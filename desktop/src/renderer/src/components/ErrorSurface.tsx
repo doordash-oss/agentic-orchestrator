@@ -26,7 +26,7 @@ limitations under the License.
  * use. Class drives the whole treatment at once — left rule, icon, label
  * word — so the surface never signals by color alone.
  */
-import { useEffect, useRef, type MouseEvent, type Ref } from 'react';
+import { useEffect, useRef, type MouseEvent, type ReactElement, type Ref } from 'react';
 import type { CanonicalError } from '../../../shared/api/parse';
 import { ERROR_CLASS_LABELS, type ErrorReference } from '../../../shared/ipc';
 import { useExplainChat } from '../explainChat';
@@ -165,6 +165,18 @@ function FileGroup({ label, paths }: { label: string; paths: readonly string[] }
   );
 }
 
+/** A host's own secondary choice: its reason as text, or its button. */
+function renderLocalSecondaryAction(action: ErrorSurfaceLocalAction): ReactElement {
+  if (action.disabledReason != null) {
+    return <span className="error-surface__action-reason">{action.disabledReason}</span>;
+  }
+  return (
+    <button type="button" className="error-surface__secondary-action" onClick={action.onAction}>
+      {action.label}
+    </button>
+  );
+}
+
 function StructuredDetails({ context }: { context: ErrorContext }) {
   const repos = context.repositories ?? [];
   return (
@@ -175,6 +187,12 @@ function StructuredDetails({ context }: { context: ErrorContext }) {
             <li className="error-surface__repo" key={repo.name}>
               <div className="error-surface__repo-head">
                 <span className="error-surface__repo-name">{repo.name}</span>
+                {repo.layer_position != null && (
+                  <span className="error-surface__repo-branch">
+                    Layer {repo.layer_position}
+                    {repo.layer_title != null ? ` — ${repo.layer_title}` : ''}
+                  </span>
+                )}
                 {repo.branch != null && (
                   <span className="error-surface__repo-branch">{repo.branch}</span>
                 )}
@@ -184,6 +202,12 @@ function StructuredDetails({ context }: { context: ErrorContext }) {
                   </span>
                 )}
               </div>
+              {repo.pull_request_url != null && (
+                <p className="error-surface__sha">
+                  <span className="error-surface__sha-label">Pull request</span>
+                  <code className="error-surface__sha-value">{repo.pull_request_url}</code>
+                </p>
+              )}
               {repo.remote_only_commits != null && (
                 <p className="error-surface__sha">
                   <span className="error-surface__sha-label">Remote-only commits</span>
@@ -288,12 +312,16 @@ export function ErrorSurface({
   const ClassIcon = CLASS_ICON[error.class];
   const remediation = error.remediation;
   const remediationHint = remediation?.hint;
-  // Only the first referenced action drives the slot; later IDs exist for the
-  // catalog's benefit, not the surface. A local action, when passed, owns the
-  // slot outright — the catalog resolution never even runs.
-  const actionId = remediation?.actions?.[0];
-  const resolvedAction =
-    localAction == null && actionId != null ? resolveAction?.(actionId) : undefined;
+  // Every referenced action resolves through the host's resolver: the first
+  // owns the primary slot exactly as before, and each remaining id renders as
+  // an additional secondary action in the same row — each independently
+  // enabled, disabled (its reason as text), or unresolved (nothing). A local
+  // action, when passed, owns the slot outright — the catalog resolution
+  // never even runs.
+  const actionIds = remediation?.actions ?? [];
+  const primaryActionId = actionIds[0];
+  const resolvedPrimaryAction =
+    localAction == null && primaryActionId != null ? resolveAction?.(primaryActionId) : undefined;
   const localActionSlot =
     localAction == null ? null : localAction.disabledReason != null ? (
       <span className="error-surface__action-reason">{localAction.disabledReason}</span>
@@ -303,34 +331,67 @@ export function ErrorSurface({
       </button>
     );
   const resolvedActionSlot =
-    resolvedAction != null && actionId != null && resolvedAction.enabled ? (
-      <button type="button" className="error-surface__action" onClick={() => onAction?.(actionId)}>
-        {resolvedAction.label}
+    resolvedPrimaryAction != null && primaryActionId != null && resolvedPrimaryAction.enabled ? (
+      <button
+        type="button"
+        className="error-surface__action"
+        onClick={() => onAction?.(primaryActionId)}
+      >
+        {resolvedPrimaryAction.label}
       </button>
-    ) : resolvedAction != null && resolvedAction.disabledReason != null ? (
-      <span className="error-surface__action-reason">{resolvedAction.disabledReason}</span>
+    ) : resolvedPrimaryAction != null && resolvedPrimaryAction.disabledReason != null ? (
+      <span className="error-surface__action-reason">{resolvedPrimaryAction.disabledReason}</span>
     ) : null;
   const actionSlot = localActionSlot ?? resolvedActionSlot;
-  const primaryDisabledReason = localAction?.disabledReason ?? resolvedAction?.disabledReason;
+  const primaryDisabledReason =
+    localAction?.disabledReason ?? resolvedPrimaryAction?.disabledReason;
+  // Catalog-resolved secondaries: one slot per remaining remediation id, in
+  // the remediation's own order. A disabled secondary whose reason text the
+  // primary already rendered stays silent, so a shared reason reads once.
+  const catalogSecondarySlots: ReactElement[] = [];
+  const catalogSecondaryLabels = new Set<string>();
+  for (const secondaryActionId of actionIds.slice(1)) {
+    const resolvedSecondary = resolveAction?.(secondaryActionId);
+    if (resolvedSecondary == null) continue;
+    catalogSecondaryLabels.add(resolvedSecondary.label);
+    if (resolvedSecondary.enabled) {
+      catalogSecondarySlots.push(
+        <button
+          key={secondaryActionId}
+          type="button"
+          className="error-surface__secondary-action"
+          onClick={() => onAction?.(secondaryActionId)}
+        >
+          {resolvedSecondary.label}
+        </button>,
+      );
+      continue;
+    }
+    if (
+      resolvedSecondary.disabledReason != null &&
+      resolvedSecondary.disabledReason !== primaryDisabledReason
+    ) {
+      catalogSecondarySlots.push(
+        <span key={secondaryActionId} className="error-surface__action-reason">
+          {resolvedSecondary.disabledReason}
+        </span>,
+      );
+    }
+  }
+  // The host's own secondary choice renders after the catalog-resolved ones
+  // and never duplicates one by label.
   const secondaryActionSlot =
     secondaryAction == null ||
     (primaryDisabledReason !== undefined &&
-      secondaryAction.disabledReason ===
-        primaryDisabledReason) ? null : secondaryAction.disabledReason != null ? (
-      <span className="error-surface__action-reason">{secondaryAction.disabledReason}</span>
-    ) : (
-      <button
-        type="button"
-        className="error-surface__secondary-action"
-        onClick={secondaryAction.onAction}
-      >
-        {secondaryAction.label}
-      </button>
-    );
+      secondaryAction.disabledReason === primaryDisabledReason) ||
+    catalogSecondaryLabels.has(secondaryAction.label)
+      ? null
+      : renderLocalSecondaryAction(secondaryAction);
+  const hasSecondaryActionSlot = secondaryActionSlot != null || catalogSecondarySlots.length > 0;
   const remediationHasContent =
     (remediationHint != null && remediationHint !== '') ||
     actionSlot != null ||
-    secondaryActionSlot != null;
+    hasSecondaryActionSlot;
   const diagnostics =
     error.diagnostics != null && error.diagnostics !== '' ? error.diagnostics : null;
   const hasDetails = contextHasContent(error.context);
@@ -361,9 +422,10 @@ export function ErrorSurface({
           {remediationHint != null && (
             <p className="error-surface__remediation-hint">{remediationHint}</p>
           )}
-          {actionSlot != null || secondaryActionSlot != null ? (
+          {actionSlot != null || hasSecondaryActionSlot ? (
             <div className="error-surface__action-row">
               {actionSlot}
+              {catalogSecondarySlots}
               {secondaryActionSlot}
             </div>
           ) : null}

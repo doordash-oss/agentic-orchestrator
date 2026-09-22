@@ -36,9 +36,13 @@ type cascadeTestWorktrees struct {
 	removeErr   error
 }
 
-func (w *cascadeTestWorktrees) Create(string, string, string, string) (string, error) {
+func (w *cascadeTestWorktrees) Create(string, string, string, string, string) (string, error) {
 	return "", nil
 }
+func (*cascadeTestWorktrees) RenameBranch(string, string, string) error { return nil }
+func (*cascadeTestWorktrees) CreateBranchAtHead(string, string) error   { return nil }
+func (*cascadeTestWorktrees) SwitchBranch(string, string) error         { return nil }
+func (*cascadeTestWorktrees) DeleteBranch(string, string) error         { return nil }
 func (w *cascadeTestWorktrees) Remove(string, bool) error {
 	w.removeCalls++
 	if _, err := w.store.LoadCascadeDelete("parent"); err != nil {
@@ -57,6 +61,10 @@ func (*cascadeTestWorktrees) CurrentHeadSHA(string) (string, error) { return "",
 func (*cascadeTestWorktrees) CurrentBranch(string) string           { return "" }
 func (w *cascadeTestWorktrees) RefSHA(_ string, ref string) (string, error) {
 	return w.refs[ref], nil
+}
+func (w *cascadeTestWorktrees) RefSHAOrAbsent(_ string, ref string) (string, bool, error) {
+	sha, ok := w.refs[ref]
+	return sha, !ok, nil
 }
 func (w *cascadeTestWorktrees) UpdateRef(_ string, ref, oldSHA, newSHA string) error {
 	w.updateCalls++
@@ -80,12 +88,17 @@ func (w *cascadeTestWorktrees) IsAncestor(_ string, ancestor, descendant string)
 	}
 	return false, nil
 }
-func (*cascadeTestWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
-	return nil, nil
-}
 func (*cascadeTestWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
 	return &git.CleanlinessReport{}, nil
 }
+func (*cascadeTestWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (*cascadeTestWorktrees) RestackChainWithResolver(string, []git.RestackCutPoint, []git.RestackOp, git.RestackConflictResolver, string) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (*cascadeTestWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
+func (*cascadeTestWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 
 func TestDeleteCascadePreservesExternallyMovedRefAndRecords(t *testing.T) {
 	t.Parallel()
@@ -488,9 +501,11 @@ func saveCascadeSymlinkFixture(t *testing.T, stateDir string) (*feature.Store, *
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID,
 			Transaction: &feature.TransactionJournal{Entries: []feature.RepoTransactionEntry{{
-				Repo: "repo-a", ParentBranch: "feature/parent",
-				ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-				CandidateSHA: "candidate", ApplyState: feature.RepoApplyApplied,
+				Repo: "repo-a",
+				Refs: []feature.RepoTransactionRef{{
+					Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate",
+				}},
+				ApplyState: feature.RepoApplyApplied,
 			}}},
 		},
 		Repos: []feature.FeatureRepo{{
@@ -537,9 +552,11 @@ func saveCascadeTestRelationship(t *testing.T) (*feature.Store, *feature.Feature
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID,
 			Transaction: &feature.TransactionJournal{Entries: []feature.RepoTransactionEntry{{
-				Repo: "repo-a", ParentBranch: "feature/parent",
-				ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-				CandidateSHA: "candidate", ApplyState: feature.RepoApplyApplied,
+				Repo: "repo-a",
+				Refs: []feature.RepoTransactionRef{{
+					Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate",
+				}},
+				ApplyState: feature.RepoApplyApplied,
 			}}},
 		},
 		Repos: []feature.FeatureRepo{{
@@ -575,20 +592,26 @@ func TestDeleteCascadeClassifiesSharedParentRefAcrossChildren(t *testing.T) {
 	// top of it (candidate-1 -> candidate-2). The IDs sort in the opposite
 	// order so classification cannot rely on journal order.
 	older := feature.RepoTransactionEntry{
-		Repo: "repo-a", ParentBranch: "feature/parent",
-		ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-		CandidateSHA: "candidate-1", ApplyState: feature.RepoApplyApplied,
+		Repo: "repo-a",
+		Refs: []feature.RepoTransactionRef{{
+			Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate-1",
+		}},
+		ApplyState: feature.RepoApplyApplied,
 	}
 	newer := feature.RepoTransactionEntry{
-		Repo: "repo-a", ParentBranch: "feature/parent",
-		ParentAnchorSHA: "candidate-1", ExpectedRefSHA: "candidate-1",
-		CandidateSHA: "candidate-2", ApplyState: feature.RepoApplyApplied,
+		Repo: "repo-a",
+		Refs: []feature.RepoTransactionRef{{
+			Branch: "feature/parent", AnchorSHA: "candidate-1", CandidateSHA: "candidate-2",
+		}},
+		ApplyState: feature.RepoApplyApplied,
 	}
 	// A rebase pass-through child whose candidate is its anchor.
 	passThrough := feature.RepoTransactionEntry{
-		Repo: "repo-a", ParentBranch: "feature/parent",
-		ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-		CandidateSHA: "anchor", ApplyState: feature.RepoApplyApplied,
+		Repo: "repo-a",
+		Refs: []feature.RepoTransactionRef{{
+			Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "anchor",
+		}},
+		ApplyState: feature.RepoApplyApplied,
 	}
 
 	tests := []struct {
@@ -733,14 +756,18 @@ func TestDeleteCascadeRecordsRestoredEntryOnlyOnce(t *testing.T) {
 	const ref = "refs/heads/feature/parent"
 	store, parent := saveCascadeTestPromotedChildren(t, map[string]feature.RepoTransactionEntry{
 		"older": {
-			Repo: "repo-a", ParentBranch: "feature/parent",
-			ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-			CandidateSHA: "candidate-1", ApplyState: feature.RepoApplyApplied,
+			Repo: "repo-a",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate-1",
+			}},
+			ApplyState: feature.RepoApplyApplied,
 		},
 		"newer": {
-			Repo: "repo-a", ParentBranch: "feature/parent",
-			ParentAnchorSHA: "candidate-1", ExpectedRefSHA: "candidate-1",
-			CandidateSHA: "candidate-2", ApplyState: feature.RepoApplyApplied,
+			Repo: "repo-a",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "candidate-1", CandidateSHA: "candidate-2",
+			}},
+			ApplyState: feature.RepoApplyApplied,
 		},
 	})
 	worktrees := &cascadeTestWorktrees{
@@ -782,14 +809,18 @@ func TestDeleteCascadeRecordsAdvancedRefWithoutRestoring(t *testing.T) {
 	const ref = "refs/heads/feature/parent"
 	store, parent := saveCascadeTestPromotedChildren(t, map[string]feature.RepoTransactionEntry{
 		"older": {
-			Repo: "repo-a", ParentBranch: "feature/parent",
-			ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-			CandidateSHA: "candidate-1", ApplyState: feature.RepoApplyApplied,
+			Repo: "repo-a",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate-1",
+			}},
+			ApplyState: feature.RepoApplyApplied,
 		},
 		"newer": {
-			Repo: "repo-a", ParentBranch: "feature/parent",
-			ParentAnchorSHA: "candidate-1", ExpectedRefSHA: "candidate-1",
-			CandidateSHA: "candidate-2", ApplyState: feature.RepoApplyApplied,
+			Repo: "repo-a",
+			Refs: []feature.RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "candidate-1", CandidateSHA: "candidate-2",
+			}},
+			ApplyState: feature.RepoApplyApplied,
 		},
 	})
 	worktrees := &cascadeTestWorktrees{

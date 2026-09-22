@@ -877,15 +877,15 @@ describe('error items', () => {
   };
   const needsActionErrorItem: Extract<AttentionItem, { kind: 'error' }> = {
     ...blockingErrorItem,
-    id: 'error:feature-1:repository:repo-a:publish_rebase_conflict',
+    id: 'error:feature-1:repository:repo-a:publish_remote_diverged',
     ref: {
       scope: 'repository',
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       featureId: 'feature-1',
       repository: 'repo-a',
     },
     class: 'needs_action',
-    code: 'publish_rebase_conflict',
+    code: 'publish_remote_diverged',
     title: 'Pull-rebase conflict',
   };
 

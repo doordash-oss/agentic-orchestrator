@@ -32,6 +32,7 @@ import {
   RepositorySourceReconcileResponseSchema,
   RepositoryDiffResponseSchema,
   RewindActionResponseSchema,
+  RewindPreviewResponseSchema,
   ServerFeatureDetailSchema,
   ServerFeatureSummarySchema,
   ServerRecoveryItemSchema,
@@ -1242,12 +1243,125 @@ describe('Repository publish-failure error contract', () => {
     expect(parsed.data?.context?.repositories?.[0]?.remote_only_commits).toBe(3);
   });
 
+  it('accepts the layer fields on a canonical error repository entry and rejects stale shapes', () => {
+    const layerError = {
+      ...repoError,
+      code: 'publish_stack_pull_request_closed',
+      context: {
+        repositories: [
+          {
+            name: 'repo-a',
+            branch: 'feature/f',
+            layer_position: 2,
+            layer_title: 'Search revamp layer 2',
+            pull_request_url: 'https://github.com/org/repo-a/pull/12',
+          },
+        ],
+      },
+    };
+    const parsed = CanonicalErrorSchema.safeParse(layerError);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.context?.repositories?.[0]?.layer_position).toBe(2);
+    expect(parsed.data?.context?.repositories?.[0]?.layer_title).toBe('Search revamp layer 2');
+    expect(parsed.data?.context?.repositories?.[0]?.pull_request_url).toBe(
+      'https://github.com/org/repo-a/pull/12',
+    );
+    // A non-integer layer position and unknown keys (the pre-layer wire shape
+    // spelled the URL differently) fail closed.
+    expect(
+      CanonicalErrorSchema.safeParse({
+        ...layerError,
+        context: { repositories: [{ name: 'repo-a', layer_position: 2.5 }] },
+      }).success,
+    ).toBe(false);
+    expect(
+      CanonicalErrorSchema.safeParse({
+        ...layerError,
+        context: { repositories: [{ name: 'repo-a', layer: 2, pr_url: 'https://x.test/pull/1' }] },
+      }).success,
+    ).toBe(false);
+  });
+
   it('rejects stale last_error keys on the repository status and preflight repository', () => {
     expect(ServerRepoStatusSchema.safeParse({ ...repoStatus, last_error: 'boom' }).success).toBe(
       false,
     );
     expect(
       CompletionPreflightRepoSchema.safeParse({ ...preflightRepo, last_error: 'boom' }).success,
+    ).toBe(false);
+  });
+});
+
+describe('per-layer pull request entry contract', () => {
+  const pullRequests = [
+    {
+      position: 1,
+      title: 'Bootstrap',
+      branch: 'feature/x/1-bootstrap',
+      url: 'https://github.com/org/repo-a/pull/11',
+      state: 'open',
+      no_commits: false,
+      pushed_up_to_date: true,
+    },
+    {
+      position: 2,
+      title: 'Layer two',
+      branch: 'feature/x/2-layer-two',
+      state: 'none',
+      no_commits: true,
+      pushed_up_to_date: false,
+    },
+  ];
+  const repoStatus = {
+    name: 'repo-a',
+    publishable: true,
+    touched: true,
+    pull_requests: pullRequests,
+  };
+  const preflightRepo = {
+    repo: 'repo-a',
+    publishable: true,
+    touched: true,
+    status: 'unpublished_changes',
+    pull_requests: pullRequests.map((entry, index) => ({
+      ...entry,
+      push_mode: index === 0 ? 'none' : 'create',
+    })),
+    push_mode: 'fast_forward',
+  };
+
+  it('accepts the shared entry list on the repository status and preflight repository', () => {
+    expect(ServerRepoStatusSchema.safeParse(repoStatus).success).toBe(true);
+    const parsedStatus = ServerRepoStatusSchema.parse(repoStatus);
+    expect(parsedStatus.pull_requests?.[0]).toEqual(pullRequests[0]);
+    expect(parsedStatus.pull_requests?.[1]?.url).toBeUndefined();
+
+    expect(CompletionPreflightRepoSchema.safeParse(preflightRepo).success).toBe(true);
+    const parsedPreflight = CompletionPreflightRepoSchema.parse(preflightRepo);
+    expect(parsedPreflight.pull_requests?.[1]?.push_mode).toBe('create');
+    expect(parsedPreflight.push_mode).toBe('fast_forward');
+  });
+
+  it('rejects an entry with an unknown state on both carriers', () => {
+    const badState = pullRequests.map((entry) => ({ ...entry, state: 'draft' }));
+    expect(
+      ServerRepoStatusSchema.safeParse({ ...repoStatus, pull_requests: badState }).success,
+    ).toBe(false);
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepo, pull_requests: badState })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects push modes outside the wire enums', () => {
+    expect(
+      CompletionPreflightRepoSchema.safeParse({
+        ...preflightRepo,
+        pull_requests: pullRequests.map((entry) => ({ ...entry, push_mode: 'force' })),
+      }).success,
+    ).toBe(false);
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepo, push_mode: 'create' }).success,
     ).toBe(false);
   });
 });
@@ -1377,12 +1491,12 @@ describe('owned error wire shapes on the feature summary', () => {
   const repoEntry = {
     ref: {
       scope: 'repository',
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       feature_id: 'abcd1234ef567890',
       repository: 'repo-a',
     },
     error: {
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action',
       title: 'Pull-rebase conflict',
       summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
@@ -1495,7 +1609,7 @@ describe('Readiness repository identity contract', () => {
 
   it.each([
     ['non-decimal device', { ...validIdentity, device: '0x1f' }],
-    ['negative inode', { ...validIdentity, inode: '-4' }],
+    ['negative inode', { ...validIdentity, inode: '-982394' }],
     ['numeric device instead of text', { ...validIdentity, device: 16777234 }],
     ['empty path', { ...validIdentity, path: '' }],
     ['missing common_dir', { ...validIdentity, common_dir: undefined }],
@@ -1503,5 +1617,134 @@ describe('Readiness repository identity contract', () => {
     ['extra field', { ...validIdentity, extra: 'no' }],
   ])('rejects malformed identity data: %s', (_label, identity) => {
     expect(() => ReadinessResponseSchema.parse(readinessWith(identity))).toThrow();
+  });
+});
+
+describe('rewind preview PR consequences', () => {
+  const basePreview = {
+    api_version: 'v1',
+    eligible: true,
+    source_run_number: 3,
+    source_revision: 'abc123def456',
+    target_phase: 'implement',
+    effective_phase: 'implement',
+    roadmap_phase: 3,
+  };
+
+  it('accepts a per-layer entry carrying every field', () => {
+    const parsed = RewindPreviewResponseSchema.safeParse({
+      ...basePreview,
+      pr_consequences: [
+        {
+          repo: 'repo-a',
+          position: 2,
+          title: 'Extension',
+          branch: 'feature/ws/2-ext',
+          pr_url: 'https://github.example/repo-a/pull/2',
+          pr_state: 'open',
+          verdict: 'close',
+          delete_remote_branch: true,
+        },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.pr_consequences?.[0]).toStrictEqual({
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      pr_url: 'https://github.example/repo-a/pull/2',
+      pr_state: 'open',
+      verdict: 'close',
+      delete_remote_branch: true,
+    });
+  });
+
+  it('accepts an entry without a pull request URL and flags its deletion', () => {
+    const parsed = RewindPreviewResponseSchema.safeParse({
+      ...basePreview,
+      pr_consequences: [
+        {
+          repo: 'repo-a',
+          position: 2,
+          title: 'Extension',
+          branch: 'feature/ws/2-ext',
+          pr_state: 'none',
+          verdict: 'none',
+          delete_remote_branch: true,
+        },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.pr_consequences?.[0]?.pr_url).toBeUndefined();
+  });
+
+  it('rejects an unknown verdict or state', () => {
+    const base = {
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      pr_state: 'open',
+      delete_remote_branch: true,
+    };
+    expect(
+      RewindPreviewResponseSchema.safeParse({
+        ...basePreview,
+        pr_consequences: [{ ...base, verdict: 'destroy' }],
+      }).success,
+    ).toBe(false);
+    expect(
+      RewindPreviewResponseSchema.safeParse({
+        ...basePreview,
+        pr_consequences: [{ ...base, verdict: 'close', pr_state: 'pending' }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('rewind preview worktree consequences', () => {
+  const basePreview = {
+    api_version: 'v1',
+    eligible: true,
+    source_run_number: 3,
+    source_revision: 'abc123def456',
+    target_phase: 'implement',
+    effective_phase: 'implement',
+    roadmap_phase: 3,
+  };
+
+  it('accepts a layer-tip reset carrying the stack layer branch', () => {
+    const parsed = RewindPreviewResponseSchema.safeParse({
+      ...basePreview,
+      worktree_consequences: [
+        { repo: 'repo-a', reset_kind: 'layer-tip', branch: 'feature/ws/2-ext' },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.worktree_consequences?.[0]).toStrictEqual({
+      repo: 'repo-a',
+      reset_kind: 'layer-tip',
+      branch: 'feature/ws/2-ext',
+    });
+  });
+
+  it('accepts a consequence without a branch (unstacked feature)', () => {
+    const parsed = RewindPreviewResponseSchema.safeParse({
+      ...basePreview,
+      roadmap_phase: 1,
+      worktree_consequences: [{ repo: 'repo-a', reset_kind: 'base' }],
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.worktree_consequences?.[0]?.branch).toBeUndefined();
+  });
+
+  it('rejects an unknown reset kind', () => {
+    expect(
+      RewindPreviewResponseSchema.safeParse({
+        ...basePreview,
+        worktree_consequences: [{ repo: 'repo-a', reset_kind: 'tip' }],
+      }).success,
+    ).toBe(false);
   });
 });

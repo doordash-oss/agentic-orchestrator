@@ -27,17 +27,18 @@ import (
 
 func attentionRecordFixture() *errcat.FailureRecord {
 	return &errcat.FailureRecord{
-		Code: errcat.IntegrationMergeConflict,
+		Code: errcat.IntegrationRebaseConflict,
 		Context: &errcat.RecordContext{
 			Repositories: []errcat.CodeRepository{{
-				Name:            "repo-a",
-				Branch:          "main",
-				ConflictFiles:   []string{"internal/api.go"},
-				ParentAnchorSHA: "3f2c1ab",
-				ChildHeadSHA:    "9b1e445",
+				Name:          "repo-a",
+				Branch:        "main",
+				ConflictFiles: []string{"internal/api.go"},
+				ChildHeadSHA:  "9b1e445",
+				CommitSHA:     "1a2b3c4d",
+				Attempts:      3,
 			}},
 		},
-		Diagnostics: "repo-a: merge conflict: [internal/api.go]",
+		Diagnostics: "repo-a: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03",
 	}
 }
 
@@ -48,9 +49,9 @@ func TestTransactionJournalRoundTripsAttentionRecord(t *testing.T) {
 	journal := &TransactionJournal{
 		Phase: TransactionPhaseAttention,
 		Entries: []RepoTransactionEntry{{
-			Repo:         "repo-a",
-			ParentBranch: "main",
-			PrepState:    RepoPrepFailed,
+			Repo:      "repo-a",
+			Refs:      []RepoTransactionRef{{Branch: "main"}},
+			PrepState: RepoPrepFailed,
 		}},
 		Attention: attentionRecordFixture(),
 	}
@@ -58,8 +59,11 @@ func TestTransactionJournalRoundTripsAttentionRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "code: integration_merge_conflict") {
+	if !strings.Contains(string(raw), "code: integration_rebase_conflict") {
 		t.Fatalf("YAML does not carry the record code:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "commit_sha: 1a2b3c4d") || !strings.Contains(string(raw), "attempts: 3") {
+		t.Fatalf("YAML does not carry the resolution context:\n%s", raw)
 	}
 	var got TransactionJournal
 	if err := yaml.Unmarshal(raw, &got); err != nil {
@@ -68,11 +72,15 @@ func TestTransactionJournalRoundTripsAttentionRecord(t *testing.T) {
 	if got.Phase != TransactionPhaseAttention || len(got.Entries) != 1 {
 		t.Fatalf("round-trip lost journal state: %+v", got)
 	}
-	if got.Attention == nil || got.Attention.Code != errcat.IntegrationMergeConflict ||
-		got.Attention.Diagnostics != "repo-a: merge conflict: [internal/api.go]" ||
+	if got.Attention == nil || got.Attention.Code != errcat.IntegrationRebaseConflict ||
+		got.Attention.Diagnostics != "repo-a: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03" ||
 		got.Attention.Context == nil || len(got.Attention.Context.Repositories) != 1 ||
 		len(got.Attention.Context.Repositories[0].ConflictFiles) != 1 {
 		t.Fatalf("round-trip lost the attention record: %+v", got.Attention)
+	}
+	repo := got.Attention.Context.Repositories[0]
+	if repo.CommitSHA != "1a2b3c4d" || repo.Attempts != 3 {
+		t.Fatalf("round-trip lost the resolution context: %+v", repo)
 	}
 }
 
@@ -106,7 +114,7 @@ entries:
 		t.Fatalf("legacy journal lost its phase or entries: %+v", got)
 	}
 	entry := got.Entries[0]
-	if entry.Repo != "repo-a" || entry.ParentBranch != "main" || entry.PrepState != RepoPrepFailed {
+	if entry.Repo != "repo-a" || entry.PrepState != RepoPrepFailed {
 		t.Fatalf("legacy entry lost its progress state: %+v", entry)
 	}
 }
@@ -127,9 +135,9 @@ func TestSavedJournalWritesNoDeletedEntryKeys(t *testing.T) {
 			Transaction: &TransactionJournal{
 				Phase: TransactionPhaseAttention,
 				Entries: []RepoTransactionEntry{{
-					Repo:         "repo-a",
-					ParentBranch: "main",
-					PrepState:    RepoPrepFailed,
+					Repo:      "repo-a",
+					Refs:      []RepoTransactionRef{{Branch: "main"}},
+					PrepState: RepoPrepFailed,
 				}},
 				Attention: attentionRecordFixture(),
 			},
@@ -160,7 +168,7 @@ func TestSavedJournalWritesNoDeletedEntryKeys(t *testing.T) {
 		}
 	}
 	attention, _ := tx["attention"].(map[string]any)
-	if attention == nil || attention["code"] != string(errcat.IntegrationMergeConflict) {
+	if attention == nil || attention["code"] != string(errcat.IntegrationRebaseConflict) {
 		t.Fatalf("saved journal attention record = %v, want the canonical record", attention)
 	}
 }
@@ -188,8 +196,9 @@ func TestIntegrationAttentionAccessors(t *testing.T) {
 		Entries: []RepoTransactionEntry{{Repo: "repo-a", ApplyState: RepoApplyAttention}},
 	})
 	cleanPrepared := newChild(&TransactionJournal{
-		Phase:   TransactionPhasePrepared,
-		Entries: []RepoTransactionEntry{{Repo: "repo-a", PrepState: RepoPrepPrepared, CandidateSHA: "abc"}},
+		Phase: TransactionPhasePrepared,
+		Entries: []RepoTransactionEntry{{Repo: "repo-a", PrepState: RepoPrepPrepared,
+			Refs: []RepoTransactionRef{{Branch: "main", AnchorSHA: "aaa", CandidateSHA: "abc"}}}},
 	})
 	merged := newChild(&TransactionJournal{Phase: TransactionPhaseMerged})
 	noJournal := newChild(nil)
@@ -217,7 +226,7 @@ func TestIntegrationAttentionAccessors(t *testing.T) {
 		t.Fatalf("attention-phase journal without a record reports none: %+v", rec)
 	}
 	withRecord := newChild(&TransactionJournal{Phase: TransactionPhaseAttention, Attention: attentionRecordFixture()})
-	if rec := withRecord.IntegrationAttentionRecord(); rec == nil || rec.Code != errcat.IntegrationMergeConflict {
+	if rec := withRecord.IntegrationAttentionRecord(); rec == nil || rec.Code != errcat.IntegrationRebaseConflict {
 		t.Fatalf("IntegrationAttentionRecord() = %+v, want the stored record", rec)
 	}
 }

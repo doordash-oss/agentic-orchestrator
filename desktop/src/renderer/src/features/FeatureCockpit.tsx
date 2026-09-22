@@ -95,7 +95,13 @@ import { MergeModalBody } from './completion/MergeModal';
 import { MarkDoneModalBody } from './completion/MarkDoneModal';
 import { CleanupConfirm } from './completion/CleanupConfirm';
 import type { CompletionAction } from './completion/completionShared';
-import type { FeatureActionResult, PublishFeatureActionRequest } from '../../../shared/ipc';
+import type {
+  FeatureActionResult,
+  PublishFeatureActionRequest,
+  PublishFamilyActionRequest,
+  ReopenPullRequestFeatureActionRequest,
+  RecreatePullRequestFeatureActionRequest,
+} from '../../../shared/ipc';
 import {
   AttentionDetail,
   OwnerAwareAttention,
@@ -114,6 +120,7 @@ import {
   displayFeatureMessage,
   displayPhaseLabel,
   displayStatusLabel,
+  errorLayerContext,
   featureBranch,
   isReadyToStart,
   isRunAtRest,
@@ -131,6 +138,20 @@ type CockpitState = LoadState<
 >;
 
 const FOCUSED_COMPLETION_SETTLE_MS = 500;
+
+/** The caption word a rejected card-dispatched action reads in its own refusal card. */
+function refusalActionLabel(actionId: string): string {
+  switch (actionId) {
+    case 'publish':
+      return 'Publish';
+    case 'reopen-pull-request':
+      return 'Reopen pull request';
+    case 'recreate-pull-request':
+      return 'Recreate pull request';
+    default:
+      return actionId;
+  }
+}
 
 export interface FeatureCockpitProps {
   featureId: string;
@@ -980,7 +1001,7 @@ export function FeatureCockpit({
   const [busy, setBusy] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [actionError, setActionError] = useState<{
-    action: 'Start' | 'Stop' | 'Resume' | 'Retry' | 'Restart' | 'Delete' | 'Rebase';
+    action: string;
     error: CanonicalError;
   } | null>(null);
   const [rebaseLaunchBusy, setRebaseLaunchBusy] = useState(false);
@@ -1178,7 +1199,7 @@ export function FeatureCockpit({
     [],
   );
   const dispatchPublish = useCallback(
-    (request: PublishFeatureActionRequest) => window.agentico.dispatchFeatureAction(request),
+    (request: PublishFamilyActionRequest) => window.agentico.dispatchFeatureAction(request),
     [],
   );
   const onCompletionDispatched = useCallback(() => {
@@ -1528,7 +1549,9 @@ export function FeatureCockpit({
     featureId,
     state.phase === 'loaded' ? state.snapshot.repos : [],
     state.phase === 'loaded' &&
-      (state.snapshot.repoStatus ?? []).some((repo) => repo.prUrl !== undefined),
+      (state.snapshot.repoStatus ?? []).some((repo) =>
+        (repo.pullRequests ?? []).some((pr) => pr.url !== undefined),
+      ),
     aftercareSurface,
   );
 
@@ -1875,6 +1898,91 @@ export function FeatureCockpit({
     }
   };
 
+  // A rejected action can carry a canonical closed-pull-request conflict —
+  // the rebase launcher's refusal does. The refusal card resolves its
+  // remediation through the same catalog machinery as the publish modal
+  // (retry publish, reopen, recreate), and dispatching reads the repository
+  // and layer from the error's own context, then converges exactly as the
+  // completion modal dispatches do.
+  const refusalSourceRevision = completion.preflight?.sourceRevision;
+  const gatedCatalogAction = (actionId: string, label: string): ErrorSurfaceAction | undefined => {
+    const base = catalogErrorAction(snapshot, actionId, label);
+    if (base === undefined) return undefined;
+    const modalReason =
+      refusalSourceRevision === undefined || refusalSourceRevision.trim() === ''
+        ? 'Refresh the preflight, then retry.'
+        : undefined;
+    const reason = base.enabled ? modalReason : base.disabledReason;
+    return {
+      ...base,
+      enabled: base.enabled && modalReason === undefined,
+      ...(reason === undefined ? {} : { disabledReason: reason }),
+    };
+  };
+  const resolveActionErrorAction = (actionId: string): ErrorSurfaceAction | undefined => {
+    if (actionError === null) return undefined;
+    if (actionId === 'publish') {
+      if (actionError.error.context?.repositories?.[0]?.name === undefined) return undefined;
+      return gatedCatalogAction('publish', 'Retry publish');
+    }
+    if (actionId === 'reopen-pull-request') {
+      if (errorLayerContext(actionError.error) === null) return undefined;
+      return gatedCatalogAction('reopen-pull-request', 'Reopen pull request');
+    }
+    if (actionId === 'recreate-pull-request') {
+      if (errorLayerContext(actionError.error) === null) return undefined;
+      return gatedCatalogAction('recreate-pull-request', 'Recreate pull request');
+    }
+    return undefined;
+  };
+  const handleActionErrorAction = (actionId: string): void => {
+    if (actionError === null) return;
+    const error = actionError.error;
+    if (refusalSourceRevision === undefined || refusalSourceRevision.trim() === '') return;
+    const repository = error.context?.repositories?.[0]?.name;
+    const layer = errorLayerContext(error);
+    let request:
+      | PublishFeatureActionRequest
+      | ReopenPullRequestFeatureActionRequest
+      | RecreatePullRequestFeatureActionRequest
+      | undefined;
+    if (actionId === 'publish') {
+      request =
+        repository === undefined
+          ? undefined
+          : {
+              featureId,
+              action: 'publish',
+              body: { source_revision: refusalSourceRevision, repos: [repository] },
+            };
+    } else if (actionId === 'reopen-pull-request' || actionId === 'recreate-pull-request') {
+      if (layer === null) return;
+      const body = {
+        repository: layer.repository,
+        layer: layer.layer,
+        source_revision: refusalSourceRevision,
+      };
+      request =
+        actionId === 'reopen-pull-request'
+          ? { featureId, action: 'reopen-pull-request', body }
+          : { featureId, action: 'recreate-pull-request', body };
+    }
+    if (request === undefined) return;
+    setActionError(null);
+    setAnnouncement('Resolving the blocker…');
+    window.agentico
+      .dispatchFeatureAction(request)
+      .then(() => {
+        setAnnouncement('');
+        return onCompletionDispatched();
+      })
+      .catch((err: unknown) => {
+        setActionError({ action: refusalActionLabel(actionId), error: parseIpcError(err) });
+        setAnnouncement('');
+        void onCompletionDispatched();
+      });
+  };
+
   // A setup failure has one owner: the failing setup task. When the run's
   // thin failure record names a setup task that carries its own canonical
   // error, the card renders the task's object captioned with the task label;
@@ -2166,6 +2274,11 @@ export function FeatureCockpit({
   // One facts element for both aftercare inspector presentations: the trailing
   // pane when wide, the drawer when narrow.
   const aftercarePendingFact = pendingDeliveryFact(pendingDelivery);
+  // The completion preflight's rebase hint — the first repository that carries
+  // one — renders beside the freshness fact; nothing renders when absent.
+  const aftercareRebaseHint = completion.preflight?.repos.find(
+    (repo) => repo.rebaseHint !== undefined,
+  )?.rebaseHint;
   // The aftercare inspector keeps the repository instrument beside the
   // feature facts: a publish failure leaves the feature in aftercare, and the
   // instrument's indication is the cockpit's link into the publish modal.
@@ -2175,6 +2288,7 @@ export function FeatureCockpit({
         snapshot={snapshot}
         run={aftercareRun}
         {...(aftercarePendingFact === null ? {} : { pendingFact: aftercarePendingFact })}
+        {...(aftercareRebaseHint === undefined ? {} : { rebaseHint: aftercareRebaseHint })}
         {...(presentation === 'pane' ? { title: 'Feature' } : {})}
         onOpenPullRequest={(url) => {
           void window.agentico.openExternal({ url });
@@ -2330,6 +2444,8 @@ export function FeatureCockpit({
                   snapshot={snapshot}
                   run={aftercareRun}
                   actionError={actionError}
+                  actionErrorResolveAction={resolveActionErrorAction}
+                  actionErrorOnAction={handleActionErrorAction}
                   pending={pendingDelivery}
                   preflight={completion.preflight}
                   evidence={aftercareEvidence}
@@ -2360,6 +2476,8 @@ export function FeatureCockpit({
             error={actionError.error}
             variant="compact"
             caption={`${actionError.action} was rejected`}
+            resolveAction={resolveActionErrorAction}
+            onAction={handleActionErrorAction}
             explain={{ featureName: snapshot.name }}
           />
         )}
@@ -2549,9 +2667,6 @@ export function FeatureCockpit({
             preflight={completion.preflight}
             actions={snapshot.actions}
             dispatchAction={dispatchPublish}
-            generatePublishDescription={(id, repos) =>
-              window.agentico.generatePublishDescription({ featureId: id, repos })
-            }
             openExternal={(url) => window.agentico.openExternal({ url })}
             onDispatched={onCompletionDispatched}
             onClose={() => setCompletionModal(null)}
@@ -2862,6 +2977,8 @@ export function FeatureCockpit({
                       error={actionError.error}
                       variant="compact"
                       caption={`${actionError.action} was rejected`}
+                      resolveAction={resolveActionErrorAction}
+                      onAction={handleActionErrorAction}
                       explain={{ featureName: snapshot.name }}
                     />
                   ) : null}
@@ -3051,9 +3168,6 @@ export function FeatureCockpit({
               preflight={completion.preflight}
               actions={snapshot.actions}
               dispatchAction={dispatchPublish}
-              generatePublishDescription={(id, repos) =>
-                window.agentico.generatePublishDescription({ featureId: id, repos })
-              }
               openExternal={(url) => window.agentico.openExternal({ url })}
               onDispatched={onCompletionDispatched}
               onClose={() => setCompletionModal(null)}

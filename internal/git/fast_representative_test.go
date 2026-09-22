@@ -85,58 +85,6 @@ func TestFastPublishCommitRepresentative(t *testing.T) {
 	}
 }
 
-func TestFastRebaseRepresentatives(t *testing.T) {
-	t.Run("linear history", func(t *testing.T) {
-		t.Parallel()
-
-		repo := testutil.InitGitRepo(t)
-		testutil.CreateBranch(t, repo, "feature/test")
-		testutil.CommitFile(t, repo, "feature.txt", "feat\n", "feature commit")
-
-		runGit(t, repo, "checkout", "main")
-		testutil.CommitFile(t, repo, "base.txt", "base\n", "base commit")
-		runGit(t, repo, "update-ref", "refs/remotes/origin/main", "main")
-		runGit(t, repo, "checkout", "feature/test")
-
-		if err := Rebase(repo, "main"); err != nil {
-			t.Fatalf("Rebase() error = %v", err)
-		}
-		if IsBehindRemote(repo, "main") {
-			t.Error("IsBehindRemote() = true, want false after rebase")
-		}
-	})
-
-	t.Run("conflict aborts cleanly", func(t *testing.T) {
-		t.Parallel()
-
-		repo := testutil.InitGitRepo(t)
-		testutil.CreateBranch(t, repo, "feature/test")
-		testutil.CommitFile(t, repo, "conflict.txt", "feature version\n", "feature change")
-
-		runGit(t, repo, "checkout", "main")
-		testutil.CommitFile(t, repo, "conflict.txt", "main version\n", "main change")
-		runGit(t, repo, "update-ref", "refs/remotes/origin/main", "main")
-		runGit(t, repo, "checkout", "feature/test")
-
-		if err := Rebase(repo, "main"); err == nil {
-			t.Fatal("Rebase() error = nil, want conflict")
-		}
-		if RebaseInProgress(repo) {
-			t.Fatal("RebaseInProgress() = true, want false after abort")
-		}
-		if branch := CurrentBranch(repo); branch != "feature/test" {
-			t.Errorf("CurrentBranch() = %q, want feature/test", branch)
-		}
-		statusOut, err := exec.Command("git", "-C", repo, "status", "--porcelain").Output()
-		if err != nil {
-			t.Fatalf("git status: %v", err)
-		}
-		if strings.TrimSpace(string(statusOut)) != "" {
-			t.Errorf("git status --porcelain = %q, want clean", statusOut)
-		}
-	})
-}
-
 func TestFastWorktreeRepresentative(t *testing.T) {
 	t.Parallel()
 
@@ -145,12 +93,13 @@ func TestFastWorktreeRepresentative(t *testing.T) {
 
 	baseBranch := DefaultBranch(repo)
 	baseCommit := gitOutput(t, repo, "rev-parse", baseBranch)
-	wtPath, err := mgr.Create(repo, "fast-worktree", "repo", "")
+	fastBranch := LayerBranchName("fast-worktree", 1, "fast-worktree")
+	wtPath, err := mgr.Create(repo, "fast-worktree", fastBranch, "repo", "")
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if branch := CurrentBranch(wtPath); branch != "feature/fast-worktree" {
-		t.Errorf("CurrentBranch() = %q, want feature/fast-worktree", branch)
+	if branch := CurrentBranch(wtPath); branch != fastBranch {
+		t.Errorf("CurrentBranch() = %q, want %s", branch, fastBranch)
 	}
 
 	testutil.CommitFile(t, wtPath, "file.txt", "data\n", "worktree commit")

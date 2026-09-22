@@ -21,15 +21,17 @@ import (
 // MockRemoteOps is the small test substitute for orchestrator-owned remote
 // operations.
 type MockRemoteOps struct {
-	PushFn                func(worktreePath, branch string) error
-	ForcePushFn           func(worktreePath, branch string) error
-	PushRewrittenBranchFn func(worktreePath, branch string) error
-	PullRebaseFn          func(worktreePath, branch string) error
-	CreatePRFn            func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
-	PRBaseBranchFn        func(repoPath, prURL string) string
-	PRStateFn             func(repoPath, prURL string) (string, error)
-	DefaultError          error
-	Calls                 []MockCall
+	PushFn              func(worktreePath, branch string) error
+	PushLayerBranchFn   func(repoPath, branch, localSHA, lastPushedSHA string) (string, error)
+	CreatePRFn          func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error)
+	PRBaseBranchFn      func(repoPath, prURL string) string
+	PRStateFn           func(repoPath, prURL string) (string, error)
+	GetPRBodyFn         func(prURL string) (string, error)
+	UpdatePRBodyFn      func(prURL, body string) error
+	UpdatePRBaseFn      func(prURL, base string) error
+	ReopenPullRequestFn func(repoPath, branch, prURL string) error
+	DefaultError        error
+	Calls               []MockCall
 }
 
 func NewMockRemoteOps() *MockRemoteOps { return &MockRemoteOps{} }
@@ -42,28 +44,12 @@ func (m *MockRemoteOps) Push(worktreePath, branch string) error {
 	return m.DefaultError
 }
 
-func (m *MockRemoteOps) ForcePush(worktreePath, branch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "ForcePush", Args: []any{worktreePath, branch}})
-	if m.ForcePushFn != nil {
-		return m.ForcePushFn(worktreePath, branch)
+func (m *MockRemoteOps) PushLayerBranch(repoPath, branch, localSHA, lastPushedSHA string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "PushLayerBranch", Args: []any{repoPath, branch, localSHA, lastPushedSHA}})
+	if m.PushLayerBranchFn != nil {
+		return m.PushLayerBranchFn(repoPath, branch, localSHA, lastPushedSHA)
 	}
-	return m.DefaultError
-}
-
-func (m *MockRemoteOps) PushRewrittenBranch(worktreePath, branch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "PushRewrittenBranch", Args: []any{worktreePath, branch}})
-	if m.PushRewrittenBranchFn != nil {
-		return m.PushRewrittenBranchFn(worktreePath, branch)
-	}
-	return m.DefaultError
-}
-
-func (m *MockRemoteOps) PullRebase(worktreePath, branch string) error {
-	m.Calls = append(m.Calls, MockCall{Method: "PullRebase", Args: []any{worktreePath, branch}})
-	if m.PullRebaseFn != nil {
-		return m.PullRebaseFn(worktreePath, branch)
-	}
-	return m.DefaultError
+	return "", m.DefaultError
 }
 
 func (m *MockRemoteOps) CreatePR(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
@@ -92,10 +78,44 @@ func (m *MockRemoteOps) PRState(repoPath, prURL string) (string, error) {
 	return "", m.DefaultError
 }
 
+func (m *MockRemoteOps) GetPRBody(prURL string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "GetPRBody", Args: []any{prURL}})
+	if m.GetPRBodyFn != nil {
+		return m.GetPRBodyFn(prURL)
+	}
+	return "", m.DefaultError
+}
+
+func (m *MockRemoteOps) UpdatePRBody(prURL, body string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "UpdatePRBody", Args: []any{prURL, body}})
+	if m.UpdatePRBodyFn != nil {
+		return m.UpdatePRBodyFn(prURL, body)
+	}
+	return m.DefaultError
+}
+
+func (m *MockRemoteOps) UpdatePRBase(prURL, base string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "UpdatePRBase", Args: []any{prURL, base}})
+	if m.UpdatePRBaseFn != nil {
+		return m.UpdatePRBaseFn(prURL, base)
+	}
+	return m.DefaultError
+}
+
+func (m *MockRemoteOps) ReopenPullRequest(repoPath, branch, prURL string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "ReopenPullRequest", Args: []any{repoPath, branch, prURL}})
+	if m.ReopenPullRequestFn != nil {
+		return m.ReopenPullRequestFn(repoPath, branch, prURL)
+	}
+	return m.DefaultError
+}
+
 type MockPRCloser struct {
-	ClosePRFn    func(prURL string) error
-	DefaultError error
-	Calls        []MockCall
+	ClosePRFn            func(prURL string) error
+	PRStateFn            func(prURL string) (string, error)
+	DeleteRemoteBranchFn func(repoPath, branch string) error
+	DefaultError         error
+	Calls                []MockCall
 }
 
 func NewMockPRCloser() *MockPRCloser { return &MockPRCloser{} }
@@ -108,6 +128,24 @@ func (m *MockPRCloser) ClosePR(prURL string) error {
 	return m.DefaultError
 }
 
+// PRState defaults to the indeterminate answer, so tests that do not care
+// about pull-request state behave as if the lookup were unavailable.
+func (m *MockPRCloser) PRState(prURL string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "PRState", Args: []any{prURL}})
+	if m.PRStateFn != nil {
+		return m.PRStateFn(prURL)
+	}
+	return "", m.DefaultError
+}
+
+func (m *MockPRCloser) DeleteRemoteBranch(repoPath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "DeleteRemoteBranch", Args: []any{repoPath, branch}})
+	if m.DeleteRemoteBranchFn != nil {
+		return m.DeleteRemoteBranchFn(repoPath, branch)
+	}
+	return m.DefaultError
+}
+
 // ---------------------------------------------------------------------------
 // MockWorktreeOps implements feature.WorktreeOps
 // ---------------------------------------------------------------------------
@@ -115,20 +153,28 @@ func (m *MockPRCloser) ClosePR(prURL string) error {
 // MockWorktreeOps implements feature.WorktreeOps with configurable
 // function overrides and call tracking.
 type MockWorktreeOps struct {
-	CreateFn               func(repoPath, featureSlug, repoName, startPoint string) (string, error)
-	ExpectedPathFn         func(featureSlug, repoName string) string
-	RemoveFn               func(worktreePath string, deleteBranch bool) error
-	RemoveRefFn            func(worktreePath, mainRepo, branch string) error
-	ResetToBaseFn          func(worktreePath, baseBranch string) error
-	ResetToBaseLocalFn     func(worktreePath, baseBranch string) error
-	ResetToCommitFn        func(worktreePath, commitSHA string) error
-	CurrentHeadSHAFn       func(worktreePath string) (string, error)
-	CurrentBranchFn        func(worktreePath string) string
-	RefSHAFn               func(repoPath, ref string) (string, error)
-	UpdateRefFn            func(repoPath, ref, oldSHA, newSHA string) error
-	IsAncestorFn           func(repoPath, ancestor, descendant string) (bool, error)
-	CreateMergeCandidateFn func(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
-	InspectCleanlinessFn   func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
+	CreateFn                   func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error)
+	ExpectedPathFn             func(featureSlug, repoName string) string
+	RemoveFn                   func(worktreePath string, deleteBranch bool) error
+	RemoveRefFn                func(worktreePath, mainRepo, branch string) error
+	ResetToBaseFn              func(worktreePath, baseBranch string) error
+	ResetToBaseLocalFn         func(worktreePath, baseBranch string) error
+	ResetToCommitFn            func(worktreePath, commitSHA string) error
+	CurrentHeadSHAFn           func(worktreePath string) (string, error)
+	CurrentBranchFn            func(worktreePath string) string
+	RefSHAFn                   func(repoPath, ref string) (string, error)
+	RefSHAOrAbsentFn           func(repoPath, ref string) (string, bool, error)
+	UpdateRefFn                func(repoPath, ref, oldSHA, newSHA string) error
+	IsAncestorFn               func(repoPath, ancestor, descendant string) (bool, error)
+	InspectCleanlinessFn       func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
+	RenameBranchFn             func(worktreePath, oldName, newName string) error
+	CreateBranchAtHeadFn       func(worktreePath, branch string) error
+	SwitchBranchFn             func(worktreePath, branch string) error
+	DeleteBranchFn             func(worktreePath, branch string) error
+	RestackChainFn             func(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp) (*git.RestackResult, error)
+	RestackChainWithResolverFn func(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp, resolver git.RestackConflictResolver, attemptsRoot string) (*git.RestackResult, error)
+	CommitTreeSHAFn            func(repoPath, commitSHA string) (string, error)
+	UpdateRefsTransactionFn    func(repoPath string, updates []git.RefUpdate) error
 
 	DefaultError error
 	Calls        []MockCall
@@ -137,10 +183,10 @@ type MockWorktreeOps struct {
 // NewMockWorktreeOps returns a MockWorktreeOps with zero-value defaults.
 func NewMockWorktreeOps() *MockWorktreeOps { return &MockWorktreeOps{} }
 
-func (m *MockWorktreeOps) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "Create", Args: []any{repoPath, featureSlug, repoName, startPoint}})
+func (m *MockWorktreeOps) Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "Create", Args: []any{repoPath, workspaceSlug, branch, repoName, startPoint}})
 	if m.CreateFn != nil {
-		return m.CreateFn(repoPath, featureSlug, repoName, startPoint)
+		return m.CreateFn(repoPath, workspaceSlug, branch, repoName, startPoint)
 	}
 	return "", m.DefaultError
 }
@@ -217,6 +263,14 @@ func (m *MockWorktreeOps) RefSHA(repoPath, ref string) (string, error) {
 	return "", m.DefaultError
 }
 
+func (m *MockWorktreeOps) RefSHAOrAbsent(repoPath, ref string) (string, bool, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "RefSHAOrAbsent", Args: []any{repoPath, ref}})
+	if m.RefSHAOrAbsentFn != nil {
+		return m.RefSHAOrAbsentFn(repoPath, ref)
+	}
+	return "", false, m.DefaultError
+}
+
 func (m *MockWorktreeOps) UpdateRef(repoPath, ref, oldSHA, newSHA string) error {
 	m.Calls = append(m.Calls, MockCall{Method: "UpdateRef", Args: []any{repoPath, ref, oldSHA, newSHA}})
 	if m.UpdateRefFn != nil {
@@ -233,18 +287,74 @@ func (m *MockWorktreeOps) IsAncestor(repoPath, ancestor, descendant string) (boo
 	return false, m.DefaultError
 }
 
-func (m *MockWorktreeOps) CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error) {
-	m.Calls = append(m.Calls, MockCall{Method: "CreateMergeCandidate", Args: []any{mainRepo, parentTip, childHead, message}})
-	if m.CreateMergeCandidateFn != nil {
-		return m.CreateMergeCandidateFn(mainRepo, parentTip, childHead, message)
-	}
-	return nil, m.DefaultError
-}
-
 func (m *MockWorktreeOps) InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error) {
 	m.Calls = append(m.Calls, MockCall{Method: "InspectCleanliness", Args: []any{worktreePath, maxPerCategory}})
 	if m.InspectCleanlinessFn != nil {
 		return m.InspectCleanlinessFn(worktreePath, maxPerCategory)
 	}
 	return &git.CleanlinessReport{}, m.DefaultError
+}
+
+func (m *MockWorktreeOps) RenameBranch(worktreePath, oldName, newName string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "RenameBranch", Args: []any{worktreePath, oldName, newName}})
+	if m.RenameBranchFn != nil {
+		return m.RenameBranchFn(worktreePath, oldName, newName)
+	}
+	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) CreateBranchAtHead(worktreePath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "CreateBranchAtHead", Args: []any{worktreePath, branch}})
+	if m.CreateBranchAtHeadFn != nil {
+		return m.CreateBranchAtHeadFn(worktreePath, branch)
+	}
+	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) SwitchBranch(worktreePath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "SwitchBranch", Args: []any{worktreePath, branch}})
+	if m.SwitchBranchFn != nil {
+		return m.SwitchBranchFn(worktreePath, branch)
+	}
+	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) DeleteBranch(worktreePath, branch string) error {
+	m.Calls = append(m.Calls, MockCall{Method: "DeleteBranch", Args: []any{worktreePath, branch}})
+	if m.DeleteBranchFn != nil {
+		return m.DeleteBranchFn(worktreePath, branch)
+	}
+	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) RestackChain(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp) (*git.RestackResult, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "RestackChain", Args: []any{mainRepo, cutPoints, ops}})
+	if m.RestackChainFn != nil {
+		return m.RestackChainFn(mainRepo, cutPoints, ops)
+	}
+	return nil, m.DefaultError
+}
+
+func (m *MockWorktreeOps) RestackChainWithResolver(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp, resolver git.RestackConflictResolver, attemptsRoot string) (*git.RestackResult, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "RestackChainWithResolver", Args: []any{mainRepo, cutPoints, ops, resolver, attemptsRoot}})
+	if m.RestackChainWithResolverFn != nil {
+		return m.RestackChainWithResolverFn(mainRepo, cutPoints, ops, resolver, attemptsRoot)
+	}
+	return nil, m.DefaultError
+}
+
+func (m *MockWorktreeOps) CommitTreeSHA(repoPath, commitSHA string) (string, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "CommitTreeSHA", Args: []any{repoPath, commitSHA}})
+	if m.CommitTreeSHAFn != nil {
+		return m.CommitTreeSHAFn(repoPath, commitSHA)
+	}
+	return "", m.DefaultError
+}
+
+func (m *MockWorktreeOps) UpdateRefsTransaction(repoPath string, updates []git.RefUpdate) error {
+	m.Calls = append(m.Calls, MockCall{Method: "UpdateRefsTransaction", Args: []any{repoPath, updates}})
+	if m.UpdateRefsTransactionFn != nil {
+		return m.UpdateRefsTransactionFn(repoPath, updates)
+	}
+	return m.DefaultError
 }

@@ -13,6 +13,7 @@ Implement the approved phase plan. You own code, development-time testing, expli
 | Artifact | Path | Requirement | Purpose |
 |----------|------|-------------|---------|
 | `progress.md` | `{phase_dir}/progress.md` | required | structured progress markdown with iteration handoff, deferrals, and iteration state |
+| `fix-manifest.yaml` | `{iteration_dir}/fix-manifest.yaml` | optional | optional manifest assigning this iteration's changed files to their owning parent stack layers |
 
 ## Start Here
 
@@ -33,6 +34,7 @@ Never create or edit `verification-report.yaml` or `phase_complete`. When a test
 - Use stubs only when the plan explicitly requests them. Mark intentional stubs with `// STUB(Phase N): <purpose>`.
 - Do not invent bookkeeping rows or edit the testing contract. If the contract or scope must change, request user input.
 - Add comments only for intent, rationale, invariants, or non-obvious tradeoffs.
+- When the user prompt names a parent delivery stack (a review-feedback child of a stacked parent) and your changes touch files a lower stack layer owns, write the optional `fix-manifest.yaml` in your iteration directory mapping each changed file to its owning parent layer position. Unlisted files follow the commented-layer default the prompt names. The manifest is optional — write it only when a fix actually changes lower-layer files, and never invent layer assignments you cannot verify against the layer branches.
 
 ## Task Fan-Out
 

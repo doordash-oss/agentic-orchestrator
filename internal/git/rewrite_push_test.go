@@ -25,66 +25,97 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-func TestPushRewrittenBranch_AllowsRedundantRemoteMerge(t *testing.T) {
+func TestPushLayerBranch_AllowsRedundantRemoteMerge(t *testing.T) {
 	repo, bare, branch := remoteMergeFixture(t, false)
+	localSHA := localHeadSHA(t, repo)
 
-	if err := PushRewrittenBranch(repo, branch); err != nil {
-		t.Fatalf("PushRewrittenBranch() error = %v; redundant merge should be replaceable", err)
+	pushedSHA, err := PushLayerBranch(repo, branch, localSHA, "")
+	if err != nil {
+		t.Fatalf("PushLayerBranch() error = %v; redundant merge should be replaceable", err)
 	}
-	if got := remoteBranchSHA(t, bare, branch); got != localHeadSHA(t, repo) {
-		t.Fatalf("remote tip = %s; want rewritten HEAD", got)
+	if pushedSHA != localSHA {
+		t.Fatalf("PushLayerBranch() = %s; want delivered SHA %s", pushedSHA, localSHA)
+	}
+	if got := remoteBranchSHA(t, bare, branch); got != localSHA {
+		t.Fatalf("remote tip = %s; want rewritten layer tip", got)
 	}
 }
 
-func TestPushRewrittenBranch_CreatesAbsentRemoteBranch(t *testing.T) {
+func TestPushLayerBranch_CreatesAbsentRemoteBranch(t *testing.T) {
 	repo, bare := testutil.InitPublishReadyGitRepo(t)
 	branch := "feature/absent"
 	testutil.CreateBranch(t, repo, branch)
 	testutil.CommitFile(t, repo, "created.txt", "created\n", "create remote branch")
+	localSHA := localHeadSHA(t, repo)
 
-	if err := PushRewrittenBranch(repo, branch); err != nil {
-		t.Fatalf("PushRewrittenBranch() error = %v; want absent remote branch created", err)
+	pushedSHA, err := PushLayerBranch(repo, branch, localSHA, "")
+	if err != nil {
+		t.Fatalf("PushLayerBranch() error = %v; want absent remote branch created", err)
 	}
-	if got := remoteBranchSHA(t, bare, branch); got != localHeadSHA(t, repo) {
-		t.Fatalf("remote tip = %s; want newly published HEAD", got)
+	if pushedSHA != localSHA {
+		t.Fatalf("PushLayerBranch() = %s; want delivered SHA %s", pushedSHA, localSHA)
+	}
+	if got := remoteBranchSHA(t, bare, branch); got != localSHA {
+		t.Fatalf("remote tip = %s; want newly published layer tip", got)
 	}
 }
 
-// TestPushRewrittenBranch_SyncsRemoteTrackingRefOnSingleBranchClone pins
-// that a rewritten push moves refs/remotes/origin/<branch> even when the
-// clone's fetch refspec only maps main.
-func TestPushRewrittenBranch_SyncsRemoteTrackingRefOnSingleBranchClone(t *testing.T) {
-	repo, bare := testutil.InitPublishReadyGitRepo(t)
-	runGit(t, repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
-	branch := "feature/narrow"
-	testutil.CreateBranch(t, repo, branch)
-	testutil.CommitFile(t, repo, "created.txt", "created\n", "create remote branch")
-
-	if err := PushRewrittenBranch(repo, branch); err != nil {
-		t.Fatalf("PushRewrittenBranch() error = %v", err)
+// TestPushLayerBranch_SyncsRemoteTrackingRefOnSingleBranchClone pins that a
+// lease push of a layer branch moves refs/remotes/origin/<branch> even when
+// the clone's fetch refspec only maps main.
+func TestPushLayerBranch_SyncsRemoteTrackingRefOnSingleBranchClone(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping real-push layer tracking-ref regression in short mode")
 	}
-	if got := remoteBranchSHA(t, bare, branch); got != localHeadSHA(t, repo) {
-		t.Fatalf("remote tip = %s; want pushed HEAD", got)
+	t.Parallel()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	branch := "feature/narrow-lease"
+	testutil.CreateBranch(t, repo, branch)
+	pushedSHA := testutil.CommitFile(t, repo, "created.txt", "created\n", "create remote branch")
+	testutil.SimulatePush(t, repo, bare, branch, branch)
+
+	// Narrow the clone to main only and drop the tracking ref the push left
+	// behind, so nothing but the lease-path sync can restore it.
+	runRewriteGit(t, repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+	runRewriteGit(t, repo, "update-ref", "-d", "refs/remotes/origin/"+branch)
+
+	// Rewrite the local tip so the remote tip is neither an ancestor of nor
+	// equal to the local SHA; only the lease path pinned to the last pushed
+	// SHA can deliver it.
+	runRewriteGit(t, repo, "commit", "--amend", "-m", "rewritten local branch")
+	localSHA := localHeadSHA(t, repo)
+
+	deliveredSHA, err := PushLayerBranch(repo, branch, localSHA, pushedSHA)
+	if err != nil {
+		t.Fatalf("PushLayerBranch() error = %v; want lease push to succeed", err)
+	}
+	if deliveredSHA != localSHA {
+		t.Fatalf("PushLayerBranch() = %s; want delivered SHA %s", deliveredSHA, localSHA)
+	}
+	if got := remoteBranchSHA(t, bare, branch); got != localSHA {
+		t.Fatalf("remote tip = %s; want rewritten layer tip %s", got, localSHA)
 	}
 	out, err := exec.Command("git", "-C", repo, "rev-parse", "refs/remotes/origin/"+branch).Output()
 	if err != nil {
-		t.Fatalf("remote-tracking ref missing after rewritten push: %v", err)
+		t.Fatalf("remote-tracking ref missing after lease push: %v", err)
 	}
-	if strings.TrimSpace(string(out)) != localHeadSHA(t, repo) {
-		t.Fatalf("origin/%s = %s; want pushed HEAD %s", branch, strings.TrimSpace(string(out)), localHeadSHA(t, repo))
+	if strings.TrimSpace(string(out)) != localSHA {
+		t.Fatalf("origin/%s = %s; want pushed tip %s", branch, strings.TrimSpace(string(out)), localSHA)
 	}
 }
 
-func TestPushRewrittenBranch_RejectsCompetingCreationAfterAbsenceInspection(t *testing.T) {
+func TestPushLayerBranch_RejectsCompetingCreationAfterAbsenceInspection(t *testing.T) {
 	repo, bare := testutil.InitPublishReadyGitRepo(t)
 	branch := "feature/competing-creation"
 	testutil.CreateBranch(t, repo, branch)
 	testutil.CommitFile(t, repo, "local.txt", "local\n", "local branch")
+	localSHA := localHeadSHA(t, repo)
 
 	other := cloneFreshnessRepo(t, bare)
 	var competingSHA string
 	hookCalled := false
-	err := pushRewrittenBranch(repo, branch, func() {
+	_, err := pushLayerBranch(repo, branch, localSHA, "", func() {
 		hookCalled = true
 		runRewriteGit(t, other, "checkout", "-b", branch)
 		competingSHA = testutil.CommitFile(t, other, "competitor.txt", "competitor\n", "competing branch")
@@ -105,7 +136,7 @@ func TestPushRewrittenBranch_RejectsCompetingCreationAfterAbsenceInspection(t *t
 	}
 }
 
-func TestPushRewrittenBranch_DoesNotTreatRemoteFailureAsAbsence(t *testing.T) {
+func TestPushLayerBranch_DoesNotTreatRemoteFailureAsAbsence(t *testing.T) {
 	repo := testutil.InitGitRepo(t)
 	branch := "feature/unreachable-origin"
 	testutil.CreateBranch(t, repo, branch)
@@ -113,16 +144,16 @@ func TestPushRewrittenBranch_DoesNotTreatRemoteFailureAsAbsence(t *testing.T) {
 	unreachable := filepath.Join(t.TempDir(), "missing-origin.git")
 	runRewriteGit(t, repo, "remote", "add", "origin", unreachable)
 
-	err := PushRewrittenBranch(repo, branch)
+	_, err := PushLayerBranch(repo, branch, localHeadSHA(t, repo), "")
 	if err == nil {
-		t.Fatal("PushRewrittenBranch() error = nil; want unreachable remote rejected")
+		t.Fatal("PushLayerBranch() error = nil; want unreachable remote rejected")
 	}
 	if !strings.Contains(err.Error(), "checking exact remote branch") {
-		t.Fatalf("PushRewrittenBranch() error = %v; want authoritative absence check failure", err)
+		t.Fatalf("PushLayerBranch() error = %v; want authoritative absence check failure", err)
 	}
 }
 
-func TestPushRewrittenBranch_KeepsRejectedAbsentCreationOperational(t *testing.T) {
+func TestPushLayerBranch_KeepsRejectedAbsentCreationOperational(t *testing.T) {
 	repo, bare := testutil.InitPublishReadyGitRepo(t)
 	branch := "feature/rejected-creation"
 	testutil.CreateBranch(t, repo, branch)
@@ -149,52 +180,52 @@ exit 1
 		t.Fatalf("writing rejecting pre-receive hook: %v", err)
 	}
 
-	err := PushRewrittenBranch(repo, branch)
+	_, err := PushLayerBranch(repo, branch, localHeadSHA(t, repo), "")
 	if err == nil {
-		t.Fatal("PushRewrittenBranch() error = nil; want rejected creation error")
+		t.Fatal("PushLayerBranch() error = nil; want rejected creation error")
 	}
 	var pushErr *RewritePushError
 	if errors.As(err, &pushErr) {
-		t.Fatalf("PushRewrittenBranch() error = %v; absent ref after rejection must remain operational", err)
+		t.Fatalf("PushLayerBranch() error = %v; absent ref after rejection must remain operational", err)
 	}
 	if !strings.Contains(err.Error(), "creation rejected") {
-		t.Fatalf("PushRewrittenBranch() error = %v; want primary push rejection retained", err)
+		t.Fatalf("PushLayerBranch() error = %v; want primary push rejection retained", err)
 	}
 	if err := rewriteGitCommand(bare, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run(); err == nil {
 		t.Fatal("rejected remote branch unexpectedly exists")
 	}
 }
 
-func TestPushRewrittenBranch_KeepsFailedReprobeOperational(t *testing.T) {
+func TestPushLayerBranch_KeepsFailedReprobeOperational(t *testing.T) {
 	repo, bare := testutil.InitPublishReadyGitRepo(t)
 	branch := "feature/failed-reprobe"
 	testutil.CreateBranch(t, repo, branch)
 	testutil.CommitFile(t, repo, "local.txt", "local\n", "local branch")
 	unreachable := filepath.Join(t.TempDir(), "missing-origin.git")
 
-	err := pushRewrittenBranch(repo, branch, func() {
+	_, err := pushLayerBranch(repo, branch, localHeadSHA(t, repo), "", func() {
 		runRewriteGit(t, repo, "remote", "set-url", "origin", unreachable)
 	})
 	if err == nil {
-		t.Fatal("PushRewrittenBranch() error = nil; want failed re-probe error")
+		t.Fatal("PushLayerBranch() error = nil; want failed re-probe error")
 	}
 	var pushErr *RewritePushError
 	if errors.As(err, &pushErr) {
-		t.Fatalf("PushRewrittenBranch() error = %v; failed re-probe must remain operational", err)
+		t.Fatalf("PushLayerBranch() error = %v; failed re-probe must remain operational", err)
 	}
 	if !strings.Contains(err.Error(), "pushing branch") || !strings.Contains(err.Error(), "checking exact remote branch") {
-		t.Fatalf("PushRewrittenBranch() error = %v; want primary push and re-probe failures retained", err)
+		t.Fatalf("PushLayerBranch() error = %v; want primary push and re-probe failures retained", err)
 	}
 	if err := rewriteGitCommand(bare, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).Run(); err == nil {
 		t.Fatal("remote branch unexpectedly exists after failed re-probe")
 	}
 }
 
-func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommit(t *testing.T) {
+func TestPushLayerBranch_RejectsOrdinaryRemoteCommit(t *testing.T) {
 	repo, bare := testutil.InitPublishReadyGitRepo(t)
 	branch := "feature/ordinary-remote"
 	testutil.CreateBranch(t, repo, branch)
-	testutil.CommitFile(t, repo, "first.txt", "first\n", "first commit")
+	pushedSHA := testutil.CommitFile(t, repo, "first.txt", "first\n", "first commit")
 	testutil.SimulatePush(t, repo, bare, branch, branch)
 
 	other := cloneFreshnessRepo(t, bare)
@@ -203,32 +234,34 @@ func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommit(t *testing.T) {
 	testutil.SimulatePush(t, other, bare, branch, branch)
 
 	testutil.CommitFile(t, repo, "rewritten.txt", "rewritten\n", "rewritten local commit")
+	localSHA := localHeadSHA(t, repo)
 
-	err := PushRewrittenBranch(repo, branch)
+	_, err := PushLayerBranch(repo, branch, localSHA, pushedSHA)
 	assertRewritePushError(t, err, RewritePushRemoteDiverged, branch, 1)
 	if got := remoteBranchSHA(t, bare, branch); got != remoteSHA {
 		t.Fatalf("remote tip = %s; want rejected remote commit %s", got, remoteSHA)
 	}
 }
 
-func TestPushRewrittenBranch_RejectsUniqueMergeResolution(t *testing.T) {
+func TestPushLayerBranch_RejectsUniqueMergeResolution(t *testing.T) {
 	repo, bare, branch := remoteMergeFixture(t, true)
 	remoteSHA := remoteBranchSHA(t, bare, branch)
 
-	err := PushRewrittenBranch(repo, branch)
+	_, err := PushLayerBranch(repo, branch, localHeadSHA(t, repo), "")
 	assertRewritePushError(t, err, RewritePushRemoteDiverged, branch, 1)
 	if got := remoteBranchSHA(t, bare, branch); got != remoteSHA {
 		t.Fatalf("remote tip = %s; want rejected merge %s", got, remoteSHA)
 	}
 }
 
-func TestPushRewrittenBranch_RejectsRemoteMoveAfterInspection(t *testing.T) {
+func TestPushLayerBranch_RejectsRemoteMoveAfterInspection(t *testing.T) {
 	repo, bare, branch := remoteMergeFixture(t, false)
+	localSHA := localHeadSHA(t, repo)
 	other := cloneFreshnessRepo(t, bare)
 	runRewriteGit(t, other, "checkout", branch)
 
 	var movedSHA string
-	err := pushRewrittenBranch(repo, branch, func() {
+	_, err := pushLayerBranch(repo, branch, localSHA, "", func() {
 		movedSHA = testutil.CommitFile(t, other, "moved.txt", "moved\n", "remote moved after inspection")
 		testutil.SimulatePush(t, other, bare, branch, branch)
 	})
@@ -238,7 +271,7 @@ func TestPushRewrittenBranch_RejectsRemoteMoveAfterInspection(t *testing.T) {
 	}
 }
 
-func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommitHiddenByReplaceRef(t *testing.T) {
+func TestPushLayerBranch_RejectsOrdinaryRemoteCommitHiddenByReplaceRef(t *testing.T) {
 	fixture := ordinaryRemoteMasqueradeFixture(t, "feature/replace-ref")
 	runRewriteGit(t, fixture.repo, "replace", "--graft", fixture.remoteSHA, fixture.featureA, fixture.master2)
 
@@ -254,7 +287,7 @@ func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommitHiddenByReplaceRef(t *te
 		t.Fatalf("replacement merge remerge diff = %q; want empty exploit proof", got)
 	}
 
-	err := PushRewrittenBranch(fixture.repo, fixture.branch)
+	_, err := PushLayerBranch(fixture.repo, fixture.branch, localHeadSHA(t, fixture.repo), "")
 	assertRewritePushError(t, err, RewritePushRemoteDiverged, fixture.branch, 1)
 	if got := remoteBranchSHA(t, fixture.bare, fixture.branch); got != fixture.remoteSHA {
 		t.Fatalf("remote tip = %s; want ordinary remote commit %s preserved", got, fixture.remoteSHA)
@@ -264,7 +297,7 @@ func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommitHiddenByReplaceRef(t *te
 	}
 }
 
-func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommitHiddenByGraft(t *testing.T) {
+func TestPushLayerBranch_RejectsOrdinaryRemoteCommitHiddenByGraft(t *testing.T) {
 	fixture := ordinaryRemoteMasqueradeFixture(t, "feature/graft")
 	runRewriteGit(t, fixture.repo, "config", "advice.graftFileDeprecated", "false")
 	graftPath := runRewriteGit(t, fixture.repo, "rev-parse", "--git-path", "info/grafts")
@@ -281,7 +314,7 @@ func TestPushRewrittenBranch_RejectsOrdinaryRemoteCommitHiddenByGraft(t *testing
 		t.Fatalf("grafted remote commit fields = %v; want commit plus two fake parents", graftedParents)
 	}
 
-	err := PushRewrittenBranch(fixture.repo, fixture.branch)
+	_, err := PushLayerBranch(fixture.repo, fixture.branch, localHeadSHA(t, fixture.repo), "")
 	assertRewritePushError(t, err, RewritePushRemoteDiverged, fixture.branch, 1)
 	if got := remoteBranchSHA(t, fixture.bare, fixture.branch); got != fixture.remoteSHA {
 		t.Fatalf("remote tip = %s; want ordinary remote commit %s preserved", got, fixture.remoteSHA)
@@ -412,7 +445,7 @@ func assertRewritePushError(
 	t.Helper()
 	var pushErr *RewritePushError
 	if !errors.As(err, &pushErr) {
-		t.Fatalf("PushRewrittenBranch() error = %v; want *RewritePushError", err)
+		t.Fatalf("PushLayerBranch() error = %v; want *RewritePushError", err)
 	}
 	if pushErr.Kind != wantKind {
 		t.Errorf("RewritePushError.Kind = %q; want %q", pushErr.Kind, wantKind)

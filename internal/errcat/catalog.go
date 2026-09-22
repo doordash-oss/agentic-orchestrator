@@ -34,16 +34,17 @@ const (
 
 // Mutation and action-conflict codes.
 const (
-	Conflict              Code = "conflict"
-	LocalSourceStale      Code = "local_source_stale"
-	LocalBaseMissing      Code = "local_base_missing"
-	PublishRemoteDiverged Code = "publish_remote_diverged"
-	PublishRemoteChanged  Code = "publish_remote_changed"
-	PipelineMismatch      Code = "pipeline_mismatch"
-	NeedUserInputOpen     Code = "need_user_input_open"
-	PhaseFinalizing       Code = "phase_finalizing"
-	InvalidTransition     Code = "invalid_transition"
-	InvalidWorkspaceRoot  Code = "invalid_workspace_root"
+	Conflict                   Code = "conflict"
+	LocalSourceStale           Code = "local_source_stale"
+	LocalBaseMissing           Code = "local_base_missing"
+	PublishRemoteDiverged      Code = "publish_remote_diverged"
+	PublishRemoteChanged       Code = "publish_remote_changed"
+	PipelineMismatch           Code = "pipeline_mismatch"
+	NeedUserInputOpen          Code = "need_user_input_open"
+	PhaseFinalizing            Code = "phase_finalizing"
+	InvalidTransition          Code = "invalid_transition"
+	InvalidWorkspaceRoot       Code = "invalid_workspace_root"
+	RoadmapPullRequestsInvalid Code = "roadmap_pull_requests_invalid"
 )
 
 // Relationship-guard codes.
@@ -73,6 +74,7 @@ const (
 	ReviewFeedbackUnsupportedCommentType Code = "review_feedback_unsupported_comment_type"
 	ReviewFeedbackUnknownRepo            Code = "review_feedback_unknown_repo"
 	ReviewFeedbackRepoHasNoPR            Code = "review_feedback_repo_has_no_pull_request"
+	ReviewFeedbackCommentPRNotOpen       Code = "review_feedback_comment_pr_not_open"
 	ReviewFeedbackDraftNotFound          Code = "review_feedback_draft_not_found"
 	ReviewFeedbackUnknownReference       Code = "review_feedback_unknown_reference"
 	ReviewFeedbackRevisionConflict       Code = "review_feedback_revision_conflict"
@@ -227,6 +229,7 @@ const (
 	ArtifactMissing          Code = "artifact_missing"
 	InfrastructureFailure    Code = "infrastructure_failure"
 	WorktreeSetupFailed      Code = "worktree_setup_failed"
+	LayerBoundaryFailed      Code = "layer_boundary_failed"
 )
 
 // RunFailureParams carries the phase name, iteration, and repository names a
@@ -564,7 +567,7 @@ var catalog = map[Code]Entry{
 			return publishDivergedSummary(p)
 		},
 		Summary:     "The pull-request branch contains remote work that is not in this workspace.",
-		Remediation: "Review and reconcile the pull-request branch on the remote, then refresh and retry.",
+		Remediation: "Run the rebase pass to replay this workspace's work onto the remote branch, then retry publish.",
 		Actions:     []string{"publish"},
 	},
 	PublishRemoteChanged: {
@@ -601,6 +604,12 @@ var catalog = map[Code]Entry{
 		Title:       "Invalid transition",
 		Summary:     "The action is not valid in the feature's current state.",
 		Remediation: "Refresh the feature and retry.",
+	},
+	RoadmapPullRequestsInvalid: {
+		Class:       ClassBlocking,
+		Title:       "Roadmap Pull Requests table is invalid",
+		Summary:     "The roadmap's ## Pull Requests table is missing or breaks the required grouping rules.",
+		Remediation: "Fix the table in the review editor and submit the decision again.",
 	},
 	InvalidWorkspaceRoot: {
 		Class:   ClassBlocking,
@@ -804,26 +813,26 @@ var catalog = map[Code]Entry{
 	// Every condition that fails a repository publish classifies into one of
 	// these at the publish boundary; the repository's stored record is the
 	// sole owner of the condition and never marks the run Failed.
-	PublishRebaseConflict: {
+	PublishStackPullRequestClosed: {
 		Class:   ClassNeedsAction,
-		Title:   "Pull-rebase conflict",
+		Title:   "Stack pull request closed",
 		Blocks:  []Block{BlockRepositories},
-		Summary: "The pull rebase onto the target branch conflicted.",
+		Summary: "The stack pull request is closed without merge and cannot receive new commits.",
 		summaryParams: func(p Params) string {
-			return publishRebaseConflictSummary(p)
+			return publishStackPullRequestClosedSummary(p)
 		},
-		Remediation: "Resolve the conflict in the worktree or run a rebase pass, then retry.",
-		Actions:     []string{"publish"},
+		Remediation: "Reopen the closed pull request to restore it on GitHub, or recreate it as a fresh pull request for the same layer branch.",
+		Actions:     []string{"reopen-pull-request", "recreate-pull-request"},
 	},
-	PublishPullRequestClosed: {
+	PublishStackMissing: {
 		Class:   ClassNeedsAction,
-		Title:   "Pull request closed",
+		Title:   "No approved stack",
 		Blocks:  []Block{BlockRepositories},
-		Summary: "The pull request is closed or merged and cannot receive new commits.",
+		Summary: "The run reached publish without an approved stack of pull requests.",
 		summaryParams: func(p Params) string {
-			return publishPullRequestClosedSummary(p)
+			return publishStackMissingSummary(p)
 		},
-		Remediation: "Reopen the pull request on the remote, then retry.",
+		Remediation: "Rewind to the roadmap phase and approve a valid Pull Requests table.",
 		Actions:     []string{"publish"},
 	},
 	PublishPullRequestFailed: {
@@ -858,6 +867,50 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "Check the repository and remote, then retry.",
 		Actions:     []string{"publish"},
+	},
+	PublishStateWriteFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Publish state not recorded",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Recording the publish state failed after the remote change succeeded.",
+		summaryParams: func(p Params) string {
+			return publishStateWriteFailedSummary(p)
+		},
+		Remediation: "Check the local feature store is writable, then retry; the retry re-records the state the remote already accepted.",
+		Actions:     []string{"publish"},
+	},
+	PublishReopenFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull-request reopen failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Reopening the closed stack pull request failed because the remote refused the change.",
+		summaryParams: func(p Params) string {
+			return publishReopenFailedSummary(p)
+		},
+		Remediation: "Retry reopen, or recreate the pull request as a fresh one for the same layer branch.",
+		Actions:     []string{"reopen-pull-request", "recreate-pull-request"},
+	},
+	PublishHeadBranchMissing: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull-request head branch missing",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "The layer branch of the closed stack pull request no longer exists on the remote, so it cannot be reopened.",
+		summaryParams: func(p Params) string {
+			return publishHeadBranchMissingSummary(p)
+		},
+		Remediation: "Recreate the pull request; Recreate pushes the layer branch again and opens a fresh pull request for it.",
+		Actions:     []string{"recreate-pull-request"},
+	},
+	PublishRecreateFailed: {
+		Class:   ClassNeedsAction,
+		Title:   "Pull-request recreation failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Creating the replacement pull request for the closed stack layer failed.",
+		summaryParams: func(p Params) string {
+			return publishRecreateFailedSummary(p)
+		},
+		Remediation: "Check GitHub access, then retry Recreate.",
+		Actions:     []string{"recreate-pull-request"},
 	},
 
 	// --- Relationship-guard codes -------------------------------------------
@@ -982,6 +1035,12 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "No pull request",
 		Summary: "The repository has no pull request to fetch feedback from.",
+	},
+	ReviewFeedbackCommentPRNotOpen: {
+		Class:       ClassBlocking,
+		Title:       "Pull request not open",
+		Summary:     "The comment's pull request is not an open layer pull request of its repository.",
+		Remediation: "Refresh the review feedback and retry.",
 	},
 	ReviewFeedbackDraftNotFound: {
 		Class:       ClassBlocking,
@@ -1415,6 +1474,21 @@ var catalog = map[Code]Entry{
 		Remediation: "Check the runtime environment and provider tooling, then restart the phase.",
 		Actions:     []string{"restart"},
 	},
+	LayerBoundaryFailed: {
+		Class:   ClassBlocking,
+		Title:   "Layer boundary failed",
+		Summary: "The phase could not cross its pull-request layer boundary.",
+		Blocks:  []Block{BlockPhase, BlockRepositories},
+		summaryParams: func(p Params) string {
+			params, ok := p.(RunFailureParams)
+			if !ok {
+				return ""
+			}
+			return runPhaseSummary(params, "could not cross its pull-request layer boundary")
+		},
+		Remediation: "Put each failing repository's worktree on the expected branch, then restart the phase.",
+		Actions:     []string{"restart"},
+	},
 	WorktreeSetupFailed: {
 		Class:   ClassBlocking,
 		Title:   "Worktree setup failed",
@@ -1599,6 +1673,16 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "The tail retries on the next server start or when the pass is integrated again; each failure is listed in the details.",
 	},
+	StackBaseRetargetFailed: {
+		Class:   ClassWarning,
+		Title:   "Stack base retarget failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Retargeting a stack layer's pull request to the parent layer's branch failed.",
+		summaryParams: func(p Params) string {
+			return stackBaseRetargetFailedSummary(p)
+		},
+		Remediation: "Retarget the pull request's base to the intended parent-layer branch on the remote yourself; the stack's pull requests stay mischained until then.",
+	},
 	RewindPullRequestCloseFailed: {
 		Class:   ClassWarning,
 		Title:   "Pull request close failed",
@@ -1628,6 +1712,26 @@ var catalog = map[Code]Entry{
 			return warningRepoSummary(p, "Resetting the worktree for %s failed during the rewind.")
 		},
 		Remediation: "Check the worktree's state; the rewind may be partially applied.",
+	},
+	RewindStackBranchFailed: {
+		Class:   ClassWarning,
+		Title:   "Stack branch step failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A stack branch step failed during the rewind.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "The stack branch step for %s failed during the rewind.")
+		},
+		Remediation: "Check the repository's branches; the rewind may be partially applied.",
+	},
+	RewindRemoteBranchDeleteFailed: {
+		Class:   ClassWarning,
+		Title:   "Remote branch deletion failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Deleting a remote branch failed during the rewind.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Deleting the remote branch for %s failed during the rewind.")
+		},
+		Remediation: "Delete the remote branch on the remote yourself before republishing the rewound layers.",
 	},
 	RepositoryWorktreeUnavailable: {
 		Class:   ClassWarning,
@@ -1668,6 +1772,36 @@ var catalog = map[Code]Entry{
 			return warningRepoSummary(p, "The mapped origin branch for %s no longer exists on the remote.")
 		},
 		Remediation: "Restore the origin branch or re-track the local branch; creation can continue from the local source.",
+	},
+	RoadmapBranchRenameFailed: {
+		Class:   ClassWarning,
+		Title:   "Branch rename failed",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Renaming a repository's branch to the approved layer-1 name failed during roadmap approval.",
+		summaryParams: func(p Params) string {
+			return warningRepoSummary(p, "Renaming the branch for %s to the approved layer-1 name failed during roadmap approval.")
+		},
+		Remediation: "The repository stays on the branch it is checked out on; rename it yourself and re-run approval from the review gate if the names must match.",
+	},
+	FixRelocatedAboveLayer: {
+		Class:   ClassWarning,
+		Title:   "Fix landed above its requested layer",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A final review fix landed above its requested stack layer.",
+		summaryParams: func(p Params) string {
+			return fixRelocatedAboveLayerSummary(p)
+		},
+		Remediation: "Inspect the commits of the layer the fix landed in; the conflict or failure detail is in the details.",
+	},
+	FixManifestEntryIgnored: {
+		Class:   ClassWarning,
+		Title:   "Fix manifest entry ignored",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "A fix manifest entry was ignored.",
+		summaryParams: func(p Params) string {
+			return fixManifestEntryIgnoredSummary(p)
+		},
+		Remediation: "Check the fix manifest format: each entry needs a layer position, a repository name, and repository-relative paths.",
 	},
 
 	// --- Orphan-session recovery codes ---------------------------------------
@@ -1726,17 +1860,6 @@ var catalog = map[Code]Entry{
 	// classifies into one of these at the transaction boundary. All are
 	// fix-then-retry preconditions that declare only the repositories block
 	// and reference the retry action.
-	IntegrationMergeConflict: {
-		Class:   ClassNeedsAction,
-		Title:   "Integration merge conflict",
-		Blocks:  []Block{BlockRepositories},
-		Summary: "The integration merge conflicted with the parent's current state.",
-		summaryParams: func(p Params) string {
-			return integrationMergeConflictSummary(p)
-		},
-		Remediation: "Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.",
-		Actions:     []string{"retry"},
-	},
 	IntegrationParentDirty: {
 		Class:   ClassNeedsAction,
 		Title:   "Parent worktree is dirty",
@@ -1825,6 +1948,17 @@ var catalog = map[Code]Entry{
 		Remediation: "Check the repository's state and retry the integration.",
 		Actions:     []string{"retry"},
 	},
+	IntegrationRebaseConflict: {
+		Class:   ClassNeedsAction,
+		Title:   "Rebase conflict resolution exhausted",
+		Blocks:  []Block{BlockRepositories},
+		Summary: "Resolving the replayed stack conflict used up every resolution attempt.",
+		summaryParams: func(p Params) string {
+			return integrationRebaseConflictSummary(p)
+		},
+		Remediation: "Start the pass again to re-run the restack and the resolution sessions, or discard the pass; the raw details name the segment, commit, files, and the last failure.",
+		Actions:     []string{"retry"},
+	},
 	RebaseGateTargetMissing: {
 		Class:   ClassNeedsAction,
 		Title:   "Rebase target missing",
@@ -1845,17 +1979,6 @@ var catalog = map[Code]Entry{
 			return rebaseGateNotAncestorSummary(p)
 		},
 		Remediation: "Rebase the pass branch onto its target and retry, or discard the pass.",
-		Actions:     []string{"retry"},
-	},
-	RebaseGateMergeInProgress: {
-		Class:   ClassNeedsAction,
-		Title:   "Merge in progress",
-		Blocks:  []Block{BlockRepositories},
-		Summary: "A repository has a merge in progress.",
-		summaryParams: func(p Params) string {
-			return rebaseGateMergeInProgressSummary(p)
-		},
-		Remediation: "Complete or abort the in-progress merge in the worktree and retry.",
 		Actions:     []string{"retry"},
 	},
 	RebaseGateConflictMarkers: {

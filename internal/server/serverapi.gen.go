@@ -146,6 +146,42 @@ func (e CloneOperationState) Valid() bool {
 	}
 }
 
+// Defines values for CompletionPreflightRepoPushMode.
+const (
+	CompletionPreflightRepoPushModeFastForward CompletionPreflightRepoPushMode = "fast_forward"
+	CompletionPreflightRepoPushModeRewrite     CompletionPreflightRepoPushMode = "rewrite"
+)
+
+// Valid indicates whether the value is a known member of the CompletionPreflightRepoPushMode enum.
+func (e CompletionPreflightRepoPushMode) Valid() bool {
+	switch e {
+	case CompletionPreflightRepoPushModeFastForward:
+		return true
+	case CompletionPreflightRepoPushModeRewrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CreateFeatureMutationRequestDeliveryMode.
+const (
+	Single CreateFeatureMutationRequestDeliveryMode = "single"
+	Stack  CreateFeatureMutationRequestDeliveryMode = "stack"
+)
+
+// Valid indicates whether the value is a known member of the CreateFeatureMutationRequestDeliveryMode enum.
+func (e CreateFeatureMutationRequestDeliveryMode) Valid() bool {
+	switch e {
+	case Single:
+		return true
+	case Stack:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateFeatureMutationRequestInquireness.
 const (
 	CreateFeatureMutationRequestInquirenessHigh   CreateFeatureMutationRequestInquireness = "high"
@@ -269,7 +305,9 @@ const (
 	FeatureActionPauseStop            FeatureAction = "pause-stop"
 	FeatureActionPublish              FeatureAction = "publish"
 	FeatureActionRebase               FeatureAction = "rebase"
+	FeatureActionRecreatePullRequest  FeatureAction = "recreate-pull-request"
 	FeatureActionRefactor             FeatureAction = "refactor"
+	FeatureActionReopenPullRequest    FeatureAction = "reopen-pull-request"
 	FeatureActionRestart              FeatureAction = "restart"
 	FeatureActionResume               FeatureAction = "resume"
 	FeatureActionRetry                FeatureAction = "retry"
@@ -303,7 +341,11 @@ func (e FeatureAction) Valid() bool {
 		return true
 	case FeatureActionRebase:
 		return true
+	case FeatureActionRecreatePullRequest:
+		return true
 	case FeatureActionRefactor:
+		return true
+	case FeatureActionReopenPullRequest:
 		return true
 	case FeatureActionRestart:
 		return true
@@ -485,6 +527,54 @@ func (e PermissionAnswerRequestDecision) Valid() bool {
 	case AllowRemember:
 		return true
 	case Deny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PullRequestEntryPushMode.
+const (
+	PullRequestEntryPushModeCreate      PullRequestEntryPushMode = "create"
+	PullRequestEntryPushModeFastForward PullRequestEntryPushMode = "fast_forward"
+	PullRequestEntryPushModeNone        PullRequestEntryPushMode = "none"
+	PullRequestEntryPushModeRewrite     PullRequestEntryPushMode = "rewrite"
+)
+
+// Valid indicates whether the value is a known member of the PullRequestEntryPushMode enum.
+func (e PullRequestEntryPushMode) Valid() bool {
+	switch e {
+	case PullRequestEntryPushModeCreate:
+		return true
+	case PullRequestEntryPushModeFastForward:
+		return true
+	case PullRequestEntryPushModeNone:
+		return true
+	case PullRequestEntryPushModeRewrite:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PullRequestEntryState.
+const (
+	PullRequestEntryStateClosed PullRequestEntryState = "closed"
+	PullRequestEntryStateMerged PullRequestEntryState = "merged"
+	PullRequestEntryStateNone   PullRequestEntryState = "none"
+	PullRequestEntryStateOpen   PullRequestEntryState = "open"
+)
+
+// Valid indicates whether the value is a known member of the PullRequestEntryState enum.
+func (e PullRequestEntryState) Valid() bool {
+	switch e {
+	case PullRequestEntryStateClosed:
+		return true
+	case PullRequestEntryStateMerged:
+		return true
+	case PullRequestEntryStateNone:
+		return true
+	case PullRequestEntryStateOpen:
 		return true
 	default:
 		return false
@@ -908,24 +998,75 @@ func (e ReviewFeedbackDraftCommentType) Valid() bool {
 	}
 }
 
+// Defines values for RewindPRConsequencePrState.
+const (
+	RewindPRConsequencePrStateClosed RewindPRConsequencePrState = "closed"
+	RewindPRConsequencePrStateMerged RewindPRConsequencePrState = "merged"
+	RewindPRConsequencePrStateNone   RewindPRConsequencePrState = "none"
+	RewindPRConsequencePrStateOpen   RewindPRConsequencePrState = "open"
+)
+
+// Valid indicates whether the value is a known member of the RewindPRConsequencePrState enum.
+func (e RewindPRConsequencePrState) Valid() bool {
+	switch e {
+	case RewindPRConsequencePrStateClosed:
+		return true
+	case RewindPRConsequencePrStateMerged:
+		return true
+	case RewindPRConsequencePrStateNone:
+		return true
+	case RewindPRConsequencePrStateOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RewindPRConsequenceVerdict.
+const (
+	RewindPRConsequenceVerdictClose  RewindPRConsequenceVerdict = "close"
+	RewindPRConsequenceVerdictKeep   RewindPRConsequenceVerdict = "keep"
+	RewindPRConsequenceVerdictMerged RewindPRConsequenceVerdict = "merged"
+	RewindPRConsequenceVerdictNone   RewindPRConsequenceVerdict = "none"
+)
+
+// Valid indicates whether the value is a known member of the RewindPRConsequenceVerdict enum.
+func (e RewindPRConsequenceVerdict) Valid() bool {
+	switch e {
+	case RewindPRConsequenceVerdictClose:
+		return true
+	case RewindPRConsequenceVerdictKeep:
+		return true
+	case RewindPRConsequenceVerdictMerged:
+		return true
+	case RewindPRConsequenceVerdictNone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RewindWorktreeConsequenceResetKind.
 const (
-	Anchor    RewindWorktreeConsequenceResetKind = "anchor"
-	Base      RewindWorktreeConsequenceResetKind = "base"
-	BaseLocal RewindWorktreeConsequenceResetKind = "base-local"
-	None      RewindWorktreeConsequenceResetKind = "none"
+	RewindWorktreeConsequenceResetKindAnchor    RewindWorktreeConsequenceResetKind = "anchor"
+	RewindWorktreeConsequenceResetKindBase      RewindWorktreeConsequenceResetKind = "base"
+	RewindWorktreeConsequenceResetKindBaseLocal RewindWorktreeConsequenceResetKind = "base-local"
+	RewindWorktreeConsequenceResetKindLayerTip  RewindWorktreeConsequenceResetKind = "layer-tip"
+	RewindWorktreeConsequenceResetKindNone      RewindWorktreeConsequenceResetKind = "none"
 )
 
 // Valid indicates whether the value is a known member of the RewindWorktreeConsequenceResetKind enum.
 func (e RewindWorktreeConsequenceResetKind) Valid() bool {
 	switch e {
-	case Anchor:
+	case RewindWorktreeConsequenceResetKindAnchor:
 		return true
-	case Base:
+	case RewindWorktreeConsequenceResetKindBase:
 		return true
-	case BaseLocal:
+	case RewindWorktreeConsequenceResetKindBaseLocal:
 		return true
-	case None:
+	case RewindWorktreeConsequenceResetKindLayerTip:
+		return true
+	case RewindWorktreeConsequenceResetKindNone:
 		return true
 	default:
 		return false
@@ -1222,15 +1363,12 @@ func (e UpdateSnapshotUnsupportedReason) Valid() bool {
 
 // Defines values for FeatureSubaction.
 const (
-	FeatureSubactionDescription FeatureSubaction = "description"
-	FeatureSubactionFetch       FeatureSubaction = "fetch"
+	FeatureSubactionFetch FeatureSubaction = "fetch"
 )
 
 // Valid indicates whether the value is a known member of the FeatureSubaction enum.
 func (e FeatureSubaction) Valid() bool {
 	switch e {
-	case FeatureSubactionDescription:
-		return true
 	case FeatureSubactionFetch:
 		return true
 	default:
@@ -1328,6 +1466,21 @@ func (e RebaseFeatureParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for RecreatePullRequestFeatureParamsXAgenticoClient.
+const (
+	RecreatePullRequestFeatureParamsXAgenticoClientLocal RecreatePullRequestFeatureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the RecreatePullRequestFeatureParamsXAgenticoClient enum.
+func (e RecreatePullRequestFeatureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case RecreatePullRequestFeatureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RefactorFeatureParamsXAgenticoClient.
 const (
 	RefactorFeatureParamsXAgenticoClientLocal RefactorFeatureParamsXAgenticoClient = "local"
@@ -1337,6 +1490,21 @@ const (
 func (e RefactorFeatureParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case RefactorFeatureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReopenPullRequestFeatureParamsXAgenticoClient.
+const (
+	ReopenPullRequestFeatureParamsXAgenticoClientLocal ReopenPullRequestFeatureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ReopenPullRequestFeatureParamsXAgenticoClient enum.
+func (e ReopenPullRequestFeatureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ReopenPullRequestFeatureParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -1420,15 +1588,12 @@ func (e RunFeatureSubactionParamsXAgenticoClient) Valid() bool {
 
 // Defines values for RunFeatureSubactionParamsSubaction.
 const (
-	RunFeatureSubactionParamsSubactionDescription RunFeatureSubactionParamsSubaction = "description"
-	RunFeatureSubactionParamsSubactionFetch       RunFeatureSubactionParamsSubaction = "fetch"
+	RunFeatureSubactionParamsSubactionFetch RunFeatureSubactionParamsSubaction = "fetch"
 )
 
 // Valid indicates whether the value is a known member of the RunFeatureSubactionParamsSubaction enum.
 func (e RunFeatureSubactionParamsSubaction) Valid() bool {
 	switch e {
-	case RunFeatureSubactionParamsSubactionDescription:
-		return true
 	case RunFeatureSubactionParamsSubactionFetch:
 		return true
 	default:
@@ -1939,7 +2104,6 @@ type ActionResponse struct {
 	NeedUserInputDraftResponse   NeedUserInputDraftResponse   `json:"need_user_input_draft_response,omitempty"`
 	NeedUserInputResumeResponse  NeedUserInputResumeResponse  `json:"need_user_input_resume_response,omitempty"`
 	PermissionAnswerResponse     PermissionAnswerResponse     `json:"permission_answer_response,omitempty"`
-	PublishDescriptionResponse   PublishDescriptionResponse   `json:"publish_description_response,omitempty"`
 	PublishFeatureResponse       PublishFeatureResponse       `json:"publish_feature_response,omitempty"`
 	RecoveryActionResponse       RecoveryActionResponse       `json:"recovery_action_response,omitempty"`
 	RetryFeatureResponse         RetryFeatureResponse         `json:"retry_feature_response,omitempty"`
@@ -2228,19 +2392,25 @@ type CompletionPreflightRepo struct {
 
 	// PendingDirtyFiles Bounded list of uncommitted paths a publish would commit. May be shorter than pending_dirty_file_total.
 	PendingDirtyFiles []string `json:"pending_dirty_files,omitempty"`
+	Publishable       bool     `json:"publishable"`
 
-	// PrURL Current PR URL when the repository has been published.
-	PrURL       string `json:"pr_url,omitempty"`
-	Publishable bool   `json:"publishable"`
+	// PullRequests Ordered per-layer stack view for this repository, one entry per layer with its per-layer push mode. Omitted for non-publishable repositories and runs without a stack.
+	PullRequests []PullRequestEntry `json:"pull_requests,omitempty"`
 
-	// PushMode How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease.
-	PushMode string `json:"push_mode,omitempty"`
-	Repo     string `json:"repo"`
+	// PushMode Repository-level push mode — rewrite when any layer's remote branch carries commits its tip does not contain, else fast_forward. Present only when the repository has at least one pull request on some layer.
+	PushMode CompletionPreflightRepoPushMode `json:"push_mode,omitempty"`
+
+	// RebaseHint Server-authored rebase hint, present when a merged layer whose entry still holds a tip sits below a kept layer with commits — the repository reads behind and the hint names the merged layer and points at the rebase pass that restacks the chain. Omitted when there is no such layer.
+	RebaseHint string `json:"rebase_hint,omitempty"`
+	Repo       string `json:"repo"`
 
 	// Status Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked.
 	Status  string `json:"status"`
 	Touched bool   `json:"touched"`
 }
+
+// CompletionPreflightRepoPushMode Repository-level push mode — rewrite when any layer's remote branch carries commits its tip does not contain, else fast_forward. Present only when the repository has at least one pull request on some layer.
+type CompletionPreflightRepoPushMode string
 
 // CompletionPreflightResponse defines model for CompletionPreflightResponse.
 type CompletionPreflightResponse struct {
@@ -2303,23 +2473,27 @@ type Cost struct {
 
 // CreateFeatureMutationRequest defines model for CreateFeatureMutationRequest.
 type CreateFeatureMutationRequest struct {
-	AttachmentUploads []string                                `json:"attachment_uploads,omitempty"`
-	Attachments       []string                                `json:"attachments,omitempty"`
-	Checkpoints       Checkpoints                             `json:"checkpoints,omitempty"`
-	Description       string                                  `json:"description,omitempty"`
-	ExitCriteria      string                                  `json:"exit_criteria,omitempty"`
-	IdempotencyKey    string                                  `json:"idempotency_key,omitempty"`
-	ImageUploads      []string                                `json:"image_uploads,omitempty"`
-	Images            []string                                `json:"images,omitempty"`
-	Inquireness       CreateFeatureMutationRequestInquireness `json:"inquireness,omitempty"`
-	Models            ModelDefaults                           `json:"models,omitempty"`
-	Name              string                                  `json:"name"`
-	Pipeline          CreateFeatureMutationRequestPipeline    `json:"pipeline,omitempty"`
-	Repos             []string                                `json:"repos,omitempty"`
-	RepositorySources []RepositorySource                      `json:"repository_sources,omitempty"`
-	RiskLevel         CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
-	UseCurrentBranch  bool                                    `json:"use_current_branch,omitempty"`
+	AttachmentUploads []string                                 `json:"attachment_uploads,omitempty"`
+	Attachments       []string                                 `json:"attachments,omitempty"`
+	Checkpoints       Checkpoints                              `json:"checkpoints,omitempty"`
+	DeliveryMode      CreateFeatureMutationRequestDeliveryMode `json:"delivery_mode,omitempty"`
+	Description       string                                   `json:"description,omitempty"`
+	ExitCriteria      string                                   `json:"exit_criteria,omitempty"`
+	IdempotencyKey    string                                   `json:"idempotency_key,omitempty"`
+	ImageUploads      []string                                 `json:"image_uploads,omitempty"`
+	Images            []string                                 `json:"images,omitempty"`
+	Inquireness       CreateFeatureMutationRequestInquireness  `json:"inquireness,omitempty"`
+	Models            ModelDefaults                            `json:"models,omitempty"`
+	Name              string                                   `json:"name"`
+	Pipeline          CreateFeatureMutationRequestPipeline     `json:"pipeline,omitempty"`
+	Repos             []string                                 `json:"repos,omitempty"`
+	RepositorySources []RepositorySource                       `json:"repository_sources,omitempty"`
+	RiskLevel         CreateFeatureMutationRequestRiskLevel    `json:"risk_level,omitempty"`
+	UseCurrentBranch  bool                                     `json:"use_current_branch,omitempty"`
 }
+
+// CreateFeatureMutationRequestDeliveryMode defines model for CreateFeatureMutationRequest.DeliveryMode.
+type CreateFeatureMutationRequestDeliveryMode string
 
 // CreateFeatureMutationRequestInquireness defines model for CreateFeatureMutationRequest.Inquireness.
 type CreateFeatureMutationRequestInquireness string
@@ -2482,16 +2656,27 @@ type ErrorRemediation struct {
 
 // ErrorRepositoryContext Repository a code references.
 type ErrorRepositoryContext struct {
-	Branch          string   `json:"branch,omitempty"`
-	CandidateSha    string   `json:"candidate_sha,omitempty"`
-	ChildHeadSha    string   `json:"child_head_sha,omitempty"`
-	ConflictFiles   []string `json:"conflict_files,omitempty"`
-	DirtyFiles      []string `json:"dirty_files,omitempty"`
-	ExpectedRefSha  string   `json:"expected_ref_sha,omitempty"`
-	MergeHead       string   `json:"merge_head,omitempty"`
-	Name            string   `json:"name"`
-	ObservedSha     string   `json:"observed_sha,omitempty"`
-	ParentAnchorSha string   `json:"parent_anchor_sha,omitempty"`
+	// Attempts Resolution attempts spent on the replayed commit's conflict, when known.
+	Attempts     int    `json:"attempts,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	CandidateSha string `json:"candidate_sha,omitempty"`
+	ChildHeadSha string `json:"child_head_sha,omitempty"`
+
+	// CommitSha Commit whose replayed conflict exhausted its resolution attempts, when known.
+	CommitSha     string   `json:"commit_sha,omitempty"`
+	ConflictFiles []string `json:"conflict_files,omitempty"`
+	DirtyFiles    []string `json:"dirty_files,omitempty"`
+
+	// LayerPosition Stack layer position of the repository's failing layer, when the code is layer-scoped.
+	LayerPosition int `json:"layer_position,omitempty"`
+
+	// LayerTitle Roadmap table title of the stack layer the code names, when known.
+	LayerTitle  string `json:"layer_title,omitempty"`
+	Name        string `json:"name"`
+	ObservedSha string `json:"observed_sha,omitempty"`
+
+	// PullRequestURL Pull-request URL of the stack layer the code names, when known.
+	PullRequestURL string `json:"pull_request_url,omitempty"`
 
 	// RebaseTarget Rebase target branch of a conflicted publish pull-rebase, when known.
 	RebaseTarget string `json:"rebase_target,omitempty"`
@@ -2570,6 +2755,7 @@ type FeatureConfigUpdateResponse struct {
 type FeatureDefaults struct {
 	AutomaticReviewEnabled bool                                 `json:"automatic_review_enabled,omitempty"`
 	Checkpoints            config.Checkpoints                   `json:"checkpoints"`
+	DeliveryMode           string                               `json:"delivery_mode,omitempty"`
 	Effort                 EffortConfig                         `json:"effort,omitempty"`
 	Inquireness            string                               `json:"inquireness,omitempty"`
 	Models                 ModelDefaults                        `json:"models"`
@@ -2606,12 +2792,13 @@ type FeatureDetail struct {
 	CloseOutcome string `json:"close_outcome,omitempty"`
 
 	// ClosedAt Relationship close timestamp; only set on closed child features.
-	ClosedAt     *time.Time   `json:"closed_at,omitempty"`
-	Cost         Cost         `json:"cost"`
-	CreatedAt    time.Time    `json:"created_at"`
-	CurrentPhase string       `json:"current_phase"`
-	Description  string       `json:"description,omitempty"`
-	Effort       EffortConfig `json:"effort,omitempty"`
+	ClosedAt     *time.Time           `json:"closed_at,omitempty"`
+	Cost         Cost                 `json:"cost"`
+	CreatedAt    time.Time            `json:"created_at"`
+	CurrentPhase string               `json:"current_phase"`
+	DeliveryMode feature.DeliveryMode `json:"delivery_mode,omitempty"`
+	Description  string               `json:"description,omitempty"`
+	Effort       EffortConfig         `json:"effort,omitempty"`
 
 	// Errors Current non-warning errors this feature or its active child owns, each pairing the catalog-rendered error (without diagnostics) with the reference to its durable home. Entries are ordered blocking first, then needs_action, stable by scope and key; absent when there are none. Warning-class records never appear here.
 	Errors       []OwnedError `json:"errors,omitempty"`
@@ -3104,16 +3291,6 @@ type ProviderReadiness struct {
 	Version string `json:"version,omitempty"`
 }
 
-// PublishDescriptionResponse defines model for PublishDescriptionResponse.
-type PublishDescriptionResponse struct {
-	APIVersion string       `json:"api_version"`
-	Body       string       `json:"body"`
-	FeatureID  string       `json:"feature_id"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-	Title      string       `json:"title"`
-}
-
 // PublishFeatureResponse defines model for PublishFeatureResponse.
 type PublishFeatureResponse struct {
 	APIVersion string       `json:"api_version"`
@@ -3127,6 +3304,39 @@ type Publishability struct {
 	ManualPublish bool            `json:"manual_publish"`
 	Repos         map[string]bool `json:"repos"`
 }
+
+// PullRequestEntry defines model for PullRequestEntry.
+type PullRequestEntry struct {
+	// Branch Layer branch name.
+	Branch string `json:"branch,omitempty"`
+
+	// NoCommits Whether the layer delivered no commits in this repository.
+	NoCommits bool `json:"no_commits"`
+
+	// Position Stack layer position, ascending from 1.
+	Position int `json:"position"`
+
+	// PushMode Per-layer push mode a publish would apply — create (no pull request yet, commits to deliver), fast_forward (pull request exists, tip moved, remote branch is an ancestor), rewrite (remote branch is not an ancestor, publish force-pushes under a lease), or none (up to date, merged, closed, or no commits). Present only on completion preflight entries.
+	PushMode PullRequestEntryPushMode `json:"push_mode,omitempty"`
+
+	// PushedUpToDate Whether a pull request exists and the layer's recorded tip equals its last-pushed SHA.
+	PushedUpToDate bool `json:"pushed_up_to_date"`
+
+	// State Recorded pull request state; none before any pull request exists.
+	State PullRequestEntryState `json:"state"`
+
+	// Title Layer title from the approved roadmap's pull-request table.
+	Title string `json:"title"`
+
+	// URL Pull request URL, omitted when no pull request exists for the layer.
+	URL string `json:"url,omitempty"`
+}
+
+// PullRequestEntryPushMode Per-layer push mode a publish would apply — create (no pull request yet, commits to deliver), fast_forward (pull request exists, tip moved, remote branch is an ancestor), rewrite (remote branch is not an ancestor, publish force-pushes under a lease), or none (up to date, merged, closed, or no commits). Present only on completion preflight entries.
+type PullRequestEntryPushMode string
+
+// PullRequestEntryState Recorded pull request state; none before any pull request exists.
+type PullRequestEntryState string
 
 // ReadinessResponse defines model for ReadinessResponse.
 type ReadinessResponse struct {
@@ -3192,6 +3402,26 @@ type RecoverySnapshotResponse struct {
 	Items      []RecoveryItem `json:"items"`
 	Meta       ResponseMeta   `json:"meta,omitempty"`
 	SnapshotID string         `json:"snapshot_id"`
+}
+
+// RecreatePullRequestRequest defines model for RecreatePullRequestRequest.
+type RecreatePullRequestRequest struct {
+	// Layer Stack layer position of the closed pull request.
+	Layer int `json:"layer"`
+
+	// Repository Repository name whose stack layer holds the closed pull request.
+	Repository string `json:"repository"`
+
+	// SourceRevision Completion preflight source revision guard, as publish carries.
+	SourceRevision string `json:"source_revision,omitempty"`
+}
+
+// RecreatePullRequestResponse defines model for RecreatePullRequestResponse.
+type RecreatePullRequestResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
 }
 
 // RefactorFeatureRequest defines model for RefactorFeatureRequest.
@@ -3302,36 +3532,67 @@ type RelationshipChildSummary struct {
 	Warnings []Error `json:"warnings"`
 }
 
+// ReopenPullRequestRequest defines model for ReopenPullRequestRequest.
+type ReopenPullRequestRequest struct {
+	// Layer Stack layer position of the closed pull request.
+	Layer int `json:"layer"`
+
+	// Repository Repository name whose stack layer holds the closed pull request.
+	Repository string `json:"repository"`
+
+	// SourceRevision Completion preflight source revision guard, as publish carries.
+	SourceRevision string `json:"source_revision,omitempty"`
+}
+
+// ReopenPullRequestResponse defines model for ReopenPullRequestResponse.
+type ReopenPullRequestResponse struct {
+	APIVersion string       `json:"api_version"`
+	FeatureID  string       `json:"feature_id"`
+	Meta       ResponseMeta `json:"meta,omitempty"`
+	Result     string       `json:"result"`
+}
+
 // RepoStatus defines model for RepoStatus.
 type RepoStatus struct {
 	ConflictFiles []string `json:"conflict_files,omitempty"`
 
 	// Error Canonical catalog-rendered publish failure record this repository owns, when any.
-	Error        *Error `json:"error,omitempty"`
-	Freshness    string `json:"freshness,omitempty"`
-	Name         string `json:"name"`
-	PRURL        string `json:"pr_url,omitempty"`
-	Publishable  bool   `json:"publishable"`
-	RebaseStatus string `json:"rebase_status,omitempty"`
-	RebaseTarget string `json:"rebase_target,omitempty"`
-	Touched      bool   `json:"touched"`
+	Error       *Error `json:"error,omitempty"`
+	Freshness   string `json:"freshness,omitempty"`
+	Name        string `json:"name"`
+	Publishable bool   `json:"publishable"`
+
+	// PullRequests Ordered per-layer stack view for this repository, one entry per layer in position order. Omitted for non-publishable repositories and runs without a stack; completion preflight entries additionally carry push_mode.
+	PullRequests []PullRequestEntry `json:"pull_requests,omitempty"`
+	RebaseStatus string             `json:"rebase_status,omitempty"`
+	RebaseTarget string             `json:"rebase_target,omitempty"`
+	Touched      bool               `json:"touched"`
 }
 
 // RepoTransactionEntry defines model for RepoTransactionEntry.
 type RepoTransactionEntry struct {
-	ApplyState      string `json:"apply_state,omitempty"`
-	CandidateSha    string `json:"candidate_sha,omitempty"`
-	ChildHeadSha    string `json:"child_head_sha,omitempty"`
-	ExpectedRefSha  string `json:"expected_ref_sha,omitempty"`
-	MergeHead       string `json:"merge_head,omitempty"`
-	ObservedSha     string `json:"observed_sha,omitempty"`
-	ParentAnchorSha string `json:"parent_anchor_sha,omitempty"`
-	ParentBranch    string `json:"parent_branch,omitempty"`
+	ApplyState   string `json:"apply_state,omitempty"`
+	ChildHeadSha string `json:"child_head_sha,omitempty"`
 
 	// PendingSync True when this applied entry's parent worktree sync failed after the ref update; closure retries the sync automatically.
 	PendingSync bool   `json:"pending_sync,omitempty"`
 	PrepState   string `json:"prep_state,omitempty"`
-	Repo        string `json:"repo,omitempty"`
+
+	// Refs Ordered per-layer ref updates this entry's transaction rewrites, ascending by layer position; the highest-position ref is the top ref the parent worktree syncs to.
+	Refs []RepoTransactionRef `json:"refs,omitempty"`
+	Repo string               `json:"repo,omitempty"`
+}
+
+// RepoTransactionRef defines model for RepoTransactionRef.
+type RepoTransactionRef struct {
+	AnchorSha    string `json:"anchor_sha,omitempty"`
+	Branch       string `json:"branch,omitempty"`
+	CandidateSha string `json:"candidate_sha,omitempty"`
+
+	// Kind Ref update kind - rewrite (an update to an existing ref), create (a ref that did not exist before the transaction), or delete (a ref that did exist, removed while sitting at its anchor).
+	Kind          string `json:"kind,omitempty"`
+	LayerPosition int    `json:"layer_position,omitempty"`
+	ObservedSha   string `json:"observed_sha,omitempty"`
 }
 
 // RepositoryDiffFile defines model for RepositoryDiffFile.
@@ -3793,20 +4054,24 @@ type ReviewDraftValidationResponse struct {
 // ReviewFeedbackComment defines model for ReviewFeedbackComment.
 type ReviewFeedbackComment = feature.ReviewFeedbackComment
 
-// ReviewFeedbackDraftComment One review-feedback comment inside the revisioned pending-draft view. `stable_ref` is the repository identity plus supported comment type plus GitHub database comment ID; `selected` is the committed draft selection. The remaining fields snapshot the reviewed child-visible content used to reconcile launch-time changes.
+// ReviewFeedbackDraftComment One review-feedback comment inside the revisioned pending-draft view. `stable_ref` is the repository identity plus supported comment type plus GitHub database comment ID; `selected` is the committed draft selection. The remaining fields snapshot the reviewed child-visible content used to reconcile launch-time changes, plus the open layer pull request the comment was left on.
 type ReviewFeedbackDraftComment struct {
-	Author      string                         `json:"author,omitempty"`
-	Body        string                         `json:"body,omitempty"`
-	CreatedAt   string                         `json:"created_at,omitempty"`
-	DiffHunk    string                         `json:"diff_hunk,omitempty"`
-	ID          int                            `json:"id"`
-	InReplyToID int                            `json:"in_reply_to_id,omitempty"`
-	Line        int                            `json:"line,omitempty"`
-	Path        string                         `json:"path,omitempty"`
-	Repo        string                         `json:"repo"`
-	Selected    bool                           `json:"selected"`
-	StableRef   string                         `json:"stable_ref"`
-	Type        ReviewFeedbackDraftCommentType `json:"type"`
+	Author        string                         `json:"author,omitempty"`
+	Body          string                         `json:"body,omitempty"`
+	CreatedAt     string                         `json:"created_at,omitempty"`
+	DiffHunk      string                         `json:"diff_hunk,omitempty"`
+	ID            int                            `json:"id"`
+	InReplyToID   int                            `json:"in_reply_to_id,omitempty"`
+	LayerPosition int                            `json:"layer_position,omitempty"`
+	LayerTitle    string                         `json:"layer_title,omitempty"`
+	Line          int                            `json:"line,omitempty"`
+	Path          string                         `json:"path,omitempty"`
+	PrNumber      int                            `json:"pr_number,omitempty"`
+	PrURL         string                         `json:"pr_url,omitempty"`
+	Repo          string                         `json:"repo"`
+	Selected      bool                           `json:"selected"`
+	StableRef     string                         `json:"stable_ref"`
+	Type          ReviewFeedbackDraftCommentType `json:"type"`
 }
 
 // ReviewFeedbackDraftCommentType defines model for ReviewFeedbackDraftComment.Type.
@@ -3842,7 +4107,7 @@ type ReviewFeedbackFeatureResponse struct {
 	Result   string `json:"result"`
 }
 
-// ReviewFeedbackFetchRequest Intentionally empty: review feedback is always fetched across every parent repository with a PR URL and has no mode selector.
+// ReviewFeedbackFetchRequest Intentionally empty: review feedback is always fetched across every open layer pull request of every parent repository and has no mode selector.
 type ReviewFeedbackFetchRequest = map[string]interface{}
 
 // ReviewFeedbackFetchResponse defines model for ReviewFeedbackFetchResponse.
@@ -3858,11 +4123,24 @@ type ReviewFeedbackFetchResponse struct {
 	SnapshotID string `json:"snapshot_id"`
 }
 
-// ReviewFeedbackRepoComments defines model for ReviewFeedbackRepoComments.
-type ReviewFeedbackRepoComments struct {
+// ReviewFeedbackPullRequestGroup One open layer pull request's comments inside a repository's pending-draft view: the stack layer's position and title, the pull request's URL, and that pull request's draft comments.
+type ReviewFeedbackPullRequestGroup struct {
 	Comments []ReviewFeedbackDraftComment `json:"comments"`
-	PrURL    string                       `json:"pr_url"`
-	Repo     string                       `json:"repo"`
+
+	// Position Stack layer position of the pull request's layer.
+	Position int `json:"position"`
+
+	// Title Title of the pull request's stack layer.
+	Title string `json:"title"`
+
+	// URL The pull request's URL.
+	URL string `json:"url"`
+}
+
+// ReviewFeedbackRepoComments One repository's pending-draft view: its open layer pull requests in ascending layer position order, each holding that pull request's draft comments.
+type ReviewFeedbackRepoComments struct {
+	PullRequests []ReviewFeedbackPullRequestGroup `json:"pull_requests"`
+	Repo         string                           `json:"repo"`
 }
 
 // ReviewFeedbackSelectionRequest defines model for ReviewFeedbackSelectionRequest.
@@ -3950,15 +4228,40 @@ type RewindFeatureResponse struct {
 	TargetPhase     string `json:"target_phase,omitempty"`
 	UpgradePipeline string `json:"upgrade_pipeline,omitempty"`
 
-	// Warnings Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset).
+	// Warnings Canonical warning-class errors for non-fatal rewind failures (pull-request close, backup branch, worktree reset, stack branch step, remote branch deletion).
 	Warnings []Error `json:"warnings,omitempty"`
 }
 
 // RewindPRConsequence defines model for RewindPRConsequence.
 type RewindPRConsequence struct {
-	PrURL string `json:"pr_url"`
+	// Branch Stack layer branch whose pull request and remote copy the verdict describes.
+	Branch string `json:"branch"`
+
+	// DeleteRemoteBranch Whether the rewind would delete this layer's remote branch from the repository's origin.
+	DeleteRemoteBranch bool `json:"delete_remote_branch"`
+
+	// Position Stack layer position, ascending with the stack.
+	Position int `json:"position"`
+
+	// PrState Recorded pull-request state at preview time; none when the layer has no pull request.
+	PrState RewindPRConsequencePrState `json:"pr_state"`
+
+	// PrURL Recorded pull request URL; omitted when the layer has no pull request.
+	PrURL string `json:"pr_url,omitempty"`
 	Repo  string `json:"repo"`
+
+	// Title Stack layer title from the approved roadmap.
+	Title string `json:"title"`
+
+	// Verdict What the rewind does to this layer's pull request - keep for layers below the closing set, close for closing layers, merged for an already-merged closing layer that is left alone, none for a layer without a pull request.
+	Verdict RewindPRConsequenceVerdict `json:"verdict"`
 }
+
+// RewindPRConsequencePrState Recorded pull-request state at preview time; none when the layer has no pull request.
+type RewindPRConsequencePrState string
+
+// RewindPRConsequenceVerdict What the rewind does to this layer's pull request - keep for layers below the closing set, close for closing layers, merged for an already-merged closing layer that is left alone, none for a layer without a pull request.
+type RewindPRConsequenceVerdict string
 
 // RewindPreview defines model for RewindPreview.
 type RewindPreview struct {
@@ -4008,6 +4311,8 @@ type RewindPreviewResponse struct {
 
 // RewindWorktreeConsequence defines model for RewindWorktreeConsequence.
 type RewindWorktreeConsequence struct {
+	// Branch Stack layer branch the worktree ends on after the rewind; omitted when the feature carries no pull-request stack.
+	Branch    string                             `json:"branch,omitempty"`
 	Repo      string                             `json:"repo"`
 	ResetKind RewindWorktreeConsequenceResetKind `json:"reset_kind"`
 }
@@ -4807,6 +5112,15 @@ type RebaseFeatureParams struct {
 // RebaseFeatureParamsXAgenticoClient defines parameters for RebaseFeature.
 type RebaseFeatureParamsXAgenticoClient string
 
+// RecreatePullRequestFeatureParams defines parameters for RecreatePullRequestFeature.
+type RecreatePullRequestFeatureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient RecreatePullRequestFeatureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// RecreatePullRequestFeatureParamsXAgenticoClient defines parameters for RecreatePullRequestFeature.
+type RecreatePullRequestFeatureParamsXAgenticoClient string
+
 // RefactorFeatureParams defines parameters for RefactorFeature.
 type RefactorFeatureParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -4815,6 +5129,15 @@ type RefactorFeatureParams struct {
 
 // RefactorFeatureParamsXAgenticoClient defines parameters for RefactorFeature.
 type RefactorFeatureParamsXAgenticoClient string
+
+// ReopenPullRequestFeatureParams defines parameters for ReopenPullRequestFeature.
+type ReopenPullRequestFeatureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ReopenPullRequestFeatureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ReopenPullRequestFeatureParamsXAgenticoClient defines parameters for ReopenPullRequestFeature.
+type ReopenPullRequestFeatureParamsXAgenticoClient string
 
 // ReviewFeedbackFeatureParams defines parameters for ReviewFeedbackFeature.
 type ReviewFeedbackFeatureParams struct {
@@ -5241,8 +5564,14 @@ type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest
 // RebaseFeatureJSONRequestBody defines body for RebaseFeature for application/json ContentType.
 type RebaseFeatureJSONRequestBody = RebaseFeatureRequest
 
+// RecreatePullRequestFeatureJSONRequestBody defines body for RecreatePullRequestFeature for application/json ContentType.
+type RecreatePullRequestFeatureJSONRequestBody = RecreatePullRequestRequest
+
 // RefactorFeatureJSONRequestBody defines body for RefactorFeature for application/json ContentType.
 type RefactorFeatureJSONRequestBody = RefactorFeatureRequest
+
+// ReopenPullRequestFeatureJSONRequestBody defines body for ReopenPullRequestFeature for application/json ContentType.
+type ReopenPullRequestFeatureJSONRequestBody = ReopenPullRequestRequest
 
 // ReviewFeedbackFeatureJSONRequestBody defines body for ReviewFeedbackFeature for application/json ContentType.
 type ReviewFeedbackFeatureJSONRequestBody = ReviewFeedbackFeatureRequest

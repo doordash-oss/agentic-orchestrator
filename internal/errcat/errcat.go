@@ -56,14 +56,16 @@ type CodeRepository struct {
 	Branch            string   `json:"branch,omitempty" yaml:"branch,omitempty"`
 	RebaseTarget      string   `json:"rebase_target,omitempty" yaml:"rebase_target,omitempty"`
 	RemoteOnlyCommits int      `json:"remote_only_commits,omitempty" yaml:"remote_only_commits,omitempty"`
+	LayerPosition     int      `json:"layer_position,omitempty" yaml:"layer_position,omitempty"`
+	LayerTitle        string   `json:"layer_title,omitempty" yaml:"layer_title,omitempty"`
+	PullRequestURL    string   `json:"pull_request_url,omitempty" yaml:"pull_request_url,omitempty"`
 	ConflictFiles     []string `json:"conflict_files,omitempty" yaml:"conflict_files,omitempty"`
 	DirtyFiles        []string `json:"dirty_files,omitempty" yaml:"dirty_files,omitempty"`
-	ParentAnchorSHA   string   `json:"parent_anchor_sha,omitempty" yaml:"parent_anchor_sha,omitempty"`
-	ExpectedRefSHA    string   `json:"expected_ref_sha,omitempty" yaml:"expected_ref_sha,omitempty"`
 	ChildHeadSHA      string   `json:"child_head_sha,omitempty" yaml:"child_head_sha,omitempty"`
 	CandidateSHA      string   `json:"candidate_sha,omitempty" yaml:"candidate_sha,omitempty"`
-	MergeHEAD         string   `json:"merge_head,omitempty" yaml:"merge_head,omitempty"`
 	ObservedSHA       string   `json:"observed_sha,omitempty" yaml:"observed_sha,omitempty"`
+	CommitSHA         string   `json:"commit_sha,omitempty" yaml:"commit_sha,omitempty"`
+	Attempts          int      `json:"attempts,omitempty" yaml:"attempts,omitempty"`
 }
 
 // CodePhase is the typed context block for the phase a code references.

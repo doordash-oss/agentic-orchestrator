@@ -64,11 +64,6 @@ func (t *preflightMutationTarget) PublishFeature(featureID string, req PublishFe
 	return PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
 }
 
-func (t *preflightMutationTarget) GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error) {
-	t.publishDescReq = req
-	return PublishDescriptionResponse{FeatureID: featureID, Title: "Generated title", Body: "Generated body", Result: "generated"}, nil
-}
-
 func (t *preflightMutationTarget) MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error) {
 	t.mergeReq = req
 	return MergeFeatureResponse{FeatureID: featureID, Result: "merged"}, nil
@@ -98,7 +93,15 @@ func TestCompletionPreflightReturnsEligibleRepos(t *testing.T) {
 			CanMarkDone:    true,
 			Repos: []CompletionPreflightRepo{
 				{Repo: "repo-a", Publishable: true, Touched: true, Status: "eligible"},
-				{Repo: "repo-b", Publishable: true, Touched: true, Status: "already_published", PrURL: "https://example.com/pr/1"},
+				{Repo: "repo-b", Publishable: true, Touched: true, Status: "already_published",
+					PullRequests: []PullRequestEntry{{
+						Position: 1,
+						Title:    "Layer 1",
+						Branch:   "feature/layer-1",
+						URL:      "https://example.com/pr/1",
+						State:    PullRequestEntryStateOpen,
+					}},
+					PushMode: CompletionPreflightRepoPushModeFastForward},
 				{Repo: "repo-c", Publishable: false, Touched: false, Status: "ineligible"},
 			},
 		},
@@ -126,8 +129,11 @@ func TestCompletionPreflightReturnsEligibleRepos(t *testing.T) {
 	if len(resp.Repos) != 3 {
 		t.Fatalf("repos len = %d; want 3", len(resp.Repos))
 	}
-	if resp.Repos[1].PrURL != "https://example.com/pr/1" {
-		t.Fatalf("repo-b pr_url = %q; want https://example.com/pr/1", resp.Repos[1].PrURL)
+	if len(resp.Repos[1].PullRequests) != 1 || resp.Repos[1].PullRequests[0].URL != "https://example.com/pr/1" {
+		t.Fatalf("repo-b pull_requests = %+v, want the layer-1 entry with url https://example.com/pr/1", resp.Repos[1].PullRequests)
+	}
+	if resp.Repos[1].PushMode != CompletionPreflightRepoPushModeFastForward {
+		t.Fatalf("repo-b push_mode = %q, want fast_forward", resp.Repos[1].PushMode)
 	}
 	if target.completionPreflightID != fixtureFeatureID {
 		t.Fatalf("preflight called with %q; want %s", target.completionPreflightID, fixtureFeatureID)
@@ -148,7 +154,6 @@ func TestCompletionActionsPassThroughSourceRevision(t *testing.T) {
 			body: map[string]any{
 				"source_revision": "rev-publish",
 				"repos":           []string{"repo-a"},
-				"title":           "Publish completion",
 			},
 			check: func(t *testing.T, target *preflightMutationTarget) {
 				t.Helper()
@@ -336,7 +341,10 @@ func TestCleanupActionRejectsCycleTarget(t *testing.T) {
 	}
 }
 
-func TestPublishDescriptionPassesOnlySelectedRepos(t *testing.T) {
+// The publish/description pre-generation subaction is gone: the route no
+// longer reaches the mutation target and answers with the generic
+// unknown-action rejection, exactly like any other unrecognized subaction.
+func TestPublishDescriptionRouteIsGone(t *testing.T) {
 	t.Parallel()
 	target := &preflightMutationTarget{}
 	handler := NewHandler(HandlerOptions{
@@ -347,18 +355,15 @@ func TestPublishDescriptionPassesOnlySelectedRepos(t *testing.T) {
 	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/publish/description", map[string]any{
 		"repos": []string{"repo-a"},
 	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d body = %s", w.Code, w.Body.String())
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d body = %s; want the generic unknown-action rejection", w.Code, w.Body.String())
 	}
-	var resp PublishDescriptionResponse
+	var resp ErrorResponse
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Title != "Generated title" || resp.Body != "Generated body" {
-		t.Fatalf("response = %+v, want generated narrative", resp)
-	}
-	if len(target.publishDescReq.Repos) != 1 || target.publishDescReq.Repos[0] != "repo-a" {
-		t.Fatalf("publish description request = %+v, want selected repo only", target.publishDescReq)
+	if resp.Error.Code != "method_not_allowed" {
+		t.Fatalf("error code = %q; want method_not_allowed", resp.Error.Code)
 	}
 }
 

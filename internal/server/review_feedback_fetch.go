@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -100,10 +101,9 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 	}
 
 	fetched := make(map[string][]feature.ReviewFeedbackComment, len(parent.Repos))
-	prURLs := parent.PRURLs()
 	for _, repo := range parent.Repos {
-		prURL := prURLs[repo.Name]
-		if prURL == "" {
+		layerPRs := parent.OpenReviewFeedbackLayerPRs(repo.Name)
+		if len(layerPRs) == 0 {
 			continue
 		}
 		addressed, loadErr := addressedReader.LoadAddressedReviewFeedbackIDs(parent.ID, repo.Name)
@@ -115,27 +115,18 @@ func (h *apiHandler) handleReviewFeedbackFetchTrusted(w http.ResponseWriter, r *
 		if repoPath == "" {
 			repoPath = repo.Path
 		}
-		comments, fetchErr := gitadapter.FetchPRComments(repoPath, prURL)
-		if fetchErr != nil {
-			writeReviewFeedbackFetchError(w, repo.Name, fetchErr)
-			return
-		}
-		for _, comment := range comments {
-			if addressed[comment.ID] {
-				continue
+		for _, pr := range layerPRs {
+			comments, fetchErr := gitadapter.FetchPRComments(repoPath, pr.URL)
+			if fetchErr != nil {
+				writeReviewFeedbackFetchError(w, repo.Name, fetchErr)
+				return
 			}
-			fetched[repo.Name] = append(fetched[repo.Name], feature.ReviewFeedbackComment{
-				Repo:      repo.Name,
-				ID:        comment.ID,
-				Type:      comment.Type,
-				Path:      comment.Path,
-				Line:      comment.Line,
-				Author:    comment.User.Login,
-				Body:      comment.Body,
-				DiffHunk:  comment.DiffHunk,
-				InReplyTo: comment.InReplyTo,
-				CreatedAt: comment.CreatedAt,
-			})
+			for _, comment := range comments {
+				if addressed[comment.ID] {
+					continue
+				}
+				fetched[repo.Name] = append(fetched[repo.Name], feature.NewReviewFeedbackCommentFromAPI(repo.Name, pr, comment))
+			}
 		}
 	}
 
@@ -296,39 +287,83 @@ func (h *apiHandler) handleReviewFeedbackSelectionTrusted(w http.ResponseWriter,
 	})
 }
 
-// reviewFeedbackDraftView renders the durable draft as the revisioned
-// wire view, preserving the parent's stable repository order and the
-// oldest-first comment order established by reconciliation.
+// reviewFeedbackDraftView renders the durable draft as the revisioned wire
+// view, preserving the parent's stable repository order. Inside each
+// repository the comments are grouped by the open layer pull request they
+// were left on, in ascending layer position order; the per-repository
+// single PR URL is gone — each pull-request group carries its own position,
+// title, and URL. A draft persisted before layer tagging (items without PR
+// fields) renders those items under one leading untitled group.
 func reviewFeedbackDraftView(parent *feature.Feature, draft *feature.ReviewFeedbackDraft) []ReviewFeedbackRepoComments {
-	prURLs := parent.PRURLs()
-	byRepo := make(map[string][]ReviewFeedbackDraftComment, len(parent.Repos))
+	type prGroup struct {
+		position int
+		title    string
+		url      string
+	}
+	byRepo := make(map[string]map[string]*prGroup, len(parent.Repos))
+	byRepoOrder := make(map[string][]string)
+	byRepoComments := make(map[string]map[string][]ReviewFeedbackDraftComment)
 	for _, item := range draft.Items {
 		c := item.Comment
-		byRepo[c.Repo] = append(byRepo[c.Repo], ReviewFeedbackDraftComment{
-			StableRef:   string(item.StableRef),
-			Selected:    item.Selected,
-			Repo:        c.Repo,
-			ID:          c.ID,
-			Type:        ReviewFeedbackDraftCommentType(c.Type),
-			Path:        c.Path,
-			Line:        c.Line,
-			Author:      c.Author,
-			Body:        c.Body,
-			DiffHunk:    c.DiffHunk,
-			InReplyToID: c.InReplyTo,
-			CreatedAt:   c.CreatedAt,
+		repoGroups, ok := byRepo[c.Repo]
+		if !ok {
+			repoGroups = make(map[string]*prGroup)
+			byRepo[c.Repo] = repoGroups
+			byRepoComments[c.Repo] = make(map[string][]ReviewFeedbackDraftComment)
+		}
+		key := c.PRURL
+		group, known := repoGroups[key]
+		if !known {
+			group = &prGroup{position: c.LayerPosition, title: c.LayerTitle, url: c.PRURL}
+			repoGroups[key] = group
+			byRepoOrder[c.Repo] = append(byRepoOrder[c.Repo], key)
+		}
+		byRepoComments[c.Repo][key] = append(byRepoComments[c.Repo][key], ReviewFeedbackDraftComment{
+			StableRef:     string(item.StableRef),
+			Selected:      item.Selected,
+			Repo:          c.Repo,
+			ID:            c.ID,
+			Type:          ReviewFeedbackDraftCommentType(c.Type),
+			Path:          c.Path,
+			Line:          c.Line,
+			Author:        c.Author,
+			Body:          c.Body,
+			DiffHunk:      c.DiffHunk,
+			InReplyToID:   c.InReplyTo,
+			CreatedAt:     c.CreatedAt,
+			PrURL:         c.PRURL,
+			PrNumber:      c.PRNumber,
+			LayerPosition: c.LayerPosition,
+			LayerTitle:    c.LayerTitle,
 		})
 	}
 	groups := make([]ReviewFeedbackRepoComments, 0, len(parent.Repos))
 	for _, repo := range parent.Repos {
-		comments := byRepo[repo.Name]
-		if len(comments) == 0 {
+		repoGroups := byRepo[repo.Name]
+		if len(repoGroups) == 0 {
 			continue
 		}
+		order := append([]string(nil), byRepoOrder[repo.Name]...)
+		sort.Slice(order, func(i, j int) bool {
+			a, b := repoGroups[order[i]], repoGroups[order[j]]
+			if a.position != b.position {
+				return a.position < b.position
+			}
+			return order[i] < order[j]
+		})
+		prViews := make([]ReviewFeedbackPullRequestGroup, 0, len(order))
+		for _, key := range order {
+			group := repoGroups[key]
+			prViews = append(prViews, ReviewFeedbackPullRequestGroup{
+				Position: group.position,
+				Title:    group.title,
+				URL:      group.url,
+				Comments: byRepoComments[repo.Name][key],
+			})
+		}
 		groups = append(groups, ReviewFeedbackRepoComments{
-			Repo:     repo.Name,
-			PrURL:    prURLs[repo.Name],
-			Comments: comments,
+			Repo:         repo.Name,
+			PullRequests: prViews,
 		})
 	}
 	return groups

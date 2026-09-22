@@ -393,8 +393,9 @@ paths:
         machine codes include 400 `review_feedback_empty_selection`,
         `review_feedback_zero_launchable_selection`,
         `review_feedback_unsupported_comment_type`,
-        `review_feedback_unknown_repo`, and
-        `review_feedback_repo_has_no_pull_request`; 404 `parent_not_found`;
+        `review_feedback_unknown_repo`,
+        `review_feedback_repo_has_no_pull_request`, and
+        `review_feedback_comment_pr_not_open`; 404 `parent_not_found`;
         and 409 `review_feedback_revision_conflict`, `parent_is_child`,
         `parent_status_ineligible`, `active_child_exists`, and
         `parent_worktrees_dirty`.
@@ -431,17 +432,20 @@ paths:
       operationId: fetchReviewFeedback
       summary: Fetch unaddressed pull-request feedback and establish the pending draft.
       description: >-
-        Aggregates every repository carrying a PR URL, silently skips parent
-        repositories without one, and reconciles the result with the
-        parent-scoped durable pending draft: first fetch selects every
-        visible unaddressed reference, later fetches retain prior selections
-        for known stable references, select newly observed ones, and prune
-        references that disappeared. Repositories are returned in the
-        parent's stable repository order with comments oldest-first inside
-        each group (stable reference as the deterministic tie-breaker). Any
-        single-repository GitHub failure fails the operation atomically with
-        that repository identified. The response carries the authoritative
-        pending-draft revision.
+        Aggregates every open layer pull request of every repository,
+        silently skips parent repositories without one, and reconciles the
+        result with the parent-scoped durable pending draft: first fetch
+        selects every visible unaddressed reference, later fetches retain
+        prior selections for known stable references, select newly observed
+        ones, and prune references that disappeared. Repositories are
+        returned in the parent's stable repository order; inside each
+        repository the comments are grouped by open layer pull request in
+        ascending layer position order, oldest-first within a group (stable
+        reference as the deterministic tie-breaker), and every comment
+        carries its pull request URL, number, layer position, and layer
+        title. Any single-repository GitHub failure fails the operation
+        atomically with that repository identified. The response carries the
+        authoritative pending-draft revision.
       parameters:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/TrustedMutationHeader"
@@ -555,6 +559,103 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the reopen-pull-request action. The server
+  # routes it through the dynamic /actions/{action} dispatch, so the served
+  # URL is exactly /api/v1/features/{feature_id}/actions/reopen-pull-request;
+  # this operation pins the typed request/response surface to that URL.
+  /api/v1/features/{feature_id}/actions/reopen-pull-request:
+    post:
+      operationId: reopenPullRequestFeature
+      summary: Reopen a closed stack pull request for one repository layer.
+      description: >-
+        Served at the same URL as `runFeatureAction` with action
+        `reopen-pull-request`. The request names the repository, the stack
+        layer position, and the completion preflight's source revision; a
+        stale revision is rejected with 409 `conflict` before any side
+        effect, exactly as publish. The orchestrator reads the live pull
+        request state first and is idempotent: a live-open request records
+        the layer open and clears the stored blocker without a remote write;
+        a live-merged request records the layer merged and clears it; a
+        closed or indeterminate state reopens the pull request on GitHub.
+        When the layer's head branch no longer exists on the remote the
+        action fails with 409 `publish_head_branch_missing`, whose only
+        resolution is recreate-pull-request. Any other reopen failure
+        returns 409 `publish_reopen_failed` and parks the repository.
+        Validation failures (unknown repository, unknown layer, local-only
+        repository, layer without a recorded pull request) are 400
+        `bad_request`; a live pull state that makes the action moot is 409
+        `conflict`.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReopenPullRequestRequest"
+      responses:
+        "200":
+          description: Layer pull request reopened or already open.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReopenPullRequestResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  # Statically documented form of the recreate-pull-request action. The
+  # server routes it through the dynamic /actions/{action} dispatch, so the
+  # served URL is exactly
+  # /api/v1/features/{feature_id}/actions/recreate-pull-request; this
+  # operation pins the typed request/response surface to that URL.
+  /api/v1/features/{feature_id}/actions/recreate-pull-request:
+    post:
+      operationId: recreatePullRequestFeature
+      summary: Recreate a closed stack pull request for one repository layer.
+      description: >-
+        Served at the same URL as `runFeatureAction` with action
+        `recreate-pull-request`. The request carries the repository, the
+        stack layer position, and the completion preflight's source revision
+        with the same stale-revision conflict as publish. The orchestrator
+        reads the live pull request state first: a live-open or live-merged
+        pull request is a 409 `conflict` because there is nothing to
+        recreate. A closed or indeterminate state pushes the layer branch
+        through the layer-aware push (a diverged remote stores the existing
+        remote-diverged record), reuses the closed pull request's body with
+        the harness-owned sections re-injected — falling back to the
+        description session when the body read fails — and opens a fresh
+        pull request with the layer's table title, the publish walk's base
+        rule, and the draft checkpoint. A pull-request creation failure
+        returns 409 `publish_recreate_failed`. The old closed pull request
+        is left untouched. Validation failures are 400 `bad_request`.
+      parameters:
+        - $ref: "#/components/parameters/FeatureID"
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecreatePullRequestRequest"
+      responses:
+        "200":
+          description: Layer pull request recreated and recorded open.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecreatePullRequestResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "409":
           $ref: "#/components/responses/ErrorResponse"
 
@@ -1749,7 +1850,6 @@ components:
       schema:
         type: string
         enum:
-          - description
           - fetch
     Offset:
       name: offset
@@ -2217,6 +2317,8 @@ components:
         - delete
         - refactor
         - review-feedback
+        - reopen-pull-request
+        - recreate-pull-request
         - discard
     Error:
       type: object
@@ -2308,18 +2410,29 @@ components:
           type: array
           items:
             type: string
-        parent_anchor_sha:
-          type: string
-        expected_ref_sha:
-          type: string
         child_head_sha:
           type: string
         candidate_sha:
           type: string
-        merge_head:
-          type: string
         observed_sha:
           type: string
+        commit_sha:
+          type: string
+          description: Commit whose replayed conflict exhausted its resolution attempts, when known.
+        attempts:
+          type: integer
+          minimum: 0
+          description: Resolution attempts spent on the replayed commit's conflict, when known.
+        layer_position:
+          type: integer
+          minimum: 1
+          description: Stack layer position of the repository's failing layer, when the code is layer-scoped.
+        layer_title:
+          type: string
+          description: Roadmap table title of the stack layer the code names, when known.
+        pull_request_url:
+          type: string
+          description: Pull-request URL of the stack layer the code names, when known.
     ErrorPhaseContext:
       type: object
       description: Phase a code references.
@@ -4131,8 +4244,6 @@ components:
               $ref: "#/components/schemas/RuntimeConfigUpdateResponse"
             publish_feature_response:
               $ref: "#/components/schemas/PublishFeatureResponse"
-            publish_description_response:
-              $ref: "#/components/schemas/PublishDescriptionResponse"
             merge_feature_response:
               $ref: "#/components/schemas/MergeFeatureResponse"
             rewind_feature_response:
@@ -4212,6 +4323,9 @@ components:
         pipeline:
           type: string
           enum: [medium, large, moonshot]
+        delivery_mode:
+          type: string
+          enum: [stack, single]
         idempotency_key: { type: string, maxLength: 128 }
     StageUploadResponse:
       type: object
@@ -4427,17 +4541,6 @@ components:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
-    PublishDescriptionResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - $ref: "#/components/schemas/FeatureActionResult"
-        - type: object
-          required: [title, body]
-          properties:
-            title:
-              type: string
-            body:
-              type: string
     MergeFeatureResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -4468,7 +4571,7 @@ components:
                 $ref: "#/components/schemas/Error"
               description: >-
                 Canonical warning-class errors for non-fatal rewind failures
-                (pull-request close, backup branch, worktree reset).
+                (pull-request close, backup branch, worktree reset, stack branch step, remote branch deletion).
     RewindPreviewResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -4546,12 +4649,33 @@ components:
           type: string
     RewindPRConsequence:
       type: object
-      required: [repo, pr_url]
+      required: [repo, position, title, branch, pr_state, verdict, delete_remote_branch]
       properties:
         repo:
           type: string
+        position:
+          type: integer
+          description: Stack layer position, ascending with the stack.
+        title:
+          type: string
+          description: Stack layer title from the approved roadmap.
+        branch:
+          type: string
+          description: Stack layer branch whose pull request and remote copy the verdict describes.
         pr_url:
           type: string
+          description: Recorded pull request URL; omitted when the layer has no pull request.
+        pr_state:
+          type: string
+          enum: [none, open, merged, closed]
+          description: Recorded pull-request state at preview time; none when the layer has no pull request.
+        verdict:
+          type: string
+          enum: [keep, close, merged, none]
+          description: What the rewind does to this layer's pull request - keep for layers below the closing set, close for closing layers, merged for an already-merged closing layer that is left alone, none for a layer without a pull request.
+        delete_remote_branch:
+          type: boolean
+          description: Whether the rewind would delete this layer's remote branch from the repository's origin.
     RewindWorktreeConsequence:
       type: object
       required: [repo, reset_kind]
@@ -4560,8 +4684,61 @@ components:
           type: string
         reset_kind:
           type: string
-          enum: [anchor, base, base-local, none]
+          enum: [anchor, base, base-local, layer-tip, none]
+        branch:
+          type: string
+          description: Stack layer branch the worktree ends on after the rewind; omitted when the feature carries no pull-request stack.
     RetryFeatureResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    ReopenPullRequestRequest:
+      # Bound by the reopenPullRequestFeature operation at
+      # /api/v1/features/{feature_id}/actions/reopen-pull-request.
+      type: object
+      required: [repository, layer]
+      additionalProperties: false
+      properties:
+        repository:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Repository name whose stack layer holds the closed pull request.
+        layer:
+          type: integer
+          minimum: 1
+          description: Stack layer position of the closed pull request.
+        source_revision:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Completion preflight source revision guard, as publish carries.
+    RecreatePullRequestRequest:
+      # Bound by the recreatePullRequestFeature operation at
+      # /api/v1/features/{feature_id}/actions/recreate-pull-request.
+      type: object
+      required: [repository, layer]
+      additionalProperties: false
+      properties:
+        repository:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Repository name whose stack layer holds the closed pull request.
+        layer:
+          type: integer
+          minimum: 1
+          description: Stack layer position of the closed pull request.
+        source_revision:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Completion preflight source revision guard, as publish carries.
+    ReopenPullRequestResponse:
+      allOf:
+        - $ref: "#/components/schemas/ActionBaseResponse"
+        - $ref: "#/components/schemas/FeatureActionResult"
+    RecreatePullRequestResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
         - $ref: "#/components/schemas/FeatureActionResult"
@@ -4647,7 +4824,8 @@ components:
       additionalProperties: false
       description: >-
         Intentionally empty: review feedback is always fetched across every
-        parent repository with a PR URL and has no mode selector.
+        open layer pull request of every parent repository and has no mode
+        selector.
     ReviewFeedbackComment:
       x-go-type: feature.ReviewFeedbackComment
       x-go-type-import:
@@ -4678,6 +4856,20 @@ components:
         created_at:
           type: string
           description: GitHub creation timestamp of the comment.
+        pr_url:
+          type: string
+          description: >-
+            URL of the open layer pull request the comment was left on;
+            absent on drafts persisted before layer tagging.
+        pr_number:
+          type: integer
+          description: GitHub pull request number parsed from the URL.
+        layer_position:
+          type: integer
+          description: Stack layer position of the pull request's layer.
+        layer_title:
+          type: string
+          description: Title of the pull request's stack layer.
     ReviewFeedbackDraftComment:
       type: object
       required: [stable_ref, selected, repo, id, type]
@@ -4687,7 +4879,8 @@ components:
         `stable_ref` is the repository identity plus supported comment type
         plus GitHub database comment ID; `selected` is the committed draft
         selection. The remaining fields snapshot the reviewed child-visible
-        content used to reconcile launch-time changes.
+        content used to reconcile launch-time changes, plus the open layer
+        pull request the comment was left on.
       properties:
         stable_ref:
           type: string
@@ -4714,19 +4907,51 @@ components:
           type: integer
         created_at:
           type: string
-    ReviewFeedbackRepoComments:
-      type: object
-      required: [repo, pr_url, comments]
-      additionalProperties: false
-      properties:
-        repo:
-          type: string
         pr_url:
           type: string
+        pr_number:
+          type: integer
+        layer_position:
+          type: integer
+        layer_title:
+          type: string
+    ReviewFeedbackPullRequestGroup:
+      type: object
+      required: [position, title, url, comments]
+      additionalProperties: false
+      description: >-
+        One open layer pull request's comments inside a repository's
+        pending-draft view: the stack layer's position and title, the pull
+        request's URL, and that pull request's draft comments.
+      properties:
+        position:
+          type: integer
+          description: Stack layer position of the pull request's layer.
+        title:
+          type: string
+          description: Title of the pull request's stack layer.
+        url:
+          type: string
+          description: The pull request's URL.
         comments:
           type: array
           items:
             $ref: "#/components/schemas/ReviewFeedbackDraftComment"
+    ReviewFeedbackRepoComments:
+      type: object
+      required: [repo, pull_requests]
+      additionalProperties: false
+      description: >-
+        One repository's pending-draft view: its open layer pull requests in
+        ascending layer position order, each holding that pull request's
+        draft comments.
+      properties:
+        repo:
+          type: string
+        pull_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReviewFeedbackPullRequestGroup"
     ReviewFeedbackFetchResponse:
       type: object
       required: [api_version, revision, snapshot_id, repos]
@@ -4869,6 +5094,36 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/CompletionPreflightRepo"
+    PullRequestEntry:
+      type: object
+      required: [position, title, state, no_commits, pushed_up_to_date]
+      properties:
+        position:
+          type: integer
+          description: Stack layer position, ascending from 1.
+        title:
+          type: string
+          description: Layer title from the approved roadmap's pull-request table.
+        branch:
+          type: string
+          description: Layer branch name.
+        url:
+          type: string
+          description: Pull request URL, omitted when no pull request exists for the layer.
+        state:
+          type: string
+          enum: [none, open, merged, closed]
+          description: Recorded pull request state; none before any pull request exists.
+        no_commits:
+          type: boolean
+          description: Whether the layer delivered no commits in this repository.
+        pushed_up_to_date:
+          type: boolean
+          description: Whether a pull request exists and the layer's recorded tip equals its last-pushed SHA.
+        push_mode:
+          type: string
+          enum: [create, fast_forward, rewrite, none]
+          description: Per-layer push mode a publish would apply — create (no pull request yet, commits to deliver), fast_forward (pull request exists, tip moved, remote branch is an ancestor), rewrite (remote branch is not an ancestor, publish force-pushes under a lease), or none (up to date, merged, closed, or no commits). Present only on completion preflight entries.
     CompletionPreflightRepo:
       type: object
       required: [repo, publishable, touched, status]
@@ -4882,15 +5137,21 @@ components:
         status:
           type: string
           description: Server-authored completion status — eligible, already_published, unpublished_changes, completed, unmerged_changes, ineligible, untouched, or blocked.
-        pr_url:
-          type: string
-          description: Current PR URL when the repository has been published.
+        pull_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestEntry"
+          description: Ordered per-layer stack view for this repository, one entry per layer with its per-layer push mode. Omitted for non-publishable repositories and runs without a stack.
         blocker:
           type: string
           description: Safe, server-authored reason this repository cannot proceed, when non-empty.
         freshness:
           type: string
           description: Server-authored freshness state.
+        rebase_hint:
+          type: string
+          maxLength: 500
+          description: Server-authored rebase hint, present when a merged layer whose entry still holds a tip sits below a kept layer with commits — the repository reads behind and the hint names the merged layer and points at the rebase pass that restacks the chain. Omitted when there is no such layer.
         error:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
@@ -4911,7 +5172,8 @@ components:
           description: Whether the worktree carries uncommitted changes that have not been delivered.
         push_mode:
           type: string
-          description: How a republish reaches an existing pull-request branch — fast_forward or rewrite. rewrite means the remote branch carries commits the local branch does not, so the push replaces remote history under a lease.
+          enum: [fast_forward, rewrite]
+          description: Repository-level push mode — rewrite when any layer's remote branch carries commits its tip does not contain, else fast_forward. Present only when the repository has at least one pull request on some layer.
         pending_dirty_files:
           type: array
           items:
@@ -5141,6 +5403,8 @@ components:
         inquireness:
           type: string
         pipeline:
+          type: string
+        delivery_mode:
           type: string
         checkpoints:
           x-go-type: config.Checkpoints
@@ -5898,9 +6162,11 @@ components:
             type: string
         touched:
           type: boolean
-        pr_url:
-          type: string
-          x-go-name: PRURL
+        pull_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/PullRequestEntry"
+          description: Ordered per-layer stack view for this repository, one entry per layer in position order. Omitted for non-publishable repositories and runs without a stack; completion preflight entries additionally carry push_mode.
         error:
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
@@ -6179,6 +6445,13 @@ components:
               x-go-type-import:
                 path: github.com/doordash-oss/agentic-orchestrator/internal/feature
                 name: feature
+            delivery_mode:
+              type: string
+              enum: [stack, single]
+              x-go-type: feature.DeliveryMode
+              x-go-type-import:
+                path: github.com/doordash-oss/agentic-orchestrator/internal/feature
+                name: feature
             exit_criteria:
               type: string
             automatic_review:
@@ -6288,29 +6561,44 @@ components:
       properties:
         repo:
           type: string
-        parent_branch:
-          type: string
-        parent_anchor_sha:
-          type: string
-        expected_ref_sha:
-          type: string
+        refs:
+          type: array
+          description: >-
+            Ordered per-layer ref updates this entry's transaction rewrites,
+            ascending by layer position; the highest-position ref is the top
+            ref the parent worktree syncs to.
+          items:
+            $ref: "#/components/schemas/RepoTransactionRef"
         child_head_sha:
-          type: string
-        candidate_sha:
-          type: string
-        merge_head:
           type: string
         prep_state:
           type: string
         apply_state:
-          type: string
-        observed_sha:
           type: string
         pending_sync:
           type: boolean
           description: >-
             True when this applied entry's parent worktree sync failed after
             the ref update; closure retries the sync automatically.
+    RepoTransactionRef:
+      type: object
+      properties:
+        branch:
+          type: string
+        layer_position:
+          type: integer
+        anchor_sha:
+          type: string
+        candidate_sha:
+          type: string
+        observed_sha:
+          type: string
+        kind:
+          type: string
+          description: >-
+            Ref update kind - rewrite (an update to an existing ref), create
+            (a ref that did not exist before the transaction), or delete (a
+            ref that did exist, removed while sitting at its anchor).
     Usage:
       type: object
       properties:

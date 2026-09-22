@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
@@ -316,12 +317,25 @@ func (t *journeyMutationTarget) RebaseFeature(featureID string, _ server.RebaseF
 	resp := server.RebaseFeatureResponse{ParentID: featureID, Result: "failed"}
 	preflight, err := t.orch.RebaseChildPreflight(featureID)
 	if err != nil {
+		// A closed stack pull request refuses launch as a conflict carrying
+		// the canonical closed code and its repository context — the same
+		// classification the preflight stored on the repository.
+		if record, ok := orchestrator.StackClosedConflictRecord(err); ok {
+			options := errcat.RecordOptions(record)
+			options = append(options, errcat.WithDiagnostics(err.Error()))
+			return resp, &server.ActionConflictError{
+				Err:     err,
+				Code:    record.Code,
+				Options: options,
+			}
+		}
 		return resp, err
 	}
 	spec := feature.RebaseChildSpec{
-		Bases:   preflight.Bases,
-		Targets: preflight.Targets,
-		Behind:  preflight.Behind,
+		Bases:       preflight.Bases,
+		Targets:     preflight.Targets,
+		LayerStates: preflight.LayerStates,
+		WorkRepos:   preflight.WorkRepos,
 	}
 	var child *feature.Feature
 	if err := t.orch.WithRelationshipWriteLock(func() error {
@@ -344,6 +358,57 @@ func (t *journeyMutationTarget) StartFeature(featureID string) (server.FeatureSt
 		return resp, err
 	}
 	resp.Result = "started"
+	return resp, nil
+}
+
+// CompletionPreflight mirrors the production orchestrator→REST mapping so
+// the journeys read the completion preflight through the same surface the
+// desktop consumes, including the rebase pass's per-layer push modes and
+// rebase hint.
+func (t *journeyMutationTarget) CompletionPreflight(featureID string) (server.CompletionPreflightResponse, error) {
+	result, err := t.orch.CompletionPreflight(featureID)
+	if err != nil {
+		return server.CompletionPreflightResponse{FeatureID: featureID}, err
+	}
+	resp := server.CompletionPreflightResponse{
+		APIVersion:      server.APIVersion,
+		FeatureID:       result.FeatureID,
+		SourceRevision:  result.SourceRevision,
+		CanMarkDone:     result.CanMarkDone,
+		MarkDoneBlocker: result.MarkDoneBlocker,
+	}
+	for _, r := range result.Repos {
+		repo := server.CompletionPreflightRepo{
+			Repo:                  r.Repo,
+			Publishable:           r.Publishable,
+			Touched:               r.Touched,
+			Status:                r.Status,
+			Blocker:               r.Blocker,
+			Freshness:             r.Freshness,
+			Error:                 server.WireRepoError(r.Error),
+			BaseBranch:            r.BaseBranch,
+			Branch:                r.Branch,
+			PendingCommits:        r.PendingCommits,
+			PendingDirty:          r.PendingDirty,
+			PushMode:              server.CompletionPreflightRepoPushMode(r.PushMode),
+			PendingDirtyFiles:     r.PendingDirtyFiles,
+			PendingDirtyFileTotal: r.PendingDirtyFileTotal,
+			RebaseHint:            r.RebaseHint,
+		}
+		for _, entry := range r.PullRequests {
+			repo.PullRequests = append(repo.PullRequests, server.PullRequestEntry{
+				Position:       entry.Position,
+				Title:          entry.Title,
+				Branch:         entry.Branch,
+				URL:            entry.URL,
+				State:          server.PullRequestEntryState(entry.State),
+				NoCommits:      entry.NoCommits,
+				PushedUpToDate: entry.PushedUpToDate,
+				PushMode:       server.PullRequestEntryPushMode(entry.PushMode),
+			})
+		}
+		resp.Repos = append(resp.Repos, repo)
+	}
 	return resp, nil
 }
 

@@ -44,6 +44,8 @@ var zeroParams = []Params{
 	EffortDriftParams{},
 	FeatureLoadFailedParams{},
 	WarningRepoParams{},
+	WarningFixRelocatedParams{},
+	WarningManifestIgnoredParams{},
 	OrphanSessionParams{},
 	ChatContextParams{},
 	CloneDestinationParams{},
@@ -157,6 +159,7 @@ var terminalRunFailureCodes = []Code{
 	ArtifactMissing,
 	InfrastructureFailure,
 	WorktreeSetupFailed,
+	LayerBoundaryFailed,
 	SetupAssetCopyFailed,
 	SetupInterrupted,
 	ProtocolViolation,
@@ -310,12 +313,37 @@ func TestWithRemediationHintOverridesAuthoredHint(t *testing.T) {
 		t.Fatalf("remediation = %#v; want hint added to an entry without one", rendered.Remediation)
 	}
 
-	rendered = New(PublishRebaseConflict, WithRemediationHint("Resolve the conflict, then retry"))
+	rendered = New(PublishStackPullRequestClosed, WithRemediationHint("Resolve the conflict, then retry"))
 	if rendered.Remediation == nil || rendered.Remediation.Hint != "Resolve the conflict, then retry" {
 		t.Fatalf("remediation hint = %q; want override", rendered.Remediation.Hint)
 	}
-	if len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "publish" {
+	if len(rendered.Remediation.Actions) != 2 ||
+		rendered.Remediation.Actions[0] != "reopen-pull-request" ||
+		rendered.Remediation.Actions[1] != "recreate-pull-request" {
 		t.Fatalf("remediation actions = %#v; want the entry's actions preserved", rendered.Remediation.Actions)
+	}
+}
+
+// TestRoadmapPullRequestsInvalidEntry pins the roadmap-gate rejection entry:
+// blocking class with authored title, summary, and remediation, and
+// diagnostics carrying the table problems verbatim.
+func TestRoadmapPullRequestsInvalidEntry(t *testing.T) {
+	entry, ok := Lookup(RoadmapPullRequestsInvalid)
+	if !ok {
+		t.Fatalf("%s missing from catalog", RoadmapPullRequestsInvalid)
+	}
+	if entry.Class != ClassBlocking {
+		t.Errorf("class = %q, want %q", entry.Class, ClassBlocking)
+	}
+	if entry.Title == "" || entry.Summary == "" || entry.Remediation == "" {
+		t.Errorf("entry must carry authored title, summary, and remediation: %+v", entry)
+	}
+	rendered := New(RoadmapPullRequestsInvalid, WithDiagnostics("## Pull Requests: phase 2 is not covered by any row"))
+	if rendered.Code != RoadmapPullRequestsInvalid || rendered.Class != ClassBlocking {
+		t.Errorf("rendered = %+v, want the roadmap pull-requests code with blocking class", rendered)
+	}
+	if !strings.Contains(rendered.Diagnostics, "## Pull Requests") {
+		t.Errorf("diagnostics = %q, want the table problems carried verbatim", rendered.Diagnostics)
 	}
 }
 

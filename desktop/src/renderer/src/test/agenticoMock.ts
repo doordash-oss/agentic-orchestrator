@@ -61,14 +61,28 @@ import { defaultSettings } from '../../../shared/ipc';
 export function ipcError(
   code: string,
   summary: string,
-  options: { class?: CanonicalError['class']; title?: string; remediation?: string } = {},
+  options: {
+    class?: CanonicalError['class'];
+    title?: string;
+    remediation?: string;
+    actions?: string[];
+    context?: CanonicalError['context'];
+  } = {},
 ): Error {
+  const remediation =
+    options.remediation === undefined && options.actions === undefined
+      ? undefined
+      : {
+          ...(options.remediation === undefined ? {} : { hint: options.remediation }),
+          ...(options.actions === undefined ? {} : { actions: options.actions }),
+        };
   const canonical: CanonicalError = {
     code,
     class: options.class ?? 'blocking',
     title: options.title ?? 'Request failed',
     summary,
-    ...(options.remediation === undefined ? {} : { remediation: { hint: options.remediation } }),
+    ...(remediation === undefined ? {} : { remediation }),
+    ...(options.context === undefined ? {} : { context: options.context }),
   };
   return Object.assign(new Error(CANONICAL_ERROR_MESSAGE_PREFIX + JSON.stringify(canonical)), {
     code: canonical.code,
@@ -187,6 +201,7 @@ export function creationDefaults(overrides: Partial<CreationDefaults> = {}): Cre
     defaults: {
       pipeline: 'medium',
       inquireness: 'medium',
+      delivery_mode: 'stack',
       models: [{ phase: 'Planning', model: 'model-plan' }],
       effort: [],
       useCurrentBranch: false,
@@ -460,7 +475,6 @@ export interface AgenticoMock {
     preflightCompletion: ReturnType<typeof vi.fn>;
     publishUiState: ReturnType<typeof vi.fn>;
     getRepositoryDiff: ReturnType<typeof vi.fn>;
-    generatePublishDescription: ReturnType<typeof vi.fn>;
     openExternal: ReturnType<typeof vi.fn>;
     revealPath: ReturnType<typeof vi.fn>;
     launchRebaseChild: ReturnType<typeof vi.fn>;
@@ -812,7 +826,6 @@ export function installAgenticoMock(
     preflightCompletion: vi.fn(() => Promise.reject(new Error('unused'))),
     publishUiState: vi.fn(() => Promise.resolve({ accepted: true })),
     getRepositoryDiff: vi.fn(() => Promise.reject(new Error('unused'))),
-    generatePublishDescription: vi.fn(() => Promise.reject(new Error('unused'))),
     openExternal: vi.fn(() => Promise.reject(new Error('unused'))),
     revealPath: vi.fn(() => Promise.reject(new Error('unused'))),
     launchRebaseChild: vi.fn(() => Promise.reject(new Error('unused'))),

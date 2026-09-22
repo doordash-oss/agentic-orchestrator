@@ -61,15 +61,17 @@ func (w *WorktreeManager) ExpectedPath(featureSlug, repoName string) string {
 	return filepath.Join(w.BaseDir, featureSlug, repoName)
 }
 
-// Create creates a new worktree branching from startPoint. If startPoint is
-// empty, HEAD is used (preserving legacy behavior).
-func (w *WorktreeManager) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+// Create creates a new worktree on branch, branching from startPoint. If
+// startPoint is empty, HEAD is used (preserving legacy behavior). The branch
+// name is taken explicitly — the layer-1 provisional name at setup, an
+// approved layer name later — while the worktree path continues to derive
+// from the workspace slug alone.
+func (w *WorktreeManager) Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 	if strings.TrimSpace(repoPath) == "" {
 		return "", fmt.Errorf("repo path is required for %q", repoName)
 	}
 
-	branch := BranchName(featureSlug)
-	wtPath := w.ExpectedPath(featureSlug, repoName)
+	wtPath := w.ExpectedPath(workspaceSlug, repoName)
 
 	if err := os.MkdirAll(filepath.Dir(wtPath), 0o755); err != nil {
 		return "", fmt.Errorf("creating worktree directory: %w", err)
@@ -348,6 +350,84 @@ func (w *WorktreeManager) ResetToCommit(worktreePath, commitSHA string) error {
 	}
 	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
 		return fmt.Errorf("cleaning worktree after reset to commit %s: %s: %w", commitSHA, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// RenameBranch renames the branch checked out in the worktree from oldName
+// to newName in place. The caller has already verified the worktree sits on
+// oldName and newName differs; git branch -m refuses a target that already
+// exists, which keeps the rename from clobbering a stale ref. Identical
+// names are a no-op so approval of an unchanged layer-1 slug never touches
+// git.
+func (w *WorktreeManager) RenameBranch(worktreePath, oldName, newName string) error {
+	if oldName == newName {
+		return nil
+	}
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "branch", "-m", oldName, newName); err != nil {
+		return fmt.Errorf("renaming branch %s to %s: %s: %w", oldName, newName, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// CreateBranchAtHead creates the given branch at the worktree's current HEAD
+// and checks it out in place. git checkout -b refuses a target ref that
+// already exists, so a stale ref is never clobbered, and it leaves the
+// branch moved off pointing at the same commit. Uncommitted changes, if
+// any, are carried over: the layer boundary runs after the round-commit
+// hook, so a dirty tree there is not this operation's concern.
+func (w *WorktreeManager) CreateBranchAtHead(worktreePath, branch string) error {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "checkout", "-b", branch); err != nil {
+		return fmt.Errorf("creating branch %s at HEAD: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// SwitchBranch switches the worktree's HEAD to the existing local branch
+// in place, discarding uncommitted changes — checkout --force plus clean
+// -fd, the same discard semantics as the hard resets. A branch that does
+// not exist is refused by git with the worktree left where it was, and
+// the branch moved off keeps pointing at its commit.
+func (w *WorktreeManager) SwitchBranch(worktreePath, branch string) error {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if out, err := runGitMutationWithLockRetry(worktreePath, "checkout", "--force", branch); err != nil {
+		return fmt.Errorf("switching to branch %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	if out, err := runGitMutationWithLockRetry(worktreePath, "clean", "-fd"); err != nil {
+		return fmt.Errorf("switching to branch %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+// DeleteBranch deletes the named local branch ref from the worktree's
+// repository. An absent ref is success, so retrying an interrupted rewind
+// stays idempotent; git branch -D refuses a branch checked out in this or
+// any other worktree, which keeps the checked-out layer's ref intact. A
+// successful deletion is confirmed by the ref no longer resolving.
+func (w *WorktreeManager) DeleteBranch(worktreePath, branch string) error {
+	mu := worktreeMutationLock(worktreePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if _, err := ReadRefSHA(worktreePath, "refs/heads/"+branch); err != nil {
+		return nil
+	}
+	if out, err := runGitMutationWithLockRetry(worktreePath, "branch", "-D", branch); err != nil {
+		return fmt.Errorf("deleting branch %s: %s: %w", branch, strings.TrimSpace(string(out)), err)
+	}
+	if sha, err := ReadRefSHA(worktreePath, "refs/heads/"+branch); err == nil {
+		return fmt.Errorf("deleting branch %s: ref still resolves at %s", branch, sha)
 	}
 	return nil
 }

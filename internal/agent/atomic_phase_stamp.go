@@ -43,8 +43,7 @@ const (
 	PhaseOutcomeNeedUserInput
 	// PhaseOutcomeFinalReviewPassed marks the feature-level Final Review
 	// as passing. No per-repo state mutation happens (feature-level Status
-	// carries the verdict). Optional PR URL writes are mirrored when
-	// supplied so RepoStates stays a faithful publish-URL source.
+	// carries the verdict).
 	PhaseOutcomeFinalReviewPassed
 )
 
@@ -57,9 +56,6 @@ type AtomicPhaseStampInput struct {
 	Repos     []string
 	Outcome   PhaseOutcome
 	GatePath  string
-	// PRURLs is an optional per-repo PR URL map applied alongside the
-	// state transition. May be nil.
-	PRURLs map[string]string
 }
 
 // AtomicPhaseStamp transitions every declared repo to the same outcome in
@@ -101,9 +97,6 @@ func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error 
 					f.RepoStates[name] = ns
 				}
 				ns.Touched = true
-				if pr, ok := in.PRURLs[name]; ok && pr != "" {
-					ns.PRURL = pr
-				}
 			}
 		case PhaseOutcomeNeedUserInput:
 			// Per-repo state is intentionally NOT mutated. The unified-flow
@@ -111,18 +104,7 @@ func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error 
 			// feature for the harness to surface.
 			f.PendingNeedUserInputPath = in.GatePath
 		case PhaseOutcomeFinalReviewPassed:
-			// FR pass is feature-level; only the optional PR URL mirror
-			// writes per-repo state.
-			for _, name := range repos {
-				ns := f.RepoStates[name]
-				if pr, ok := in.PRURLs[name]; ok && pr != "" {
-					if ns == nil {
-						ns = &feature.RepoState{}
-						f.RepoStates[name] = ns
-					}
-					ns.PRURL = pr
-				}
-			}
+			// FR pass is feature-level; no per-repo state mutation happens.
 		default:
 			return fmt.Errorf("atomic phase stamp: unknown outcome %d", in.Outcome)
 		}

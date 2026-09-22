@@ -42,9 +42,9 @@ type RecordContext struct {
 // refs. Setup failure codes receive the setup-task label and repository
 // names, so a run-level record names the owning task and a task-level
 // record names the repositories. Publish failure codes receive the
-// repository, branch, rebase target, and remote-only commit count of the
-// failing repository, so a stored record renders the same text the
-// mutation rejection renders. Relationship warning codes receive the full
+// repository, branch, rebase target, remote-only commit count, stack-layer
+// position and title, and pull-request URL of the failing repository, so a
+// stored record renders the same text the mutation rejection renders. Relationship warning codes receive the full
 // repositories block, so a stored journal record renders the same text a
 // freshly built warning renders.
 func RenderRecord(record FailureRecord) Error {

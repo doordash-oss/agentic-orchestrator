@@ -63,6 +63,7 @@ function runtimeConfigBody(): Record<string, unknown> {
       effort: { planning: 'high', implementation: 'max' },
       inquireness: 'medium',
       pipeline: 'medium',
+      delivery_mode: 'single',
       checkpoints: {},
     },
   };
@@ -160,6 +161,7 @@ describe('FeatureService.creationDefaults', () => {
     expect(defaults.repositories[1]?.valid).toBe(false);
     expect(defaults.defaults.pipeline).toBe('medium');
     expect(defaults.defaults.inquireness).toBe('medium');
+    expect(defaults.defaults.delivery_mode).toBe('single');
     expect(defaults.defaults.useCurrentBranch).toBe(false);
     expect(defaults.defaults.models).toEqual([
       { phase: 'Planning', model: 'model-plan' },
@@ -842,9 +844,20 @@ describe('FeatureService.createFeature', () => {
         pipeline: 'medium',
         risk_level: 'medium',
         inquireness: 'medium',
+        // The input schema defaults an omitted delivery choice to stack.
+        delivery_mode: 'stack',
         idempotency_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
       }),
     );
+  });
+
+  it('carries the chosen delivery mode on the create request', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 201,
+      body: { api_version: 'v1', result: 'created', feature_id: 'abcd1234ef567890' },
+    }));
+    await service.createFeature({ ...input, deliveryMode: 'single' });
+    expect(calls[0]?.init?.body).toEqual(expect.objectContaining({ delivery_mode: 'single' }));
   });
 
   it('returns canonical nonblocking branch-probe warnings with diagnostics redacted', async () => {
@@ -1073,7 +1086,6 @@ describe('FeatureService.dispatchAction', () => {
         body: {
           source_revision: 'rev-1',
           repos: ['repo-a'],
-          title: 'Ship reviewed changes',
         },
       }),
     ).resolves.toMatchObject({
@@ -1088,7 +1100,6 @@ describe('FeatureService.dispatchAction', () => {
       body: {
         source_revision: 'rev-1',
         repos: ['repo-a'],
-        title: 'Ship reviewed changes',
       },
       // Publish commits, pushes, and opens or updates a pull request per
       // repository; the ordinary 30-second bound would abort mid-flight.
@@ -1179,6 +1190,41 @@ describe('FeatureService.dispatchAction', () => {
     expect(calls[0]?.init?.timeoutMs).toBe(600000);
   });
 
+  it('passes the closed-pull-request resolution bodies through, bounding recreate like publish', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'resolved' },
+    }));
+
+    await expect(
+      service.dispatchAction({
+        featureId: 'abcd1234ef567890',
+        action: 'reopen-pull-request',
+        body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+      }),
+    ).resolves.toMatchObject({ action: 'reopen-pull-request', result: 'resolved' });
+    expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/reopen-pull-request');
+    // Reopen is one idempotent forge call: the ordinary bound, body verbatim.
+    expect(calls[0]?.init).toStrictEqual({
+      method: 'POST',
+      body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+    });
+
+    await service.dispatchAction({
+      featureId: 'abcd1234ef567890',
+      action: 'recreate-pull-request',
+      body: { repository: 'web', layer: 2, source_revision: 'rev-1' },
+    });
+    expect(calls[1]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/recreate-pull-request');
+    // Recreate pushes and may run a description session: the long bound.
+    expect(calls[1]?.init?.timeoutMs).toBe(600000);
+    expect(calls[1]?.init?.body).toStrictEqual({
+      repository: 'web',
+      layer: 2,
+      source_revision: 'rev-1',
+    });
+  });
+
   it('keeps the ordinary bound for short lifecycle actions', async () => {
     const { service, calls } = makeService(() => ({
       status: 200,
@@ -1216,7 +1262,7 @@ describe('FeatureService.dispatchAction', () => {
     const input = {
       featureId: 'abcd1234ef567890',
       action: 'publish' as const,
-      body: { source_revision: 'rev-1', repos: ['repo-a'], title: 'Ship it' },
+      body: { source_revision: 'rev-1', repos: ['repo-a'] },
     };
 
     await expect(service.dispatchAction(input)).rejects.toMatchObject({
@@ -1253,7 +1299,7 @@ describe('FeatureService.dispatchAction', () => {
     const input = {
       featureId: 'abcd1234ef567890',
       action: 'publish' as const,
-      body: { source_revision: 'rev-1', repos: ['repo-a'], title: 'Ship it' },
+      body: { source_revision: 'rev-1', repos: ['repo-a'] },
     };
 
     await expect(service.dispatchAction(input)).rejects.toThrow();
@@ -1301,33 +1347,6 @@ describe('FeatureService.dispatchAction', () => {
     });
   });
 
-  it('requests a server-authored publish narrative for selected repositories only', async () => {
-    const { service, calls } = makeService(() => ({
-      status: 200,
-      body: {
-        api_version: 'v1',
-        feature_id: 'abcd1234ef567890',
-        title: 'Ship reviewed changes',
-        body: 'Generated from server-owned feature and repository context.',
-        result: 'generated',
-      },
-    }));
-
-    await expect(
-      service.generatePublishDescription('abcd1234ef567890', ['repo-a']),
-    ).resolves.toStrictEqual({
-      featureId: 'abcd1234ef567890',
-      title: 'Ship reviewed changes',
-      body: 'Generated from server-owned feature and repository context.',
-    });
-    expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/publish/description');
-    expect(calls[0]?.init).toStrictEqual({
-      method: 'POST',
-      body: { repos: ['repo-a'] },
-      timeoutMs: 6 * 60_000,
-    });
-  });
-
   it('rejects every action outside the audited allowlist before transport', async () => {
     const { service, calls } = makeService(() => ({ status: 200, body: {} }));
     await expect(
@@ -1364,6 +1383,14 @@ describe('FeatureService.getFeature', () => {
       },
       { id: 'start', enabled: true, disabledReasons: [], inputs: [] },
     ]);
+  });
+
+  it('maps the immutable delivery mode onto the snapshot', async () => {
+    const body = detailBody({ delivery_mode: 'single' });
+    const { service } = makeService(() => ({ status: 200, body }));
+    const snapshot = await service.getFeature('abcd1234ef567890');
+    expect(FeatureSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    expect(snapshot.deliveryMode).toBe('single');
   });
 
   it('crosses a repository publish-failure record as the canonical error with redacted diagnostics', async () => {
@@ -1412,6 +1439,74 @@ describe('FeatureService.getFeature', () => {
     // other raw text the renderer receives.
     expect(repo.error?.diagnostics).not.toContain('/Users/dev/tmp');
     expect(repo.error?.diagnostics).toContain('[path]');
+  });
+
+  it('maps per-layer pull request entries onto the repository status view', async () => {
+    const body = detailBody({
+      repo_status: [
+        {
+          name: 'repo-a',
+          publishable: true,
+          touched: true,
+          pull_requests: [
+            {
+              position: 1,
+              title: 'Bootstrap',
+              branch: 'feature/x/1-bootstrap',
+              url: 'https://github.com/org/repo-a/pull/11',
+              state: 'open',
+              no_commits: false,
+              pushed_up_to_date: true,
+            },
+            {
+              position: 2,
+              title: 'Layer two',
+              branch: 'feature/x/2-layer-two',
+              state: 'none',
+              no_commits: false,
+              pushed_up_to_date: false,
+            },
+            {
+              position: 3,
+              title: 'Layer three',
+              state: 'merged',
+              no_commits: true,
+              pushed_up_to_date: true,
+            },
+          ],
+        },
+      ],
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+    const snapshot = await service.getFeature('abcd1234ef567890');
+    expect(FeatureSnapshotSchema.parse(snapshot)).toEqual(snapshot);
+    expect(snapshot.repoStatus?.[0]?.pullRequests).toEqual([
+      {
+        position: 1,
+        title: 'Bootstrap',
+        branch: 'feature/x/1-bootstrap',
+        url: 'https://github.com/org/repo-a/pull/11',
+        state: 'open',
+        noCommits: false,
+        pushedUpToDate: true,
+      },
+      {
+        position: 2,
+        title: 'Layer two',
+        branch: 'feature/x/2-layer-two',
+        state: 'none',
+        noCommits: false,
+        pushedUpToDate: false,
+      },
+      {
+        position: 3,
+        title: 'Layer three',
+        state: 'merged',
+        noCommits: true,
+        pushedUpToDate: true,
+      },
+    ]);
+    expect(Reflect.get(snapshot.repoStatus?.[0] as object, 'prUrl')).toBeUndefined();
   });
 
   it('maps roadmap phase, total, iteration, and phase status from the active run detail', async () => {
@@ -1690,12 +1785,12 @@ describe('FeatureService.listFeatures', () => {
               {
                 ref: {
                   scope: 'repository',
-                  code: 'publish_rebase_conflict',
+                  code: 'publish_remote_diverged',
                   feature_id: 'abcd1234ef567890',
                   repository: 'repo-a',
                 },
                 error: {
-                  code: 'publish_rebase_conflict',
+                  code: 'publish_remote_diverged',
                   class: 'needs_action',
                   title: 'Pull-rebase conflict',
                   summary:
@@ -2148,7 +2243,7 @@ describe('FeatureService relationship operations', () => {
 });
 
 describe('FeatureService review-feedback operations', () => {
-  it('maps a fetch to the typed review-feedback fetch endpoint and groups comments by repo', async () => {
+  it('maps a fetch to the typed review-feedback fetch endpoint and groups comments by repo and pull request', async () => {
     const { service, calls } = makeService(() => ({
       status: 200,
       body: {
@@ -2158,43 +2253,74 @@ describe('FeatureService review-feedback operations', () => {
         repos: [
           {
             repo: 'repo-a',
-            pr_url: 'https://github.com/org/repo-a/pull/1',
-            comments: [
+            pull_requests: [
               {
-                stable_ref: 'repo-a:review:41',
-                selected: true,
-                repo: 'repo-a',
-                id: 41,
-                type: 'review',
-                path: 'src/query.ts',
-                line: 12,
-                author: 'octocat',
-                body: 'Bearer tok-secret leaks here',
-                diff_hunk: 'clone /Users/someone/repo-a',
-                in_reply_to_id: 39,
-                created_at: '2026-07-16T00:00:00Z',
+                position: 1,
+                title: 'Foundation',
+                url: 'https://github.com/org/repo-a/pull/1',
+                comments: [
+                  {
+                    stable_ref: 'repo-a:review:41',
+                    selected: true,
+                    repo: 'repo-a',
+                    id: 41,
+                    type: 'review',
+                    path: 'src/query.ts',
+                    line: 12,
+                    author: 'octocat',
+                    body: 'Bearer tok-secret leaks here',
+                    diff_hunk: 'clone /Users/someone/repo-a',
+                    in_reply_to_id: 39,
+                    created_at: '2026-07-16T00:00:00Z',
+                    pr_url: 'https://github.com/org/repo-a/pull/1',
+                    pr_number: 1,
+                    layer_position: 1,
+                    layer_title: 'Foundation',
+                  },
+                  {
+                    stable_ref: 'repo-a:issue:42',
+                    selected: false,
+                    repo: 'repo-a',
+                    id: 42,
+                    type: 'issue',
+                    body: 'plain note',
+                  },
+                ],
               },
               {
-                stable_ref: 'repo-a:issue:42',
-                selected: false,
-                repo: 'repo-a',
-                id: 42,
-                type: 'issue',
-                body: 'plain note',
+                position: 3,
+                title: 'Extension',
+                url: 'https://github.com/org/repo-a/pull/3',
+                comments: [
+                  {
+                    stable_ref: 'repo-a:review_body:43',
+                    selected: true,
+                    repo: 'repo-a',
+                    id: 43,
+                    type: 'review_body',
+                    author: 'reviewer',
+                  },
+                ],
               },
             ],
           },
           {
             repo: 'repo-b',
-            pr_url: 'https://github.com/org/repo-b/pull/7',
-            comments: [
+            pull_requests: [
               {
-                stable_ref: 'repo-b:review_body:90',
-                selected: true,
-                repo: 'repo-b',
-                id: 90,
-                type: 'review_body',
-                author: 'reviewer',
+                position: 1,
+                title: 'Foundation',
+                url: 'https://github.com/org/repo-b/pull/7',
+                comments: [
+                  {
+                    stable_ref: 'repo-b:review_body:90',
+                    selected: true,
+                    repo: 'repo-b',
+                    id: 90,
+                    type: 'review_body',
+                    author: 'reviewer',
+                  },
+                ],
               },
             ],
           },
@@ -2208,43 +2334,70 @@ describe('FeatureService review-feedback operations', () => {
       repos: [
         {
           repo: 'repo-a',
-          prUrl: 'https://github.com/org/repo-a/pull/1',
-          comments: [
+          pullRequests: [
             {
-              stableRef: 'repo-a:review:41',
-              selected: true,
-              repo: 'repo-a',
-              id: 41,
-              type: 'review',
-              path: 'src/query.ts',
-              line: 12,
-              author: 'octocat',
-              body: '[redacted] leaks here',
-              diffHunk: 'clone [path]',
-              inReplyToId: 39,
-              createdAt: '2026-07-16T00:00:00Z',
+              position: 1,
+              title: 'Foundation',
+              url: 'https://github.com/org/repo-a/pull/1',
+              comments: [
+                {
+                  stableRef: 'repo-a:review:41',
+                  selected: true,
+                  repo: 'repo-a',
+                  id: 41,
+                  type: 'review',
+                  path: 'src/query.ts',
+                  line: 12,
+                  author: 'octocat',
+                  body: '[redacted] leaks here',
+                  diffHunk: 'clone [path]',
+                  inReplyToId: 39,
+                  createdAt: '2026-07-16T00:00:00Z',
+                },
+                {
+                  stableRef: 'repo-a:issue:42',
+                  selected: false,
+                  repo: 'repo-a',
+                  id: 42,
+                  type: 'issue',
+                  body: 'plain note',
+                },
+              ],
             },
             {
-              stableRef: 'repo-a:issue:42',
-              selected: false,
-              repo: 'repo-a',
-              id: 42,
-              type: 'issue',
-              body: 'plain note',
+              position: 3,
+              title: 'Extension',
+              url: 'https://github.com/org/repo-a/pull/3',
+              comments: [
+                {
+                  stableRef: 'repo-a:review_body:43',
+                  selected: true,
+                  repo: 'repo-a',
+                  id: 43,
+                  type: 'review_body',
+                  author: 'reviewer',
+                },
+              ],
             },
           ],
         },
         {
           repo: 'repo-b',
-          prUrl: 'https://github.com/org/repo-b/pull/7',
-          comments: [
+          pullRequests: [
             {
-              stableRef: 'repo-b:review_body:90',
-              selected: true,
-              repo: 'repo-b',
-              id: 90,
-              type: 'review_body',
-              author: 'reviewer',
+              position: 1,
+              title: 'Foundation',
+              url: 'https://github.com/org/repo-b/pull/7',
+              comments: [
+                {
+                  stableRef: 'repo-b:review_body:90',
+                  selected: true,
+                  repo: 'repo-b',
+                  id: 90,
+                  type: 'review_body',
+                  author: 'reviewer',
+                },
+              ],
             },
           ],
         },
@@ -2258,6 +2411,41 @@ describe('FeatureService review-feedback operations', () => {
     ]);
   });
 
+  it('rejects a pull-request group missing its position instead of rendering an unplaced section', async () => {
+    const { service, calls } = makeService(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        revision: 7,
+        snapshot_id: 'snapshot-009',
+        repos: [
+          {
+            repo: 'repo-a',
+            pull_requests: [
+              {
+                title: 'Foundation',
+                url: 'https://github.com/org/repo-a/pull/1',
+                comments: [
+                  {
+                    stable_ref: 'repo-a:review:41',
+                    selected: true,
+                    repo: 'repo-a',
+                    id: 41,
+                    type: 'review',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    }));
+    await expect(
+      service.fetchReviewFeedback({ featureId: 'abcd1234ef567890' }),
+    ).rejects.toMatchObject({ canonical: { code: 'E_SCHEMA_MISMATCH' } });
+    expect(calls).toHaveLength(1);
+  });
+
   it('redacts fetched comment bodies and diff hunks before they cross the boundary', async () => {
     const { service } = makeService(() => ({
       status: 200,
@@ -2268,16 +2456,22 @@ describe('FeatureService review-feedback operations', () => {
         repos: [
           {
             repo: 'repo-a',
-            pr_url: 'https://github.com/org/repo-a/pull/1',
-            comments: [
+            pull_requests: [
               {
-                stable_ref: 'repo-a:review:1',
-                selected: true,
-                repo: 'repo-a',
-                id: 1,
-                type: 'review',
-                body: 'token=Bearer abc and /Users/secret/path',
-                diff_hunk: 'diff --git a/x /home/hidden',
+                position: 1,
+                title: 'Foundation',
+                url: 'https://github.com/org/repo-a/pull/1',
+                comments: [
+                  {
+                    stable_ref: 'repo-a:review:1',
+                    selected: true,
+                    repo: 'repo-a',
+                    id: 1,
+                    type: 'review',
+                    body: 'token=Bearer abc and /Users/secret/path',
+                    diff_hunk: 'diff --git a/x /home/hidden',
+                  },
+                ],
               },
             ],
           },
@@ -2285,7 +2479,7 @@ describe('FeatureService review-feedback operations', () => {
       },
     }));
     const result = await service.fetchReviewFeedback({ featureId: 'abcd1234ef567890' });
-    const comment = result.repos[0]?.comments[0];
+    const comment = result.repos[0]?.pullRequests[0]?.comments[0];
     expect(comment?.body).not.toContain('Bearer abc');
     expect(comment?.body).not.toContain('/Users/secret/path');
     expect(comment?.diffHunk).not.toContain('/home/hidden');
@@ -2300,14 +2494,20 @@ describe('FeatureService review-feedback operations', () => {
         repos: [
           {
             repo: 'repo-a',
-            pr_url: 'https://github.com/org/repo-a/pull/1',
-            comments: [
+            pull_requests: [
               {
-                stable_ref: 'repo-a:review:41',
-                selected: false,
-                repo: 'repo-a',
-                id: 41,
-                type: 'review',
+                position: 1,
+                title: 'Foundation',
+                url: 'https://github.com/org/repo-a/pull/1',
+                comments: [
+                  {
+                    stable_ref: 'repo-a:review:41',
+                    selected: false,
+                    repo: 'repo-a',
+                    id: 41,
+                    type: 'review',
+                  },
+                ],
               },
             ],
           },
@@ -2326,14 +2526,20 @@ describe('FeatureService review-feedback operations', () => {
       repos: [
         {
           repo: 'repo-a',
-          prUrl: 'https://github.com/org/repo-a/pull/1',
-          comments: [
+          pullRequests: [
             {
-              stableRef: 'repo-a:review:41',
-              selected: false,
-              repo: 'repo-a',
-              id: 41,
-              type: 'review',
+              position: 1,
+              title: 'Foundation',
+              url: 'https://github.com/org/repo-a/pull/1',
+              comments: [
+                {
+                  stableRef: 'repo-a:review:41',
+                  selected: false,
+                  repo: 'repo-a',
+                  id: 41,
+                  type: 'review',
+                },
+              ],
             },
           ],
         },

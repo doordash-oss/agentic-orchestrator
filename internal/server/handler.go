@@ -912,12 +912,12 @@ func wireError(rendered errcat.Error) Error {
 				RemoteOnlyCommits: repo.RemoteOnlyCommits,
 				ConflictFiles:     repo.ConflictFiles,
 				DirtyFiles:        repo.DirtyFiles,
-				ParentAnchorSha:   repo.ParentAnchorSHA,
-				ExpectedRefSha:    repo.ExpectedRefSHA,
 				ChildHeadSha:      repo.ChildHeadSHA,
 				CandidateSha:      repo.CandidateSHA,
-				MergeHead:         repo.MergeHEAD,
 				ObservedSha:       repo.ObservedSHA,
+				LayerPosition:     repo.LayerPosition,
+				LayerTitle:        repo.LayerTitle,
+				PullRequestURL:    repo.PullRequestURL,
 			})
 		}
 		if rendered.Context.Phase != nil {

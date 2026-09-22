@@ -95,6 +95,56 @@ func TestContractRegistryPlanRoadmapPlannerReportsMalformedRoadmap(t *testing.T)
 	}
 }
 
+func TestContractRegistryPlanRoadmapPlannerReportsMissingPullRequestsTable(t *testing.T) {
+	attemptDir := writeRoadmapPlannerAttempt(t, "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n", validPlanAttemptMetaYAML())
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanRoadmapPlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if out.OK {
+		t.Fatal("Validate() OK = true, want false")
+	}
+	got := JoinProtocolViolations(violations)
+	if !strings.Contains(got, "roadmap markdown") || !strings.Contains(got, "## Pull Requests") {
+		t.Fatalf("JoinProtocolViolations() = %q, want violation naming the ## Pull Requests section", got)
+	}
+}
+
+func TestContractRegistryPlanRoadmapPlannerReportsInvalidPullRequestsTable(t *testing.T) {
+	roadmap := "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n\n## Pull Requests\n\n" +
+		"| # | Title | Phases | Rationale |\n|---|---|---|---|\n| 1 | Skeleton | 1 | First. |\n| 2 | Extras | 2 | Second. |\n"
+	attemptDir := writeRoadmapPlannerAttempt(t, roadmap, validPlanAttemptMetaYAML())
+
+	out, violations, err := Validate(feature.PhasePlan, RolePlanRoadmapPlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if out.OK {
+		t.Fatal("Validate() OK = true, want false")
+	}
+	got := JoinProtocolViolations(violations)
+	if !strings.Contains(got, "## Pull Requests") || !strings.Contains(got, "phase 2, which is not a roadmap phase") {
+		t.Fatalf("JoinProtocolViolations() = %q, want the specific table problem naming the section", got)
+	}
+}
+
+func TestValidateArtifactsPreflightReportsInvalidPullRequestsTable(t *testing.T) {
+	attemptDir := writeRoadmapPlannerAttempt(t, "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n", "")
+
+	out, violations, err := ValidateArtifactsPreflight(feature.PhasePlan, RolePlanRoadmapPlanner, attemptDir)
+	if err != nil {
+		t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+	}
+	if out.OK {
+		t.Fatal("ValidateArtifactsPreflight() OK = true, want false")
+	}
+	got := JoinProtocolViolations(violations)
+	if !strings.Contains(got, "## Pull Requests") {
+		t.Fatalf("JoinProtocolViolations() = %q, want preflight violation naming the section", got)
+	}
+}
+
 func TestContractRegistryPlanRoadmapPlannerReportsMissingMeta(t *testing.T) {
 	attemptDir := writeRoadmapPlannerAttempt(t, validRoadmapText(), "")
 
@@ -712,6 +762,73 @@ func TestValidateArtifactsPreflightImplementerAcceptsAgentEvidence(t *testing.T)
 	}
 }
 
+func TestValidateArtifactsPreflightImplementerToleratesOptionalFixManifest(t *testing.T) {
+	newIterDir := func(t *testing.T) string {
+		t.Helper()
+		phaseDir := filepath.Join(t.TempDir(), "phase-01")
+		artifactDir := filepath.Join(phaseDir, "implement")
+		iterDir := filepath.Join(artifactDir, "iteration-01")
+		if err := os.MkdirAll(iterDir, 0o755); err != nil {
+			t.Fatalf("mkdir iteration: %v", err)
+		}
+		writeValidProgress(t, filepath.Join(artifactDir, "progress.md"), "", StateSuccess)
+		return iterDir
+	}
+
+	t.Run("without_manifest", func(t *testing.T) {
+		iterDir := newIterDir(t)
+		out, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, RoleImplementer, iterDir)
+		if err != nil {
+			t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+		}
+		if len(violations) != 0 || !out.OK {
+			t.Fatalf("ValidateArtifactsPreflight() = (%+v, %v), want OK without a manifest", out, violations)
+		}
+		if out.FixManifest != nil {
+			t.Fatalf("Outcome.FixManifest = %+v, want nil when no manifest is present", out.FixManifest)
+		}
+	})
+
+	t.Run("with_valid_manifest", func(t *testing.T) {
+		iterDir := newIterDir(t)
+		manifest := strings.Join([]string{
+			"entries:",
+			"  - layer: 1",
+			"    repository: api",
+			"    paths:",
+			"      - internal/git/restack.go",
+		}, "\n")
+		if err := os.WriteFile(filepath.Join(iterDir, "fix-manifest.yaml"), []byte(manifest), 0o644); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+		out, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, RoleImplementer, iterDir)
+		if err != nil {
+			t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+		}
+		if len(violations) != 0 || !out.OK {
+			t.Fatalf("ValidateArtifactsPreflight() = (%+v, %v), want OK with a valid manifest", out, violations)
+		}
+		if out.FixManifest == nil || len(out.FixManifest.Entries) != 1 || out.FixManifest.Entries[0].Layer != 1 {
+			t.Fatalf("Outcome.FixManifest = %+v, want the parsed manifest on the outcome", out.FixManifest)
+		}
+	})
+
+	t.Run("with_malformed_manifest", func(t *testing.T) {
+		iterDir := newIterDir(t)
+		if err := os.WriteFile(filepath.Join(iterDir, "fix-manifest.yaml"), []byte("entries: [not\nvalid yaml"), 0o644); err != nil {
+			t.Fatalf("write malformed manifest: %v", err)
+		}
+		_, violations, err := ValidateArtifactsPreflight(feature.PhaseImplement, RoleImplementer, iterDir)
+		if err != nil {
+			t.Fatalf("ValidateArtifactsPreflight() error = %v", err)
+		}
+		got := JoinProtocolViolations(violations)
+		if !strings.Contains(got, "fix-manifest.yaml") {
+			t.Fatalf("JoinProtocolViolations() = %q, want malformed fix-manifest.yaml named", got)
+		}
+	})
+}
+
 func TestValidateArtifactsPreflightImplementerReportsMissingAgentEvidence(t *testing.T) {
 	phaseDir := filepath.Join(t.TempDir(), "phase-01")
 	artifactDir := filepath.Join(phaseDir, "implement")
@@ -1014,7 +1131,8 @@ func writeRoadmapPlannerAttempt(t *testing.T, roadmapText, metaText string) stri
 }
 
 func validRoadmapText() string {
-	return "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n"
+	return "# Roadmap\n\n## Phase 1: Skeleton\n\n### Goal\nShip the skeleton.\n\n## Pull Requests\n\n" +
+		"| # | Title | Phases | Rationale |\n|---|---|---|---|\n| 1 | Skeleton | 1 | One phase, one reviewable slice. |\n"
 }
 
 func validPlanAttemptMetaYAML() string {

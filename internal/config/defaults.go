@@ -43,6 +43,7 @@ func NewDefault() *Config {
 			},
 			ExitCriteria:             defaultExitCriteria,
 			Inquireness:              "high",
+			DeliveryMode:             "stack",
 			Pipeline:                 "large",
 			MaxIterations:            10,
 			MaxConsecutiveFailures:   3,

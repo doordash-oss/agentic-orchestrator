@@ -46,3 +46,20 @@ func InjectPRSignature(body string) string {
 	}
 	return body + PRSignature
 }
+
+// RemovePRSignature strips the agentic orchestrator signature from a PR
+// body and trims the whitespace it leaves behind.
+func RemovePRSignature(body string) string {
+	return strings.TrimSpace(strings.ReplaceAll(body, PRSignature, ""))
+}
+
+// StripHarnessSections removes every harness-owned section from a PR body —
+// the stack section, the related-PRs section, and the signature — leaving
+// only the content the description session authored. Recreate reuses the
+// surviving content for the replacement pull request's body and re-injects
+// the sections fresh.
+func StripHarnessSections(body string) string {
+	body = RemoveStackSection(body)
+	body = RemoveCrossReferenceSection(body)
+	return RemovePRSignature(body)
+}

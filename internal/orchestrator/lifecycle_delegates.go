@@ -167,11 +167,13 @@ func (o *Orchestrator) MarkDone(featureID string) error {
 	return nil
 }
 
-// MarkPublished persists the PR URL and fires the feature-completed hooks
-// (FeatureCompleted event + OnFeatureCompleted + OnFeatureSummaryNeeded)
-// so observer emission lives in a single chokepoint.
-func (o *Orchestrator) MarkPublished(featureID, prURL string) error {
-	if err := o.deps.Lifecycle.MarkPublished(featureID, prURL); err != nil {
+// MarkPublished transitions the feature to Published and fires the
+// feature-completed hooks (FeatureCompleted event + OnFeatureCompleted +
+// OnFeatureSummaryNeeded) so observer emission lives in a single chokepoint.
+// The per-repository PR URLs on RepoStates are the durable record; no URL
+// argument crosses this boundary.
+func (o *Orchestrator) MarkPublished(featureID string) error {
+	if err := o.deps.Lifecycle.MarkPublished(featureID); err != nil {
 		return err
 	}
 	f, fErr := o.deps.Lifecycle.Get(featureID)
@@ -403,7 +405,9 @@ func (o *Orchestrator) MergeFeatureLocal(featureID string) error {
 		}
 		branch := repo.Branch
 		if branch == "" {
-			branch = "feature/" + f.Slug
+			// No fabricated name: a repository without a recorded branch
+			// cannot be merged locally, and the error names the repository.
+			return fmt.Errorf("%s: no feature branch recorded", repo.Name)
 		}
 		baseBranch := repo.BaseBranch
 		if baseBranch == "" {
@@ -746,6 +750,12 @@ const (
 
 	// RestartDispatchPhase requires the caller to start Outcome.Phase.
 	RestartDispatchPhase
+
+	// RestartRestackRunning means an asynchronous restack loop is now
+	// running for a rebase child at Created; no phase dispatch follows —
+	// the loop itself dispatches the Final Review on landing. The server
+	// and CLI map this onto the restart response's dispatch string.
+	RestartRestackRunning
 )
 
 // RestartOutcome describes the follow-up required after RestartPhase applies
@@ -799,9 +809,33 @@ func (o *Orchestrator) RestartPhase(featureID string, maxIterationsDelta, maxPla
 		return RestartOutcome{}, fmt.Errorf("load feature: %w", err)
 	}
 
+	// A rebase child whose asynchronous restack loop is still running
+	// refuses a restart: the loop is the pass's own work and a restart must
+	// not kill its sessions. (While a resolution session runs, the active
+	// session guard above already refused; this catches the gaps between
+	// sessions.)
+	if f.IsChild() && f.Parent != nil && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated {
+		if _, inFlight := o.rebaseRestackLoops.Load(featureID); inFlight {
+			return RestartOutcome{}, ErrFeatureBusy
+		}
+	}
+
 	// Stop any active sessions before mutating state so orphaned agents do not
 	// race subsequent Store.Modify writes.
 	o.StopFeatureSessions(featureID)
+
+	// A rebase child at Created restarts the asynchronous harness restack
+	// loop: the restack replaces the planning and implement phases, and a
+	// pass parked on exhausted resolution attempts re-runs the loop from
+	// scratch. The start returns at once with the restack-running outcome;
+	// landing dispatches the Final Review — the pass's single verification
+	// round — from the loop's goroutine.
+	if f.IsChild() && f.Parent != nil && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated {
+		if err := o.startRebaseRestackPass(featureID); err != nil {
+			return RestartOutcome{}, err
+		}
+		return RestartOutcome{Action: RestartRestackRunning}, nil
+	}
 
 	// An active child with resumable integration state replays the integration
 	// boundary — never Plan, Implement, or an already-approved Final Review.

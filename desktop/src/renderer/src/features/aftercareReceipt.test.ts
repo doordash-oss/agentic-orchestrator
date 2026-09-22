@@ -99,7 +99,7 @@ describe('verificationFact', () => {
 });
 
 describe('pullRequestRows', () => {
-  it('emits one row per PR-bearing repository with plain-language state', () => {
+  it('emits one row per PR with repository, position, title, and plain-language state', () => {
     const rows = pullRequestRows(
       featureSnapshot({
         repos: ['api', 'web', 'local'],
@@ -107,10 +107,49 @@ describe('pullRequestRows', () => {
           {
             name: 'api',
             publishable: true,
-            prUrl: 'https://github.com/x/api/pull/412',
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://github.com/x/api/pull/412',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+              {
+                position: 2,
+                title: 'Empty layer',
+                state: 'none',
+                noCommits: true,
+                pushedUpToDate: false,
+              },
+              {
+                position: 3,
+                title: 'Search revamp',
+                url: 'https://github.com/x/api/pull/415',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: false,
+              },
+            ],
             freshness: 'in sync',
           },
-          { name: 'web', publishable: true, prUrl: 'https://github.com/x/web/pull/9' },
+          {
+            name: 'web',
+            publishable: true,
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://github.com/x/web/pull/9',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: false,
+              },
+            ],
+          },
           { name: 'local', publishable: false },
         ],
       }),
@@ -125,10 +164,24 @@ describe('pullRequestRows', () => {
         repos: [
           {
             repo: 'api',
-            prUrl: 'https://github.com/x/api/pull/412',
-            comments: [
-              { stableRef: 'api:review:1', selected: true, repo: 'api', id: 1, type: 'review' },
-              { stableRef: 'api:issue:2', selected: true, repo: 'api', id: 2, type: 'issue' },
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                url: 'https://github.com/x/api/pull/412',
+                comments: [
+                  { stableRef: 'api:review:1', selected: true, repo: 'api', id: 1, type: 'review' },
+                  { stableRef: 'api:issue:2', selected: true, repo: 'api', id: 2, type: 'issue' },
+                ],
+              },
+              {
+                position: 3,
+                title: 'Search revamp',
+                url: 'https://github.com/x/api/pull/413',
+                comments: [
+                  { stableRef: 'api:review:3', selected: true, repo: 'api', id: 3, type: 'review' },
+                ],
+              },
             ],
           },
         ],
@@ -137,12 +190,24 @@ describe('pullRequestRows', () => {
     expect(rows).toEqual([
       {
         repo: 'api',
+        position: 1,
+        title: 'Bootstrap',
         url: 'https://github.com/x/api/pull/412',
         number: '#412',
-        clauses: ['Published from this run', 'in sync', '2 unresolved comments'],
+        clauses: ['Published from this run', 'in sync', '3 unresolved comments'],
+      },
+      {
+        repo: 'api',
+        position: 3,
+        title: 'Search revamp',
+        url: 'https://github.com/x/api/pull/415',
+        number: '#415',
+        clauses: ['Published from this run', 'in sync', '3 unresolved comments'],
       },
       {
         repo: 'web',
+        position: 1,
+        title: 'Bootstrap',
         url: 'https://github.com/x/web/pull/9',
         number: '#9',
         clauses: ['New commits not pushed yet', 'no unresolved comments'],
@@ -150,10 +215,87 @@ describe('pullRequestRows', () => {
     ]);
   });
 
+  it('falls back to preflight entries for repositories the snapshot does not cover', () => {
+    const rows = pullRequestRows(
+      featureSnapshot({ repoStatus: [{ name: 'api', publishable: true, freshness: 'in sync' }] }),
+      preflight([
+        {
+          repo: 'api',
+          publishable: true,
+          touched: true,
+          status: 'already_published',
+          pullRequests: [
+            {
+              position: 1,
+              title: 'Bootstrap',
+              url: 'https://github.com/x/api/pull/7',
+              state: 'open',
+              noCommits: false,
+              pushedUpToDate: true,
+            },
+          ],
+        },
+        {
+          repo: 'web',
+          publishable: true,
+          touched: true,
+          status: 'unpublished_changes',
+          pullRequests: [
+            {
+              position: 2,
+              title: 'Search revamp',
+              url: 'https://github.com/x/web/pull/8',
+              state: 'open',
+              noCommits: false,
+              pushedUpToDate: false,
+            },
+          ],
+        },
+      ]),
+      null,
+    );
+    // The snapshot repository without entries falls back to the preflight's;
+    // the preflight-only repository ships its PR too.
+    expect(rows).toEqual([
+      {
+        repo: 'api',
+        position: 1,
+        title: 'Bootstrap',
+        url: 'https://github.com/x/api/pull/7',
+        number: '#7',
+        clauses: ['Published from this run', 'in sync'],
+      },
+      {
+        repo: 'web',
+        position: 2,
+        title: 'Search revamp',
+        url: 'https://github.com/x/web/pull/8',
+        number: '#8',
+        clauses: ['New commits not pushed yet'],
+      },
+    ]);
+  });
+
   it('omits the unresolved clause entirely when the fetch did not resolve', () => {
     const rows = pullRequestRows(
       featureSnapshot({
-        repoStatus: [{ name: 'api', publishable: true, prUrl: 'https://github.com/x/api/pull/1' }],
+        repoStatus: [
+          {
+            name: 'api',
+            publishable: true,
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://github.com/x/api/pull/1',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
+          },
+        ],
       }),
       null,
       null,
@@ -168,7 +310,17 @@ describe('pullRequestRows', () => {
           {
             name: 'api',
             publishable: true,
-            prUrl: 'https://github.com/x/api/pull/1',
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://github.com/x/api/pull/1',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
             freshness: 'unknown',
           },
         ],

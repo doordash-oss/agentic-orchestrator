@@ -204,7 +204,7 @@ func TestOwnedErrorsProjectRepositoryRecords(t *testing.T) {
 	parent.Repos = append(parent.Repos, feature.FeatureRepo{Name: "beta"})
 	record := func(repo string) *errcat.FailureRecord {
 		return &errcat.FailureRecord{
-			Code: errcat.PublishRebaseConflict,
+			Code: errcat.PublishStackPullRequestClosed,
 			Context: &errcat.RecordContext{
 				Repositories: []errcat.CodeRepository{{Name: repo, Branch: "main", ConflictFiles: []string{"a.go"}}},
 			},
@@ -267,8 +267,8 @@ func TestOwnedErrorsProjectChildRecords(t *testing.T) {
 		if len(entries) != 1 {
 			t.Fatalf("errors len = %d, want one transaction entry; entries = %#v", len(entries), entries)
 		}
-		assertOwnedEntry(t, entries[0], "transaction", string(errcat.IntegrationMergeConflict), child.ID,
-			"Integration merge conflict", errcat.ClassNeedsAction)
+		assertOwnedEntry(t, entries[0], "transaction", string(errcat.IntegrationRebaseConflict), child.ID,
+			"Rebase conflict resolution exhausted", errcat.ClassNeedsAction)
 	})
 
 	t.Run("failed child run projects child-keyed run entry", func(t *testing.T) {
@@ -380,7 +380,7 @@ func TestOwnedErrorsClassAndOrderInvariants(t *testing.T) {
 	store, parent := seedReadFeature(t)
 	seedRunFailure(t, store, parent, errcat.IterationBudgetExhausted)
 	parent.RepoStates[repoNameSelf].Error = &errcat.FailureRecord{
-		Code:    errcat.PublishRebaseConflict,
+		Code:    errcat.PublishStackPullRequestClosed,
 		Context: &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
 	}
 	if err := store.Save(parent); err != nil {

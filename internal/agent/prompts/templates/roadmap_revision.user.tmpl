@@ -14,7 +14,11 @@ This is revision attempt {{ .Attempt }}.
 
 Roadmap: {{ .PreviousRoadmapPath }}
 
-{{ end }}## Critic Feedback
+{{ end }}## Delivery
+
+{{ if eq .DeliveryMode "single" }}This feature is delivered as a single pull request. The `## Pull Requests` table must contain exactly one row whose `Phases` cell spans every phase (for example `1-3` for a three-phase roadmap). This is a delivery constraint only: phase slicing itself is unchanged — still divide the work into reviewable phases as the skill directs.{{ else }}This feature is delivered as a stack of pull requests — the grouping heuristic in the create-roadmap skill applies when filling in the `## Pull Requests` table.{{ end }}
+
+## Critic Feedback
 
 {{ .CriticFeedback }}
 

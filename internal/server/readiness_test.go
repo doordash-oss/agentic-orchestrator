@@ -34,6 +34,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
@@ -444,6 +445,8 @@ func TestReadinessInvalidConfigurationReported(t *testing.T) {
 type createFeatureRecorder struct {
 	MutationTarget
 	created atomic.Int64
+	mu      sync.Mutex
+	last    CreateFeatureRequest
 }
 
 func TestCreateFeatureIdempotencyKeyReturnsOriginalResult(t *testing.T) {
@@ -577,7 +580,74 @@ func TestCreateFeatureAcceptsContextAnnotatedModelFallback(t *testing.T) {
 
 func (t *createFeatureRecorder) CreateFeature(req CreateFeatureRequest) (CreateFeatureResponse, error) {
 	t.created.Add(1)
+	t.mu.Lock()
+	t.last = req
+	t.mu.Unlock()
 	return CreateFeatureResponse{FeatureID: fixtureFeatureID, Result: resultCreated}, nil
+}
+
+// lastRequest returns the most recently accepted create request.
+func (t *createFeatureRecorder) lastRequest() CreateFeatureRequest {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.last
+}
+
+// TestCreateFeaturePassesDeliveryModeToTarget verifies the create route
+// forwards the requested delivery mode verbatim; resolving the workspace
+// default for an omitted mode is the mutation target's job.
+func TestCreateFeaturePassesDeliveryModeToTarget(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		body map[string]any
+		want feature.DeliveryMode
+	}{
+		{name: "single delivery mode", body: map[string]any{"name": "single feature", "delivery_mode": "single"}, want: feature.DeliveryModeSingle},
+		{name: "stack delivery mode", body: map[string]any{"name": "stack feature", "delivery_mode": "stack"}, want: feature.DeliveryModeStack},
+		{name: "omitted delivery mode", body: map[string]any{"name": "defaulted feature"}, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := &createFeatureRecorder{}
+			handler := NewHandler(HandlerOptions{
+				Config: config.NewDefault(), Mutations: target, DisableHostValidation: true,
+			})
+			w := postTrustedJSON(handler, apiPathFeatures, tc.body)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("create status = %d body=%s; want 201", w.Code, w.Body.String())
+			}
+			if got := target.lastRequest().DeliveryMode; got != tc.want {
+				t.Fatalf("delivery_mode passed to target = %q; want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCreateFeatureRejectsInvalidDeliveryMode verifies an unknown delivery
+// mode is rejected with a 400 naming the accepted values before the mutation
+// target runs, so nothing is created.
+func TestCreateFeatureRejectsInvalidDeliveryMode(t *testing.T) {
+	t.Parallel()
+	target := &createFeatureRecorder{}
+	handler := NewHandler(HandlerOptions{
+		Config: config.NewDefault(), Mutations: target, DisableHostValidation: true,
+	})
+	w := postTrustedJSON(handler, apiPathFeatures, map[string]any{
+		"name": "bad delivery", "delivery_mode": "pr-per-phase",
+	})
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("create status = %d body=%s; want 400", w.Code, w.Body.String())
+	}
+	body := decodeErrorBody(t, w)
+	if body.Error.Code != string(errcat.BadRequest) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.BadRequest)
+	}
+	if !strings.Contains(body.Error.Diagnostics, "delivery_mode must be stack or single") {
+		t.Fatalf("diagnostics = %q; want delivery_mode must be stack or single", body.Error.Diagnostics)
+	}
+	if got := target.created.Load(); got != 0 {
+		t.Fatalf("CreateFeature called %d times; want 0 for invalid delivery mode", got)
+	}
 }
 
 func TestCreateFeatureReturnsStructuredReadinessErrorWhenNoProviderUsable(t *testing.T) {

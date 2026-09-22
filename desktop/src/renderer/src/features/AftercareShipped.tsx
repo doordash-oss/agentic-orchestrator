@@ -66,7 +66,6 @@ export function AftercareShipped({
   const phases = phasesFact(snapshot, run);
   // Fully completed at rest: the pip row draws the pipeline, not progress.
   const phaseSegments = archiveRailSegments(spineStages(snapshot.pipeline), phases.stages - 1);
-  const multiRepo = prRows.length > 1;
 
   return (
     <section className="aftercare-shipped" aria-labelledby="aftercare-shipped-title">
@@ -94,15 +93,20 @@ export function AftercareShipped({
           </ShippedRow>
           {prRows.map((row) => (
             <ShippedRow
-              key={row.repo}
-              label={multiRepo ? `Pull request · ${row.repo}` : 'Pull request'}
+              key={`${row.repo}:${row.position}`}
+              label={
+                prRows.length === 1
+                  ? 'Pull request'
+                  : `Pull request · ${row.repo} · layer ${row.position}`
+              }
               action="Open on GitHub"
               external
               onAction={() => onOpenPullRequest(row.url)}
             >
               <code className="aftercare-shipped__number">{row.number}</code>
+              <span className="aftercare-shipped__fact-text">{row.title}</span>
               {row.clauses.length === 0 ? null : (
-                <span className="aftercare-shipped__fact-text">{row.clauses.join(' · ')}</span>
+                <span className="aftercare-shipped__meta">{row.clauses.join(' · ')}</span>
               )}
             </ShippedRow>
           ))}

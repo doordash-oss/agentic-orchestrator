@@ -91,7 +91,6 @@ import {
   type UpdateInstallNowRequest,
   type ServerUpdateInstallRequest,
   type CompletionPreflightRequest,
-  type PublishDescriptionRequest,
   type RepositoryDiffRequest,
   type OpenExternalRequest,
   type RevealPathRequest,
@@ -335,8 +334,6 @@ const api: AgenticoApi = {
   preflightCompletion: (request: CompletionPreflightRequest) =>
     call(IPC_CHANNELS.completionPreflight, request),
   getRepositoryDiff: (request: RepositoryDiffRequest) => call(IPC_CHANNELS.repositoryDiff, request),
-  generatePublishDescription: (request: PublishDescriptionRequest) =>
-    call(IPC_CHANNELS.publishDescription, request),
   openExternal: (request: OpenExternalRequest) => call(IPC_CHANNELS.openExternal, request),
   revealPath: (request: RevealPathRequest) => call(IPC_CHANNELS.revealPath, request),
   writeClipboardText: (text: string) => call(IPC_CHANNELS.clipboardWriteText, text),

@@ -42,15 +42,26 @@ func (*prDescriptionPermissionHandler) CanUseTool(_ ports.ToolPermissionRequest)
 	}, nil
 }
 
-// PRContext is the lean input for PR description generation. It replaces the
-// raw `master..HEAD` diff with structured, bounded signals that fit comfortably
-// inside the Claude CLI prompt budget even for very large features.
+// PRContext is the lean input for one stack layer's PR body generation. It
+// replaces the raw `base..HEAD` diff with structured, bounded signals that
+// fit comfortably inside the Claude CLI prompt budget even for very large
+// features. The layer fields scope the session to a single delivery-stack
+// layer: LayerPosition is the 1-based position, LayerTitle/LayerPhases/
+// LayerRationale come from the layer's roadmap pull-request row, and Stack
+// lists every layer (one prompts.PRStackLayerView per layer) so the model
+// can place this layer inside the stack. CommitBodies is
+// `git log --format=%B base..HEAD` and DiffStat is
+// `git diff --stat base...HEAD`.
 type PRContext struct {
 	FeatureName        string
 	FeatureDescription string
-	Roadmap            string // plan/roadmap text (was the prior "plan" arg)
-	CommitBodies       string // `git log --format=%B base..HEAD`
-	DiffStat           string // `git diff --stat base...HEAD`
+	LayerPosition      int
+	LayerTitle         string
+	LayerPhases        []int
+	LayerRationale     string
+	Stack              []prompts.PRStackLayerView
+	CommitBodies       string
+	DiffStat           string
 }
 
 // extractTextFromStreamJSON parses JSONL stream-json output from the claude CLI
@@ -93,33 +104,29 @@ func extractTextFromStreamJSON(output string) string {
 	return output
 }
 
-// BuildPRDescriptionPrompt constructs the prompt for generating a PR description
-// from a lean PRContext. Empty sections are omitted so the model is not asked to
-// reason about them.
+// BuildPRDescriptionPrompt constructs the prompt for generating one stack
+// layer's PR body from a lean PRContext. Empty sections are omitted so the
+// model is not asked to reason about them.
 //
 // The prose lives in internal/agent/prompts/templates/pr_description.user.tmpl.
 func BuildPRDescriptionPrompt(ctx PRContext) string {
 	return prompts.PRDescriptionUserPrompt(prompts.PRDescriptionUserInput{
 		FeatureName:        ctx.FeatureName,
 		FeatureDescription: ctx.FeatureDescription,
-		Roadmap:            ctx.Roadmap,
+		LayerPosition:      ctx.LayerPosition,
+		LayerTitle:         ctx.LayerTitle,
+		LayerPhases:        ctx.LayerPhases,
+		LayerRationale:     ctx.LayerRationale,
+		Stack:              ctx.Stack,
 		CommitBodies:       ctx.CommitBodies,
 		DiffStat:           ctx.DiffStat,
 	})
 }
 
-func truncateTitle(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return strings.TrimRight(string(runes[:n-1]), " ") + "…"
-}
-
-// RunDescriptionGeneration runs the bounded utility helper to generate a PR
-// title/body from a structured PRContext. It is tool-free and returns errors
-// without synthesizing replacement content.
-func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, model string, prCtx PRContext) (title, body string, err error) {
+// RunDescriptionGeneration runs the bounded utility helper to generate one
+// stack layer's PR body from a structured PRContext. It is tool-free and
+// returns errors without synthesizing replacement content.
+func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, model string, prCtx PRContext) (body string, err error) {
 	result, runErr := pr.RunUtilitySession(ctx, UtilityRunConfig{
 		SessionID:    fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
 		FeatureID:    featureID,
@@ -132,89 +139,57 @@ func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, 
 		RequireText:  true,
 	})
 	if runErr != nil {
-		return "", "", fmt.Errorf("generating description: %w", runErr)
+		return "", fmt.Errorf("generating description: %w", runErr)
 	}
 
-	title, body = ParsePRDescription(result.Text)
-	if title == "" || body == "" {
-		return "", "", fmt.Errorf("generating description: model returned an incomplete title or body")
+	body = ParsePRDescription(result.Text)
+	if body == "" {
+		return "", fmt.Errorf("generating description: model returned an empty body")
 	}
-	return title, body, nil
+	return body, nil
 }
 
-// ParsePRDescription extracts title and body from the generation output. The
-// parser is intentionally lenient: output need not contain explicit TITLE:/BODY:
-// markers. When markers are absent it treats the first markdown heading (or the
-// first non-empty line) as the title and the rest as the body. Returns empty
-// strings for whichever field cannot be extracted so callers can decide to
-// fall back deterministically.
-func ParsePRDescription(output string) (title, body string) {
+// ParsePRDescription extracts the PR body from the generation output. The
+// reply is body-only: the whole trimmed output is the body. As a lenient
+// fallback for a reply that still carries the retired TITLE: marker, the
+// marker line (and an optional BODY: marker) is stripped and the remainder
+// is the body. Returns an empty string when no body can be extracted so
+// callers can decide to fail deterministically.
+func ParsePRDescription(output string) string {
 	output = strings.TrimSpace(output)
 	if output == "" {
-		return "", ""
+		return ""
 	}
-
 	if strings.Contains(output, "TITLE:") {
-		return parseMarked(output)
+		return parseMarkedBody(output)
 	}
-	return parseUnmarked(output)
+	return output
 }
 
-// parseMarked handles output that contains a TITLE: marker (and optionally BODY:).
-// If BODY: is absent, every line after the TITLE: line is treated as the body.
-func parseMarked(output string) (title, body string) {
+// parseMarkedBody strips a legacy TITLE: marker line (and an optional BODY:
+// marker) from a reply, returning the remaining text as the body.
+func parseMarkedBody(output string) string {
 	lines := strings.Split(output, "\n")
+	hasBodyMarker := strings.Contains(output, "BODY:")
 	var bodyLines []string
 	inBody := false
-	titleSeen := false
-
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !titleSeen && strings.HasPrefix(trimmed, "TITLE:") {
-			title = strings.TrimSpace(strings.TrimPrefix(trimmed, "TITLE:"))
-			titleSeen = true
-			continue
+		if !inBody {
+			if strings.HasPrefix(trimmed, "TITLE:") {
+				continue
+			}
+			if hasBodyMarker && trimmed == "BODY:" {
+				inBody = true
+				continue
+			}
+			// Allow blank lines between the markers.
+			if trimmed == "" {
+				continue
+			}
 		}
-		if titleSeen && !inBody && trimmed == "BODY:" {
-			inBody = true
-			continue
-		}
-		if titleSeen && !inBody && trimmed == "" {
-			// Allow blank line between TITLE: and BODY:.
-			continue
-		}
-		if titleSeen {
-			// Either BODY: was already seen, or it was omitted — in both cases,
-			// everything after the title is body.
-			inBody = true
-			bodyLines = append(bodyLines, line)
-		}
+		inBody = true
+		bodyLines = append(bodyLines, line)
 	}
-	body = strings.TrimSpace(strings.Join(bodyLines, "\n"))
-	return title, body
-}
-
-// parseUnmarked handles output without TITLE:/BODY: markers. Extracts the first
-// markdown heading or first non-empty line as title; the rest becomes body.
-func parseUnmarked(output string) (title, body string) {
-	lines := strings.Split(output, "\n")
-	titleIdx := -1
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		titleIdx = i
-		if strings.HasPrefix(trimmed, "# ") {
-			title = strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
-		} else {
-			title = truncateTitle(trimmed, 70)
-		}
-		break
-	}
-	if titleIdx < 0 {
-		return "", ""
-	}
-	body = strings.TrimSpace(strings.Join(lines[titleIdx+1:], "\n"))
-	return title, body
+	return strings.TrimSpace(strings.Join(bodyLines, "\n"))
 }

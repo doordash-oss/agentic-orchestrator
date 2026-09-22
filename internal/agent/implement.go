@@ -180,36 +180,6 @@ type ImplementConfig struct {
 	// single-repo path, relying on the Final Review for quality gating.
 	// Multi-repo orchestration keeps per-iteration review enabled.
 	SkipIterationReview bool
-
-	// PhaseExitGate, when non-nil, re-verifies mechanical exit facts at every
-	// success exit before the loop returns review_passed. Non-empty feedback
-	// routes into a fix round like a deterministic regression and counts
-	// toward the no-progress and iteration rails. Nil disables the gate.
-	PhaseExitGate PhaseExitGate
-}
-
-// PhaseExitGate reports mechanical phase-exit violations as fix-round
-// feedback; "" means all checks passed. The implementation loop invokes it at
-// every success exit.
-type PhaseExitGate func() string
-
-// phaseExitGateFeedback invokes the config's phase-exit gate, returning the
-// trimmed violation feedback ("" when the gate is nil or satisfied).
-func phaseExitGateFeedback(cfg ImplementConfig) string {
-	if cfg.PhaseExitGate == nil {
-		return ""
-	}
-	return strings.TrimSpace(cfg.PhaseExitGate())
-}
-
-// phaseExitGateBlockers derives the open-blocker count fed to the progress
-// tracker from gate feedback: the structured finding count, floored at one so
-// a violated gate is never mistaken for a clean outcome.
-func phaseExitGateBlockers(feedback string) int {
-	if n := CountBlockingReviewFindings(feedback); n > 0 {
-		return n
-	}
-	return 1
 }
 
 // SessionRuntimeConfig is the role-specific configuration snapshot used to
@@ -476,13 +446,24 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}
 				capabilityEnv = env
 			}
-			// Build prompt
+			// Build prompt. A review-feedback child whose parent
+			// delivers as a stack additionally receives the parent's
+			// layer list and the fix-manifest default instruction;
+			// every other feature renders the prompt unchanged.
+			var parentStack []feature.StackLayer
+			fixManifestPath := ""
+			if stack, ok := reviewFeedbackParentStack(cfg.FeatureStore, cfg.Feature); ok {
+				parentStack = stack
+				fixManifestPath = filepath.Join(iterDir, FixManifestFilename)
+			}
 			prompt := BuildImplementPrompt(
 				cfg.PlanPath,
 				cfg.ExitCriteria,
 				reviewerFeedback,
 				helpAnswers,
 				i,
+				parentStack,
+				fixManifestPath,
 			)
 			// Re-inject user-attached visual references (mockups, design
 			// comps, desired-state screenshots) on every implement
@@ -794,6 +775,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					Kind:                 RoundCommitImplement,
 					FixNumber:            roundFixNumber,
 					FirstImplementCommit: roundFirstImplement,
+					IterationDir:         iterDir,
 					Repos:                implementRoundCommitRepos(cfg),
 				}
 				if roundIsFix {
@@ -1002,29 +984,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				continue
 			}
 
-			// Phase-exit gate: mechanical exit facts re-verified at every
-			// success exit before the loop returns review_passed. Violations
-			// route back to the implementer exactly like a deterministic
-			// harness regression; nil result means the gate passed.
-			gateFixRound := func(gateFeedback string) *LoopResult {
-				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, phaseExitGateBlockers(gateFeedback), cfg)
-				meta.ReviewStatus = ReviewChangesRequested.String()
-				_ = am.WriteMeta(iterDir, meta)
-				_ = am.WriteSummary(summaryPath, meta)
-				consecutiveFailures = 0
-				reviewerFeedback = gateFeedback
-				roundCommits.changesRequested++
-				cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "phase_exit_gate")
-				if pt.NoProgressCount() >= cfg.MaxConsecNoProgress {
-					return &LoopResult{
-						FinalStatus: "safety_rail",
-						Iterations:  i,
-						LastError:   fmt.Sprintf("no progress for %d consecutive iterations", pt.NoProgressCount()),
-					}
-				}
-				return nil
-			}
-
 			// Fall through: SUCCESS — run the review gate.
 			if cfg.SkipIterationReview {
 				// Medium/Large: skip per-iteration review, rely on Final Review.
@@ -1050,12 +1009,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 						}, nil
 					}
 					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "harness_regression")
-					continue
-				}
-				if gateFeedback := phaseExitGateFeedback(cfg); gateFeedback != "" {
-					if rail := gateFixRound(gateFeedback); rail != nil {
-						return rail, nil
-					}
 					continue
 				}
 				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
@@ -1171,16 +1124,8 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			switch reviewStatus {
 			case ReviewApproved:
-				// Phase-exit gate: an approving review does not override
-				// violated mechanical exit facts.
 				// An approving review does not override violated mechanical
 				// exit facts.
-				if gateFeedback := phaseExitGateFeedback(cfg); gateFeedback != "" {
-					if rail := gateFixRound(gateFeedback); rail != nil {
-						return rail, nil
-					}
-					continue
-				}
 				meta.MadeProgress = observeVerifiedImplementationOutcome(pt, 0, cfg)
 				meta.ReviewStatus = reviewStatus.String()
 				_ = am.WriteMeta(iterDir, meta)
@@ -1701,7 +1646,11 @@ func phaseReposForImplementationContract(f *feature.Feature, planPath string) []
 // iteration. Role-internal artifact paths, resource catalogs, and static
 // verification discovery live in the RoleSpec-backed system prompt, the
 // pre-seeded verification report, and skills/implement/SKILL.md.
-func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int) string {
+//
+// stack and fixManifestPath are populated only for a review-feedback child
+// whose parent delivers as a stack (see reviewFeedbackParentStack); empty
+// values render the prompt without the parent-stack section.
+func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int, stack []feature.StackLayer, fixManifestPath string) string {
 	return roles.BuildImplementPrompt(roles.ImplementUserInput{
 		PlanPath:             planPath,
 		ExitCriteria:         exitCriteria,
@@ -1709,7 +1658,30 @@ func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, 
 		PlanRevisionFeedback: implementationPlanRevisionFeedback(planPath, iteration),
 		HelpAnswers:          helpAnswers,
 		Iteration:            iteration,
+		Stack:                stack,
+		FixManifestPath:      fixManifestPath,
 	})
+}
+
+// reviewFeedbackParentStack returns the parent feature's stack layers in
+// ascending position order when f is a review-feedback child whose parent
+// loads with a non-empty stack. It returns false for top-level features,
+// other child kinds, and parents that cannot be loaded or carry no stack;
+// callers leave the prompt's stack section unpopulated in those cases so
+// the prompt renders exactly as it did before.
+func reviewFeedbackParentStack(store ports.FeatureStore, f *feature.Feature) ([]feature.StackLayer, bool) {
+	if store == nil || f == nil || f.Parent == nil || f.Parent.Kind != feature.ChildKindReviewFeedback {
+		return nil, false
+	}
+	parent, err := store.Load(f.Parent.ParentID)
+	if err != nil || parent == nil || len(parent.Stack) == 0 {
+		return nil, false
+	}
+	stack := feature.CopyStackLayers(parent.Stack)
+	slices.SortFunc(stack, func(a, b feature.StackLayer) int {
+		return a.Position - b.Position
+	})
+	return stack, true
 }
 
 func implementationPlanRevisionFeedback(planPath string, iteration int) string {

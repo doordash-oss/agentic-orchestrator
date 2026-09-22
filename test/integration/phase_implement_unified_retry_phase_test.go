@@ -82,10 +82,19 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 		RepoStates: map[string]*feature.RepoState{
 			"repo-a": {},
 			"repo-b": {},
-			// repo-c outside the phase: pre-stamped with a published PR URL
-			// so we can verify RetryPhase does NOT touch it.
-			"repo-c": {Touched: true, PRURL: "https://github.com/example/repo-c/pull/9"},
+			// repo-c outside the phase: pre-stamped with a published pull
+			// request on its stack layer entry so we can verify RetryPhase
+			// does NOT touch it.
+			"repo-c": {Touched: true},
 		},
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Title:    "Delivery",
+			Branch:   "feature/test",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-c": {PRURL: "https://github.com/example/repo-c/pull/9", PRState: feature.StackPRStateOpen},
+			},
+		}},
 		MaxIterations: 2,
 	}
 	if err := store.Save(f); err != nil {
@@ -164,9 +173,9 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 			t.Errorf("after first run, repo %q = %+v, want the failed stamp (Touched)", name, st)
 		}
 	}
-	// repo-c outside the phase plan: status preserved.
-	if st := got.RepoStates["repo-c"]; st == nil || st.PRURL == "" {
-		t.Errorf("repo-c after first run = %+v, want pr_ready (preserved — outside phase)", st)
+	// repo-c outside the phase plan: pull request preserved.
+	if prURL := got.TopStackLayerPRURL("repo-c"); prURL != "https://github.com/example/repo-c/pull/9" {
+		t.Errorf("repo-c after first run top-layer PR = %q, want preserved — outside phase", prURL)
 	}
 
 	// Seed a run-level failure record to verify RetryPhase clears it as
@@ -210,9 +219,9 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 			t.Errorf("after RetryPhase, repo %q record = %+v, want cleared", name, st.Error)
 		}
 	}
-	// Outside-the-phase preservation: repo-c PRURL retained.
-	if st := got.RepoStates["repo-c"]; st == nil || st.PRURL == "" {
-		t.Errorf("repo-c after RetryPhase = %+v, want PRURL preserved", st)
+	// Outside-the-phase preservation: repo-c layer pull request retained.
+	if prURL := got.TopStackLayerPRURL("repo-c"); prURL != "https://github.com/example/repo-c/pull/9" {
+		t.Errorf("repo-c after RetryPhase top-layer PR = %q, want preserved", prURL)
 	}
 	// Run-level failure record cleared.
 	if got.FailureCode() != "" {
@@ -253,7 +262,7 @@ func TestPhaseImplementUnified_RetryPhaseRecovery(t *testing.T) {
 		}
 	}
 	// repo-c still preserved.
-	if st := got2.RepoStates["repo-c"]; st == nil || st.PRURL == "" {
-		t.Errorf("repo-c after second run = %+v, want pr_ready (preserved)", st)
+	if prURL := got2.TopStackLayerPRURL("repo-c"); prURL != "https://github.com/example/repo-c/pull/9" {
+		t.Errorf("repo-c after second run top-layer PR = %q, want preserved", prURL)
 	}
 }

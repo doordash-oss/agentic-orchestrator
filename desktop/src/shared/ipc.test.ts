@@ -33,6 +33,8 @@ import {
   FeatureActionResultSchema,
   RepositoryDiffResultSchema,
   RecoveryItemViewSchema,
+  RewindWorktreeConsequenceViewSchema,
+  RewindPRConsequenceViewSchema,
   applyShellPatch,
   ShellPatchSchema,
   SettingsPatchSchema,
@@ -69,7 +71,6 @@ import {
   windowPurposeFromArgv,
   LocalReviewDraftSaveRequestSchema,
   LocalReviewDraftStoreSchema,
-  PublishDescriptionRequestSchema,
   RepoStatusViewSchema,
   AppRouteEventSchema,
   ServerRemoveRequestSchema,
@@ -760,25 +761,6 @@ describe('operational IPC schemas', () => {
         body: {
           source_revision: 'rev-1',
           repos: ['repo-a'],
-          title: 'Ship reviewed changes',
-        },
-      }),
-    ).toStrictEqual({
-      featureId: 'abcd1234',
-      action: 'publish',
-      body: {
-        source_revision: 'rev-1',
-        repos: ['repo-a'],
-        title: 'Ship reviewed changes',
-      },
-    });
-    expect(
-      FeatureActionRequestSchema.parse({
-        featureId: 'abcd1234',
-        action: 'publish',
-        body: {
-          source_revision: 'rev-1',
-          repos: ['repo-a'],
         },
       }),
     ).toStrictEqual({
@@ -809,8 +791,61 @@ describe('operational IPC schemas', () => {
       FeatureActionRequestSchema.safeParse({ featureId: 'abcd1234', action: 'publish' }).success,
     ).toBe(false);
     expect(
-      PublishDescriptionRequestSchema.parse({ featureId: 'abcd1234', repos: ['repo-a'] }),
-    ).toStrictEqual({ featureId: 'abcd1234', repos: ['repo-a'] });
+      FeatureActionRequestSchema.safeParse({
+        featureId: 'abcd1234',
+        action: 'publish',
+        body: { source_revision: 'rev-1', repos: ['repo-a'], title: 'No longer accepted' },
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts the closed-pull-request resolution requests and rejects malformed bodies', () => {
+    for (const action of ['reopen-pull-request', 'recreate-pull-request'] as const) {
+      expect(
+        FeatureActionRequestSchema.parse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: 'repo-a', layer: 2, source_revision: 'rev-1' },
+        }),
+      ).toStrictEqual({
+        featureId: 'abcd1234',
+        action,
+        body: { repository: 'repo-a', layer: 2, source_revision: 'rev-1' },
+      });
+      // A missing body, an empty repository, a non-positive layer, an empty
+      // source revision, and unknown keys all fail closed.
+      expect(FeatureActionRequestSchema.safeParse({ featureId: 'abcd1234', action }).success).toBe(
+        false,
+      );
+      expect(
+        FeatureActionRequestSchema.safeParse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: '', layer: 2, source_revision: 'rev-1' },
+        }).success,
+      ).toBe(false);
+      expect(
+        FeatureActionRequestSchema.safeParse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: 'repo-a', layer: 0, source_revision: 'rev-1' },
+        }).success,
+      ).toBe(false);
+      expect(
+        FeatureActionRequestSchema.safeParse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: 'repo-a', layer: 2, source_revision: '' },
+        }).success,
+      ).toBe(false);
+      expect(
+        FeatureActionRequestSchema.safeParse({
+          featureId: 'abcd1234',
+          action,
+          body: { repository: 'repo-a', layer: 2, source_revision: 'rev-1', repos: ['repo-a'] },
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('bounds transcript windows and keeps row cursors distinct from global event cursors', () => {
@@ -1854,6 +1889,76 @@ describe('repository publish-failure error views', () => {
   });
 });
 
+describe('per-layer pull request entry views', () => {
+  const pullRequests = [
+    {
+      position: 1,
+      title: 'Bootstrap',
+      branch: 'feature/x/1-bootstrap',
+      url: 'https://github.com/org/repo-a/pull/11',
+      state: 'open',
+      noCommits: false,
+      pushedUpToDate: true,
+    },
+    {
+      position: 2,
+      title: 'Layer two',
+      state: 'none',
+      noCommits: true,
+      pushedUpToDate: false,
+      pushMode: 'none',
+    },
+  ];
+  const repoStatusView = {
+    name: 'repo-a',
+    publishable: true,
+    touched: true,
+    pullRequests,
+  };
+  const preflightRepoView = {
+    repo: 'repo-a',
+    publishable: true,
+    touched: true,
+    status: 'unpublished_changes',
+    pullRequests: pullRequests.map((entry, index) => ({
+      ...entry,
+      pushMode: index === 0 ? 'fast_forward' : 'none',
+    })),
+    pushMode: 'fast_forward',
+  };
+
+  it('accepts the entry list on the repository status and preflight repository views', () => {
+    expect(RepoStatusViewSchema.safeParse(repoStatusView).success).toBe(true);
+    expect(CompletionPreflightRepoSchema.safeParse(preflightRepoView).success).toBe(true);
+    const parsed = CompletionPreflightRepoSchema.parse(preflightRepoView);
+    expect(parsed.pullRequests?.[0]?.pushMode).toBe('fast_forward');
+    expect(parsed.pullRequests?.[1]?.url).toBeUndefined();
+  });
+
+  it('rejects an entry with an unknown state on both views', () => {
+    const badState = pullRequests.map((entry) => ({ ...entry, state: 'draft' }));
+    expect(
+      RepoStatusViewSchema.safeParse({ ...repoStatusView, pullRequests: badState }).success,
+    ).toBe(false);
+    expect(
+      CompletionPreflightRepoSchema.safeParse({ ...preflightRepoView, pullRequests: badState })
+        .success,
+    ).toBe(false);
+  });
+
+  it('rejects the removed prUrl key on both strict views', () => {
+    expect(
+      RepoStatusViewSchema.safeParse({ ...repoStatusView, prUrl: 'https://x.test/pull/1' }).success,
+    ).toBe(false);
+    expect(
+      CompletionPreflightRepoSchema.safeParse({
+        ...preflightRepoView,
+        prUrl: 'https://x.test/pull/1',
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('owned errors on the feature summary and snapshot views', () => {
   const ownedRunError = {
     ref: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234ef567890' },
@@ -1867,12 +1972,12 @@ describe('owned errors on the feature summary and snapshot views', () => {
   const ownedRepoError = {
     ref: {
       scope: 'repository',
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       featureId: 'abcd1234ef567890',
       repository: 'repo-a',
     },
     error: {
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action',
       title: 'Pull-rebase conflict',
       summary: 'The pull rebase for repository "repo-a" conflicted with its target branch.',
@@ -2034,5 +2139,97 @@ describe('sidebar width preferences', () => {
     for (const sidebarWidth of [199, 521, 260.5, NaN, Infinity, '300']) {
       expect(SettingsPatchSchema.safeParse({ shell: { sidebarWidth } }).success).toBe(false);
     }
+  });
+});
+
+describe('rewind PR consequence views', () => {
+  it('accepts a per-layer entry carrying every field', () => {
+    const parsed = RewindPRConsequenceViewSchema.parse({
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      prUrl: 'https://github.example/repo-a/pull/2',
+      prState: 'open',
+      verdict: 'close',
+      deleteRemoteBranch: true,
+    });
+    expect(parsed).toStrictEqual({
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      prUrl: 'https://github.example/repo-a/pull/2',
+      prState: 'open',
+      verdict: 'close',
+      deleteRemoteBranch: true,
+    });
+  });
+
+  it('accepts an entry without a pull request URL', () => {
+    const parsed = RewindPRConsequenceViewSchema.parse({
+      repo: 'repo-a',
+      position: 3,
+      title: 'Cleanup',
+      branch: 'feature/ws/3-cleanup',
+      prState: 'none',
+      verdict: 'none',
+      deleteRemoteBranch: false,
+    });
+    expect(parsed.prUrl).toBeUndefined();
+  });
+
+  it('rejects an unknown verdict or an unexpected snake_case alias', () => {
+    const base = {
+      repo: 'repo-a',
+      position: 2,
+      title: 'Extension',
+      branch: 'feature/ws/2-ext',
+      prState: 'open',
+      deleteRemoteBranch: true,
+    };
+    expect(RewindPRConsequenceViewSchema.safeParse({ ...base, verdict: 'destroy' }).success).toBe(
+      false,
+    );
+    expect(
+      RewindPRConsequenceViewSchema.safeParse({
+        ...base,
+        verdict: 'close',
+        pr_url: 'https://github.example/repo-a/pull/2',
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('rewind worktree consequence views', () => {
+  it('accepts a layer-tip reset carrying the stack layer branch', () => {
+    const parsed = RewindWorktreeConsequenceViewSchema.parse({
+      repo: 'repo-a',
+      resetKind: 'layer-tip',
+      branch: 'feature/ws/2-ext',
+    });
+    expect(parsed.branch).toBe('feature/ws/2-ext');
+    expect(parsed.resetKind).toBe('layer-tip');
+  });
+
+  it('accepts a consequence without a branch (unstacked feature)', () => {
+    const parsed = RewindWorktreeConsequenceViewSchema.parse({
+      repo: 'repo-a',
+      resetKind: 'base',
+    });
+    expect(parsed.branch).toBeUndefined();
+  });
+
+  it('rejects an unknown reset kind or an unexpected branch alias', () => {
+    expect(
+      RewindWorktreeConsequenceViewSchema.safeParse({ repo: 'repo-a', resetKind: 'tip' }).success,
+    ).toBe(false);
+    expect(
+      RewindWorktreeConsequenceViewSchema.safeParse({
+        repo: 'repo-a',
+        resetKind: 'layer-tip',
+        reset_kind: 'layer-tip',
+      }).success,
+    ).toBe(false);
   });
 });

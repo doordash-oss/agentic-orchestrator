@@ -222,8 +222,8 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 
 	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -244,7 +244,7 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 	if repo.Branch == "" {
 		t.Error("expected Branch to be set")
 	}
-	expectedBranch := git.BranchName(f.WorkspaceSlug())
+	expectedBranch := git.LayerBranchName(f.WorkspaceSlug(), 1, f.Slug)
 	if repo.Branch != expectedBranch {
 		t.Errorf("branch = %q, want %q", repo.Branch, expectedBranch)
 	}
@@ -264,7 +264,7 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 
 	mgr := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		return "", fmt.Errorf("worktree side effect should not run while setup is only queued")
 	}
 	mgr.Worktrees = worktrees
@@ -289,7 +289,7 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 		t.Fatalf("persisted features = %d, want 1", len(features))
 	}
 	persisted := features[0]
-	wantBranch := git.BranchName(persisted.WorkspaceSlug())
+	wantBranch := git.LayerBranchName(persisted.WorkspaceSlug(), 1, persisted.Slug)
 	if got := persisted.Repos[0].Branch; got != wantBranch {
 		t.Fatalf("persisted branch = %q, want %q", got, wantBranch)
 	}
@@ -405,7 +405,7 @@ func TestManagerRunSetupUsesFeatureIDQualifiedBranchWhenPlainSlugBranchIsChecked
 	if gotBranch == occupiedBranch {
 		t.Fatalf("branch = %q, want ID-qualified branch distinct from occupied plain slug branch", gotBranch)
 	}
-	wantBranch := git.BranchName(loaded.WorkspaceSlug())
+	wantBranch := git.LayerBranchName(loaded.WorkspaceSlug(), 1, loaded.Slug)
 	if gotBranch != wantBranch {
 		t.Fatalf("branch = %q, want %q", gotBranch, wantBranch)
 	}
@@ -423,8 +423,8 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 	cfg.Repos["repo-b"] = config.RepoConfig{Path: "/repos/repo-b"}
 	mgr := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-		return filepath.Join(wtDir, featureSlug, repoName), nil
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+		return filepath.Join(wtDir, workspaceSlug, repoName), nil
 	}
 	mgr.Worktrees = worktrees
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -482,8 +482,8 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 		if repo.WorktreePath != wantPath {
 			t.Fatalf("%s worktree path = %q, want %q", repo.Name, repo.WorktreePath, wantPath)
 		}
-		if repo.Branch != git.BranchName(loaded.WorkspaceSlug()) {
-			t.Fatalf("%s branch = %q, want %q", repo.Name, repo.Branch, git.BranchName(loaded.WorkspaceSlug()))
+		if repo.Branch != git.LayerBranchName(loaded.WorkspaceSlug(), 1, loaded.Slug) {
+			t.Fatalf("%s branch = %q, want %q", repo.Name, repo.Branch, git.LayerBranchName(loaded.WorkspaceSlug(), 1, loaded.Slug))
 		}
 	}
 	if got, want := len(loaded.Images), 1; got != want {
@@ -528,7 +528,7 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 func TestManagerRunSetupFailurePersistsDiagnosticsAndLog(t *testing.T) {
 	mgr := newTestManager(t)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		return "", errors.New("git worktree add failed: branch exists")
 	}
 	mgr.Worktrees = worktrees
@@ -586,8 +586,8 @@ func TestManagerRunSetupImageFailurePreservesCompletedWorktree(t *testing.T) {
 	wtDir := t.TempDir()
 	mgr := newTestManager(t)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 
@@ -636,11 +636,11 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	mgr := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
 	failRepoB := true
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		if repoName == "repo-b" && failRepoB {
 			return "", errors.New("repo-b checkout failed")
 		}
-		return filepath.Join(wtDir, featureSlug, repoName), nil
+		return filepath.Join(wtDir, workspaceSlug, repoName), nil
 	}
 	mgr.Worktrees = worktrees
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -690,7 +690,7 @@ func TestManagerRetrySetupSkipsDoneTasksAndCompletesOriginalRun(t *testing.T) {
 	}
 	var repoACreates int
 	for _, call := range worktrees.Calls {
-		if call.Method == "Create" && len(call.Args) >= 3 && call.Args[2] == "repo-a" {
+		if call.Method == "Create" && len(call.Args) >= 4 && call.Args[3] == "repo-a" {
 			repoACreates++
 		}
 	}
@@ -705,10 +705,10 @@ func TestManagerRetrySetupRefusesDuplicateActiveRunner(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 			close(started)
 			<-release
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 	f, err := mgr.Create("Setup Duplicate", "duplicate retry", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
@@ -735,7 +735,7 @@ func TestManagerRetrySetupFailsOnExpectedWorktreeBranchMismatch(t *testing.T) {
 	conflictPath := testutil.InitGitRepo(t)
 	testutil.CreateBranch(t, conflictPath, "feature/someone-else")
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		t.Fatalf("Create called despite persisted path conflict")
 		return "", nil
 	}
@@ -783,7 +783,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	worktrees.ExpectedPathFn = func(featureSlug, repoName string) string {
 		return expectedPath
 	}
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		t.Fatalf("Create called even though expected worktree path exists")
 		return "", nil
 	}
@@ -793,7 +793,7 @@ func TestManagerRetrySetupReusesExpectedWorktreeWhenTaskPathWasNotPersisted(t *t
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	expectedBranch := git.BranchName(f.WorkspaceSlug())
+	expectedBranch := git.LayerBranchName(f.WorkspaceSlug(), 1, f.Slug)
 	if err := os.MkdirAll(expectedPath, 0o755); err != nil {
 		t.Fatalf("mkdir expected path: %v", err)
 	}
@@ -1037,7 +1037,7 @@ func TestManagerPhaseProgression(t *testing.T) {
 	}
 
 	// MarkPublished should keep CurrentPhase at Publish
-	if err := mgr.MarkPublished(f.ID, "https://github.com/test/pr/1"); err != nil {
+	if err := mgr.MarkPublished(f.ID); err != nil {
 		t.Fatalf("mark published: %v", err)
 	}
 	f, _ = mgr.Get(f.ID)
@@ -1105,7 +1105,7 @@ func TestManagerMarkPublished(t *testing.T) {
 	f, _ := mgr.Create("Publish Test", "test", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil)
 
 	// The test config has no origin remote, so Create initialises repos as
-	// non-publishable. Force publishable=true to exercise the empty-URL guard.
+	// non-publishable. Force publishable=true to exercise the no-PR guard.
 	makePublishable(t, mgr, f.ID)
 
 	// Advance through full lifecycle to CodeReady.
@@ -1117,21 +1117,34 @@ func TestManagerMarkPublished(t *testing.T) {
 	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
 	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
 
-	// Mark published — empty URL is rejected for publishable features
-	if err := mgr.MarkPublished(f.ID, ""); err == nil {
-		t.Fatalf("MarkPublished with empty URL on publishable feature should fail")
+	// Mark published — a publishable feature with no stack layer pull
+	// request recorded is refused.
+	if err := mgr.MarkPublished(f.ID); err == nil {
+		t.Fatalf("MarkPublished without any stack layer pull request on publishable feature should fail")
+	} else if !strings.Contains(err.Error(), "no stack layer pull request recorded") {
+		t.Fatalf("MarkPublished error = %v, want the no-stack-layer-pull-request guard", err)
 	}
 
-	// Publishable + non-empty URL succeeds
-	if err := mgr.MarkPublished(f.ID, "https://github.com/test/pr/1"); err != nil {
+	// Publishable + a recorded stack layer pull request succeeds; the
+	// per-layer entries are the durable record.
+	_ = mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"test-repo": {PRURL: "https://github.com/test/pr/1", PRState: feature.StackPRStateOpen},
+			},
+		}}
+		return nil
+	})
+	if err := mgr.MarkPublished(f.ID); err != nil {
 		t.Fatalf("mark published: %v", err)
 	}
 	f, _ = mgr.Get(f.ID)
 	if f.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want Published", f.Status)
 	}
-	if f.PRURL() != "https://github.com/test/pr/1" {
-		t.Errorf("PRURL = %q, want PR URL preserved", f.PRURL())
+	if got := f.TopStackLayerPRURL("test-repo"); got != "https://github.com/test/pr/1" {
+		t.Errorf("TopStackLayerPRURL = %q, want the recorded stack layer PR URL preserved", got)
 	}
 }
 
@@ -1262,10 +1275,11 @@ func TestManagerCreateWithImages(t *testing.T) {
 	}
 }
 
-// TestMarkPublished_NonPublishableEmptyURLAccepted confirms the guard
+// TestMarkPublished_NonPublishableWithoutPRURLAccepted confirms the guard
 // only applies to publishable features; non-publishable features may
-// legitimately Transition to StatusPublished with no PR URL.
-func TestMarkPublished_NonPublishableEmptyURLAccepted(t *testing.T) {
+// legitimately Transition to StatusPublished with no stack layer pull
+// request recorded.
+func TestMarkPublished_NonPublishableWithoutPRURLAccepted(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	mgr := newTestManager(t)
@@ -1289,15 +1303,15 @@ func TestMarkPublished_NonPublishableEmptyURLAccepted(t *testing.T) {
 	_ = mgr.Transition(f.ID, feature.StatusReviewPassed)
 	_ = mgr.Transition(f.ID, feature.StatusCodeReady)
 
-	if err := mgr.MarkPublished(f.ID, ""); err != nil {
-		t.Fatalf("non-publishable MarkPublished with empty URL should succeed: %v", err)
+	if err := mgr.MarkPublished(f.ID); err != nil {
+		t.Fatalf("non-publishable MarkPublished without a PR URL should succeed: %v", err)
 	}
 	got, _ := mgr.Get(f.ID)
 	if got.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want Published", got.Status)
 	}
-	if got.PRURL() != "" {
-		t.Errorf("PRURL = %q, want empty", got.PRURL())
+	if got.AnyStackLayerHasPullRequest() {
+		t.Errorf("AnyStackLayerHasPullRequest = true, want false (no pull request recorded)")
 	}
 }
 
@@ -1434,8 +1448,8 @@ func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 
 	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(wtDir, featureSlug, repoName), nil
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+			return filepath.Join(wtDir, workspaceSlug, repoName), nil
 		},
 	}
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -1477,8 +1491,8 @@ func TestManagerCreateKeepsLocallyUniqueBranchWhenOriginProbeIsUnavailable(t *te
 			mgr := feature.NewManager(store, cfg)
 			mgr.Worktrees = mocks.NewMockWorktreeOps()
 			mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: git.BranchProbeRunnerFunc(func(_ context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
-				if len(args) > 0 && args[0] == "show-ref" {
-					return git.BranchProbeCommandResult{ExitCode: 1}
+				if len(args) > 0 && args[0] == "for-each-ref" {
+					return git.BranchProbeCommandResult{ExitCode: 0}
 				}
 				return git.BranchProbeCommandResult{ExitCode: 128, Diagnostics: "fatal: https://user:secret@example.test/repo.git offline\x1b[31m", Err: errors.New("exit status 128")}
 			})}
@@ -1493,8 +1507,8 @@ func TestManagerCreateKeepsLocallyUniqueBranchWhenOriginProbeIsUnavailable(t *te
 				t.Fatalf("creation warnings = %+v, want one", f.CreationWarnings)
 			}
 			warning := f.CreationWarnings[0]
-			if warning.Repository != "repo-a" || warning.Branch != f.Repos[0].Branch {
-				t.Fatalf("warning = %+v, want repo-a on %q", warning, f.Repos[0].Branch)
+			if warning.Repository != "repo-a" || warning.Branch != "feature/"+f.WorkspaceSlug() {
+				t.Fatalf("warning = %+v, want repo-a on prefix %q", warning, "feature/"+f.WorkspaceSlug())
 			}
 			if strings.Contains(warning.Diagnostics, "secret") || strings.ContainsRune(warning.Diagnostics, '\x1b') || !strings.Contains(warning.Diagnostics, "[redacted]") {
 				t.Fatalf("diagnostics = %q, want bounded redaction", warning.Diagnostics)
@@ -1531,7 +1545,9 @@ func TestManagerCreateSelectsSuffixedCandidateWhenOriginConfirmsCollision(t *tes
 		Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) git.BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "ls-remote" && !planted {
 				planted = true
-				branch := strings.TrimPrefix(args[len(args)-1], "refs/heads/")
+				// The flat pattern is the second-to-last ls-remote argument;
+				// the last one is the nested wildcard.
+				branch := strings.TrimPrefix(args[len(args)-2], "refs/heads/")
 				testutil.CreateBranch(t, fixtureDir, branch)
 				testutil.SimulatePush(t, fixtureDir, bareDir, branch, branch)
 			}
@@ -1546,7 +1562,7 @@ func TestManagerCreateSelectsSuffixedCandidateWhenOriginConfirmsCollision(t *tes
 	if f.Slug == "origin-collision" || !strings.HasPrefix(f.Slug, "origin-collision-") {
 		t.Fatalf("slug = %q, want a suffixed candidate after the confirmed origin collision", f.Slug)
 	}
-	if got := f.Repos[0].Branch; got != git.BranchName(feature.WorkspaceSlug(f.Slug, f.ID)) {
+	if got := f.Repos[0].Branch; got != git.LayerBranchName(feature.WorkspaceSlug(f.Slug, f.ID), 1, f.Slug) {
 		t.Fatalf("selected branch = %q, want the regenerated candidate", got)
 	}
 	if len(f.CreationWarnings) != 0 {
@@ -1569,8 +1585,8 @@ func TestManagerCreateBoundsBranchProbesAcrossRepositories(t *testing.T) {
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.BranchProbeBudget = 40 * time.Millisecond
 	mgr.BranchProbeOptions = git.BranchProbeOptions{OperationTimeout: time.Second, Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
-		if len(args) > 0 && args[0] == "show-ref" {
-			return git.BranchProbeCommandResult{ExitCode: 1}
+		if len(args) > 0 && args[0] == "for-each-ref" {
+			return git.BranchProbeCommandResult{ExitCode: 0}
 		}
 		<-ctx.Done()
 		return git.BranchProbeCommandResult{ExitCode: -1, Diagnostics: ctx.Err().Error(), Err: ctx.Err()}
@@ -1599,7 +1615,7 @@ func TestManagerCreateFailsAfterFiniteBranchCandidateExhaustion(t *testing.T) {
 	var calls int
 	mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: git.BranchProbeRunnerFunc(func(_ context.Context, _ string, _ []string, _ int) git.BranchProbeCommandResult {
 		calls++
-		return git.BranchProbeCommandResult{ExitCode: 0}
+		return git.BranchProbeCommandResult{ExitCode: 0, Stdout: "refs/heads/feature/colliding\n"}
 	})}
 
 	_, err := mgr.Create("Exhaust Branches", "test", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
@@ -1935,13 +1951,17 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 	_ = mgr.Store.Modify(f.ID, func(f *feature.Feature) error {
 		f.Status = feature.StatusPublished
 		f.CurrentPhase = feature.PhasePublish
-		// Per-repo PR URL is the only source of truth.
+		// The stack's per-layer entry is the only source of truth.
 		if f.RepoStates == nil {
 			f.RepoStates = map[string]*feature.RepoState{}
 		}
-		f.RepoStates["test-repo"] = &feature.RepoState{
-			Touched: true, PRURL: "https://github.com/org/repo/pull/123",
-		}
+		f.RepoStates["test-repo"] = &feature.RepoState{Touched: true}
+		f.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"test-repo": {PRURL: "https://github.com/org/repo/pull/123", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		// Ensure the feature is publishable so ClosePR is attempted
 		for i := range f.Repos {
 			f.Repos[i].Publishable = nil
@@ -1965,8 +1985,8 @@ func TestRewindToPhase_PRURLCleared(t *testing.T) {
 		t.Errorf("expected warning about PR close failure, got warnings: %v", warns)
 	}
 	got, _ := mgr.Get(f.ID)
-	if got.PRURL() != "" {
-		t.Errorf("PRURL should be cleared, got %q", got.PRURL())
+	if got.StackRepoHasPullRequest("test-repo") {
+		t.Errorf("stack layer pull request still on record after rewind: stack = %+v", got.Stack)
 	}
 }
 
@@ -2819,16 +2839,26 @@ func TestSetRepoPublished(t *testing.T) {
 		{Name: "repo-b", Path: "/tmp/b"},
 	})
 
-	// Initialize RepoImpl
+	// A two-layer stack whose repo-a entries both carry pull requests: the
+	// per-layer entries are the pull-request record; SetRepoPublished only
+	// refreshes the repository's orchestration state.
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.RepoStates = map[string]*feature.RepoState{
 			"repo-a": {Touched: true},
 			"repo-b": {Touched: true},
 		}
+		feat.Stack = []feature.StackLayer{
+			{Position: 1, Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/repo/pull/1"},
+			}},
+			{Position: 2, Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/repo/pull/2"},
+			}},
+		}
 		return nil
 	})
 
-	err := mgr.SetRepoPublished(f.ID, "repo-a", "https://github.com/org/repo/pull/1")
+	err := mgr.SetRepoPublished(f.ID, "repo-a")
 	if err != nil {
 		t.Fatalf("SetRepoPublished: %v", err)
 	}
@@ -2837,12 +2867,15 @@ func TestSetRepoPublished(t *testing.T) {
 	if !loaded.RepoStates["repo-a"].Touched {
 		t.Errorf("repo-a Touched = false, want true")
 	}
-	if loaded.RepoStates["repo-a"].PRURL != "https://github.com/org/repo/pull/1" {
-		t.Errorf("repo-a PRURL = %q, want %q", loaded.RepoStates["repo-a"].PRURL, "https://github.com/org/repo/pull/1")
+	if got := loaded.Stack[1].Repos["repo-a"].PRURL; got != "https://github.com/org/repo/pull/2" {
+		t.Errorf("repo-a top layer PRURL = %q, want the stack entries preserved", got)
 	}
 	// repo-b should be unchanged
 	if !loaded.RepoStates["repo-b"].Touched {
 		t.Errorf("repo-b Touched = false, want true (unchanged)")
+	}
+	if loaded.StackRepoHasPullRequest("repo-b") {
+		t.Errorf("repo-b pull request = %v, want none recorded (no publish recorded)", loaded.Stack)
 	}
 }
 
@@ -2904,10 +2937,16 @@ func TestSetRepoPublished_ClearsErrorRecord(t *testing.T) {
 		{Name: "repo-a", Path: "/tmp/a"},
 	})
 
-	// Initialize RepoImpl
+	// A stack layer carrying repo-a's pull request, plus the touched repo
+	// state the successful publish refreshes.
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.RepoStates = map[string]*feature.RepoState{
 			"repo-a": {Touched: true},
+		}
+		feat.Stack = []feature.StackLayer{
+			{Position: 1, Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/repo/pull/1"},
+			}},
 		}
 		return nil
 	})
@@ -2927,8 +2966,9 @@ func TestSetRepoPublished_ClearsErrorRecord(t *testing.T) {
 		t.Fatalf("Error = nil, want the stored publish failure record")
 	}
 
-	// Now publish successfully — should clear the record
-	err = mgr.SetRepoPublished(f.ID, "repo-a", "https://github.com/org/repo/pull/1")
+	// Now publish successfully — clears the record; the stack entries keep
+	// the pull-request record untouched.
+	err = mgr.SetRepoPublished(f.ID, "repo-a")
 	if err != nil {
 		t.Fatalf("SetRepoPublished: %v", err)
 	}
@@ -2937,11 +2977,184 @@ func TestSetRepoPublished_ClearsErrorRecord(t *testing.T) {
 	if loaded.RepoStates["repo-a"].Error != nil {
 		t.Errorf("Error = %+v, want nil (cleared after successful publish)", loaded.RepoStates["repo-a"].Error)
 	}
-	if loaded.RepoStates["repo-a"].PRURL != "https://github.com/org/repo/pull/1" {
-		t.Errorf("PRURL = %q, want %q", loaded.RepoStates["repo-a"].PRURL, "https://github.com/org/repo/pull/1")
+	if got := loaded.Stack[0].Repos["repo-a"].PRURL; got != "https://github.com/org/repo/pull/1" {
+		t.Errorf("stack layer PRURL = %q, want the recorded pull request preserved", got)
 	}
 	if !loaded.RepoStates["repo-a"].Touched {
 		t.Errorf("Touched = false, want true after publish")
+	}
+}
+
+// seedStackPublishFeature saves a one-repo, two-layer feature whose repo
+// state carries a stored publish failure: every per-layer publish write
+// must clear that record while updating only its own entry fields.
+func seedStackPublishFeature(t *testing.T) (*feature.Manager, *feature.Store, *feature.Feature) {
+	t.Helper()
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	mgr := &feature.Manager{Store: store, Config: &config.Config{}}
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}})
+	if err := store.Modify(f.ID, func(feat *feature.Feature) error {
+		feat.RepoStates = map[string]*feature.RepoState{
+			"repo-a": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.PublishPushFailed, Diagnostics: "push failed"}},
+		}
+		feat.Stack = []feature.StackLayer{
+			{Position: 1, Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: "tip-1"},
+			}},
+			{Position: 2, Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: "tip-2"},
+			}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("seed stack publish feature: %v", err)
+	}
+	return mgr, store, f
+}
+
+// TestStackLayerPublishWrites covers the per-layer publish write family:
+// each write updates only its own fields on the target layer's entry and
+// clears the repository's stored error; the per-layer entries are the sole
+// durable pull-request record.
+func TestStackLayerPublishWrites(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	tests := []struct {
+		name  string
+		write func(mgr *feature.Manager, featureID string) error
+		check func(t *testing.T, f *feature.Feature)
+	}{
+		{
+			name: "RecordStackLayerPR records URL, open state, and pushed SHA",
+			write: func(mgr *feature.Manager, id string) error {
+				return mgr.RecordStackLayerPR(id, "repo-a", 2, "https://github.com/org/repo-a/pull/2", "sha-2")
+			},
+			check: func(t *testing.T, f *feature.Feature) {
+				entry := f.Stack[1].Repos["repo-a"]
+				if entry.PRURL != "https://github.com/org/repo-a/pull/2" ||
+					entry.PRState != feature.StackPRStateOpen ||
+					entry.LastPushedSHA != "sha-2" {
+					t.Errorf("layer 2 entry = %+v, want PR URL, open state, and pushed SHA", entry)
+				}
+				if entry.TipSHA != "tip-2" {
+					t.Errorf("layer 2 TipSHA = %q, want the boundary tip preserved", entry.TipSHA)
+				}
+				if got := f.Stack[0].Repos["repo-a"]; got.PRURL != "" || got.PRState != "" || got.LastPushedSHA != "" || got.TipSHA != "tip-1" {
+					t.Errorf("layer 1 entry = %+v, want untouched", got)
+				}
+			},
+		},
+		{
+			name: "a lower-layer PR records only its own layer",
+			write: func(mgr *feature.Manager, id string) error {
+				if err := mgr.RecordStackLayerPR(id, "repo-a", 2, "https://github.com/org/repo-a/pull/2", "sha-2"); err != nil {
+					return err
+				}
+				return mgr.RecordStackLayerPR(id, "repo-a", 1, "https://github.com/org/repo-a/pull/1", "sha-1")
+			},
+			check: func(t *testing.T, f *feature.Feature) {
+				if got := f.Stack[0].Repos["repo-a"]; got.PRURL != "https://github.com/org/repo-a/pull/1" {
+					t.Errorf("layer 1 entry = %+v, want its own PR recorded", got)
+				}
+				if got := f.Stack[1].Repos["repo-a"]; got.PRURL != "https://github.com/org/repo-a/pull/2" {
+					t.Errorf("layer 2 entry = %+v, want its own PR unchanged", got)
+				}
+			},
+		},
+		{
+			name: "RecordStackLayerPushedSHA records the SHA alone",
+			write: func(mgr *feature.Manager, id string) error {
+				return mgr.RecordStackLayerPushedSHA(id, "repo-a", 2, "sha-2")
+			},
+			check: func(t *testing.T, f *feature.Feature) {
+				entry := f.Stack[1].Repos["repo-a"]
+				if entry.LastPushedSHA != "sha-2" {
+					t.Errorf("layer 2 entry = %+v, want the pushed SHA recorded", entry)
+				}
+				if entry.PRURL != "" || entry.PRState != "" {
+					t.Errorf("layer 2 entry = %+v, want the pull request record untouched", entry)
+				}
+				if got := f.Stack[0].Repos["repo-a"]; got.PRURL != "" || got.LastPushedSHA != "" {
+					t.Errorf("layer 1 entry = %+v, want untouched", got)
+				}
+			},
+		},
+		{
+			name: "SetStackLayerPRState records the state change",
+			write: func(mgr *feature.Manager, id string) error {
+				if err := mgr.RecordStackLayerPR(id, "repo-a", 2, "https://github.com/org/repo-a/pull/2", "sha-2"); err != nil {
+					return err
+				}
+				return mgr.SetStackLayerPRState(id, "repo-a", 2, feature.StackPRStateMerged)
+			},
+			check: func(t *testing.T, f *feature.Feature) {
+				entry := f.Stack[1].Repos["repo-a"]
+				if entry.PRState != feature.StackPRStateMerged {
+					t.Errorf("layer 2 entry = %+v, want the merged state recorded", entry)
+				}
+				if entry.PRURL != "https://github.com/org/repo-a/pull/2" {
+					t.Errorf("layer 2 entry = %+v, want the PR URL preserved", entry)
+				}
+			},
+		},
+		{
+			name: "MarkStackLayerNoCommits marks the layer empty",
+			write: func(mgr *feature.Manager, id string) error {
+				return mgr.MarkStackLayerNoCommits(id, "repo-a", 2)
+			},
+			check: func(t *testing.T, f *feature.Feature) {
+				entry := f.Stack[1].Repos["repo-a"]
+				if !entry.NoCommits {
+					t.Errorf("layer 2 entry = %+v, want the no-commits marker set", entry)
+				}
+				if entry.TipSHA != "tip-2" || entry.PRURL != "" {
+					t.Errorf("layer 2 entry = %+v, want only the marker changed", entry)
+				}
+				if got := f.Stack[0].Repos["repo-a"]; got.PRURL != "" || got.NoCommits {
+					t.Errorf("layer 1 entry = %+v, want untouched", got)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			mgr, store, f := seedStackPublishFeature(t)
+			if err := tt.write(mgr, f.ID); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			loaded, err := store.Load(f.ID)
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			tt.check(t, loaded)
+			if state := loaded.RepoStates["repo-a"]; state.Error != nil {
+				t.Errorf("repo-a stored error = %+v, want cleared by the publish write", state.Error)
+			}
+		})
+	}
+}
+
+// TestStackLayerPublishWrites_UnknownLayerRejected proves a write aimed at
+// a position no stack layer occupies fails closed without touching the
+// feature's durable state.
+func TestStackLayerPublishWrites_UnknownLayerRejected(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	mgr, store, f := seedStackPublishFeature(t)
+
+	err := mgr.RecordStackLayerPR(f.ID, "repo-a", 3, "https://github.com/org/repo-a/pull/3", "sha-3")
+	if err == nil || !strings.Contains(err.Error(), "position 3") {
+		t.Fatalf("RecordStackLayerPR error = %v, want no-stack-layer-at-position failure", err)
+	}
+
+	loaded, _ := store.Load(f.ID)
+	if got := loaded.Stack[1].Repos["repo-a"]; got.PRURL != "" {
+		t.Errorf("layer 2 entry = %+v, want untouched by the rejected write", got)
+	}
+	if state := loaded.RepoStates["repo-a"]; state.Error == nil {
+		t.Error("repo-a stored error = nil, want preserved by the rejected write")
 	}
 }
 
@@ -2963,7 +3176,7 @@ func TestRetryPhaseClearsRepoErrorRecords(t *testing.T) {
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.RepoStates = map[string]*feature.RepoState{
 			"repo-a": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.PublishPushFailed, Diagnostics: "push failed"}},
-			"repo-b": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.PublishRebaseConflict, Diagnostics: "conflict"}},
+			"repo-b": {Touched: true, Error: &errcat.FailureRecord{Code: errcat.PublishStackPullRequestClosed, Diagnostics: "conflict"}},
 		}
 		return nil
 	})
@@ -2996,14 +3209,22 @@ func TestTryCompletePublish_AllReady(t *testing.T) {
 		{Name: "repo-b", Path: "/tmp/b"},
 	})
 
-	// Set up: feature at ReviewPassed, all repos at pr_ready with PR URLs
+	// Set up: feature at ReviewPassed, all touched repos published on every
+	// stack layer (pull request or no-commits marker).
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.Status = feature.StatusReviewPassed
 		feat.CurrentPhase = feature.PhaseImplement
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
-			"repo-b": {Touched: true, PRURL: "https://github.com/org/b/pull/2"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
 		}
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/1", PRState: feature.StackPRStateOpen},
+				"repo-b": {PRURL: "https://github.com/org/b/pull/2", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -3019,8 +3240,8 @@ func TestTryCompletePublish_AllReady(t *testing.T) {
 	if loaded.Status != feature.StatusPublished {
 		t.Errorf("status = %v, want %v", loaded.Status, feature.StatusPublished)
 	}
-	if loaded.PRURL() != "https://github.com/org/a/pull/1" {
-		t.Errorf("PRURL = %q, want first repo's PR URL", loaded.PRURL())
+	if got := loaded.TopStackLayerPRURL("repo-a"); got != "https://github.com/org/a/pull/1" {
+		t.Errorf("TopStackLayerPRURL(repo-a) = %q, want the recorded stack layer PR URL", got)
 	}
 }
 
@@ -3040,15 +3261,18 @@ func TestTryCompletePublish_NotAllReady(t *testing.T) {
 		feat.Status = feature.StatusReviewPassed
 		feat.CurrentPhase = feature.PhaseImplement
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
+			"repo-a": {Touched: true},
 			"repo-b": {Touched: true},
 		}
-		// Mirror the strangler-implant dual-write: repo-b is touched but
-		// has no PR URL yet, so AllReposPublished must return false.
-		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
-			"repo-b": {Touched: true},
-		}
+		// repo-b is touched but its layer entry has no pull request yet, so
+		// AllReposPublished must return false.
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/1", PRState: feature.StackPRStateOpen},
+				"repo-b": {TipSHA: "tip-b"},
+			},
+		}}
 		return nil
 	})
 
@@ -3081,8 +3305,14 @@ func TestTryCompletePublish_FeatureAtCodeReady(t *testing.T) {
 		feat.Status = feature.StatusCodeReady
 		feat.CurrentPhase = feature.PhasePublish
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
+			"repo-a": {Touched: true},
 		}
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/1", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -3092,6 +3322,59 @@ func TestTryCompletePublish_FeatureAtCodeReady(t *testing.T) {
 	}
 	if !published {
 		t.Fatal("expected published = true for feature at CodeReady")
+	}
+
+	loaded, _ := store.Load(f.ID)
+	if loaded.Status != feature.StatusPublished {
+		t.Errorf("status = %v, want %v", loaded.Status, feature.StatusPublished)
+	}
+}
+
+// TestTryCompletePublish_StackedCodeReadyTransitionsWithoutURL pins the
+// stack-based completion: a code-ready feature whose touched repository has
+// layer 1 carrying a pull request and layer 2 marked empty transitions to
+// Published through the per-layer record alone.
+func TestTryCompletePublish_StackedCodeReadyTransitionsWithoutURL(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	mgr := &feature.Manager{Store: store, Config: &config.Config{}}
+
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/a"},
+		{Name: "repo-b", Path: "/tmp/b"},
+	})
+
+	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
+		feat.Status = feature.StatusCodeReady
+		feat.CurrentPhase = feature.PhasePublish
+		feat.RepoStates = map[string]*feature.RepoState{
+			"repo-a": {Touched: true},
+			"repo-b": {},
+		}
+		feat.Stack = []feature.StackLayer{
+			{Position: 1},
+			{Position: 2},
+		}
+		return nil
+	})
+
+	// Build the settled stack through the per-layer publish writes: layer 1
+	// carries the pull request, layer 2 is marked empty.
+	if err := mgr.RecordStackLayerPR(f.ID, "repo-a", 1, "https://github.com/org/a/pull/1", "sha-1"); err != nil {
+		t.Fatalf("RecordStackLayerPR: %v", err)
+	}
+	if err := mgr.MarkStackLayerNoCommits(f.ID, "repo-a", 2); err != nil {
+		t.Fatalf("MarkStackLayerNoCommits: %v", err)
+	}
+
+	published, err := mgr.TryCompletePublish(f.ID)
+	if err != nil {
+		t.Fatalf("TryCompletePublish: %v", err)
+	}
+	if !published {
+		t.Fatal("expected published = true for the fully settled stack")
 	}
 
 	loaded, _ := store.Load(f.ID)
@@ -3115,8 +3398,14 @@ func TestTryCompletePublish_WrongStatus(t *testing.T) {
 		feat.Status = feature.StatusImplementing
 		feat.CurrentPhase = feature.PhaseImplement
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
+			"repo-a": {Touched: true},
 		}
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/1", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -3272,9 +3561,18 @@ func TestRewindToPhase_ClosesPerRepoPRs(t *testing.T) {
 		feat.Status = feature.StatusImplementing
 		feat.CurrentPhase = feature.PhaseImplement
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/10"},
-			"repo-b": {Touched: true, PRURL: "https://github.com/org/b/pull/20"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
 		}
+		// Each repository's pull request lives on its top stack layer; the
+		// close loop reads the top layer per repository.
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://github.com/org/a/pull/10", PRState: feature.StackPRStateOpen},
+				"repo-b": {PRURL: "https://github.com/org/b/pull/20", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -3320,8 +3618,8 @@ func TestRewindToPhase_ImplementResetsMultiRepoState(t *testing.T) {
 		feat.Status = feature.StatusPublished
 		feat.CurrentPhase = feature.PhasePublish
 		feat.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://github.com/org/a/pull/1"},
-			"repo-b": {Touched: true, PRURL: "https://github.com/org/b/pull/2"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
 		}
 		return nil
 	})
@@ -3459,6 +3757,115 @@ func TestCreateExplicitPipelineOverridesDefault(t *testing.T) {
 	}
 	if f.Pipeline != feature.PipelineMedium {
 		t.Errorf("Pipeline = %v, want medium (explicit)", f.Pipeline)
+	}
+}
+
+func TestCreateDeliveryModeCarriesWorkspaceDefault(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	cfg.Defaults.DeliveryMode = "single"
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/tmp/test-repo"}
+	mgr := feature.NewManager(store, cfg)
+
+	f, err := mgr.Create("single-default-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != feature.DeliveryModeSingle {
+		t.Errorf("DeliveryMode = %v, want single (workspace default)", f.DeliveryMode)
+	}
+}
+
+func TestCreateDefaultDeliveryModeIsStack(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t) // NewDefault seeds defaults.delivery_mode = "stack"
+	f, err := mgr.Create("stack-default-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != feature.DeliveryModeStack {
+		t.Errorf("DeliveryMode = %v, want stack", f.DeliveryMode)
+	}
+}
+
+func TestCreateEmptyDefaultsDeliveryModeFallsBackToStack(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	cfg.Defaults.DeliveryMode = "" // explicitly empty
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/tmp/test-repo"}
+	mgr := feature.NewManager(store, cfg)
+
+	f, err := mgr.Create("delivery-fallback-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != feature.DeliveryModeStack {
+		t.Errorf("DeliveryMode = %v, want stack (fallback)", f.DeliveryMode)
+	}
+}
+
+func TestCreateExplicitDeliveryModeSinglePersists(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t)
+	f, err := mgr.Create("single-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil, feature.CreateOptions{DeliveryMode: feature.DeliveryModeSingle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != feature.DeliveryModeSingle {
+		t.Errorf("DeliveryMode = %v, want single", f.DeliveryMode)
+	}
+	loaded, err := mgr.Store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DeliveryMode != feature.DeliveryModeSingle {
+		t.Errorf("loaded DeliveryMode = %v, want single", loaded.DeliveryMode)
+	}
+}
+
+func TestCreateInvalidDeliveryModeRejected(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mgr := newTestManager(t)
+	_, err := mgr.Create("bad-delivery-feature", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil, feature.CreateOptions{DeliveryMode: feature.DeliveryMode("garbage")})
+	if err == nil {
+		t.Fatal("expected error for invalid delivery mode")
+	}
+	if !strings.Contains(err.Error(), "stack, single") {
+		t.Errorf("error should name the accepted values, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "garbage") {
+		t.Errorf("error should name the rejected value, got: %v", err)
+	}
+}
+
+func TestCreateInvalidDefaultsDeliveryModeRejected(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	dir := t.TempDir()
+	store := feature.NewStore(dir)
+	cfg := config.NewDefault()
+	cfg.Defaults.DeliveryMode = "garbage"
+	cfg.Repos["test-repo"] = config.RepoConfig{Path: "/tmp/test-repo"}
+	mgr := feature.NewManager(store, cfg)
+
+	_, err := mgr.Create("invalid-default-delivery", "test", []string{"test-repo"}, config.ModelConfig{}, "", "", nil)
+	if err == nil {
+		t.Fatal("expected error for invalid defaults.delivery_mode")
+	}
+	if !strings.Contains(err.Error(), "invalid defaults.delivery_mode") {
+		t.Errorf("error should mention 'invalid defaults.delivery_mode', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "stack, single") {
+		t.Errorf("error should name the accepted values, got: %v", err)
 	}
 }
 
@@ -4153,10 +4560,17 @@ func TestRewindToPhase_SkipsClosePRForUnpublished(t *testing.T) {
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.Status = feature.StatusPublished
 		feat.CurrentPhase = feature.PhasePublish
-		feat.SetPRURL("https://github.com/org/repo/pull/99")
 		feat.RepoStates = map[string]*feature.RepoState{
-			"local-repo": {Touched: true, PRURL: "https://github.com/org/repo/pull/100"},
+			"local-repo": {Touched: true},
 		}
+		// A pull request is on record; the feature's unpublishable repos
+		// must still keep the close loop away from it.
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"local-repo": {PRURL: "https://github.com/org/repo/pull/100", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -4195,13 +4609,17 @@ func TestRewindToPhase_ClosePRStillCalledForPublished(t *testing.T) {
 	_ = store.Modify(f.ID, func(feat *feature.Feature) error {
 		feat.Status = feature.StatusPublished
 		feat.CurrentPhase = feature.PhasePublish
-		// Per-repo PR URL is the only source of truth.
+		// The stack's per-layer entry is the only source of truth.
 		if feat.RepoStates == nil {
 			feat.RepoStates = map[string]*feature.RepoState{}
 		}
-		feat.RepoStates["pub-repo"] = &feature.RepoState{
-			Touched: true, PRURL: "https://github.com/org/repo/pull/42",
-		}
+		feat.RepoStates["pub-repo"] = &feature.RepoState{Touched: true}
+		feat.Stack = []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"pub-repo": {PRURL: "https://github.com/org/repo/pull/42", PRState: feature.StackPRStateOpen},
+			},
+		}}
 		return nil
 	})
 
@@ -4288,8 +4706,8 @@ func TestManagerCreateSkipsBranchCheckForUnpublishedRepos(t *testing.T) {
 	cfg.Repos["local-repo"] = config.RepoConfig{Path: "/repos/local-repo"}
 	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = &mocks.MockWorktreeOps{
-		CreateFn: func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-			return filepath.Join(t.TempDir(), featureSlug, repoName), nil
+		CreateFn: func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+			return filepath.Join(t.TempDir(), workspaceSlug, repoName), nil
 		},
 	}
 	mgr.PRs = mocks.NewMockPRCloser()
@@ -4534,9 +4952,17 @@ func TestInitRepoImpl_PreservesExistingState(t *testing.T) {
 			{Name: "repo-b", Path: "/tmp/b"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"repo-a": {Touched: true, PRURL: "https://example.com/a/pr/1"},
+			"repo-a": {Touched: true},
 			"repo-b": {},
 		},
+		// repo-a's pull request lives on its stack layer entry; the state
+		// must survive InitRepoImpl's per-repo bookkeeping.
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {PRURL: "https://example.com/a/pr/1", PRState: feature.StackPRStateOpen},
+			},
+		}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	if err := store.Save(f); err != nil {
@@ -4554,8 +4980,8 @@ func TestInitRepoImpl_PreservesExistingState(t *testing.T) {
 	if !loaded.RepoStates["repo-a"].Touched {
 		t.Errorf("repo-a Touched = false, want true (existing state must survive)")
 	}
-	if loaded.RepoStates["repo-a"].PRURL == "" {
-		t.Errorf("repo-a PRURL was cleared, want preserved")
+	if got := loaded.Stack[0].Repos["repo-a"].PRURL; got != "https://example.com/a/pr/1" {
+		t.Errorf("repo-a stack layer PRURL = %q, want preserved", got)
 	}
 	if loaded.RepoStates["repo-b"].Touched {
 		t.Errorf("repo-b Touched = true, want false (existing state must survive)")
@@ -4915,7 +5341,17 @@ func TestRewindWithRequest_RejectsInvalidPartialBeforeSideEffects(t *testing.T) 
 				ff.CurrentRoadmapPhase = 3
 				ff.TotalRoadmapPhases = 3
 				ff.RepoStates = map[string]*feature.RepoState{
-					"repo-a": {PRURL: "https://example.invalid/pr/1"},
+					"repo-a": {Touched: true},
+				}
+				// A pull request is on record: without up-front validation the
+				// rewind would close it, so the no-side-effect assertions below
+				// stay meaningful.
+				ff.Stack = []feature.StackLayer{
+					{Position: 1, Slug: "core", Phases: []int{1, 2}, Branch: "feature/reject-side-effects/1-core",
+						Repos: map[string]feature.StackRepoEntry{
+							"repo-a": {PRURL: "https://example.invalid/pr/1", PRState: feature.StackPRStateOpen},
+						}},
+					{Position: 2, Slug: "ext", Phases: []int{3}, Branch: "feature/reject-side-effects/2-ext"},
 				}
 				if tc.mutate != nil {
 					tc.mutate(ff)
@@ -5394,8 +5830,18 @@ func TestRewindWithRequest_PartialUnpublishableSkipsPRCloseAndRecordsBackups(t *
 		ff.TotalRoadmapPhases = 3
 		ff.Slug = "partial-side-effects"
 		ff.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1"},
-			"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
+		}
+		// Pull requests are on record for both repositories; the feature's
+		// unpublishable repo must keep the close loop away from them.
+		ff.Stack = []feature.StackLayer{
+			{Position: 1, Slug: "core", Phases: []int{1, 2}, Branch: "feature/partial-side-effects/1-core",
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1", PRState: feature.StackPRStateOpen},
+					"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2", PRState: feature.StackPRStateOpen},
+				}},
+			{Position: 2, Slug: "ext", Phases: []int{3}, Branch: "feature/partial-side-effects/2-ext"},
 		}
 		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
 			1: {
@@ -5451,8 +5897,18 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 		ff.CurrentRoadmapPhase = 3
 		ff.TotalRoadmapPhases = 3
 		ff.RepoStates = map[string]*feature.RepoState{
-			"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1"},
-			"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2"},
+			"repo-a": {Touched: true},
+			"repo-b": {Touched: true},
+		}
+		// Each repository's pull request lives on its top stack layer; the
+		// close loop reads the top layer per repository.
+		ff.Stack = []feature.StackLayer{
+			{Position: 1, Slug: "core", Phases: []int{1, 2}, Branch: "feature/partial-closes/1-core",
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {PRURL: "https://example.invalid/repo-a/pull/1", PRState: feature.StackPRStateOpen},
+					"repo-b": {PRURL: "https://example.invalid/repo-b/pull/2", PRState: feature.StackPRStateOpen},
+				}},
+			{Position: 2, Slug: "ext", Phases: []int{3}, Branch: "feature/partial-closes/2-ext"},
 		}
 		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
 			1: {
@@ -5478,8 +5934,23 @@ func TestRewindWithRequest_PartialPublishableClosesPRs(t *testing.T) {
 	if len(warns) != 0 {
 		t.Fatalf("warnings = %v, want none", warns)
 	}
-	if len(prs.Calls) != 2 {
-		t.Fatalf("PR calls = %+v, want two closes", prs.Calls)
+	// The remote pass records the live state lookup, the close, and the
+	// remote branch deletion per repository; layer 2 recorded no pull
+	// request, so only layer 1 is touched.
+	var closes, deletes int
+	for _, c := range prs.Calls {
+		switch c.Method {
+		case "ClosePR":
+			closes++
+		case "DeleteRemoteBranch":
+			if c.Args[1] != "feature/partial-closes/1-core" {
+				t.Fatalf("DeleteRemoteBranch(%v); want layer 1's branch", c.Args)
+			}
+			deletes++
+		}
+	}
+	if closes != 2 || deletes != 2 {
+		t.Fatalf("PR calls = %+v, want two closes and two layer-1 branch deletions", prs.Calls)
 	}
 }
 
@@ -6229,4 +6700,1308 @@ func writeFeatureYAMLFromExternal(t *testing.T, baseDir, id string, activeRun, r
 	if err := os.WriteFile(path, out, 0o644); err != nil {
 		t.Fatalf("write feature.yaml: %v", err)
 	}
+}
+
+// A partial rewind copies the persisted stack into the forked run alongside
+// the phase count, and the sealed run keeps its own copy.
+func TestRewindWithRequest_PartialCarriesStackForward(t *testing.T) {
+	mgr := newTestManager(t)
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
+	})
+	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
+	stack := []feature.StackLayer{
+		{
+			Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}, Branch: "feature/carry-a1b2c3d4/1-bootstrap",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PRURL: "https://github.com/org/repo-a/pull/7", PRState: feature.StackPRStateMerged},
+			},
+		},
+		{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}, Branch: "feature/carry-a1b2c3d4/2-build-and-polish"},
+	}
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 3
+		ff.TotalRoadmapPhases = 3
+		ff.Stack = stack
+		ff.Artifacts = map[string]string{
+			"roadmap":      filepath.Join(run1Dir, "roadmap", "roadmap.md"),
+			"phase-1-plan": filepath.Join(run1Dir, "phase-01", "plan", "phase-plan.md"),
+			"phase-2-plan": filepath.Join(run1Dir, "phase-02", "plan", "phase-plan.md"),
+			"phase-3-plan": filepath.Join(run1Dir, "phase-03", "plan", "phase-plan.md"),
+		}
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			2: {"repo-a": "cccccccccccccccccccccccccccccccccccccccc"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	files := map[string]string{
+		filepath.Join("roadmap", "roadmap.md"):             "roadmap",
+		filepath.Join("phase-01", "plan", "phase-plan.md"): "phase 1 plan",
+		filepath.Join("phase-02", "plan", "phase-plan.md"): "phase 2 plan",
+		filepath.Join("phase-03", "plan", "phase-plan.md"): "phase 3 plan",
+	}
+	for rel, content := range files {
+		full := filepath.Join(run1Dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
+	mgr.PRs = nil
+
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+
+	newRun, err := mgr.Store.LoadRun(f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if len(newRun.Stack) != len(stack) {
+		t.Fatalf("new run stack = %+v, want %+v", newRun.Stack, stack)
+	}
+	for i, layer := range stack {
+		if newRun.Stack[i].Position != layer.Position || newRun.Stack[i].Title != layer.Title ||
+			newRun.Stack[i].Slug != layer.Slug || len(newRun.Stack[i].Phases) != len(layer.Phases) ||
+			newRun.Stack[i].Branch != layer.Branch {
+			t.Errorf("new run stack layer %d = %+v, want %+v", i+1, newRun.Stack[i], layer)
+		}
+	}
+	// A partial rewind carries the per-repository entries forward together
+	// with the layer definitions and branch names.
+	wantEntry := feature.StackRepoEntry{
+		TipSHA:  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		PRURL:   "https://github.com/org/repo-a/pull/7",
+		PRState: feature.StackPRStateMerged,
+	}
+	if got := newRun.Stack[0].Repos["repo-a"]; got != wantEntry {
+		t.Errorf("new run layer 1 repo-a = %+v, want %+v", got, wantEntry)
+	}
+	sealedRun, err := mgr.Store.LoadRun(f.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun(1): %v", err)
+	}
+	if len(sealedRun.Stack) != len(stack) || sealedRun.Stack[0].Slug != stack[0].Slug {
+		t.Errorf("sealed run stack = %+v, want its own copy of %+v", sealedRun.Stack, stack)
+	}
+	if got := sealedRun.Stack[0].Repos["repo-a"]; got != wantEntry {
+		t.Errorf("sealed run layer 1 repo-a = %+v, want its own copy of %+v", got, wantEntry)
+	}
+}
+
+// A full rewind to the roadmap phase leaves the forked run without layers:
+// planning re-runs and re-persists the stack at the next approval.
+func TestRewindToPhase_FullRewindToRoadmapClearsStack(t *testing.T) {
+	mgr := newTestManager(t)
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main"},
+	})
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 3
+		ff.TotalRoadmapPhases = 3
+		ff.Stack = []feature.StackLayer{
+			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+			{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	mgr.Worktrees = mocks.NewMockWorktreeOps()
+	mgr.PRs = nil
+
+	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	newRun, err := mgr.Store.LoadRun(f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if newRun.Stack != nil {
+		t.Errorf("new run stack = %+v, want no layers after a full rewind to the roadmap phase", newRun.Stack)
+	}
+	sealedRun, err := mgr.Store.LoadRun(f.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun(1): %v", err)
+	}
+	if len(sealedRun.Stack) != 2 {
+		t.Errorf("sealed run stack = %+v, want its own copy kept", sealedRun.Stack)
+	}
+}
+
+// stackRewindFixture is a two-repository feature carrying a two-layer,
+// three-phase stack (layer 1 covers phases 1 and 2, layer 2 covers phase 3)
+// with per-repository entries on both layers and phase-1 commit anchors,
+// plus the mutable worktree state its mock drives: the branch each worktree
+// is checked out on, the branch refs that exist in each worktree's
+// repository, and per-worktree failure injections for the stack branch
+// steps.
+type stackRewindFixture struct {
+	mgr       *feature.Manager
+	f         *feature.Feature
+	worktrees *mocks.MockWorktreeOps
+	branches  map[string]string
+	refs      map[string]map[string]bool
+	stack     []feature.StackLayer
+	layer1    string
+	layer2    string
+	anchorA   string
+	anchorB   string
+}
+
+const (
+	stackWtA = "/tmp/stack-wt-a"
+	stackWtB = "/tmp/stack-wt-b"
+)
+
+// newStackRewindFixture builds the stacked feature with both worktrees on
+// the given starting branch (defaulting to layer 2's) and both layer refs
+// present (layer 2 present only when reached).
+func newStackRewindFixture(t *testing.T, startBranch string, layer2Reached bool) *stackRewindFixture {
+	t.Helper()
+	mgr := newTestManager(t)
+	layer1 := "feature/stack-ws/1-bootstrap"
+	layer2 := "feature/stack-ws/2-extension"
+	if startBranch == "" {
+		startBranch = layer2
+	}
+	fx := &stackRewindFixture{
+		mgr:      mgr,
+		branches: map[string]string{stackWtA: startBranch, stackWtB: startBranch},
+		refs: map[string]map[string]bool{
+			stackWtA: {layer1: true},
+			stackWtB: {layer1: true},
+		},
+		layer1:  layer1,
+		layer2:  layer2,
+		anchorA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		anchorB: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		stack: []feature.StackLayer{
+			{
+				Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1, 2}, Branch: layer1,
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", LastPushedSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", PRURL: "https://github.com/org/repo-a/pull/1", PRState: feature.StackPRStateMerged},
+					"repo-b": {TipSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", LastPushedSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PRURL: "https://github.com/org/repo-b/pull/1", PRState: feature.StackPRStateMerged},
+				},
+			},
+			{
+				Position: 2, Title: "Extension", Slug: "extension", Phases: []int{3}, Branch: layer2,
+				Repos: map[string]feature.StackRepoEntry{
+					"repo-a": {TipSHA: "cccccccccccccccccccccccccccccccccccccccc", LastPushedSHA: "cccccccccccccccccccccccccccccccccccccccc", PRURL: "https://github.com/org/repo-a/pull/2", PRState: feature.StackPRStateOpen},
+					"repo-b": {TipSHA: "dddddddddddddddddddddddddddddddddddddddd", PRURL: "https://github.com/org/repo-b/pull/2", PRState: feature.StackPRStateOpen},
+				},
+			},
+		},
+	}
+	if layer2Reached {
+		fx.refs[stackWtA][layer2] = true
+		fx.refs[stackWtB][layer2] = true
+	}
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/stack-repo-a", WorktreePath: stackWtA, BaseBranch: "main", Branch: startBranch},
+		{Name: "repo-b", Path: "/tmp/stack-repo-b", WorktreePath: stackWtB, BaseBranch: "main", Branch: startBranch},
+	})
+	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 3
+		ff.TotalRoadmapPhases = 3
+		ff.Stack = fx.stack
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-a": fx.anchorA, "repo-b": fx.anchorB},
+			2: {"repo-a": "cccccccccccccccccccccccccccccccccccccccc", "repo-b": "dddddddddddddddddddddddddddddddddddddddd"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	for _, dir := range []string{
+		filepath.Join(run1Dir, "roadmap"),
+		filepath.Join(run1Dir, "phase-01", "plan"),
+		filepath.Join(run1Dir, "phase-02", "plan"),
+		filepath.Join(run1Dir, "phase-03", "plan"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	fx.f = f
+	return fx
+}
+
+// mock installs the stateful worktree double: CurrentBranch reads the
+// branches map, SwitchBranch moves it, DeleteBranch removes an existing ref
+// (an absent one is success, mirroring the real operation), and RenameBranch
+// renames the checked-out branch. Fail* maps inject one failing step per
+// worktree path. Every call is recorded on the mock's Calls log.
+func (fx *stackRewindFixture) mock(failSwitch, failDelete, failRename map[string]bool) {
+	w := mocks.NewMockWorktreeOps()
+	w.CurrentBranchFn = func(path string) string { return fx.branches[path] }
+	w.SwitchBranchFn = func(path, branch string) error {
+		if failSwitch[path] {
+			return fmt.Errorf("switch refused")
+		}
+		fx.branches[path] = branch
+		return nil
+	}
+	w.DeleteBranchFn = func(path, branch string) error {
+		if failDelete[path] {
+			return fmt.Errorf("delete refused")
+		}
+		delete(fx.refs[path], branch)
+		return nil
+	}
+	w.RenameBranchFn = func(path, oldName, newName string) error {
+		if failRename[path] {
+			return fmt.Errorf("rename refused")
+		}
+		if fx.refs[path][oldName] {
+			delete(fx.refs[path], oldName)
+			fx.refs[path][newName] = true
+		}
+		fx.branches[path] = newName
+		return nil
+	}
+	fx.worktrees = w
+	fx.mgr.Worktrees = w
+	fx.mgr.PRs = nil
+}
+
+// calls returns the recorded mock calls for one method.
+func (fx *stackRewindFixture) calls(method string) []mocks.MockCall {
+	var out []mocks.MockCall
+	for _, c := range fx.worktrees.Calls {
+		if c.Method == method {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// warnings returns the rewind warnings of one kind (backup-branch warnings
+// from the nonexistent /tmp worktree paths are expected noise here).
+func stackWarnings(warnings []feature.RewindWarning, kind feature.RewindWarningKind) []feature.RewindWarning {
+	var out []feature.RewindWarning
+	for _, w := range warnings {
+		if w.Kind == kind {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+func branchOf(t *testing.T, mgr *feature.Manager, id, repo string) string {
+	t.Helper()
+	loaded, err := mgr.Store.Load(id)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	for _, r := range loaded.Repos {
+		if r.Name == repo {
+			return r.Branch
+		}
+	}
+	t.Fatalf("repo %s not found", repo)
+	return ""
+}
+
+// A partial rewind to the first phase of the upper layer switches nothing
+// (the worktrees already sit on that layer's branch), resets each worktree
+// to layer 1's recorded tip, deletes no refs, keeps layer 1's per-repo
+// entries while clearing layer 2's, and records layer 2's branch on every
+// repository.
+func TestRewindWithRequest_PartialStackRewindToFirstPhaseOfUpperLayer(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, nil)
+
+	warnings, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 3,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	if got := stackWarnings(warnings, feature.RewindWarningStackBranch); len(got) != 0 {
+		t.Fatalf("stack branch warnings = %+v; want none", got)
+	}
+	if got := stackWarnings(warnings, feature.RewindWarningWorktreeReset); len(got) != 0 {
+		t.Fatalf("worktree reset warnings = %+v; want none", got)
+	}
+	if calls := fx.calls("SwitchBranch"); len(calls) != 0 {
+		t.Errorf("SwitchBranch calls = %+v; want none (already on layer 2)", calls)
+	}
+	if calls := fx.calls("DeleteBranch"); len(calls) != 0 {
+		t.Errorf("DeleteBranch calls = %+v; want none (no layers above)", calls)
+	}
+	resets := fx.calls("ResetToCommit")
+	if len(resets) != 2 {
+		t.Fatalf("ResetToCommit calls = %+v; want one per repo", resets)
+	}
+	wantTips := map[string]string{stackWtA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", stackWtB: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+	for _, c := range resets {
+		path, _ := c.Args[0].(string)
+		sha, _ := c.Args[1].(string)
+		if sha != wantTips[path] {
+			t.Errorf("ResetToCommit(%s) = %s; want layer 1's tip %s", path, sha, wantTips[path])
+		}
+	}
+	for _, path := range []string{stackWtA, stackWtB} {
+		if !fx.refs[path][fx.layer1] {
+			t.Errorf("layer 1 ref removed in %s; want it untouched", path)
+		}
+	}
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if len(newRun.Stack) != 2 {
+		t.Fatalf("new run stack = %+v; want both layer definitions", newRun.Stack)
+	}
+	if newRun.Stack[0].Repos["repo-a"].TipSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ||
+		newRun.Stack[0].Repos["repo-b"].TipSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
+		t.Errorf("layer 1 entries = %+v; want them kept", newRun.Stack[0].Repos)
+	}
+	if newRun.Stack[1].Repos != nil {
+		t.Errorf("layer 2 entries = %+v; want them cleared", newRun.Stack[1].Repos)
+	}
+	for _, layer := range newRun.Stack {
+		if layer.Branch == "" || len(layer.Phases) == 0 {
+			t.Errorf("layer %d definition trimmed: %+v", layer.Position, layer)
+		}
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != fx.layer2 {
+			t.Errorf("repo %s recorded on %q; want layer 2's branch %q", repo, got, fx.layer2)
+		}
+	}
+}
+
+// A partial rewind to a later phase of layer 1 switches each worktree to
+// layer 1's branch, resets to the phase-1 anchor, deletes layer 2's ref,
+// clears both layers' per-repo entries while keeping both definitions, and
+// records layer 1's branch.
+func TestRewindWithRequest_PartialStackRewindWithinLayerOne(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, nil)
+
+	warnings, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	if got := stackWarnings(warnings, feature.RewindWarningStackBranch); len(got) != 0 {
+		t.Fatalf("stack branch warnings = %+v; want none", got)
+	}
+	switches := fx.calls("SwitchBranch")
+	if len(switches) != 2 {
+		t.Fatalf("SwitchBranch calls = %+v; want one per repo", switches)
+	}
+	for _, c := range switches {
+		if branch, _ := c.Args[1].(string); branch != fx.layer1 {
+			t.Errorf("SwitchBranch to %q; want layer 1's branch %q", branch, fx.layer1)
+		}
+	}
+	resets := fx.calls("ResetToCommit")
+	if len(resets) != 2 {
+		t.Fatalf("ResetToCommit calls = %+v; want one per repo", resets)
+	}
+	wantAnchors := map[string]string{stackWtA: fx.anchorA, stackWtB: fx.anchorB}
+	for _, c := range resets {
+		path, _ := c.Args[0].(string)
+		sha, _ := c.Args[1].(string)
+		if sha != wantAnchors[path] {
+			t.Errorf("ResetToCommit(%s) = %s; want phase-1 anchor %s", path, sha, wantAnchors[path])
+		}
+	}
+	deletes := fx.calls("DeleteBranch")
+	if len(deletes) != 2 {
+		t.Fatalf("DeleteBranch calls = %+v; want layer 2's ref per repo", deletes)
+	}
+	for _, c := range deletes {
+		if branch, _ := c.Args[1].(string); branch != fx.layer2 {
+			t.Errorf("DeleteBranch(%q); want layer 2's branch %q", branch, fx.layer2)
+		}
+	}
+	for _, path := range []string{stackWtA, stackWtB} {
+		if fx.refs[path][fx.layer2] {
+			t.Errorf("layer 2 ref still exists in %s; want it deleted", path)
+		}
+		if !fx.refs[path][fx.layer1] {
+			t.Errorf("layer 1 ref removed in %s; want it kept", path)
+		}
+	}
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if len(newRun.Stack) != 2 {
+		t.Fatalf("new run stack = %+v; want both layer definitions", newRun.Stack)
+	}
+	for _, layer := range newRun.Stack {
+		if layer.Repos != nil {
+			t.Errorf("layer %d entries = %+v; want them cleared", layer.Position, layer.Repos)
+		}
+		if layer.Branch == "" || len(layer.Phases) == 0 {
+			t.Errorf("layer %d definition trimmed: %+v", layer.Position, layer)
+		}
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != fx.layer1 {
+			t.Errorf("repo %s recorded on %q; want layer 1's branch %q", repo, got, fx.layer1)
+		}
+	}
+}
+
+// A failing branch switch in one repository produces exactly one
+// stack-branch warning, leaves that repository recorded on the branch the
+// mock reports (layer 2's, untouched by the failed switch), still runs the
+// reset and deletion steps, and the rewind still seals and forks.
+func TestRewindWithRequest_PartialStackRewindSwitchFailureWarnsAndContinues(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(map[string]bool{stackWtA: true}, nil, nil)
+
+	warnings, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	got := stackWarnings(warnings, feature.RewindWarningStackBranch)
+	if len(got) != 1 {
+		t.Fatalf("stack branch warnings = %+v; want exactly one", got)
+	}
+	if got[0].Repo != "repo-a" || got[0].Branch != fx.layer1 || got[0].Err == nil {
+		t.Fatalf("stack branch warning = %+v; want repo-a naming layer 1's branch", got[0])
+	}
+	if len(fx.calls("ResetToCommit")) != 2 {
+		t.Errorf("ResetToCommit calls = %d; want the reset to still run for both repos", len(fx.calls("ResetToCommit")))
+	}
+	if len(fx.calls("DeleteBranch")) != 2 {
+		t.Errorf("DeleteBranch calls = %d; want the deletion to still run for both repos", len(fx.calls("DeleteBranch")))
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-a"); got != fx.layer2 {
+		t.Errorf("repo-a recorded on %q; want the branch the worktree stayed on %q", got, fx.layer2)
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-b"); got != fx.layer1 {
+		t.Errorf("repo-b recorded on %q; want layer 1's branch %q", got, fx.layer1)
+	}
+	if _, err := fx.mgr.Store.LoadRun(fx.f.ID, 2); err != nil {
+		t.Fatalf("LoadRun(2): %v; want the rewind to still seal and fork", err)
+	}
+}
+
+// A failing upper-layer ref deletion produces exactly one warning and the
+// rewind still completes.
+func TestRewindWithRequest_PartialStackRewindDeleteFailureWarnsAndCompletes(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, map[string]bool{stackWtA: true}, nil)
+
+	warnings, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	got := stackWarnings(warnings, feature.RewindWarningStackBranch)
+	if len(got) != 1 {
+		t.Fatalf("stack branch warnings = %+v; want exactly one", got)
+	}
+	if got[0].Repo != "repo-a" || got[0].Branch != fx.layer2 {
+		t.Fatalf("stack branch warning = %+v; want repo-a naming layer 2's branch", got[0])
+	}
+	if _, err := fx.mgr.Store.LoadRun(fx.f.ID, 2); err != nil {
+		t.Fatalf("LoadRun(2): %v; want the rewind to complete", err)
+	}
+}
+
+// A full rewind on a stacked feature deletes every layer ref except the
+// checked-out one, renames it to the provisional layer-1 name, resets to
+// base, records the provisional name on every repository, and leaves the
+// forked run with no stack.
+func TestRewindToPhase_FullStackRewindCollapsesToProvisionalBranch(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, nil)
+	provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+
+	warnings, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan)
+	if err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	if got := stackWarnings(warnings, feature.RewindWarningStackBranch); len(got) != 0 {
+		t.Fatalf("stack branch warnings = %+v; want none", got)
+	}
+	deletes := fx.calls("DeleteBranch")
+	if len(deletes) != 2 {
+		t.Fatalf("DeleteBranch calls = %+v; want layer 1's ref per repo", deletes)
+	}
+	for _, c := range deletes {
+		if branch, _ := c.Args[1].(string); branch != fx.layer1 {
+			t.Errorf("DeleteBranch(%q); want layer 1's branch %q (layer 2 is checked out)", branch, fx.layer1)
+		}
+	}
+	renames := fx.calls("RenameBranch")
+	if len(renames) != 2 {
+		t.Fatalf("RenameBranch calls = %+v; want one per repo", renames)
+	}
+	for _, c := range renames {
+		oldName, _ := c.Args[1].(string)
+		newName, _ := c.Args[2].(string)
+		if oldName != fx.layer2 || newName != provisional {
+			t.Errorf("RenameBranch(%q, %q); want layer 2's branch to the provisional %q", oldName, newName, provisional)
+		}
+	}
+	if len(fx.calls("ResetToBase")) != 2 {
+		t.Errorf("ResetToBase calls = %d; want one per repo", len(fx.calls("ResetToBase")))
+	}
+	for _, path := range []string{stackWtA, stackWtB} {
+		if fx.refs[path][fx.layer1] || fx.refs[path][fx.layer2] {
+			t.Errorf("refs in %s = %v; want only the provisional branch left", path, fx.refs[path])
+		}
+		if !fx.refs[path][provisional] {
+			t.Errorf("provisional ref missing in %s", path)
+		}
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != provisional {
+			t.Errorf("repo %s recorded on %q; want the provisional %q", repo, got, provisional)
+		}
+	}
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if newRun.Stack != nil {
+		t.Errorf("new run stack = %+v; want none after a full rewind", newRun.Stack)
+	}
+}
+
+// With the worktrees on layer 1's branch and layer 2 never reached, a full
+// rewind deletes nothing that exists, renames layer 1's branch to the
+// provisional name, and skips the rename entirely when the branch already
+// carries it.
+func TestRewindToPhase_FullStackRewindOnLayerOne(t *testing.T) {
+	t.Run("renames layer 1 to the provisional name", func(t *testing.T) {
+		fx := newStackRewindFixture(t, "feature/stack-ws/1-bootstrap", false)
+		fx.mock(nil, nil, nil)
+		provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+
+		if _, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan); err != nil {
+			t.Fatalf("RewindToPhase: %v", err)
+		}
+		if len(fx.calls("DeleteBranch")) != 2 {
+			t.Errorf("DeleteBranch calls = %d; want layer 2's absent ref attempted per repo (a no-op)", len(fx.calls("DeleteBranch")))
+		}
+		for _, path := range []string{stackWtA, stackWtB} {
+			if !fx.refs[path][fx.layer1] && !fx.refs[path][provisional] {
+				t.Errorf("refs in %s = %v; want layer 1's ref (renamed) to survive", path, fx.refs[path])
+			}
+		}
+		if len(fx.calls("RenameBranch")) != 2 {
+			t.Fatalf("RenameBranch calls = %d; want one per repo", len(fx.calls("RenameBranch")))
+		}
+		for _, repo := range []string{"repo-a", "repo-b"} {
+			if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != provisional {
+				t.Errorf("repo %s recorded on %q; want the provisional %q", repo, got, provisional)
+			}
+		}
+	})
+	t.Run("no rename call when already the provisional name", func(t *testing.T) {
+		fx := newStackRewindFixture(t, "", false)
+		provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+		// The stack's layer 1 already carries the provisional name and both
+		// worktrees sit on it.
+		fx.stack[0].Branch = provisional
+		fx.layer1 = provisional
+		for _, path := range []string{stackWtA, stackWtB} {
+			delete(fx.refs[path], "feature/stack-ws/1-bootstrap")
+			fx.refs[path][provisional] = true
+			fx.branches[path] = provisional
+		}
+		if err := fx.mgr.Store.Modify(fx.f.ID, func(ff *feature.Feature) error {
+			ff.Stack = fx.stack
+			for i := range ff.Repos {
+				ff.Repos[i].Branch = provisional
+			}
+			return nil
+		}); err != nil {
+			t.Fatalf("modify: %v", err)
+		}
+		fx.mock(nil, nil, nil)
+
+		warnings, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan)
+		if err != nil {
+			t.Fatalf("RewindToPhase: %v", err)
+		}
+		if got := stackWarnings(warnings, feature.RewindWarningStackBranch); len(got) != 0 {
+			t.Fatalf("stack branch warnings = %+v; want none", got)
+		}
+		if calls := fx.calls("RenameBranch"); len(calls) != 0 {
+			t.Errorf("RenameBranch calls = %+v; want none (already the provisional name)", calls)
+		}
+		for _, repo := range []string{"repo-a", "repo-b"} {
+			if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != provisional {
+				t.Errorf("repo %s recorded on %q; want the provisional %q", repo, got, provisional)
+			}
+		}
+	})
+}
+
+// A worktree on an unexpected branch yields one warning naming the
+// repository, the current branch, and the recorded branch, is not renamed,
+// is still reset to base, and is recorded on the branch it is on.
+func TestRewindToPhase_FullStackRewindUnexpectedBranchWarnsAndKeepsBranch(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.branches[stackWtA] = "feature/unexpected"
+	fx.refs[stackWtA]["feature/unexpected"] = true
+	fx.mock(nil, nil, nil)
+	provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+
+	warnings, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan)
+	if err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	got := stackWarnings(warnings, feature.RewindWarningStackBranch)
+	if len(got) != 1 {
+		t.Fatalf("stack branch warnings = %+v; want exactly one", got)
+	}
+	if got[0].Repo != "repo-a" || got[0].Branch != "feature/unexpected" {
+		t.Fatalf("stack branch warning = %+v; want repo-a on the unexpected branch", got[0])
+	}
+	if got[0].Err == nil ||
+		!strings.Contains(got[0].Err.Error(), "feature/unexpected") ||
+		!strings.Contains(got[0].Err.Error(), fx.layer2) {
+		t.Fatalf("stack branch warning error = %v; want it to name the current and recorded branches", got[0].Err)
+	}
+	for _, c := range fx.calls("RenameBranch") {
+		if path, _ := c.Args[0].(string); path == stackWtA {
+			t.Errorf("RenameBranch called for the unexpected-branch worktree: %+v", c)
+		}
+	}
+	if resets := fx.calls("ResetToBase"); len(resets) != 2 {
+		t.Errorf("ResetToBase calls = %d; want the reset to still run for both repos", len(resets))
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-a"); got != "feature/unexpected" {
+		t.Errorf("repo-a recorded on %q; want the branch it stayed on", got)
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-b"); got != provisional {
+		t.Errorf("repo-b recorded on %q; want the provisional %q", got, provisional)
+	}
+}
+
+// A failing rename yields exactly one warning and the rewind still seals
+// and forks, leaving the repository recorded on the branch it kept.
+func TestRewindToPhase_FullStackRewindRenameFailureWarnsAndStillSeals(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, map[string]bool{stackWtA: true})
+
+	warnings, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhasePlan)
+	if err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	got := stackWarnings(warnings, feature.RewindWarningStackBranch)
+	if len(got) != 1 {
+		t.Fatalf("stack branch warnings = %+v; want exactly one", got)
+	}
+	if got[0].Repo != "repo-a" || got[0].Branch != fx.layer2 {
+		t.Fatalf("stack branch warning = %+v; want repo-a naming layer 2's branch", got[0])
+	}
+	if _, err := fx.mgr.Store.LoadRun(fx.f.ID, 2); err != nil {
+		t.Fatalf("LoadRun(2): %v; want the rewind to still seal and fork", err)
+	}
+	if got := branchOf(t, fx.mgr, fx.f.ID, "repo-a"); got != fx.layer2 {
+		t.Errorf("repo-a recorded on %q; want the branch it kept %q", got, fx.layer2)
+	}
+}
+
+// A partial rewind on a feature without a stack performs no branch switch,
+// no deletion, and no branch-record change.
+func TestRewindWithRequest_PartialRewindWithoutStackLeavesBranchRecordsAlone(t *testing.T) {
+	mgr := newTestManager(t)
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/repo-a", WorktreePath: "/tmp/wt-a", BaseBranch: "main", Branch: "feature/original"},
+	})
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 2
+		ff.TotalRoadmapPhases = 3
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	worktrees := mocks.NewMockWorktreeOps()
+	mgr.Worktrees = worktrees
+	mgr.PRs = nil
+
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 2,
+	}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	sawReset := false
+	for _, c := range worktrees.Calls {
+		switch c.Method {
+		case "ResetToCommit":
+			sawReset = true
+		case "CurrentBranch", "SwitchBranch", "DeleteBranch", "RenameBranch":
+			t.Errorf("unexpected %s call on a feature without a stack: %+v", c.Method, c)
+		}
+	}
+	if !sawReset {
+		t.Errorf("worktree calls = %+v; want the anchor reset to still run", worktrees.Calls)
+	}
+	if got := branchOf(t, mgr, f.ID, "repo-a"); got != "feature/original" {
+		t.Errorf("repo-a recorded on %q; want the untouched %q", got, "feature/original")
+	}
+}
+
+// A rewind to Implement without a roadmap phase is a full stack rewind too:
+// it collapses to the provisional branch and leaves the forked run without
+// a stack, exactly like a rewind to the Plan phase.
+func TestRewindToPhase_FullStackRewindToImplementWithoutRoadmapPhase(t *testing.T) {
+	fx := newStackRewindFixture(t, "", true)
+	fx.mock(nil, nil, nil)
+	provisional := git.LayerBranchName(fx.f.WorkspaceSlug(), 1, fx.f.Slug)
+
+	if _, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhaseImplement); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	if len(fx.calls("DeleteBranch")) != 2 {
+		t.Errorf("DeleteBranch calls = %d; want layer 1's ref per repo", len(fx.calls("DeleteBranch")))
+	}
+	if len(fx.calls("RenameBranch")) != 2 {
+		t.Errorf("RenameBranch calls = %d; want one per repo", len(fx.calls("RenameBranch")))
+	}
+	if len(fx.calls("ResetToBase")) != 2 {
+		t.Errorf("ResetToBase calls = %d; want one per repo", len(fx.calls("ResetToBase")))
+	}
+	for _, repo := range []string{"repo-a", "repo-b"} {
+		if got := branchOf(t, fx.mgr, fx.f.ID, repo); got != provisional {
+			t.Errorf("repo %s recorded on %q; want the provisional %q", repo, got, provisional)
+		}
+	}
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if newRun.Stack != nil {
+		t.Errorf("new run stack = %+v; want none after a full rewind", newRun.Stack)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Stack rewind remote consequences: per-layer PR close + remote branch delete
+// ---------------------------------------------------------------------------
+
+// stackRemoteRewindFixture is a two-repository, three-layer stack with open
+// pull requests on every layer, a stateful worktree double, and a recording
+// rewind remote-operations mock whose live pull-request state answers are
+// scripted per URL (open by default). The fake /tmp worktree paths make the
+// pre-rewind backup branches fail, which is expected warning noise here.
+type stackRemoteRewindFixture struct {
+	mgr       *feature.Manager
+	f         *feature.Feature
+	prs       *mocks.MockPRCloser
+	worktrees *mocks.MockWorktreeOps
+	branches  map[string]string
+	refs      map[string]map[string]bool
+	state     map[string]string
+	layer1    string
+	layer2    string
+	layer3    string
+}
+
+// stackPRURL is the recorded pull request URL of one repository's layer.
+func stackPRURL(repoName string, position int) string {
+	return fmt.Sprintf("https://github.com/org/%s/pull/%d", repoName, position)
+}
+
+func newStackRemoteRewindFixture(t *testing.T) *stackRemoteRewindFixture {
+	t.Helper()
+	mgr := newTestManager(t)
+	layer1 := "feature/stack-ws/1-bootstrap"
+	layer2 := "feature/stack-ws/2-extension"
+	layer3 := "feature/stack-ws/3-cleanup"
+	fx := &stackRemoteRewindFixture{
+		mgr:      mgr,
+		branches: map[string]string{stackWtA: layer3, stackWtB: layer3},
+		refs: map[string]map[string]bool{
+			stackWtA: {layer1: true, layer2: true, layer3: true},
+			stackWtB: {layer1: true, layer2: true, layer3: true},
+		},
+		state:  map[string]string{},
+		layer1: layer1,
+		layer2: layer2,
+		layer3: layer3,
+	}
+	stackEntry := func(repoName, sha string, position int) feature.StackRepoEntry {
+		return feature.StackRepoEntry{
+			TipSHA:        sha,
+			LastPushedSHA: sha,
+			PRURL:         stackPRURL(repoName, position),
+			PRState:       feature.StackPRStateOpen,
+		}
+	}
+	stack := []feature.StackLayer{
+		{
+			Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1, 2}, Branch: layer1,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": stackEntry("repo-a", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1),
+				"repo-b": stackEntry("repo-b", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 1),
+			},
+		},
+		{
+			Position: 2, Title: "Extension", Slug: "extension", Phases: []int{3}, Branch: layer2,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": stackEntry("repo-a", "cccccccccccccccccccccccccccccccccccccccc", 2),
+				"repo-b": stackEntry("repo-b", "dddddddddddddddddddddddddddddddddddddddd", 2),
+			},
+		},
+		{
+			Position: 3, Title: "Cleanup", Slug: "cleanup", Phases: []int{4}, Branch: layer3,
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-a": stackEntry("repo-a", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", 3),
+				"repo-b": stackEntry("repo-b", "ffffffffffffffffffffffffffffffffffffffff", 3),
+			},
+		},
+	}
+	f := newMultiRepoFeature(t, mgr, []feature.FeatureRepo{
+		{Name: "repo-a", Path: "/tmp/stack-repo-a", WorktreePath: stackWtA, BaseBranch: "main", Branch: layer3},
+		{Name: "repo-b", Path: "/tmp/stack-repo-b", WorktreePath: stackWtB, BaseBranch: "main", Branch: layer3},
+	})
+	run1Dir := filepath.Join(mgr.Store.BaseDir, f.ID, "runs", "run-001")
+	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusImplementing
+		ff.CurrentPhase = feature.PhaseImplement
+		ff.CurrentRoadmapPhase = 4
+		ff.TotalRoadmapPhases = 4
+		ff.Stack = stack
+		ff.Run().RoadmapPhaseCommitAnchors = map[int]map[string]string{
+			1: {"repo-a": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "repo-b": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			2: {"repo-a": "cccccccccccccccccccccccccccccccccccccccc", "repo-b": "dddddddddddddddddddddddddddddddddddddddd"},
+			3: {"repo-a": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "repo-b": "ffffffffffffffffffffffffffffffffffffffff"},
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+	for _, dir := range []string{
+		filepath.Join(run1Dir, "roadmap"),
+		filepath.Join(run1Dir, "phase-01", "plan"),
+		filepath.Join(run1Dir, "phase-02", "plan"),
+		filepath.Join(run1Dir, "phase-03", "plan"),
+		filepath.Join(run1Dir, "phase-04", "plan"),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	fx.f = f
+	fx.installMocks()
+	return fx
+}
+
+// installMocks wires the stateful worktree double (mirroring the local
+// stack-rewind fixture) and the rewind remote-operations mock, whose live
+// state answers read fx.state: a URL mapped to "error" fails the lookup, an
+// unmapped URL answers open.
+func (fx *stackRemoteRewindFixture) installMocks() {
+	w := mocks.NewMockWorktreeOps()
+	w.CurrentBranchFn = func(path string) string { return fx.branches[path] }
+	w.SwitchBranchFn = func(path, branch string) error {
+		fx.branches[path] = branch
+		return nil
+	}
+	w.DeleteBranchFn = func(path, branch string) error {
+		delete(fx.refs[path], branch)
+		return nil
+	}
+	w.RenameBranchFn = func(path, oldName, newName string) error {
+		if fx.refs[path][oldName] {
+			delete(fx.refs[path], oldName)
+			fx.refs[path][newName] = true
+		}
+		fx.branches[path] = newName
+		return nil
+	}
+	fx.worktrees = w
+	fx.mgr.Worktrees = w
+	prs := mocks.NewMockPRCloser()
+	fx.prs = prs
+	fx.mgr.PRs = prs
+}
+
+// prCalls returns the recorded remote-operations calls for one method.
+func (fx *stackRemoteRewindFixture) prCalls(method string) []mocks.MockCall {
+	var out []mocks.MockCall
+	for _, c := range fx.prs.Calls {
+		if c.Method == method {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// closedURLs returns the closed pull request URLs in call order.
+func (fx *stackRemoteRewindFixture) closedURLs() []string {
+	var out []string
+	for _, c := range fx.prCalls("ClosePR") {
+		out = append(out, c.Args[0].(string))
+	}
+	return out
+}
+
+// deletedBranches returns the (worktree path, branch) pairs deleted from the
+// remotes, in call order.
+func (fx *stackRemoteRewindFixture) deletedBranches() [][2]string {
+	var out [][2]string
+	for _, c := range fx.prCalls("DeleteRemoteBranch") {
+		out = append(out, [2]string{c.Args[0].(string), c.Args[1].(string)})
+	}
+	return out
+}
+
+func (fx *stackRemoteRewindFixture) modify(t *testing.T, fn func(ff *feature.Feature)) {
+	t.Helper()
+	if err := fx.mgr.Store.Modify(fx.f.ID, func(f *feature.Feature) error {
+		fn(f)
+		return nil
+	}); err != nil {
+		t.Fatalf("modify: %v", err)
+	}
+}
+
+// rewindPartial rewinds to roadmap phase 3 — the first phase of layer 2 —
+// so layers 2 and 3 are the closing set and layer 1 must stay untouched.
+func (fx *stackRemoteRewindFixture) rewindPartial(t *testing.T) []feature.RewindWarning {
+	t.Helper()
+	warns, _, err := fx.mgr.RewindWithRequest(fx.f.ID, feature.RewindRequest{
+		TargetPhase:  feature.PhaseImplement,
+		RoadmapPhase: 3,
+	})
+	if err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
+	}
+	return warns
+}
+
+func TestRewindWithRequest_PartialStackRewindClosesAndDeletesClosingLayersOnly(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+
+	warns := fx.rewindPartial(t)
+
+	wantCloses := []string{
+		stackPRURL("repo-a", 3), stackPRURL("repo-a", 2),
+		stackPRURL("repo-b", 3), stackPRURL("repo-b", 2),
+	}
+	if got := fx.closedURLs(); !slicesEqual(got, wantCloses) {
+		t.Errorf("closed URLs = %v; want %v", got, wantCloses)
+	}
+	wantDeletes := [][2]string{
+		{stackWtA, fx.layer3}, {stackWtA, fx.layer2},
+		{stackWtB, fx.layer3}, {stackWtB, fx.layer2},
+	}
+	if got := fx.deletedBranches(); !pairsEqual(got, wantDeletes) {
+		t.Errorf("deleted branches = %v; want %v", got, wantDeletes)
+	}
+	if got := fx.prCalls("PRState"); len(got) != 4 {
+		t.Errorf("PRState calls = %v; want the four closing-layer lookups only", got)
+	}
+	for _, kind := range []feature.RewindWarningKind{feature.RewindWarningPullRequestClose, feature.RewindWarningRemoteBranchDelete} {
+		if got := stackWarnings(warns, kind); len(got) != 0 {
+			t.Errorf("%s warnings = %v; want none", kind, got)
+		}
+	}
+
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	for _, layer := range newRun.Stack {
+		switch layer.Position {
+		case 1:
+			if layer.Repos["repo-a"].PRURL == "" || layer.Repos["repo-b"].PRURL == "" {
+				t.Errorf("layer 1 entries = %+v; want layer 1 kept on a partial rewind into layer 2", layer.Repos)
+			}
+		case 2, 3:
+			if len(layer.Repos) != 0 {
+				t.Errorf("layer %d entries = %+v; want cleared for the closing layers", layer.Position, layer.Repos)
+			}
+		}
+	}
+}
+
+func TestRewindToPhase_FullStackRewindClosesAndDeletesEveryLayer(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+
+	if _, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhaseImplement); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+
+	wantCloses := []string{
+		stackPRURL("repo-a", 3), stackPRURL("repo-a", 2), stackPRURL("repo-a", 1),
+		stackPRURL("repo-b", 3), stackPRURL("repo-b", 2), stackPRURL("repo-b", 1),
+	}
+	if got := fx.closedURLs(); !slicesEqual(got, wantCloses) {
+		t.Errorf("closed URLs = %v; want %v", got, wantCloses)
+	}
+	wantDeletes := [][2]string{
+		{stackWtA, fx.layer3}, {stackWtA, fx.layer2}, {stackWtA, fx.layer1},
+		{stackWtB, fx.layer3}, {stackWtB, fx.layer2}, {stackWtB, fx.layer1},
+	}
+	if got := fx.deletedBranches(); !pairsEqual(got, wantDeletes) {
+		t.Errorf("deleted branches = %v; want %v", got, wantDeletes)
+	}
+
+	newRun, err := fx.mgr.Store.LoadRun(fx.f.ID, 2)
+	if err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	if newRun.Stack != nil {
+		t.Errorf("new run stack = %+v; want none after a full rewind", newRun.Stack)
+	}
+}
+
+func TestRewindWithRequest_StackRewindLiveStateDrivesCloseAndDelete(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	mergedURL := stackPRURL("repo-a", 3)
+	for name, state := range map[string]string{
+		"merged":  git.PRStateMerged,
+		"closed":  git.PRStateClosed,
+		"unknown": "error",
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newStackRemoteRewindFixture(t)
+			fx.prs.PRStateFn = func(prURL string) (string, error) {
+				if prURL != mergedURL {
+					return git.PRStateOpen, nil
+				}
+				if state == "error" {
+					return "", errors.New("state lookup failed")
+				}
+				return state, nil
+			}
+
+			warns := fx.rewindPartial(t)
+
+			closed := fx.closedURLs()
+			deleted := fx.deletedBranches()
+			if state == git.PRStateMerged {
+				if slicesContains(closed, mergedURL) {
+					t.Errorf("merged layer 3 pull request was closed: %v", closed)
+				}
+				if pairsContains(deleted, stackWtA, fx.layer3) {
+					t.Errorf("merged layer 3 remote branch was deleted: %v", deleted)
+				}
+			}
+			if state == git.PRStateClosed && slicesContains(closed, mergedURL) {
+				t.Errorf("already-closed layer 3 pull request was closed again: %v", closed)
+			}
+			if state == "error" && !slicesContains(closed, mergedURL) {
+				t.Errorf("indeterminate layer 3 state must be treated as open and closed: %v", closed)
+			}
+			if state != git.PRStateMerged && !pairsContains(deleted, stackWtA, fx.layer3) {
+				t.Errorf("non-merged layer 3 remote branch must be deleted: %v", deleted)
+			}
+			// Layer 2 is closing and open in every scenario: closed and
+			// deleted for both repositories, and the other repository's
+			// layer 3 follows the same rule as its own live state (open).
+			if !slicesContains(closed, stackPRURL("repo-a", 2)) || !slicesContains(closed, stackPRURL("repo-b", 2)) {
+				t.Errorf("layer 2 pull requests must be closed in every scenario: %v", closed)
+			}
+			if !slicesContains(closed, stackPRURL("repo-b", 3)) {
+				t.Errorf("repo-b's open layer 3 pull request must be closed: %v", closed)
+			}
+			if !pairsContains(deleted, stackWtA, fx.layer2) || !pairsContains(deleted, stackWtB, fx.layer2) {
+				t.Errorf("layer 2 remote branches must be deleted in every scenario: %v", deleted)
+			}
+			for _, kind := range []feature.RewindWarningKind{feature.RewindWarningPullRequestClose, feature.RewindWarningRemoteBranchDelete} {
+				if got := stackWarnings(warns, kind); len(got) != 0 {
+					t.Errorf("%s warnings = %v; want none (a lookup failure produces no warning of its own)", kind, got)
+				}
+			}
+		})
+	}
+}
+
+func TestRewindWithRequest_StackRewindRemoteFailuresWarnPerLayerAndStillSeal(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+	fx.prs.ClosePRFn = func(prURL string) error {
+		if prURL == stackPRURL("repo-a", 2) {
+			return errors.New("close refused")
+		}
+		return nil
+	}
+	fx.prs.DeleteRemoteBranchFn = func(repoPath, branch string) error {
+		if repoPath == stackWtB && branch == fx.layer3 {
+			return errors.New("delete refused")
+		}
+		return nil
+	}
+
+	warns := fx.rewindPartial(t)
+
+	closeWarns := stackWarnings(warns, feature.RewindWarningPullRequestClose)
+	if len(closeWarns) != 1 || closeWarns[0].Repo != "repo-a" || closeWarns[0].Branch != fx.layer2 {
+		t.Errorf("close warnings = %+v; want one for repo-a naming layer 2's branch", closeWarns)
+	}
+	deleteWarns := stackWarnings(warns, feature.RewindWarningRemoteBranchDelete)
+	if len(deleteWarns) != 1 || deleteWarns[0].Repo != "repo-b" || deleteWarns[0].Branch != fx.layer3 {
+		t.Errorf("remote delete warnings = %+v; want one for repo-b naming layer 3's branch", deleteWarns)
+	}
+
+	// The rewind still seals and forks, and each repository completes every
+	// other remote consequence.
+	if _, err := fx.mgr.Store.LoadRun(fx.f.ID, 2); err != nil {
+		t.Fatalf("LoadRun(2): %v", err)
+	}
+	sealed, err := fx.mgr.Store.LoadRun(fx.f.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadRun(1): %v", err)
+	}
+	if !sealed.IsSealed() {
+		t.Errorf("run 1 sealed = false; want the rewind to seal despite remote failures")
+	}
+	closed := fx.closedURLs()
+	for _, want := range []string{
+		stackPRURL("repo-a", 3), stackPRURL("repo-a", 2),
+		stackPRURL("repo-b", 3), stackPRURL("repo-b", 2),
+	} {
+		if !slicesContains(closed, want) {
+			t.Errorf("closed URLs = %v; want %q present (best-effort close)", closed, want)
+		}
+	}
+	deleted := fx.deletedBranches()
+	for _, want := range [][2]string{
+		{stackWtA, fx.layer3}, {stackWtA, fx.layer2},
+		{stackWtB, fx.layer3}, {stackWtB, fx.layer2},
+	} {
+		if !pairsContains(deleted, want[0], want[1]) {
+			t.Errorf("deleted branches = %v; want %v present (best-effort delete)", deleted, want)
+		}
+	}
+}
+
+func TestRewindWithRequest_StackRewindSkipsDeletionWithoutPushEvidenceOrWorktree(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+	// repo-a's layer 3 carries neither a pull request URL nor a pushed SHA:
+	// nothing proves Agentico pushed it, so no deletion call may happen.
+	// repo-b loses its worktree path: deletion runs from the worktree path
+	// only, so its branches stay — while its pull requests still close.
+	fx.modify(t, func(ff *feature.Feature) {
+		ff.Stack[2].Repos["repo-a"] = feature.StackRepoEntry{}
+		for i := range ff.Repos {
+			if ff.Repos[i].Name == "repo-b" {
+				ff.Repos[i].WorktreePath = ""
+			}
+		}
+	})
+
+	warns := fx.rewindPartial(t)
+
+	wantDeletes := [][2]string{{stackWtA, fx.layer2}}
+	if got := fx.deletedBranches(); !pairsEqual(got, wantDeletes) {
+		t.Errorf("deleted branches = %v; want %v", got, wantDeletes)
+	}
+	wantCloses := []string{
+		stackPRURL("repo-a", 2),
+		stackPRURL("repo-b", 3), stackPRURL("repo-b", 2),
+	}
+	if got := fx.closedURLs(); !slicesEqual(got, wantCloses) {
+		t.Errorf("closed URLs = %v; want %v", got, wantCloses)
+	}
+	for _, kind := range []feature.RewindWarningKind{feature.RewindWarningPullRequestClose, feature.RewindWarningRemoteBranchDelete} {
+		if got := stackWarnings(warns, kind); len(got) != 0 {
+			t.Errorf("%s warnings = %v; want none", kind, got)
+		}
+	}
+}
+
+func TestRewindToPhase_StacklessFeatureMakesNoRemoteCall(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
+	fx := newStackRemoteRewindFixture(t)
+	fx.modify(t, func(ff *feature.Feature) {
+		ff.Stack = nil
+	})
+
+	if _, _, err := fx.mgr.RewindToPhase(fx.f.ID, feature.PhaseImplement); err != nil {
+		t.Fatalf("RewindToPhase: %v", err)
+	}
+	if len(fx.prs.Calls) != 0 {
+		t.Errorf("remote calls = %+v; want none without a stack", fx.prs.Calls)
+	}
+}
+
+func slicesEqual(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func slicesContains(haystack []string, needle string) bool {
+	for _, item := range haystack {
+		if item == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func pairsEqual(got, want [][2]string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func pairsContains(haystack [][2]string, first, second string) bool {
+	for _, item := range haystack {
+		if item[0] == first && item[1] == second {
+			return true
+		}
+	}
+	return false
 }

@@ -251,6 +251,43 @@ describe('AftercareWorkspace runway', () => {
     expect(screen.getByText('No action is needed right now.')).toBeVisible();
   });
 
+  it('renders catalog-resolved resolutions on the action-error card through the threaded resolver', async () => {
+    const user = userEvent.setup();
+    const onActionErrorAction = vi.fn();
+    renderWorkspace({
+      snapshot: featureSnapshot({ status: 'Published', actions: [] }),
+      actionError: {
+        action: 'Rebase',
+        error: {
+          code: 'publish_stack_pull_request_closed',
+          class: 'needs_action',
+          title: 'Stack pull request closed',
+          summary: 'The layer 2 pull request for repository "web" was closed without merging.',
+          remediation: {
+            hint: 'Reopen the pull request on GitHub, or recreate it from the local branch.',
+            actions: ['reopen-pull-request', 'recreate-pull-request'],
+          },
+          context: { repositories: [{ name: 'web', layer_position: 2 }] },
+        },
+      },
+      actionErrorResolveAction: (actionId) =>
+        actionId === 'reopen-pull-request'
+          ? { enabled: true, label: 'Reopen pull request' }
+          : actionId === 'recreate-pull-request'
+            ? { enabled: true, label: 'Recreate pull request' }
+            : undefined,
+      actionErrorOnAction: onActionErrorAction,
+    });
+    expect(screen.getByText('Rebase was rejected')).toBeVisible();
+    const primary = screen.getByRole('button', { name: 'Reopen pull request' });
+    expect(primary).toHaveClass('error-surface__action');
+    expect(screen.getByRole('button', { name: 'Recreate pull request' })).toHaveClass(
+      'error-surface__secondary-action',
+    );
+    await user.click(primary);
+    expect(onActionErrorAction).toHaveBeenCalledWith('reopen-pull-request');
+  });
+
   it('offers the first local merge as a runway row', async () => {
     const user = userEvent.setup();
     const props = renderWorkspace({
@@ -423,7 +460,18 @@ describe('AftercareWorkspace What shipped', () => {
         publishable: true,
         touched: true,
         status: 'already_published',
-        prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+        pullRequests: [
+          {
+            position: 1,
+            title: 'Phase 8 stack read model',
+            branch: 'feature/x/1-bootstrap',
+            url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+            state: 'open',
+            noCommits: false,
+            pushedUpToDate: true,
+            pushMode: 'none',
+          },
+        ],
         pendingCommits: 2,
       },
     ],
@@ -439,7 +487,17 @@ describe('AftercareWorkspace What shipped', () => {
         {
           name: 'agentic-orchestrator',
           publishable: true,
-          prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+          pullRequests: [
+            {
+              position: 1,
+              title: 'Phase 8 stack read model',
+              branch: 'feature/x/1-bootstrap',
+              url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+              state: 'open',
+              noCommits: false,
+              pushedUpToDate: true,
+            },
+          ],
           freshness: 'in sync',
         },
       ],
@@ -463,14 +521,20 @@ describe('AftercareWorkspace What shipped', () => {
           repos: [
             {
               repo: 'agentic-orchestrator',
-              prUrl: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
-              comments: [
+              pullRequests: [
                 {
-                  stableRef: 'agentic-orchestrator:review:1',
-                  selected: true,
-                  repo: 'agentic-orchestrator',
-                  id: 1,
-                  type: 'review',
+                  position: 1,
+                  title: 'Layer 1',
+                  url: 'https://github.com/doordash-oss/agentic-orchestrator/pull/107',
+                  comments: [
+                    {
+                      stableRef: 'agentic-orchestrator:review:1',
+                      selected: true,
+                      repo: 'agentic-orchestrator',
+                      id: 1,
+                      type: 'review',
+                    },
+                  ],
                 },
               ],
             },
@@ -487,6 +551,7 @@ describe('AftercareWorkspace What shipped', () => {
     expect(within(shipped).getByText('2 of 2 checks passed')).toBeVisible();
     expect(within(shipped).getByText('npm run check · npm test')).toBeVisible();
     expect(within(shipped).getByText('#107')).toBeVisible();
+    expect(within(shipped).getByText('Phase 8 stack read model')).toBeVisible();
     expect(
       within(shipped).getByText('Published from this run · in sync · 1 unresolved comment'),
     ).toBeVisible();
@@ -526,7 +591,7 @@ describe('AftercareWorkspace What shipped', () => {
     expect(shipped.textContent).not.toMatch(/approval|rewind/i);
   });
 
-  it('labels one pull-request row per repository when the feature spans several', () => {
+  it('labels one pull-request row per PR when the feature spans repositories and layers', () => {
     renderWorkspace({
       snapshot: featureSnapshot({
         status: 'Published',
@@ -534,16 +599,55 @@ describe('AftercareWorkspace What shipped', () => {
         actions: [],
         repos: ['api', 'web'],
         repoStatus: [
-          { name: 'api', publishable: true, prUrl: 'https://example.test/api/pull/12' },
-          { name: 'web', publishable: true, prUrl: 'https://example.test/web/pull/34' },
+          {
+            name: 'api',
+            publishable: true,
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://example.test/api/pull/12',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+              {
+                position: 2,
+                title: 'Search revamp',
+                url: 'https://example.test/api/pull/56',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
+          },
+          {
+            name: 'web',
+            publishable: true,
+            pullRequests: [
+              {
+                position: 1,
+                title: 'Bootstrap',
+                branch: 'feature/x/1-bootstrap',
+                url: 'https://example.test/web/pull/34',
+                state: 'open',
+                noCommits: false,
+                pushedUpToDate: true,
+              },
+            ],
+          },
         ],
       }),
     });
     const shipped = screen.getByRole('region', { name: 'What shipped' });
-    expect(within(shipped).getByText('Pull request · api')).toBeVisible();
-    expect(within(shipped).getByText('Pull request · web')).toBeVisible();
+    expect(within(shipped).getByText('Pull request · api · layer 1')).toBeVisible();
+    expect(within(shipped).getByText('Pull request · api · layer 2')).toBeVisible();
+    expect(within(shipped).getByText('Pull request · web · layer 1')).toBeVisible();
     expect(within(shipped).getByText('#12')).toBeVisible();
+    expect(within(shipped).getByText('#56')).toBeVisible();
     expect(within(shipped).getByText('#34')).toBeVisible();
+    expect(within(shipped).getAllByRole('button', { name: /Open on GitHub/ })).toHaveLength(3);
   });
 
   it('omits the unresolved-comment clause when the review-feedback fetch failed', () => {

@@ -326,7 +326,7 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 		// The journal's attention is one stored canonical record; rendered
 		// text is produced by the catalog at projection time.
 		Attention: &errcat.FailureRecord{
-			Code: errcat.IntegrationMergeConflict,
+			Code: errcat.IntegrationRebaseConflict,
 			Context: &errcat.RecordContext{
 				Repositories: []errcat.CodeRepository{{
 					Name:          repoNameSelf,
@@ -334,7 +334,7 @@ func TestParentProjectionsCarryCompleteRelationshipHistory(t *testing.T) {
 					ConflictFiles: []string{"internal/server/read_model.go"},
 				}},
 			},
-			Diagnostics: repoNameSelf + ": merge candidate conflict: [internal/server/read_model.go]",
+			Diagnostics: repoNameSelf + ": resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/server/read_model.go; last failure: conflict markers remain in internal/server/read_model.go; attempt directory: /state/features/f1/rebase-resolution/repo-a/1a2b3c4d/attempt-03",
 		},
 		Entries: []feature.RepoTransactionEntry{{
 			Repo: repoNameSelf,
@@ -630,8 +630,16 @@ func TestReviewFeedbackActionCatalogEligibility(t *testing.T) {
 	publishable := true
 	base := actionCatalogTestFeature(feature.StatusPublished, feature.Checkpoints{}, &publishable)
 	base.RepoStates = map[string]*feature.RepoState{
-		repoNameSelf: {PRURL: "https://github.example/org/repo/pull/17"},
+		repoNameSelf: {Touched: true},
 	}
+	base.Stack = []feature.StackLayer{{
+		Position: 1,
+		Title:    "Layer 1",
+		Branch:   "agentico/read-model/1-layer-1",
+		Repos: map[string]feature.StackRepoEntry{
+			repoNameSelf: {PRURL: "https://github.example/org/repo/pull/17", PRState: feature.StackPRStateOpen},
+		},
+	}}
 
 	tests := []struct {
 		name             string
@@ -646,6 +654,7 @@ func TestReviewFeedbackActionCatalogEligibility(t *testing.T) {
 			feature: func() *feature.Feature {
 				copy := *base
 				copy.RepoStates = map[string]*feature.RepoState{repoNameSelf: {}}
+				copy.Stack = nil
 				return &copy
 			}(),
 			wantDisabledCode: "no_pull_request",

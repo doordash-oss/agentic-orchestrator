@@ -103,7 +103,9 @@ const (
 	actionPauseStop            = "pause-stop"
 	actionPublish              = "publish"
 	actionRebase               = "rebase"
+	actionRecreatePullRequest  = "recreate-pull-request"
 	actionRefactor             = "refactor"
+	actionReopenPullRequest    = "reopen-pull-request"
 	actionRestart              = "restart"
 	actionResume               = "resume"
 	actionSetup                = "setup"
@@ -158,17 +160,21 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 			}
 			for _, e := range tx.Entries {
 				entry := RepoTransactionEntry{
-					Repo:            e.Repo,
-					ParentBranch:    e.ParentBranch,
-					ParentAnchorSha: e.ParentAnchorSHA,
-					ExpectedRefSha:  e.ExpectedRefSHA,
-					ChildHeadSha:    e.ChildHeadSHA,
-					CandidateSha:    e.CandidateSHA,
-					MergeHead:       e.MergeHEAD,
-					PrepState:       string(e.PrepState),
-					ApplyState:      string(e.ApplyState),
-					ObservedSha:     e.ObservedSHA,
-					PendingSync:     e.PendingSync,
+					Repo:         e.Repo,
+					ChildHeadSha: e.ChildHeadSHA,
+					PrepState:    string(e.PrepState),
+					ApplyState:   string(e.ApplyState),
+					PendingSync:  e.PendingSync,
+				}
+				for _, r := range e.Refs {
+					entry.Refs = append(entry.Refs, RepoTransactionRef{
+						Branch:        r.Branch,
+						LayerPosition: r.Layer,
+						Kind:          string(r.RefKind()),
+						AnchorSha:     r.AnchorSHA,
+						CandidateSha:  r.CandidateSHA,
+						ObservedSha:   r.ObservedSHA,
+					})
 				}
 				detail.Transaction.Entries = append(detail.Transaction.Entries, entry)
 			}
@@ -201,6 +207,9 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	detail.Effort = f.Effort
 	detail.Inquireness = f.Inquireness
 	detail.RiskLevel = f.RiskLevel
+	// The detail always exposes the effective mode so legacy records without
+	// a stored value read as stack; delivery mode is immutable after creation.
+	detail.DeliveryMode = f.EffectiveDeliveryMode()
 	detail.ExitCriteria = SafeDisplayText(f.ExitCriteria, 500)
 	autoReviewEnabled, autoReviewSource := feature.ResolveAutomaticReview(
 		f.AutomaticReviewMode,
@@ -741,6 +750,11 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 	// failure never ends the flow, so retry stays available.
 	canPublish := f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
 	canMerge := !f.IsPublishable() && (status == feature.StatusCodeReady || status == feature.StatusPublished)
+	// The closed-pull-request resolutions follow publish's enablement shape
+	// — a publishable feature at CodeReady or Published — and additionally
+	// require some stack layer entry in some repository to record the
+	// closed state; otherwise they carry the no_closed_pull_request reason.
+	canResolveClosedPullRequest := canPublish && featureHasClosedStackLayer(f)
 	canRewind := !running && (len(feature.RewindChoicesForFeature(f)) > 0 || hasRewindUpgradeTarget(f))
 	canPostPublishPass := publishedOrManualReady
 	canReviewFeedback := canPostPublishPass && f.IsPublishable() && featureHasPullRequest(f)
@@ -770,6 +784,7 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		canMarkDone = false
 		canCleanup = false
 		canRefactor = false
+		canResolveClosedPullRequest = false
 	}
 
 	// Prepend the child-guard disabled reason to locked actions.
@@ -787,6 +802,8 @@ func actionCatalogDTOsWithChildGuard(f *feature.Feature, hasActiveChild bool) []
 		action(actionResume, canResume, featureScope, nil, childGuardReason(canResume, ActionDisabledReason{Code: "not_paused", Message: "feature has no paused session or input gate"})...),
 		action(actionRestart, canRestart, featureScope, nil, childGuardReason(canRestart, ActionDisabledReason{Code: "running", Message: "feature must stop before restart"})...),
 		action(actionPublish, canPublish, featureScope, nil, childGuardReason(canPublish, publishDisabledReason(f))...),
+		action(actionReopenPullRequest, canResolveClosedPullRequest, featureScope, nil, childGuardReason(canResolveClosedPullRequest, closedPullRequestDisabledReason(f))...),
+		action(actionRecreatePullRequest, canResolveClosedPullRequest, featureScope, nil, childGuardReason(canResolveClosedPullRequest, closedPullRequestDisabledReason(f))...),
 		action(actionMerge, canMerge, featureScope, nil, childGuardReason(canMerge, mergeDisabledReason(f))...),
 		action(actionRewind, canRewind, featureScope, []ActionInput{
 			{Name: "target_phase", Kind: actionInputKindEnum, Required: true, Options: rewindPhaseOptions(f)},
@@ -971,6 +988,43 @@ func publishDisabledReason(f *feature.Feature) ActionDisabledReason {
 	return disabledStatusReason(f.Status)
 }
 
+// closedPullRequestDisabledReason explains why the reopen/recreate actions
+// are unavailable: the publish enablement reasons (local-only repos, a
+// status other than CodeReady/Published) or, when publish itself would be
+// enabled, the absence of any closed stack layer pull request to resolve.
+func closedPullRequestDisabledReason(f *feature.Feature) ActionDisabledReason {
+	if f == nil {
+		return disabledStatusReason(feature.StatusCreated)
+	}
+	if !f.IsPublishable() {
+		return ActionDisabledReason{Code: "local_only", Message: "feature has at least one local-only repo"}
+	}
+	if f.Status != feature.StatusCodeReady && f.Status != feature.StatusPublished {
+		return disabledStatusReason(f.Status)
+	}
+	return ActionDisabledReason{
+		Code:    "no_closed_pull_request",
+		Message: "no repository layer records a closed pull request to resolve",
+	}
+}
+
+// featureHasClosedStackLayer reports whether some stack layer entry of some
+// repository records a closed pull request — the condition the reopen and
+// recreate actions resolve.
+func featureHasClosedStackLayer(f *feature.Feature) bool {
+	if f == nil {
+		return false
+	}
+	for _, layer := range f.Stack {
+		for _, entry := range layer.Repos {
+			if entry.PRState == feature.StackPRStateClosed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func mergeDisabledReason(f *feature.Feature) ActionDisabledReason {
 	if f == nil {
 		return disabledStatusReason(feature.StatusCreated)
@@ -1007,15 +1061,7 @@ func reviewFeedbackDisabledReason(f *feature.Feature) ActionDisabledReason {
 }
 
 func featureHasPullRequest(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	for _, state := range f.RepoStates {
-		if state != nil && strings.TrimSpace(state.PRURL) != "" {
-			return true
-		}
-	}
-	return false
+	return f != nil && f.AnyStackLayerHasPullRequest()
 }
 
 func rewindPhaseOptions(f *feature.Feature) []string {
@@ -1181,19 +1227,44 @@ func (h *apiHandler) repoStatusDTOs(f *feature.Feature) []RepoStatus {
 	out := make([]RepoStatus, 0, len(f.Repos))
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
+		publishable := repo.Publishable == nil || *repo.Publishable
 		dto := RepoStatus{
 			Name:        repo.Name,
-			Publishable: repo.Publishable == nil || *repo.Publishable,
+			Publishable: publishable,
 		}
 		if state != nil {
 			dto.Touched = state.Touched
-			dto.PRURL = state.PRURL
 			dto.Error = WireRepoError(state.Error)
+		}
+		if publishable && len(f.Stack) > 0 {
+			dto.PullRequests = wirePullRequestEntries(f.StackRepoPullRequestEntries(repo.Name))
 		}
 		if freshness != nil {
 			dto.Freshness = string(freshness[repo.Name])
 		}
 		out = append(out, dto)
+	}
+	return out
+}
+
+// wirePullRequestEntries projects the feature read model's per-layer stack
+// entries onto the shared wire schema. Push mode stays empty here — only
+// completion preflight, which measures the worktree, fills it.
+func wirePullRequestEntries(entries []feature.StackPullRequestEntry) []PullRequestEntry {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]PullRequestEntry, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, PullRequestEntry{
+			Position:       entry.Position,
+			Title:          entry.Title,
+			Branch:         entry.Branch,
+			URL:            entry.URL,
+			State:          PullRequestEntryState(entry.State),
+			NoCommits:      entry.NoCommits,
+			PushedUpToDate: entry.PushedUpToDate,
+		})
 	}
 	return out
 }
@@ -1516,6 +1587,7 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaults {
 		PipelinePreferences:    prefs,
 		Inquireness:            defaults.Inquireness,
 		Pipeline:               defaults.Pipeline,
+		DeliveryMode:           defaults.DeliveryMode,
 		Checkpoints:            defaults.Checkpoints,
 		AutomaticReviewEnabled: defaults.AutomaticReviewEnabled,
 	}

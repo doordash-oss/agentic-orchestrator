@@ -49,7 +49,7 @@ type rebaseGateRepo struct {
 
 // rebaseGateFixture builds real-git parent/child pairs for rebase gate tests.
 // Each repo has a feature branch (the parent) and a child worktree on a child
-// branch pinned at the parent tip. The persisted RebaseTargets/RebaseBehind
+// branch pinned at the parent tip. The persisted RebaseTargets/RebaseWorkRepos
 // are set explicitly by each test via setRebaseTargets.
 type rebaseGateFixture struct {
 	t        *testing.T
@@ -163,9 +163,9 @@ func newRebaseGateFixtureN(t *testing.T, mergeTarget bool, n int) *rebaseGateFix
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID, Kind: feature.ChildKindRebase,
-			Bases:         fx.bases(),
-			RebaseTargets: targets,
-			RebaseBehind:  behind,
+			Bases:           fx.bases(),
+			RebaseTargets:   targets,
+			RebaseWorkRepos: behind,
 		},
 	}
 	if err := store.Save(parent); err != nil {
@@ -212,7 +212,7 @@ func (fx *rebaseGateFixture) setRebaseTargets(targets []feature.RebaseRepoTarget
 	fx.t.Helper()
 	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
 		f.Parent.RebaseTargets = append([]feature.RebaseRepoTarget(nil), targets...)
-		f.Parent.RebaseBehind = append([]string(nil), behind...)
+		f.Parent.RebaseWorkRepos = append([]string(nil), behind...)
 		return nil
 	}); err != nil {
 		fx.t.Fatalf("setRebaseTargets: %v", err)
@@ -320,108 +320,6 @@ func TestRebaseGate_ConflictMarkersFailure(t *testing.T) {
 	}
 }
 
-// TestRebaseGate_MergeInProgressFailure verifies a child worktree with an
-// in-progress merge aborts with the typed merge-in-progress attention record
-// and refs untouched.
-func TestRebaseGate_MergeInProgressFailure(t *testing.T) {
-	fx := newRebaseGateFixture(t, true) // merge target so ancestor check passes
-	before := fx.parentRefSHA(0)
-
-	// Start a conflicting merge in the child worktree so MERGE_HEAD remains.
-	// Diverge on a shared tracked file that already exists (child.txt).
-	childWT := fx.repos[0].childWT
-	// Create a divergent commit on a sibling branch touching child.txt, then
-	// merge it to force a conflict.
-	childIntegrationGit(t, fx.repos[0].repoDir, "checkout", "feature/parent")
-	// Make a sibling commit on main that touches the same file the child has.
-	childIntegrationGit(t, fx.repos[0].repoDir, "checkout", "main")
-	testutil.CommitFile(t, fx.repos[0].repoDir, "child.txt", "main side\n", "main touches child file")
-	sibling := childIntegrationGit(t, fx.repos[0].repoDir, "rev-parse", "HEAD")
-	childIntegrationGit(t, fx.repos[0].repoDir, "checkout", "feature/parent")
-
-	// Merge the sibling commit into the child worktree; it conflicts on
-	// child.txt and leaves MERGE_HEAD.
-	cmd := exec.Command("git", "-C", childWT, "merge", "--no-ff", sibling, "-m", "conflicting merge")
-	cmd.Env = append(testutil.GitTestEnv(),
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-	)
-	_ = cmd.Run() // expected to fail due to conflict
-
-	if !git.MergeInProgress(childWT) {
-		t.Fatalf("setup invariant: MERGE_HEAD not present before integration")
-	}
-
-	o := fx.orchestrator()
-	if err := o.RunChildIntegration(fx.childID); err != nil {
-		t.Fatalf("RunChildIntegration() error = %v; want nil", err)
-	}
-
-	_, child := fx.reload()
-	journal := child.Parent.Transaction
-	if journal == nil || journal.Phase != feature.TransactionPhaseAttention {
-		t.Fatalf("transaction = %+v, want attention", journal)
-	}
-	if journal.Attention == nil || journal.Attention.Code != errcat.RebaseGateMergeInProgress {
-		t.Errorf("attention record = %+v, want rebase_gate_merge_in_progress", journal.Attention)
-	}
-	if after := fx.parentRefSHA(0); after != before {
-		t.Errorf("parent ref changed: before=%s after=%s", before, after)
-	}
-}
-
-// TestRebaseGate_RebaseInProgressFailure verifies a child worktree stopped in
-// an interactive rebase aborts with the typed sequencer-in-progress attention
-// record and refs untouched even when the worktree is otherwise clean.
-func TestRebaseGate_RebaseInProgressFailure(t *testing.T) {
-	fx := newRebaseGateFixture(t, true) // merge target so ancestor check passes
-	before := fx.parentRefSHA(0)
-	childWT := fx.repos[0].childWT
-
-	testutil.CommitFile(t, childWT, "paused-rebase.txt", "pending\n", "pending rebase edit")
-
-	editor := filepath.Join(t.TempDir(), "sequence-editor.sh")
-	script := "#!/bin/sh\nperl -0pi -e 's/^pick /edit /m' \"$1\"\n"
-	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil {
-		t.Fatalf("write sequence editor: %v", err)
-	}
-	cmd := exec.Command("git", "-C", childWT, "rebase", "-i", "HEAD~1")
-	cmd.Env = append(testutil.GitTestEnv(),
-		"GIT_SEQUENCE_EDITOR="+editor,
-		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
-		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
-	)
-	out, err := cmd.CombinedOutput()
-	if !git.RebaseInProgress(childWT) {
-		t.Fatalf("setup invariant: rebase-merge/rebase-apply not present after interactive rebase: err=%v\n%s", err, out)
-	}
-	if git.MergeInProgress(childWT) {
-		t.Fatalf("setup invariant: MERGE_HEAD present; want a rebase-only sequencer state")
-	}
-	if status := childIntegrationGit(t, childWT, "status", "--porcelain"); status != "" {
-		t.Fatalf("setup invariant: child worktree status = %q, want clean stopped-rebase worktree", status)
-	}
-
-	o := fx.orchestrator()
-	if err := o.RunChildIntegration(fx.childID); err != nil {
-		t.Fatalf("RunChildIntegration() error = %v; want nil", err)
-	}
-
-	_, child := fx.reload()
-	journal := child.Parent.Transaction
-	if journal == nil || journal.Phase != feature.TransactionPhaseAttention {
-		t.Fatalf("transaction = %+v, want attention", journal)
-	}
-	if journal.Attention == nil || journal.Attention.Code != errcat.RebaseGateMergeInProgress {
-		t.Errorf("attention record = %+v, want rebase_gate_merge_in_progress", journal.Attention)
-	} else if !strings.Contains(journal.Attention.Diagnostics, "rebase") {
-		t.Errorf("diagnostics = %q, want rebase sequencer detail", journal.Attention.Diagnostics)
-	}
-	if after := fx.parentRefSHA(0); after != before {
-		t.Errorf("parent ref changed: before=%s after=%s", before, after)
-	}
-}
-
 // TestRebaseGate_MissingTargetSHAFailsClosed verifies a behind-repo target
 // without a persisted creation-time SHA fails closed with its own typed
 // diagnostic.
@@ -433,7 +331,7 @@ func TestRebaseGate_MissingTargetSHAFailsClosed(t *testing.T) {
 	// before this phase landed.
 	targets := append([]feature.RebaseRepoTarget(nil), fx.child.Parent.RebaseTargets...)
 	targets[0].TargetSHA = ""
-	fx.setRebaseTargets(targets, fx.child.Parent.RebaseBehind)
+	fx.setRebaseTargets(targets, fx.child.Parent.RebaseWorkRepos)
 
 	o := fx.orchestrator()
 	if err := o.RunChildIntegration(fx.childID); err != nil {
@@ -455,25 +353,38 @@ func TestRebaseGate_MissingTargetSHAFailsClosed(t *testing.T) {
 
 // TestRebaseGate_TargetMovedStillPasses verifies the gate reads persisted
 // targets only: advancing the target branch (local ref) after creation does
-// not change what the gate checks — a child that contains the creation-time
-// target SHA passes even after the target advances.
+// not change what the gate checks — a child worktree that contains the
+// creation-time target SHA passes even after the target advances, and the
+// integration lands through the persisted restack result.
 func TestRebaseGate_TargetMovedStillPasses(t *testing.T) {
-	fx := newRebaseGateFixture(t, true) // child already contains creation-time mainTip
-	creationMainTip := fx.repos[0].mainTip
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{})
+	o := fx.orchestrator()
 
-	// Advance the local target branch (main) past the creation-time SHA so the
-	// ref no longer matches the persisted TargetSHA. The gate must still check
-	// the persisted SHA and pass.
-	childIntegrationGit(t, fx.repos[0].repoDir, "checkout", "main")
-	testutil.CommitFile(t, fx.repos[0].repoDir, "more_upstream.txt", "u2\n", "further upstream")
-	childIntegrationGit(t, fx.repos[0].repoDir, "checkout", "feature/parent")
-	if got := childIntegrationGit(t, fx.repos[0].repoDir, "rev-parse", "main"); got == creationMainTip {
+	// Run the harness restack and land the child at the approved-shaped
+	// state a finished verification round leaves behind.
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("StartFeature() error = %v", err)
+	}
+	fx.waitLanded(t)
+	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
+		f.Status = feature.StatusReviewPassed
+		return nil
+	}); err != nil {
+		t.Fatalf("mark the child review-passed: %v", err)
+	}
+
+	// Advance the local target branch (main) past the creation-time SHA so
+	// the ref no longer matches the persisted TargetSHA. The gate must still
+	// check the persisted SHA and pass.
+	restackCheckout(t, fx.repoDir, "main")
+	testutil.CommitFile(t, fx.repoDir, "more_upstream.txt", "u2\n", "further upstream")
+	restackCheckout(t, fx.repoDir, "stack/3")
+	if got := restackGit(t, fx.repoDir, "rev-parse", "main"); got == fx.targetSHA {
 		t.Fatalf("setup invariant: main did not advance past creation-time tip")
 	}
 
-	o := fx.orchestrator()
 	if err := o.RunChildIntegration(fx.childID); err != nil {
-		t.Fatalf("RunChildIntegration() error = %v; want nil (gate should pass)", err)
+		t.Fatalf("RunChildIntegration() error = %v, want nil (gate should pass)", err)
 	}
 
 	_, child := fx.reload()
@@ -486,40 +397,47 @@ func TestRebaseGate_TargetMovedStillPasses(t *testing.T) {
 }
 
 // TestRebaseGate_OnlyBehindReposGated verifies up-to-date repos (not in the
-// persisted behind set) are not gated: a multi-repo child with one behind repo
-// still lands when only that repo satisfies the criteria.
+// persisted work list) are neither gated nor rewritten: a two-repository
+// child with one work repository lands with the pass-through repository's
+// ref untouched and a pass-through transaction entry.
 func TestRebaseGate_OnlyBehindReposGated(t *testing.T) {
-	fx := newRebaseGateFixtureN(t, true, 2)
-	// repoA is behind (gated); repoB is up-to-date (not in behind set).
-	fx.setRebaseTargets(
-		[]feature.RebaseRepoTarget{fx.child.Parent.RebaseTargets[0]},
-		[]string{fx.repos[0].name},
-	)
-	childIntegrationGit(t, fx.repos[1].childWT, "reset", "--hard", fx.repos[1].parentBase)
-	repoBHeadBefore := fx.parentRefSHA(1)
-
+	fx := newRebaseRestackFixture(t, rebaseRestackFixtureOpts{WithPassThrough: true})
 	o := fx.orchestrator()
+
+	if err := o.StartFeature(fx.childID); err != nil {
+		t.Fatalf("StartFeature() error = %v", err)
+	}
+	fx.waitLanded(t)
+	if err := fx.store.Modify(fx.childID, func(f *feature.Feature) error {
+		f.Status = feature.StatusReviewPassed
+		return nil
+	}); err != nil {
+		t.Fatalf("mark the child review-passed: %v", err)
+	}
+	repoBHeadBefore := restackGit(t, fx.passRepoDir, "rev-parse", "feature/pass")
+
 	if err := o.RunChildIntegration(fx.childID); err != nil {
-		t.Fatalf("RunChildIntegration() error = %v; want nil", err)
+		t.Fatalf("RunChildIntegration() error = %v, want nil", err)
 	}
 
 	_, child := fx.reload()
 	if child.Parent.Transaction == nil || child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
 		t.Fatalf("transaction phase = %+v, want merged", child.Parent.Transaction)
 	}
-	repoAParents := childIntegrationGit(t, fx.repos[0].repoDir, "rev-list", "--parents", "-n", "1", "HEAD")
-	if fields := len(strings.Fields(repoAParents)); fields != 3 {
-		t.Errorf("repoA merge parents = %q, want two-parent merge commit", repoAParents)
+	// repoA's parent worktree now sits on the rebuilt top: a linear chain
+	// from the target (no merge commit anywhere in the new history).
+	if !git.IsAncestor(fx.repoDir, fx.targetSHA, "HEAD") {
+		t.Fatal("repoA parent HEAD does not descend from the target after integration")
 	}
-	if repoBHeadAfter := fx.parentRefSHA(1); repoBHeadAfter != repoBHeadBefore {
+	if repoBHeadAfter := restackGit(t, fx.passRepoDir, "rev-parse", "feature/pass"); repoBHeadAfter != repoBHeadBefore {
 		t.Errorf("repoB ref changed: before=%s after=%s", repoBHeadBefore, repoBHeadAfter)
 	}
-	entry := child.Parent.Transaction.EntryByRepo(fx.repos[1].name)
+	entry := child.Parent.Transaction.EntryByRepo("repoB")
 	if entry == nil {
 		t.Fatalf("repoB transaction entry missing: %+v", child.Parent.Transaction)
 	}
-	if entry.CandidateSHA != repoBHeadBefore || entry.MergeHEAD != repoBHeadBefore {
-		t.Errorf("repoB transaction candidate=%s merge_head=%s, want pass-through SHA %s", entry.CandidateSHA, entry.MergeHEAD, repoBHeadBefore)
+	if top := entry.TopRef(); top == nil || top.CandidateSHA != repoBHeadBefore || top.ObservedSHA != repoBHeadBefore {
+		t.Errorf("repoB transaction refs=%+v, want pass-through SHA %s", entry.Refs, repoBHeadBefore)
 	}
 }
 

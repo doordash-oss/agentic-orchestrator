@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,10 +81,6 @@ type loopTestFeatureOptions struct {
 	// active roadmap phase.
 	CurrentPhase        feature.Phase
 	CurrentRoadmapPhase int
-
-	// OmitPRURL, when true, leaves RepoState.PRURL unset (Touched still
-	// set true) instead of the default synthetic PR URL.
-	OmitPRURL bool
 }
 
 func newLoopTestFeature(t *testing.T, stateDir, featureID string, repoNames []string, opts loopTestFeatureOptions) (*feature.Store, *feature.Feature, []string) {
@@ -106,11 +101,7 @@ func newLoopTestFeature(t *testing.T, stateDir, featureID string, repoNames []st
 			BaseBranch: defaultTestBranch,
 		})
 		repoPaths = append(repoPaths, repoDir)
-		repoState := &feature.RepoState{Touched: true}
-		if !opts.OmitPRURL {
-			repoState.PRURL = fmt.Sprintf("https://github.com/example/%s/pull/1", name)
-		}
-		repoStates[name] = repoState
+		repoStates[name] = &feature.RepoState{Touched: true}
 	}
 
 	status := opts.Status

@@ -16,6 +16,7 @@ package feature_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -35,9 +36,17 @@ func launchTestParent() *feature.Feature {
 			{Name: "web", Path: "/src/web", WorktreePath: "/wt/web", Branch: "feature/parent-web", BaseBranch: "main"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"api": {PRURL: "https://github.example/acme/api/pull/17"},
-			"web": {PRURL: "https://github.example/acme/web/pull/23"},
+			"api": {Touched: true},
+			"web": {Touched: true},
 		},
+		// Each repository's pull request lives on its stack layer entry.
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"api": {PRURL: "https://github.example/acme/api/pull/17", PRState: feature.StackPRStateOpen},
+				"web": {PRURL: "https://github.example/acme/web/pull/23", PRState: feature.StackPRStateOpen},
+			},
+		}},
 	}
 }
 
@@ -58,6 +67,85 @@ func launchComment(id int, typ, login, body string) gitadapter.ReviewComment {
 	c := gitadapter.ReviewComment{ID: id, Type: typ, Body: body}
 	c.User.Login = login
 	return c
+}
+
+// closedLayerLaunchParent carries two open layer PRs for api (layers 1 and
+// 2) so a draft can hold selected comments from both.
+func closedLayerLaunchParent() *feature.Feature {
+	parent := launchTestParent()
+	parent.Stack = []feature.StackLayer{
+		{
+			Position: 1,
+			Title:    "Foundation",
+			Repos: map[string]feature.StackRepoEntry{
+				"api": {PRURL: "https://github.example/acme/api/pull/17", PRState: feature.StackPRStateOpen},
+			},
+		},
+		{
+			Position: 2,
+			Title:    "Extension",
+			Repos: map[string]feature.StackRepoEntry{
+				"api": {PRURL: "https://github.example/acme/api/pull/18", PRState: feature.StackPRStateOpen},
+				"web": {PRURL: "https://github.example/acme/web/pull/23", PRState: feature.StackPRStateOpen},
+			},
+		},
+	}
+	return parent
+}
+
+// A selected comment whose pull request was recorded closed since the draft
+// is omitted at launch, counted in the receipt, and never requested from
+// GitHub again; the remaining selected comments launch with their PR and
+// layer identity.
+func TestLaunchOmitsSelectedCommentWhosePRClosedSinceDraft(t *testing.T) {
+	heads := map[string]string{"/wt/api": strings.Repeat("a", 40), "/wt/web": strings.Repeat("b", 40)}
+	mgr := newChildTestManager(t, heads, cleanEverywhere())
+	parent := closedLayerLaunchParent()
+	saveChildTestParent(t, mgr, parent)
+
+	layer1 := feature.ReviewFeedbackLayerPR{Position: 1, Title: "Foundation", URL: "https://github.example/acme/api/pull/17", Number: 17}
+	layer2 := feature.ReviewFeedbackLayerPR{Position: 2, Title: "Extension", URL: "https://github.example/acme/api/pull/18", Number: 18}
+	fetched := map[string][]feature.ReviewFeedbackComment{
+		"api": {
+			feature.NewReviewFeedbackCommentFromAPI("api", layer1, launchComment(11, feature.ReviewFeedbackCommentTypeReview, "alice", "layer one fix")),
+			feature.NewReviewFeedbackCommentFromAPI("api", layer2, launchComment(12, feature.ReviewFeedbackCommentTypeReview, "bob", "layer two fix")),
+		},
+	}
+	draft := feature.ReconcileReviewFeedbackDraft(parent, nil, fetched)
+	if err := mgr.Store.SaveReviewFeedbackDraft(parent.ID, draft, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	// The layer-2 pull request closes between the draft and the launch.
+	if err := mgr.SetStackLayerPRState(parent.ID, "api", 2, feature.StackPRStateClosed); err != nil {
+		t.Fatalf("SetStackLayerPRState() error = %v", err)
+	}
+	restore := feature.SwapFetchPRCommentsForTest(func(_ string, prURL string) ([]gitadapter.ReviewComment, error) {
+		if strings.HasSuffix(prURL, "/api/pull/18") {
+			return nil, fmt.Errorf("closed layer pull request %q must never be requested", prURL)
+		}
+		if strings.HasSuffix(prURL, "/api/pull/17") {
+			return []gitadapter.ReviewComment{launchComment(11, feature.ReviewFeedbackCommentTypeReview, "alice", "layer one fix")}, nil
+		}
+		return nil, nil
+	})
+	t.Cleanup(restore)
+
+	result, err := mgr.LaunchReviewFeedbackChildFromDraft(parent.ID, draft.Revision, nil)
+	if err != nil {
+		t.Fatalf("LaunchReviewFeedbackChildFromDraft() error = %v", err)
+	}
+	if result.Omitted != 1 || result.Changed != 0 || result.Deferred != 0 {
+		t.Fatalf("counts = changed:%d omitted:%d deferred:%d, want 0/1/0", result.Changed, result.Omitted, result.Deferred)
+	}
+	if len(result.Child.ReviewFeedback) != 1 {
+		t.Fatalf("child comments = %+v, want only the still-open layer's comment", result.Child.ReviewFeedback)
+	}
+	kept := result.Child.ReviewFeedback[0]
+	if kept.ID != 11 || kept.PRURL != layer1.URL || kept.PRNumber != 17 ||
+		kept.LayerPosition != 1 || kept.LayerTitle != "Foundation" {
+		t.Fatalf("child comment = %+v, want comment 11 carrying its layer-1 PR identity", kept)
+	}
 }
 
 func installLaunchFetchStub(t *testing.T, byRepo map[string][]gitadapter.ReviewComment) {

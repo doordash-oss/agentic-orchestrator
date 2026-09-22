@@ -179,9 +179,17 @@ func TestReviewFeedbackExitCriteriaDeterministic(t *testing.T) {
 			Inquireness:  feature.InquirenessHigh,
 			Checkpoints:  feature.Checkpoints{RoadmapReview: true, ManualPublish: true},
 			RepoStates: map[string]*feature.RepoState{
-				"api": {PRURL: "https://github.example/acme/api/pull/1"},
-				"web": {PRURL: "https://github.example/acme/web/pull/2"},
+				"api": {Touched: true},
+				"web": {Touched: true},
 			},
+			// Each repository's pull request lives on its stack layer entry.
+			Stack: []feature.StackLayer{{
+				Position: 1,
+				Repos: map[string]feature.StackRepoEntry{
+					"api": {PRURL: "https://github.example/acme/api/pull/1", PRState: feature.StackPRStateOpen},
+					"web": {PRURL: "https://github.example/acme/web/pull/2", PRState: feature.StackPRStateOpen},
+				},
+			}},
 		}
 		saveChildTestParent(t, mgr, parent)
 	}

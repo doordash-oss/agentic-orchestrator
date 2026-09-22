@@ -319,6 +319,7 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  1,
+		Stack:               singleLayerStack(1, "feature/x"),
 		Repos: []feature.FeatureRepo{{
 			Name:       repoName,
 			Path:       repoAPath,
@@ -369,10 +370,11 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 		case publishCalled <- struct{}{}:
 		default:
 		}
-		return &orchestrator.PublishConflictError{
-			RepoName:     repoName,
-			Branch:       "feature/x",
-			RebaseTarget: mainBranch,
+		return &orchestrator.PublishRemoteDivergedError{
+			RepoName:      repoName,
+			Branch:        "feature/x",
+			LayerPosition: 1,
+			LayerTitle:    "Single layer",
 		}
 	})
 
@@ -387,13 +389,13 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 
 	select {
 	case <-markFailedCalled:
-		t.Fatal("MarkFailed called for PublishConflictError; conflict should route to rebase UX")
+		t.Fatal("MarkFailed called for a publish conflict; the conflict should route to rebase UX")
 	case <-time.After(100 * time.Millisecond):
 	}
 	if ev := waitForEvent(o.Events(), func(ev ports.Event) bool {
 		return ev.Type == ports.FeatureFailed
 	}, 100*time.Millisecond); ev != nil {
-		t.Fatalf("FeatureFailed emitted for PublishConflictError: %+v", *ev)
+		t.Fatalf("FeatureFailed emitted for a publish conflict: %+v", *ev)
 	}
 	if f.Status == feature.StatusFailed {
 		t.Fatalf("feature status = Failed, want conflict to leave feature recoverable")

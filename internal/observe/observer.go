@@ -1714,3 +1714,197 @@ func configSnapshotAttrs(s feature.ConfigSnapshot) map[string]any {
 		},
 	}
 }
+
+// LayerBoundaryEvent is the boundary snapshot one feature.layer_boundary
+// event carries: the layer the phase completed, its per-repository tips,
+// and — when a split happened — the next layer the worktrees moved onto.
+// NextLayerBranch is empty for the final roadmap phase's tip recording,
+// where no split happens.
+type LayerBoundaryEvent struct {
+	LayerPosition     int
+	LayerTitle        string
+	LayerBranch       string
+	RepoTips          map[string]string
+	NextLayerPosition int
+	NextLayerBranch   string
+}
+
+// LayerBoundaryCrossed emits a feature.layer_boundary event recording one
+// roadmap layer boundary: the completed layer, its per-repository tips, and
+// the next layer when the boundary split the worktrees onto a new branch.
+// Safe on nil receiver / disabled observer. Called from the orchestrator's
+// OnLayerBoundaryCrossed hook after the boundary's persistence write.
+func (o *Observer) LayerBoundaryCrossed(sc SpanContext, boundary LayerBoundaryEvent) {
+	if o == nil || !o.enabled {
+		return
+	}
+	tips := make(map[string]string, len(boundary.RepoTips))
+	for repo, sha := range boundary.RepoTips {
+		tips[repo] = sha
+	}
+	data := map[string]any{
+		"layer_position": boundary.LayerPosition,
+		"layer_title":    boundary.LayerTitle,
+		"layer_branch":   boundary.LayerBranch,
+		"repo_tips":      tips,
+	}
+	if boundary.NextLayerBranch != "" {
+		data["next_layer_position"] = boundary.NextLayerPosition
+		data["next_layer_branch"] = boundary.NextLayerBranch
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "feature.layer_boundary",
+		FeatureID:    sc.FeatureID,
+		Data:         data,
+	})
+}
+
+// RestackWarningEvent is the audit record one feature.restack_warning event
+// carries: the canonical warning code raised while a Final Review fix round
+// landed its commits onto the stack, the repository it concerns, and the
+// warning's specifics — the requested and actual layers for a relocated
+// fix, or the ignored entry's layer, path, and reason for a manifest entry.
+type RestackWarningEvent struct {
+	Code           string
+	Repository     string
+	RequestedLayer int
+	RequestedTitle string
+	ActualLayer    int
+	ActualTitle    string
+	Layer          int
+	Path           string
+	Reason         string
+	Diagnostics    string
+}
+
+// RestackWarning emits a feature.restack_warning audit event for one
+// relocation warning. Safe on nil receiver / disabled observer. Called from
+// the orchestrator's OnRestackWarning hook.
+func (o *Observer) RestackWarning(sc SpanContext, ev RestackWarningEvent) {
+	if o == nil || !o.enabled {
+		return
+	}
+	data := map[string]any{"code": ev.Code}
+	if ev.Repository != "" {
+		data["repository"] = ev.Repository
+	}
+	if ev.RequestedLayer > 0 {
+		data["requested_layer"] = ev.RequestedLayer
+	}
+	if ev.RequestedTitle != "" {
+		data["requested_title"] = ev.RequestedTitle
+	}
+	if ev.ActualLayer > 0 {
+		data["actual_layer"] = ev.ActualLayer
+	}
+	if ev.ActualTitle != "" {
+		data["actual_title"] = ev.ActualTitle
+	}
+	if ev.Layer > 0 {
+		data["layer"] = ev.Layer
+	}
+	if ev.Path != "" {
+		data["path"] = ev.Path
+	}
+	if ev.Reason != "" {
+		data["reason"] = ev.Reason
+	}
+	if ev.Diagnostics != "" {
+		data["diagnostics"] = ev.Diagnostics
+	}
+	status := "warning"
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "feature.restack_warning",
+		Status:       status,
+		FeatureID:    sc.FeatureID,
+		RepoName:     ev.Repository,
+		Data:         data,
+	})
+}
+
+// LayerPublishAction enumerates what a publish pass did to one layer's
+// pull request in one repository.
+type LayerPublishAction string
+
+const (
+	// LayerPublishActionCreated marks a newly created pull request.
+	LayerPublishActionCreated LayerPublishAction = "created"
+	// LayerPublishActionPushed marks a fast-forward push onto an existing
+	// pull request's branch.
+	LayerPublishActionPushed LayerPublishAction = "pushed"
+	// LayerPublishActionRewritten marks a lease-protected force push that
+	// replaced an existing pull request branch's history.
+	LayerPublishActionRewritten LayerPublishAction = "rewritten"
+	// LayerPublishActionMerged marks a layer whose pull request was found
+	// merged.
+	LayerPublishActionMerged LayerPublishAction = "merged"
+	// LayerPublishActionBlocked marks a layer whose pull request was found
+	// closed without merge, blocking the repository.
+	LayerPublishActionBlocked LayerPublishAction = "blocked"
+	// LayerPublishActionFailed marks a layer whose publish step failed.
+	LayerPublishActionFailed LayerPublishAction = "failed"
+	// LayerPublishActionReopened marks a closed layer pull request the
+	// reopen action restored to open on the remote.
+	LayerPublishActionReopened LayerPublishAction = "reopened"
+	// LayerPublishActionRecreated marks a closed layer pull request the
+	// recreate action replaced with a fresh pull request.
+	LayerPublishActionRecreated LayerPublishAction = "recreated"
+)
+
+// LayerPublishEvent is the outcome record one feature.layer_publish event
+// carries: the repository and the layer the publish pass acted on, the
+// layer's pull request URL and recorded state, and what the pass did.
+type LayerPublishEvent struct {
+	Repository string
+	Position   int
+	Title      string
+	Branch     string
+	PRURL      string
+	State      string
+	Action     LayerPublishAction
+}
+
+// StackLayerPublished emits a feature.layer_publish event recording one
+// layer publish outcome for one repository. Safe on nil receiver /
+// disabled observer. Called from the orchestrator's
+// OnStackLayerPublished hook after the layer's persistence write.
+func (o *Observer) StackLayerPublished(sc SpanContext, ev LayerPublishEvent) {
+	if o == nil || !o.enabled {
+		return
+	}
+	data := map[string]any{
+		"repository":     ev.Repository,
+		"layer_position": ev.Position,
+		"action":         string(ev.Action),
+	}
+	if ev.Title != "" {
+		data["layer_title"] = ev.Title
+	}
+	if ev.Branch != "" {
+		data["layer_branch"] = ev.Branch
+	}
+	if ev.PRURL != "" {
+		data["pr_url"] = ev.PRURL
+	}
+	if ev.State != "" {
+		data["pr_state"] = ev.State
+	}
+	o.emit(sc, Event{
+		Timestamp:    time.Now(),
+		TraceID:      sc.TraceID,
+		SpanID:       sc.SpanID,
+		ParentSpanID: sc.ParentSpanID,
+		EventType:    "feature.layer_publish",
+		FeatureID:    sc.FeatureID,
+		RepoName:     ev.Repository,
+		Data:         data,
+	})
+}

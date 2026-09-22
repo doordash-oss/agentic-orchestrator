@@ -311,9 +311,11 @@ func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
 	h.OnRecoveryAction("x", "", "resume")
 	h.OnReviewRequired("x", feature.PhaseImplement)
 	h.OnPublishStarted("x")
-	h.OnPublishCompleted("x", map[string]string{}, nil)
+	h.OnPublishCompleted("x", nil)
+	h.OnStackLayerPublished("x", observe.LayerPublishEvent{Position: 1})
 	h.OnFeatureSummaryNeeded("x", f)
 	h.OnFeatureConfigChanged("x", feature.ConfigSnapshot{}, feature.ConfigSnapshot{})
+	h.OnLayerBoundaryCrossed("x", observe.LayerBoundaryEvent{LayerPosition: 1, LayerBranch: "feature/x/1-bootstrap"})
 }
 
 // TestBuildHooks_OnFeatureConfigChanged_FiresObserver verifies that the hook
@@ -349,6 +351,47 @@ func TestBuildHooks_OnFeatureConfigChanged_FiresObserver(t *testing.T) {
 	events := readEvents(t, filepath.Join(tmp, "f1", "events.jsonl"))
 	if !containsEventType(events, "feature.config_changed") {
 		t.Errorf("expected feature.config_changed event, got events: %+v", events)
+	}
+}
+
+// TestBuildHooks_OnLayerBoundaryCrossed_FiresObserver verifies that the hook
+// invokes Observer.LayerBoundaryCrossed, which writes a
+// feature.layer_boundary line to events.jsonl with the layer snapshot.
+func TestBuildHooks_OnLayerBoundaryCrossed_FiresObserver(t *testing.T) {
+	tmp := t.TempDir()
+	obs := newTestObserver(tmp)
+	defer obs.Shutdown()
+
+	if err := os.MkdirAll(filepath.Join(tmp, "f1"), 0o755); err != nil {
+		t.Fatalf("mkdir feature dir: %v", err)
+	}
+
+	fs := mocks.NewMockFeatureStore()
+	f := &feature.Feature{
+		ID:   "f1",
+		Name: "My feature",
+	}
+	fs.LoadFn = func(id string) (*feature.Feature, error) {
+		return f, nil
+	}
+
+	h := orchestrator.BuildHooks(obs, nil, fs)
+	if h.OnLayerBoundaryCrossed == nil {
+		t.Fatal("OnLayerBoundaryCrossed hook is nil")
+	}
+	h.OnLayerBoundaryCrossed("f1", observe.LayerBoundaryEvent{
+		LayerPosition:     1,
+		LayerTitle:        "Bootstrap",
+		LayerBranch:       "feature/demo-a1b2c3d4/1-bootstrap",
+		RepoTips:          map[string]string{"repo-a": "aaaa"},
+		NextLayerPosition: 2,
+		NextLayerBranch:   "feature/demo-a1b2c3d4/2-build-and-polish",
+	})
+
+	obs.Shutdown()
+	events := readEvents(t, filepath.Join(tmp, "f1", "events.jsonl"))
+	if !containsEventType(events, "feature.layer_boundary") {
+		t.Errorf("expected feature.layer_boundary event, got events: %+v", events)
 	}
 }
 
@@ -486,6 +529,101 @@ func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *te
 		}
 		if summary.Feature.ErrorClass != "" {
 			t.Errorf("error_class = %q, want empty for a healthy feature", summary.Feature.ErrorClass)
+		}
+	})
+}
+
+// TestBuildHooks_OnFeatureSummaryNeeded_StackDerivedRepoStatuses pins the
+// per-repository summary status derivation against the delivery stack: the
+// read model reports published only when every layer is settled (a pull
+// request or the no-commits marker), so an unpublished upper layer reads
+// touched. A run without a stack can never settle — publish fails closed for
+// it — so a touched repository reports touched under the stackless shape too.
+func TestBuildHooks_OnFeatureSummaryNeeded_StackDerivedRepoStatuses(t *testing.T) {
+	writeSummaryStatus := func(t *testing.T, f *feature.Feature) string {
+		t.Helper()
+		tmp := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(tmp, f.ID), 0o755); err != nil {
+			t.Fatalf("mkdir feature dir: %v", err)
+		}
+		obs := newTestObserver(tmp)
+		defer obs.Shutdown()
+
+		fs := mocks.NewMockFeatureStore()
+		fs.LoadFn = func(id string) (*feature.Feature, error) { return f, nil }
+
+		h := orchestrator.BuildHooks(obs, nil, fs, tmp)
+		if h.OnFeatureSummaryNeeded == nil {
+			t.Fatal("OnFeatureSummaryNeeded hook is nil")
+		}
+		h.OnFeatureSummaryNeeded(f.ID, f)
+		obs.Shutdown()
+
+		data, err := os.ReadFile(filepath.Join(tmp, f.ID, "observe-summary.yaml"))
+		if err != nil {
+			t.Fatalf("read observe-summary.yaml: %v", err)
+		}
+		var summary observe.SummaryArtifact
+		if err := yaml.Unmarshal(data, &summary); err != nil {
+			t.Fatalf("unmarshal observe-summary.yaml: %v\n%s", err, data)
+		}
+		repo, ok := summary.Repos["r"]
+		if !ok {
+			t.Fatalf("repos = %+v, want an entry for r", summary.Repos)
+		}
+		return repo.Status
+	}
+
+	stackedFeature := func(layer2 feature.StackRepoEntry) *feature.Feature {
+		return &feature.Feature{
+			ID:     "fsum-stack",
+			Name:   "Summary stack",
+			Status: feature.StatusCodeReady,
+			Stack: []feature.StackLayer{
+				{
+					Position: 1, Title: "Bootstrap", Branch: "feature/x/1-bootstrap",
+					Repos: map[string]feature.StackRepoEntry{
+						"r": {PRURL: "https://github.com/org/r/pull/1", PRState: feature.StackPRStateOpen},
+					},
+				},
+				{
+					Position: 2, Title: "Build", Branch: "feature/x/2-build",
+					Repos: map[string]feature.StackRepoEntry{"r": layer2},
+				},
+			},
+			Repos: []feature.FeatureRepo{{Name: "r", Path: "/tmp/r"}},
+			RepoStates: map[string]*feature.RepoState{
+				"r": {Touched: true},
+			},
+		}
+	}
+
+	t.Run("unpublished upper layer reports touched, not published", func(t *testing.T) {
+		// Layer 2 delivered nothing yet: no PR, no no-commits marker. Layer
+		// 1's pull request must not mask it.
+		if got := writeSummaryStatus(t, stackedFeature(feature.StackRepoEntry{})); got != "touched" {
+			t.Errorf("repos[r].status = %q, want touched (layer 2 is unpublished)", got)
+		}
+	})
+
+	t.Run("every layer settled reports published", func(t *testing.T) {
+		if got := writeSummaryStatus(t, stackedFeature(feature.StackRepoEntry{NoCommits: true})); got != "published" {
+			t.Errorf("repos[r].status = %q, want published (every layer settled)", got)
+		}
+	})
+
+	t.Run("stackless touched repo reports touched", func(t *testing.T) {
+		f := &feature.Feature{
+			ID:     "fsum-legacy",
+			Name:   "Summary legacy",
+			Status: feature.StatusPublished,
+			Repos:  []feature.FeatureRepo{{Name: "r", Path: "/tmp/r"}},
+			RepoStates: map[string]*feature.RepoState{
+				"r": {Touched: true},
+			},
+		}
+		if got := writeSummaryStatus(t, f); got != "touched" {
+			t.Errorf("repos[r].status = %q, want touched (a stackless run is never settled)", got)
 		}
 	})
 }

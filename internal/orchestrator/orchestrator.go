@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
@@ -62,7 +63,7 @@ type Hooks struct {
 	OnFeatureFailed    func(featureID string, code errcat.Code, class errcat.Class, diagnostics string)
 	OnReviewRequired   func(featureID string, phase feature.Phase)
 	OnPublishStarted   func(featureID string)
-	OnPublishCompleted func(featureID string, prURLs map[string]string, err error)
+	OnPublishCompleted func(featureID string, err error)
 
 	// OnFeatureSummaryNeeded fires at every terminal transition (completed,
 	// failed, done) so downstream observers can persist observe-summary.yaml
@@ -79,6 +80,23 @@ type Hooks struct {
 	// the requested target and the effective target plus source/new run
 	// numbers so observers can emit a durable audit record.
 	OnFeatureRewound func(featureID string, request feature.RewindRequest, effectiveTarget feature.Phase, sourceRun, newRun int)
+
+	// OnLayerBoundaryCrossed fires after a roadmap layer boundary's single
+	// persistence write: the completed layer, its per-repository tips, and
+	// — when the boundary split the worktrees — the next layer's position
+	// and branch.
+	OnLayerBoundaryCrossed func(featureID string, boundary observe.LayerBoundaryEvent)
+
+	// OnStackLayerPublished fires after each stack layer's persistence
+	// write during a publish pass, once per layer per repository the pass
+	// acted on, with the layer's publish outcome (created, pushed,
+	// rewritten, merged, blocked, or failed).
+	OnStackLayerPublished func(featureID string, outcome observe.LayerPublishEvent)
+
+	// OnRestackWarning fires for every relocation warning a Final Review
+	// fix round's round-commit hook raises: a fix that landed above its
+	// requested stack layer, or an ignored fix manifest entry.
+	OnRestackWarning func(featureID string, warning observe.RestackWarningEvent)
 }
 
 // PhaseCompletionInput is a sum-type describing a phase completion. Exactly
@@ -118,35 +136,6 @@ type ReviewDecision struct {
 	// (the roadmap reject path). Mirrors RoadmapReviewDecisionMsg.Comment.
 	Comment string
 }
-
-// PublishConflictError signals a pull-rebase conflict during publish. Satisfies
-// errors.Is(err, ErrPublishConflict) so callers can route conflicts without
-// reflecting on the wrapped type.
-//
-// Branch is the feature branch the conflicted push was targeting.
-// RebaseTarget is the PR base branch (e.g. "master", "main") that the
-// follow-up rebase-resolution plan must rebase ONTO. It is computed by the
-// orchestrator (via PR lookup, repo.BaseBranch, or default-branch fallback)
-// so consumers do not have to re-derive it; passing the feature branch in
-// its place would point the rebase plan at the wrong target.
-type PublishConflictError struct {
-	RepoName     string
-	Branch       string
-	RebaseTarget string
-}
-
-func (e *PublishConflictError) Error() string {
-	return fmt.Sprintf("publish: pull-rebase conflict in repo %s on branch %s", e.RepoName, e.Branch)
-}
-
-// Is reports whether target is the publish-conflict sentinel.
-func (e *PublishConflictError) Is(target error) bool {
-	_, ok := target.(*PublishConflictError)
-	return ok
-}
-
-// ErrPublishConflict is the sentinel used with errors.Is for publish conflicts.
-var ErrPublishConflict = &PublishConflictError{}
 
 // Deps holds all port interface dependencies for the orchestrator.
 type Deps struct {
@@ -230,6 +219,12 @@ type Orchestrator struct {
 	// the test returns so those writes don't race with TempDir cleanup.
 	cycleWG sync.WaitGroup
 
+	// rebaseRestackLoops tracks the in-flight asynchronous restack loops by
+	// rebase child id. Presence is the in-flight guard that refuses a
+	// second start with ErrFeatureBusy; the handle's stopped flag turns a
+	// running resolution attempt into an abort on stop or discard.
+	rebaseRestackLoops sync.Map
+
 	// featureStartControls serialize phase admission per feature. This makes
 	// repeated API start requests idempotent even when they arrive before
 	// the first request's state transition is visible to the second.
@@ -246,10 +241,11 @@ type Orchestrator struct {
 	// the publish implementation.
 	publishFn func(featureID string) error
 
-	// publishRepoFn is a test hook. When nil Publish calls o.publishRepo.
+	// publishRepoFn is a test hook. When nil Publish calls
+	// o.publishRepoWithOptions.
 	// Tests can override this to isolate the Publish loop logic from the
 	// per-repo pipeline logic.
-	publishRepoFn func(featureID, repoName string) (string, error)
+	publishRepoFn func(featureID, repoName string) error
 
 	// runMultiRepoImplFn is a test seam over
 	// PhaseRunner.RunMultiRepoImplementation. The default (set in New()) is
@@ -288,6 +284,33 @@ type Orchestrator struct {
 	// worktreeFingerprintFn is a test seam for detecting whether a mounted
 	// context repo changed during the agent loop.
 	worktreeFingerprintFn func(worktreePath string) (string, error)
+
+	// runConflictResolutionFn is a test seam over
+	// PhaseRunner.RunConflictResolution, the bounded session a rebase pass
+	// runs to resolve a conflicting cherry-pick. The default (set in New())
+	// is a thin adapter that calls o.deps.PhaseRunner.RunConflictResolution.
+	// Tests override this via SetRunConflictResolutionFn so the resolution
+	// budget, verification, and feedback loop can be exercised with
+	// scripted sessions.
+	runConflictResolutionFn func(ctx context.Context, req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error)
+}
+
+// SetRunConflictResolutionFn installs a test seam that intercepts
+// PhaseRunner.RunConflictResolution dispatch. Intended for tests only.
+func (o *Orchestrator) SetRunConflictResolutionFn(fn func(ctx context.Context, req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error)) {
+	o.runConflictResolutionFn = fn
+}
+
+// runConflictResolution dispatches one bounded conflict-resolution attempt
+// through the seam, so tests can script the session.
+func (o *Orchestrator) runConflictResolution(ctx context.Context, req agent.ConflictResolutionRequest) (*agent.ConflictResolutionResult, error) {
+	if o.runConflictResolutionFn != nil {
+		return o.runConflictResolutionFn(ctx, req)
+	}
+	if o.deps.PhaseRunner == nil {
+		return nil, errors.New("phase runner not configured")
+	}
+	return o.deps.PhaseRunner.RunConflictResolution(ctx, req)
 }
 
 // SetRunImplementationFn installs a test seam that intercepts
@@ -340,16 +363,6 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 			}
 			return o.commitRound(input)
 		}
-		// Phase-exit gate: rebase children re-verify the mechanical rebase
-		// exit facts before the implement loop declares success, surfacing
-		// violations as fix-round feedback instead of failing later at the
-		// integration gate. Non-rebase features get no gate (nil = no-op).
-		o.deps.PhaseRunner.PhaseExitGateFor = func(f *feature.Feature) agent.PhaseExitGate {
-			if f == nil || f.Parent == nil || f.Parent.Kind != feature.ChildKindRebase {
-				return nil
-			}
-			return func() string { return o.rebaseGateFeedback(f) }
-		}
 	}
 	o.runMultiRepoImplFn = func(
 		f *feature.Feature,
@@ -400,8 +413,8 @@ func (o *Orchestrator) SetPublishFn(fn func(featureID string) error) {
 }
 
 // SetPublishRepoFn installs a test hook that intercepts per-repo publish
-// dispatch in place of o.publishRepo. Intended for tests only.
-func (o *Orchestrator) SetPublishRepoFn(fn func(featureID, repoName string) (string, error)) {
+// dispatch in place of o.publishRepoWithOptions. Intended for tests only.
+func (o *Orchestrator) SetPublishRepoFn(fn func(featureID, repoName string) error) {
 	o.publishRepoFn = fn
 }
 
@@ -557,6 +570,20 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 	}
 
 	phase := f.CurrentPhase
+
+	// A rebase child at Created runs the asynchronous harness restack loop
+	// instead of dispatching a planning phase: the start returns at once
+	// with the child still at Created, the loop runs in a background
+	// goroutine (with bounded agent sessions resolving any conflicting
+	// cherry-pick), and landing dispatches the deferred Final Review — the
+	// pass's single verification round — from the goroutine through this
+	// same start path. Exhausted resolution attempts park the pass (durable
+	// attention journal) and the loop ends; a resolver error or a stop ends
+	// the loop without parking, leaving the child at Created.
+	if f.IsChild() && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated {
+		return o.startRebaseRestackPass(featureID)
+	}
+
 	// For new features, fall back to the pipeline's first phase.
 	//
 	// For interrupted features, the CurrentPhase field carries intent — it is
@@ -1370,6 +1397,18 @@ func (o *Orchestrator) InterruptFeature(featureID string) error {
 	case getErr == nil && isSettledFeatureStatus(f.Status):
 		// Stop is idempotent when work completed after the caller's activity
 		// check.
+	case getErr == nil && f.IsChild() && f.Parent != nil && f.Parent.Kind == feature.ChildKindRebase && f.Status == feature.StatusCreated:
+		// The restack pass's home state is Created: a stop kills the pass's
+		// sessions — aborting an in-flight resolution session and its
+		// background loop without parking — and the child stays at Created
+		// so the next start recomputes from scratch. The loop handle's
+		// stopped flag is what turns the running attempt into an abort
+		// instead of a retryable failure.
+		if handle, ok := o.rebaseRestackLoops.Load(featureID); ok {
+			if h, ok := handle.(*rebaseRestackLoopHandle); ok {
+				h.stop()
+			}
+		}
 	default:
 		// Transition to interrupted FIRST so racing completion handlers
 		// (onKBCompleted, onPhaseCompletedDefault, …) observe the terminal
@@ -1589,6 +1628,18 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 // count). Each branch both prepares state and dispatches the appropriate
 // follow-up phase so the orchestrator owns the full unwind.
 func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d ReviewDecision) error {
+	// Roadmap approval re-reads the roadmap from disk — so edits made at the
+	// review gate are honored — and persists TotalRoadmapPhases and the
+	// pull-request stack BEFORE the gate is cleared or the roadmap phase
+	// advances. A roadmap that cannot yield a stack returns an error with
+	// the gate still open, so a run can never advance past approval without
+	// one.
+	if d.Roadmap && f.CurrentRoadmapPhase == 0 {
+		if err := o.persistRoadmapApproval(featureID, f); err != nil {
+			return fmt.Errorf("persisting approved roadmap: %w", err)
+		}
+	}
+
 	if err := o.clearReviewGate(featureID); err != nil {
 		return err
 	}
@@ -1623,14 +1674,13 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 	// Roadmap-level plan approval: advance roadmap phase, then dispatch
 	// PhasePlan for the newly-advanced phase.
 	if d.Roadmap {
-		// Parse roadmap and persist TotalRoadmapPhases before advancing. The
-		// automatic approved path (onPlanApproved) does this when the planner
-		// returns "approved" status, but when the planner returns
-		// "needs_human_review" and the reviewer subsequently approves via the
-		// gate, TotalRoadmapPhases is still 0 and downstream roadmap sequencing
-		// (CurrentRoadmapPhase < TotalRoadmapPhases checks, phase-plan vs legacy
-		// plan routing) would be wrong.
-		o.persistRoadmapPhaseCount(featureID, f)
+		// The top-level roadmap approval persisted the phase count and stack
+		// above, before the gate was cleared. Mid-flight synthetic Roadmap
+		// proceeds (CurrentRoadmapPhase > 0) keep the legacy best-effort
+		// count persist.
+		if f.CurrentRoadmapPhase > 0 {
+			o.persistRoadmapPhaseCount(featureID, f)
+		}
 		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
 		}
@@ -1820,6 +1870,30 @@ func (o *Orchestrator) clearReviewGate(featureID string) error {
 		ff.PendingReviewPhase = nil
 		ff.PendingRewindReviewRoadmapPhase = nil
 		ff.IsRewind = false
+		return nil
+	})
+}
+
+// persistRoadmapApproval re-reads the roadmap from disk — so edits made at
+// the review gate are honored — and persists TotalRoadmapPhases and the
+// pull-request stack (with every layer's branch name) on the run, alongside
+// the repository records' and worktree setup tasks' renamed branch. All
+// renames run BEFORE the single persistence write, so a crash between the
+// two is healed by the retry. Unlike the best-effort persistRoadmapPhaseCount,
+// a failure here is returned: the caller must not clear the review gate or
+// advance the roadmap phase when the approved roadmap cannot yield a stack
+// or a repository worktree cannot be renamed onto the approved layer-1 name.
+func (o *Orchestrator) persistRoadmapApproval(featureID string, f *feature.Feature) error {
+	phaseCount, layers, err := o.deriveApprovedStack(f)
+	if err != nil {
+		return err
+	}
+	renames := o.renameWorktreeBranchesToLayerOne(f, layers)
+	if failures := joinRenameFailures(renames); failures != nil {
+		return failures
+	}
+	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
+		applyApprovedStack(ff, phaseCount, layers, renames)
 		return nil
 	})
 }
@@ -2023,13 +2097,18 @@ func (o *Orchestrator) Publish(featureID string) error {
 
 type PublishOptions struct {
 	Repos []string
-	Title string
-	Body  string
+	// UpdateOnly restricts the walk to layers that already carry a pull
+	// request: rebased layers with one are pushed with their lease and their
+	// stack sections refreshed, while layers without a pull request are left
+	// for a later full publish (the user's Publish action or auto-publish).
+	UpdateOnly bool
 }
 
 // PublishWithOptions runs the publish pipeline for all repos, or for the
-// selected repos when Repos is non-empty. Title and Body override generated PR
-// metadata for interactive publish flows that already reviewed those fields.
+// selected repos when Repos is non-empty. Every selected touched repository
+// walks its whole delivery stack; unchanged layers are no-ops. Pull-request
+// narratives are generated per layer per repository through the
+// description-generation session.
 func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions) error {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
@@ -2064,51 +2143,57 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		o.hooks.OnPublishStarted(featureID)
 	}
 
-	prURLs := make(map[string]string)
 	var firstErr error
-	var conflictErr *PublishConflictError
 	hasRepoSelection := len(requestedRepos) > 0
-	republishExistingPRs := publishRequiresLeasePush(f)
 	for _, repo := range f.Repos {
 		if hasRepoSelection && !requestedRepos[repo.Name] {
 			continue
 		}
-		// Skip repos already published (sibling goroutines may have updated)
-		// or untouched (no phase ever touched them, no PR to open).
-		freshF, freshErr := o.deps.Lifecycle.Get(featureID)
-		if freshErr == nil {
-			if st, ok := freshF.RepoStates[repo.Name]; ok && st != nil {
-				if st.PRURL != "" {
-					prURLs[repo.Name] = st.PRURL
-					if !hasRepoSelection && !republishExistingPRs {
-						continue
-					}
-				}
-				if !st.Touched {
-					continue
-				}
+		// Skip untouched repos (no phase ever touched them, no PR to open).
+		// A repository with existing pull requests is NOT skipped: the stack
+		// walk re-reads its layer entries and no-ops the unchanged layers.
+		walkF := f
+		if freshF, freshErr := o.deps.Lifecycle.Get(featureID); freshErr == nil {
+			walkF = freshF
+			if st, ok := freshF.RepoStates[repo.Name]; ok && st != nil && !st.Touched {
+				continue
 			}
 		}
+		before := stackRepoEntriesSnapshot(walkF, repo.Name)
 
-		var prURL string
 		var repoErr error
 		if o.publishRepoFn != nil {
-			prURL, repoErr = o.publishRepoFn(featureID, repo.Name)
+			repoErr = o.publishRepoFn(featureID, repo.Name)
 		} else {
-			prURL, repoErr = o.publishRepoWithOptions(featureID, repo.Name, opts)
+			repoErr = o.publishRepoWithOptions(featureID, repo.Name, opts)
+		}
+
+		// One repository status event per changed stack layer — whether or
+		// not the pass stopped early — so surfaces displaying the stack
+		// refresh at layer granularity. Each event carries the changed
+		// layer's position.
+		if freshF, freshErr := o.deps.Lifecycle.Get(featureID); freshErr == nil {
+			after := stackRepoEntriesSnapshot(freshF, repo.Name)
+			for _, layer := range orderedStackLayers(freshF) {
+				if after[layer.Position] == before[layer.Position] {
+					continue
+				}
+				o.emitEvent(ports.Event{
+					Type:          ports.RepoStatusChanged,
+					FeatureID:     featureID,
+					RepoName:      repo.Name,
+					Branch:        repo.Branch,
+					LayerPosition: layer.Position,
+					Message:       "stack publish updated repository layer entries",
+				})
+			}
 		}
 		if repoErr != nil {
-			var ce *PublishConflictError
-			if errors.As(repoErr, &ce) {
-				if conflictErr == nil {
-					conflictErr = ce
-				}
-			} else if firstErr == nil {
+			if firstErr == nil {
 				firstErr = repoErr
 			}
 			continue
 		}
-		prURLs[repo.Name] = prURL
 	}
 
 	// Delegate FeatureCompleted emission to the sole-emitter helper.
@@ -2116,23 +2201,15 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 		firstErr = completeErr
 	}
 
-	// Pick the final error: conflict first, then non-conflict.
-	var finalErr error
-	if conflictErr != nil {
-		finalErr = conflictErr
-	} else if firstErr != nil {
-		finalErr = firstErr
-	}
-
 	publishCompleted := ports.Event{
 		Type:      ports.PublishCompleted,
 		FeatureID: featureID,
-		Error:     finalErr,
+		Error:     firstErr,
 	}
 	// A repository failure owns the condition through its stored record; the
 	// event carries the first failed repository's rendered canonical error
 	// so its SSE projection matches the feature-failure shape.
-	if finalErr != nil {
+	if firstErr != nil {
 		if freshF, getErr := o.deps.Lifecycle.Get(featureID); getErr == nil {
 			if rendered, ok := firstFailedRepoError(freshF); ok {
 				publishCompleted.CanonicalError = &rendered
@@ -2141,9 +2218,9 @@ func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOp
 	}
 	o.emitEventBlocking(publishCompleted)
 	if o.hooks.OnPublishCompleted != nil {
-		o.hooks.OnPublishCompleted(featureID, prURLs, finalErr)
+		o.hooks.OnPublishCompleted(featureID, firstErr)
 	}
-	return finalErr
+	return firstErr
 }
 
 func publishRepoSelection(f *feature.Feature, repos []string) (map[string]bool, error) {

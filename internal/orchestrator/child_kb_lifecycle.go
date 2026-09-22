@@ -195,9 +195,11 @@ func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error 
 		mergeHEAD := ""
 		if child.Parent.Transaction != nil {
 			if txEntry := child.Parent.Transaction.EntryByRepo(entry.Repo); txEntry != nil {
-				mergeHEAD = txEntry.MergeHEAD
-				if mergeHEAD == "" {
-					mergeHEAD = txEntry.CandidateSHA
+				if top := txEntry.TopRef(); top != nil {
+					mergeHEAD = top.CandidateSHA
+					if mergeHEAD == "" {
+						mergeHEAD = top.ObservedSHA
+					}
 				}
 			}
 		}

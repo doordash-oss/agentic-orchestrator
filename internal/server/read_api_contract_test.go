@@ -46,8 +46,7 @@ import (
 const (
 	// descriptionFieldKey, confidenceFieldKey, labelFieldKey, optionsFieldKey,
 	// headerFieldKey, questionsFieldKey and questionFieldKey are JSON field
-	// names reused across AskUserQuestion, rewind-option and
-	// publish-description test fixtures.
+	// names reused across AskUserQuestion and rewind-option test fixtures.
 	descriptionFieldKey = "description"
 	confidenceFieldKey  = "confidence"
 	labelFieldKey       = "label"
@@ -595,6 +594,62 @@ func TestConfigCatalogPromptPermissionSnapshots(t *testing.T) {
 	detailGate := detail[entityFeature].(map[string]any)["need_user_input"].(map[string]any)
 	if detailGate["feature_id"] != f.ID {
 		t.Fatalf("detail need user input feature_id = %v; want %s", detailGate["feature_id"], f.ID)
+	}
+}
+
+// TestFeatureDetailExposesEffectiveDeliveryMode pins the read-only delivery
+// mode on the feature detail: clients always see stack or single, including
+// legacy records that predate the field.
+func TestFeatureDetailExposesEffectiveDeliveryMode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		stored feature.DeliveryMode
+		want   string
+	}{
+		{"single feature", feature.DeliveryModeSingle, "single"},
+		{"stack feature", feature.DeliveryModeStack, "stack"},
+		{"legacy feature without stored mode", "", "stack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, f := seedReadFeature(t)
+			f.DeliveryMode = tc.stored
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+			handler := NewHandler(baseReadHandlerOptions(store))
+			detail := getJSONMap(t, handler, "/api/v1/features/"+f.ID)
+			got := detail[entityFeature].(map[string]any)["delivery_mode"]
+			if got != tc.want {
+				t.Fatalf("feature delivery_mode = %v; want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRuntimeConfigFeatureDefaultsExposeDeliveryMode pins the workspace
+// delivery default on the feature-defaults DTO that seeds the create form.
+func TestRuntimeConfigFeatureDefaultsExposeDeliveryMode(t *testing.T) {
+	t.Parallel()
+	store, _ := seedReadFeature(t)
+	for _, tc := range []struct {
+		name string
+		mode string
+		want string
+	}{
+		{"workspace default single", "single", "single"},
+		{"workspace default stack", "stack", "stack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := baseReadHandlerOptions(store)
+			opts.Config = &config.Config{Defaults: config.DefaultsConfig{DeliveryMode: tc.mode}}
+			handler := NewHandler(opts)
+			body := getJSONMap(t, handler, apiPathConfigRuntime)
+			defaults := body["feature_defaults"].(map[string]any)
+			if defaults["delivery_mode"] != tc.want {
+				t.Fatalf("feature_defaults.delivery_mode = %v; want %s", defaults["delivery_mode"], tc.want)
+			}
+		})
 	}
 }
 
@@ -1337,6 +1392,8 @@ func TestFeatureDetailActionCatalogStableAndRedacted(t *testing.T) {
 		actionResume,
 		actionRestart,
 		actionPublish,
+		actionReopenPullRequest,
+		actionRecreatePullRequest,
 		actionMerge,
 		actionRewind,
 		actionRebase,
@@ -1562,10 +1619,10 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			Transaction: &feature.TransactionJournal{
 				Phase: feature.TransactionPhaseMerged,
 				Entries: []feature.RepoTransactionEntry{{
-					ParentBranch:    "main",
-					ParentAnchorSHA: "aaaa1111",
-					ChildHeadSHA:    "bbbb2222",
-					MergeHEAD:       "cccc3333",
+					ChildHeadSHA: "bbbb2222",
+					Refs: []feature.RepoTransactionRef{{
+						Branch: "main", AnchorSHA: "aaaa1111", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333",
+					}},
 				}},
 			},
 		}
@@ -1590,10 +1647,10 @@ func TestChildFeatureActionCatalogRestricted(t *testing.T) {
 			Transaction: &feature.TransactionJournal{
 				Phase: feature.TransactionPhaseMerged,
 				Entries: []feature.RepoTransactionEntry{{
-					ParentBranch:    "main",
-					ParentAnchorSHA: "aaaa1111",
-					ChildHeadSHA:    "bbbb2222",
-					MergeHEAD:       "cccc3333",
+					ChildHeadSHA: "bbbb2222",
+					Refs: []feature.RepoTransactionRef{{
+						Branch: "main", AnchorSHA: "aaaa1111", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333",
+					}},
 					Cleanup: &errcat.FailureRecord{
 						Code:        errcat.ChildCleanupIncomplete,
 						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repo-a"}}},
@@ -3159,7 +3216,15 @@ func seedReadFeature(t *testing.T) (*feature.Store, *feature.Feature) {
 	f.TotalRoadmapPhases = 3
 	f.CurrentPhaseStatus = "implementing"
 	f.Artifacts = map[string]string{targetPhasePlan: "plan/phase-plan.md"}
-	f.RepoStates = map[string]*feature.RepoState{repoNameSelf: {Touched: true, PRURL: "https://github.example/pr/1"}}
+	f.RepoStates = map[string]*feature.RepoState{repoNameSelf: {Touched: true}}
+	f.Stack = []feature.StackLayer{{
+		Position: 1,
+		Title:    "Layer 1",
+		Branch:   "agentico/read-api/1-layer-1",
+		Repos: map[string]feature.StackRepoEntry{
+			repoNameSelf: {PRURL: "https://github.example/pr/1", PRState: feature.StackPRStateOpen},
+		},
+	}}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
@@ -3752,16 +3817,24 @@ func (l fakeMessageLog) ToolUseBlocks() []llm.ContentBlock {
 
 func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	repo := CompletionPreflightRepo{
-		Repo:                  "repo-a",
-		Publishable:           true,
-		Touched:               true,
-		Status:                "unpublished_changes",
-		PrURL:                 "https://github.example/repo-a/pull/1",
+		Repo:        "repo-a",
+		Publishable: true,
+		Touched:     true,
+		Status:      "unpublished_changes",
+		PullRequests: []PullRequestEntry{{
+			Position: 1,
+			Title:    "Layer 1",
+			Branch:   "feature/layer-1",
+			URL:      "https://github.example/repo-a/pull/1",
+			State:    PullRequestEntryStateOpen,
+			PushMode: PullRequestEntryPushModeRewrite,
+		}},
 		PendingCommits:        3,
 		PendingDirty:          true,
-		PushMode:              "rewrite",
+		PushMode:              CompletionPreflightRepoPushModeRewrite,
 		PendingDirtyFiles:     []string{"a.go", "b.go"},
 		PendingDirtyFileTotal: 2,
+		RebaseHint:            "Layer 1 (Foundation) is merged below kept work — run the rebase pass to restack the layers above.",
 	}
 	data, err := json.Marshal(repo)
 	if err != nil {
@@ -3780,12 +3853,24 @@ func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	if decoded["push_mode"] != "rewrite" {
 		t.Errorf("push_mode = %v; want rewrite", decoded["push_mode"])
 	}
+	pullRequests, _ := decoded["pull_requests"].([]any)
+	if len(pullRequests) != 1 {
+		t.Fatalf("pull_requests = %v, want one layer entry", decoded["pull_requests"])
+	}
+	entry, _ := pullRequests[0].(map[string]any)
+	if entry["url"] != "https://github.example/repo-a/pull/1" || entry["state"] != "open" || entry["push_mode"] != "rewrite" {
+		t.Errorf("pull_requests[0] = %v, want the open layer-1 entry with rewrite push mode", entry)
+	}
 	files, _ := decoded["pending_dirty_files"].([]any)
 	if len(files) != 2 || files[0] != "a.go" || files[1] != "b.go" {
 		t.Errorf("pending_dirty_files = %v; want [a.go b.go]", decoded["pending_dirty_files"])
 	}
 	if decoded["pending_dirty_file_total"] != float64(2) {
 		t.Errorf("pending_dirty_file_total = %v; want 2", decoded["pending_dirty_file_total"])
+	}
+	if hint, _ := decoded["rebase_hint"].(string); hint == "" ||
+		!strings.Contains(hint, "Layer 1") || !strings.Contains(hint, "rebase pass") {
+		t.Errorf("rebase_hint = %v; want the hint naming layer 1 and the rebase pass", decoded["rebase_hint"])
 	}
 }
 

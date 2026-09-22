@@ -80,10 +80,19 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 			{Name: "repoB", Path: repoB, WorktreePath: repoB, Branch: "feature/review-parent", BaseBranch: "main", Publishable: &publishable},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"repoA": {Touched: true, PRURL: "https://github.com/example/api/pull/1"},
+			"repoA": {Touched: true},
 			"docs":  {},
-			"repoB": {Touched: true, PRURL: "https://github.com/example/web/pull/2"},
+			"repoB": {Touched: true},
 		},
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Title:    "Parent delivery",
+			Branch:   "feature/review-parent",
+			Repos: map[string]feature.StackRepoEntry{
+				"repoA": {PRURL: "https://github.com/example/api/pull/1", PRState: feature.StackPRStateOpen},
+				"repoB": {PRURL: "https://github.com/example/web/pull/2", PRState: feature.StackPRStateOpen},
+			},
+		}},
 		Models:       config.ModelConfig{Planning: "planning-model", Implementation: "implementation-model", Review: "review-model"},
 		Effort:       config.EffortConfig{Planning: "high", Implementation: "medium", Review: "low"},
 		RiskLevel:    feature.RiskHigh,
@@ -153,15 +162,30 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	if len(fetched.Repos) != 2 || fetched.Repos[0].Repo != "repoA" || fetched.Repos[1].Repo != "repoB" {
 		t.Fatalf("FetchReviewFeedback().Repos = %+v, want repoA then repoB with docs skipped", fetched.Repos)
 	}
-	if fetched.Repos[0].PrURL != parent.RepoStates["repoA"].PRURL || fetched.Repos[1].PrURL != parent.RepoStates["repoB"].PRURL {
-		t.Errorf("fetch PR URLs = %q/%q, want %q/%q", fetched.Repos[0].PrURL, fetched.Repos[1].PrURL, parent.RepoStates["repoA"].PRURL, parent.RepoStates["repoB"].PRURL)
+	// Each repository has exactly one open layer pull request, so its
+	// comments arrive under one pull-request group carrying the PR and
+	// layer identity.
+	for i, repo := range []string{"repoA", "repoB"} {
+		groups := fetched.Repos[i].PullRequests
+		if len(groups) != 1 || groups[0].Position != 1 || groups[0].Title != "Parent delivery" {
+			t.Fatalf("%s pull-request groups = %+v, want one group on layer 1 (Parent delivery)", repo, groups)
+		}
+		if groups[0].URL != parent.TopStackLayerPRURL(repo) {
+			t.Errorf("%s group URL = %q, want %q", repo, groups[0].URL, parent.TopStackLayerPRURL(repo))
+		}
+		for _, comment := range groups[0].Comments {
+			if comment.PrURL != groups[0].URL || comment.PrNumber == 0 ||
+				comment.LayerPosition != 1 || comment.LayerTitle != "Parent delivery" {
+				t.Errorf("%s comment %+v lacks its PR identity", repo, comment)
+			}
+		}
 	}
-	if got := fetched.Repos[0].Comments; len(got) != 3 || got[0].ID != 11 || got[0].Type != "review" || got[0].Repo != "repoA" ||
+	if got := fetched.Repos[0].PullRequests[0].Comments; len(got) != 3 || got[0].ID != 11 || got[0].Type != "review" || got[0].Repo != "repoA" ||
 		got[1].ID != 12 || got[1].Type != "issue" || got[1].Repo != "repoA" ||
 		got[2].ID != 13 || got[2].Type != "review_body" || got[2].Repo != "repoA" {
 		t.Fatalf("repoA comments = %+v, want chronologically grouped/tagged review, issue, review body", got)
 	}
-	if got := fetched.Repos[1].Comments; len(got) != 1 || got[0].ID != 21 || got[0].Type != "review" || got[0].Repo != "repoB" {
+	if got := fetched.Repos[1].PullRequests[0].Comments; len(got) != 1 || got[0].ID != 21 || got[0].Type != "review" || got[0].Repo != "repoB" {
 		t.Fatalf("repoB comments = %+v, want tagged inline comment 21", got)
 	}
 
@@ -226,7 +250,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	if len(child.ReviewFeedback) != 2 || child.ReviewFeedback[0].ID != 11 || child.ReviewFeedback[1].ID != 21 {
 		t.Errorf("child structured feedback = %+v, want selected IDs 11 and 21", child.ReviewFeedback)
 	}
-	for _, want := range []string{"inline selected api", "inline selected web", parent.RepoStates["repoA"].PRURL, parent.RepoStates["repoB"].PRURL} {
+	for _, want := range []string{"inline selected api", "inline selected web", parent.TopStackLayerPRURL("repoA"), parent.TopStackLayerPRURL("repoB")} {
 		if !strings.Contains(child.Description, want) {
 			t.Errorf("child description missing selected context %q:\n%s", want, child.Description)
 		}
@@ -262,10 +286,13 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	waitForJourneyGate(t, srv.URL, childID, 1)
 	postReviewSessionProceed(t, srv.URL, childID)
 	waitForJourneyChildClosed(t, srv.URL, store, childID)
-	// Published is written before the child's durable tail-settled marker.
-	// Join the completion goroutine before loading the child or asserting
-	// tail side effects, so those reads cannot race the final state write.
+	// The tail's republish walk moves the parent back to Published well
+	// before its final durable tail-settled marker, so wait for the marker
+	// itself rather than Published. Published is also written before that
+	// marker, so join the completion goroutine too — assertions must
+	// observe the completed tail, not race its final state write.
 	waitForJourneyStatus(t, srv.URL, parent.ID, feature.StatusPublished.String())
+	waitForStackedReviewFeedbackTailSettled(t, store, childID)
 	orch.WaitForCycles()
 
 	closedChild, err := store.Load(childID)
@@ -279,8 +306,10 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(repoPath, "child-output.txt")); err != nil {
 			t.Errorf("%s parent worktree missing integrated child output: %v", repoName, err)
 		}
-		if parents := strings.Fields(journeyGit(t, repoPath, "rev-list", "--parents", "-n", "1", "HEAD")); len(parents) != 3 {
-			t.Errorf("%s parent tip parents = %v, want explicit two-parent merge", repoName, parents)
+		// A single-layer parent integrates the child as a plain append: the
+		// relocated child commit is the new linear tip.
+		if parents := strings.Fields(journeyGit(t, repoPath, "rev-list", "--parents", "-n", "1", "HEAD")); len(parents) != 2 {
+			t.Errorf("%s parent tip parents = %v, want a linear (single-parent) relocated tip", repoName, parents)
 		}
 	}
 
@@ -392,7 +421,8 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 		t.Fatalf("refetched repos = %+v, want only repoA (repoB all addressed → skipped)", refetched.Repos)
 	}
 	// repoA: only unselected comments 12 and 13 remain (11 is addressed).
-	if got := refetched.Repos[0].Comments; len(got) != 2 || got[0].ID != 12 || got[1].ID != 13 {
+	refetchedA := refetched.Repos[0].PullRequests[0].Comments
+	if got := refetchedA; len(got) != 2 || got[0].ID != 12 || got[1].ID != 13 {
 		t.Errorf("refetched repoA comments = %+v, want only unselected 12 and 13 (11 addressed)", got)
 	}
 
@@ -423,10 +453,9 @@ func reviewFeedbackJourneyBareRemote(t *testing.T, repoPath, branch string) stri
 	}
 	journeyGit(t, remote, "init", "--bare")
 	journeyGit(t, repoPath, "remote", "add", "origin", remote)
-	// Do not push the initial branch: the tail's PullRebase is a no-op when
-	// origin/<branch> does not exist (first publish), and the tail's Push
-	// pushes the merge commit for the first time — preserving the
-	// two-parent merge boundary.
+	// Do not push the initial branch: the tail's republish delivers the
+	// layer branch for the first time through the leased layer push —
+	// preserving the linear integration boundary.
 	return remote
 }
 

@@ -38,7 +38,8 @@ func TestWorktreeCreateAndRemove(t *testing.T) {
 	mgr := NewWorktreeManager(wtBaseDir)
 
 	// Create worktree from HEAD (empty start point)
-	wtPath, err := mgr.Create(repoDir, "test-feature", "test-repo", "")
+	provisional := LayerBranchName("test-feature", 1, "test-feature")
+	wtPath, err := mgr.Create(repoDir, "test-feature", provisional, "test-repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -50,8 +51,8 @@ func TestWorktreeCreateAndRemove(t *testing.T) {
 
 	// Verify branch
 	branch := CurrentBranch(wtPath)
-	if branch != "feature/test-feature" {
-		t.Errorf("expected branch feature/test-feature, got %s", branch)
+	if branch != provisional {
+		t.Errorf("expected branch %s, got %s", provisional, branch)
 	}
 
 	// Make a commit in worktree
@@ -70,7 +71,7 @@ func TestWorktreeCreateRejectsExistingBranchAtDifferentAcceptedCommit(t *testing
 	runGit(t, repo, "branch", "feature/pinned-mismatch")
 
 	mgr := NewWorktreeManager(t.TempDir())
-	if _, err := mgr.Create(repo, "pinned-mismatch", "repo", accepted); err == nil ||
+	if _, err := mgr.Create(repo, "pinned-mismatch", "feature/pinned-mismatch", "repo", accepted); err == nil ||
 		!strings.Contains(err.Error(), "want accepted commit") {
 		t.Fatalf("Create() error = %v, want accepted-commit mismatch", err)
 	}
@@ -152,7 +153,7 @@ func TestWorktreeRemoveMaterialFailureReturned(t *testing.T) {
 	parentDir := t.TempDir()
 	mgr := NewWorktreeManager(parentDir)
 
-	wtPath, err := mgr.Create(repoDir, "stuck-feature", "test-repo", "")
+	wtPath, err := mgr.Create(repoDir, "stuck-feature", "feature/stuck-feature", "test-repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -205,7 +206,7 @@ func TestWorktreeRemoveRefDeletesBranchAfterDeregistration(t *testing.T) {
 	repoDir := testutil.InitGitRepo(t)
 	mgr := NewWorktreeManager(t.TempDir())
 
-	wtPath, err := mgr.Create(repoDir, "partial-feature", "test-repo", "")
+	wtPath, err := mgr.Create(repoDir, "partial-feature", "feature/partial-feature", "test-repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -259,7 +260,7 @@ func TestWorktreeRemoveIdempotentOnAbsentResources(t *testing.T) {
 	repoDir := testutil.InitGitRepo(t)
 	mgr := NewWorktreeManager(t.TempDir())
 
-	wtPath, err := mgr.Create(repoDir, "gone-feature", "test-repo", "")
+	wtPath, err := mgr.Create(repoDir, "gone-feature", "feature/gone-feature", "test-repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -287,7 +288,7 @@ func TestWorktreeCreateRejectsEmptyRepoPath(t *testing.T) {
 	})
 
 	mgr := NewWorktreeManager(t.TempDir())
-	if _, err := mgr.Create("", "empty-repo-path", "test-repo", ""); err == nil {
+	if _, err := mgr.Create("", "empty-repo-path", "feature/empty-repo-path", "test-repo", ""); err == nil {
 		t.Fatal("Create() error = nil, want empty repo path rejected")
 	}
 }
@@ -348,7 +349,7 @@ func TestWorktreeThinStateQueries(t *testing.T) {
 					t.Fatal("HasOriginRemote() = true, want false before remote setup")
 				}
 				mgr := NewWorktreeManager(t.TempDir())
-				wtPath, err := mgr.Create(repo, "no-origin-feat", "repo", "")
+				wtPath, err := mgr.Create(repo, "no-origin-feat", "feature/no-origin-feat", "repo", "")
 				if err != nil {
 					t.Fatalf("Create() error = %v", err)
 				}
@@ -463,7 +464,7 @@ func TestResetToBaseLocal(t *testing.T) {
 	baseCommit := gitOutput(t, repoDir, "rev-parse", baseBranch)
 
 	// Create worktree
-	wtPath, err := mgr.Create(repoDir, "reset-local-feat", "repo", "")
+	wtPath, err := mgr.Create(repoDir, "reset-local-feat", "feature/reset-local-feat", "repo", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}
@@ -520,7 +521,7 @@ func TestResetToCommit_NoOriginNeeded(t *testing.T) {
 	}
 
 	mgr := NewWorktreeManager(t.TempDir())
-	wtPath, err := mgr.Create(repoDir, "reset-to-commit", "test-repo", "main")
+	wtPath, err := mgr.Create(repoDir, "reset-to-commit", "feature/reset-to-commit", "test-repo", "main")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -547,7 +548,7 @@ func TestResetToCommitRetriesTransientIndexLock(t *testing.T) {
 	testutil.CommitFile(t, repoDir, "later.txt", "later\n", "later commit")
 
 	mgr := NewWorktreeManager(t.TempDir())
-	wtPath, err := mgr.Create(repoDir, "reset-lock-retry", "test-repo", "main")
+	wtPath, err := mgr.Create(repoDir, "reset-lock-retry", "feature/reset-lock-retry", "test-repo", "main")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -577,6 +578,46 @@ func TestResetToCommitRetriesTransientIndexLock(t *testing.T) {
 	}
 }
 
+func TestWorktreeManagerRenameBranch(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	mgr := NewWorktreeManager(t.TempDir())
+	provisional := LayerBranchName("rename-me-a1b2c3d4", 1, "rename-me")
+	approved := LayerBranchName("rename-me-a1b2c3d4", 1, "approved-layer")
+	wtPath, err := mgr.Create(repoDir, "rename-me-a1b2c3d4", provisional, "repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+
+	if err := mgr.RenameBranch(wtPath, provisional, approved); err != nil {
+		t.Fatalf("RenameBranch: %v", err)
+	}
+	if got := CurrentBranch(wtPath); got != approved {
+		t.Fatalf("CurrentBranch() = %q, want %q", got, approved)
+	}
+	if got := gitOutput(t, repoDir, "branch", "--list", provisional); got != "" {
+		t.Fatalf("old branch %q still present after rename", provisional)
+	}
+
+	// Identical names are a no-op.
+	if err := mgr.RenameBranch(wtPath, approved, approved); err != nil {
+		t.Fatalf("RenameBranch(no-op): %v", err)
+	}
+	if got := CurrentBranch(wtPath); got != approved {
+		t.Fatalf("CurrentBranch() = %q after no-op rename, want %q", got, approved)
+	}
+
+	// A target that already exists is refused instead of clobbered.
+	testutil.CreateBranch(t, repoDir, "feature/taken")
+	if err := mgr.RenameBranch(wtPath, approved, "feature/taken"); err == nil {
+		t.Fatal("RenameBranch to an existing ref must fail")
+	}
+	if got := CurrentBranch(wtPath); got != approved {
+		t.Fatalf("CurrentBranch() = %q after failed rename, want %q", got, approved)
+	}
+}
+
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := gitCmd(dir, args...)
@@ -585,4 +626,197 @@ func gitOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func TestWorktreeManagerCreateBranchAtHead(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	mgr := NewWorktreeManager(t.TempDir())
+	layer1 := LayerBranchName("split-me-a1b2c3d4", 1, "split-me")
+	layer2 := LayerBranchName("split-me-a1b2c3d4", 2, "next-layer")
+	wtPath, err := mgr.Create(repoDir, "split-me-a1b2c3d4", layer1, "repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+	headBefore, err := CurrentHeadSHA(wtPath)
+	if err != nil {
+		t.Fatalf("HEAD before: %v", err)
+	}
+
+	// An uncommitted modification rides across the split untouched: the
+	// layer boundary runs after the round-commit hook.
+	if err := os.WriteFile(filepath.Join(wtPath, "dirty.txt"), []byte("in flight\n"), 0o644); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+
+	if err := mgr.CreateBranchAtHead(wtPath, layer2); err != nil {
+		t.Fatalf("CreateBranchAtHead: %v", err)
+	}
+	if got := CurrentBranch(wtPath); got != layer2 {
+		t.Fatalf("CurrentBranch() = %q, want %q", got, layer2)
+	}
+	headAfter, err := CurrentHeadSHA(wtPath)
+	if err != nil {
+		t.Fatalf("HEAD after: %v", err)
+	}
+	if headAfter != headBefore {
+		t.Fatalf("HEAD = %s after split, want the same commit %s", headAfter, headBefore)
+	}
+	if got, err := ReadRefSHA(wtPath, "refs/heads/"+layer1); err != nil || got != headBefore {
+		t.Fatalf("layer-1 ref = %q (%v); want it left pointing at %s", got, err, headBefore)
+	}
+	if _, err := os.Stat(filepath.Join(wtPath, "dirty.txt")); err != nil {
+		t.Fatalf("uncommitted modification lost across the split: %v", err)
+	}
+
+	// A target that already exists is refused, naming the branch, without
+	// moving the worktree.
+	if err := mgr.CreateBranchAtHead(wtPath, layer1); err == nil {
+		t.Fatal("CreateBranchAtHead to an existing ref must fail")
+	} else if !strings.Contains(err.Error(), layer1) {
+		t.Fatalf("error %q must name the refused branch %q", err, layer1)
+	}
+	if got := CurrentBranch(wtPath); got != layer2 {
+		t.Fatalf("CurrentBranch() = %q after refused split, want %q", got, layer2)
+	}
+	headRefused, _ := CurrentHeadSHA(wtPath)
+	if headRefused != headBefore {
+		t.Fatalf("HEAD moved during the refused split: %s", headRefused)
+	}
+}
+
+func TestWorktreeManagerSwitchBranch(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	mgr := NewWorktreeManager(t.TempDir())
+	layer1 := LayerBranchName("switch-me-a1b2c3d4", 1, "switch-me")
+	layer2 := LayerBranchName("switch-me-a1b2c3d4", 2, "next-layer")
+	wtPath, err := mgr.Create(repoDir, "switch-me-a1b2c3d4", layer1, "repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+	layer1SHA, err := ReadRefSHA(wtPath, "refs/heads/"+layer1)
+	if err != nil {
+		t.Fatalf("layer-1 ref before switch: %v", err)
+	}
+	testutil.CreateBranch(t, repoDir, layer2)
+	layer2Tip := testutil.CommitFile(t, repoDir, "layer2.txt", "layer2\n", "layer2 commit")
+	// The main checkout must not hold layer2, or the worktree's switch to
+	// it would collide with it.
+	gitOutput(t, repoDir, "checkout", "main")
+	if layer2Tip == layer1SHA {
+		t.Fatal("test setup produced identical commits")
+	}
+
+	// Uncommitted modifications and untracked files are discarded, exactly
+	// as a hard reset does.
+	if err := os.WriteFile(filepath.Join(wtPath, "README.md"), []byte("# Dirty\n"), 0o644); err != nil {
+		t.Fatalf("modify README: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(wtPath, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
+		t.Fatalf("write untracked: %v", err)
+	}
+
+	if err := mgr.SwitchBranch(wtPath, layer2); err != nil {
+		t.Fatalf("SwitchBranch: %v", err)
+	}
+	if got := CurrentBranch(wtPath); got != layer2 {
+		t.Fatalf("CurrentBranch() = %q, want %q", got, layer2)
+	}
+	head, err := CurrentHeadSHA(wtPath)
+	if err != nil {
+		t.Fatalf("HEAD after switch: %v", err)
+	}
+	if head != layer2Tip {
+		t.Fatalf("HEAD = %s after switch, want the layer-2 tip %s", head, layer2Tip)
+	}
+	if got, err := ReadRefSHA(wtPath, "refs/heads/"+layer1); err != nil || got != layer1SHA {
+		t.Fatalf("layer-1 ref = %q (%v); want it left pointing at %s", got, err, layer1SHA)
+	}
+	readme, err := os.ReadFile(filepath.Join(wtPath, "README.md"))
+	if err != nil {
+		t.Fatalf("read README after switch: %v", err)
+	}
+	if string(readme) != "# Test\n" {
+		t.Fatalf("README.md = %q after switch, want the committed content", readme)
+	}
+	if _, err := os.Stat(filepath.Join(wtPath, "untracked.txt")); !os.IsNotExist(err) {
+		t.Fatalf("untracked.txt should be cleaned, err=%v", err)
+	}
+
+	// A branch that does not exist is refused, naming it, without moving
+	// the worktree.
+	missing := "feature/no-such-branch"
+	if err := mgr.SwitchBranch(wtPath, missing); err == nil {
+		t.Fatal("SwitchBranch to a missing branch must fail")
+	} else if !strings.Contains(err.Error(), missing) {
+		t.Fatalf("error %q must name the missing branch %q", err, missing)
+	}
+	if got := CurrentBranch(wtPath); got != layer2 {
+		t.Fatalf("CurrentBranch() = %q after refused switch, want %q", got, layer2)
+	}
+	headRefused, err := CurrentHeadSHA(wtPath)
+	if err != nil {
+		t.Fatalf("HEAD after refused switch: %v", err)
+	}
+	if headRefused != layer2Tip {
+		t.Fatalf("HEAD = %s after refused switch, want %s", headRefused, layer2Tip)
+	}
+}
+
+func TestWorktreeManagerDeleteBranch(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.InitGitRepo(t)
+	mgr := NewWorktreeManager(t.TempDir())
+	layer1 := LayerBranchName("delete-me-a1b2c3d4", 1, "delete-me")
+	layer2 := LayerBranchName("delete-me-a1b2c3d4", 2, "next-layer")
+	held := LayerBranchName("delete-me-a1b2c3d4", 3, "held-elsewhere")
+	wtPath, err := mgr.Create(repoDir, "delete-me-a1b2c3d4", layer1, "repo", "")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
+
+	// An absent ref is success, so a retried rewind stays idempotent.
+	if err := mgr.DeleteBranch(wtPath, "feature/never-created"); err != nil {
+		t.Fatalf("DeleteBranch(absent) = %v, want nil", err)
+	}
+
+	// A ref no worktree holds is deleted and verified gone.
+	testutil.CreateBranch(t, repoDir, layer2)
+	testutil.CommitFile(t, repoDir, "layer2.txt", "layer2\n", "layer2 commit")
+	gitOutput(t, repoDir, "checkout", "main")
+	if err := mgr.DeleteBranch(wtPath, layer2); err != nil {
+		t.Fatalf("DeleteBranch: %v", err)
+	}
+	if _, err := ReadRefSHA(wtPath, "refs/heads/"+layer2); err == nil {
+		t.Fatalf("ref %q still resolves after deletion", layer2)
+	}
+
+	// A branch checked out in another worktree is refused, naming it, with
+	// the ref left intact.
+	wtPathB, err := mgr.Create(repoDir, "delete-me-a1b2c3d4", held, "repo-b", "")
+	if err != nil {
+		t.Fatalf("create second worktree: %v", err)
+	}
+	if err := mgr.DeleteBranch(wtPath, held); err == nil {
+		t.Fatal("DeleteBranch on a branch checked out elsewhere must fail")
+	} else if !strings.Contains(err.Error(), held) {
+		t.Fatalf("error %q must name the refused branch %q", err, held)
+	}
+	if _, err := ReadRefSHA(wtPathB, "refs/heads/"+held); err != nil {
+		t.Fatalf("ref %q must survive the refused delete: %v", held, err)
+	}
+
+	// The branch this worktree holds is refused the same way.
+	if err := mgr.DeleteBranch(wtPath, layer1); err == nil {
+		t.Fatal("DeleteBranch on the checked-out branch must fail")
+	} else if !strings.Contains(err.Error(), layer1) {
+		t.Fatalf("error %q must name the refused branch %q", err, layer1)
+	}
+	if _, err := ReadRefSHA(wtPath, "refs/heads/"+layer1); err != nil {
+		t.Fatalf("ref %q must survive the refused delete: %v", layer1, err)
+	}
 }

@@ -510,16 +510,18 @@ func (fx *kbPromoFixture) runStep3MultiRepoPromotionFailure(t *testing.T) {
 		Phase: feature.TransactionPhaseMerged,
 		Entries: []feature.RepoTransactionEntry{
 			{
-				ParentBranch:    "main",
-				ParentAnchorSHA: fx.parentBaseA,
-				ChildHeadSHA:    childHeadA,
-				MergeHEAD:       childHeadA,
+				Refs: []feature.RepoTransactionRef{{
+					Branch: "main", AnchorSHA: fx.parentBaseA,
+					CandidateSHA: childHeadA, ObservedSHA: childHeadA,
+				}},
+				ChildHeadSHA: childHeadA,
 			},
 			{
-				ParentBranch:    "main",
-				ParentAnchorSHA: fx.parentBaseB,
-				ChildHeadSHA:    childHeadB,
-				MergeHEAD:       childHeadB,
+				Refs: []feature.RepoTransactionRef{{
+					Branch: "main", AnchorSHA: fx.parentBaseB,
+					CandidateSHA: childHeadB, ObservedSHA: childHeadB,
+				}},
+				ChildHeadSHA: childHeadB,
 			},
 		},
 	}

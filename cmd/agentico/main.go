@@ -1354,6 +1354,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
 		Pipeline:                req.Pipeline,
+		DeliveryMode:            req.DeliveryMode,
 		SourceExpectations:      sourceExpectations,
 		// Every ordinary server creation is accepted against immutable local
 		// commits. Requests from source-aware clients revalidate their displayed
@@ -1378,7 +1379,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		}
 		return serverruntime.CreateFeatureResponse{}, err
 	}
-	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Effort, f.Inquireness, f.Checkpoints, true); err != nil {
+	if err := t.persistPipelinePreferences(featureRepoNames(f), f.EffectivePipeline(), f.Models, f.Effort, f.Inquireness, f.EffectiveDeliveryMode(), f.Checkpoints, true); err != nil {
 		return serverruntime.CreateFeatureResponse{}, err
 	}
 	return serverruntime.CreateFeatureResponse{
@@ -1538,6 +1539,12 @@ func (t *serverMutationTarget) dispatchRestartOutcome(featureID string, outcome 
 	case orchestrator.RestartNoOp:
 		resp.Dispatch = dispatchNone
 		return nil
+	case orchestrator.RestartRestackRunning:
+		// The asynchronous restack loop is now running for a rebase child;
+		// no phase dispatch follows — the loop dispatches the Final Review
+		// itself on landing.
+		resp.Dispatch = "restack"
+		return nil
 	case orchestrator.RestartDispatchPhase:
 		resp.Dispatch = "phase"
 		if outcome.Phase.String() != "" {
@@ -1609,7 +1616,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 				if pipeline == "" {
 					pipeline = f.EffectivePipeline()
 				}
-				if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+				if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.EffectiveDeliveryMode(), f.Checkpoints, f.IsPublishable()); err != nil {
 					return err
 				}
 				configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
@@ -1633,7 +1640,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 			if pipeline == "" {
 				pipeline = f.EffectivePipeline()
 			}
-			if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+			if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.EffectiveDeliveryMode(), f.Checkpoints, f.IsPublishable()); err != nil {
 				return err
 			}
 			configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
@@ -2136,8 +2143,6 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 	}
 	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
 		Repos: req.Repos,
-		Title: req.Title,
-		Body:  req.Body,
 	}); err != nil {
 		if conflict := actionConflictError(err); conflict != nil {
 			return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultConflict}, conflict
@@ -2147,17 +2152,40 @@ func (t *serverMutationTarget) PublishFeature(featureID string, req serverruntim
 	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
 }
 
-func (t *serverMutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
+func (t *serverMutationTarget) ReopenPullRequestFeature(featureID string, req serverruntime.ReopenPullRequestRequest) (serverruntime.ReopenPullRequestResponse, error) {
+	resp := serverruntime.ReopenPullRequestResponse{FeatureID: featureID, Result: resultFailed}
 	if t.orch == nil {
-		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
+		return resp, errors.New("orchestrator is not available")
 	}
-	title, body, err := t.orch.GeneratePublishDescription(featureID, orchestrator.PublishDescriptionOptions{
-		Repos: req.Repos,
-	})
-	if err != nil {
-		return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, err
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return resp, err
 	}
-	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, nil
+	if err := t.orch.ReopenPullRequest(featureID, req.Repository, req.Layer); err != nil {
+		if conflict := pullRequestResolutionConflictError(err); conflict != nil {
+			return serverruntime.ReopenPullRequestResponse{FeatureID: featureID, Result: resultConflict}, conflict
+		}
+		return resp, err
+	}
+	resp.Result = "reopened"
+	return resp, nil
+}
+
+func (t *serverMutationTarget) RecreatePullRequestFeature(featureID string, req serverruntime.RecreatePullRequestRequest) (serverruntime.RecreatePullRequestResponse, error) {
+	resp := serverruntime.RecreatePullRequestResponse{FeatureID: featureID, Result: resultFailed}
+	if t.orch == nil {
+		return resp, errors.New("orchestrator is not available")
+	}
+	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
+		return resp, err
+	}
+	if err := t.orch.RecreatePullRequest(featureID, req.Repository, req.Layer); err != nil {
+		if conflict := pullRequestResolutionConflictError(err); conflict != nil {
+			return serverruntime.RecreatePullRequestResponse{FeatureID: featureID, Result: resultConflict}, conflict
+		}
+		return resp, err
+	}
+	resp.Result = "recreated"
+	return resp, nil
 }
 
 func (t *serverMutationTarget) MergeFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MergeFeatureResponse, error) {
@@ -2291,6 +2319,10 @@ func wireRewindWarnings(warnings []feature.RewindWarning) []serverruntime.Error 
 			code = errcat.RewindPullRequestCloseFailed
 		case feature.RewindWarningBackupBranch:
 			code = errcat.RewindBackupBranchFailed
+		case feature.RewindWarningStackBranch:
+			code = errcat.RewindStackBranchFailed
+		case feature.RewindWarningRemoteBranchDelete:
+			code = errcat.RewindRemoteBranchDeleteFailed
 		default:
 			code = errcat.RewindWorktreeResetFailed
 		}
@@ -2400,12 +2432,11 @@ func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverrunt
 		MarkDoneBlocker: result.MarkDoneBlocker,
 	}
 	for _, r := range result.Repos {
-		resp.Repos = append(resp.Repos, serverruntime.CompletionPreflightRepo{
+		repo := serverruntime.CompletionPreflightRepo{
 			Repo:                  r.Repo,
 			Publishable:           r.Publishable,
 			Touched:               r.Touched,
 			Status:                r.Status,
-			PrURL:                 r.PRURL,
 			Blocker:               r.Blocker,
 			Freshness:             r.Freshness,
 			Error:                 serverruntime.WireRepoError(r.Error),
@@ -2413,10 +2444,24 @@ func (t *serverMutationTarget) CompletionPreflight(featureID string) (serverrunt
 			Branch:                r.Branch,
 			PendingCommits:        r.PendingCommits,
 			PendingDirty:          r.PendingDirty,
-			PushMode:              r.PushMode,
+			PushMode:              serverruntime.CompletionPreflightRepoPushMode(r.PushMode),
 			PendingDirtyFiles:     r.PendingDirtyFiles,
 			PendingDirtyFileTotal: r.PendingDirtyFileTotal,
-		})
+			RebaseHint:            r.RebaseHint,
+		}
+		for _, entry := range r.PullRequests {
+			repo.PullRequests = append(repo.PullRequests, serverruntime.PullRequestEntry{
+				Position:       entry.Position,
+				Title:          entry.Title,
+				Branch:         entry.Branch,
+				URL:            entry.URL,
+				State:          serverruntime.PullRequestEntryState(entry.State),
+				NoCommits:      entry.NoCommits,
+				PushedUpToDate: entry.PushedUpToDate,
+				PushMode:       serverruntime.PullRequestEntryPushMode(entry.PushMode),
+			})
+		}
+		resp.Repos = append(resp.Repos, repo)
 	}
 	return resp, nil
 }
@@ -2544,12 +2589,20 @@ func (t *serverMutationTarget) RebaseFeature(featureID string, _ serverruntime.R
 	}
 	preflight, err := t.orch.RebaseChildPreflight(featureID)
 	if err != nil {
+		// A closed stack pull request refuses launch as a conflict carrying
+		// the canonical closed code and its repository context — the same
+		// classification the preflight stored on the repository — instead
+		// of a generic bad request.
+		if conflict := closedPullRequestConflictError(err); conflict != nil {
+			return resp, conflict
+		}
 		return resp, err
 	}
 	spec := feature.RebaseChildSpec{
-		Bases:   preflight.Bases,
-		Targets: preflight.Targets,
-		Behind:  preflight.Behind,
+		Bases:       preflight.Bases,
+		Targets:     preflight.Targets,
+		LayerStates: preflight.LayerStates,
+		WorkRepos:   preflight.WorkRepos,
 	}
 	var child *feature.Feature
 	if wErr := t.orch.WithRelationshipWriteLock(func() error {
@@ -2671,6 +2724,52 @@ func actionConflictError(err error) error {
 	// that stores the repository's record, so the HTTP rejection and the
 	// stored record agree.
 	if record, ok := orchestrator.PublishConflictRecord(err); ok {
+		options := errcat.RecordOptions(record)
+		options = append(options, errcat.WithDiagnostics(err.Error()))
+		return &serverruntime.ActionConflictError{
+			Err:     err,
+			Code:    record.Code,
+			Options: options,
+		}
+	}
+	return nil
+}
+
+// pullRequestResolutionConflictError maps a reopen or recreate failure onto
+// the conflict envelope. Stored-record failures carry the canonical code
+// and repository context — the same classification that stored the
+// repository's record — and the moot-state refusal carries the generic
+// conflict code. Validation failures map to nil and stay bad requests.
+func pullRequestResolutionConflictError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if record, ok := orchestrator.PullRequestResolutionConflictRecord(err); ok {
+		options := errcat.RecordOptions(record)
+		options = append(options, errcat.WithDiagnostics(err.Error()))
+		return &serverruntime.ActionConflictError{
+			Err:     err,
+			Code:    record.Code,
+			Options: options,
+		}
+	}
+	var moot *orchestrator.PublishRecreateMootError
+	if errors.As(err, &moot) {
+		return &serverruntime.ActionConflictError{Err: err, Detail: moot.Error()}
+	}
+	return nil
+}
+
+// closedPullRequestConflictError maps a rebase preflight refusal caused by a
+// closed stack pull request onto the conflict envelope carrying the
+// canonical closed code and repository context — the same classification
+// the preflight stored on the repository. Every other preflight refusal
+// keeps its existing mapping.
+func closedPullRequestConflictError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if record, ok := orchestrator.StackClosedConflictRecord(err); ok {
 		options := errcat.RecordOptions(record)
 		options = append(options, errcat.WithDiagnostics(err.Error()))
 		return &serverruntime.ActionConflictError{
@@ -2873,6 +2972,9 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntim
 	if patch.Pipeline != "" && setIfChanged(&dst.Pipeline, patch.Pipeline) {
 		changed = true
 	}
+	if patch.DeliveryMode != "" && setIfChanged(&dst.DeliveryMode, patch.DeliveryMode) {
+		changed = true
+	}
 	if patch.MaxIterations > 0 && setIfChanged(&dst.MaxIterations, patch.MaxIterations) {
 		changed = true
 	}
@@ -2944,7 +3046,10 @@ func featureRepoNames(f *feature.Feature) []string {
 	return repos
 }
 
-func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeline feature.PipelineProfile, models config.ModelConfig, effort config.EffortConfig, inquireness feature.Inquireness, checkpoints feature.Checkpoints, publishable bool) error {
+// persistPipelinePreferences remembers the last-used models, effort,
+// inquireness, and delivery mode per pipeline profile so the next creation
+// for the same profile can be seeded from them.
+func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeline feature.PipelineProfile, models config.ModelConfig, effort config.EffortConfig, inquireness feature.Inquireness, deliveryMode feature.DeliveryMode, checkpoints feature.Checkpoints, publishable bool) error {
 	if t.configPath == "" {
 		return errors.New("config path is not available")
 	}
@@ -2967,9 +3072,10 @@ func (t *serverMutationTarget) persistPipelinePreferences(repos []string, pipeli
 	projection := pipeline.ProjectGates(checkpoints, publishable)
 	profileKey := string(pipeline)
 	cfg.Defaults.PipelinePreferences[profileKey] = config.PipelinePreference{
-		Models:      models,
-		Effort:      effort,
-		Inquireness: string(inquireness),
+		Models:       models,
+		Effort:       effort,
+		Inquireness:  string(inquireness),
+		DeliveryMode: string(deliveryMode),
 	}
 	configGates := feature.FeatureCheckpointsToConfig(projection.Checkpoints)
 	for _, repoName := range repos {

@@ -307,6 +307,9 @@ export const CanonicalErrorSchema = z.strictObject({
             branch: z.string().optional(),
             rebase_target: z.string().optional(),
             remote_only_commits: z.number().int().nonnegative().optional(),
+            layer_position: z.number().int().optional(),
+            layer_title: z.string().optional(),
+            pull_request_url: z.string().optional(),
             // Uncapped on purpose: the Go producers store conflict lists
             // unbounded, so any client-side cap would make one large
             // conflict unparse the whole payload.
@@ -962,11 +965,30 @@ export const ServerFeatureSummarySchema = z.object({
 
 export type ServerFeatureSummary = z.output<typeof ServerFeatureSummarySchema>;
 
+/**
+ * One stack layer's pull request on the wire. Shared by the feature-detail
+ * repository status and the completion preflight repository; the per-layer
+ * push mode is populated only by completion preflight.
+ */
+export const ServerPullRequestEntrySchema = z.object({
+  position: z.number(),
+  title: z.string(),
+  branch: z.string().optional(),
+  url: z.string().optional(),
+  state: z.enum(['none', 'open', 'merged', 'closed']),
+  no_commits: z.boolean(),
+  pushed_up_to_date: z.boolean(),
+  push_mode: z.enum(['create', 'fast_forward', 'rewrite', 'none']).optional(),
+});
+export type ServerPullRequestEntry = z.output<typeof ServerPullRequestEntrySchema>;
+
 export const ServerRepoStatusSchema = z.object({
   name: z.string(),
   publishable: z.boolean(),
   touched: z.boolean().optional(),
-  pr_url: z.string().optional(),
+  // Ordered per-layer stack view; omitted for non-publishable repositories
+  // and runs without a stack.
+  pull_requests: z.array(ServerPullRequestEntrySchema).optional(),
   freshness: z.string().optional(),
   // Canonical error rendering the repository's stored publish-failure
   // record; absent when the repository has not failed.
@@ -1010,6 +1032,10 @@ export const ServerReviewFeedbackCommentSchema = z.object({
   diff_hunk: z.string().optional(),
   in_reply_to_id: z.number().int().optional(),
   created_at: z.string().optional(),
+  pr_url: z.string().optional(),
+  pr_number: z.number().int().optional(),
+  layer_position: z.number().int().optional(),
+  layer_title: z.string().optional(),
 });
 export type ServerReviewFeedbackComment = z.output<typeof ServerReviewFeedbackCommentSchema>;
 
@@ -1022,10 +1048,25 @@ export type ServerReviewFeedbackDraftComment = z.output<
   typeof ServerReviewFeedbackDraftCommentSchema
 >;
 
+/**
+ * One open layer pull request's comment group inside a repository's draft
+ * view. The position is required: a group without it is a malformed view
+ * and fails closed at the boundary instead of rendering an unplaced
+ * section.
+ */
+export const ServerReviewFeedbackPullRequestGroupSchema = z.object({
+  position: z.number().int(),
+  title: z.string(),
+  url: z.string(),
+  comments: z.array(ServerReviewFeedbackDraftCommentSchema),
+});
+export type ServerReviewFeedbackPullRequestGroup = z.output<
+  typeof ServerReviewFeedbackPullRequestGroupSchema
+>;
+
 const ServerReviewFeedbackRepoCommentsSchema = z.object({
   repo: z.string(),
-  pr_url: z.string(),
-  comments: z.array(ServerReviewFeedbackDraftCommentSchema),
+  pull_requests: z.array(ServerReviewFeedbackPullRequestGroupSchema),
 });
 
 export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
@@ -1033,6 +1074,8 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
   wait_reason: z.string().optional(),
   pipeline: z.string().optional(),
   risk_level: z.string().optional(),
+  /** The feature's immutable delivery mode; the server's effective read. */
+  delivery_mode: z.string().optional(),
   exit_criteria: z.string().optional(),
   active_run_detail: z
     .object({
@@ -1258,12 +1301,19 @@ export const ServerRewindChoiceSchema = z.object({
 
 export const ServerRewindPRConsequenceSchema = z.object({
   repo: z.string(),
-  pr_url: z.string(),
+  position: z.number().int().positive(),
+  title: z.string(),
+  branch: z.string(),
+  pr_url: z.string().optional(),
+  pr_state: z.enum(['none', 'open', 'merged', 'closed']),
+  verdict: z.enum(['keep', 'close', 'merged', 'none']),
+  delete_remote_branch: z.boolean(),
 });
 
 export const ServerRewindWorktreeConsequenceSchema = z.object({
   repo: z.string(),
-  reset_kind: z.enum(['anchor', 'base', 'base-local', 'none']),
+  reset_kind: z.enum(['anchor', 'base', 'base-local', 'layer-tip', 'none']),
+  branch: z.string().optional(),
 });
 
 export const RewindPreviewResponseSchema = z.object({
@@ -1300,7 +1350,7 @@ export const RewindActionResponseSchema = z.object({
   source_run_number: z.number().int().nonnegative().optional(),
   new_run_number: z.number().int().nonnegative().optional(),
   // Canonical warning-class errors for non-fatal rewind failures
-  // (pull-request close, backup branch, worktree reset).
+  // (pull-request close, backup branch, worktree reset, stack branch step).
   warnings: z.array(CanonicalErrorSchema).max(100).optional(),
 });
 export type RewindActionResponse = z.output<typeof RewindActionResponseSchema>;
@@ -1514,6 +1564,8 @@ export const RuntimeConfigCreationSchema = z.object({
     effort: ServerEffortDefaultsSchema.optional(),
     inquireness: z.string().optional(),
     pipeline: z.string().optional(),
+    /** Workspace delivery default ("stack" | "single"); unknown ⇒ stack. */
+    delivery_mode: z.string().optional(),
   }),
 });
 
@@ -1617,9 +1669,14 @@ export const CompletionPreflightRepoSchema = z.object({
   publishable: z.boolean(),
   touched: z.boolean(),
   status: z.string(),
-  pr_url: z.string().optional(),
+  // Ordered per-layer stack view with per-layer push modes; omitted for
+  // non-publishable repositories and runs without a stack.
+  pull_requests: z.array(ServerPullRequestEntrySchema).optional(),
   blocker: z.string().optional(),
   freshness: z.string().optional(),
+  // Server-authored rebase hint, present when a merged layer whose entry
+  // still holds a tip sits below a kept layer with commits.
+  rebase_hint: z.string().max(500).optional(),
   // Canonical error rendering the repository's stored publish-failure
   // record; absent when the repository has not failed.
   error: CanonicalErrorSchema.optional(),
@@ -1629,7 +1686,7 @@ export const CompletionPreflightRepoSchema = z.object({
   branch: z.string().optional(),
   pending_commits: z.number().optional(),
   pending_dirty: z.boolean().optional(),
-  push_mode: z.string().optional(),
+  push_mode: z.enum(['fast_forward', 'rewrite']).optional(),
   pending_dirty_files: z.array(z.string()).optional(),
   pending_dirty_file_total: z.number().optional(),
 });
@@ -1682,15 +1739,6 @@ export const RepositoryPathResponseSchema = z.object({
   path: z.string(),
 });
 export type RepositoryPathResponse = z.output<typeof RepositoryPathResponseSchema>;
-
-export const PublishDescriptionResponseSchema = z.object({
-  api_version: z.string(),
-  feature_id: z.string(),
-  result: z.string(),
-  title: z.string(),
-  body: z.string(),
-});
-export type PublishDescriptionResponse = z.output<typeof PublishDescriptionResponseSchema>;
 
 // Compile-time drift guards: zod outputs must stay assignable to the
 // generated OpenAPI component types.
@@ -1846,10 +1894,6 @@ void _rewindActionSubset;
 type RepositoryPathDTO = components['schemas']['RepositoryPathDTO'];
 const _repositoryPathSubset = (value: RepositoryPathDTO): RepositoryPathResponse => value;
 void _repositoryPathSubset;
-type PublishDescriptionDTO = components['schemas']['PublishDescriptionResponse'];
-const _publishDescriptionSubset = (value: PublishDescriptionDTO): PublishDescriptionResponse =>
-  value;
-void _publishDescriptionSubset;
 type CompletionPreflightDTO = components['schemas']['CompletionPreflightResponse'];
 const _completionPreflightSubset = (value: CompletionPreflightDTO): CompletionPreflightResponse =>
   value;

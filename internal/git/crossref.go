@@ -48,21 +48,57 @@ func BuildCrossReferenceSection(featureName string, entries []CrossRefEntry) str
 	sb.WriteString("|------------|--------|----|")
 
 	for _, e := range entries {
-		prCol := "_(pending)_"
-		if e.PRURL == "(failed)" {
-			prCol = "_(failed)_"
-		} else if e.PRURL != "" {
-			// Extract PR number from URL (last segment after "/pull/")
-			num := path.Base(e.PRURL)
-			if num != "" && num != "." && num != "/" {
-				prCol = fmt.Sprintf("[#%s](%s)", num, e.PRURL)
-			} else {
-				prCol = fmt.Sprintf("[PR](%s)", e.PRURL)
-			}
-		}
-		fmt.Fprintf(&sb, "\n| %s | %s | %s |", e.RepoName, e.Branch, prCol)
+		fmt.Fprintf(&sb, "\n| %s | %s | %s |", e.RepoName, e.Branch, crossRefPRCell(e.PRURL))
 	}
 
+	return sb.String()
+}
+
+// crossRefPRCell renders the PR column of a cross-reference row from an entry
+// URL: pending, failed, or a link carrying the PR number when the URL shape
+// allows extracting one.
+func crossRefPRCell(prURL string) string {
+	switch prURL {
+	case "":
+		return "_(pending)_"
+	case "(failed)":
+		return "_(failed)_"
+	}
+	num := path.Base(prURL)
+	if num != "" && num != "." && num != "/" {
+		return fmt.Sprintf("[#%s](%s)", num, prURL)
+	}
+	return fmt.Sprintf("[PR](%s)", prURL)
+}
+
+// BuildLayerCrossReferenceSection builds the related-PRs section for one stack
+// layer: entries are that layer's per-repository entries across the feature,
+// and currentRepoName is the repository whose PR body the section is rendered
+// into. Only sibling repositories with a published PR for the layer are linked;
+// the current repository and repositories whose layer has no PR (pending or
+// failed) are omitted. Returns empty when no sibling PR exists for the layer.
+func BuildLayerCrossReferenceSection(featureName string, entries []CrossRefEntry, currentRepoName string) string {
+	var siblings []CrossRefEntry
+	for _, e := range entries {
+		if e.RepoName == currentRepoName || e.PRURL == "" || e.PRURL == "(failed)" {
+			continue
+		}
+		siblings = append(siblings, e)
+	}
+	if len(siblings) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString(CrossRefSectionHeader)
+	sb.WriteString("\n\n")
+	fmt.Fprintf(&sb, "This PR is part of the multi-repo feature **\"%s\"**.", featureName)
+	sb.WriteString("\n\n")
+	sb.WriteString("| Repository | Branch | PR |\n")
+	sb.WriteString("|------------|--------|----|")
+	for _, e := range siblings {
+		fmt.Fprintf(&sb, "\n| %s | %s | %s |", e.RepoName, e.Branch, crossRefPRCell(e.PRURL))
+	}
 	return sb.String()
 }
 
@@ -98,22 +134,30 @@ func InjectCrossReferenceSection(body, section string) string {
 // Returns the section including the header, trimmed of trailing whitespace.
 // Returns empty string if no cross-reference section is found.
 func ExtractCrossReferenceSection(body string) string {
-	idx := strings.Index(body, CrossRefSectionHeader)
+	return extractSectionByHeader(body, CrossRefSectionHeader)
+}
+
+// extractSectionByHeader extracts the section starting at the first occurrence
+// of header in body, including the header and trimmed of trailing whitespace.
+// The section ends at the next markdown H2 header, the PR signature, or the end
+// of the body, whichever comes first. Returns empty string when the header is
+// absent.
+func extractSectionByHeader(body, header string) string {
+	idx := strings.Index(body, header)
 	if idx < 0 {
 		return ""
 	}
 
-	sectionStart := idx
-	rest := body[sectionStart:]
+	rest := body[idx:]
 
 	// Find the end boundary: next "## " header, PRSignature, or end of body.
 	endIdx := len(rest)
 
 	// Look for next markdown H2 header after the current one.
-	afterHeader := rest[len(CrossRefSectionHeader):]
+	afterHeader := rest[len(header):]
 	nextH2 := strings.Index(afterHeader, "\n## ")
 	if nextH2 >= 0 {
-		candidate := len(CrossRefSectionHeader) + nextH2
+		candidate := len(header) + nextH2
 		if candidate < endIdx {
 			endIdx = candidate
 		}
@@ -131,21 +175,27 @@ func ExtractCrossReferenceSection(body string) string {
 // RemoveCrossReferenceSection removes the cross-reference section from a PR body.
 // Cleans up extra whitespace left behind.
 func RemoveCrossReferenceSection(body string) string {
-	idx := strings.Index(body, CrossRefSectionHeader)
+	return removeSectionByHeader(body, CrossRefSectionHeader)
+}
+
+// removeSectionByHeader removes the section starting at the first occurrence of
+// header in body, using the same end boundaries as extractSectionByHeader, and
+// collapses the leftover whitespace so at most two consecutive newlines remain.
+func removeSectionByHeader(body, header string) string {
+	idx := strings.Index(body, header)
 	if idx < 0 {
 		return body
 	}
 
-	sectionStart := idx
-	rest := body[sectionStart:]
+	rest := body[idx:]
 
-	// Find the end boundary (same logic as ExtractCrossReferenceSection).
+	// Find the end boundary (same logic as extractSectionByHeader).
 	endIdx := len(rest)
 
-	afterHeader := rest[len(CrossRefSectionHeader):]
+	afterHeader := rest[len(header):]
 	nextH2 := strings.Index(afterHeader, "\n## ")
 	if nextH2 >= 0 {
-		candidate := len(CrossRefSectionHeader) + nextH2
+		candidate := len(header) + nextH2
 		if candidate < endIdx {
 			endIdx = candidate
 		}
@@ -156,10 +206,7 @@ func RemoveCrossReferenceSection(body string) string {
 		endIdx = sigIdx
 	}
 
-	before := body[:sectionStart]
-	after := body[sectionStart+endIdx:]
-
-	result := before + after
+	result := body[:idx] + body[idx+endIdx:]
 
 	// Collapse multiple consecutive newlines to at most 2.
 	for strings.Contains(result, "\n\n\n") {
@@ -185,6 +232,22 @@ func UpdatePRBody(prURL, newBody string) error {
 	return nil
 }
 
+// UpdatePRBaseBranch retargets a GitHub PR's base branch by URL.
+func UpdatePRBaseBranch(prURL, base string) error {
+	owner, repo, number, err := ParsePRURL(prURL)
+	if err != nil {
+		return err
+	}
+	client, err := github.ForHost(prURLHost(prURL))
+	if err != nil {
+		return err
+	}
+	if err := client.UpdatePRBase(owner, repo, number, base); err != nil {
+		return fmt.Errorf("retargeting PR base: %w", err)
+	}
+	return nil
+}
+
 // GetPRBody fetches the body of a GitHub PR by URL.
 func GetPRBody(prURL string) (string, error) {
 	owner, repo, number, err := ParsePRURL(prURL)
@@ -206,26 +269,59 @@ func GetPRBody(prURL string) (string, error) {
 // related PRs (except the current repo's PR). Errors are collected and returned
 // rather than aborting on the first failure.
 func RetroactivelyUpdateCrossRefs(featureName string, entries []CrossRefEntry, currentRepoName string) []error {
-	var errs []error
+	section := BuildCrossReferenceSection(featureName, entries)
+	if section == "" {
+		return nil
+	}
 
+	var prURLs []string
 	for _, entry := range entries {
 		if entry.PRURL == "" || entry.PRURL == "(failed)" || entry.RepoName == currentRepoName {
 			continue
 		}
+		prURLs = append(prURLs, entry.PRURL)
+	}
+	return UpdatePRBodiesWithSection(prURLs, section)
+}
 
-		body, err := GetPRBody(entry.PRURL)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("repo %s: %w", entry.RepoName, err))
+// UpdatePRBodiesWithSection injects a rendered related-PRs section into every
+// given PR body through the remote PR-body read/update operations. Bodies the
+// injection leaves unchanged are not written back. Errors are collected per PR
+// rather than aborting the set.
+func UpdatePRBodiesWithSection(prURLs []string, section string) []error {
+	if section == "" {
+		return nil
+	}
+	return updatePRBodies(prURLs, func(body string) string {
+		return InjectCrossReferenceSection(body, section)
+	})
+}
+
+// updatePRBodies reads each PR body, applies transform, and writes the result
+// back with UpdatePRBody. A transform that leaves the body unchanged produces
+// no write. Placeholder URLs ("(failed)") are skipped. Errors are collected per
+// PR rather than aborting the set.
+func updatePRBodies(prURLs []string, transform func(body string) string) []error {
+	var errs []error
+	for _, prURL := range prURLs {
+		if prURL == "" || prURL == "(failed)" {
 			continue
 		}
 
-		section := BuildCrossReferenceSection(featureName, entries)
-		updated := InjectCrossReferenceSection(body, section)
+		body, err := GetPRBody(prURL)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("PR %s: %w", prURL, err))
+			continue
+		}
 
-		if err := UpdatePRBody(entry.PRURL, updated); err != nil {
-			errs = append(errs, fmt.Errorf("repo %s: %w", entry.RepoName, err))
+		updated := transform(body)
+		if updated == body {
+			continue
+		}
+
+		if err := UpdatePRBody(prURL, updated); err != nil {
+			errs = append(errs, fmt.Errorf("PR %s: %w", prURL, err))
 		}
 	}
-
 	return errs
 }

@@ -101,6 +101,36 @@ describe('CompletionService.preflightCompletion', () => {
                   publishable: true,
                   touched: true,
                   status: 'unpublished_changes',
+                  pull_requests: [
+                    {
+                      position: 1,
+                      title: 'Bootstrap',
+                      branch: 'feature/x/1-bootstrap',
+                      url: 'https://github.com/org/repo-a/pull/11',
+                      state: 'open',
+                      no_commits: false,
+                      pushed_up_to_date: false,
+                      push_mode: 'rewrite',
+                    },
+                    {
+                      position: 2,
+                      title: 'Layer two',
+                      branch: 'feature/x/2-layer-two',
+                      state: 'none',
+                      no_commits: false,
+                      pushed_up_to_date: false,
+                      push_mode: 'create',
+                    },
+                    {
+                      position: 3,
+                      title: 'Layer three',
+                      branch: 'feature/x/3-layer-three',
+                      state: 'none',
+                      no_commits: true,
+                      pushed_up_to_date: false,
+                      push_mode: 'none',
+                    },
+                  ],
                   pending_commits: 3,
                   pending_dirty: true,
                   push_mode: 'rewrite',
@@ -123,6 +153,72 @@ describe('CompletionService.preflightCompletion', () => {
       pendingDirtyFiles: ['a.go', 'b.go'],
       pendingDirtyFileTotal: 5,
     });
+    expect(result.repos[0]?.pullRequests).toEqual([
+      {
+        position: 1,
+        title: 'Bootstrap',
+        branch: 'feature/x/1-bootstrap',
+        url: 'https://github.com/org/repo-a/pull/11',
+        state: 'open',
+        noCommits: false,
+        pushedUpToDate: false,
+        pushMode: 'rewrite',
+      },
+      {
+        position: 2,
+        title: 'Layer two',
+        branch: 'feature/x/2-layer-two',
+        state: 'none',
+        noCommits: false,
+        pushedUpToDate: false,
+        pushMode: 'create',
+      },
+      {
+        position: 3,
+        title: 'Layer three',
+        branch: 'feature/x/3-layer-three',
+        state: 'none',
+        noCommits: true,
+        pushedUpToDate: false,
+        pushMode: 'none',
+      },
+    ]);
+    expect(Reflect.get(result.repos[0] as object, 'prUrl')).toBeUndefined();
+  });
+
+  it('rejects a preflight repository whose pull request entry carries an unknown state', async () => {
+    const service = new CompletionService({
+      transport: {
+        apiRequest: () =>
+          Promise.resolve({
+            status: 200,
+            body: {
+              api_version: 'v1',
+              feature_id: 'abcd1234ef567890',
+              source_revision: 'rev-1',
+              repos: [
+                {
+                  repo: 'repo-a',
+                  publishable: true,
+                  touched: true,
+                  status: 'unpublished_changes',
+                  pull_requests: [
+                    {
+                      position: 1,
+                      title: 'Bootstrap',
+                      state: 'draft',
+                      no_commits: false,
+                      pushed_up_to_date: false,
+                    },
+                  ],
+                },
+              ],
+            },
+          }),
+      },
+    });
+
+    await expect(service.preflightCompletion({ featureId: 'abcd1234ef567890' })).rejects.toThrow();
   });
 
   it('crosses a repository publish-failure record as the canonical error with redacted diagnostics', async () => {
@@ -142,7 +238,7 @@ describe('CompletionService.preflightCompletion', () => {
                   touched: true,
                   status: 'unpublished_changes',
                   error: {
-                    code: 'publish_rebase_conflict',
+                    code: 'publish_remote_diverged',
                     class: 'needs_action',
                     title: 'Pull-rebase conflict',
                     summary:
@@ -175,7 +271,7 @@ describe('CompletionService.preflightCompletion', () => {
     expect(repo).toBeDefined();
     if (repo == null) return;
     expect(repo.error).toMatchObject({
-      code: 'publish_rebase_conflict',
+      code: 'publish_remote_diverged',
       class: 'needs_action',
       title: 'Pull-rebase conflict',
     });

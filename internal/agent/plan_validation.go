@@ -1714,6 +1714,37 @@ roadmapAttemptLoop:
 			continue
 		}
 
+		// Deterministically enforce the delivery-mode contract on the `##
+		// Pull Requests` table: a feature delivered as a single pull request
+		// must carry exactly one row covering every phase. The contract
+		// validator above stays structural and context-free, so this check
+		// runs after it passes, mirroring the phase-plan evidence-mode block.
+		{
+			roadmapArtifactPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
+			roadmapText, readErr := os.ReadFile(roadmapArtifactPath)
+			if readErr != nil {
+				log.Printf("roadmap delivery-mode check skipped: read %s: %v", roadmapArtifactPath, readErr)
+			} else {
+				phases, parseErr := ParseRoadmap(string(roadmapText))
+				if parseErr != nil {
+					log.Printf("roadmap delivery-mode check skipped: parse %s: %v", roadmapArtifactPath, parseErr)
+				} else if violations := roadmapDeliveryModeViolations(string(roadmapText), phases, cfg.Feature.EffectiveDeliveryMode()); len(violations) > 0 {
+					lastErr := formatProtocolViolationError(plannerRole, attemptDir, violations)
+					criticFeedback = formatPlanContractViolationFeedback(plannerRole, violations)
+					_ = os.WriteFile(filepath.Join(attemptDir, "validation-feedback.md"), []byte(criticFeedback), 0o644)
+					_ = WritePlanAttemptMeta(artifactDir, PlanAttemptMeta{
+						Attempt:      attempt,
+						AgentStatus:  agentStatusSuccess,
+						ReviewStatus: agentStatusChangesRequested,
+					})
+					if attempt >= maxAttempts {
+						return &PlanLoopResult{FinalStatus: BoundedHelperStatusProtocolViolation, Iterations: attempt, LastError: lastErr}, nil
+					}
+					continue
+				}
+			}
+		}
+
 		// Re-read feature state to pick up mid-loop profile upgrades
 		if cfg.FeatureStore != nil {
 			if fresh, loadErr := cfg.FeatureStore.Load(cfg.Feature.ID); loadErr == nil {

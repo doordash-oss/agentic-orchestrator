@@ -72,6 +72,7 @@ type Outcome struct {
 	PlanMarkdownPath   string
 	PhaseArtifactPath  string
 	AxisApproval       *AxisApproval
+	FixManifest        *FixManifest
 }
 
 // Lookup returns the registered contract for a phase and role.
@@ -298,6 +299,16 @@ func validateRoadmapArtifact(iterDir string, path string, out *Outcome) ([]Proto
 		return []ProtocolViolation{{Artifact: "roadmap markdown", Reason: fmt.Sprintf("roadmap markdown is unparseable: %v", err)}}, nil
 	}
 	out.RoadmapPhases = phases
+	// The `## Pull Requests` table check is a contract step callers opt into
+	// through this validator; phase-only extraction (ParseRoadmap) stays
+	// lenient so features already past roadmap approval without a table keep
+	// dispatching phase plans.
+	if _, problems := ValidateRoadmapPullRequestsTable(string(data), phases); len(problems) > 0 {
+		return []ProtocolViolation{{
+			Artifact: "roadmap markdown",
+			Reason:   fmt.Sprintf("roadmap markdown has a missing or invalid ## Pull Requests table: %s", strings.Join(problems, "; ")),
+		}}, nil
+	}
 	return nil, nil
 }
 

@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 func TestImplementPromptBranchBehavior(t *testing.T) {
@@ -58,6 +60,42 @@ func TestImplementPromptBranchBehavior(t *testing.T) {
 				"Fix the PKCE branch.",
 				"Answers to NEED_HELP questions",
 				"Q: Which library?",
+			},
+		},
+		{
+			name: "parent_stack_section_lists_layers_marks_top_and_instructs_manifest_default",
+			input: ImplementUserInput{
+				PlanPath:        "/plan.md",
+				ExitCriteria:    "Relevant tests pass.",
+				Iteration:       1,
+				FixManifestPath: "/state/parent-x/run-001/phase-01/implement/iteration-01/fix-manifest.yaml",
+				Stack: []feature.StackLayer{
+					{Position: 1, Title: "Foundations", Phases: []int{1, 2}, Branch: "feature/parent-x-1/bootstrap"},
+					{Position: 2, Title: "Review loop", Phases: []int{3}, Branch: "feature/parent-x-1/review-loop"},
+				},
+			},
+			wantContains: []string{
+				"## Parent Delivery Stack",
+				"- Layer 1: Foundations — phases [1 2], branch feature/parent-x-1/bootstrap",
+				"- Layer 2: Review loop (top layer) — phases [3], branch feature/parent-x-1/review-loop",
+				"/state/parent-x/run-001/phase-01/implement/iteration-01/fix-manifest.yaml",
+				"The default target layer for a review comment's fix is the layer of the pull request that comment was left on",
+				"Files not listed in the manifest follow that same default",
+				"You never run git write commands",
+			},
+		},
+		{
+			name: "feature_without_stack_gets_no_stack_section",
+			input: ImplementUserInput{
+				PlanPath:     "/plan.md",
+				ExitCriteria: "Relevant tests pass.",
+				Iteration:    1,
+			},
+			wantContains: []string{"# Implementation Context"},
+			wantOmit: []string{
+				"## Parent Delivery Stack",
+				"fix-manifest.yaml",
+				"(top layer)",
 			},
 		},
 	}
@@ -143,6 +181,44 @@ func TestFinalFixPromptBranches(t *testing.T) {
 			wantContains: []string{"NOTE: Local-only repository"},
 			wantOmit:     []string{"## Manual Verification Outcomes"},
 		},
+		{
+			name: "stack_section_lists_layers_marks_top_and_includes_manifest_instructions",
+			input: FinalFixUserInput{
+				Iteration:       1,
+				Feedback:        "Tighten wording.",
+				Publishable:     true,
+				FixManifestPath: "/state/feat-x/run-001/review/iteration-02/fix-manifest.yaml",
+				Stack: []feature.StackLayer{
+					{Position: 1, Title: "Foundations", Phases: []int{1, 2}, Branch: "feature/feat-x-1/bootstrap"},
+					{Position: 2, Title: "Review loop", Phases: []int{3}, Branch: "feature/feat-x-1/review-loop"},
+				},
+			},
+			wantContains: []string{
+				"## Delivery Stack",
+				"- Layer 1: Foundations — phases [1 2], branch feature/feat-x-1/bootstrap",
+				"- Layer 2: Review loop (top layer) — phases [3], branch feature/feat-x-1/review-loop",
+				"/state/feat-x/run-001/review/iteration-02/fix-manifest.yaml",
+				"entries:",
+				"The manifest is optional",
+				"Files not listed in the manifest belong to the top layer",
+				"You still never run git write commands",
+			},
+			wantOmit: []string{"NOTE: Local-only repository"},
+		},
+		{
+			name: "feature_without_stack_gets_no_stack_section_or_manifest_instruction",
+			input: FinalFixUserInput{
+				Iteration:   1,
+				Feedback:    "Tighten wording.",
+				Publishable: true,
+			},
+			wantContains: []string{"# Fix Context"},
+			wantOmit: []string{
+				"## Delivery Stack",
+				"fix-manifest.yaml",
+				"(top layer)",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -166,23 +242,43 @@ func TestPRDescriptionPromptPopulationBranches(t *testing.T) {
 		wantOmit     []string
 	}{
 		{
-			name: "pr_description_full_renders_roadmap_commits_and_diffstat",
+			name: "pr_description_full_renders_layer_stack_commits_and_diffstat",
 			input: PRDescriptionUserInput{
 				FeatureName:        "Add OAuth login",
 				FeatureDescription: "Sign in with Google.",
-				Roadmap:            "Phase 1: scaffolding.",
-				CommitBodies:       "feat: add login route",
-				DiffStat:           " 5 files changed",
+				LayerPosition:      2,
+				LayerTitle:         "Wire the OAuth callback",
+				LayerPhases:        []int{3},
+				LayerRationale:     "Callback handling completes the login flow.",
+				Stack: []PRStackLayerView{
+					{Position: 1, Title: "Scaffold the login route", Phases: []int{1, 2}, Branch: "feature/oauth-login-1/scaffold"},
+					{Position: 2, Title: "Wire the OAuth callback", Phases: []int{3}, Branch: "feature/oauth-login-2/callback"},
+				},
+				CommitBodies: "feat: add login route",
+				DiffStat:     " 5 files changed",
 			},
-			wantContains: []string{"## Feature", "## Roadmap / Plan", "## Commit Messages", "## Changes (file stats)"},
+			wantContains: []string{
+				"## Feature",
+				"## This Layer",
+				"Position: Layer 2 of 2",
+				"Title: Wire the OAuth callback",
+				"Phases: [3]",
+				"Rationale: Callback handling completes the login flow.",
+				"## Delivery Stack",
+				"- Layer 2: Wire the OAuth callback (top layer) — phases [3], branch feature/oauth-login-2/callback",
+				"## Commit Messages",
+				"## Changes (file stats)",
+			},
+			wantOmit: []string{"TITLE:"},
 		},
 		{
 			name: "pr_description_minimal_omits_unpopulated_sections",
 			input: PRDescriptionUserInput{
-				FeatureName: "Add OAuth login",
+				FeatureName:   "Add OAuth login",
+				LayerPosition: 1,
 			},
-			wantContains: []string{"## Feature", "Name: Add OAuth login", "## Instructions"},
-			wantOmit:     []string{"## Roadmap / Plan", "## Commit Messages", "## Changes (file stats)"},
+			wantContains: []string{"## Feature", "Name: Add OAuth login", "## This Layer", "Position: Layer 1", "## Instructions"},
+			wantOmit:     []string{"## Delivery Stack", "## Commit Messages", "## Changes (file stats)"},
 		},
 	}
 
@@ -273,6 +369,7 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"codex_implement_system_rolespec":                      true,
 		"autoreview_user":                                      true,
 		"autoreview_format_retry":                              true,
+		"conflict_resolution_user":                             true,
 		"design_system_rolespec":                               true,
 		"design_user_multi_repo":                               true,
 		"final_fix_user_with_manual":                           true,

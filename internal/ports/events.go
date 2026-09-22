@@ -108,4 +108,10 @@ type Event struct {
 	RepoName    string
 	Path        string
 	Branch      string
+	// LayerPosition is the stack layer a repository-status event concerns,
+	// when exactly one layer is known: publish emits one event per changed
+	// layer, a Final Review fix relocation names the layer it landed on,
+	// and a layer-boundary split names the next layer. Zero when the event
+	// is not layer-scoped.
+	LayerPosition int
 }

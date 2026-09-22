@@ -442,6 +442,80 @@ func (h *BoundedHelperArtifactHandler) pathAllowed(path string) bool {
 	return false
 }
 
+// ConflictResolverHandler scopes a rebase conflict-resolution session: reads
+// and exploration agents are open, edit/write tools may touch only the
+// conflicted paths inside the temporary restack worktree, and the shell is
+// limited to the read-only inspection allowlist so no mutating git command
+// can run.
+type ConflictResolverHandler struct {
+	WorkDir       string   // absolute path of the temporary restack worktree
+	ConflictPaths []string // conflicted paths relative to WorkDir
+}
+
+// CanUseTool approves reads and conflicted-file edits inside the worktree.
+func (h *ConflictResolverHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	switch req.ToolName {
+	case "Read", "Glob", "Grep", "LS", "LSP", "ExternalDirectory", "WebSearch", "WebFetch":
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+
+	// Sub-agent spawning — auto-approve. Exploration sub-agents inherit the
+	// provider's depth-1 profile and the same read-only posture as the
+	// research-phase treatment.
+	case "Agent":
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+
+	case toolNameBash:
+		if boundedHelperReadOnlyBashAllowed(req.Input) {
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+		}
+		return ports.PermissionDecision{
+			Behavior: DecisionDeny,
+			Reason:   "conflict resolution shell access is limited to read-only inspection commands; git and file creation are not allowed",
+		}, nil
+
+	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
+		path, ok := toolInputFilePath(req.Input)
+		if ok && h.conflictPathAllowed(path) {
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+		}
+		return ports.PermissionDecision{
+			Behavior: DecisionDeny,
+			Reason:   "conflict resolution may only edit the conflicted files inside the restack worktree",
+		}, nil
+	}
+
+	return ports.PermissionDecision{
+		Behavior: DecisionDeny,
+		Reason:   fmt.Sprintf("conflict resolution may not use %s; the session may only edit the conflicted files inside the restack worktree", req.ToolName),
+	}, nil
+}
+
+// conflictPathAllowed reports whether path resolves to exactly one of the
+// conflicted paths inside WorkDir. The exact relative-path match (rather
+// than a prefix or containment test) rejects parent-relative escapes such
+// as ../x, absolute paths outside the worktree, and new files that merely
+// sit next to a conflicted path.
+func (h *ConflictResolverHandler) conflictPathAllowed(path string) bool {
+	abs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	workDir, err := filepath.Abs(filepath.Clean(h.WorkDir))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(workDir, abs)
+	if err != nil {
+		return false
+	}
+	for _, conflict := range h.ConflictPaths {
+		if rel == filepath.ToSlash(filepath.Clean(conflict)) {
+			return true
+		}
+	}
+	return false
+}
+
 // LiveRunReviewHandler grants a review axis hands-on command access while
 // keeping tool-driven writes scoped to harness-owned helper artifacts and
 // scratch roots outside the reviewed source tree.

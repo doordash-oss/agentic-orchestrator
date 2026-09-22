@@ -73,8 +73,17 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 		RepoStates: map[string]*feature.RepoState{
 			"repo-a": {},
 			"repo-b": {},
-			"repo-c": {Touched: true, PRURL: "https://github.com/example/repo-c/pull/9"},
+			"repo-c": {Touched: true},
 		},
+		// repo-c's pre-existing pull request lives on its stack layer entry.
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Title:    "Delivery",
+			Branch:   "feature/test",
+			Repos: map[string]feature.StackRepoEntry{
+				"repo-c": {PRURL: "https://github.com/example/repo-c/pull/9", PRState: feature.StackPRStateOpen},
+			},
+		}},
 		MaxIterations: 5,
 	}
 	if err := store.Save(f); err != nil {
@@ -163,10 +172,10 @@ func TestPhaseImplementUnified_ProtocolViolation_EndToEnd(t *testing.T) {
 		}
 		t.Logf("behavior observed repo stamp: repo=%s touched=%v", repo, st.Touched)
 	}
-	if st := got.RepoStates["repo-c"]; st == nil || st.PRURL == "" {
-		t.Errorf("repo-c state = %+v, want outside-phase PR state preserved", st)
-	} else {
-		t.Logf("behavior observed outside-phase repo preserved: repo=repo-c touched=%v pr_url=%q", st.Touched, st.PRURL)
+	if prURL := got.TopStackLayerPRURL("repo-c"); prURL != "https://github.com/example/repo-c/pull/9" {
+		t.Errorf("repo-c top-layer PR URL = %q, want outside-phase PR state preserved", prURL)
+	} else if st := got.RepoStates["repo-c"]; st != nil {
+		t.Logf("behavior observed outside-phase repo preserved: repo=repo-c touched=%v pr_url=%q", st.Touched, prURL)
 	}
 	for _, iter := range []string{"iteration-01", "iteration-02"} {
 		iterDir := filepath.Join(artifactDir, iter)

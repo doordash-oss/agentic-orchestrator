@@ -46,6 +46,8 @@ func TestBuildImplementPrompt(t *testing.T) {
 		"Fix the auth bug",
 		"Use JWT",
 		3,
+		nil,
+		"",
 	)
 
 	checks := []string{
@@ -77,7 +79,7 @@ func TestBuildImplementPrompt(t *testing.T) {
 }
 
 func TestBuildImplementPromptMinimal(t *testing.T) {
-	prompt := BuildImplementPrompt("/tmp/plan.md", "criteria", "", "", 1)
+	prompt := BuildImplementPrompt("/tmp/plan.md", "criteria", "", "", 1, nil, "")
 	if !strings.Contains(prompt, "/tmp/plan.md") {
 		t.Error("expected plan path in minimal prompt")
 	}
@@ -196,6 +198,8 @@ func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
 		planPath,
 		"Relevant tests pass",
 		"", "", 3,
+		nil,
+		"",
 	)
 
 	for _, want := range []string{
@@ -242,6 +246,8 @@ func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
 		planPath,
 		"Relevant tests pass",
 		"", "", 2,
+		nil,
+		"",
 	)
 
 	for _, unexpected := range []string{
@@ -478,6 +484,8 @@ func TestBuildImplementPromptWithHelpAnswers(t *testing.T) {
 		"",
 		"Q: What auth?\nA: Use JWT",
 		1,
+		nil,
+		"",
 	)
 	if !strings.Contains(prompt, "Q: What auth?") {
 		t.Error("expected help question in prompt")
@@ -487,6 +495,170 @@ func TestBuildImplementPromptWithHelpAnswers(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Answers to NEED_HELP questions") {
 		t.Error("expected help section header in prompt")
+	}
+}
+
+// TestReviewFeedbackParentStack pins the parent-stack resolution contract:
+// only a review-feedback child whose parent loads with a non-empty stack
+// gets the parent's layers (ascending position order); top-level features,
+// other child kinds, and unresolvable parents get none.
+func TestReviewFeedbackParentStack(t *testing.T) {
+	storeBase := t.TempDir()
+	store := feature.NewStore(storeBase)
+	parent := &feature.Feature{
+		ID:            "parent-stack-001",
+		Name:          "Parent Stack Feature",
+		Slug:          "parent-stack",
+		Status:        feature.StatusImplementing,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		// Deliberately stored out of position order.
+		Stack: []feature.StackLayer{
+			{Position: 2, Title: "Review loop", Phases: []int{2}, Branch: "feature/parent-stack-001-1/review-loop"},
+			{Position: 1, Title: "Foundations", Phases: []int{1}, Branch: "feature/parent-stack-001-1/bootstrap"},
+		},
+	}
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("save parent: %v", err)
+	}
+	stackless := &feature.Feature{
+		ID:            "parent-nostack-001",
+		Name:          "Stackless Parent",
+		Slug:          "stackless-parent",
+		Status:        feature.StatusImplementing,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(stackless); err != nil {
+		t.Fatalf("save stackless parent: %v", err)
+	}
+
+	rfChild := &feature.Feature{ID: "rf-child", Parent: &feature.ChildRelationship{ParentID: "parent-stack-001", Kind: feature.ChildKindReviewFeedback}}
+	refactorChild := &feature.Feature{ID: "refactor-child", Parent: &feature.ChildRelationship{ParentID: "parent-stack-001", Kind: feature.ChildKindRefactor}}
+	topLevel := &feature.Feature{ID: "top-level"}
+	missingParentChild := &feature.Feature{ID: "orphan-child", Parent: &feature.ChildRelationship{ParentID: "missing", Kind: feature.ChildKindReviewFeedback}}
+	stacklessChild := &feature.Feature{ID: "stackless-child", Parent: &feature.ChildRelationship{ParentID: "parent-nostack-001", Kind: feature.ChildKindReviewFeedback}}
+
+	got, ok := reviewFeedbackParentStack(store, rfChild)
+	if !ok {
+		t.Fatal("review-feedback child of stacked parent: ok = false, want true")
+	}
+	if len(got) != 2 || got[0].Position != 1 || got[1].Position != 2 {
+		t.Errorf("stack = %+v, want ascending positions [1 2]", got)
+	}
+
+	for name, f := range map[string]*feature.Feature{
+		"refactor_child":       refactorChild,
+		"top_level_feature":    topLevel,
+		"missing_parent":       missingParentChild,
+		"parent_without_stack": stacklessChild,
+	} {
+		if _, ok := reviewFeedbackParentStack(store, f); ok {
+			t.Errorf("%s: ok = true, want false", name)
+		}
+	}
+	if _, ok := reviewFeedbackParentStack(nil, rfChild); ok {
+		t.Error("nil store: ok = true, want false")
+	}
+}
+
+// TestRunImplementationLoop_ReviewFeedbackChildPromptListsParentStack drives
+// one implement iteration of a review-feedback child whose parent delivers
+// as a two-layer stack and asserts the user prompt lists the parent's layers
+// in ascending order with the top marker, the manifest path, and the
+// fix-manifest default instruction.
+func TestRunImplementationLoop_ReviewFeedbackChildPromptListsParentStack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	artifactDir := filepath.Join(tmpDir, "artifacts")
+	stateDir := filepath.Join(tmpDir, "state", "test-feat-001")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	for _, d := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+		os.MkdirAll(d, 0o755)
+	}
+
+	store := feature.NewStore(filepath.Join(tmpDir, "state"))
+	parent := &feature.Feature{
+		ID:            "parent-stack-001",
+		Name:          "Parent Stack Feature",
+		Slug:          "parent-stack",
+		Status:        feature.StatusPublished,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Stack: []feature.StackLayer{
+			{Position: 1, Title: "Foundations", Phases: []int{1}, Branch: "feature/parent-stack-001-1/bootstrap"},
+			{Position: 2, Title: "Review loop", Phases: []int{2}, Branch: "feature/parent-stack-001-1/review-loop"},
+		},
+	}
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("save parent: %v", err)
+	}
+
+	f := newTestFeature(t, workDir)
+	f.Parent = &feature.ChildRelationship{ParentID: parent.ID, Kind: feature.ChildKindReviewFeedback}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save child: %v", err)
+	}
+
+	agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+	reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan interface{}, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	planPath := writePlanFile(t, artifactDir, "Address the selected review comments")
+
+	cfg := ImplementConfig{
+		Feature:             f,
+		FeatureStore:        store,
+		WorkDir:             workDir,
+		PlanPath:            planPath,
+		MaxIterations:       5,
+		MaxConsecFails:      3,
+		MaxConsecNoProgress: 3,
+		ExitCriteria:        "Tests pass",
+		Model:               "agent",
+		ReviewModel:         "reviewer",
+		ArtifactDir:         artifactDir,
+		StateDir:            stateDir,
+		BuildSession:        mockBuildSession(agentScript, reviewScript),
+	}
+
+	result, err := RunImplementationLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("RunImplementationLoop error: %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want review_passed (result %+v)", result.FinalStatus, result)
+	}
+
+	promptPath := filepath.Join(artifactDir, "iteration-01", "user-prompt.md")
+	promptData, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("read user prompt %s: %v", promptPath, readErr)
+	}
+	prompt := string(promptData)
+	for _, want := range []string{
+		"## Parent Delivery Stack",
+		"- Layer 1: Foundations — phases [1], branch feature/parent-stack-001-1/bootstrap",
+		"- Layer 2: Review loop (top layer) — phases [2], branch feature/parent-stack-001-1/review-loop",
+		filepath.Join(artifactDir, "iteration-01", "fix-manifest.yaml"),
+		"The default target layer for a review comment's fix is the layer of the pull request that comment was left on",
+		"You never run git write commands",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("implement prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

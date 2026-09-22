@@ -8,6 +8,10 @@ This is revision attempt 2.
 
 Roadmap: /state/feat-x/run-1/roadmap/plan.md
 
+## Delivery
+
+This feature is delivered as a stack of pull requests — the grouping heuristic in the create-roadmap skill applies when filling in the `## Pull Requests` table.
+
 ## Critic Feedback
 
 The roadmap omits the PKCE flow.

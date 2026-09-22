@@ -1240,6 +1240,360 @@ func TestRewindRoadmapPhaseYAMLRoundTripAndLegacyOmit(t *testing.T) {
 	}
 }
 
+func TestStackYAMLRoundTripAndLegacyOmit(t *testing.T) {
+	r := Run{
+		RunNumber: 1,
+		Stack: []StackLayer{
+			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}, Branch: "feature/demo-a1b2c3d4/1-bootstrap"},
+			{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}, Branch: "feature/demo-a1b2c3d4/2-build-and-polish"},
+		},
+	}
+	data, err := yaml.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !containsBytes(data, []byte("stack:")) || !containsBytes(data, []byte("slug: build-and-polish")) {
+		t.Fatalf("run.yaml missing stack layers: %s", string(data))
+	}
+	if !containsBytes(data, []byte("branch: feature/demo-a1b2c3d4/2-build-and-polish")) {
+		t.Fatalf("run.yaml missing layer branch names: %s", string(data))
+	}
+	var got Run
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(got.Stack) != 2 {
+		t.Fatalf("stack = %+v, want two layers", got.Stack)
+	}
+	if got.Stack[1].Position != 2 || got.Stack[1].Title != "Build and polish" ||
+		got.Stack[1].Slug != "build-and-polish" || len(got.Stack[1].Phases) != 2 ||
+		got.Stack[1].Branch != "feature/demo-a1b2c3d4/2-build-and-polish" {
+		t.Fatalf("layer 2 = %+v, want the persisted composition", got.Stack[1])
+	}
+
+	// A run YAML persisted before layer branch names existed loads unchanged.
+	legacy := []byte("run_number: 1\ncurrent_roadmap_phase: 2\n")
+	var old Run
+	if err := yaml.Unmarshal(legacy, &old); err != nil {
+		t.Fatalf("Unmarshal legacy run without stack: %v", err)
+	}
+	if old.Stack != nil {
+		t.Errorf("legacy stack = %+v, want nil", old.Stack)
+	}
+	legacyStack := []byte("run_number: 1\nstack:\n- position: 1\n  title: Bootstrap\n  slug: bootstrap\n  phases:\n  - 1\n")
+	var noBranch Run
+	if err := yaml.Unmarshal(legacyStack, &noBranch); err != nil {
+		t.Fatalf("Unmarshal legacy stack without branch names: %v", err)
+	}
+	if len(noBranch.Stack) != 1 || noBranch.Stack[0].Branch != "" {
+		t.Fatalf("legacy stack = %+v, want one layer with no branch name", noBranch.Stack)
+	}
+}
+
+func TestStackShadowSyncRoundTrip(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := &Feature{
+		ID:            "test-stack-sync",
+		Name:          "Stack Sync Test",
+		Status:        StatusImplementing,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: SchemaVersionCurrent,
+		Stack: []StackLayer{
+			{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(got.Stack) != 1 || got.Stack[0].Slug != "bootstrap" {
+		t.Fatalf("stack shadow = %+v, want the persisted layer", got.Stack)
+	}
+	if len(got.Run().Stack) != 1 || got.Run().Stack[0].Slug != "bootstrap" {
+		t.Fatalf("run stack = %+v, want the persisted layer", got.Run().Stack)
+	}
+}
+
+func TestStackRepoEntriesYAMLRoundTripAndLegacyOmit(t *testing.T) {
+	r := Run{
+		RunNumber: 1,
+		Stack: []StackLayer{
+			{
+				Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1},
+				Branch: "feature/demo-a1b2c3d4/1-bootstrap",
+				Repos: map[string]StackRepoEntry{
+					"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+					"repo-b": {
+						TipSHA:        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+						LastPushedSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+						PRURL:         "https://github.com/org/repo-b/pull/12",
+						PRState:       StackPRStateOpen,
+					},
+				},
+			},
+			{
+				Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3},
+				Branch: "feature/demo-a1b2c3d4/2-build-and-polish",
+				Repos: map[string]StackRepoEntry{
+					"repo-a": {
+						TipSHA:  "cccccccccccccccccccccccccccccccccccccccc",
+						PRURL:   "https://github.com/org/repo-a/pull/13",
+						PRState: StackPRStateMerged,
+					},
+				},
+			},
+		},
+	}
+	data, err := yaml.Marshal(r)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, want := range [][]byte{
+		[]byte("repos:"),
+		[]byte("tip_sha: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+		[]byte("last_pushed_sha: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+		[]byte("pr_url: https://github.com/org/repo-b/pull/12"),
+		[]byte("pr_state: open"),
+		[]byte("pr_state: merged"),
+	} {
+		if !containsBytes(data, want) {
+			t.Fatalf("run.yaml missing per-repository entry field %q: %s", want, string(data))
+		}
+	}
+	var got Run
+	if err := yaml.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(got.Stack) != 2 {
+		t.Fatalf("stack = %+v, want two layers", got.Stack)
+	}
+	entryA := got.Stack[0].Repos["repo-a"]
+	if entryA.TipSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || entryA.PRURL != "" || entryA.PRState != "" {
+		t.Fatalf("layer 1 repo-a = %+v, want tip-only entry", entryA)
+	}
+	entryB := got.Stack[0].Repos["repo-b"]
+	if entryB.TipSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
+		entryB.LastPushedSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
+		entryB.PRURL != "https://github.com/org/repo-b/pull/12" ||
+		entryB.PRState != StackPRStateOpen {
+		t.Fatalf("layer 1 repo-b = %+v, want the persisted entry", entryB)
+	}
+	entryTop := got.Stack[1].Repos["repo-a"]
+	if entryTop.PRState != StackPRStateMerged {
+		t.Fatalf("layer 2 repo-a = %+v, want merged PR state", entryTop)
+	}
+
+	// A stack persisted before per-repository entries existed still loads,
+	// with the entries absent.
+	legacyStack := []byte("run_number: 1\nstack:\n- position: 1\n  title: Bootstrap\n  slug: bootstrap\n  phases:\n  - 1\n  branch: feature/demo-a1b2c3d4/1-bootstrap\n")
+	var legacy Run
+	if err := yaml.Unmarshal(legacyStack, &legacy); err != nil {
+		t.Fatalf("Unmarshal legacy stack without repo entries: %v", err)
+	}
+	if len(legacy.Stack) != 1 || legacy.Stack[0].Repos != nil {
+		t.Fatalf("legacy stack = %+v, want one layer with no repo entries", legacy.Stack)
+	}
+
+	// A layer with no entries omits the repos key entirely.
+	bare := Run{RunNumber: 1, Stack: []StackLayer{{Position: 1, Slug: "bootstrap", Phases: []int{1}}}}
+	bareData, err := yaml.Marshal(bare)
+	if err != nil {
+		t.Fatalf("Marshal bare: %v", err)
+	}
+	if containsBytes(bareData, []byte("repos:")) {
+		t.Fatalf("bare stack layer emitted repos: %s", string(bareData))
+	}
+}
+
+func TestStackRepoEntriesShadowSyncRoundTrip(t *testing.T) {
+	store := NewStore(t.TempDir())
+	f := &Feature{
+		ID:            "test-stack-repos-sync",
+		Name:          "Stack Repos Sync Test",
+		Status:        StatusImplementing,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: SchemaVersionCurrent,
+		Stack: []StackLayer{
+			{
+				Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1},
+				Branch: "feature/demo-a1b2c3d4/1-bootstrap",
+				Repos: map[string]StackRepoEntry{
+					"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+					"repo-b": {TipSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", PRURL: "https://github.com/org/repo-b/pull/12", PRState: StackPRStateOpen},
+				},
+			},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	entry := got.Stack[0].Repos["repo-b"]
+	if entry.TipSHA != "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ||
+		entry.PRURL != "https://github.com/org/repo-b/pull/12" ||
+		entry.PRState != StackPRStateOpen {
+		t.Fatalf("shadow stack repo-b = %+v, want the persisted entry", entry)
+	}
+	runEntry := got.Run().Stack[0].Repos["repo-b"]
+	if runEntry != entry {
+		t.Fatalf("run stack repo-b = %+v, want the same entry as the shadow", runEntry)
+	}
+}
+
+func TestCopyStackLayersIndependentRepoEntries(t *testing.T) {
+	stack := []StackLayer{
+		{
+			Position: 1, Phases: []int{1, 2}, Branch: "feature/demo-a1b2c3d4/1-bootstrap",
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
+		},
+	}
+	copied := CopyStackLayers(stack)
+	copied[0].Repos["repo-a"] = StackRepoEntry{TipSHA: "dddddddddddddddddddddddddddddddddddddddd", PRState: StackPRStateClosed}
+	copied[0].Repos["repo-b"] = StackRepoEntry{TipSHA: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}
+	if got := stack[0].Repos["repo-a"]; got.TipSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || got.PRState != "" {
+		t.Fatalf("source repo-a mutated to %+v; the copy must be independent", got)
+	}
+	if _, ok := stack[0].Repos["repo-b"]; ok {
+		t.Fatal("source map gained repo-b; the copy must be independent")
+	}
+}
+
+// TestCopyStackLayersDeepCopiesOrigin pins the full copy contract: a layer's
+// origin record is deep-copied, so mutating the copy's origin never reaches
+// the sealed stack it came from.
+func TestCopyStackLayersDeepCopiesOrigin(t *testing.T) {
+	stack := []StackLayer{
+		{
+			Position: 3, Title: "Appended", Slug: "appended", Branch: "feature/demo-a1b2c3d4/3-appended",
+			Origin: &StackLayerOrigin{SourceFeatureID: "child-001", SourceLayerPosition: 1},
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
+		},
+	}
+	copied := CopyStackLayers(stack)
+	if copied[0].Origin == nil || copied[0].Origin == stack[0].Origin {
+		t.Fatalf("copied origin = %+v, want a distinct deep copy", copied[0].Origin)
+	}
+	copied[0].Origin.SourceFeatureID = "child-999"
+	copied[0].Origin.SourceLayerPosition = 9
+	if got := stack[0].Origin; got.SourceFeatureID != "child-001" || got.SourceLayerPosition != 1 {
+		t.Fatalf("source origin mutated to %+v; the copy must be independent", got)
+	}
+}
+
+// TestCopyStackLayersForPartialRewindDropsAppendedLayers pins the partial
+// rewind contract: roadmap-derived layers at or above the target keep their
+// definitions with cleared per-repository entries, appended layers (those
+// carrying an origin) are dropped entirely, and layers below the target keep
+// their entries untouched.
+func TestCopyStackLayersForPartialRewindDropsAppendedLayers(t *testing.T) {
+	stack := []StackLayer{
+		{
+			Position: 1, Title: "Base", Slug: "base", Branch: "feature/demo-a1b2c3d4/1-base",
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
+		},
+		{
+			Position: 2, Title: "Top", Slug: "top", Branch: "feature/demo-a1b2c3d4/2-top",
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			},
+		},
+		{
+			Position: 3, Title: "Appended one", Slug: "appended-one", Branch: "feature/demo-a1b2c3d4/3-appended-one",
+			Origin: &StackLayerOrigin{SourceFeatureID: "child-001", SourceLayerPosition: 1},
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "cccccccccccccccccccccccccccccccccccccccc"},
+			},
+		},
+		{
+			Position: 4, Title: "Appended two", Slug: "appended-two", Branch: "feature/demo-a1b2c3d4/4-appended-two",
+			Origin: &StackLayerOrigin{SourceFeatureID: "child-001", SourceLayerPosition: 2},
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "dddddddddddddddddddddddddddddddddddddddd"},
+			},
+		},
+	}
+
+	copied := CopyStackLayersForPartialRewind(stack, 2)
+	if len(copied) != 2 {
+		t.Fatalf("partial rewind copy has %d layers, want 2 (appended layers dropped): %+v", len(copied), copied)
+	}
+	if copied[0].Position != 1 || copied[0].Repos["repo-a"].TipSHA != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("layer below the target lost its entries: %+v", copied[0])
+	}
+	if copied[1].Position != 2 || copied[1].Branch != "feature/demo-a1b2c3d4/2-top" {
+		t.Fatalf("target layer lost its definition: %+v", copied[1])
+	}
+	if copied[1].Repos != nil {
+		t.Fatalf("target layer kept per-repository entries: %+v", copied[1].Repos)
+	}
+	for _, layer := range copied {
+		if layer.Origin != nil {
+			t.Fatalf("partial rewind copy kept an appended layer: %+v", layer)
+		}
+	}
+
+	// A full copy preserves every layer and its origin.
+	full := CopyStackLayers(stack)
+	if len(full) != 4 {
+		t.Fatalf("full copy has %d layers, want 4", len(full))
+	}
+	if full[2].Origin == nil || full[2].Origin.SourceFeatureID != "child-001" || full[2].Origin.SourceLayerPosition != 1 {
+		t.Fatalf("full copy lost layer 3's origin: %+v", full[2].Origin)
+	}
+	if full[3].Origin == nil || full[3].Origin.SourceFeatureID != "child-001" || full[3].Origin.SourceLayerPosition != 2 {
+		t.Fatalf("full copy lost layer 4's origin: %+v", full[3].Origin)
+	}
+}
+
+func TestStackLayerReadHelpers(t *testing.T) {
+	f := &Feature{
+		Stack: []StackLayer{
+			{Position: 1, Slug: "bootstrap", Phases: []int{1, 2}, Branch: "feature/demo-a1b2c3d4/1-bootstrap"},
+			{Position: 2, Slug: "build-and-polish", Phases: []int{3}, Branch: "feature/demo-a1b2c3d4/2-build-and-polish"},
+		},
+	}
+
+	layer, ok := f.StackLayerForPhase(2)
+	if !ok || layer.Position != 1 || layer.Branch != "feature/demo-a1b2c3d4/1-bootstrap" {
+		t.Fatalf("StackLayerForPhase(2) = %+v, %v; want layer 1", layer, ok)
+	}
+	if _, ok := f.StackLayerForPhase(4); ok {
+		t.Fatal("StackLayerForPhase(4) found a layer; phase 4 belongs to none")
+	}
+
+	above, ok := f.StackLayerAbove(1)
+	if !ok || above.Position != 2 || above.Branch != "feature/demo-a1b2c3d4/2-build-and-polish" {
+		t.Fatalf("StackLayerAbove(1) = %+v, %v; want layer 2", above, ok)
+	}
+	if _, ok := f.StackLayerAbove(2); ok {
+		t.Fatal("StackLayerAbove(2) found a layer; layer 2 is the top")
+	}
+
+	if !f.IsLastPhaseOfStackLayer(2) || !f.IsLastPhaseOfStackLayer(3) {
+		t.Fatal("phases 2 and 3 must be their layers' last phases")
+	}
+	if f.IsLastPhaseOfStackLayer(1) {
+		t.Fatal("phase 1 is mid-layer; it must not read as the layer's last")
+	}
+	if f.IsLastPhaseOfStackLayer(4) {
+		t.Fatal("phase 4 belongs to no layer; it must not read as a layer's last")
+	}
+}
+
 func TestRoadmapFieldsOmittedWhenZero(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1252,7 +1606,7 @@ func TestRoadmapFieldsOmittedWhenZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	for _, field := range []string{"current_roadmap_phase", "total_roadmap_phases", "roadmap_phase_type"} {
+	for _, field := range []string{"current_roadmap_phase", "total_roadmap_phases", "roadmap_phase_type", "stack"} {
 		if containsBytes(data, []byte(field)) {
 			t.Errorf("expected %s to be omitted from YAML when zero, but found in output", field)
 		}
@@ -1354,64 +1708,80 @@ func TestValidTransitionsNoRetiredStates(t *testing.T) {
 	}
 }
 
-func TestFirstRepoPRURL(t *testing.T) {
+// TestStackLayerPRURLSelectors covers the per-repository top/lowest layer
+// PR URL readers: the highest positioned layer entry carrying a pull request
+// for the repository, and the lowest, whatever the layers in between hold.
+func TestStackLayerPRURLSelectors(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
 	tests := []struct {
-		name     string
-		repos    []FeatureRepo
-		repoImpl map[string]*RepoState
-		want     string
+		name       string
+		stack      []StackLayer
+		wantTop    string
+		wantLowest string
 	}{
 		{
-			name:  "first repo has URL",
-			repos: []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{
-				"a": {PRURL: "url-a"},
-				"b": {PRURL: "url-b"},
+			name: "every layer has a URL",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {PRURL: "url-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {PRURL: "url-2"}}},
 			},
-			want: "url-a",
+			wantTop:    "url-2",
+			wantLowest: "url-1",
 		},
 		{
-			name:  "second repo has URL first doesnt",
-			repos: []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{
-				"a": {PRURL: ""},
-				"b": {PRURL: "url-b"},
+			name: "only the lower layer has a URL",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {PRURL: "url-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {TipSHA: "tip-2"}}},
 			},
-			want: "url-b",
+			wantTop:    "url-1",
+			wantLowest: "url-1",
 		},
 		{
-			name:  "no repos have URLs",
-			repos: []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{
-				"a": {PRURL: ""},
-				"b": {PRURL: ""},
+			name: "only the upper layer has a URL",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {TipSHA: "tip-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {PRURL: "url-2"}}},
 			},
-			want: "",
+			wantTop:    "url-2",
+			wantLowest: "url-2",
 		},
 		{
-			name:     "empty RepoImpl",
-			repos:    []FeatureRepo{{Name: "a"}},
-			repoImpl: map[string]*RepoState{},
-			want:     "",
+			name: "no layer carries a URL",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {}}},
+			},
+			wantTop:    "",
+			wantLowest: "",
+		},
+		{
+			name:       "no stack",
+			stack:      nil,
+			wantTop:    "",
+			wantLowest: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{Repos: tt.repos, RepoStates: tt.repoImpl}
-			got := f.FirstRepoPRURL()
-			if got != tt.want {
-				t.Errorf("FirstRepoPRURL() = %q, want %q", got, tt.want)
+			t.Parallel()
+			f := &Feature{Repos: []FeatureRepo{{Name: "a"}}, Stack: tt.stack}
+			if got := f.TopStackLayerPRURL("a"); got != tt.wantTop {
+				t.Errorf("TopStackLayerPRURL() = %q, want %q", got, tt.wantTop)
+			}
+			if got := f.LowestStackLayerPRURL("a"); got != tt.wantLowest {
+				t.Errorf("LowestStackLayerPRURL() = %q, want %q", got, tt.wantLowest)
 			}
 		})
 	}
 }
 
-// TestAllReposPublished covers the strangler-implant predicate that supersedes
-// AllReposCodeReady. Reads exclusively from the new RepoState shape; legacy
-// RepoImpl is dual-written but unread by orchestration.
+// TestAllReposPublished covers the publish-completion predicate: under a
+// delivery stack a touched repository counts as published only when every
+// layer's entry either carries a pull request or is marked empty, while a
+// touched repository on a run without a stack is never published — there is
+// no layer composition to settle and publish fails closed for it.
 func TestAllReposPublished(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
@@ -1419,6 +1789,7 @@ func TestAllReposPublished(t *testing.T) {
 		name   string
 		repos  []FeatureRepo
 		states map[string]*RepoState
+		stack  []StackLayer
 		want   bool
 	}{
 		{
@@ -1434,36 +1805,130 @@ func TestAllReposPublished(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:  "all touched repos have PR URL",
+			name:  "stackless: touched repository is never published",
 			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}},
 			states: map[string]*RepoState{
-				"api": {Touched: true, PRURL: "url-a"},
-				"web": {Touched: true, PRURL: "url-b"},
-			},
-			want: true,
-		},
-		{
-			name:  "one touched repo missing PR URL blocks",
-			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}},
-			states: map[string]*RepoState{
-				"api": {Touched: true, PRURL: "url-a"},
-				"web": {Touched: true, PRURL: ""},
+				"api": {Touched: true},
+				"web": {Touched: true},
 			},
 			want: false,
 		},
 		{
-			name:  "untouched mixed with published touched",
+			name:  "stacked: one touched repo missing its layer PR blocks",
+			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+				"web": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-a", PRState: StackPRStateOpen},
+					"web": {TipSHA: "tip-web"},
+				}},
+			},
+			want: false,
+		},
+		{
+			name:  "stacked: untouched mixed with published touched",
 			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}, {Name: "infra"}},
 			states: map[string]*RepoState{
-				"api":   {Touched: true, PRURL: "url-a"},
+				"api":   {Touched: true},
 				"infra": {Touched: false},
 			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1", PRState: StackPRStateOpen},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {NoCommits: true},
+				}},
+			},
 			want: true,
+		},
+		{
+			name:  "stacked: layer 1 PR and layer 2 marked empty is published",
+			repos: []FeatureRepo{{Name: "api"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1", PRState: StackPRStateOpen},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {NoCommits: true},
+				}},
+			},
+			want: true,
+		},
+		{
+			name:  "stacked: layer 2 unmarked without PR blocks",
+			repos: []FeatureRepo{{Name: "api"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1"},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {TipSHA: "tip-2"},
+				}},
+			},
+			want: false,
+		},
+		{
+			name:  "stacked: layer with no entry for the repository blocks",
+			repos: []FeatureRepo{{Name: "api"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1"},
+				}},
+				{Position: 2},
+			},
+			want: false,
+		},
+		{
+			name:  "stacked: untouched repository never blocks",
+			repos: []FeatureRepo{{Name: "api"}, {Name: "web"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+				"web": {},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {PRURL: "url-1"},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {NoCommits: true},
+				}},
+			},
+			want: true,
+		},
+		{
+			name:  "stacked: touched repo with tip-only layer entries blocks",
+			repos: []FeatureRepo{{Name: "api"}},
+			states: map[string]*RepoState{
+				"api": {Touched: true},
+			},
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{
+					"api": {TipSHA: "tip-1"},
+				}},
+				{Position: 2, Repos: map[string]StackRepoEntry{
+					"api": {TipSHA: "tip-2"},
+				}},
+			},
+			want: false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{Repos: tt.repos, RepoStates: tt.states}
+			t.Parallel()
+			f := &Feature{Repos: tt.repos, RepoStates: tt.states, Stack: tt.stack}
 			if got := f.AllReposPublished(); got != tt.want {
 				t.Errorf("AllReposPublished() = %v, want %v", got, tt.want)
 			}
@@ -1587,6 +2052,97 @@ func TestPipelineYAMLBackwardCompat(t *testing.T) {
 	}
 	if f.EffectivePipeline() != PipelineMoonshot {
 		t.Errorf("EffectivePipeline() should be moonshot for legacy features, got %v", f.EffectivePipeline())
+	}
+}
+
+func TestDeliveryModeIsValid(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	tests := []struct {
+		name string
+		mode DeliveryMode
+		want bool
+	}{
+		{"stack", DeliveryModeStack, true},
+		{"single", DeliveryModeSingle, true},
+		{"empty is valid so defaults can apply later", "", true},
+		{"unknown", DeliveryMode("mega"), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.mode.IsValid(); got != tt.want {
+				t.Errorf("IsValid() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEffectiveDeliveryMode(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	tests := []struct {
+		name string
+		mode DeliveryMode
+		want DeliveryMode
+	}{
+		{"empty defaults to stack", "", DeliveryModeStack},
+		{"stack returns stack", DeliveryModeStack, DeliveryModeStack},
+		{"single returns single", DeliveryModeSingle, DeliveryModeSingle},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Feature{DeliveryMode: tt.mode}
+			if got := f.EffectiveDeliveryMode(); got != tt.want {
+				t.Errorf("EffectiveDeliveryMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeliveryModeYAMLRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	f := &Feature{
+		ID:           "test",
+		Name:         "test",
+		DeliveryMode: DeliveryModeSingle,
+		Status:       StatusCreated,
+	}
+	data, err := yaml.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("delivery_mode: single")) {
+		t.Errorf("YAML should contain 'delivery_mode: single', got:\n%s", data)
+	}
+	var loaded Feature
+	if err := yaml.Unmarshal(data, &loaded); err != nil {
+		t.Fatal(err)
+	}
+	if loaded.DeliveryMode != DeliveryModeSingle {
+		t.Errorf("DeliveryMode = %v, want single", loaded.DeliveryMode)
+	}
+	if loaded.EffectiveDeliveryMode() != DeliveryModeSingle {
+		t.Errorf("EffectiveDeliveryMode() = %v, want single", loaded.EffectiveDeliveryMode())
+	}
+}
+
+func TestDeliveryModeYAMLBackwardCompat(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	// Feature YAML with no delivery_mode key loads as empty with an
+	// effective mode of stack, so legacy records keep working without a
+	// schema version bump.
+	yamlData := []byte("id: test\nname: test\nstatus: Created\n")
+	var f Feature
+	if err := yaml.Unmarshal(yamlData, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.DeliveryMode != "" {
+		t.Errorf("DeliveryMode should be empty for legacy YAML, got %v", f.DeliveryMode)
+	}
+	if f.EffectiveDeliveryMode() != DeliveryModeStack {
+		t.Errorf("EffectiveDeliveryMode() should be stack for legacy features, got %v", f.EffectiveDeliveryMode())
 	}
 }
 
@@ -1785,76 +2341,133 @@ func TestIsFinalizingPhase(t *testing.T) {
 	}
 }
 
-// TestPRURLs covers the PRURLs accessor. Per-repo entries from RepoImpl
-// are the only source of PR URLs.
-func TestPRURLs(t *testing.T) {
+// TestStackRepoPullRequestEntries covers the per-layer read-model
+// projection: one entry per layer in ascending position order (never
+// skipping), state "none" for a layer without a pull request, and the
+// pushed-up-to-date flag only when a layer carrying a pull request has its
+// tip equal to its last pushed SHA. The stack's per-layer entries are the
+// only source of pull request URLs.
+func TestStackRepoPullRequestEntries(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
+	f := &Feature{
+		Repos: []FeatureRepo{{Name: "api"}},
+		Stack: []StackLayer{
+			// Seeded out of position order: the projection must sort.
+			{Position: 2, Title: "Ext", Branch: "feature/x/2-ext", Repos: map[string]StackRepoEntry{
+				"api": {TipSHA: "tip-2", LastPushedSHA: "tip-2", PRURL: "url-2", PRState: StackPRStateOpen},
+			}},
+			{Position: 1, Title: "Core", Branch: "feature/x/1-core", Repos: map[string]StackRepoEntry{
+				"api": {TipSHA: "tip-1", PRURL: "url-1", PRState: StackPRStateMerged},
+			}},
+			{Position: 3, Title: "Polish", Branch: "feature/x/3-polish"},
+		},
+	}
+
+	entries := f.StackRepoPullRequestEntries("api")
+	if len(entries) != 3 {
+		t.Fatalf("StackRepoPullRequestEntries() length = %d, want one per layer (got %v)", len(entries), entries)
+	}
+	want := []StackPullRequestEntry{
+		{Position: 1, Title: "Core", Branch: "feature/x/1-core", URL: "url-1", State: StackPRStateMerged},
+		{Position: 2, Title: "Ext", Branch: "feature/x/2-ext", URL: "url-2", State: StackPRStateOpen, PushedUpToDate: true},
+		{Position: 3, Title: "Polish", Branch: "feature/x/3-polish", State: StackPRStateNone},
+	}
+	for i, got := range entries {
+		if got != want[i] {
+			t.Errorf("StackRepoPullRequestEntries()[%d] = %+v, want %+v", i, got, want[i])
+		}
+	}
+
+	// A layer entry carrying a URL without a recorded state reads as open —
+	// the same posture the publish walk takes toward an indeterminate answer.
+	urlNoState := &Feature{Stack: []StackLayer{{Position: 1, Repos: map[string]StackRepoEntry{
+		"api": {PRURL: "url-open"},
+	}}}}
+	if entries := urlNoState.StackRepoPullRequestEntries("api"); len(entries) != 1 || entries[0].State != StackPRStateOpen {
+		t.Errorf("StackRepoPullRequestEntries() = %+v, want state open for a URL recorded without a state", entries)
+	}
+}
+
+// TestStackRepoPRURLList covers the per-repository URL list: every layer's
+// pull request URL in position order, from the stack entries alone.
+func TestStackRepoPRURLList(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
 	tests := []struct {
-		name     string
-		repos    []FeatureRepo
-		repoImpl map[string]*RepoState
-		prURL    string
-		want     map[string]string
+		name  string
+		stack []StackLayer
+		want  []string
 	}{
 		{
-			name:     "per-repo url present",
-			repos:    []FeatureRepo{{Name: "a"}},
-			repoImpl: map[string]*RepoState{"a": {PRURL: "u-a"}},
-			want:     map[string]string{"a": "u-a"},
+			name: "urls on every layer",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {PRURL: "u-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {PRURL: "u-2"}}},
+			},
+			want: []string{"u-1", "u-2"},
 		},
 		{
-			name:     "multi repo only one populated",
-			repos:    []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{"a": {PRURL: "u-a"}, "b": {PRURL: ""}},
-			want:     map[string]string{"a": "u-a"},
+			name: "gap between recorded layers",
+			stack: []StackLayer{
+				{Position: 1, Repos: map[string]StackRepoEntry{"a": {PRURL: "u-1"}}},
+				{Position: 2, Repos: map[string]StackRepoEntry{"a": {}}},
+				{Position: 3, Repos: map[string]StackRepoEntry{"a": {PRURL: "u-3"}}},
+			},
+			want: []string{"u-1", "u-3"},
 		},
 		{
-			name:     "multi repo legacy fallback ignored",
-			repos:    []FeatureRepo{{Name: "a"}, {Name: "b"}},
-			repoImpl: map[string]*RepoState{},
-			prURL:    "legacy",
-			want:     map[string]string{},
+			name:  "no layer carries a URL",
+			stack: []StackLayer{{Position: 1, Repos: map[string]StackRepoEntry{"a": {}}}},
+			want:  nil,
 		},
 		{
-			name:  "no repos",
-			repos: nil,
-			prURL: "legacy",
-			want:  map[string]string{},
+			name:  "no stack",
+			stack: nil,
+			want:  nil,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := &Feature{Repos: tt.repos, RepoStates: tt.repoImpl}
-			f.SetPRURL(tt.prURL)
-			got := f.PRURLs()
+			t.Parallel()
+			f := &Feature{Repos: []FeatureRepo{{Name: "a"}}, Stack: tt.stack}
+			got := f.StackRepoPRURLList("a")
 			if len(got) != len(tt.want) {
-				t.Errorf("PRURLs() length = %d, want %d (got=%v want=%v)", len(got), len(tt.want), got, tt.want)
+				t.Fatalf("StackRepoPRURLList() length = %d, want %d (got=%v want=%v)", len(got), len(tt.want), got, tt.want)
 			}
-			for k, v := range tt.want {
-				if got[k] != v {
-					t.Errorf("PRURLs()[%s] = %q, want %q", k, got[k], v)
+			for i, url := range tt.want {
+				if got[i] != url {
+					t.Errorf("StackRepoPRURLList()[%d] = %q, want %q", i, got[i], url)
 				}
 			}
 		})
 	}
 }
 
-// TestPRURLs_NoLegacyFallback verifies that the legacy single-repo fallback
-// (f.PRURL → repos[0].Name when RepoImpl[name].PRURL is empty) is gone.
-// A single-repo feature with empty RepoImpl PR URL and a non-empty f.PRURL
-// shadow returns an empty map.
-func TestPRURLs_NoLegacyFallback(t *testing.T) {
+// TestStackReadHelpers_NoStackFailClosed verifies that the legacy
+// single-URL projection is gone: a run without a stack reports no pull
+// requests anywhere, even with a touched repository state.
+func TestStackReadHelpers_NoStackFailClosed(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: pure value, table-driven, or per-test temp-dir assertions with no shared state.
 	f := &Feature{
 		Repos:      []FeatureRepo{{Name: "only"}},
-		RepoStates: map[string]*RepoState{"only": {PRURL: ""}},
+		RepoStates: map[string]*RepoState{"only": {Touched: true}},
 	}
-	f.SetPRURL("https://example.com/legacy-pr")
-	got := f.PRURLs()
-	if len(got) != 0 {
-		t.Errorf("PRURLs() = %v, want empty (no legacy fallback)", got)
+	if got := f.StackRepoPullRequestEntries("only"); got != nil {
+		t.Errorf("StackRepoPullRequestEntries() = %v, want nil (no stack)", got)
+	}
+	if f.AnyStackLayerHasPullRequest() {
+		t.Error("AnyStackLayerHasPullRequest() = true, want false (no stack)")
+	}
+	if f.StackRepoHasPullRequest("only") {
+		t.Error("StackRepoHasPullRequest() = true, want false (no stack)")
+	}
+	if got := f.TopStackLayerPRURL("only"); got != "" {
+		t.Errorf("TopStackLayerPRURL() = %q, want empty (no stack)", got)
+	}
+	if got := f.StackRepoPRURLList("only"); len(got) != 0 {
+		t.Errorf("StackRepoPRURLList() = %v, want empty (no stack)", got)
 	}
 }
 

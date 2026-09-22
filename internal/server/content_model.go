@@ -41,9 +41,9 @@ const (
 	// (non-log) artifact.
 	contentCategoryArtifact = "artifact"
 
-	// phaseNameDescription is the "publish description" phase/subaction name,
-	// shared between the description-review artifact's Phase field and the
-	// actions/publish/description mutation route in mutation.go.
+	// phaseNameDescription is the description-review artifact's Phase field
+	// value: the rewind description-review surface is presented as a
+	// "description" phase artifact.
 	phaseNameDescription = "description"
 
 	// logIDSession is the "session" log stream ID in handleLogContent's log map.

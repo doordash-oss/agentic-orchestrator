@@ -26,6 +26,8 @@ import (
 
 // seedReviewFeedbackSelectionDraft saves a draft with one selected and one
 // unselected reference for the fetch-test feature layout (api + web + docs).
+// Comments carry the PR and layer identity a fresh fetch would tag them
+// with: api 22 on layer 1, api 33 on layer 3, web 44 on its layer 1.
 func seedReviewFeedbackSelectionDraft(t *testing.T, store *feature.Store, parentID string) *feature.ReviewFeedbackDraft {
 	t.Helper()
 	parent, err := store.Load(parentID)
@@ -34,11 +36,14 @@ func seedReviewFeedbackSelectionDraft(t *testing.T, store *feature.Store, parent
 	}
 	fetched := map[string][]feature.ReviewFeedbackComment{
 		"api": {
-			{Repo: "api", ID: 22, Type: "issue", Author: "bob", Body: "issue body", CreatedAt: "2026-08-02T09:00:00Z"},
-			{Repo: "api", ID: 33, Type: "review_body", Author: "carol", Body: "review body", CreatedAt: "2026-08-02T10:00:00Z"},
+			{Repo: "api", ID: 22, Type: "issue", Author: "bob", Body: "issue body", CreatedAt: "2026-08-02T09:00:00Z",
+				PRURL: "https://github.com/example/api/pull/1", PRNumber: 1, LayerPosition: 1, LayerTitle: "Foundation"},
+			{Repo: "api", ID: 33, Type: "review_body", Author: "carol", Body: "review body", CreatedAt: "2026-08-02T10:00:00Z",
+				PRURL: "https://github.com/example/api/pull/3", PRNumber: 3, LayerPosition: 3, LayerTitle: "Extension"},
 		},
 		"web": {
-			{Repo: "web", ID: 44, Type: "review", Author: "dana", Body: "inline", CreatedAt: "2026-08-02T08:00:00Z"},
+			{Repo: "web", ID: 44, Type: "review", Author: "dana", Body: "inline", CreatedAt: "2026-08-02T08:00:00Z",
+				PRURL: "https://github.com/example/web/pull/2", PRNumber: 2, LayerPosition: 1, LayerTitle: "Foundation"},
 		},
 	}
 	draft := feature.ReconcileReviewFeedbackDraft(parent, nil, fetched)
@@ -51,24 +56,30 @@ func seedReviewFeedbackSelectionDraft(t *testing.T, store *feature.Store, parent
 func selectionResponse(t *testing.T, recorderBody []byte) struct {
 	Revision int `json:"revision"`
 	Repos    []struct {
-		Repo     string `json:"repo"`
-		Comments []struct {
-			StableRef string `json:"stable_ref"`
-			Selected  bool   `json:"selected"`
-			CreatedAt string `json:"created_at"`
-		} `json:"comments"`
+		Repo         string `json:"repo"`
+		PullRequests []struct {
+			Position int `json:"position"`
+			Comments []struct {
+				StableRef string `json:"stable_ref"`
+				Selected  bool   `json:"selected"`
+				CreatedAt string `json:"created_at"`
+			} `json:"comments"`
+		} `json:"pull_requests"`
 	} `json:"repos"`
 } {
 	t.Helper()
 	var response struct {
 		Revision int `json:"revision"`
 		Repos    []struct {
-			Repo     string `json:"repo"`
-			Comments []struct {
-				StableRef string `json:"stable_ref"`
-				Selected  bool   `json:"selected"`
-				CreatedAt string `json:"created_at"`
-			} `json:"comments"`
+			Repo         string `json:"repo"`
+			PullRequests []struct {
+				Position int `json:"position"`
+				Comments []struct {
+					StableRef string `json:"stable_ref"`
+					Selected  bool   `json:"selected"`
+					CreatedAt string `json:"created_at"`
+				} `json:"comments"`
+			} `json:"pull_requests"`
 		} `json:"repos"`
 	}
 	if err := json.Unmarshal(recorderBody, &response); err != nil {
@@ -94,15 +105,17 @@ func TestReviewFeedbackSelectionCommitsAndPersists(t *testing.T) {
 		t.Fatalf("revision = %d, want %d", response.Revision, draft.Revision+1)
 	}
 	// Only the committed card changed; other selections across repositories
-	// stay untouched.
+	// and pull-request groups stay untouched.
 	for _, group := range response.Repos {
-		for _, comment := range group.Comments {
-			want := comment.StableRef != "web:review:44"
-			if comment.Selected != want {
-				t.Fatalf("comment %q selected = %v, want %v", comment.StableRef, comment.Selected, want)
-			}
-			if comment.CreatedAt == "" {
-				t.Fatalf("comment %q lost its creation timestamp", comment.StableRef)
+		for _, pr := range group.PullRequests {
+			for _, comment := range pr.Comments {
+				want := comment.StableRef != "web:review:44"
+				if comment.Selected != want {
+					t.Fatalf("comment %q selected = %v, want %v", comment.StableRef, comment.Selected, want)
+				}
+				if comment.CreatedAt == "" {
+					t.Fatalf("comment %q lost its creation timestamp", comment.StableRef)
+				}
 			}
 		}
 	}
@@ -256,10 +269,12 @@ func TestReviewFeedbackFetchRetainsCommittedSelections(t *testing.T) {
 		Revision   int    `json:"revision"`
 		SnapshotID string `json:"snapshot_id"`
 		Repos      []struct {
-			Comments []struct {
-				StableRef string `json:"stable_ref"`
-				Selected  bool   `json:"selected"`
-			} `json:"comments"`
+			PullRequests []struct {
+				Comments []struct {
+					StableRef string `json:"stable_ref"`
+					Selected  bool   `json:"selected"`
+				} `json:"comments"`
+			} `json:"pull_requests"`
 		} `json:"repos"`
 	}
 	if err := json.Unmarshal(second.Body.Bytes(), &secondView); err != nil {
@@ -269,10 +284,12 @@ func TestReviewFeedbackFetchRetainsCommittedSelections(t *testing.T) {
 		t.Fatalf("second view revision/snapshot = %d/%q, want 3 and an identity", secondView.Revision, secondView.SnapshotID)
 	}
 	for _, group := range secondView.Repos {
-		for _, comment := range group.Comments {
-			want := comment.StableRef != "web:review:44"
-			if comment.Selected != want {
-				t.Fatalf("refetch changed committed selection for %q", comment.StableRef)
+		for _, pr := range group.PullRequests {
+			for _, comment := range pr.Comments {
+				want := comment.StableRef != "web:review:44"
+				if comment.Selected != want {
+					t.Fatalf("refetch changed committed selection for %q", comment.StableRef)
+				}
 			}
 		}
 	}

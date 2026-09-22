@@ -183,7 +183,7 @@ func TestStoreSaveAndLoadRebaseTargetsRoundTrip(t *testing.T) {
 					TargetSHA:   "fedcba9876543210fedcba9876543210fedcba98",
 				},
 			},
-			RebaseBehind: []string{"repoA", "repoB"},
+			RebaseWorkRepos: []string{"repoA", "repoB"},
 		},
 	}
 	if err := store.Save(f); err != nil {
@@ -211,8 +211,8 @@ func TestStoreSaveAndLoadRebaseTargetsRoundTrip(t *testing.T) {
 	if gotB.TargetSHA != "fedcba9876543210fedcba9876543210fedcba98" {
 		t.Errorf("repoB TargetSHA = %q, want persisted SHA", gotB.TargetSHA)
 	}
-	if !reflect.DeepEqual(loaded.Parent.RebaseBehind, []string{"repoA", "repoB"}) {
-		t.Errorf("loaded RebaseBehind = %+v, want [repoA repoB]", loaded.Parent.RebaseBehind)
+	if !reflect.DeepEqual(loaded.Parent.RebaseWorkRepos, []string{"repoA", "repoB"}) {
+		t.Errorf("loaded RebaseWorkRepos = %+v, want [repoA repoB]", loaded.Parent.RebaseWorkRepos)
 	}
 
 	// Accessor round-trip.
@@ -1062,6 +1062,77 @@ func timePointer(t time.Time) *time.Time {
 	return &t
 }
 
+// TestStoreStackRepoEntryPublishFieldsRoundTrip pins the durable shape of
+// the per-layer publish fields on StackRepoEntry: the no-commits marker,
+// pull request URL and state, and last pushed SHA survive a save/load
+// cycle, and a partial rewind's stack copy clears every entry field —
+// including the marker — for layers at and above the target layer while
+// layers below keep their records.
+func TestStoreStackRepoEntryPublishFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "stack-publish-fields-001",
+		Name:          "Stack Publish Fields",
+		Slug:          "stack-publish-fields",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		SchemaVersion: SchemaVersionCurrent,
+		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}, {Name: "repo-b", Path: "/tmp/b"}},
+	}
+	f.RepoStates = map[string]*RepoState{
+		"repo-a": {Touched: true},
+	}
+	f.Stack = []StackLayer{
+		{
+			Position: 1,
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "aaaa", PRURL: "https://github.com/org/repo-a/pull/1", PRState: StackPRStateMerged},
+				"repo-b": {TipSHA: "bbbb", NoCommits: true},
+			},
+		},
+		{
+			Position: 2,
+			Repos: map[string]StackRepoEntry{
+				"repo-a": {TipSHA: "cccc", LastPushedSHA: "cccc", PRURL: "https://github.com/org/repo-a/pull/2", PRState: StackPRStateOpen},
+			},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := loaded.Stack[0].Repos["repo-b"]; !got.NoCommits || got.TipSHA != "bbbb" {
+		t.Errorf("layer 1 repo-b entry = %+v, want the no-commits marker and tip preserved", got)
+	}
+	if got := loaded.Stack[0].Repos["repo-a"]; got.PRState != StackPRStateMerged || got.PRURL != "https://github.com/org/repo-a/pull/1" {
+		t.Errorf("layer 1 repo-a entry = %+v, want the merged PR record preserved", got)
+	}
+	if got := loaded.Stack[1].Repos["repo-a"]; got.LastPushedSHA != "cccc" || got.PRState != StackPRStateOpen || got.PRURL != "https://github.com/org/repo-a/pull/2" {
+		t.Errorf("layer 2 repo-a entry = %+v, want the pushed SHA and open PR record preserved", got)
+	}
+
+	// A partial rewind to layer 2 clears the target layer's entries — the
+	// no-commits marker goes with the other per-repository fields — while
+	// layer 1 below the target keeps its records.
+	copied := CopyStackLayersForPartialRewind(loaded.Stack, 2)
+	if got := copied[0].Repos["repo-b"]; !got.NoCommits || got.TipSHA != "bbbb" {
+		t.Errorf("layer 1 repo-b entry after copy = %+v, want kept below the rewind target", got)
+	}
+	if got := copied[0].Repos["repo-a"]; got.PRURL != "https://github.com/org/repo-a/pull/1" {
+		t.Errorf("layer 1 repo-a entry after copy = %+v, want kept below the rewind target", got)
+	}
+	if copied[1].Repos != nil {
+		t.Errorf("layer 2 entries after copy = %+v, want cleared at the rewind target", copied[1].Repos)
+	}
+}
+
 func TestStoreDelete(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
@@ -1576,6 +1647,64 @@ func TestStoreLoadIgnoresLegacyRepoLastErrorKeys(t *testing.T) {
 	}
 	if state.Error != nil {
 		t.Fatalf("repo record = %+v, want none from a stale last_error key", state.Error)
+	}
+}
+
+// TestStoreLoadIgnoresLegacyRepoPRURLKeys pins the lenient-load contract
+// for the removed per-repo PR URL projection: a legacy pr_url key under
+// repo_states in a hand-written run.yaml loads without error (unknown YAML
+// keys are ignored) and contributes no pull-request state, while the
+// current schema is 9 — the child transaction journal's per-layer ref list.
+func TestStoreLoadIgnoresLegacyRepoPRURLKeys(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp dirs isolate filesystem state.
+	if SchemaVersionCurrent != 9 {
+		t.Errorf("SchemaVersionCurrent = %d, want 9 (the transaction journal ref-list reshape)", SchemaVersionCurrent)
+	}
+	store := NewStore(t.TempDir())
+
+	f := &Feature{
+		ID:            "legacy-repo-pr-001",
+		Name:          "Legacy Repo PR",
+		Slug:          "legacy-repo-pr",
+		Status:        StatusCodeReady,
+		CurrentPhase:  PhasePublish,
+		SchemaVersion: SchemaVersionCurrent,
+		Repos:         []FeatureRepo{{Name: "repo-a", Path: "/tmp/a"}},
+	}
+	f.RepoStates = map[string]*RepoState{
+		"repo-a": {Touched: true},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	runPath := filepath.Join(store.BaseDir, f.ID, "runs", RunDirName(1), "run.yaml")
+	raw, err := os.ReadFile(runPath)
+	if err != nil {
+		t.Fatalf("read run.yaml: %v", err)
+	}
+	stale := strings.Replace(string(raw), "repo-a:\n",
+		"repo-a:\n        pr_url: https://github.com/org/repo-a/pull/2\n", 1)
+	if stale == string(raw) {
+		t.Fatal("run.yaml does not carry the expected repo_states entry header")
+	}
+	if err := os.WriteFile(runPath, []byte(stale), 0o644); err != nil {
+		t.Fatalf("rewrite run.yaml with stale repo pr_url key: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load with stale repo pr_url key: %v", err)
+	}
+	state := loaded.RepoStates["repo-a"]
+	if state == nil || !state.Touched {
+		t.Fatalf("repo state = %+v, want the touched entry preserved", state)
+	}
+	// The legacy projection is gone: only the stack's per-layer entries
+	// answer pull-request questions.
+	if loaded.StackRepoHasPullRequest("repo-a") {
+		t.Fatalf("stack pull requests = %+v, want none recorded from a stale pr_url key", loaded.Stack)
 	}
 }
 
@@ -2994,4 +3123,106 @@ func TestStoreLoadNeverObservesSetupDoneWithStaleLifecycleStatus(t *testing.T) {
 		}
 	}()
 	wg.Wait()
+}
+
+// TestStoreSaveAndLoadRebaseDivergedLayerStatesRoundTrip proves the
+// divergence fields of the per-layer classification round-trip unchanged
+// through the feature YAML, and that a relationship persisted before the
+// fields existed loads with no diverged layers.
+func TestStoreSaveAndLoadRebaseDivergedLayerStatesRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	store := NewStore(dir)
+	now := time.Now().Truncate(time.Second)
+	f := &Feature{
+		ID:            "test-rebase-diverged-roundtrip",
+		Name:          "Test Rebase Diverged RoundTrip",
+		Slug:          "test-rebase-diverged-roundtrip",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+		Created:       now,
+		Parent: &ChildRelationship{
+			ParentID: "parent-1",
+			Kind:     ChildKindRebase,
+			RebaseLayerStates: []RebaseLayerClassification{
+				{
+					Repo: "repoA", LayerPosition: 1, LayerTitle: "Layer one", Branch: "stack/1",
+					State: RebaseLayerStateKept,
+				},
+				{
+					Repo: "repoA", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2",
+					State: RebaseLayerStateKept, Diverged: true,
+					RemoteTip:         "fedcba9876543210fedcba9876543210fedcba98",
+					RemoteOnlyCommits: 3,
+					ForeignCommits: []RebaseForeignCommit{
+						{SHA: "1111111111111111111111111111111111111111", Subject: "reviewer fix one", Author: "Reviewer One <reviewer1@example.com>"},
+						{SHA: "2222222222222222222222222222222222222222", Subject: "reviewer fix two", Author: "Reviewer Two <reviewer2@example.com>"},
+					},
+				},
+			},
+			RebaseWorkRepos: []string{"repoA"},
+		},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	states := loaded.Parent.RebaseLayerStates
+	if len(states) != 2 {
+		t.Fatalf("loaded RebaseLayerStates = %+v, want 2", states)
+	}
+	if states[0].Diverged || states[0].RemoteTip != "" || states[0].RemoteOnlyCommits != 0 || len(states[0].ForeignCommits) != 0 {
+		t.Errorf("layer 1 classification = %+v, want no divergence fields", states[0])
+	}
+	got := states[1]
+	if !got.Diverged || got.RemoteTip != "fedcba9876543210fedcba9876543210fedcba98" || got.RemoteOnlyCommits != 3 {
+		t.Errorf("layer 2 classification = %+v, want diverged with pinned tip and count", got)
+	}
+	if len(got.ForeignCommits) != 2 || got.ForeignCommits[0].SHA != "1111111111111111111111111111111111111111" ||
+		got.ForeignCommits[1].Subject != "reviewer fix two" || got.ForeignCommits[1].Author != "Reviewer Two <reviewer2@example.com>" {
+		t.Errorf("layer 2 foreign commits = %+v, want the recorded reviewer commits", got.ForeignCommits)
+	}
+
+	// The accessor returns exactly the diverged layers of one repository.
+	diverged := loaded.RebaseDivergedLayers("repoA")
+	if len(diverged) != 1 || diverged[0].LayerPosition != 2 {
+		t.Fatalf("RebaseDivergedLayers(repoA) = %+v, want layer 2 only", diverged)
+	}
+	if legacy := loaded.RebaseDivergedLayers("repoB"); legacy != nil {
+		t.Fatalf("RebaseDivergedLayers(repoB) = %+v, want none", legacy)
+	}
+
+	// A relationship persisted before the divergence fields existed loads
+	// with no diverged layers.
+	legacy := &Feature{
+		ID:            "test-rebase-diverged-legacy",
+		Name:          "Test Rebase Diverged Legacy",
+		Slug:          "test-rebase-diverged-legacy",
+		Status:        StatusCreated,
+		SchemaVersion: SchemaVersionCurrent,
+		Created:       now,
+		Parent: &ChildRelationship{
+			ParentID: "parent-1",
+			Kind:     ChildKindRebase,
+			RebaseLayerStates: []RebaseLayerClassification{
+				{Repo: "repoA", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2", State: RebaseLayerStateKept},
+			},
+			RebaseWorkRepos: []string{"repoA"},
+		},
+	}
+	if err := store.Save(legacy); err != nil {
+		t.Fatalf("Save legacy: %v", err)
+	}
+	loadedLegacy, err := store.Load(legacy.ID)
+	if err != nil {
+		t.Fatalf("Load legacy: %v", err)
+	}
+	if got := loadedLegacy.RebaseDivergedLayers("repoA"); got != nil {
+		t.Fatalf("legacy RebaseDivergedLayers(repoA) = %+v, want none", got)
+	}
 }

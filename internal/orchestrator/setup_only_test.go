@@ -53,8 +53,8 @@ func countWorktreeCreates(worktrees *mocks.MockWorktreeOps) int {
 
 func TestRunSetupOnlyLeavesFeatureStartableWithoutStarting(t *testing.T) {
 	store, manager, worktrees, runtimeDir := newSetupOnlyFixture(t)
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	f, err := manager.Create("Setup only", "desc", []string{setupOnlyRepoA}, config.NewDefault().Defaults.Models, "", "", nil, feature.CreateOptions{
 		QueueSetup: true,
@@ -92,11 +92,11 @@ func TestRunSetupOnlyLeavesFeatureStartableWithoutStarting(t *testing.T) {
 func TestRetrySetupOnlyRerunsOnlyUnfinishedTasksWithoutStarting(t *testing.T) {
 	store, manager, worktrees, runtimeDir := newSetupOnlyFixture(t)
 	failRepoB := true
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		if repoName == setupOnlyRepoB && failRepoB {
 			return "", errors.New("transient checkout failure")
 		}
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	f, err := manager.Create("Retry setup only", "desc", []string{setupOnlyRepoA, setupOnlyRepoB}, config.NewDefault().Defaults.Models, "", "", nil, feature.CreateOptions{
 		QueueSetup: true,

@@ -25,6 +25,7 @@ limitations under the License.
  * `dispatchAction`.
  */
 import {
+  buildCanonicalError,
   CanonicalErrorException,
   isRequestTimeout,
   redactText,
@@ -36,7 +37,6 @@ import {
   ServerFeatureOperationalActionResponseSchema,
   FeatureDetailResponseSchema,
   FeatureListResponseSchema,
-  PublishDescriptionResponseSchema,
   RuntimeConfigCreationSchema,
   RepositorySourcesResponseSchema,
   RepositoryOriginStatusResponseSchema,
@@ -89,7 +89,6 @@ import {
   type FeatureActionRequest,
   type FeatureActionResult,
   type OwnedError,
-  type PublishDescriptionResult,
   type ReadinessSnapshot,
   type RepositoryFileRef,
   type LaunchRebaseChildRequest,
@@ -108,6 +107,7 @@ import {
   type LaunchReviewFeedbackChildResult,
   type ReviewFeedbackCommentView,
   type ReviewFeedbackDraftCommentView,
+  type ReviewFeedbackPullRequestGroup,
   type ReviewFeedbackRepoGroup,
   type SetupDispatchResult,
   type SetupTaskView,
@@ -177,17 +177,19 @@ function assertNoLocalPathsRemotely(remote: boolean, ...groups: readonly string[
   }
 }
 
-// Description generation is a synchronous utility LLM session. Its session
-// idle bounds are five minutes, so leave transport cleanup time beyond that
-// without weakening the 30-second default for ordinary API calls.
-const PUBLISH_DESCRIPTION_TIMEOUT_MS = 6 * 60_000;
-
 // Publish and merge run non-idempotent multi-repository git and forge work
 // (commit, push, then pull-request create or update per repository), which
 // legitimately takes minutes. The 30-second default would abort a request whose
 // server-side work is still progressing, so these carry their own bound.
+// Recreate runs the same push-plus-create walk for one layer and may fall back
+// to a description session, so it shares the long bound; reopen is a single
+// idempotent forge call and keeps the default.
 const LONG_MUTATION_TIMEOUT_MS = 10 * 60_000;
-const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set(['publish', 'merge']);
+const LONG_MUTATION_ACTIONS: ReadonlySet<string> = new Set([
+  'publish',
+  'merge',
+  'recreate-pull-request',
+]);
 
 // Source acceptance and setup serialize with in-flight origin checks on the
 // repositories' shared mutation boundary, so a submit while a check is running
@@ -253,6 +255,10 @@ export class FeatureService {
         config.feature_defaults.inquireness === ''
           ? {}
           : { inquireness: config.feature_defaults.inquireness }),
+        ...(config.feature_defaults.delivery_mode === undefined ||
+        config.feature_defaults.delivery_mode === ''
+          ? {}
+          : { delivery_mode: config.feature_defaults.delivery_mode }),
         models,
         effort,
         // The creation contract's server default: a new feature branch.
@@ -521,6 +527,8 @@ export class FeatureService {
         pipeline: validated.pipeline,
         risk_level: validated.riskLevel,
         inquireness: validated.inquireness,
+        // Always set: the input schema defaults an omitted choice to stack.
+        delivery_mode: validated.deliveryMode,
         ...(validated.exitCriteria.trim() === ''
           ? {}
           : { exit_criteria: validated.exitCriteria.trim() }),
@@ -560,24 +568,6 @@ export class FeatureService {
     });
     const response = validateWithSchema(body, FeatureActionResponseSchema);
     return { result: response.result };
-  }
-
-  async generatePublishDescription(
-    featureId: string,
-    repos: string[] = [],
-  ): Promise<PublishDescriptionResult> {
-    const id = validateWithSchema(featureId, FeatureIdSchema);
-    const body = await this.api(`/api/v1/features/${id}/actions/publish/description`, {
-      method: 'POST',
-      body: repos.length === 0 ? {} : { repos },
-      timeoutMs: PUBLISH_DESCRIPTION_TIMEOUT_MS,
-    });
-    const response = validateWithSchema(body, PublishDescriptionResponseSchema);
-    return {
-      featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
-      title: redactText(response.title).slice(0, 200),
-      body: redactText(response.body).slice(0, 4000),
-    };
   }
 
   async listFeatures(): Promise<FeaturesListResult> {
@@ -985,16 +975,49 @@ function toReviewFeedbackDraftCommentView(
   };
 }
 
+/**
+ * Maps a server pull-request group (snake_case) to the renderer-facing view
+ * (camelCase). A group missing its position is a malformed view and fails
+ * closed instead of rendering an unplaced section.
+ */
+function toReviewFeedbackPullRequestGroupView(group: {
+  position?: number;
+  title?: string;
+  url?: string;
+  comments: ServerReviewFeedbackDraftComment[];
+}): ReviewFeedbackPullRequestGroup {
+  if (
+    typeof group.position !== 'number' ||
+    !Number.isInteger(group.position) ||
+    group.position < 0
+  ) {
+    throw new CanonicalErrorException(
+      buildCanonicalError('E_SCHEMA_MISMATCH', {
+        params: { paths: 'pull_requests.position' },
+      }),
+    );
+  }
+  return {
+    position: group.position,
+    title: group.title ?? '',
+    url: group.url ?? '',
+    comments: group.comments.map(toReviewFeedbackDraftCommentView),
+  };
+}
+
 /** Maps a server repo group (snake_case) to the renderer-facing view (camelCase). */
 function toReviewFeedbackRepoGroupView(group: {
   repo: string;
-  pr_url: string;
-  comments: ServerReviewFeedbackDraftComment[];
+  pull_requests?: Array<{
+    position?: number;
+    title?: string;
+    url?: string;
+    comments: ServerReviewFeedbackDraftComment[];
+  }>;
 }): ReviewFeedbackRepoGroup {
   return {
     repo: group.repo,
-    prUrl: group.pr_url,
-    comments: group.comments.map(toReviewFeedbackDraftCommentView),
+    pullRequests: (group.pull_requests ?? []).map(toReviewFeedbackPullRequestGroupView),
   };
 }
 
@@ -1016,6 +1039,9 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
     ...(feature.risk_level === undefined || feature.risk_level === ''
       ? {}
       : { riskLevel: feature.risk_level }),
+    ...(feature.delivery_mode === undefined || feature.delivery_mode === ''
+      ? {}
+      : { deliveryMode: feature.delivery_mode }),
     ...(feature.exit_criteria === undefined || feature.exit_criteria === ''
       ? {}
       : { exitCriteria: feature.exit_criteria }),
@@ -1150,7 +1176,23 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
             name: repo.name,
             publishable: repo.publishable,
             ...(repo.touched === undefined ? {} : { touched: repo.touched }),
-            ...(repo.pr_url === undefined || repo.pr_url === '' ? {} : { prUrl: repo.pr_url }),
+            ...(repo.pull_requests === undefined || repo.pull_requests.length === 0
+              ? {}
+              : {
+                  // One view entry per stack layer; feature-detail entries
+                  // never carry a push mode, but it passes through when the
+                  // server sends one.
+                  pullRequests: repo.pull_requests.map((entry) => ({
+                    position: entry.position,
+                    title: entry.title,
+                    ...(entry.branch === undefined ? {} : { branch: entry.branch }),
+                    ...(entry.url === undefined || entry.url === '' ? {} : { url: entry.url }),
+                    state: entry.state,
+                    noCommits: entry.no_commits,
+                    pushedUpToDate: entry.pushed_up_to_date,
+                    ...(entry.push_mode === undefined ? {} : { pushMode: entry.push_mode }),
+                  })),
+                }),
             ...(repo.freshness === undefined || repo.freshness === ''
               ? {}
               : { freshness: repo.freshness }),

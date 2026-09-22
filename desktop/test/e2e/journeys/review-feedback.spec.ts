@@ -24,8 +24,9 @@ limitations under the License.
  * constant-size launch dispatch → kind-aware pass workspace with auto-start
  * attempted, all against the packaged app and bundled server.
  *
- * The feature is seeded to Published with a pr_url per repository so the
- * server enables the "Address review feedback" aftercare action. A local
+ * The feature is seeded to Published with a stack pull-request entry per
+ * repository so the server enables the "Address review feedback" aftercare
+ * action. A local
  * HTTP server serves deterministic comment fixtures for both repositories at
  * the GitHub REST API paths, and the bundled server is pointed at it via
  * AGENTICO_GITHUB_API_BASE so no real GitHub network is touched and no gh
@@ -48,12 +49,19 @@ import {
   createRepo,
   createWorld,
   destroyWorld,
+  git,
   processAlive,
   readDiscovery,
   waitFor,
+  type JourneyWorld,
 } from '../helpers/world';
 import { setFeatureStatus } from '../helpers/seed';
-import { activeRunYamlPath, clearRunFailures } from '../helpers/completionFixture';
+import {
+  activeRunYamlPath,
+  clearRunFailures,
+  featureYamlPath,
+  parseFeatureRepos,
+} from '../helpers/completionFixture';
 import { replaceTopLevelBlock } from '../helpers/yaml';
 
 interface RepoFixture {
@@ -102,6 +110,64 @@ function serverBaseUrl(server: http.Server): string {
   return `http://127.0.0.1:${addr.port}`;
 }
 
+/**
+ * Seeds the run's stack read model with one layer carrying each repository's
+ * pull request. The legacy repo_states pr_url seed is ignored on load; the
+ * review-feedback action gates on any stack layer having a pull request and
+ * the fetch reads the top layer's URL per repository.
+ */
+function seedStackPullRequests(
+  world: JourneyWorld,
+  featureId: string,
+  prUrls: Record<string, string>,
+): void {
+  const featureYaml = fs.readFileSync(featureYamlPath(world, featureId), 'utf8');
+  const worktrees = parseFeatureRepos(featureYaml);
+  const branches: string[] = [];
+  const tips: Record<string, string> = {};
+  for (const repoName of Object.keys(prUrls)) {
+    const worktree = worktrees[repoName];
+    if (worktree === undefined) {
+      throw new Error(`feature.yaml missing repo ${repoName}`);
+    }
+    branches.push(git(worktree, 'rev-parse', '--abbrev-ref', 'HEAD').trim());
+    tips[repoName] = git(worktree, 'rev-parse', 'HEAD').trim();
+  }
+  // One stack layer carries one shared branch name across repositories.
+  const layerBranch = branches[0]!;
+  if (new Set(branches).size !== 1) {
+    throw new Error(`worktrees diverged across layer branches: ${branches.join(', ')}`);
+  }
+
+  const repoStateLines = ['repo_states:'];
+  const stackLines = [
+    'stack:',
+    '    - position: 1',
+    '      title: Review feedback fixture',
+    '      slug: review-feedback-fixture',
+    '      phases:',
+    '        - 1',
+    `      branch: ${layerBranch}`,
+    '      repos:',
+  ];
+  for (const [repoName, prUrl] of Object.entries(prUrls)) {
+    repoStateLines.push(`  ${repoName}:`, '    touched: true');
+    stackLines.push(
+      `        ${repoName}:`,
+      `          tip_sha: ${tips[repoName]}`,
+      `          last_pushed_sha: ${tips[repoName]}`,
+      `          pr_url: ${prUrl}`,
+      '          pr_state: open',
+    );
+  }
+
+  const runPath = activeRunYamlPath(world, featureId);
+  let runYaml = clearRunFailures(fs.readFileSync(runPath, 'utf8'));
+  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', repoStateLines);
+  runYaml = replaceTopLevelBlock(runYaml, 'stack', stackLines);
+  fs.writeFileSync(runPath, runYaml);
+}
+
 test('multi-repo review-feedback triage: sections → filtered bulk clear → restore → drawer → bounded launch → child transition', async ({}, testInfo: TestInfo) => {
   const transcript = new Transcript('review-feedback', 'Multi-repository review triage journey');
   const world = createWorld('review-feedback', {
@@ -146,7 +212,9 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
-    transcript.section('Quit, seed Published + pr_urls, start fake GitHub API, relaunch');
+    transcript.section(
+      'Quit, seed Published + stack pull requests, start fake GitHub API, relaunch',
+    );
     const discovery = readDiscovery(world);
     await closeApp(handle);
     handle = null;
@@ -161,20 +229,8 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     setFeatureStatus(world.stateDir, featureId, 'Published');
     transcript.step('seeded feature to Published status');
 
-    const runPath = activeRunYamlPath(world, featureId);
-    let runYaml = fs.readFileSync(runPath, 'utf8');
-    runYaml = clearRunFailures(runYaml);
-    runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
-      'repo_states:',
-      '  alpha:',
-      '    touched: true',
-      `    pr_url: ${prUrls.alpha}`,
-      '  beta:',
-      '    touched: true',
-      `    pr_url: ${prUrls.beta}`,
-    ]);
-    fs.writeFileSync(runPath, runYaml);
-    transcript.step('seeded pr_urls for alpha and beta in repo_states');
+    seedStackPullRequests(world, featureId, prUrls);
+    transcript.step('seeded stack pull-request entries for alpha and beta');
 
     const fake = await startFakeGitHubAPI({
       'e2e/alpha': {
@@ -301,8 +357,25 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(alphaSection.getByText('This function could be simplified.')).toBeVisible();
     await expect(betaSection.getByText('Has this been tested with large inputs?')).toBeVisible();
     await expect(betaSection.getByText('Overall looks good, just a few nits.')).toBeVisible();
-    await expect(alphaSection.getByText('2 of 2 selected')).toBeVisible();
-    await expect(betaSection.getByText('2 of 2 selected')).toBeVisible();
+    // The repository ledger counts across the repository's pull-request
+    // groups; the single seeded layer renders one PR sub-header with its
+    // own open-pull-request action.
+    await expect(
+      alphaSection.locator('.review-feedback-section__ledger', { hasText: '2 of 2 selected' }),
+    ).toBeVisible();
+    await expect(
+      betaSection.locator('.review-feedback-section__ledger', { hasText: '2 of 2 selected' }),
+    ).toBeVisible();
+    await expect(
+      alphaSection.getByRole('button', {
+        name: 'Open pull request: layer 1 Review feedback fixture',
+      }),
+    ).toBeVisible();
+    await expect(
+      betaSection.getByRole('button', {
+        name: 'Open pull request: layer 1 Review feedback fixture',
+      }),
+    ).toBeVisible();
     // First fetch pre-selects everything; the ledger starts full.
     const boxes = feed.getByRole('checkbox', { name: /^Select feedback/ });
     await expect(boxes).toHaveCount(4);
@@ -381,7 +454,9 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
     await expect(commentDialog.getByRole('button', { name: 'Close comment' })).toBeFocused();
     // Reading the complete comment never touches selection state.
     await expect(feed.getByLabel(/This function could be simplified/)).toBeChecked();
-    await expect(alphaSection.getByText('2 of 2 selected')).toBeVisible();
+    await expect(
+      alphaSection.locator('.review-feedback-section__ledger', { hasText: '2 of 2 selected' }),
+    ).toBeVisible();
     await handle.page.keyboard.press('Escape');
     await expect(commentDialog).toHaveCount(0);
     await expect(hugeCardToggle).toBeFocused();
@@ -572,7 +647,9 @@ test('review-feedback recovery: failed-save Retry/Reload → conflict convergenc
     const featureId = features[0]!.id;
     transcript.json('feature id', featureId);
 
-    transcript.section('Quit, seed Published + pr_url, relaunch against the fake GitHub API');
+    transcript.section(
+      'Quit, seed Published + stack pull request, relaunch against the fake GitHub API',
+    );
     const discovery = readDiscovery(world);
     await closeApp(handle);
     handle = null;
@@ -584,16 +661,7 @@ test('review-feedback recovery: failed-save Retry/Reload → conflict convergenc
       );
     }
     setFeatureStatus(world.stateDir, featureId, 'Published');
-    const runPath = activeRunYamlPath(world, featureId);
-    let runYaml = fs.readFileSync(runPath, 'utf8');
-    runYaml = clearRunFailures(runYaml);
-    runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
-      'repo_states:',
-      '  alpha:',
-      '    touched: true',
-      `    pr_url: ${prUrl}`,
-    ]);
-    fs.writeFileSync(runPath, runYaml);
+    seedStackPullRequests(world, featureId, { alpha: prUrl });
 
     const fake = await startFakeGitHubAPI({
       'e2e/alpha': { reviewComments: alphaComments, issueComments: [], reviews: [] },

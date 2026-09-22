@@ -56,6 +56,18 @@ var implementRoleSpec = RoleSpec{
 			Description:  "structured progress markdown with iteration handoff, deferrals, and iteration state",
 			Validate:     ValidatorProgress,
 		},
+		// The fix manifest is optional: review-feedback children of a
+		// PR-stack parent use it to route changed files to the parent
+		// layer that owns them. Every other feature never writes it.
+		{
+			Name:         "fix_manifest",
+			DisplayPath:  "fix-manifest.yaml",
+			RootName:     "iteration_dir",
+			RelativePath: "fix-manifest.yaml",
+			Presence:     ArtifactOptional,
+			Description:  "optional manifest assigning this iteration's changed files to their owning parent stack layers",
+			Validate:     ValidatorFixManifest,
+		},
 	},
 }
 
@@ -72,6 +84,14 @@ type ImplementUserInput struct {
 	PlanRevisionFeedback string
 	HelpAnswers          string
 	Iteration            int
+	// Stack is the parent feature's PR-stack layers, populated only for a
+	// review-feedback child whose parent delivers as a stack; empty for
+	// top-level features and other child kinds.
+	Stack []feature.StackLayer
+	// FixManifestPath is the resolved artifact path of the optional
+	// fix-manifest.yaml, shown to the implementer alongside the parent
+	// stack layers.
+	FixManifestPath string
 }
 
 // BuildImplementPrompt renders the implement user prompt.

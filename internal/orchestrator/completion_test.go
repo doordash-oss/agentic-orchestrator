@@ -1032,10 +1032,11 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_NotPublish
 }
 
 // Multi-repo all_passed, publishable, auto-publish on (>1 repos, non-roadmap)
-// → tryCompleteAndEmit fires (which calls TryCompletePublish). When
-// TryCompletePublish returns (false, nil) — the common "not all repos published
-// yet" resume case — the handler MUST fall back to MarkCodeReady so recovery
-// can continue the remaining repo publishes on restart.
+// routes through the unified MarkCodeReady → Publish tail. When
+// TryCompletePublish returns (false, nil) — the common "not all repos
+// published yet" resume case — the feature stays at CodeReady (marked before
+// the publish dispatch) so recovery can continue the remaining repo
+// publishes on restart.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublish_PartialPublishFallsBackToCodeReady(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-ap",
@@ -1053,6 +1054,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	// The per-repo publish is a clean no-op: the partial state under test is
+	// tryCompletePublish's answer, not a repository failure.
+	o.SetPublishRepoFn(func(id, repo string) error { return nil })
 
 	if err := o.HandlePhaseCompletion("feat-multi-ap", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1072,9 +1076,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 }
 
 // Multi-repo all_passed, publishable, auto-publish on (>1 repos, non-roadmap)
-// with TryCompletePublish → (true, nil) — the fully-published case. Asserts
-// the handler does NOT call MarkCodeReady, because the feature just
-// transitioned to StatusPublished and MarkCodeReady would regress it.
+// with TryCompletePublish → (true, nil) — the fully-published case. The
+// unified tail marks code ready BEFORE dispatching publish, so the transition
+// order is MarkCodeReady → TryCompletePublish and the just-published feature
+// is never regressed back to CodeReady afterwards.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublish_FullyPublishedSkipsCodeReady(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-ap-full",
@@ -1087,10 +1092,19 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
+	markCodeReadyCalls := 0
+	lc.MarkCodeReadyFn = func(id string) error { markCodeReadyCalls++; return nil }
+	tryCompleteAfterCodeReady := false
+	lc.TryCompletePublishFn = func(id string) (bool, error) {
+		tryCompleteAfterCodeReady = markCodeReadyCalls > 0
+		return true, nil
+	}
 	fs := newFeatureStore(f)
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetPublishRepoFn(func(id, repo string) error {
+		return nil
+	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-ap-full", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1100,9 +1114,14 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	}
 
 	assertLifecycleCall(t, lc, "TryCompletePublish")
-	// When TryCompletePublish → true the feature is at StatusPublished —
-	// MarkCodeReady would regress it.
-	refuteLifecycleCall(t, lc, "MarkCodeReady")
+	// MarkCodeReady fires exactly once and strictly before the publish
+	// completion check — never after StatusPublished.
+	if markCodeReadyCalls != 1 {
+		t.Fatalf("MarkCodeReady calls = %d, want exactly one", markCodeReadyCalls)
+	}
+	if !tryCompleteAfterCodeReady {
+		t.Fatal("TryCompletePublish ran before MarkCodeReady; want code ready marked before the publish dispatch")
+	}
 }
 
 // Multi-repo requires StatusImplementing — otherwise no-op.
@@ -1508,6 +1527,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_RoutesT
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 3,
 		TotalRoadmapPhases:  3,
+		Stack:               singleLayerStack(3, "feature/feat-multi-rf/1-single"),
 		Repos: []feature.FeatureRepo{
 			{Name: repoName, Path: repoAPath},
 			{Name: repoNameB, Path: repoBPath},
@@ -1554,6 +1574,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_Publish
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-multi-rf-err/1-single"),
 		Repos: []feature.FeatureRepo{
 			{Name: repoName, Path: repoAPath},
 			{Name: repoNameB, Path: repoBPath},
@@ -1762,6 +1783,118 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_NoGate_EmitsFea
 	}
 }
 
+// Auto-approval of a roadmap whose table has two rows persists a two-layer
+// stack on the run alongside the phase count, before the roadmap advances.
+func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_PersistsStack(t *testing.T) {
+	tmpDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n## Phase 3: Polish\n### Goal\nPolish\n\n" +
+		"## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n" +
+		"| 1 | Bootstrap | 1 | Stands alone. |\n| 2 | Build and polish | 2-3 | Two halves of one concern. |\n"
+	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:                  "feat-ra-stack",
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineLarge,
+		CurrentRoadmapPhase: 0,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		Repos:               []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		f.CurrentRoadmapPhase = 1
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	if err := o.HandlePhaseCompletion("feat-ra-stack", orchestrator.PhaseCompletionInput{
+		Phase:      feature.PhasePlan,
+		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v", err)
+	}
+
+	if f.TotalRoadmapPhases != 3 {
+		t.Errorf("TotalRoadmapPhases = %d, want 3 (persisted as today)", f.TotalRoadmapPhases)
+	}
+	if len(f.Stack) != 2 {
+		t.Fatalf("stack = %+v, want two layers", f.Stack)
+	}
+	want := []feature.StackLayer{
+		{Position: 1, Title: "Bootstrap", Slug: "bootstrap", Phases: []int{1}},
+		{Position: 2, Title: "Build and polish", Slug: "build-and-polish", Phases: []int{2, 3}},
+	}
+	for i, layer := range want {
+		if f.Stack[i].Position != layer.Position || f.Stack[i].Title != layer.Title ||
+			f.Stack[i].Slug != layer.Slug || len(f.Stack[i].Phases) != len(layer.Phases) {
+			t.Errorf("stack layer %d = %+v, want %+v", i+1, f.Stack[i], layer)
+		}
+		for j, phase := range layer.Phases {
+			if f.Stack[i].Phases[j] != phase {
+				t.Errorf("stack layer %d phases = %v, want %v", i+1, f.Stack[i].Phases, layer.Phases)
+			}
+		}
+	}
+}
+
+// Auto-approval of a single-delivery feature whose roadmap table has two
+// rows: stack derivation is skipped (best-effort, matching the structural
+// skip) while the phase count still persists and approval does not fail.
+func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_SingleDeliverySkipsStackDerivation(t *testing.T) {
+	tmpDir := t.TempDir()
+	roadmapPath := filepath.Join(tmpDir, "roadmap.md")
+	roadmap := "# Roadmap\n\n## Phase 1: Bootstrap\n### Goal\nInit\n\n## Phase 2: Build\n### Goal\nBuild\n\n" +
+		"## Pull Requests\n\n| # | Title | Phases | Rationale |\n|---|---|---|---|\n" +
+		"| 1 | Bootstrap | 1 | Stands alone. |\n| 2 | Build | 2 | Stands alone. |\n"
+	if err := os.WriteFile(roadmapPath, []byte(roadmap), 0o644); err != nil {
+		t.Fatalf("write roadmap: %v", err)
+	}
+
+	f := &feature.Feature{
+		ID:                  "feat-ra-single-skip",
+		Status:              feature.StatusPlanning,
+		CurrentPhase:        feature.PhasePlan,
+		Pipeline:            feature.PipelineLarge,
+		DeliveryMode:        feature.DeliveryModeSingle,
+		CurrentRoadmapPhase: 0,
+		Artifacts:           map[string]string{"roadmap": roadmapPath},
+		Repos:               []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
+	}
+	lc := lifecycleForFeature(f)
+	lc.AdvanceRoadmapPhaseFn = func(id string) error {
+		f.CurrentRoadmapPhase = 1
+		f.Status = feature.StatusPlanning
+		return nil
+	}
+	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
+	fs := newFeatureStore(f)
+
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	if err := o.HandlePhaseCompletion("feat-ra-single-skip", orchestrator.PhaseCompletionInput{
+		Phase:      feature.PhasePlan,
+		PlanResult: &agent.PlanLoopResult{FinalStatus: "approved"},
+	}); err != nil {
+		t.Fatalf("HandlePhaseCompletion: %v (single-delivery table problems must not fail approval)", err)
+	}
+
+	if f.TotalRoadmapPhases != 2 {
+		t.Errorf("TotalRoadmapPhases = %d, want 2 (persisted despite the delivery problem)", f.TotalRoadmapPhases)
+	}
+	if len(f.Stack) != 0 {
+		t.Errorf("stack = %+v, want no layers derived from a two-row single-delivery table", f.Stack)
+	}
+	if f.CurrentRoadmapPhase != 1 {
+		t.Errorf("CurrentRoadmapPhase = %d, want 1 (approval still advances)", f.CurrentRoadmapPhase)
+	}
+}
+
 // Per-phase plan approved (roadmap mid-flight) → dispatches PhaseImplement.
 // FeatureAdvanced(PhaseImplement) must fire after
 // StartRoadmapPhaseImplementation + populate + startPhase so subscribers see
@@ -1894,6 +2027,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapMidflight_Emi
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  3,
+		Stack:               singleLayerStack(3, "feature/feat-multi-midflight/1-single"),
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: "/tmp/r1"},
@@ -1955,6 +2089,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-anchors/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
@@ -2023,6 +2158,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-anchor-failure/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
@@ -2067,35 +2203,40 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 // Non-roadmap multi-repo auto-publish: PublishCompleted emission
 // ---------------------------------------------------------------------------
 //
-// When the non-roadmap multi-repo auto-publish path completes — per-repo
-// publishes fired via OnRepoStatusChanged as each repo hit review_passed, and
-// the cross-repo join inside onMultiReposPassed reaches tryCompleteAndEmit
-// with published==true — the orchestrator must emit PublishCompleted and
-// fire OnPublishCompleted. Without this, subscribers tracking publish
-// completion (dashboards, observability, tests) miss the non-roadmap
-// multi-repo happy path entirely because the per-repo publishes never emit
-// the feature-level event and the Publish() pipeline is not invoked here.
+// The non-roadmap auto-publish path routes through the same Publish pipeline
+// as the roadmap-final one: MarkCodeReady, then a full publish pass whose
+// completion site emits PublishCompleted and fires OnPublishCompleted
+// whenever no repository failed.
 
-// Fully-published non-roadmap multi-repo path: tryCompleteAndEmit succeeds
+// Fully-published non-roadmap multi-repo path: both repositories' stack
+// layers are already delivered (recorded pull requests with pushed tips, so
+// the deferred Final Review pass is skipped), the publish pass walks both
+// repositories as a no-op, and tryCompleteAndEmit succeeds
 // (TryCompletePublish → (true, nil)) → must emit PublishCompleted and fire
-// OnPublishCompleted with the per-repo PR URL map. The nil error signals the
-// happy path.
+// OnPublishCompleted. The nil error signals the happy path.
 func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPublished_EmitsPublishCompleted(t *testing.T) {
+	stack := singleLayerStack(1, "feature/multi-pub-full")
+	stack[0].Repos = map[string]feature.StackRepoEntry{
+		"r1": {TipSHA: "aaaa", LastPushedSHA: "aaaa", PRURL: "https://github.com/org/r1/pull/1", PRState: feature.StackPRStateOpen},
+		"r2": {TipSHA: "bbbb", LastPushedSHA: "bbbb", PRURL: "https://github.com/org/r2/pull/2", PRState: feature.StackPRStateOpen},
+	}
 	f := &feature.Feature{
 		ID:           "feat-multi-pub-full",
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
+		Stack:        stack,
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: "/tmp/r1"},
 			{Name: "r2", Path: "/tmp/r2"},
 		},
 		RepoStates: map[string]*feature.RepoState{
-			"r1": {PRURL: "https://github.com/org/r1/pull/1"},
-			"r2": {PRURL: "https://github.com/org/r2/pull/2"},
+			"r1": {Touched: true},
+			"r2": {Touched: true},
 		},
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { return nil }
+	lc.MarkCodeReadyFn = func(id string) error { return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) {
 		f.Status = feature.StatusPublished
 		return true, nil
@@ -2103,16 +2244,18 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 	fs := newFeatureStore(f)
 
 	var pubCompletedID string
-	var pubCompletedURLs map[string]string
 	var pubCompletedErr error
 	var pubHookCalls int
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnPublishCompleted: func(id string, urls map[string]string, err error) {
+		OnPublishCompleted: func(id string, err error) {
 			pubCompletedID = id
-			pubCompletedURLs = urls
 			pubCompletedErr = err
 			pubHookCalls++
 		},
+	})
+	// The stack walk over already-delivered repositories is a no-op.
+	o.SetPublishRepoFn(func(id, repo string) error {
+		return nil
 	})
 
 	if err := o.HandlePhaseCompletion("feat-multi-pub-full", orchestrator.PhaseCompletionInput{
@@ -2122,9 +2265,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	// tryCompleteAndEmit ran and returned published=true — the orchestrator
-	// must NOT regress the feature to StatusCodeReady.
-	refuteLifecycleCall(t, lc, "MarkCodeReady")
+	// Code ready is marked before the publish dispatch; the just-published
+	// feature is never regressed afterwards.
+	assertLifecycleCall(t, lc, "MarkCodeReady")
 
 	// PublishCompleted event must be on the bus.
 	events := drainEvents(o)
@@ -2142,8 +2285,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 		t.Errorf("PublishCompleted.Error = %v, want nil on fully-published happy path", pubEvent.Error)
 	}
 
-	// OnPublishCompleted hook must have fired exactly once with no error and
-	// the per-repo PR URLs gathered from RepoImpl.
+	// OnPublishCompleted hook must have fired exactly once with no error.
 	if pubHookCalls != 1 {
 		t.Errorf("OnPublishCompleted fired %d times, want 1", pubHookCalls)
 	}
@@ -2153,20 +2295,18 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 	if pubCompletedErr != nil {
 		t.Errorf("OnPublishCompleted err = %v, want nil", pubCompletedErr)
 	}
-	if got := pubCompletedURLs["r1"]; got != "https://github.com/org/r1/pull/1" {
-		t.Errorf("OnPublishCompleted prURLs[r1] = %q, want r1 URL", got)
-	}
-	if got := pubCompletedURLs["r2"]; got != "https://github.com/org/r2/pull/2" {
-		t.Errorf("OnPublishCompleted prURLs[r2] = %q, want r2 URL", got)
+	if f.Status != feature.StatusPublished {
+		t.Errorf("feature status = %s, want Published", f.Status)
 	}
 }
 
 // Partially-published non-roadmap multi-repo path: tryCompleteAndEmit returns
 // (false, nil) (not yet fully published — e.g. a repo publish is still
-// pending). The handler must fall back to MarkCodeReady so resume paths can
-// recover the partial state, and PublishCompleted must NOT fire (the publish
-// has not actually completed yet).
-func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyPublished_NoPublishCompleted(t *testing.T) {
+// pending). The feature stays at CodeReady so resume paths can recover the
+// partial state, and no FeatureCompleted fires — the publish pass itself
+// still reports completion (no repository failed), but the feature-level
+// completion signal is withheld until every repository is published.
+func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyPublished_StaysCodeReady(t *testing.T) {
 	f := &feature.Feature{
 		ID:           "feat-multi-pub-partial",
 		Status:       feature.StatusImplementing,
@@ -2182,10 +2322,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyP
 	lc.MarkCodeReadyFn = func(id string) error { return nil }
 	fs := newFeatureStore(f)
 
-	var pubHookCalls int
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnPublishCompleted: func(id string, urls map[string]string, err error) { pubHookCalls++ },
-	})
+	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetPublishRepoFn(func(id, repo string) error { return nil })
 
 	if err := o.HandlePhaseCompletion("feat-multi-pub-partial", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2197,13 +2335,13 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyP
 	// Not fully published → MarkCodeReady must fire so resume paths recover.
 	assertLifecycleCall(t, lc, "MarkCodeReady")
 
-	// PublishCompleted must NOT have fired — the publish has not completed.
+	// FeatureCompleted must NOT fire — the feature is not yet published.
 	events := drainEvents(o)
-	if hasEventType(events, ports.PublishCompleted) {
-		t.Error("PublishCompleted must NOT fire when the feature is not yet fully published")
+	if hasEventType(events, ports.FeatureCompleted) {
+		t.Error("FeatureCompleted must NOT fire when the feature is not yet fully published")
 	}
-	if pubHookCalls != 0 {
-		t.Errorf("OnPublishCompleted fired %d times on partial-publish path; want 0", pubHookCalls)
+	if f.Status == feature.StatusPublished {
+		t.Errorf("feature status = %v, want not published (partial publish)", f.Status)
 	}
 }
 
@@ -2269,6 +2407,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapSkipsUntouchedRepos
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-untouched/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos: []feature.FeatureRepo{
@@ -2340,6 +2479,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapCommitsAllReposWith
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-no-states/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos:               []feature.FeatureRepo{{Name: "solo", Path: repo, WorktreePath: repo}},
@@ -2387,6 +2527,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcro
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 1,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/feat-roadmap-finalizing/1-single"),
 		RoadmapPhaseType:    "tracer-bullet",
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos:               []feature.FeatureRepo{{Name: "solo", Path: repo, WorktreePath: repo}},
@@ -2433,15 +2574,18 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcro
 }
 
 // A non-roadmap feature never crosses the phase commit boundary, so it must
-// not be flagged finalizing.
+// not be flagged finalizing. The repositories are non-publishable so the
+// completion stops at MarkCodeReady — the auto-publish tail is not this
+// test's subject.
 func TestOrchestrator_HandlePhaseCompletion_Implement_NonRoadmapDoesNotFlagFinalizing(t *testing.T) {
+	unpub := false
 	f := &feature.Feature{
 		ID:           "feat-nonroadmap-finalizing",
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-			{Name: repoNameB, Path: repoBPath},
+			{Name: repoName, Path: repoAPath, Publishable: &unpub},
+			{Name: repoNameB, Path: repoBPath, Publishable: &unpub},
 		},
 	}
 	lc := lifecycleForFeature(f)

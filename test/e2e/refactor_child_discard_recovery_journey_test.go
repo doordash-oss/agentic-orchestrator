@@ -27,25 +27,32 @@ import (
 // TestRefactorChildDiscardRecoveryJourney exercises the integration-attention
 // discard path and the crash-recovery journey for interrupted discards:
 //
-//   - Part A (candidate rollback): A child with a transaction journal in the
-//     "applied" phase is discarded. The discard flow must CAS-rollback every
-//     provably child-applied parent ref to its anchor SHA, sync the parent
-//     worktree, and close the child with outcome "discarded" while leaving
-//     parent repositories free of child candidates.
+//   - Part A (candidate rollback): A refactor child with a transaction
+//     journal in the "applied" phase is discarded. The discard flow must
+//     delete every provably child-applied created ref (a created ref still
+//     at its candidate), restore the parent worktree to the previous top
+//     branch, and close the child with outcome "discarded" while leaving
+//     the parent's own layer refs untouched and free of child candidates.
 //
-//   - Part B (externally-moved ref → attention preserved): A child with an
-//     applied journal where one parent ref was externally moved after the
-//     apply. The discard flow must roll back provable refs, preserve the
-//     externally moved ref (never overwrite), record diagnostics naming
-//     repository, ref, anchor, candidate, and observed SHA, and keep the
-//     child active with its discard intent. After the externally moved ref
-//     is restored to the anchor, a retry discard completes.
+//   - Part B (externally moved ref → attention preserved): A child with an
+//     applied journal where one created ref was externally moved after the
+//     apply. The discard flow must delete the provable created refs,
+//     preserve the externally moved ref (never overwrite), record
+//     diagnostics naming repository, ref, candidate, and observed SHA, and
+//     keep the child active with its discard intent. After the externally
+//     moved ref is restored to its candidate, a retry discard completes.
 //
 //   - Part C (crash recovery): A child with an applied journal has its
 //     discard intent durably recorded at "attention_resolved" — simulating a
 //     crash after attention resolution but before ref safety. A fresh
 //     orchestrator calls ReconcileDiscardIntents and the discard completes:
-//     refs rolled back, child closed, cleanup done.
+//     created refs deleted, child closed, cleanup done.
+//
+//   - Part D (applying crash): a created ref exists at its candidate but
+//     the entry was never persisted as applied.
+//
+//   - Part E (scan ordering): discard intents are reconciled before
+//     integration reconciliation.
 func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
@@ -63,8 +70,8 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			anchorSHAs[i] = fx.refSHA(i, "refs/heads/feature/parent")
 		}
 
-		// Apply both refs to their candidate SHAs, simulating a completed
-		// apply phase that crashed before close.
+		// Apply both created refs to their candidate SHAs, simulating a
+		// completed apply phase that crashed before close.
 		for i := range journal.Entries {
 			fx.manualApplyRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyApplied
@@ -72,11 +79,12 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		journal.Phase = feature.TransactionPhaseApplied
 		fx.saveJournal(journal)
 
-		// Verify the refs actually moved to candidates before discard.
+		// Verify the created refs exist at their candidates before
+		// discard, and the parent's own layer ref never moved.
 		for i := range fx.repoDirs {
-			got := fx.refSHA(i, "refs/heads/feature/parent")
-			if got != journal.Entries[i].CandidateSHA {
-				t.Fatalf("repo %d: ref = %s before discard, want candidate %s", i, got, journal.Entries[i].CandidateSHA)
+			fx.assertCreatedRefAt(t, i, journal.Entries[i].TopRef().CandidateSHA)
+			if got := fx.refSHA(i, "refs/heads/feature/parent"); got != anchorSHAs[i] {
+				t.Fatalf("repo %d: parent ref = %s before discard, want anchor %s (never rewritten)", i, got, anchorSHAs[i])
 			}
 		}
 
@@ -98,17 +106,18 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			t.Fatalf("discard step = %v, want cleanup_done", child.DiscardIntent)
 		}
 
-		// Every parent ref must be rolled back to its anchor SHA — no
-		// child candidate remains.
+		// Every created ref must be deleted — no child candidate remains —
+		// and the parent's own layer ref stays at its anchor.
 		for i := range fx.repoDirs {
-			got := fx.refSHA(i, "refs/heads/feature/parent")
-			if got != anchorSHAs[i] {
-				t.Fatalf("repo %d: ref = %s after discard, want anchor %s (CAS rollback)", i, got, anchorSHAs[i])
+			fx.assertCreatedRefAbsent(t, i)
+			if got := fx.refSHA(i, "refs/heads/feature/parent"); got != anchorSHAs[i] {
+				t.Fatalf("repo %d: parent ref = %s after discard, want anchor %s (untouched)", i, got, anchorSHAs[i])
 			}
 		}
 
-		// Parent worktrees must be synced back to the anchor.
+		// Parent worktrees must be synced back to the previous top branch.
 		for i := range fx.repoDirs {
+			fx.assertWorktreeOn(t, i, fx.parentBranch)
 			wtHead := multiRepoGit(t, fx.repoDirs[i], "rev-parse", "HEAD")
 			if wtHead != anchorSHAs[i] {
 				t.Fatalf("repo %d: worktree HEAD = %s, want anchor %s", i, wtHead, anchorSHAs[i])
@@ -156,14 +165,14 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		journal.Phase = feature.TransactionPhaseApplied
 		fx.saveJournal(journal)
 
-		// Externally move repo 2's parent ref after the apply: create a
-		// new commit on the parent branch that is neither the anchor nor
-		// the candidate.
-		multiRepoGit(t, fx.repoDirs[2], "checkout", "feature/parent")
+		// Externally move repo 2's created ref after the apply: create a
+		// new commit on the appended branch that is neither the parent
+		// anchor nor the candidate.
+		multiRepoGit(t, fx.repoDirs[2], "checkout", fx.appendedBranch)
 		testutil.CommitFile(t, fx.repoDirs[2], "external.txt", "external\n", "external ref movement")
-		externalSHA := fx.refSHA(2, "refs/heads/feature/parent")
-		if externalSHA == anchorSHAs[2] || externalSHA == journal.Entries[2].CandidateSHA {
-			t.Fatal("external SHA should differ from both anchor and candidate")
+		externalSHA := fx.refSHA(2, "refs/heads/"+fx.appendedBranch)
+		if externalSHA == anchorSHAs[2] || externalSHA == journal.Entries[2].TopRef().CandidateSHA {
+			t.Fatal("external SHA should differ from both the parent anchor and the candidate")
 		}
 
 		o := fx.orchestrator()
@@ -186,18 +195,18 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			t.Fatal("discard intent missing; must remain durable")
 		}
 
-		// Repos 0 and 1 must be rolled back to their anchor SHAs.
+		// Repos 0 and 1 must be rolled back: their created refs deleted
+		// and their worktrees restored to the previous top branch.
 		for i := 0; i < 2; i++ {
-			got := fx.refSHA(i, "refs/heads/feature/parent")
-			if got != anchorSHAs[i] {
-				t.Fatalf("repo %d: ref = %s, want anchor %s (CAS rollback)", i, got, anchorSHAs[i])
-			}
+			fx.assertCreatedRefAbsent(t, i)
+			fx.assertWorktreeOn(t, i, fx.parentBranch)
 		}
 
-		// Repo 2's externally moved ref must be preserved (not overwritten).
-		got := fx.refSHA(2, "refs/heads/feature/parent")
+		// Repo 2's externally moved created ref must be preserved (not
+		// overwritten).
+		got := fx.refSHA(2, "refs/heads/"+fx.appendedBranch)
 		if got != externalSHA {
-			t.Fatalf("repo 2: ref = %s, want externally moved %s (must not overwrite)", got, externalSHA)
+			t.Fatalf("repo 2: created ref = %s, want externally moved %s (must not overwrite)", got, externalSHA)
 		}
 
 		// The journal must be in attention phase with a stored ref-race
@@ -215,9 +224,9 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		}
 
 		// The externally moved entry must stay applied, and the record's
-		// repositories block must carry its anchor, expected, candidate,
-		// and observed SHAs with raw diagnostics naming the repository,
-		// ref, and those SHAs.
+		// repositories block must carry its candidate and observed SHAs
+		// with raw diagnostics naming the repository, ref, and those SHAs.
+		// A created ref's anchor is absence, so no anchor SHA appears.
 		movedEntry := tx.EntryByRepo(child.Repos[2].Name)
 		if movedEntry == nil {
 			t.Fatal("moved entry missing from journal")
@@ -225,23 +234,22 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		if movedEntry.ApplyState != feature.RepoApplyApplied {
 			t.Fatalf("moved entry apply_state = %q, want applied (not rolled back)", movedEntry.ApplyState)
 		}
-		if movedEntry.ObservedSHA != externalSHA {
-			t.Fatalf("moved entry observed_sha = %s, want external %s", movedEntry.ObservedSHA, externalSHA)
+		movedTop := movedEntry.TopRef()
+		if movedTop == nil || movedTop.ObservedSHA != externalSHA {
+			t.Fatalf("moved entry top ref = %+v, want observed %s", movedEntry.TopRef(), externalSHA)
 		}
 		if block := attentionRepoBlock(raceRec, movedEntry.Repo); block == nil ||
-			block.ParentAnchorSHA != movedEntry.ParentAnchorSHA ||
-			block.ExpectedRefSHA != movedEntry.ExpectedRefSHA ||
-			block.CandidateSHA != movedEntry.CandidateSHA ||
+			block.Branch != movedTop.Branch ||
+			block.CandidateSHA != movedTop.CandidateSHA ||
 			block.ObservedSHA != externalSHA {
-			t.Fatalf("moved repo repositories block = %+v, want anchor %s expected %s candidate %s observed %s",
-				block, movedEntry.ParentAnchorSHA, movedEntry.ExpectedRefSHA, movedEntry.CandidateSHA, externalSHA)
+			t.Fatalf("moved repo repositories block = %+v, want branch %s candidate %s observed %s",
+				block, movedTop.Branch, movedTop.CandidateSHA, externalSHA)
 		}
 		for _, needle := range []string{
 			movedEntry.Repo,
-			"refs/heads/" + movedEntry.ParentBranch,
-			movedEntry.ParentAnchorSHA,
-			movedEntry.CandidateSHA,
-			movedEntry.ObservedSHA,
+			"refs/heads/" + movedTop.Branch,
+			movedTop.CandidateSHA,
+			movedTop.ObservedSHA,
 		} {
 			if !strings.Contains(raceRec.Diagnostics, needle) {
 				t.Fatalf("attention diagnostics %q missing %q", raceRec.Diagnostics, needle)
@@ -267,10 +275,9 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			t.Fatal("CreateRefactorChild should fail while discard is in attention")
 		}
 
-		// Fix the externally moved ref: reset it back to the anchor.
-		// The reset --hard moves both HEAD and the branch ref.
-		multiRepoGit(t, fx.repoDirs[2], "checkout", "feature/parent")
-		multiRepoGit(t, fx.repoDirs[2], "reset", "--hard", anchorSHAs[2])
+		// Fix the externally moved created ref: reset it back to the
+		// candidate. The reset --hard moves both HEAD and the branch ref.
+		multiRepoGit(t, fx.repoDirs[2], "reset", "--hard", journal.Entries[2].TopRef().CandidateSHA)
 
 		// Retry the discard — it should now complete.
 		if err := o.DiscardChild(fx.child.ID); err != nil {
@@ -285,11 +292,12 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			t.Fatalf("discard step after retry = %v, want cleanup_done", child.DiscardIntent)
 		}
 
-		// All parent refs must now be at the anchor (no child candidate).
+		// Every created ref must now be absent (no child candidate), and
+		// the parent's own refs stay at their anchors.
 		for i := range fx.repoDirs {
-			got := fx.refSHA(i, "refs/heads/feature/parent")
-			if got != anchorSHAs[i] {
-				t.Fatalf("repo %d: ref = %s after retry, want anchor %s", i, got, anchorSHAs[i])
+			fx.assertCreatedRefAbsent(t, i)
+			if got := fx.refSHA(i, "refs/heads/feature/parent"); got != anchorSHAs[i] {
+				t.Fatalf("repo %d: parent ref = %s after retry, want anchor %s (untouched)", i, got, anchorSHAs[i])
 			}
 		}
 	})
@@ -339,7 +347,7 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 		_, child := fx.reload()
 
 		// The discard must have completed through the ref safety step
-		// (CAS rollback), closure, and cleanup tail.
+		// (created-ref deletion), closure, and cleanup tail.
 		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeDiscarded {
 			t.Fatalf("close_outcome = %q, want discarded", child.Parent.CloseOutcome)
 		}
@@ -350,12 +358,15 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			t.Fatalf("discard step = %v, want cleanup_done", child.DiscardIntent)
 		}
 
-		// All parent refs must be rolled back to their anchor SHAs.
+		// Every created ref must be deleted, the parent's own layer refs
+		// stay at their anchors, and the worktrees are back on the
+		// previous top branch.
 		for i := range fx.repoDirs {
-			got := fx.refSHA(i, "refs/heads/feature/parent")
-			if got != anchorSHAs[i] {
-				t.Fatalf("repo %d: ref = %s after recovery, want anchor %s", i, got, anchorSHAs[i])
+			fx.assertCreatedRefAbsent(t, i)
+			if got := fx.refSHA(i, "refs/heads/feature/parent"); got != anchorSHAs[i] {
+				t.Fatalf("repo %d: parent ref = %s after recovery, want anchor %s (untouched)", i, got, anchorSHAs[i])
 			}
+			fx.assertWorktreeOn(t, i, fx.parentBranch)
 		}
 
 		// The journal must show all entries rolled back.
@@ -402,21 +413,19 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			anchorSHAs[i] = fx.refSHA(i, "refs/heads/feature/parent")
 		}
 
-		// Simulate an applying crash: the CAS succeeds for repo 0 (ref
-		// moves to candidate) but the entry is NOT persisted as applied
-		// because the crash happened between the CAS and the
-		// persistTransaction call. The journal stays in "applying"
-		// phase and the entry's ApplyState is empty.
+		// Simulate an applying crash: the create succeeds for repo 0
+		// (created ref exists at the candidate) but the entry is NOT
+		// persisted as applied because the crash happened between the
+		// ref transaction and the persistTransaction call. The journal
+		// stays in "applying" phase and the entry's ApplyState is empty.
 		fx.manualApplyRef(t, 0, &journal.Entries[0])
 		journal.Phase = feature.TransactionPhaseApplying
 		// Deliberately do NOT set journal.Entries[0].ApplyState to
 		// RepoApplyApplied — the crash left the entry un-persisted.
 		fx.saveJournal(journal)
 
-		// Verify repo 0's ref is at the candidate.
-		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != journal.Entries[0].CandidateSHA {
-			t.Fatalf("repo 0 ref = %s, want candidate %s", got, journal.Entries[0].CandidateSHA)
-		}
+		// Verify repo 0's created ref is at the candidate.
+		fx.assertCreatedRefAt(t, 0, journal.Entries[0].TopRef().CandidateSHA)
 
 		o := fx.orchestrator()
 		if err := o.DiscardChild(fx.child.ID); err != nil {
@@ -430,17 +439,17 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			t.Fatalf("close_outcome = %q, want discarded", child.Parent.CloseOutcome)
 		}
 
-		// Repo 0's ref must be rolled back to its anchor — the discard
-		// flow inspected the actual ref (not just the ApplyState) and
-		// found it at the candidate even though the entry was not
-		// persisted as applied.
-		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != anchorSHAs[0] {
-			t.Fatalf("repo 0 ref = %s after discard, want anchor %s (crash-entry rollback)", got, anchorSHAs[0])
-		}
+		// Repo 0's created ref must be deleted — the discard flow
+		// inspected the actual ref (not just the ApplyState) and found it
+		// at the candidate even though the entry was not persisted as
+		// applied.
+		fx.assertCreatedRefAbsent(t, 0)
+		fx.assertWorktreeOn(t, 0, fx.parentBranch)
 
-		// Repo 1's ref must still be at its anchor (never applied).
+		// Repo 1's created ref was never created (absent = at-anchor).
+		fx.assertCreatedRefAbsent(t, 1)
 		if got := fx.refSHA(1, "refs/heads/feature/parent"); got != anchorSHAs[1] {
-			t.Fatalf("repo 1 ref = %s, want anchor %s", got, anchorSHAs[1])
+			t.Fatalf("repo 1 parent ref = %s, want anchor %s (untouched)", got, anchorSHAs[1])
 		}
 	})
 
@@ -511,10 +520,12 @@ func TestRefactorChildDiscardRecoveryJourney(t *testing.T) {
 			t.Fatal("parent moved to CodeReady; discard should not trigger integration closure")
 		}
 
-		// All parent refs must be rolled back to anchors.
+		// Every created ref must be deleted and the parent's own refs
+		// stay at their anchors.
 		for i := range fx.repoDirs {
+			fx.assertCreatedRefAbsent(t, i)
 			if got := fx.refSHA(i, "refs/heads/feature/parent"); got != anchorSHAs[i] {
-				t.Fatalf("repo %d ref = %s, want anchor %s", i, got, anchorSHAs[i])
+				t.Fatalf("repo %d parent ref = %s, want anchor %s (untouched)", i, got, anchorSHAs[i])
 			}
 		}
 	})

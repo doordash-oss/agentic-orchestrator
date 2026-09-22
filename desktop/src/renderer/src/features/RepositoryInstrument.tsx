@@ -21,7 +21,7 @@ limitations under the License.
  * failure indication that links into the publish modal. Used as the cockpit
  * inspector's operational context.
  */
-import type { RepoStatusView } from '../../../shared/ipc';
+import type { PullRequestEntryView, RepoStatusView } from '../../../shared/ipc';
 
 const FRESHNESS_LABELS: Record<string, string> = {
   'in sync': 'In sync',
@@ -41,6 +41,64 @@ const REBASE_STATUS_LABELS: Record<string, string> = {
   completed: 'Completed',
   interrupted: 'Interrupted',
 };
+
+const PR_STATE_BADGES: Record<PullRequestEntryView['state'], string> = {
+  none: 'not published',
+  open: 'open',
+  merged: 'merged',
+  closed: 'closed',
+};
+
+/**
+ * The stack layer's state badge: the no-commits marker wins over the recorded
+ * state (an empty layer never claims a publish state), and `none` reads as
+ * "not published" because the read model reports recorded state only.
+ */
+export function stackPullRequestBadge(entry: PullRequestEntryView): string {
+  if (entry.noCommits) return 'no changes in this repository';
+  return PR_STATE_BADGES[entry.state];
+}
+
+export interface StackPullRequestListProps {
+  entries: PullRequestEntryView[];
+  onOpenPullRequest(url: string): void;
+}
+
+/**
+ * One row per stack layer, in position order: the layer's position, title,
+ * state badge, and — only where the layer has a published PR — the external
+ * link. One-layer repositories render through this same list; there is no
+ * collapsed single-link presentation.
+ */
+export function StackPullRequestList({ entries, onOpenPullRequest }: StackPullRequestListProps) {
+  if (entries.length === 0) return null;
+  return (
+    <ul className="repo-instrument__pr-list" aria-label="Stack pull requests">
+      {entries.map((entry) => (
+        <li key={entry.position} className="repo-instrument__pr-row">
+          <span className="repo-instrument__pr-position">Layer {entry.position}</span>
+          <span className="repo-instrument__pr-title">{entry.title}</span>
+          <span
+            className="repo-instrument__pr-badge"
+            data-state={entry.noCommits ? 'no_changes' : entry.state}
+          >
+            {stackPullRequestBadge(entry)}
+          </span>
+          {entry.url === undefined ? null : (
+            <button
+              type="button"
+              className="repo-instrument__pr-link"
+              aria-label="Open pull request"
+              onClick={() => onOpenPullRequest(entry.url!)}
+            >
+              {entry.url}
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export interface RepositoryInstrumentProps {
   repos: RepoStatusView[];
@@ -83,21 +141,6 @@ export function RepositoryInstrument({
                   <dd>{FRESHNESS_LABELS[repo.freshness] ?? repo.freshness}</dd>
                 </div>
               ) : null}
-              {repo.prUrl !== undefined ? (
-                <div className="repo-instrument__fact">
-                  <dt>PR</dt>
-                  <dd>
-                    <button
-                      type="button"
-                      className="repo-instrument__pr-link"
-                      aria-label="Open pull request"
-                      onClick={() => onOpenPullRequest(repo.prUrl!)}
-                    >
-                      {repo.prUrl}
-                    </button>
-                  </dd>
-                </div>
-              ) : null}
               {repo.rebaseStatus !== undefined ? (
                 <div className="repo-instrument__fact" data-rebase={repo.rebaseStatus}>
                   <dt>Rebase</dt>
@@ -124,6 +167,12 @@ export function RepositoryInstrument({
                 </div>
               ) : null}
             </dl>
+            {repo.pullRequests !== undefined && repo.pullRequests.length > 0 ? (
+              <StackPullRequestList
+                entries={repo.pullRequests}
+                onOpenPullRequest={onOpenPullRequest}
+              />
+            ) : null}
             {repo.error !== undefined ? (
               <div className="repo-instrument__publish-attention" data-repo={repo.name}>
                 <span className="repo-instrument__publish-attention-title">{repo.error.title}</span>

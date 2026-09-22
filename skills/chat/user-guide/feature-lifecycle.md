@@ -34,7 +34,7 @@ Compares implementation approaches and records a chosen direction with its trade
 
 Planning has two levels:
 
-1. a strategic roadmap divided into vertical phases (on design-less pipelines such as Medium, the roadmap distills the exit criteria into its `## Overall Exit Criteria` section); and
+1. a strategic roadmap divided into vertical phases, with a `## Pull Requests` table proposing how the phases group into stacked pull requests — reviewed and edited at the roadmap gate — (on design-less pipelines such as Medium, the roadmap distills the exit criteria into its `## Overall Exit Criteria` section); and
 2. a tactical plan for each roadmap phase, with repository ownership and verification requirements.
 
 ### Implement

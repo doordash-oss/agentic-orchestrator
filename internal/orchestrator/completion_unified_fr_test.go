@@ -283,6 +283,7 @@ func TestOrchestrator_OnMultiReposPassed_FinalReviewPlanRevisionResultFailsWitho
 				CurrentPhase:        feature.PhaseImplement,
 				CurrentRoadmapPhase: 1,
 				TotalRoadmapPhases:  1,
+				Stack:               singleLayerStack(1, "feature/"+featureID+"/1-single"),
 				ActiveRun:           1,
 				Pipeline:            tt.pipeline,
 				Artifacts:           map[string]string{"roadmap": roadmapPath},
@@ -382,6 +383,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurr
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/"+featureID+"/1-single"),
 		ActiveRun:           1,
 		RunCount:            1,
 		Pipeline:            feature.PipelineLarge,
@@ -452,32 +454,43 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceStaysOnCurr
 }
 
 // TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishCompleted
-// verifies the auto-publish path for N=1: when the per-repo publish fired
-// already (via OnRepoStatusChanged eager publish) and the cross-repo join
-// reaches tryCompleteAndEmit with published==true, the orchestrator emits
-// PublishCompleted and fires OnPublishCompleted.
+// verifies the auto-publish tail for N=1: the repository's single stack layer
+// already carries a recorded pull request with its tip pushed (so the
+// deferred Final Review pass is skipped), and the unified MarkCodeReady →
+// Publish pipeline emits PublishCompleted and fires OnPublishCompleted — the
+// stack walk over an already-delivered repository is a no-op.
 func TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishCompleted(t *testing.T) {
+	const prURL = "https://github.com/org/r1/pull/1"
+	stack := singleLayerStack(1, "feature/n1-pub")
+	stack[0].Repos = map[string]feature.StackRepoEntry{
+		"r1": {TipSHA: "aaaa", LastPushedSHA: "aaaa", PRURL: prURL, PRState: feature.StackPRStateOpen},
+	}
 	f := &feature.Feature{
 		ID:           "feat-n1-pub",
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
+		Stack:        stack,
 		Repos:        []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
 		RepoStates: map[string]*feature.RepoState{
-			"r1": {PRURL: "https://github.com/org/r1/pull/1"},
+			"r1": {Touched: true},
 		},
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
+	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
 	lc.TryCompletePublishFn = func(id string) (bool, error) { f.Status = feature.StatusPublished; return true, nil }
 	fs := newFeatureStore(f)
 
-	var pubURLs map[string]string
 	var pubID string
+	var pubErr error
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
-		OnPublishCompleted: func(id string, urls map[string]string, err error) {
+		OnPublishCompleted: func(id string, err error) {
 			pubID = id
-			pubURLs = urls
+			pubErr = err
 		},
+	})
+	o.SetPublishRepoFn(func(id, repo string) error {
+		return nil
 	})
 
 	if err := o.HandlePhaseCompletion("feat-n1-pub", orchestrator.PhaseCompletionInput{
@@ -494,8 +507,11 @@ func TestOrchestrator_OnMultiReposPassed_N1_AutoPublishComplete_EmitsPublishComp
 	if pubID != "feat-n1-pub" {
 		t.Errorf("OnPublishCompleted feature ID = %q, want %q", pubID, "feat-n1-pub")
 	}
-	if got := pubURLs["r1"]; got != "https://github.com/org/r1/pull/1" {
-		t.Errorf("OnPublishCompleted urls[r1] = %q, want PR URL", got)
+	if pubErr != nil {
+		t.Errorf("OnPublishCompleted err = %v, want nil", pubErr)
+	}
+	if f.Status != feature.StatusPublished {
+		t.Errorf("feature status = %s, want Published", f.Status)
 	}
 }
 
@@ -569,10 +585,9 @@ func TestOrchestrator_FeatureFinalReview_3Repo_Approves_AllReposAdvanceAndPublis
 	})
 
 	publishedRepos := map[string]string{}
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		url := "https://github.com/org/" + repo + "/pull/1"
-		publishedRepos[repo] = url
-		return url, nil
+	o.SetPublishRepoFn(func(id, repo string) error {
+		publishedRepos[repo] = "https://github.com/org/" + repo + "/pull/1"
+		return nil
 	})
 
 	if err := o.HandlePhaseCompletion("feat-3repo-fr-success", orchestrator.PhaseCompletionInput{
@@ -634,12 +649,12 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 			BaseBranch:   mainBranch,
 		}},
 		RepoStates: map[string]*feature.RepoState{apiRepoName: {Touched: true}},
+		Stack:      singleLayerStack(1, "feature/fr-scrub"),
 	}
 	lc := lifecycleForFeature(f)
 	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
 	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
-	lc.SetRepoPublishedFn = func(featureID, repoName, prURL string) error {
-		f.RepoStates[repoName].PRURL = prURL
+	lc.SetRepoPublishedFn = func(featureID, repoName string) error {
 		return nil
 	}
 	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
@@ -647,6 +662,9 @@ func TestAdvanceAfterFinalReviewScrubsRootArtifactsBeforeCommitAll(t *testing.T)
 
 	publisher := mocks.NewMockRemoteOps()
 	publisher.PushFn = func(string, string) error { return nil }
+	publisher.PushLayerBranchFn = func(_, _ string, localSHA, _ string) (string, error) {
+		return localSHA, nil
+	}
 	publisher.CreatePRFn = func(string, string, string, string, string, bool) (string, error) {
 		return "https://github.com/org/api/pull/1", nil
 	}
@@ -725,6 +743,7 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/fr-roadmap-scrub/1-single"),
 		Pipeline:            feature.PipelineLarge,
 		Checkpoints:         feature.Checkpoints{},
 		Repos: []feature.FeatureRepo{
@@ -754,8 +773,7 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 	lc.CompleteImplementationFn = func(id string) error { f.Status = feature.StatusReviewPassed; return nil }
 	lc.MarkFinalReviewReadyFn = func(id string) error { f.Status = feature.StatusFinalReviewing; return nil }
 	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	lc.SetRepoPublishedFn = func(featureID, repoName, prURL string) error {
-		f.RepoStates[repoName].PRURL = prURL
+	lc.SetRepoPublishedFn = func(featureID, repoName string) error {
 		return nil
 	}
 	lc.TryCompletePublishFn = func(id string) (bool, error) { f.Status = feature.StatusPublished; return true, nil }
@@ -767,6 +785,11 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 		return "https://github.com/org/" + filepath.Base(repoPath) + "/pull/1", nil
 	}
 
+	// The stranded artifacts exist before the completion runs: the deferred
+	// Final Review pass is stubbed to all_passed (no layer tips are recorded
+	// without WorktreeOps, so the repositories stay staged for it), and the
+	// scrub must remove the artifacts on the auto-publish tail's own pass.
+	writeCandidates()
 	o := orchestrator.New(orchestrator.Deps{
 		Lifecycle: lc,
 		Store:     fs,
@@ -782,7 +805,6 @@ func TestAdvanceAfterFinalReviewRoadmapFinalScrubsRootArtifactsBeforeCommitAll(t
 		ff *feature.Feature,
 		_ ...agent.KBInfo,
 	) (chan *agent.OrchestratorResult, error) {
-		writeCandidates()
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
 		return ch, nil
@@ -873,10 +895,9 @@ func TestOrchestrator_FeatureFinalReview_3Repo_ChangesRequested_FixApproves(t *t
 	})
 
 	publishedRepos := map[string]string{}
-	o.SetPublishRepoFn(func(id, repo string) (string, error) {
-		url := "https://github.com/org/" + repo + "/pull/1"
-		publishedRepos[repo] = url
-		return url, nil
+	o.SetPublishRepoFn(func(id, repo string) error {
+		publishedRepos[repo] = "https://github.com/org/" + repo + "/pull/1"
+		return nil
 	})
 
 	if err := o.HandlePhaseCompletion("feat-3repo-fr-fix", orchestrator.PhaseCompletionInput{

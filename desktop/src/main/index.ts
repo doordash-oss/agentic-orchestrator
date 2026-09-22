@@ -1628,8 +1628,6 @@ if (!hasSingleInstanceLock) {
       clearDiagnostics: () => diagnostics.clear(),
       preflightCompletion: (request) => completion.preflightCompletion(request),
       getRepositoryDiff: (request) => completion.getRepositoryDiff(request),
-      generatePublishDescription: (request) =>
-        features.generatePublishDescription(request.featureId, request.repos ?? []),
       openExternal: (request) => completion.openExternal(request),
       revealPath: (request) => completion.revealPath(request),
       writeClipboardText: (text) => completion.writeClipboardText(text),

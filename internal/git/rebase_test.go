@@ -34,14 +34,6 @@ func TestRemoteUpToDateGuards(t *testing.T) {
 	if IsBehindRemote(repo, "main") {
 		t.Error("IsBehindRemote() = true, want false when up to date")
 	}
-
-	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("PullRebase() outcome = %d, want %d (err: %v)", result.Outcome, PullRebaseSuccess, result.Err)
-	}
-	if result.Err != nil {
-		t.Errorf("PullRebase() error = %v, want nil", result.Err)
-	}
 }
 
 func TestIsBehindRemote_Behind(t *testing.T) {
@@ -71,71 +63,6 @@ func TestIsBehindRemote_Behind(t *testing.T) {
 	}
 }
 
-func TestRebase_LinearHistory(t *testing.T) {
-	if testing.Short() {
-		t.Skip("covered by TestFastRebaseRepresentatives in short mode")
-	}
-	t.Parallel()
-
-	repo := testutil.InitGitRepo(t)
-
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "feature.txt", "feat\n", "feature commit")
-
-	runGit(t, repo, "checkout", "main")
-	testutil.CommitFile(t, repo, "base.txt", "base\n", "base commit")
-	runGit(t, repo, "update-ref", "refs/remotes/origin/main", "main")
-	runGit(t, repo, "checkout", "feature/test")
-
-	if err := Rebase(repo, "main"); err != nil {
-		t.Fatalf("Rebase: %v", err)
-	}
-
-	// After rebase, should no longer be behind
-	if IsBehindRemote(repo, "main") {
-		t.Error("expected not behind after rebase")
-	}
-}
-
-func TestRebase_ConflictAborts(t *testing.T) {
-	if testing.Short() {
-		t.Skip("covered by TestFastRebaseRepresentatives in short mode")
-	}
-	t.Parallel()
-
-	repo := testutil.InitGitRepo(t)
-
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "conflict.txt", "feature version\n", "feature change")
-
-	runGit(t, repo, "checkout", "main")
-	testutil.CommitFile(t, repo, "conflict.txt", "main version\n", "main change")
-	runGit(t, repo, "update-ref", "refs/remotes/origin/main", "main")
-	runGit(t, repo, "checkout", "feature/test")
-
-	err := Rebase(repo, "main")
-	if err == nil {
-		t.Fatal("expected rebase to fail with conflicts")
-	}
-	if RebaseInProgress(repo) {
-		t.Fatal("expected rebase to be aborted")
-	}
-
-	// Verify rebase was aborted (no .git/rebase-merge dir)
-	branch := CurrentBranch(repo)
-	if branch != "feature/test" {
-		t.Errorf("expected branch feature/test after abort, got %s", branch)
-	}
-	statusCmd := exec.Command("git", "-C", repo, "status", "--porcelain")
-	statusOut, err := statusCmd.Output()
-	if err != nil {
-		t.Fatalf("git status failed: %v", err)
-	}
-	if strings.TrimSpace(string(statusOut)) != "" {
-		t.Errorf("expected clean worktree after conflict abort, got: %s", string(statusOut))
-	}
-}
-
 func TestPRBaseBranch_NoGH(t *testing.T) {
 	t.Parallel()
 
@@ -156,6 +83,49 @@ func TestPRBaseBranchReturnsBaseRefAndEmptyOnError(t *testing.T) {
 	}
 	if got := PRBaseBranch("/nonexistent", "https://github.com/acme/widgets/pull/8"); got != "" {
 		t.Errorf("PRBaseBranch() = %q, want empty string on API error", got)
+	}
+}
+
+// TestFetchBranchForcesRemoteTrackingRefUpdate proves the invariant FetchBranch
+// exists for: even when the remote branch moved non-fast-forward, the forced
+// refspec lands refs/remotes/origin/<branch> at the remote tip.
+func TestFetchBranchForcesRemoteTrackingRefUpdate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("drives a real git repository with a bare origin")
+	}
+	t.Parallel()
+
+	repo, bare := testutil.InitPublishReadyGitRepo(t)
+	testutil.CreateBranch(t, repo, "feature/test")
+	testutil.CommitFile(t, repo, "feature.txt", "first\n", "first commit")
+	testutil.SimulatePush(t, repo, bare, "feature/test", "feature/test")
+
+	// Rewrite the remote branch non-fast-forward from a clone so the stale
+	// tracking ref can only catch up through the forced refspec.
+	clone := t.TempDir()
+	gitClone(t, bare, clone)
+	runGit(t, clone, "checkout", "-B", "feature/test", "main")
+	testutil.CommitFile(t, clone, "feature.txt", "rewritten history\n", "rewritten commit")
+	runGit(t, bare, "fetch", clone, "+feature/test:refs/heads/feature/test")
+
+	staleTip := runGit(t, repo, "rev-parse", "refs/remotes/origin/feature/test")
+	remoteTip := runGit(t, bare, "rev-parse", "refs/heads/feature/test")
+	if staleTip == remoteTip {
+		t.Fatalf("remote branch did not move non-fast-forward: both at %s", remoteTip)
+	}
+
+	if err := FetchBranch(repo, "feature/test"); err != nil {
+		t.Fatalf("FetchBranch: %v", err)
+	}
+	trackedTip := runGit(t, repo, "rev-parse", "refs/remotes/origin/feature/test")
+	if trackedTip != remoteTip {
+		t.Fatalf("refs/remotes/origin/feature/test = %s, want forced remote tip %s", trackedTip, remoteTip)
+	}
+
+	// A branch the remote does not have must surface the fetch error rather
+	// than silently leaving a stale tracking ref in place.
+	if err := FetchBranch(repo, "feature/missing"); err == nil {
+		t.Fatal("FetchBranch() = nil error, want error for a branch absent on the remote")
 	}
 }
 
@@ -182,13 +152,14 @@ func gitPush(t *testing.T, repoPath, branch string) {
 	testutil.SimulatePush(t, repoPath, bareDir, branch, branch)
 }
 
-func runGit(t *testing.T, dir string, args ...string) {
+func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := gitCmd(dir, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
+	return strings.TrimSpace(string(out))
 }
 
 func gitCmd(dir string, args ...string) *exec.Cmd {
@@ -208,230 +179,6 @@ func gitCmd(dir string, args ...string) *exec.Cmd {
 		"GIT_TERMINAL_PROMPT=0",
 	)
 	return cmd
-}
-
-// PullRebase tests
-
-func TestPullRebase_BehindRemote(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping pull-rebase behind-remote multi-repo regression in short mode")
-	}
-	t.Parallel()
-
-	repo, bare := testutil.InitPublishReadyGitRepo(t)
-
-	// Create a feature branch and push it
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "feature.txt", "feature work\n", "feature commit")
-	gitPush(t, repo, "feature/test")
-
-	// Simulate remote changes via a second clone
-	clone2 := t.TempDir()
-	gitClone(t, bare, clone2)
-	runGit(t, clone2, "checkout", "feature/test")
-	testutil.CommitFile(t, clone2, "remote-change.txt", "remote work\n", "remote commit")
-	gitPush(t, clone2, "feature/test")
-
-	// Add a local non-conflicting commit
-	testutil.CommitFile(t, repo, "local-change.txt", "local work\n", "local commit")
-
-	// PullRebase should succeed
-	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
-	}
-
-	// Verify both commits are present
-	cmd := exec.Command("git", "-C", repo, "log", "--oneline")
-	out, _ := cmd.Output()
-	log := string(out)
-	if !strings.Contains(log, "remote commit") {
-		t.Error("expected remote commit in log after rebase")
-	}
-	if !strings.Contains(log, "local commit") {
-		t.Error("expected local commit in log after rebase")
-	}
-}
-
-// TestPullRebase_SingleBranchClone pins the single-branch clone case: the
-// configured fetch refspec only maps main, so a plain fetch never writes
-// origin/<branch>. PullRebase must still rebase onto the remote branch
-// instead of treating it as absent.
-func TestPullRebase_SingleBranchClone(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping single-branch pull-rebase regression in short mode")
-	}
-	t.Parallel()
-
-	repo, bare := testutil.InitPublishReadyGitRepo(t)
-
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "feature.txt", "feature work\n", "feature commit")
-	gitPush(t, repo, "feature/test")
-
-	// Narrow the clone to main only and drop the tracking ref the push left behind.
-	runGit(t, repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
-	runGit(t, repo, "update-ref", "-d", "refs/remotes/origin/feature/test")
-
-	clone2 := t.TempDir()
-	gitClone(t, bare, clone2)
-	runGit(t, clone2, "checkout", "feature/test")
-	testutil.CommitFile(t, clone2, "remote-change.txt", "remote work\n", "remote commit")
-	gitPush(t, clone2, "feature/test")
-
-	testutil.CommitFile(t, repo, "local-change.txt", "local work\n", "local commit")
-
-	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Fatalf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
-	}
-	out, _ := exec.Command("git", "-C", repo, "log", "--oneline").Output()
-	if !strings.Contains(string(out), "remote commit") {
-		t.Errorf("expected remote commit in log after rebase, got:\n%s", out)
-	}
-	if !strings.Contains(string(out), "local commit") {
-		t.Errorf("expected local commit in log after rebase, got:\n%s", out)
-	}
-}
-
-func TestPullRebase_ConflictAbortsCleanly(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping second pull-rebase conflict regression in short mode")
-	}
-	t.Parallel()
-
-	repo, bare := testutil.InitPublishReadyGitRepo(t)
-
-	// Create a feature branch with a shared file and push
-	testutil.CreateBranch(t, repo, "feature/test")
-	testutil.CommitFile(t, repo, "shared.txt", "original content\n", "add shared file")
-	gitPush(t, repo, "feature/test")
-
-	// Simulate conflicting remote changes
-	clone2 := t.TempDir()
-	gitClone(t, bare, clone2)
-	runGit(t, clone2, "checkout", "feature/test")
-	testutil.CommitFile(t, clone2, "shared.txt", "remote version\n", "remote conflicting commit")
-	gitPush(t, clone2, "feature/test")
-
-	// Make local conflicting change
-	testutil.CommitFile(t, repo, "shared.txt", "local version\n", "local conflicting commit")
-
-	// PullRebase should detect conflict
-	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseConflict {
-		t.Errorf("expected PullRebaseConflict, got %d (err: %v)", result.Outcome, result.Err)
-	}
-	if result.Err == nil {
-		t.Error("expected non-nil error for conflict")
-	}
-
-	// Verify worktree is clean (rebase was aborted)
-	statusCmd := exec.Command("git", "-C", repo, "status", "--porcelain")
-	statusOut, err := statusCmd.Output()
-	if err != nil {
-		t.Fatalf("git status failed: %v", err)
-	}
-	if strings.TrimSpace(string(statusOut)) != "" {
-		t.Errorf("expected clean worktree after conflict abort, got: %s", string(statusOut))
-	}
-}
-
-func TestPullRebase_RemoteBranchAbsent(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping absent-remote-branch first-publish regression in short mode")
-	}
-	t.Parallel()
-
-	repo, _ := testutil.InitPublishReadyGitRepo(t)
-
-	// Create a local branch but don't push it
-	testutil.CreateBranch(t, repo, "feature/new-feature")
-	testutil.CommitFile(t, repo, "new.txt", "new feature\n", "new feature commit")
-
-	// PullRebase should succeed (no-op, remote branch doesn't exist)
-	result := PullRebase(repo, "feature/new-feature")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
-	}
-	if result.Err != nil {
-		t.Errorf("expected nil error, got %v", result.Err)
-	}
-}
-
-func TestPullRebase_FetchFailure(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping redundant fetch-failure regression in short mode")
-	}
-	t.Parallel()
-
-	repo, _ := testutil.InitPublishReadyGitRepo(t)
-
-	// Point remote to an invalid URL to simulate fetch failure
-	runGit(t, repo, "remote", "set-url", "origin", "/nonexistent/path")
-
-	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseFailure {
-		t.Errorf("expected PullRebaseFailure, got %d", result.Outcome)
-	}
-	if result.Outcome == PullRebaseConflict {
-		t.Error("fetch failure should NOT be classified as conflict")
-	}
-	if result.Err == nil {
-		t.Error("expected non-nil error for fetch failure")
-	}
-}
-
-func TestPullRebase_FirstPublishNoRemoteBranch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping multi-commit first-publish regression in short mode")
-	}
-	t.Parallel()
-
-	repo, _ := testutil.InitPublishReadyGitRepo(t)
-
-	// Create a local branch with multiple commits, never pushed
-	testutil.CreateBranch(t, repo, "feature/first-publish")
-	testutil.CommitFile(t, repo, "a.txt", "first file\n", "first commit")
-	testutil.CommitFile(t, repo, "b.txt", "second file\n", "second commit")
-
-	// Record commit count before
-	cmd := exec.Command("git", "-C", repo, "log", "--oneline")
-	out, _ := cmd.Output()
-	countBefore := len(strings.Split(strings.TrimSpace(string(out)), "\n"))
-
-	result := PullRebase(repo, "feature/first-publish")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
-	}
-
-	// Verify local commits are untouched
-	cmd = exec.Command("git", "-C", repo, "log", "--oneline")
-	out, _ = cmd.Output()
-	countAfter := len(strings.Split(strings.TrimSpace(string(out)), "\n"))
-	if countBefore != countAfter {
-		t.Errorf("expected %d commits, got %d", countBefore, countAfter)
-	}
-}
-
-func TestPullRebase_NonConflictFailureIsNotConflict(t *testing.T) {
-	t.Parallel()
-
-	repo, _ := testutil.InitPublishReadyGitRepo(t)
-
-	// Set remote to invalid path
-	runGit(t, repo, "remote", "set-url", "origin", "/totally/invalid/repo")
-
-	result := PullRebase(repo, "main")
-	if result.Outcome == PullRebaseConflict {
-		t.Error("non-conflict failure must NOT be classified as PullRebaseConflict")
-	}
-	if result.Outcome != PullRebaseFailure {
-		t.Errorf("expected PullRebaseFailure, got %d", result.Outcome)
-	}
-	if result.Err == nil {
-		t.Error("expected non-nil error")
-	}
 }
 
 // TestPush_SyncsRemoteTrackingRefOnSingleBranchClone pins that a successful
@@ -459,5 +206,4 @@ func TestPush_SyncsRemoteTrackingRefOnSingleBranchClone(t *testing.T) {
 	if strings.TrimSpace(string(tracking)) != strings.TrimSpace(string(head)) {
 		t.Fatalf("origin/feature/test = %s, want pushed tip %s", tracking, head)
 	}
-
 }

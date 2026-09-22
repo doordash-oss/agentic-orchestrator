@@ -154,8 +154,9 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir
 			Lead:          "Read these Q&A files for important context about their intent and preferences — do not re-ask questions that have already been answered:",
 			TrailingBlank: true,
 		},
-		MultiRepo:   len(repos) > 1,
-		Inquireness: prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
+		MultiRepo:    len(repos) > 1,
+		Inquireness:  prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
+		DeliveryMode: string(f.EffectiveDeliveryMode()),
 	})
 }
 
@@ -171,11 +172,11 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir
 // The prose lives in
 // internal/agent/prompts/templates/roadmap_revision.user.tmpl.
 //
-// f is currently unused by the template; retained on the signature for
-// caller stability. roadmapPath is similarly unused (the path is implicit
-// via previousRoadmapPath).
+// f supplies the feature's effective delivery mode for the template's
+// Delivery section. roadmapPath and designArtifactPath remain unused
+// (the previous roadmap path is carried by previousRoadmapPath; the
+// design artifact is already baked into the roadmap being revised).
 func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, previousRoadmapPath, criticFeedback, designArtifactPath string, attempt int, approvals []AxisApproval) string {
-	_ = f
 	_ = roadmapPath
 	_ = designArtifactPath
 	return roles.BuildRoadmapRevisionPrompt(roles.RoadmapRevisionUserInput{
@@ -188,6 +189,7 @@ func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, prev
 		PreviousRoadmapPath: previousRoadmapPath,
 		RoadmapFormatPath:   roadmapFormatPath(skillsDir),
 		Inquireness:         prompts.AutonomousInquirenessInput{},
+		DeliveryMode:        string(f.EffectiveDeliveryMode()),
 	})
 }
 

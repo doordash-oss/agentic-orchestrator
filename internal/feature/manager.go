@@ -37,7 +37,9 @@ var ErrDuplicateSlug = fmt.Errorf("feature with this slug already exists")
 // WorktreeOps is the feature package's single worktree substitution point.
 // Satisfied by *git.WorktreeManager.
 type WorktreeOps interface {
-	Create(repoPath, featureSlug, repoName, startPoint string) (string, error)
+	// Create makes a worktree on the given branch; the path derives from the
+	// workspace slug alone.
+	Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error)
 	ExpectedPath(featureSlug, repoName string) string
 	Remove(worktreePath string, deleteBranch bool) error
 	RemoveRef(worktreePath, mainRepo, branch string) error
@@ -47,23 +49,62 @@ type WorktreeOps interface {
 	CurrentHeadSHA(worktreePath string) (string, error)
 	CurrentBranch(worktreePath string) string
 	RefSHA(repoPath, ref string) (string, error)
+	// RefSHAOrAbsent reads a ref like RefSHA but reports a missing ref as
+	// absent=true with an empty SHA and no error; only a genuine git failure
+	// is an error.
+	RefSHAOrAbsent(repoPath, ref string) (sha string, absent bool, err error)
 	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
 	IsAncestor(repoPath, ancestor, descendant string) (bool, error)
-	CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
 	InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
+	// RenameBranch renames the branch checked out in the worktree in place.
+	RenameBranch(worktreePath, oldName, newName string) error
+	// CreateBranchAtHead creates the given branch at the worktree's current
+	// HEAD and checks it out in place, leaving the branch moved off pointing
+	// at the same commit.
+	CreateBranchAtHead(worktreePath, branch string) error
+	// SwitchBranch switches the worktree's HEAD to an existing local branch
+	// in place, discarding uncommitted changes; the branch moved off keeps
+	// pointing at its commit.
+	SwitchBranch(worktreePath, branch string) error
+	// DeleteBranch deletes a local branch ref by name; an absent branch is
+	// success, and a branch checked out in any worktree is refused.
+	DeleteBranch(worktreePath, branch string) error
+	// RestackChain rewrites a linear chain described by labelled cut points
+	// through a list of operations, replaying affected segments with
+	// cherry-picks inside a detached temporary worktree. It never modifies
+	// refs or existing worktrees; a conflict returns
+	// *git.RestackConflictError.
+	RestackChain(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp) (*git.RestackResult, error)
+	// RestackChainWithResolver behaves like RestackChain, but a conflicting
+	// cherry-pick is left in progress inside the primitive's temporary
+	// worktree and handed to the supplied resolver together with the
+	// attempt-directory root. A resolved result stages the conflicted files
+	// and continues the pick; exhaustion surfaces the conflict error with
+	// the attempt count; a resolver error fails the run. A nil resolver
+	// keeps RestackChain's abort-on-conflict behavior.
+	RestackChainWithResolver(mainRepo string, cutPoints []git.RestackCutPoint, ops []git.RestackOp, resolver git.RestackConflictResolver, attemptsRoot string) (*git.RestackResult, error)
+	// CommitTreeSHA returns a commit's tree identifier for byte-for-byte
+	// tree comparison.
+	CommitTreeSHA(repoPath, commitSHA string) (string, error)
+	// UpdateRefsTransaction atomically applies several compare-and-swap ref
+	// updates to one repository: either every ref moves or none does. A
+	// mismatch returns *git.RefCASMismatchError naming the observed ref.
+	UpdateRefsTransaction(repoPath string, updates []git.RefUpdate) error
 }
 
-// PRCloser abstracts the single git/gh operation the feature manager performs
-// against an open pull request (close on rewind).
-type PRCloser interface {
+// RewindRemoteOps abstracts the remote git/gh operations the feature manager
+// performs against published pull requests and layer branches on rewind.
+type RewindRemoteOps interface {
 	ClosePR(prURL string) error
+	PRState(prURL string) (string, error)
+	DeleteRemoteBranch(repoPath, branch string) error
 }
 
 type Manager struct {
 	Store     *Store
 	Config    *config.Config
-	Worktrees WorktreeOps // optional for basic lifecycle; required for child launch/integration safety checks
-	PRs       PRCloser    // optional; nil skips PR close on rewind
+	Worktrees WorktreeOps     // optional for basic lifecycle; required for child launch/integration safety checks
+	PRs       RewindRemoteOps // optional; nil skips remote consequences on rewind
 	// BranchProbeOptions and BranchProbeBudget are per-manager injection points
 	// for bounded feature-branch selection. Zero values use safe defaults.
 	BranchProbeOptions git.BranchProbeOptions
@@ -92,39 +133,6 @@ func NewManager(store *Store, cfg *config.Config) *Manager {
 	return &Manager{Store: store, Config: cfg}
 }
 
-func branchSlug(branch string) string {
-	return strings.TrimPrefix(branch, "feature/")
-}
-
-func repoWorkspaceSlug(f *Feature, repo FeatureRepo) string {
-	if slug := branchSlug(repo.Branch); slug != "" && slug != repo.Branch {
-		return slug
-	}
-	if f == nil {
-		return ""
-	}
-	return f.WorkspaceSlug()
-}
-
-func setupWorkspaceSlug(f *Feature, repo FeatureRepo, task SetupTask) (string, string) {
-	if f == nil {
-		return "", task.Branch
-	}
-	qualified := f.WorkspaceSlug()
-	qualifiedBranch := git.BranchName(qualified)
-	legacyBranch := git.BranchName(f.Slug)
-	if task.Branch == "" || task.Branch == legacyBranch {
-		return qualified, qualifiedBranch
-	}
-	if slug := branchSlug(task.Branch); slug != "" && slug != task.Branch {
-		return slug, task.Branch
-	}
-	if slug := branchSlug(repo.Branch); slug != "" && slug != repo.Branch {
-		return slug, repo.Branch
-	}
-	return qualified, qualifiedBranch
-}
-
 // CreateOptions holds optional parameters for feature creation.
 type CreateOptions struct {
 	// UseCurrentBranch, when true, creates worktrees from the repo's current
@@ -145,6 +153,7 @@ type CreateOptions struct {
 	Attachments             []string // temp attachment file paths
 	RiskLevel               RiskLevel
 	Pipeline                PipelineProfile
+	DeliveryMode            DeliveryMode
 	QueueSetup              bool
 	SourceExpectations      []RepoSourceExpectation
 	PinLocalSources         bool
@@ -259,9 +268,12 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	}
 
 	var branchProbeWarnings []git.BranchProbeWarning
-	// Ensure the branch name is locally unique in every usable selected checkout
-	// and does not conflict with a confirmed origin branch. Origin failures are
-	// warnings; local uniqueness failures are blocking.
+	// Ensure the feature-branch prefix is locally unique in every usable
+	// selected checkout and does not conflict with a confirmed origin branch:
+	// both the flat feature/<slug>-<id> name and everything under
+	// feature/<slug>-<id>/ are probed, because git refuses to create a nested
+	// layer ref while the flat ref exists. Origin failures are warnings; local
+	// uniqueness failures are blocking.
 	if opt.QueueSetup || m.Worktrees != nil {
 		probeRepos := make([]git.BranchProbeRepository, 0, len(featureRepos))
 		for _, repo := range featureRepos {
@@ -286,10 +298,9 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		selected := false
 		for attempt := 0; attempt < 5; attempt++ {
 			workspaceSlug = WorkspaceSlug(slug, id)
-			branch := git.BranchName(workspaceSlug)
-			result, err := git.ProbeBranchCandidate(probeCtx, probeRepos, branch, m.BranchProbeOptions)
+			result, err := git.ProbeBranchPrefix(probeCtx, probeRepos, workspaceSlug, m.BranchProbeOptions)
 			if err != nil {
-				return nil, fmt.Errorf("checking generated feature branch %q: %w", branch, err)
+				return nil, fmt.Errorf("checking generated feature branch prefix feature/%s: %w", workspaceSlug, err)
 			}
 			if result.State != git.BranchProbeCollision {
 				branchProbeWarnings = result.Warnings
@@ -348,8 +359,10 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	}
 
 	if opt.QueueSetup || m.Worktrees != nil {
+		// The provisional layer-1 branch: the layer naming helper applied to
+		// position 1 and the feature slug (after any collision-retry suffix).
 		for i := range featureRepos {
-			featureRepos[i].Branch = git.BranchName(workspaceSlug)
+			featureRepos[i].Branch = git.LayerBranchName(workspaceSlug, 1, slug)
 		}
 	}
 
@@ -359,6 +372,26 @@ func (m *Manager) Create(name, description string, repos []string, models config
 	}
 	if !inq.IsValid() {
 		return nil, fmt.Errorf("invalid inquireness level %q: must be one of none, medium, high", inq)
+	}
+
+	// Delivery mode resolution mirrors the pipeline default fallback: an
+	// unset request value defers to the workspace config default, and an
+	// invalid value — from either source — is rejected instead of silently
+	// falling back. The mode is immutable after creation.
+	deliveryMode := opt.DeliveryMode
+	if deliveryMode == "" {
+		if def := m.Config.Defaults.DeliveryMode; def != "" {
+			parsed := DeliveryMode(def)
+			if !parsed.IsValid() {
+				return nil, fmt.Errorf("invalid defaults.delivery_mode in config: delivery mode %q must be one of stack, single", def)
+			}
+			deliveryMode = parsed
+		} else {
+			deliveryMode = DeliveryModeStack
+		}
+	}
+	if !deliveryMode.IsValid() {
+		return nil, fmt.Errorf("invalid delivery mode %q: must be one of stack, single", deliveryMode)
 	}
 
 	now := time.Now()
@@ -383,6 +416,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		MaxIterations: m.Config.Defaults.MaxIterations,
 		Checkpoints:   opt.Checkpoints,
 		RiskLevel:     opt.RiskLevel,
+		DeliveryMode:  deliveryMode,
 		// Feature starts on run-001. Explicit seeding ensures feature.yaml is
 		// never persisted with ActiveRun == 0 (which Store.loadUnlocked treats
 		// as the pre-runs migration trip wire).
@@ -434,7 +468,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 					startPoint = ""
 				}
 			}
-			wtPath, err := m.Worktrees.Create(fr.Path, workspaceSlug, fr.Name, startPoint)
+			wtPath, err := m.Worktrees.Create(fr.Path, workspaceSlug, fr.Branch, fr.Name, startPoint)
 			if err != nil {
 				return nil, fmt.Errorf("creating worktree for %s: %w", fr.Name, err)
 			}
@@ -818,19 +852,20 @@ func (m *Manager) MarkFinalReviewReady(featureID string) error {
 	})
 }
 
-// MarkPublished transitions a feature to Published and stores the PR URL.
-// Publishable features must pass a non-empty prURL; otherwise the transition
-// is refused so a stale "Published with no PR" state is unreachable.
-func (m *Manager) MarkPublished(featureID, prURL string) error {
+// MarkPublished transitions a feature to Published. The stack's per-layer
+// pull-request entries are the durable record. Publishable features must
+// have at least one pull request recorded on some layer of some repository;
+// otherwise the transition is refused so a stale "Published with no PR"
+// state is unreachable.
+func (m *Manager) MarkPublished(featureID string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
-		if f.IsPublishable() && prURL == "" {
-			return fmt.Errorf("MarkPublished: PR URL required for publishable feature %s", featureID)
+		if f.IsPublishable() && !f.AnyStackLayerHasPullRequest() {
+			return fmt.Errorf("MarkPublished: no stack layer pull request recorded for publishable feature %s", featureID)
 		}
 		if err := f.Transition(StatusPublished); err != nil {
 			return err
 		}
 		f.CurrentPhase = PhasePublish
-		f.SetPRURL(prURL)
 		return nil
 	})
 }
@@ -1084,10 +1119,16 @@ func RewindChoicesForFeature(f *Feature) []RewindChoice {
 	return choices
 }
 
+// partialRewindPlan is the resolved execution plan for a partial roadmap-phase
+// rewind. resetAnchors holds the previous phase's per-repo commit anchors for
+// the anchor reset; layerTips holds the stack layer below's per-repo tips for
+// the layer-tip reset (first phase of a layer above layer 1). Exactly one of
+// the two is populated once the plan is enabled.
 type partialRewindPlan struct {
 	enabled      bool
 	roadmapPhase int
 	resetAnchors map[string]string
+	layerTips    map[string]string
 }
 
 func (m *Manager) validatePartialRewindRequest(f *Feature, request RewindRequest) (partialRewindPlan, error) {
@@ -1117,12 +1158,10 @@ func roadmapPhaseType(phase, total int) string {
 //	    quick succession on the same featureID could race on PR close and
 //	    worktree reset. The Store.SealAndForkRun step is mutex-guarded and
 //	    idempotent on a sealed run (it errors out instead of double-sealing).
-//	    The PR close loop now iterates f.PRURLs() (legacy f.PRURL shadow +
-//	    per-repo RepoStates[name].PRURL aggregated by repo name) and treats
-//	    failures as non-fatal warnings, so a partial pass on retry simply
-//	    closes whatever PRs are still open without re-closing already-closed
-//	    PRs in any new way (gh pr close on a closed PR returns an error that
-//	    surfaces as a warning, identical to the prior behavior).
+//	    subset) and treats failures as non-fatal warnings, so a partial pass on
+//	    retry simply closes whatever PRs are still open without re-closing
+//	    already-closed PRs in any new way (gh pr close on a closed PR returns
+//	    an error that surfaces as a warning, identical to the prior behavior).
 //	(b) If the process crashes mid-call, persisted state recovery depends on
 //	    where the crash hits: pre-seal leaves the active run unchanged; between
 //	    seal-write and feature.yaml-bump leaves a sealed run on disk with
@@ -1186,31 +1225,12 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 	// Give running goroutines a moment to observe the interrupted status.
 	time.Sleep(500 * time.Millisecond)
 
-	// Close every PR on record (skip for unpublishable features — no PR exists).
-	// f.PRURLs() aggregates the legacy f.PRURL shadow and per-repo
-	// RepoStates[name].PRURL into a single map keyed by repo name, so this
-	// loop covers both single-repo legacy features and multi-repo features
-	// without double-closing.
-	if f.IsPublishable() && m.PRs != nil {
-		for repoName, url := range f.PRURLs() {
-			if url == "" {
-				continue
-			}
-			if err := m.PRs.ClosePR(url); err != nil {
-				warns = append(warns, RewindWarning{
-					Kind:   RewindWarningPullRequestClose,
-					Repo:   repoName,
-					Branch: f.repoBranch(repoName),
-					Err:    err,
-				})
-			}
-		}
-	}
-
-	// Create backup branch if rewinding past Implement and worktree has work.
-	// Aggregate per-repo backup-branch names into a map for seal recording.
-	// Per-repo failures warn but do not abort — rewind continues so the user
-	// can still reach an uncorrupted new run.
+	// Create the pre-rewind backup branches before any remote copy of the
+	// layers' commits disappears: every local commit is preserved first, so
+	// the remote consequences below can never strand work. Aggregate
+	// per-repo backup-branch names into a map for seal recording. Per-repo
+	// failures warn but do not abort — rewind continues so the user can
+	// still reach an uncorrupted new run.
 	backupBranches := map[string]string{}
 	if targetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() {
 		for _, repo := range f.Repos {
@@ -1233,15 +1253,183 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 	}
 
-	// Reset worktree if rewinding past Implement
+	// Remote consequences of the rewind, best-effort per publishable
+	// repository: the pull requests of the closing layers are closed and
+	// their remote layer branches deleted. The closing set is the layer
+	// containing the partial target phase and every layer above it for a
+	// partial rewind, and every layer for a full rewind (the forked run
+	// carries no stack at all, so no remote copy may survive to trip a
+	// later republish into a remote-diverged refusal). Both passes walk the
+	// closing layers from the highest position downward so a chained pull
+	// request is always closed before the branch it bases on disappears —
+	// GitHub would otherwise retarget or auto-close it on its own.
+	//
+	// Each closing layer's pull request is read live before acting (the
+	// recorded state may lag GitHub): a merged pull request skips the layer
+	// entirely — the base branch already contains that work, the same rule
+	// the rebase pass applies to merged layers — a closed one skips the
+	// close call but still deletes its branch, and an open or indeterminate
+	// answer is treated as open exactly as publish treats one. Branch
+	// deletion is unconditional for a non-merged closing layer that records
+	// a pull request URL or a last pushed SHA — the two facts that prove
+	// Agentico pushed it — and runs from the repository's worktree path,
+	// where the refs and the origin remote are shared with the main
+	// checkout; a remote ref that no longer exists counts as deleted, so
+	// retried rewinds stay idempotent. Every failure warns and the rewind
+	// still seals and forks; a nil remote-operations dependency skips the
+	// whole pass.
+	if f.IsPublishable() && m.PRs != nil && hasStack(f) {
+		closingPosition := rewindClosingLayerPosition(f, partial.enabled, partial.roadmapPhase)
+		if closingPosition > 0 {
+			layers := append([]StackLayer(nil), f.Stack...)
+			sort.Slice(layers, func(i, j int) bool { return layers[i].Position > layers[j].Position })
+			for _, repo := range f.Repos {
+				mergedLayers := map[int]bool{}
+				for _, layer := range layers {
+					if layer.Position < closingPosition {
+						continue
+					}
+					entry := layer.Repos[repo.Name]
+					if entry.PRURL == "" {
+						continue
+					}
+					state, err := m.PRs.PRState(entry.PRURL)
+					if err == nil && state == git.PRStateMerged {
+						mergedLayers[layer.Position] = true
+						continue
+					}
+					if err == nil && state == git.PRStateClosed {
+						continue
+					}
+					if err := m.PRs.ClosePR(entry.PRURL); err != nil {
+						warns = append(warns, RewindWarning{
+							Kind:   RewindWarningPullRequestClose,
+							Repo:   repo.Name,
+							Branch: layer.Branch,
+							Err:    err,
+						})
+					}
+				}
+				if repo.WorktreePath == "" {
+					continue
+				}
+				for _, layer := range layers {
+					if layer.Position < closingPosition || layer.Branch == "" {
+						continue
+					}
+					if mergedLayers[layer.Position] {
+						continue
+					}
+					entry := layer.Repos[repo.Name]
+					if entry.PRURL == "" && entry.LastPushedSHA == "" {
+						continue
+					}
+					if err := m.PRs.DeleteRemoteBranch(repo.WorktreePath, layer.Branch); err != nil {
+						warns = append(warns, RewindWarning{
+							Kind:   RewindWarningRemoteBranchDelete,
+							Repo:   repo.Name,
+							Branch: layer.Branch,
+							Err:    err,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// Reset worktree if rewinding past Implement. On a feature with a stack
+	// the rewind is stack-aware: a partial rewind first switches each
+	// worktree to the target layer's branch and deletes the local refs of
+	// every layer above it, while a full rewind deletes every other layer's
+	// ref and renames the checked-out branch to the provisional layer-1
+	// name. Every step is warn-and-continue — the backup branch already
+	// preserves each repository's commits — and a step that cannot run
+	// because an earlier one failed (deleting a ref that is still checked
+	// out after a failed switch) surfaces as its own warning. Afterwards
+	// each repository record is set to the branch its worktree is actually
+	// on, keeping the recorded-branch-equals-checked-out-branch invariant
+	// intact for the later approval rename and boundary split.
+	rewindBranches := map[string]string{}
 	if targetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() {
 		if m.Worktrees != nil {
+			stacked := hasStack(f)
+			layerPosition := 0
+			layerBranch := ""
+			provisionalBranch := ""
+			if stacked {
+				if partial.enabled {
+					if layer, ok := f.StackLayerForPhase(partial.roadmapPhase); ok {
+						layerPosition = layer.Position
+						layerBranch = layer.Branch
+					}
+				} else {
+					provisionalBranch = git.LayerBranchName(f.WorkspaceSlug(), 1, f.Slug)
+				}
+			}
 			for _, repo := range f.Repos {
 				if repo.WorktreePath == "" {
 					continue
 				}
+				var current string
+				if stacked {
+					current = m.Worktrees.CurrentBranch(repo.WorktreePath)
+				}
+				if partial.enabled && stacked && layerBranch != "" && current != layerBranch {
+					if err := m.Worktrees.SwitchBranch(repo.WorktreePath, layerBranch); err != nil {
+						warns = append(warns, RewindWarning{
+							Kind:   RewindWarningStackBranch,
+							Repo:   repo.Name,
+							Branch: layerBranch,
+							Err:    err,
+						})
+					}
+				}
+				if stacked && !partial.enabled {
+					for _, layer := range f.Stack {
+						if layer.Branch == "" || layer.Branch == current {
+							continue
+						}
+						if err := m.Worktrees.DeleteBranch(repo.WorktreePath, layer.Branch); err != nil {
+							warns = append(warns, RewindWarning{
+								Kind:   RewindWarningStackBranch,
+								Repo:   repo.Name,
+								Branch: layer.Branch,
+								Err:    err,
+							})
+						}
+					}
+					switch {
+					case current == provisionalBranch && current != "":
+						// Already the provisional layer-1 name: the collapse
+						// has nothing left to rename (a healed retry reads
+						// here).
+					case current != "" && current == repo.Branch:
+						if err := m.Worktrees.RenameBranch(repo.WorktreePath, current, provisionalBranch); err != nil {
+							warns = append(warns, RewindWarning{
+								Kind:   RewindWarningStackBranch,
+								Repo:   repo.Name,
+								Branch: current,
+								Err:    err,
+							})
+						}
+					default:
+						err := fmt.Errorf("worktree is on branch %q, want the recorded %q; left unrenamed",
+							current, repo.Branch)
+						if current == "" {
+							err = fmt.Errorf("could not read the worktree's current branch; left unrenamed")
+						}
+						warns = append(warns, RewindWarning{
+							Kind:   RewindWarningStackBranch,
+							Repo:   repo.Name,
+							Branch: current,
+							Err:    err,
+						})
+					}
+				}
 				var resetErr error
-				switch WorktreeResetKind(repo, partial.enabled, partial.roadmapPhase) {
+				switch WorktreeResetKind(f, repo, partial.enabled, partial.roadmapPhase) {
+				case ResetKindLayerTip:
+					resetErr = m.Worktrees.ResetToCommit(repo.WorktreePath, partial.layerTips[repo.Name])
 				case ResetKindAnchor:
 					resetErr = m.Worktrees.ResetToCommit(repo.WorktreePath, partial.resetAnchors[repo.Name])
 				case ResetKindBaseLocal:
@@ -1256,6 +1444,26 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 						Branch: repo.Branch,
 						Err:    resetErr,
 					})
+				}
+				if partial.enabled && stacked {
+					for _, layer := range f.Stack {
+						if layer.Branch == "" || layer.Position <= layerPosition {
+							continue
+						}
+						if err := m.Worktrees.DeleteBranch(repo.WorktreePath, layer.Branch); err != nil {
+							warns = append(warns, RewindWarning{
+								Kind:   RewindWarningStackBranch,
+								Repo:   repo.Name,
+								Branch: layer.Branch,
+								Err:    err,
+							})
+						}
+					}
+				}
+				if stacked {
+					if actual := m.Worktrees.CurrentBranch(repo.WorktreePath); actual != "" {
+						rewindBranches[repo.Name] = actual
+					}
 				}
 			}
 		}
@@ -1359,6 +1567,20 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 				newRun.CurrentRoadmapPhase = partial.roadmapPhase
 				newRun.TotalRoadmapPhases = oldRun.TotalRoadmapPhases
 				newRun.RoadmapPhaseType = roadmapPhaseType(partial.roadmapPhase, oldRun.TotalRoadmapPhases)
+				// A partial rewind keeps the approved stack: the roadmap (and
+				// its `## Pull Requests` table) is carried forward, so the
+				// forked run still holds the approved layer definitions. A full
+				// rewind to the roadmap phase or earlier re-runs planning, which
+				// re-derives and re-persists the stack at the next approval.
+				// The target layer and every layer above lose their
+				// per-repository entries (tip, pushed SHA, pull request URL
+				// and state) — the worktrees were reset, so the next layer
+				// boundary re-records them; layers below keep theirs.
+				if layer, ok := f.StackLayerForPhase(partial.roadmapPhase); ok {
+					newRun.Stack = CopyStackLayersForPartialRewind(oldRun.Stack, layer.Position)
+				} else {
+					newRun.Stack = CopyStackLayers(oldRun.Stack)
+				}
 				newRun.RoadmapPhaseCommitAnchors = carryForwardRoadmapPhaseCommitAnchors(oldRun.RoadmapPhaseCommitAnchors, partial.roadmapPhase)
 				pendingRoadmapPhase := partial.roadmapPhase
 				newRun.PendingRewindReviewRoadmapPhase = &pendingRoadmapPhase
@@ -1393,6 +1615,19 @@ func (m *Manager) RewindWithRequest(featureID string, request RewindRequest) (wa
 		}
 		f.IsRewind = true
 		f.CurrentPhase = phaseBeforeTarget(targetPhase)
+		// Record the branch each worktree actually ended on after the
+		// stack-aware steps, so the recorded-branch-equals-checked-out-branch
+		// invariant holds even when a switch or rename warned and left the
+		// worktree elsewhere. Repositories without a worktree path are
+		// untouched; setup state is not carried across the fork, so only the
+		// repository records need the update.
+		for name, branch := range rewindBranches {
+			for i := range f.Repos {
+				if f.Repos[i].Name == name {
+					f.Repos[i].Branch = branch
+				}
+			}
+		}
 		return nil
 	})
 	_ = updated
@@ -1556,7 +1791,7 @@ func copyFile(src, dst string) error {
 
 // InitRepoImpl ensures every repo in f.Repos has an entry in f.RepoStates
 // and prunes entries for repos that are no longer part of the feature.
-// Existing per-repo state (Touched, PRURL, LastError) survives: durable
+// Existing per-repo state (Touched, LastError) survives: durable
 // progress set by prior iterations must not be clobbered on restart,
 // otherwise the engine cannot short-circuit and redoes approved work.
 //
@@ -1583,9 +1818,11 @@ func (m *Manager) InitRepoImpl(featureID string) error {
 	})
 }
 
-// SetRepoPublished updates a repo's implementation state after successful publish.
-// Sets Touched=true, PRURL, and clears the stored failure record.
-func (m *Manager) SetRepoPublished(featureID, repoName, prURL string) error {
+// SetRepoPublished updates a repository's implementation state after a
+// successful publish: Touched is set and the stored failure record cleared.
+// The per-layer stack entries are the source of truth for pull-request
+// state; no repository-level projection is maintained.
+func (m *Manager) SetRepoPublished(featureID, repoName string) error {
 	return m.Store.Modify(featureID, func(f *Feature) error {
 		if f.RepoStates == nil {
 			f.RepoStates = make(map[string]*RepoState)
@@ -1596,9 +1833,80 @@ func (m *Manager) SetRepoPublished(featureID, repoName, prURL string) error {
 			f.RepoStates[repoName] = state
 		}
 		state.Touched = true
-		state.PRURL = prURL
 		state.Error = nil
 		return nil
+	})
+}
+
+// modifyStackRepoEntry resolves the stack layer at layerPosition, applies
+// mutate to that layer's entry for repoName, then runs the bookkeeping
+// every per-layer publish write shares: the repository's stored error is
+// cleared. The per-layer entries are the sole durable pull-request record.
+func (m *Manager) modifyStackRepoEntry(featureID, repoName string, layerPosition int, mutate func(entry *StackRepoEntry)) error {
+	return m.Store.Modify(featureID, func(f *Feature) error {
+		var layer *StackLayer
+		for i := range f.Stack {
+			if f.Stack[i].Position == layerPosition {
+				layer = &f.Stack[i]
+				break
+			}
+		}
+		if layer == nil {
+			return fmt.Errorf("feature %s has no stack layer at position %d", featureID, layerPosition)
+		}
+		if layer.Repos == nil {
+			layer.Repos = make(map[string]StackRepoEntry)
+		}
+		entry := layer.Repos[repoName]
+		mutate(&entry)
+		layer.Repos[repoName] = entry
+
+		if f.RepoStates == nil {
+			f.RepoStates = make(map[string]*RepoState)
+		}
+		state, ok := f.RepoStates[repoName]
+		if !ok || state == nil {
+			state = &RepoState{}
+			f.RepoStates[repoName] = state
+		}
+		state.Error = nil
+		return nil
+	})
+}
+
+// RecordStackLayerPR records a successful per-layer publish for one
+// repository: the layer's pull request URL, its open state, and the last
+// SHA pushed for it.
+func (m *Manager) RecordStackLayerPR(featureID, repoName string, layerPosition int, prURL, pushedSHA string) error {
+	return m.modifyStackRepoEntry(featureID, repoName, layerPosition, func(entry *StackRepoEntry) {
+		entry.PRURL = prURL
+		entry.PRState = StackPRStateOpen
+		entry.LastPushedSHA = pushedSHA
+	})
+}
+
+// RecordStackLayerPushedSHA records the last SHA pushed for a layer's pull
+// request without touching the pull request record itself.
+func (m *Manager) RecordStackLayerPushedSHA(featureID, repoName string, layerPosition int, sha string) error {
+	return m.modifyStackRepoEntry(featureID, repoName, layerPosition, func(entry *StackRepoEntry) {
+		entry.LastPushedSHA = sha
+	})
+}
+
+// SetStackLayerPRState records a pull request lifecycle change (merged or
+// closed) on one layer's repository entry.
+func (m *Manager) SetStackLayerPRState(featureID, repoName string, layerPosition int, state StackPRState) error {
+	return m.modifyStackRepoEntry(featureID, repoName, layerPosition, func(entry *StackRepoEntry) {
+		entry.PRState = state
+	})
+}
+
+// MarkStackLayerNoCommits marks one layer's repository entry as having no
+// commits to deliver, so the all-published check counts that layer as
+// settled instead of pending.
+func (m *Manager) MarkStackLayerNoCommits(featureID, repoName string, layerPosition int) error {
+	return m.modifyStackRepoEntry(featureID, repoName, layerPosition, func(entry *StackRepoEntry) {
+		entry.NoCommits = true
 	})
 }
 
@@ -1639,8 +1947,7 @@ func (m *Manager) TryCompletePublish(featureID string) (bool, error) {
 			return false, err
 		}
 	}
-	prURL := f.FirstRepoPRURL()
-	if err := m.MarkPublished(featureID, prURL); err != nil {
+	if err := m.MarkPublished(featureID); err != nil {
 		return false, err
 	}
 	return true, nil

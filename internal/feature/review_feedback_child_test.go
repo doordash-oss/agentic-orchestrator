@@ -49,9 +49,17 @@ func TestCreateReviewFeedbackChildPersistsSelectedFeedback(t *testing.T) {
 		Inquireness:  feature.InquirenessHigh,
 		Checkpoints:  feature.Checkpoints{RoadmapReview: true, ManualPublish: true},
 		RepoStates: map[string]*feature.RepoState{
-			"api": {PRURL: "https://github.example/acme/api/pull/17"},
-			"web": {PRURL: "https://github.example/acme/web/pull/23"},
+			"api": {Touched: true},
+			"web": {Touched: true},
 		},
+		// Each repository's pull request lives on its stack layer entry.
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"api": {PRURL: "https://github.example/acme/api/pull/17", PRState: feature.StackPRStateOpen},
+				"web": {PRURL: "https://github.example/acme/web/pull/23", PRState: feature.StackPRStateOpen},
+			},
+		}},
 	}
 	saveChildTestParent(t, mgr, parent)
 
@@ -139,6 +147,80 @@ func TestCreateReviewFeedbackChildPersistsSelectedFeedback(t *testing.T) {
 	}
 }
 
+func TestCreateReviewFeedbackChildInheritsParentDeliveryMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		parent      feature.DeliveryMode // stored value; "" models a legacy record
+		wantPersist feature.DeliveryMode // child's persisted mode
+	}{
+		{"single parent", feature.DeliveryModeSingle, feature.DeliveryModeSingle},
+		{"stack parent", feature.DeliveryModeStack, feature.DeliveryModeStack},
+		{"legacy parent with no stored mode", "", feature.DeliveryModeStack},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := newChildTestManager(t, map[string]string{"/wt/api": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, cleanEverywhere())
+			parent := &feature.Feature{
+				ID:       "parent-rf-delivery",
+				Name:     "Parent",
+				Slug:     "parent",
+				Status:   feature.StatusPublished,
+				Pipeline: feature.PipelineMoonshot,
+				Repos: []feature.FeatureRepo{
+					{Name: "api", Path: "/src/api", WorktreePath: "/wt/api", Branch: "feature/parent-api", BaseBranch: "main"},
+				},
+				ExitCriteria: "all selected feedback is addressed",
+				Checkpoints:  feature.Checkpoints{RoadmapReview: true, ManualPublish: true},
+				RepoStates: map[string]*feature.RepoState{
+					"api": {Touched: true},
+				},
+				Stack: []feature.StackLayer{{
+					Position: 1,
+					Repos: map[string]feature.StackRepoEntry{
+						"api": {PRURL: "https://github.example/acme/api/pull/17", PRState: feature.StackPRStateOpen},
+					},
+				}},
+				DeliveryMode: tt.parent,
+			}
+			saveChildTestParent(t, mgr, parent)
+
+			child, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{
+				Comments: []feature.ReviewFeedbackComment{
+					{Repo: "api", ID: 101, Type: "issue", Author: "alice", Body: "Please add a regression test."},
+				},
+			})
+			if err != nil {
+				t.Fatalf("CreateReviewFeedbackChild() error = %v", err)
+			}
+			if child.DeliveryMode != tt.wantPersist {
+				t.Fatalf("child DeliveryMode = %q, want %q", child.DeliveryMode, tt.wantPersist)
+			}
+			if child.EffectiveDeliveryMode() != parent.EffectiveDeliveryMode() {
+				t.Fatalf("child effective DeliveryMode = %q, want parent effective %q", child.EffectiveDeliveryMode(), parent.EffectiveDeliveryMode())
+			}
+
+			loaded, err := mgr.Store.Load(child.ID)
+			if err != nil {
+				t.Fatalf("Store.Load(%q) error = %v", child.ID, err)
+			}
+			if loaded.DeliveryMode != tt.wantPersist {
+				t.Fatalf("reloaded DeliveryMode = %q, want %q", loaded.DeliveryMode, tt.wantPersist)
+			}
+
+			// The paired-config back-sync must not copy the delivery mode.
+			reloadedParent, err := mgr.Store.Load(parent.ID)
+			if err != nil {
+				t.Fatalf("Store.Load(%q) error = %v", parent.ID, err)
+			}
+			if reloadedParent.DeliveryMode != tt.parent {
+				t.Fatalf("parent DeliveryMode = %q, want untouched %q", reloadedParent.DeliveryMode, tt.parent)
+			}
+		})
+	}
+}
+
 func TestCreateReviewFeedbackChildResolvesGateOnParentAndChild(t *testing.T) {
 	t.Parallel()
 
@@ -166,7 +248,13 @@ func TestCreateReviewFeedbackChildResolvesGateOnParentAndChild(t *testing.T) {
 				Pipeline:    feature.PipelineMoonshot,
 				Repos:       []feature.FeatureRepo{{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "main"}},
 				Checkpoints: feature.Checkpoints{RoadmapReview: tt.parentRoadmap, ManualPublish: true},
-				RepoStates:  map[string]*feature.RepoState{"repo": {PRURL: "https://github.example/acme/repo/pull/1"}},
+				RepoStates:  map[string]*feature.RepoState{"repo": {Touched: true}},
+				Stack: []feature.StackLayer{{
+					Position: 1,
+					Repos: map[string]feature.StackRepoEntry{
+						"repo": {PRURL: "https://github.example/acme/repo/pull/1", PRState: feature.StackPRStateOpen},
+					},
+				}},
 			}
 			saveChildTestParent(t, mgr, parent)
 
@@ -267,9 +355,17 @@ func TestCreateReviewFeedbackChildRejectsInvalidCommentRepositoryBeforeWrites(t 
 					{Name: "web", Path: "/src/web", WorktreePath: "/wt/web", Branch: "main"},
 				},
 				RepoStates: map[string]*feature.RepoState{
-					"api": {PRURL: "https://github.example/acme/api/pull/1"},
+					"api": {Touched: true},
 					"web": {},
 				},
+				// Only api carries a pull request: web must be rejected as a
+				// repository without one.
+				Stack: []feature.StackLayer{{
+					Position: 1,
+					Repos: map[string]feature.StackRepoEntry{
+						"api": {PRURL: "https://github.example/acme/api/pull/1", PRState: feature.StackPRStateOpen},
+					},
+				}},
 			}
 			saveChildTestParent(t, mgr, parent)
 
@@ -294,6 +390,73 @@ func TestCreateReviewFeedbackChildRejectsInvalidCommentRepositoryBeforeWrites(t 
 				t.Fatalf("Store.List() = %+v, want only parent after validation failure", features)
 			}
 		})
+	}
+}
+
+// Launch validation requires the comment's pull request to be an open layer
+// pull request of its repository: a repository whose every layer pull
+// request is merged counts as having no open layer pull request (the
+// existing no-PR error), and a comment naming a pull request that is not
+// one of the repository's open layer pull requests is rejected outright.
+func TestCreateReviewFeedbackChildValidatesCommentPullRequest(t *testing.T) {
+	t.Parallel()
+
+	heads := map[string]string{"/wt/api": "aaaaaaaa", "/wt/web": "bbbbbbbb"}
+	mgr := newChildTestManager(t, heads, cleanEverywhere())
+	parent := &feature.Feature{
+		ID:     "parent-pr-validation",
+		Slug:   "parent-pr-validation",
+		Status: feature.StatusPublished,
+		Repos: []feature.FeatureRepo{
+			{Name: "api", Path: "/src/api", WorktreePath: "/wt/api", Branch: "main"},
+			{Name: "web", Path: "/src/web", WorktreePath: "/wt/web", Branch: "main"},
+		},
+		RepoStates: map[string]*feature.RepoState{
+			"api": {Touched: true},
+			"web": {Touched: true},
+		},
+		// api layer 1 is open and layer 2 is merged; web's only layer pull
+		// request is merged, so web has no open layer pull request at all.
+		Stack: []feature.StackLayer{
+			{
+				Position: 1,
+				Title:    "Foundation",
+				Repos: map[string]feature.StackRepoEntry{
+					"api": {PRURL: "https://github.example/acme/api/pull/1", PRState: feature.StackPRStateOpen},
+					"web": {PRURL: "https://github.example/acme/web/pull/5", PRState: feature.StackPRStateMerged},
+				},
+			},
+			{
+				Position: 2,
+				Title:    "Extension",
+				Repos: map[string]feature.StackRepoEntry{
+					"api": {PRURL: "https://github.example/acme/api/pull/2", PRState: feature.StackPRStateMerged},
+				},
+			},
+		},
+	}
+	saveChildTestParent(t, mgr, parent)
+
+	if _, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{Comments: []feature.ReviewFeedbackComment{
+		{Repo: "web", ID: 7, Type: "issue"},
+	}}); !errors.Is(err, feature.ErrReviewFeedbackRepoHasNoPR) {
+		t.Fatalf("CreateReviewFeedbackChild() error = %v, want the existing no-PR error for a repository without an open layer PR", err)
+	}
+
+	if _, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{Comments: []feature.ReviewFeedbackComment{
+		{Repo: "api", ID: 8, Type: "issue", PRURL: "https://github.example/acme/api/pull/2", PRNumber: 2, LayerPosition: 2, LayerTitle: "Extension"},
+	}}); !errors.Is(err, feature.ErrReviewFeedbackCommentPRNotOpen) {
+		t.Fatalf("CreateReviewFeedbackChild() error = %v, want the not-open error for a comment naming a merged layer PR", err)
+	}
+
+	child, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{Comments: []feature.ReviewFeedbackComment{
+		{Repo: "api", ID: 9, Type: "issue", PRURL: "https://github.example/acme/api/pull/1", PRNumber: 1, LayerPosition: 1, LayerTitle: "Foundation"},
+	}})
+	if err != nil {
+		t.Fatalf("CreateReviewFeedbackChild() error = %v, want acceptance for a comment on the open layer PR", err)
+	}
+	if len(child.ReviewFeedback) != 1 || child.ReviewFeedback[0].PRURL != "https://github.example/acme/api/pull/1" {
+		t.Fatalf("child comments = %+v, want the open layer PR's comment with its identity", child.ReviewFeedback)
 	}
 }
 
@@ -380,8 +543,14 @@ func TestCreateReviewFeedbackChildDescriptionIsDeterministic(t *testing.T) {
 			Pipeline: feature.PipelineLarge,
 			Repos:    []feature.FeatureRepo{{Name: "api", Path: "/src/api", WorktreePath: "/wt/api", Branch: "main"}},
 			RepoStates: map[string]*feature.RepoState{
-				"api": {PRURL: "https://github.example/acme/api/pull/3"},
+				"api": {Touched: true},
 			},
+			Stack: []feature.StackLayer{{
+				Position: 1,
+				Repos: map[string]feature.StackRepoEntry{
+					"api": {PRURL: "https://github.example/acme/api/pull/3", PRState: feature.StackPRStateOpen},
+				},
+			}},
 		}
 		saveChildTestParent(t, mgr, parent)
 		child, err := mgr.CreateReviewFeedbackChild(parent.ID, feature.ReviewFeedbackChildSpec{Comments: comments})
@@ -412,8 +581,14 @@ func TestCreateReviewFeedbackChildInterruptedWriteRollsForward(t *testing.T) {
 		Pipeline: feature.PipelineMoonshot,
 		Repos:    []feature.FeatureRepo{{Name: "api", Path: "/src/api", WorktreePath: "/wt/api", Branch: "main"}},
 		RepoStates: map[string]*feature.RepoState{
-			"api": {PRURL: "https://github.example/acme/api/pull/8"},
+			"api": {Touched: true},
 		},
+		Stack: []feature.StackLayer{{
+			Position: 1,
+			Repos: map[string]feature.StackRepoEntry{
+				"api": {PRURL: "https://github.example/acme/api/pull/8", PRState: feature.StackPRStateOpen},
+			},
+		}},
 	}
 	saveChildTestParent(t, mgr, parent)
 	comment := feature.ReviewFeedbackComment{Repo: "api", ID: 81, Type: "issue", Author: "reviewer", Body: "Add the missing test."}

@@ -62,83 +62,111 @@ func (e *RewritePushError) Unwrap() error {
 	return e.Err
 }
 
-// PushRewrittenBranch replaces a remote branch only when any remote-only
-// commits are provably redundant merges of history already present in HEAD.
-func PushRewrittenBranch(worktreePath, branch string) error {
-	return pushRewrittenBranch(worktreePath, branch, nil)
+// PushLayerBranch delivers a layer branch that is not necessarily checked out
+// in the repository at repoPath. It pushes the named local ref — never HEAD —
+// because worktrees share refs with the main repository, so a worktree sitting
+// on a higher layer branch can still publish a lower layer. localSHA is the
+// commit the caller wants on the remote; lastPushedSHA is the last SHA
+// Agentico itself pushed for the branch, empty when it was never pushed.
+//
+// Delivery decision order: an absent remote branch is created with a plain
+// push; a remote tip that is an ancestor of localSHA (including an equal tip)
+// is plain-pushed; a remote tip equal to lastPushedSHA is force-with-lease
+// pushed pinned to that SHA — the remote holds exactly what Agentico pushed,
+// so no further proof is required; anything else must pass the
+// redundant-merge proof over the remote-only commits before a lease push
+// pinned to the inspected SHA. A failed proof reports
+// RewritePushRemoteDiverged and a rejected lease RewritePushRemoteChanged.
+// The returned SHA is the commit now sitting on the remote.
+func PushLayerBranch(repoPath, branch, localSHA, lastPushedSHA string) (string, error) {
+	return pushLayerBranch(repoPath, branch, localSHA, lastPushedSHA, nil)
 }
 
-func pushRewrittenBranch(worktreePath, branch string, beforePush func()) error {
+func pushLayerBranch(repoPath, branch, localSHA, lastPushedSHA string, beforePush func()) (string, error) {
+	if strings.TrimSpace(localSHA) == "" {
+		return "", fmt.Errorf("layer push for branch %q requires the local SHA to deliver", branch)
+	}
 	remoteRef := "refs/heads/" + branch
-	_, remoteExists, err := rewritePushRemoteBranchState(worktreePath, remoteRef)
+	_, remoteExists, err := rewritePushRemoteBranchState(repoPath, remoteRef)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !remoteExists {
 		if beforePush != nil {
 			beforePush()
 		}
-		pushErr := Push(worktreePath, branch)
+		pushErr := Push(repoPath, branch)
 		if pushErr == nil {
-			return nil
+			return rewritePushDeliveredSHA(repoPath, remoteRef)
 		}
 		// Distinguish a concurrent creation from an ordinary push failure. The
 		// probe is diagnostic only: no result retries or force-pushes.
-		_, appeared, probeErr := rewritePushRemoteBranchState(worktreePath, remoteRef)
+		_, appeared, probeErr := rewritePushRemoteBranchState(repoPath, remoteRef)
 		if probeErr != nil {
-			return fmt.Errorf("creating remote branch and checking rejected push: %w", errors.Join(pushErr, probeErr))
+			return "", fmt.Errorf("creating remote branch and checking rejected push: %w", errors.Join(pushErr, probeErr))
 		}
 		if appeared {
-			return &RewritePushError{
-				Kind:              RewritePushRemoteChanged,
-				Branch:            branch,
-				RemoteOnlyCommits: 0,
-				Err:               sanitizeOrdinaryPushError(pushErr),
+			return "", &RewritePushError{
+				Kind:   RewritePushRemoteChanged,
+				Branch: branch,
+				Err:    sanitizeOrdinaryPushError(pushErr),
 			}
 		}
-		return pushErr
+		return "", pushErr
 	}
 
 	inspectionRef, err := newRewriteInspectionRef()
 	if err != nil {
-		return fmt.Errorf("creating rewritten-push inspection ref: %w", err)
+		return "", fmt.Errorf("creating rewritten-push inspection ref: %w", err)
 	}
 	defer func() {
-		_ = exec.Command("git", "-C", worktreePath, "update-ref", "-d", inspectionRef).Run()
+		_ = exec.Command("git", "-C", repoPath, "update-ref", "-d", inspectionRef).Run()
 	}()
 
-	if err := runRewritePushGit(worktreePath, "fetching remote branch for rewritten-push inspection",
+	if err := runRewritePushGit(repoPath, "fetching remote branch for rewritten-push inspection",
 		"fetch", "--no-tags", "origin", remoteRef+":"+inspectionRef); err != nil {
-		return err
+		return "", err
 	}
 
-	inspectedSHABytes, err := rewritePushGitOutput(worktreePath, "resolving rewritten-push inspection ref",
+	inspectedSHABytes, err := rewritePushGitOutput(repoPath, "resolving rewritten-push inspection ref",
 		"rev-parse", "--verify", inspectionRef+"^{commit}")
 	if err != nil {
-		return err
+		return "", err
 	}
 	inspectedSHA := strings.TrimSpace(string(inspectedSHABytes))
 	if inspectedSHA == "" {
-		return errors.New("resolving rewritten-push inspection ref: empty commit SHA")
+		return "", errors.New("resolving rewritten-push inspection ref: empty commit SHA")
 	}
 
-	remoteIsAncestor, err := rewritePushIsAncestor(worktreePath, inspectedSHA, "HEAD")
+	remoteIsAncestor, err := rewritePushIsAncestor(repoPath, inspectedSHA, localSHA)
 	if err != nil {
-		return fmt.Errorf("checking whether rewritten push is a fast-forward: %w", err)
+		return "", fmt.Errorf("checking whether rewritten push is a fast-forward: %w", err)
 	}
 	if remoteIsAncestor {
-		return Push(worktreePath, branch)
+		if err := Push(repoPath, branch); err != nil {
+			return "", err
+		}
+		return rewritePushDeliveredSHA(repoPath, remoteRef)
 	}
 
-	remoteOnlyOutput, err := rewritePushProofOutput(worktreePath, "enumerating remote-only commits",
-		"rev-list", inspectionRef, "^HEAD")
+	if lastPushedSHA != "" && inspectedSHA == lastPushedSHA {
+		// The remote holds exactly what Agentico pushed, so a lease pinned to
+		// that SHA proves ownership without any further redundancy proof.
+		if beforePush != nil {
+			beforePush()
+		}
+		return leasePushLayerBranch(repoPath, branch, remoteRef, inspectedSHA, 0)
+	}
+
+	remoteOnlyOutput, err := rewritePushProofOutput(repoPath, "enumerating remote-only commits",
+		"rev-list", inspectionRef, "^"+localSHA)
 	if err != nil {
-		return err
+		return "", err
 	}
 	remoteOnlyCommits := strings.Fields(string(remoteOnlyOutput))
 	for _, commitSHA := range remoteOnlyCommits {
-		if err := proveRemoteOnlyMergeIsRedundant(worktreePath, commitSHA); err != nil {
-			return &RewritePushError{
+		if err := proveRemoteOnlyMergeIsRedundant(repoPath, commitSHA, localSHA); err != nil {
+			return "", &RewritePushError{
 				Kind:              RewritePushRemoteDiverged,
 				Branch:            branch,
 				RemoteOnlyCommits: len(remoteOnlyCommits),
@@ -150,28 +178,57 @@ func pushRewrittenBranch(worktreePath, branch string, beforePush func()) error {
 	if beforePush != nil {
 		beforePush()
 	}
+	return leasePushLayerBranch(repoPath, branch, remoteRef, inspectedSHA, len(remoteOnlyCommits))
+}
 
-	pushCmd := exec.Command("git", "-C", worktreePath,
-		"push", "--force-with-lease="+remoteRef+":"+inspectedSHA,
-		"-u", "origin", "HEAD:"+remoteRef)
+// leasePushLayerBranch force-pushes the named local ref with an explicit
+// expected-SHA lease. A rejection is classified against the observed remote
+// tip so a concurrent move reports RewritePushRemoteChanged.
+func leasePushLayerBranch(repoPath, branch, remoteRef, expectedSHA string, remoteOnlyCommits int) (string, error) {
+	pushCmd := exec.Command("git", "-C", repoPath,
+		"push", "--force-with-lease="+remoteRef+":"+expectedSHA,
+		"-u", "origin", remoteRef+":"+remoteRef)
 	if err := pushCmd.Run(); err != nil {
 		pushErr := fmt.Errorf("git push with explicit expected-SHA lease: %w", err)
-		observedSHA, observeErr := rewritePushRemoteSHA(worktreePath, remoteRef)
+		observedSHA, observeErr := rewritePushRemoteSHA(repoPath, remoteRef)
 		if observeErr != nil {
-			return fmt.Errorf("pushing rewritten branch and checking remote state: %w", errors.Join(pushErr, observeErr))
+			return "", fmt.Errorf("pushing layer branch and checking remote state: %w", errors.Join(pushErr, observeErr))
 		}
-		if observedSHA != inspectedSHA {
-			return &RewritePushError{
+		if observedSHA != expectedSHA {
+			return "", &RewritePushError{
 				Kind:              RewritePushRemoteChanged,
 				Branch:            branch,
-				RemoteOnlyCommits: len(remoteOnlyCommits),
+				RemoteOnlyCommits: remoteOnlyCommits,
 				Err:               pushErr,
 			}
 		}
-		return fmt.Errorf("pushing rewritten branch: %w", pushErr)
+		return "", fmt.Errorf("pushing layer branch: %w", pushErr)
 	}
+	// The explicit-SHA lease does not depend on the remote-tracking ref, so
+	// git never moves it on a single-branch clone. Point it at the pushed
+	// local ref the way Push does; a failed sync fails the call even though
+	// the remote already holds the commit — the next attempt observes
+	// remote tip == local SHA and plain-pushes.
+	if err := syncRemoteTrackingRef(repoPath, branch, remoteRef); err != nil {
+		return "", err
+	}
+	return rewritePushDeliveredSHA(repoPath, remoteRef)
+}
 
-	return syncRemoteTrackingRef(worktreePath, branch, "HEAD")
+// rewritePushDeliveredSHA resolves the local ref that was just pushed. A
+// successful push of refs/heads/<branch> leaves the remote holding exactly
+// this commit, so it is the SHA that now sits on the remote.
+func rewritePushDeliveredSHA(repoPath, ref string) (string, error) {
+	out, err := rewritePushGitOutput(repoPath, "resolving pushed local ref",
+		"rev-parse", "--verify", ref)
+	if err != nil {
+		return "", err
+	}
+	sha := strings.TrimSpace(string(out))
+	if sha == "" {
+		return "", errors.New("resolving pushed local ref: empty commit SHA")
+	}
+	return sha, nil
 }
 
 func sanitizeOrdinaryPushError(err error) error {
@@ -190,8 +247,8 @@ func newRewriteInspectionRef() (string, error) {
 	return "refs/agentico/publish-inspection/" + hex.EncodeToString(nonce[:]), nil
 }
 
-func proveRemoteOnlyMergeIsRedundant(worktreePath, commitSHA string) error {
-	parentsOutput, err := rewritePushProofOutput(worktreePath, "reading remote-only commit parents",
+func proveRemoteOnlyMergeIsRedundant(repoPath, commitSHA, localSHA string) error {
+	parentsOutput, err := rewritePushProofOutput(repoPath, "reading remote-only commit parents",
 		"rev-list", "--parents", "-n", "1", commitSHA)
 	if err != nil {
 		return err
@@ -202,16 +259,16 @@ func proveRemoteOnlyMergeIsRedundant(worktreePath, commitSHA string) error {
 	}
 
 	for _, parentSHA := range parents[1:] {
-		isAncestor, err := rewritePushIsAncestor(worktreePath, parentSHA, "HEAD")
+		isAncestor, err := rewritePushIsAncestor(repoPath, parentSHA, localSHA)
 		if err != nil {
 			return fmt.Errorf("checking remote-only merge parent: %w", err)
 		}
 		if !isAncestor {
-			return errors.New("remote-only merge parent is not an ancestor of local HEAD")
+			return errors.New("remote-only merge parent is not an ancestor of the local layer tip")
 		}
 	}
 
-	remergeDiff, err := rewritePushProofOutput(worktreePath, "checking remote-only merge resolution",
+	remergeDiff, err := rewritePushProofOutput(repoPath, "checking remote-only merge resolution",
 		"show", "--remerge-diff", "--format=", "--no-ext-diff", commitSHA)
 	if err != nil {
 		return err
@@ -222,8 +279,8 @@ func proveRemoteOnlyMergeIsRedundant(worktreePath, commitSHA string) error {
 	return nil
 }
 
-func rewritePushIsAncestor(worktreePath, ancestor, descendant string) (bool, error) {
-	cmd := rewritePushProofCommand(worktreePath, "merge-base", "--is-ancestor", ancestor, descendant)
+func rewritePushIsAncestor(repoPath, ancestor, descendant string) (bool, error) {
+	cmd := rewritePushProofCommand(repoPath, "merge-base", "--is-ancestor", ancestor, descendant)
 	err := cmd.Run()
 	if err == nil {
 		return true, nil
@@ -235,8 +292,8 @@ func rewritePushIsAncestor(worktreePath, ancestor, descendant string) (bool, err
 	return false, fmt.Errorf("git merge-base --is-ancestor: %w", err)
 }
 
-func rewritePushProofOutput(worktreePath, operation string, args ...string) ([]byte, error) {
-	cmd := rewritePushProofCommand(worktreePath, args...)
+func rewritePushProofOutput(repoPath, operation string, args ...string) ([]byte, error) {
+	cmd := rewritePushProofCommand(repoPath, args...)
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
@@ -248,8 +305,8 @@ func rewritePushProofOutput(worktreePath, operation string, args ...string) ([]b
 // rewritePushProofCommand reads the repository's real object graph. Both
 // replace refs and the legacy graft file are local, untrusted overlays that
 // could otherwise make ordinary remote work appear to be a redundant merge.
-func rewritePushProofCommand(worktreePath string, args ...string) *exec.Cmd {
-	cmd := exec.Command("git", append([]string{"--no-replace-objects", "-C", worktreePath}, args...)...)
+func rewritePushProofCommand(repoPath string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", append([]string{"--no-replace-objects", "-C", repoPath}, args...)...)
 	cmd.Env = append(cmd.Environ(),
 		"GIT_NO_REPLACE_OBJECTS=1",
 		"GIT_GRAFT_FILE="+os.DevNull,
@@ -257,15 +314,15 @@ func rewritePushProofCommand(worktreePath string, args ...string) *exec.Cmd {
 	return cmd
 }
 
-func rewritePushRemoteSHA(worktreePath, remoteRef string) (string, error) {
-	sha, _, err := rewritePushRemoteBranchState(worktreePath, remoteRef)
+func rewritePushRemoteSHA(repoPath, remoteRef string) (string, error) {
+	sha, _, err := rewritePushRemoteBranchState(repoPath, remoteRef)
 	return sha, err
 }
 
 // rewritePushRemoteBranchState uses ls-remote's documented exit code 2 for an
 // exact-ref miss. Every other command failure is operational, never absence.
-func rewritePushRemoteBranchState(worktreePath, remoteRef string) (string, bool, error) {
-	cmd := exec.Command("git", "-C", worktreePath, "ls-remote", "--exit-code", "origin", remoteRef)
+func rewritePushRemoteBranchState(repoPath, remoteRef string) (string, bool, error) {
+	cmd := exec.Command("git", "-C", repoPath, "ls-remote", "--exit-code", "origin", remoteRef)
 	cmd.Stderr = io.Discard
 	out, err := cmd.Output()
 	if err != nil {
@@ -282,13 +339,13 @@ func rewritePushRemoteBranchState(worktreePath, remoteRef string) (string, bool,
 	return fields[0], true, nil
 }
 
-func runRewritePushGit(worktreePath, operation string, args ...string) error {
-	_, err := rewritePushGitOutput(worktreePath, operation, args...)
+func runRewritePushGit(repoPath, operation string, args ...string) error {
+	_, err := rewritePushGitOutput(repoPath, operation, args...)
 	return err
 }
 
-func rewritePushGitOutput(worktreePath, operation string, args ...string) ([]byte, error) {
-	cmd := exec.Command("git", append([]string{"-C", worktreePath}, args...)...)
+func rewritePushGitOutput(repoPath, operation string, args ...string) ([]byte, error) {
+	cmd := exec.Command("git", append([]string{"-C", repoPath}, args...)...)
 	// Prevent os/exec.Output from retaining raw stderr in *exec.ExitError.
 	// Callers receive only the fixed operation label and the process failure.
 	cmd.Stderr = io.Discard

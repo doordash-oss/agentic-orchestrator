@@ -29,6 +29,7 @@ type Role = roles.Role
 const (
 	RoleImplementer                               = roles.RoleImplementer
 	RoleFinalReviewFixer                          = roles.RoleFinalReviewFixer
+	RoleResolveRebaseConflict                     = roles.RoleResolveRebaseConflict
 	RolePlanRoadmapPlanner                        = roles.RolePlanRoadmapPlanner
 	RolePlanRoadmapReviser                        = roles.RolePlanRoadmapReviser
 	RolePlanPhasePlanner                          = roles.RolePlanPhasePlanner
@@ -130,6 +131,12 @@ func ImplementationReviewAxisRoleForSkill(skillName string) (RoleSpec, bool) {
 // FinalReviewFixerRoleSpec returns the RoleSpec-backed final-review fix role.
 func FinalReviewFixerRoleSpec() RoleSpec {
 	return wrapRoleSpec(roles.FinalReviewFixerRoleSpec())
+}
+
+// ConflictResolverRoleSpec returns the RoleSpec-backed rebase
+// conflict-resolution role.
+func ConflictResolverRoleSpec() RoleSpec {
+	return wrapRoleSpec(roles.ConflictResolverRoleSpec())
 }
 
 // PlanValidatorRoleSpecs returns the RoleSpec-backed per-axis validator roles.
@@ -245,6 +252,8 @@ func validatorForRoleArtifact(artifact RoleArtifactSpec) func(iterDir, path stri
 		}
 	case roles.ValidatorPlanValidatorAxisApproval:
 		return validatePlanValidatorAxisApprovalArtifact
+	case roles.ValidatorFixManifest:
+		return validateFixManifestArtifact
 	default:
 		return func(_, _ string, _ *Outcome) ([]ProtocolViolation, error) {
 			return []ProtocolViolation{{Artifact: artifact.DisplayPath, Reason: fmt.Sprintf("unknown RoleSpec validator %q", artifact.Validate)}}, nil

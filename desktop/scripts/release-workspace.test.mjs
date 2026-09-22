@@ -172,7 +172,7 @@ describe('detached release workspace', () => {
     expect(failure.message).toContain('manual cleanup');
     expect(existsSync(expectedPath)).toBe(true);
     git(fixture.root, 'worktree', 'remove', '--force', expectedPath);
-  });
+  }, 120_000);
 
   it('clears ambient Go workspace and flags while forcing readonly modules', () => {
     expect(

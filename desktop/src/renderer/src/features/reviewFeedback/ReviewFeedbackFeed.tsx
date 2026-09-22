@@ -17,9 +17,12 @@ limitations under the License.
 /**
  * The review-feedback feed: the feedbar (active-filter chips, clear-all, and
  * the polite visible/scoped summary), the filtered-empty state, and one
- * labelled section per repository in the server's stable order, comments
- * oldest-first. All selection and filtering logic lives in the workspace and
- * its draft controller; this component only renders it.
+ * labelled section per repository in the server's stable order. Inside each
+ * repository section, one sub-section per open layer pull request in
+ * position order — a header naming the layer position and title with an
+ * "Open pull request" action for the PR's URL, followed by that PR's cards,
+ * comments oldest-first. All selection and filtering logic lives in the
+ * workspace and its draft controller; this component only renders it.
  */
 import { COMMENT_TYPE_LABEL } from '../refactor/refactorPassModel';
 import { ReviewFeedbackCard } from './ReviewFeedbackCard';
@@ -27,13 +30,20 @@ import type { ReviewFeedbackFilters } from './feedbackFilters';
 import type { PendingSelection } from './useReviewFeedbackDraft';
 import type {
   ReviewFeedbackDraftCommentView,
+  ReviewFeedbackDraftPullRequestGroup,
   ReviewFeedbackDraftRepoGroup,
 } from './reviewFeedbackDraftApi';
 
-/** One rendered repository section: the group plus its filter-matched comments. */
+/** One rendered pull-request sub-section: the PR group plus its filter-matched comments. */
+export interface FeedPullRequestSection {
+  pr: ReviewFeedbackDraftPullRequestGroup;
+  comments: ReviewFeedbackDraftCommentView[];
+}
+
+/** One rendered repository section: the group plus its PR sub-sections. */
 export interface FeedSection {
   group: ReviewFeedbackDraftRepoGroup;
-  comments: ReviewFeedbackDraftCommentView[];
+  pullRequests: FeedPullRequestSection[];
 }
 
 export interface ReviewFeedbackFeedProps {
@@ -140,36 +150,65 @@ export function ReviewFeedbackFeed({
           </button>
         </div>
       ) : null}
-      {sections.map(({ group, comments }) => {
-        const sectionSelected = comments.filter(selectedOf).length;
+      {sections.map(({ group, pullRequests }) => {
+        // The repository ledger counts across every pull-request group —
+        // the scope rail's per-repository counts use the same flattening.
+        const repoTotal = group.pullRequests.reduce((sum, pr) => sum + pr.comments.length, 0);
+        const matched = pullRequests.flatMap((section) => section.comments);
+        const sectionSelected = matched.filter(selectedOf).length;
         return (
           <section key={group.repo} className="review-feedback-section" aria-label={group.repo}>
             <header className="review-feedback-section__header">
               <h3 className="review-feedback-section__title">{group.repo}</h3>
               <span className="review-feedback-section__ledger">
-                {sectionSelected} of {group.comments.length} selected
+                {sectionSelected} of {repoTotal} selected
               </span>
-              {group.prUrl !== '' ? (
-                <button
-                  type="button"
-                  className="review-feedback-section__pr"
-                  onClick={() => void window.agentico.openExternal({ url: group.prUrl })}
-                >
-                  Open pull request
-                </button>
-              ) : null}
             </header>
-            {comments.map((comment) => (
-              <ReviewFeedbackCard
-                key={comment.stableRef}
-                comment={comment}
-                checked={selectedOf(comment)}
-                unsaved={saveFailed && pending.has(comment.stableRef)}
-                disabled={selectionDisabled}
-                onToggle={onToggle}
-                onOpen={onOpen}
-              />
-            ))}
+            {pullRequests.map(({ pr, comments }) => {
+              const prSelected = pr.comments.filter(selectedOf).length;
+              return (
+                <div
+                  key={pr.url !== '' ? pr.url : `layer-${pr.position}`}
+                  className="review-feedback-pr"
+                >
+                  <header className="review-feedback-pr__header">
+                    <h4 className="review-feedback-pr__title">
+                      Layer {pr.position}
+                      {pr.title !== '' ? (
+                        <>
+                          {` — `}
+                          <span className="review-feedback-pr__name">{pr.title}</span>
+                        </>
+                      ) : null}
+                    </h4>
+                    <span className="review-feedback-pr__ledger">
+                      {prSelected} of {pr.comments.length} selected
+                    </span>
+                    {pr.url !== '' ? (
+                      <button
+                        type="button"
+                        className="review-feedback-pr__open"
+                        aria-label={`Open pull request: layer ${pr.position}${pr.title !== '' ? ` ${pr.title}` : ''}`}
+                        onClick={() => void window.agentico.openExternal({ url: pr.url })}
+                      >
+                        Open pull request
+                      </button>
+                    ) : null}
+                  </header>
+                  {comments.map((comment) => (
+                    <ReviewFeedbackCard
+                      key={comment.stableRef}
+                      comment={comment}
+                      checked={selectedOf(comment)}
+                      unsaved={saveFailed && pending.has(comment.stableRef)}
+                      disabled={selectionDisabled}
+                      onToggle={onToggle}
+                      onOpen={onOpen}
+                    />
+                  ))}
+                </div>
+              );
+            })}
           </section>
         );
       })}

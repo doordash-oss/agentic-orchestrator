@@ -33,8 +33,20 @@ var finalReviewFixerRoleSpec = RoleSpec{
 		iterationDirOutputRoot("Final-review fix iteration artifact directory."),
 	},
 	// No required artifacts: no testing contract executes at Final Review;
-	// the next review iteration's live-run axes re-exercise the product.
-	Artifacts: []RoleArtifactSpec{},
+	// the next review iteration's live-run axes re-exercise the product. The
+	// fix manifest is optional: PR-stack features use it to route changed
+	// files to the stack layer that owns them.
+	Artifacts: []RoleArtifactSpec{
+		{
+			Name:         "fix_manifest",
+			DisplayPath:  "fix-manifest.yaml",
+			RootName:     "iteration_dir",
+			RelativePath: "fix-manifest.yaml",
+			Presence:     ArtifactOptional,
+			Description:  "optional manifest assigning this fix round's changed files to their owning stack layers",
+			Validate:     ValidatorFixManifest,
+		},
+	},
 }
 
 // FinalReviewFixerRoleSpec returns the RoleSpec-backed final-review fix role.
@@ -57,6 +69,12 @@ type FinalFixUserInput struct {
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
+	// Stack is the feature's PR-stack layers; empty for features that do not
+	// deliver as a stack.
+	Stack []feature.StackLayer
+	// FixManifestPath is the resolved artifact path of the optional
+	// fix-manifest.yaml, shown to the fixer alongside the stack layers.
+	FixManifestPath string
 }
 
 // BuildFinalFixPrompt renders the final-review fix prompt.

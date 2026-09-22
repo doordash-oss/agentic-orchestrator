@@ -94,7 +94,7 @@ type FeatureLifecycle interface {
 	// before invoking RunMultiRepoFinalReview after the last roadmap-phase's
 	// implement returns all_passed.
 	MarkFinalReviewReady(featureID string) error
-	MarkPublished(featureID, prURL string) error
+	MarkPublished(featureID string) error
 	MarkDone(featureID string) error
 
 	// Roadmap phases
@@ -117,9 +117,17 @@ type FeatureLifecycle interface {
 	// signal in RepoStates (Touched, PRURL, Error); orchestration
 	// readers consume it via Feature.AllReposPublished / Feature.TouchedRepos.
 	InitRepoImpl(featureID string) error
-	SetRepoPublished(featureID, repoName, prURL string) error
+	SetRepoPublished(featureID, repoName string) error
 	SetRepoPublishError(featureID, repoName string, record errcat.FailureRecord) error
 	TryCompletePublish(featureID string) (bool, error)
+	// Per-layer stack publish writes. Each write updates one stack layer's
+	// repository entry, clears the repository's stored error, and refreshes
+	// the legacy RepoStates PR URL to the highest layer with a pull request
+	// for the repository; none writes the run-level PR URL shadow.
+	RecordStackLayerPR(featureID, repoName string, layerPosition int, prURL, pushedSHA string) error
+	RecordStackLayerPushedSHA(featureID, repoName string, layerPosition int, sha string) error
+	SetStackLayerPRState(featureID, repoName string, layerPosition int, state feature.StackPRState) error
+	MarkStackLayerNoCommits(featureID, repoName string, layerPosition int) error
 	// RetryPhase clears feature-level error/gate state so the unified
 	// phase-implement loop can re-run the active phase from iteration 1.
 	// Per-repo Touched flags are monotonic and intentionally preserved.

@@ -51,6 +51,7 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/cool-feature"),
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: "feature/cool-feature", BaseBranch: mainBranch},
 		},
@@ -77,7 +78,11 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 		st.Error = &stored
 		return nil
 	}
-	lc.SetRepoPublishedFn = func(id, repo, url string) error {
+	// Emulates the per-layer publish write the real lifecycle performs on a
+	// successful publish: every stack layer's entry for the repository
+	// records the pull request so the stack-based all-published check
+	// passes.
+	lc.SetRepoPublishedFn = func(id, repo string) error {
 		if f.RepoStates == nil {
 			f.RepoStates = make(map[string]*feature.RepoState)
 		}
@@ -86,8 +91,16 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 			st = &feature.RepoState{}
 			f.RepoStates[repo] = st
 		}
+		const prURL = "https://github.com/org/r1/pull/1"
+		for i := range f.Stack {
+			if f.Stack[i].Repos == nil {
+				f.Stack[i].Repos = make(map[string]feature.StackRepoEntry)
+			}
+			entry := f.Stack[i].Repos[repo]
+			entry.PRURL = prURL
+			f.Stack[i].Repos[repo] = entry
+		}
 		st.Touched = true
-		st.PRURL = url
 		st.Error = nil
 		return nil
 	}
@@ -196,8 +209,8 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 	if state.Error != nil {
 		t.Fatalf("repo record = %+v, want cleared by the successful publish", state.Error)
 	}
-	if state.PRURL != "https://github.com/org/r1/pull/1" {
-		t.Fatalf("repo PRURL = %q, want the pull-request link", state.PRURL)
+	if got := f.TopStackLayerPRURL("r1"); got != "https://github.com/org/r1/pull/1" {
+		t.Fatalf("top stack layer PR URL = %q, want the pull-request link", got)
 	}
 	if f.Status != feature.StatusPublished {
 		t.Fatalf("feature status = %v, want Published after the repo-scoped retry", f.Status)
@@ -225,6 +238,7 @@ func TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted(t *test
 		CurrentPhase:        feature.PhaseImplement,
 		CurrentRoadmapPhase: 2,
 		TotalRoadmapPhases:  2,
+		Stack:               singleLayerStack(2, "feature/cool-feature"),
 		Repos: []feature.FeatureRepo{
 			{Name: "r1", Path: repoPath, WorktreePath: repoPath, Branch: "feature/cool-feature", BaseBranch: mainBranch},
 		},
@@ -280,7 +294,7 @@ func TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted(t *test
 		PhaseRunner: pr,
 		CmdRunner:   cmd,
 	}, orchestrator.Hooks{
-		OnPublishCompleted: func(featureID string, prURLs map[string]string, err error) {
+		OnPublishCompleted: func(featureID string, err error) {
 			publishCompletedHook++
 			if err == nil {
 				t.Fatal("OnPublishCompleted err = nil, want the scrub failure")

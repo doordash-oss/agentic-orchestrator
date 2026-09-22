@@ -22,6 +22,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -345,11 +346,12 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 			continue
 		}
 		// Entries that are not yet durably marked applied may still have
-		// their ref at the candidate: the apply CAS succeeds before the
-		// entry is persisted as RepoApplyApplied, so a crash between the
-		// CAS and the persist leaves the ref at the candidate while the
-		// entry's ApplyState is still empty or "applying". We must inspect
-		// the actual ref for every entry that is not already rolled back.
+		// their refs at the candidates: the ref transaction succeeds before
+		// the entry is persisted as RepoApplyApplied, so a crash between the
+		// transaction and the persist leaves the refs at their candidates
+		// while the entry's ApplyState is still empty or "applying". We must
+		// inspect the actual refs for every entry that is not already rolled
+		// back.
 		inspectedRefs = true
 		parentRepo := featureRepoByName(parent, entry.Repo)
 		if parentRepo == nil {
@@ -358,44 +360,86 @@ func (o *Orchestrator) ensureDiscardRefSafety(childID string) (bool, error) {
 				fmt.Sprintf("parent no longer has repository %s", entry.Repo)))
 			continue
 		}
-		ref := "refs/heads/" + entry.ParentBranch
-		current, err := o.deps.Worktrees.RefSHA(parentRepo.Path, ref)
-		if err != nil {
-			allSafe = false
-			findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
-				fmt.Sprintf("reading ref %s: %v", ref, err)))
+		rollbackRefs := make([]git.RefUpdate, 0, len(entry.Refs))
+		entrySafe := true
+		for j := range entry.Refs {
+			ref := &entry.Refs[j]
+			refName := "refs/heads/" + ref.Branch
+			current, absent, err := o.deps.Worktrees.RefSHAOrAbsent(parentRepo.Path, refName)
+			if err != nil {
+				allSafe = false
+				entrySafe = false
+				findings = append(findings, entryFinding(entry, errcat.IntegrationCandidateFailed,
+					fmt.Sprintf("reading ref %s: %v", refName, err)))
+				break
+			}
+			ref.ObservedSHA = current
+			switch ref.Classify(current, absent) {
+			case feature.RefAtCandidate:
+				// Ref still at its candidate — a created ref is deleted, a
+				// deleted ref recreated at its anchor, a rewrite ref
+				// restored to its anchor — in the entry's single transaction
+				// below.
+				rollbackRefs = append(rollbackRefs, rollbackRefUpdateFor(ref))
+			case feature.RefAtAnchor:
+				// Already rolled back (possibly externally); a created ref's
+				// absence and a deleted ref's presence at its anchor
+				// included.
+			default:
+				// Externally moved — cannot overwrite.
+				allSafe = false
+				entrySafe = false
+				observed := current
+				if absent {
+					observed = "absent"
+				}
+				findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
+					fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
+						entry.Repo, refName, ref.AnchorSHA, ref.CandidateSHA, observed)))
+			}
+			if !entrySafe {
+				break
+			}
+		}
+		if !entrySafe {
 			continue
 		}
-		entry.ObservedSHA = current
-
-		if current == entry.CandidateSHA {
-			// Ref still at candidate — CAS rollback to anchor.
-			if err := o.deps.Worktrees.UpdateRef(parentRepo.Path, ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
+		if len(rollbackRefs) > 0 {
+			if err := o.deps.Worktrees.UpdateRefsTransaction(parentRepo.Path, rollbackRefs); err != nil {
+				observeEntryRefs(o, parentRepo.Path, entry)
 				allSafe = false
-				findings = append(findings, refUpdateFinding(entry, ref, err))
+				findings = append(findings, refsUpdateFinding(entry, err))
 				continue
 			}
 			entry.ApplyState = feature.RepoApplyRolledBack
-			// Sync parent worktree back to anchor.
+			// Restore the parent worktree and record: an entry that appended
+			// layers switches back to the previous top branch — its ref was
+			// only ever verified, never moved — and points the repository
+			// record back at it; every other entry resets to the top anchor.
 			parentWorktree := parentRepo.WorktreePath
 			if parentWorktree == "" {
 				parentWorktree = parentRepo.Path
 			}
-			if err := o.deps.Worktrees.ResetToCommit(parentWorktree, entry.ParentAnchorSHA); err != nil {
-				allSafe = false
-				findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,
-					fmt.Sprintf("repo %s syncing parent worktree after rollback: %v", entry.Repo, err)))
-				continue
+			if entry.PreviousTop != nil {
+				if err := o.deps.Worktrees.SwitchBranch(parentWorktree, entry.PreviousTop.Branch); err != nil {
+					allSafe = false
+					findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,
+						fmt.Sprintf("repo %s switching parent worktree back to %s: %v", entry.Repo, entry.PreviousTop.Branch, err)))
+					continue
+				}
+				if err := o.moveParentRepoBranch(parent.ID, entry.Repo, entry.PreviousTop.Branch); err != nil {
+					return false, fmt.Errorf("restoring parent branch record for repo %s: %w", entry.Repo, err)
+				}
+			} else if top := entry.TopRef(); top != nil {
+				if err := o.deps.Worktrees.ResetToCommit(parentWorktree, top.AnchorSHA); err != nil {
+					allSafe = false
+					findings = append(findings, entryFinding(entry, errcat.IntegrationWorktreeSyncFailed,
+						fmt.Sprintf("repo %s syncing parent worktree after rollback: %v", entry.Repo, err)))
+					continue
+				}
 			}
-		} else if current == entry.ParentAnchorSHA {
-			// Already rolled back (possibly externally).
-			entry.ApplyState = feature.RepoApplyRolledBack
 		} else {
-			// Externally moved — cannot overwrite.
-			allSafe = false
-			findings = append(findings, entryFinding(entry, errcat.IntegrationRefRace,
-				fmt.Sprintf("repo %s ref %s externally moved: anchor %s candidate %s observed %s",
-					entry.Repo, ref, entry.ParentAnchorSHA, entry.CandidateSHA, current)))
+			entry.ApplyState = feature.RepoApplyRolledBack
 		}
 	}
 

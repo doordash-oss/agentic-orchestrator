@@ -66,11 +66,6 @@ type PhaseRunner struct {
 	// its commit implementation here (see orchestrator.New).
 	RoundCommitHook RoundCommitHook
 
-	// PhaseExitGateFor, when non-nil, resolves a feature's mechanical
-	// phase-exit gate for the implement loop; a nil gate disables the check.
-	// The orchestrator installs kind-specific gates here (see orchestrator.New).
-	PhaseExitGateFor func(f *feature.Feature) PhaseExitGate
-
 	// BuildSessionFn, if non-nil, overrides the production BuildSession logic.
 	// Used exclusively for test injection.
 	BuildSessionFn func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
@@ -118,13 +113,6 @@ func (pr *PhaseRunner) completionToolForModel(model string) string {
 
 // phaseExitGate resolves the feature's phase-exit gate; nil when no factory
 // is installed or the factory declines to gate the feature.
-func (pr *PhaseRunner) phaseExitGate(f *feature.Feature) PhaseExitGate {
-	if pr.PhaseExitGateFor == nil {
-		return nil
-	}
-	return pr.PhaseExitGateFor(f)
-}
-
 func (pr *PhaseRunner) defaultModelForRole(role llm.PhaseRole) string {
 	if pr.Registry == nil {
 		return ""
@@ -991,7 +979,6 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 		RoundCommitHook:            pr.RoundCommitHook,
-		PhaseExitGate:              pr.phaseExitGate(f),
 	}
 
 	resultCh := make(chan *LoopResult, 1)
@@ -1059,7 +1046,6 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		Observer:                   pr.Observer,
 		OnVerificationProgress:     pr.OnVerificationProgress,
 		RoundCommitHook:            pr.RoundCommitHook,
-		PhaseExitGate:              pr.phaseExitGate(f),
 		RunImplementFn:             pr.RunImplementFn,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}

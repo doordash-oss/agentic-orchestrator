@@ -53,6 +53,14 @@ const (
 	// RewindWarningWorktreeReset marks a worktree that could not be reset
 	// during the rewind.
 	RewindWarningWorktreeReset RewindWarningKind = "worktree_reset"
+	// RewindWarningStackBranch marks a stack branch step that could not run
+	// during the rewind: switching a worktree to its layer's branch, deleting
+	// an upper layer's local ref, or renaming the checked-out branch to the
+	// provisional layer-1 name.
+	RewindWarningStackBranch RewindWarningKind = "stack_branch"
+	// RewindWarningRemoteBranchDelete marks a remote layer branch that could
+	// not be deleted from its repository's origin during the rewind.
+	RewindWarningRemoteBranchDelete RewindWarningKind = "remote_branch_delete"
 )
 
 // RewindWarning is one typed non-fatal rewind failure: the cause family, the
@@ -146,6 +154,22 @@ type Run struct {
 	// marked as frontend work. Missing phases default to false.
 	RoadmapPhaseFrontendByPhase map[int]bool `yaml:"roadmap_phase_frontend,omitempty"`
 
+	// Stack records the approved pull-request stack composition (one layer
+	// per `## Pull Requests` table row), derived from the roadmap on disk at
+	// approval so gate edits are honored. Omitted on runs approved before the
+	// table existed; a full rewind to the roadmap phase clears it because
+	// planning re-runs and re-persists it at the next approval.
+	Stack []StackLayer `yaml:"stack,omitempty"`
+
+	// RestackJournal records, per repository, the durable state of an
+	// in-flight restack landing: the ref updates a Final Review fix
+	// relocation wrote into a compare-and-swap transaction, the remapped
+	// roadmap-phase anchors and layer tips to persist once the transaction
+	// lands, and the landing state. Any rewind (partial or full) drops it:
+	// the rewind resets the worktree itself, so no landing is left to
+	// reconcile. Omitted when empty; nil when no restack is in flight.
+	RestackJournal []RestackJournalEntry `yaml:"restack_journal,omitempty"`
+
 	// Artifacts (moved from Feature) — entries are run-relative paths.
 	Artifacts map[string]string `yaml:"artifacts,omitempty"`
 
@@ -160,8 +184,10 @@ type Run struct {
 	// in a phase).
 	CurrentPhaseStatus string `yaml:"current_phase_status,omitempty"`
 
-	// Publish (moved from Feature).
-	PRURL string `yaml:"pr_url,omitempty"`
+	// Publish. The run-level PR URL shadow was removed with the
+	// single-PR-URL model; the durable pull-request record lives on the
+	// stack's per-layer entries. Legacy `pr_url` keys on old run records
+	// are ignored on load.
 
 	// Plan validation + gate state (moved from Feature).
 	ValidatingPlan    bool              `yaml:"validating_plan,omitempty"`
@@ -229,6 +255,122 @@ type SessionCostRecord struct {
 // IsSealed reports whether this run has been sealed (rewound past).
 // A sealed run is immutable: SaveRun panics if called on one.
 func (r *Run) IsSealed() bool { return r != nil && r.SealedAt != nil }
+
+// StackPRState is the lifecycle state of the pull request a layer's
+// repository entry delivers. None is the state before any pull request
+// exists; the empty value loads as absent and means the same.
+type StackPRState string
+
+const (
+	StackPRStateNone   StackPRState = "none"
+	StackPRStateOpen   StackPRState = "open"
+	StackPRStateMerged StackPRState = "merged"
+	StackPRStateClosed StackPRState = "closed"
+)
+
+// StackRepoEntry is one repository's state inside one stack layer: the tip
+// SHA the layer boundary snapshotted, the last SHA pushed for the layer's
+// pull request, that pull request's URL and state, and the marker for a
+// repository the layer delivered no commits for — the all-published check
+// reads it to tell "nothing to publish here" from "publish still pending".
+// All fields persist with omit-empty semantics; a layer persisted before
+// per-repository entries existed loads with the map absent, and a
+// repository untouched by the layer records a tip equal to the layer below
+// (or the base start point for layer 1), which is how "no pull request
+// here" is represented.
+type StackRepoEntry struct {
+	TipSHA        string       `yaml:"tip_sha,omitempty" json:"tip_sha,omitempty"`
+	LastPushedSHA string       `yaml:"last_pushed_sha,omitempty" json:"last_pushed_sha,omitempty"`
+	PRURL         string       `yaml:"pr_url,omitempty" json:"pr_url,omitempty"`
+	PRState       StackPRState `yaml:"pr_state,omitempty" json:"pr_state,omitempty"`
+	NoCommits     bool         `yaml:"no_commits,omitempty" json:"no_commits,omitempty"`
+}
+
+// StackLayerOrigin records where an appended stack layer came from: the
+// child feature whose roadmap produced it and that child's layer position.
+// Roadmap-derived layers leave it nil.
+type StackLayerOrigin struct {
+	SourceFeatureID     string `yaml:"source_feature_id,omitempty" json:"source_feature_id,omitempty"`
+	SourceLayerPosition int    `yaml:"source_layer_position,omitempty" json:"source_layer_position,omitempty"`
+}
+
+// StackLayer is one pull-request layer of a feature's delivery stack,
+// derived from one `## Pull Requests` table row of the approved roadmap.
+// Branch is the layer's shared branch name feature/<slug>-<id>/<k>-<layer-
+// slug>, filled in at roadmap approval from the workspace slug, the
+// position, and the layer slug; a run persisted before that fill loads with
+// it omitted. Later roadmap phases read it through the run accessors to
+// create the next layer's branch rather than recomputing the name. Repos
+// holds the per-repository entries the layer boundaries fill in: each
+// repository's layer tip (a boundary snapshot — the checked-out branch ref
+// stays authoritative between boundaries), last pushed SHA, and pull
+// request URL and state. Origin records the child feature and layer
+// position an appended layer came from; roadmap-derived layers leave it
+// nil.
+type StackLayer struct {
+	Position int                       `yaml:"position" json:"position"`
+	Title    string                    `yaml:"title,omitempty" json:"title,omitempty"`
+	Slug     string                    `yaml:"slug,omitempty" json:"slug,omitempty"`
+	Phases   []int                     `yaml:"phases,omitempty" json:"phases,omitempty"`
+	Branch   string                    `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Repos    map[string]StackRepoEntry `yaml:"repos,omitempty" json:"repos,omitempty"`
+	Origin   *StackLayerOrigin         `yaml:"origin,omitempty" json:"origin,omitempty"`
+}
+
+// CopyStackLayers returns a deep copy of stack so a forked run and the
+// sealed run it came from never share backing arrays or maps.
+func CopyStackLayers(stack []StackLayer) []StackLayer {
+	if stack == nil {
+		return nil
+	}
+	out := make([]StackLayer, len(stack))
+	for i, layer := range stack {
+		out[i] = layer
+		out[i].Phases = append([]int(nil), layer.Phases...)
+		if layer.Repos != nil {
+			repos := make(map[string]StackRepoEntry, len(layer.Repos))
+			for name, entry := range layer.Repos {
+				repos[name] = entry
+			}
+			out[i].Repos = repos
+		}
+		if layer.Origin != nil {
+			origin := *layer.Origin
+			out[i].Origin = &origin
+		}
+	}
+	return out
+}
+
+// CopyStackLayersForPartialRewind deep-copies stack for a partial rewind to a
+// phase of the layer at layerPosition: every roadmap-derived layer definition
+// (position, title, slug, phases, branch) is kept, while the per-repository
+// entries of the target layer and every layer above are cleared — the
+// worktrees were reset, so the next layer boundary re-records them against
+// the new tips. Layers below the target layer keep their entries untouched.
+// Appended layers (those carrying an origin) are dropped entirely: they are
+// not derivable from the parent's roadmap, and they always sit above roadmap
+// layers, so "at or above the target" covers them.
+func CopyStackLayersForPartialRewind(stack []StackLayer, layerPosition int) []StackLayer {
+	out := CopyStackLayers(stack)
+	if len(out) == 0 {
+		return out
+	}
+	kept := out[:0]
+	for _, layer := range out {
+		if layer.Origin != nil {
+			continue
+		}
+		kept = append(kept, layer)
+	}
+	out = kept
+	for i := range out {
+		if layerPosition > 0 && out[i].Position >= layerPosition {
+			out[i].Repos = nil
+		}
+	}
+	return out
+}
 
 // AccumulateActiveTime moves elapsed time from ActivePhaseStart into
 // PhaseTimings under the ActiveTimingKey, then clears ActivePhaseStart.

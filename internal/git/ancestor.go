@@ -18,7 +18,29 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 )
+
+// MergeBaseSHA resolves the merge base of a and b in the repository at
+// repoPath. It returns an error when either argument is empty or git cannot
+// resolve a merge base (unrelated histories), so callers treat an
+// unresolvable base as a hard failure rather than silently substituting one
+// side.
+func MergeBaseSHA(repoPath, a, b string) (string, error) {
+	if a == "" || b == "" {
+		return "", fmt.Errorf("merge-base requires two commits (got %q, %q)", a, b)
+	}
+	cmd := readGitCmd(repoPath, "merge-base", a, b)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("merge-base %s %s in %s: %w", a, b, repoPath, err)
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 || fields[0] == "" {
+		return "", fmt.Errorf("merge-base %s %s in %s resolved no commit", a, b, repoPath)
+	}
+	return fields[0], nil
+}
 
 // IsAncestor reports whether ancestor is an ancestor of descendant in the
 // repository at repoPath. It shells out to
@@ -39,6 +61,19 @@ func IsAncestor(repoPath, ancestor, descendant string) bool {
 		return false
 	}
 	return true
+}
+
+// HasCommitsBeyond reports whether tipSHA carries commits past cutPointSHA.
+// It is false when the tip is an ancestor of the cut point — including a tip
+// equal to the cut point — and when either SHA is empty, because an unnamed
+// tip has nothing to deliver. A git failure reports true: IsAncestor answers
+// false when it cannot decide, and an indeterminate range must not let a
+// layer be silently skipped as empty.
+func HasCommitsBeyond(repoPath, tipSHA, cutPointSHA string) bool {
+	if tipSHA == "" || cutPointSHA == "" {
+		return false
+	}
+	return !IsAncestor(repoPath, tipSHA, cutPointSHA)
 }
 
 // CheckAncestor is IsAncestor for callers that must distinguish "not an

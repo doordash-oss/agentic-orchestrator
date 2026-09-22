@@ -29,6 +29,7 @@ import { matchMediaState } from '../../test/setup';
 import { ReviewFeedbackWorkspace } from './ReviewFeedbackWorkspace';
 import type {
   ReviewFeedbackDraftCommentView,
+  ReviewFeedbackDraftRepoGroup,
   ReviewFeedbackDraftView,
 } from './reviewFeedbackDraftApi';
 
@@ -47,6 +48,14 @@ function comment(
   return { selected: true, ...overrides };
 }
 
+/** One repository whose comments all sit on a single link-less PR group. */
+function singleGroupRepo(
+  repo: string,
+  comments: ReviewFeedbackDraftCommentView[],
+): ReviewFeedbackDraftRepoGroup {
+  return { repo, pullRequests: [{ position: 1, title: '', url: '', comments }] };
+}
+
 function draftView(overrides: Partial<ReviewFeedbackDraftView> = {}): ReviewFeedbackDraftView {
   return {
     revision: 7,
@@ -54,71 +63,83 @@ function draftView(overrides: Partial<ReviewFeedbackDraftView> = {}): ReviewFeed
     repos: [
       {
         repo: 'repo-a',
-        prUrl: 'https://github.com/org/repo-a/pull/1',
-        comments: [
-          comment({
-            stableRef: 'repo-a:review:41',
-            repo: 'repo-a',
-            id: 41,
-            type: 'review',
-            path: 'src/query.ts',
-            line: 12,
-            author: 'Octocat',
-            body: [
-              '# Security fix',
-              '',
-              'Rewrite this to avoid the bearer token.',
-              '',
-              '- [ ] follow up on caching',
-              '- [x] confirm token rotation',
-              '',
-              '```go',
-              'return newQueryCodec()',
-              '```',
-              '',
-              'See [hardening guide](https://docs.example.com/harden), never',
-              '[this mirror](https://user:pass@mirror.example.com/x). Inline',
-              'HTML like <script> stays inert.',
-            ].join('\n'),
-            diffHunk: '@@ -1 +1,2 @@\n-oldCodec()\n+newQueryCodec()',
-            inReplyToId: 39,
-            createdAt: '2026-07-20T10:00:00Z',
-          }),
-          comment({
-            stableRef: 'repo-a:issue:42',
-            repo: 'repo-a',
-            id: 42,
-            type: 'issue',
-            author: 'hubot',
-            body: [
-              'Consider extracting the parser.',
-              '',
-              '| path | note |',
-              '| --- | --- |',
-              '| a.go | hot |',
-              '',
-              '- keep the visible instruction',
-              '',
-              '![Screen Recording](https://attachments.example.com/icon.svg)',
-              '![failing screenshot](https://attachments.example.com/shot.png)',
-            ].join('\n'),
-            diffHunk: '@@ -5,2 +5,3 @@\n keep\n-drop\n+add',
-          }),
+        pullRequests: [
+          {
+            position: 1,
+            title: 'Core runtime',
+            url: 'https://github.com/org/repo-a/pull/1',
+            comments: [
+              comment({
+                stableRef: 'repo-a:review:41',
+                repo: 'repo-a',
+                id: 41,
+                type: 'review',
+                path: 'src/query.ts',
+                line: 12,
+                author: 'Octocat',
+                body: [
+                  '# Security fix',
+                  '',
+                  'Rewrite this to avoid the bearer token.',
+                  '',
+                  '- [ ] follow up on caching',
+                  '- [x] confirm token rotation',
+                  '',
+                  '```go',
+                  'return newQueryCodec()',
+                  '```',
+                  '',
+                  'See [hardening guide](https://docs.example.com/harden), never',
+                  '[this mirror](https://user:pass@mirror.example.com/x). Inline',
+                  'HTML like <script> stays inert.',
+                ].join('\n'),
+                diffHunk: '@@ -1 +1,2 @@\n-oldCodec()\n+newQueryCodec()',
+                inReplyToId: 39,
+                createdAt: '2026-07-20T10:00:00Z',
+              }),
+              comment({
+                stableRef: 'repo-a:issue:42',
+                repo: 'repo-a',
+                id: 42,
+                type: 'issue',
+                author: 'hubot',
+                body: [
+                  'Consider extracting the parser.',
+                  '',
+                  '| path | note |',
+                  '| --- | --- |',
+                  '| a.go | hot |',
+                  '',
+                  '- keep the visible instruction',
+                  '',
+                  '![Screen Recording](https://attachments.example.com/icon.svg)',
+                  '![failing screenshot](https://attachments.example.com/shot.png)',
+                ].join('\n'),
+                diffHunk: '@@ -5,2 +5,3 @@\n keep\n-drop\n+add',
+              }),
+            ],
+          },
         ],
       },
       {
         repo: 'repo-b',
-        prUrl: 'https://github.com/org/repo-b/pull/7',
-        comments: [
-          comment({
-            stableRef: 'repo-b:review_body:90',
-            repo: 'repo-b',
-            id: 90,
-            type: 'review_body',
-            author: 'Reviewer',
-            body: 'Overall looks good.',
-            selected: false,
-          }),
+        pullRequests: [
+          {
+            position: 1,
+            title: 'Web surface',
+            url: 'https://github.com/org/repo-b/pull/7',
+            comments: [
+              comment({
+                stableRef: 'repo-b:review_body:90',
+                repo: 'repo-b',
+                id: 90,
+                type: 'review_body',
+                author: 'Reviewer',
+                body: 'Overall looks good.',
+                selected: false,
+              }),
+            ],
+          },
         ],
       },
     ],
@@ -332,15 +353,21 @@ describe('rich review feedback cards', () => {
         repos: [
           {
             repo: 'repo-a',
-            prUrl: '',
-            comments: [
-              comment({
-                stableRef: 'a:issue:1',
-                repo: 'a',
-                id: 1,
-                type: 'issue',
-                body: 'Short note.',
-              }),
+            pullRequests: [
+              {
+                position: 1,
+                title: '',
+                url: '',
+                comments: [
+                  comment({
+                    stableRef: 'a:issue:1',
+                    repo: 'a',
+                    id: 1,
+                    type: 'issue',
+                    body: 'Short note.',
+                  }),
+                ],
+              },
             ],
           },
         ],
@@ -358,16 +385,22 @@ describe('rich review feedback cards', () => {
         repos: [
           {
             repo: 'repo-a',
-            prUrl: '',
-            comments: [
-              comment({
-                stableRef: 'a:review:2',
-                repo: 'a',
-                id: 2,
-                type: 'review',
-                body: 'Brief.',
-                diffHunk: Array.from({ length: 21 }, (_, i) => ` line ${i}`).join('\n'),
-              }),
+            pullRequests: [
+              {
+                position: 1,
+                title: '',
+                url: '',
+                comments: [
+                  comment({
+                    stableRef: 'a:review:2',
+                    repo: 'a',
+                    id: 2,
+                    type: 'review',
+                    body: 'Brief.',
+                    diffHunk: Array.from({ length: 21 }, (_, i) => ` line ${i}`).join('\n'),
+                  }),
+                ],
+              },
             ],
           },
         ],
@@ -408,8 +441,24 @@ describe('ReviewFeedbackWorkspace', () => {
       'repo-b',
     ]);
     expect(within(sections[0]!).getByRole('heading', { name: 'repo-a' })).toBeVisible();
-    expect(within(sections[0]!).getByText('2 of 2 selected')).toBeVisible();
-    expect(within(sections[1]!).getByText('0 of 1 selected')).toBeVisible();
+    // The repository ledger counts across the repository's pull-request
+    // groups; each group renders its own quieter sub-header.
+    expect(
+      within(sections[0]!).getByText('2 of 2 selected', {
+        selector: '.review-feedback-section__ledger',
+      }),
+    ).toBeVisible();
+    expect(
+      within(sections[1]!).getByText('0 of 1 selected', {
+        selector: '.review-feedback-section__ledger',
+      }),
+    ).toBeVisible();
+    expect(
+      within(sections[0]!).getByRole('heading', { name: 'Layer 1 — Core runtime' }),
+    ).toBeVisible();
+    expect(
+      within(sections[1]!).getByRole('heading', { name: 'Layer 1 — Web surface' }),
+    ).toBeVisible();
 
     // Cards: author, type label, path:line, humanized creation time.
     expect(within(sections[0]!).getByText('Octocat')).toBeVisible();
@@ -420,10 +469,121 @@ describe('ReviewFeedbackWorkspace', () => {
     expect(screen.getByLabelText(/Overall looks good/)).not.toBeChecked();
 
     // PR links route through the privileged external-browser boundary.
-    await user.click(within(sections[1]!).getByRole('button', { name: 'Open pull request' }));
+    await user.click(
+      within(sections[1]!).getByRole('button', { name: 'Open pull request: layer 1 Web surface' }),
+    );
     expect(mock.api.openExternal).toHaveBeenCalledWith({
       url: 'https://github.com/org/repo-b/pull/7',
     });
+  });
+
+  it('renders one sub-section per pull-request group in position order with the scope rail counting per repository', async () => {
+    const draft = draftView({
+      repos: [
+        {
+          repo: 'repo-a',
+          pullRequests: [
+            {
+              position: 3,
+              title: 'Extension',
+              url: 'https://github.com/org/repo-a/pull/3',
+              comments: [
+                comment({
+                  stableRef: 'repo-a:review:43',
+                  repo: 'repo-a',
+                  id: 43,
+                  type: 'review',
+                  author: 'Octocat',
+                  body: 'Layer three note.',
+                }),
+              ],
+            },
+            {
+              position: 1,
+              title: 'Core runtime',
+              url: 'https://github.com/org/repo-a/pull/1',
+              comments: [
+                comment({
+                  stableRef: 'repo-a:issue:42',
+                  repo: 'repo-a',
+                  id: 42,
+                  type: 'issue',
+                  author: 'hubot',
+                  body: 'Consider extracting the parser.',
+                }),
+                comment({
+                  stableRef: 'repo-a:review:44',
+                  repo: 'repo-a',
+                  id: 44,
+                  type: 'review',
+                  author: 'Octocat',
+                  path: 'src/query.ts',
+                  line: 12,
+                  body: 'Rewrite this to avoid the bearer token.',
+                  selected: false,
+                }),
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    const { mock, user } = await renderWorkspace({ draft });
+
+    // Both groups render inside the single repository section, in position
+    // order regardless of the array order above.
+    const section = screen.getByRole('region', { name: 'repo-a' });
+    const prHeaders = within(section).getAllByRole('heading', { name: /Layer/ });
+    expect(prHeaders.map((header) => header.textContent)).toEqual([
+      'Layer 1 — Core runtime',
+      'Layer 3 — Extension',
+    ]);
+
+    // Each group's open-pull-request action opens its own URL externally.
+    await user.click(
+      within(section).getByRole('button', { name: 'Open pull request: layer 1 Core runtime' }),
+    );
+    await user.click(
+      within(section).getByRole('button', { name: 'Open pull request: layer 3 Extension' }),
+    );
+    expect(mock.api.openExternal).toHaveBeenNthCalledWith(1, {
+      url: 'https://github.com/org/repo-a/pull/1',
+    });
+    expect(mock.api.openExternal).toHaveBeenNthCalledWith(2, {
+      url: 'https://github.com/org/repo-a/pull/3',
+    });
+
+    // The scope rail counts the repository's comments across both groups;
+    // the All-feedback row shares the ratio, so scope the assertion to the
+    // repository's own row.
+    const rail = screen.getByRole('navigation', { name: 'Feedback scope' });
+    const repoAScope = within(rail)
+      .getByRole('radio', { name: /repo-a/ })
+      .closest('label');
+    expect(repoAScope).not.toBeNull();
+    expect(within(repoAScope as HTMLElement).getByText('2 of 3 selected')).toBeVisible();
+    expect(summary('3 of 3 comments visible')).toBeVisible();
+
+    // Bulk selection acts across groups: every visible comment, both layers.
+    await user.click(screen.getByRole('button', { name: 'Select visible (1)' }));
+    await waitFor(() =>
+      expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledWith({
+        featureId: PARENT_ID,
+        expectedRevision: 7,
+        updates: [{ stableRef: 'repo-a:review:44', selected: true }],
+      }),
+    );
+
+    // Filters act across groups too: Octocat authored one comment per layer.
+    await user.click(screen.getByRole('checkbox', { name: 'Octocat' }));
+    expect(summary('2 of 3 comments visible')).toBeVisible();
+    expect(within(section).getByLabelText(/Layer three note/)).toBeInTheDocument();
+    expect(
+      within(section).getByLabelText(/Rewrite this to avoid the bearer token/),
+    ).toBeInTheDocument();
+    expect(
+      within(section).queryByLabelText(/Consider extracting the parser/),
+    ).not.toBeInTheDocument();
   });
 
   it('choosing one repository narrows the feed without touching selections anywhere', async () => {
@@ -515,8 +675,14 @@ describe('ReviewFeedbackWorkspace', () => {
     const clear = screen.getByRole('button', { name: 'Clear visible (2)' });
     expect(screen.getByRole('button', { name: 'Select visible (1)' })).toBeEnabled();
     const ack = draftView({ revision: 8 });
-    ack.repos[0]!.comments[0] = { ...ack.repos[0]!.comments[0]!, selected: false };
-    ack.repos[0]!.comments[1] = { ...ack.repos[0]!.comments[1]!, selected: false };
+    ack.repos[0]!.pullRequests[0]!.comments[0] = {
+      ...ack.repos[0]!.pullRequests[0]!.comments[0]!,
+      selected: false,
+    };
+    ack.repos[0]!.pullRequests[0]!.comments[1] = {
+      ...ack.repos[0]!.pullRequests[0]!.comments[1]!,
+      selected: false,
+    };
     mock.api.updateReviewFeedbackSelection.mockResolvedValue(ackWith(8, ack));
     await user.click(clear);
     await waitFor(() => expect(mock.api.updateReviewFeedbackSelection).toHaveBeenCalledOnce());
@@ -549,7 +715,7 @@ describe('ReviewFeedbackWorkspace', () => {
       }),
     );
     const draft = draftView({
-      repos: [{ repo: 'repo-a', prUrl: '', comments: many }],
+      repos: [singleGroupRepo('repo-a', many)],
     });
     const { mock, user } = await renderWorkspace({ draft });
     const first = deferred<{ revision: number; repos: ReviewFeedbackDraftView['repos'] }>();
@@ -591,7 +757,7 @@ describe('ReviewFeedbackWorkspace', () => {
         type: 'review',
       }),
     );
-    const draft = draftView({ repos: [{ repo: 'repo-a', prUrl: '', comments: many }] });
+    const draft = draftView({ repos: [singleGroupRepo('repo-a', many)] });
     const { mock, user } = await renderWorkspace({ draft });
     mock.api.updateReviewFeedbackSelection
       .mockResolvedValueOnce({ revision: 8, repos: draft.repos })
@@ -610,7 +776,10 @@ describe('ReviewFeedbackWorkspace', () => {
   it('toggles update the visible choice immediately and send a reference-only mutation', async () => {
     const { mock, user } = await renderWorkspace();
     const ack = draftView({ revision: 8 });
-    ack.repos[0]!.comments[1] = { ...ack.repos[0]!.comments[1]!, selected: false };
+    ack.repos[0]!.pullRequests[0]!.comments[1] = {
+      ...ack.repos[0]!.pullRequests[0]!.comments[1]!,
+      selected: false,
+    };
     mock.api.updateReviewFeedbackSelection.mockResolvedValue(ackWith(8, ack));
     const comment42 = screen.getByLabelText(/Consider extracting the parser/);
     await user.click(comment42);
@@ -733,8 +902,8 @@ describe('ReviewFeedbackWorkspace', () => {
     const mock = installAgenticoMock();
     mock.api.getFeatureConfig.mockResolvedValue(featureConfigSnapshot({}));
     const committed = draftView({ revision: 8 });
-    committed.repos[0]!.comments[1] = {
-      ...committed.repos[0]!.comments[1]!,
+    committed.repos[0]!.pullRequests[0]!.comments[1] = {
+      ...committed.repos[0]!.pullRequests[0]!.comments[1]!,
       selected: false,
     };
     mock.api.fetchReviewFeedback.mockResolvedValue(committed);
@@ -866,7 +1035,7 @@ describe('ReviewFeedbackWorkspace', () => {
       expect(screen.getByRole('radio', { name: /All feedback/ })).toBeEnabled();
       expect(screen.getByRole('searchbox', { name: 'File path' })).toBeEnabled();
       expect(screen.getAllByRole('button', { name: 'View full comment' })[0]).toBeEnabled();
-      expect(screen.getAllByRole('button', { name: 'Open pull request' })[0]).toBeEnabled();
+      expect(screen.getAllByRole('button', { name: /Open pull request/ })[0]).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Retry save' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'Reload saved selections' })).toBeEnabled();
     });
@@ -882,8 +1051,8 @@ describe('ReviewFeedbackWorkspace', () => {
       // The ledger stays the only announcement: no alert ever takes focus.
       expect(screen.getByText('1 of 3 selected · saving…')).toBeVisible();
       const ack = draftView({ revision: 8 });
-      ack.repos[0]!.comments = ack.repos[0]!.comments.map((entry) =>
-        entry.stableRef === 'repo-a:issue:42' ? { ...entry, selected: false } : entry,
+      ack.repos[0]!.pullRequests[0]!.comments = ack.repos[0]!.pullRequests[0]!.comments.map(
+        (entry) => (entry.stableRef === 'repo-a:issue:42' ? { ...entry, selected: false } : entry),
       );
       inflight.resolve(ackWith(8, ack));
       await waitFor(() =>
@@ -909,10 +1078,12 @@ describe('ReviewFeedbackWorkspace', () => {
       // Retry sends both outstanding references once, in seq order, from the
       // acknowledged revision.
       const acked = draftView({ revision: 8 });
-      acked.repos[0]!.comments = acked.repos[0]!.comments.map((entry) => ({
-        ...entry,
-        selected: false,
-      }));
+      acked.repos[0]!.pullRequests[0]!.comments = acked.repos[0]!.pullRequests[0]!.comments.map(
+        (entry) => ({
+          ...entry,
+          selected: false,
+        }),
+      );
       mock.api.updateReviewFeedbackSelection.mockResolvedValueOnce({
         revision: 8,
         repos: acked.repos,
@@ -942,7 +1113,7 @@ describe('ReviewFeedbackWorkspace', () => {
           type: 'review',
         }),
       );
-      const draft = draftView({ repos: [{ repo: 'repo-a', prUrl: '', comments: many }] });
+      const draft = draftView({ repos: [singleGroupRepo('repo-a', many)] });
       const { mock, user } = await renderWorkspace({ draft });
       mock.api.updateReviewFeedbackSelection
         .mockResolvedValueOnce({ revision: 8, repos: draft.repos })
@@ -987,7 +1158,10 @@ describe('ReviewFeedbackWorkspace', () => {
       expect(screen.getByText('Unsaved choice')).toBeVisible();
       expect(comment90).toBeDisabled();
       const acked = draftView({ revision: 8 });
-      acked.repos[1]!.comments[0] = { ...acked.repos[1]!.comments[0]!, selected: true };
+      acked.repos[1]!.pullRequests[0]!.comments[0] = {
+        ...acked.repos[1]!.pullRequests[0]!.comments[0]!,
+        selected: true,
+      };
       mock.api.updateReviewFeedbackSelection.mockResolvedValueOnce({
         revision: 8,
         repos: acked.repos,

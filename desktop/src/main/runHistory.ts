@@ -225,7 +225,13 @@ export class RunHistoryService {
         ? {
             prConsequences: response.pr_consequences.map((p) => ({
               repo: p.repo,
-              prUrl: p.pr_url,
+              position: p.position,
+              title: p.title,
+              branch: p.branch,
+              ...(p.pr_url !== undefined && p.pr_url !== '' ? { prUrl: p.pr_url } : {}),
+              prState: p.pr_state,
+              verdict: p.verdict,
+              deleteRemoteBranch: p.delete_remote_branch,
             })),
           }
         : {}),
@@ -234,6 +240,7 @@ export class RunHistoryService {
             worktreeConsequences: response.worktree_consequences.map((w) => ({
               repo: w.repo,
               resetKind: w.reset_kind,
+              ...(w.branch !== undefined && w.branch !== '' ? { branch: w.branch } : {}),
             })),
           }
         : {}),

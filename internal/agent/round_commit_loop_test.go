@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -140,6 +141,15 @@ fi
 	if first.Repos["test-repo"] != workDir {
 		t.Errorf("round 1 Repos[test-repo] = %q, want %q", first.Repos["test-repo"], workDir)
 	}
+	// Implementation-loop rounds never carry a fix iteration directory;
+	// the field is Final Review fix rounds only. Every round does carry its
+	// own iteration directory.
+	if first.FixIterationDir != "" {
+		t.Errorf("round 1 FixIterationDir = %q, want empty", first.FixIterationDir)
+	}
+	if want := filepath.Join(artifactDir, "iteration-01"); first.IterationDir != want {
+		t.Errorf("round 1 IterationDir = %q, want %q", first.IterationDir, want)
+	}
 
 	if second.Kind != RoundCommitFix {
 		t.Errorf("round 2 Kind = %q, want fix", second.Kind)
@@ -152,6 +162,15 @@ fi
 	}
 	if second.Iteration != 2 {
 		t.Errorf("round 2 Iteration = %d, want 2", second.Iteration)
+	}
+	// Phase-level fix rounds route through the implement loop, which leaves
+	// the fix iteration directory to Final Review fix rounds only; the
+	// round's own iteration directory is still carried.
+	if second.FixIterationDir != "" {
+		t.Errorf("round 2 FixIterationDir = %q, want empty", second.FixIterationDir)
+	}
+	if want := filepath.Join(artifactDir, "iteration-02"); second.IterationDir != want {
+		t.Errorf("round 2 IterationDir = %q, want %q", second.IterationDir, want)
 	}
 }
 
@@ -329,6 +348,10 @@ func TestRunFeatureFinalReviewLoop_RoundCommitHook_FiresPerFixRound(t *testing.T
 	repo := testutil.InitGitRepo(t)
 	f.Repos[0].Path = repo
 	f.Repos[0].WorktreePath = repo
+	f.Stack = []feature.StackLayer{
+		{Position: 1, Title: "Foundations", Phases: []int{1}, Branch: "feature/fr-round-commit-1/bootstrap"},
+		{Position: 2, Title: "Review loop", Phases: []int{2}, Branch: "feature/fr-round-commit-1/review-loop"},
+	}
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature with git repo: %v", err)
 	}
@@ -402,6 +425,150 @@ fi`,
 	}
 	if got.Repos[testRepoNameAPI] != repo {
 		t.Errorf("Repos[api] = %q, want %q", got.Repos[testRepoNameAPI], repo)
+	}
+	// The fix round must carry the fixer's iteration directory so the hook
+	// can locate the optional fix manifest.
+	wantIterDir := filepath.Join(artDir, "iteration-01")
+	if got.FixIterationDir != wantIterDir {
+		t.Errorf("FixIterationDir = %q, want %q", got.FixIterationDir, wantIterDir)
+	}
+	if got.IterationDir != wantIterDir {
+		t.Errorf("IterationDir = %q, want %q", got.IterationDir, wantIterDir)
+	}
+
+	// runFix must render the feature's stack into the fixer prompt with the
+	// manifest artifact path inside that same iteration directory.
+	promptPath := filepath.Join(wantIterDir, "fix-prompt.md")
+	promptData, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("read fix prompt %s: %v", promptPath, readErr)
+	}
+	prompt := string(promptData)
+	for _, want := range []string{
+		"## Delivery Stack",
+		"- Layer 1: Foundations — phases [1], branch feature/fr-round-commit-1/bootstrap",
+		"- Layer 2: Review loop (top layer) — phases [2], branch feature/fr-round-commit-1/review-loop",
+		filepath.Join(wantIterDir, "fix-manifest.yaml"),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("fix prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+// TestRunFeatureFinalReviewLoop_ReviewFeedbackChildFixerListsParentStack: a
+// review-feedback child's own stack is empty/provisional, so its Final
+// Review fixer prompt must list the parent's layers instead. Other features
+// keep listing their own stack (covered by the test above).
+func TestRunFeatureFinalReviewLoop_ReviewFeedbackChildFixerListsParentStack(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	env := newFRLoopEnv(t)
+	store, f, _ := newFRTestFeature(t, env.stateDir, "fr-rf-child", []string{testRepoNameAPI})
+	repo := testutil.InitGitRepo(t)
+	f.Repos[0].Path = repo
+	f.Repos[0].WorktreePath = repo
+	// The child's own stack stays empty: the fixer prompt must derive its
+	// layer listing from the parent below, not from the child.
+	f.Parent = &feature.ChildRelationship{ParentID: "fr-rf-parent", Kind: feature.ChildKindReviewFeedback}
+
+	parent := &feature.Feature{
+		ID:            "fr-rf-parent",
+		Name:          "Review Feedback Parent",
+		Slug:          "fr-rf-parent",
+		Status:        feature.StatusPublished,
+		ActiveRun:     1,
+		RunCount:      1,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Stack: []feature.StackLayer{
+			{Position: 1, Title: "Foundations", Phases: []int{1}, Branch: "feature/fr-rf-parent-1/bootstrap"},
+			{Position: 2, Title: "Review loop", Phases: []int{2}, Branch: "feature/fr-rf-parent-1/review-loop"},
+		},
+	}
+	if err := store.Save(parent); err != nil {
+		t.Fatalf("save parent: %v", err)
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save child: %v", err)
+	}
+
+	artDir := frArtifactDir(env.stateDir, f)
+	if err := os.MkdirAll(artDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact: %v", err)
+	}
+
+	reviewScript := testutil.WriteScript(t, env.scriptsDir, "review.sh",
+		fmt.Sprintf(`if [ -d "%s/iteration-02" ]; then
+%s
+%s
+%s
+else
+%s
+%s
+%s
+fi`,
+			artDir,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewApproved(artDir),
+			testutil.JSONLSuccess,
+			testutil.JSONLInit,
+			testutil.WriteFinalReviewChangesRequested(artDir, "- **High**: needs a fix"),
+			testutil.JSONLSuccess))
+
+	fixScript := testutil.WriteScript(t, env.scriptsDir, "fix.sh",
+		testutil.JSONLInit+"\n"+testutil.JSONLSuccess+"\n")
+
+	eventCh := make(chan any, 100)
+	sm := session.NewManager(eventCh)
+	defer sm.Shutdown()
+
+	hook, inputs := recordingRoundCommitHook(t)
+
+	cfg := OrchestratorConfig{
+		Feature:        f,
+		FeatureStore:   store,
+		StateDir:       env.stateDir,
+		Model:          "agent",
+		ReviewModel:    "reviewer",
+		MaxIterations:  5,
+		MaxConsecFails: 3,
+		BuildSession: mockBuildSessionByModel(map[string]string{
+			"reviewer": reviewScript,
+			"agent":    fixScript,
+		}),
+		RoundCommitHook: hook,
+	}
+
+	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	if err != nil {
+		t.Fatalf("loop: %v", err)
+	}
+	if result.FinalStatus != finalStatusReviewPassed {
+		t.Fatalf("FinalStatus = %q, want review_passed (LastError=%q)", result.FinalStatus, result.LastError)
+	}
+	if len(*inputs) != 1 {
+		t.Fatalf("round commit hook fired %d times, want 1; inputs: %+v", len(*inputs), *inputs)
+	}
+
+	// The fixer prompt must list the parent's layers with the manifest
+	// artifact path inside the fixer's iteration directory.
+	wantIterDir := filepath.Join(artDir, "iteration-01")
+	promptPath := filepath.Join(wantIterDir, "fix-prompt.md")
+	promptData, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("read fix prompt %s: %v", promptPath, readErr)
+	}
+	prompt := string(promptData)
+	for _, want := range []string{
+		"## Delivery Stack",
+		"- Layer 1: Foundations — phases [1], branch feature/fr-rf-parent-1/bootstrap",
+		"- Layer 2: Review loop (top layer) — phases [2], branch feature/fr-rf-parent-1/review-loop",
+		filepath.Join(wantIterDir, "fix-manifest.yaml"),
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("fix prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

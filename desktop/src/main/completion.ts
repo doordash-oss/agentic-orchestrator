@@ -92,9 +92,24 @@ export class CompletionService {
         publishable: repo.publishable,
         touched: repo.touched,
         status: repo.status,
-        ...(repo.pr_url ? { prUrl: repo.pr_url } : {}),
+        ...(repo.pull_requests === undefined || repo.pull_requests.length === 0
+          ? {}
+          : {
+              // One view entry per stack layer with its per-layer push mode.
+              pullRequests: repo.pull_requests.map((entry) => ({
+                position: entry.position,
+                title: entry.title,
+                ...(entry.branch === undefined ? {} : { branch: entry.branch }),
+                ...(entry.url === undefined || entry.url === '' ? {} : { url: entry.url }),
+                state: entry.state,
+                noCommits: entry.no_commits,
+                pushedUpToDate: entry.pushed_up_to_date,
+                ...(entry.push_mode === undefined ? {} : { pushMode: entry.push_mode }),
+              })),
+            }),
         ...(repo.blocker ? { blocker: repo.blocker } : {}),
         ...(repo.freshness ? { freshness: repo.freshness } : {}),
+        ...(repo.rebase_hint ? { rebaseHint: repo.rebase_hint } : {}),
         // The canonical object crosses IPC intact except diagnostics, which
         // pass through the same redaction as every other raw text the
         // renderer receives.

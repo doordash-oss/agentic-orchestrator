@@ -78,12 +78,18 @@ type MockFeatureLifecycle struct {
 	// Publish / completion hooks.
 	MarkCodeReadyFn        func(featureID string) error
 	MarkFinalReviewReadyFn func(featureID string) error
-	MarkPublishedFn        func(featureID, prURL string) error
+	MarkPublishedFn        func(featureID string) error
 	MarkFailedFn           func(featureID string, failure errcat.FailureRecord) error
-	SetRepoPublishedFn     func(featureID, repoName, prURL string) error
+	SetRepoPublishedFn     func(featureID, repoName string) error
 	SetRepoPublishErrorFn  func(featureID, repoName string, record errcat.FailureRecord) error
 	TryCompletePublishFn   func(featureID string) (bool, error)
 	InitRepoImplFn         func(featureID string) error
+
+	// Per-layer stack publish hooks.
+	RecordStackLayerPRFn        func(featureID, repoName string, layerPosition int, prURL, pushedSHA string) error
+	RecordStackLayerPushedSHAFn func(featureID, repoName string, layerPosition int, sha string) error
+	SetStackLayerPRStateFn      func(featureID, repoName string, layerPosition int, state feature.StackPRState) error
+	MarkStackLayerNoCommitsFn   func(featureID, repoName string, layerPosition int) error
 
 	// RetryPhaseFn lets tests intercept the unified phase-retry path that
 	// replaces the old per-repo RetryRepo (deleted in SchemaVersionCurrent = 4).
@@ -356,10 +362,10 @@ func (m *MockFeatureLifecycle) MarkFinalReviewReady(featureID string) error {
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) MarkPublished(featureID, prURL string) error {
-	m.record("MarkPublished", featureID, prURL)
+func (m *MockFeatureLifecycle) MarkPublished(featureID string) error {
+	m.record("MarkPublished", featureID)
 	if m.MarkPublishedFn != nil {
-		return m.MarkPublishedFn(featureID, prURL)
+		return m.MarkPublishedFn(featureID)
 	}
 	return m.DefaultError
 }
@@ -455,10 +461,10 @@ func (m *MockFeatureLifecycle) InitRepoImpl(featureID string) error {
 	return m.DefaultError
 }
 
-func (m *MockFeatureLifecycle) SetRepoPublished(featureID, repoName, prURL string) error {
-	m.record("SetRepoPublished", featureID, repoName, prURL)
+func (m *MockFeatureLifecycle) SetRepoPublished(featureID, repoName string) error {
+	m.record("SetRepoPublished", featureID, repoName)
 	if m.SetRepoPublishedFn != nil {
-		return m.SetRepoPublishedFn(featureID, repoName, prURL)
+		return m.SetRepoPublishedFn(featureID, repoName)
 	}
 	return m.DefaultError
 }
@@ -467,6 +473,38 @@ func (m *MockFeatureLifecycle) SetRepoPublishError(featureID, repoName string, r
 	m.record("SetRepoPublishError", featureID, repoName, record)
 	if m.SetRepoPublishErrorFn != nil {
 		return m.SetRepoPublishErrorFn(featureID, repoName, record)
+	}
+	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) RecordStackLayerPR(featureID, repoName string, layerPosition int, prURL, pushedSHA string) error {
+	m.record("RecordStackLayerPR", featureID, repoName, layerPosition, prURL, pushedSHA)
+	if m.RecordStackLayerPRFn != nil {
+		return m.RecordStackLayerPRFn(featureID, repoName, layerPosition, prURL, pushedSHA)
+	}
+	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) RecordStackLayerPushedSHA(featureID, repoName string, layerPosition int, sha string) error {
+	m.record("RecordStackLayerPushedSHA", featureID, repoName, layerPosition, sha)
+	if m.RecordStackLayerPushedSHAFn != nil {
+		return m.RecordStackLayerPushedSHAFn(featureID, repoName, layerPosition, sha)
+	}
+	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) SetStackLayerPRState(featureID, repoName string, layerPosition int, state feature.StackPRState) error {
+	m.record("SetStackLayerPRState", featureID, repoName, layerPosition, state)
+	if m.SetStackLayerPRStateFn != nil {
+		return m.SetStackLayerPRStateFn(featureID, repoName, layerPosition, state)
+	}
+	return m.DefaultError
+}
+
+func (m *MockFeatureLifecycle) MarkStackLayerNoCommits(featureID, repoName string, layerPosition int) error {
+	m.record("MarkStackLayerNoCommits", featureID, repoName, layerPosition)
+	if m.MarkStackLayerNoCommitsFn != nil {
+		return m.MarkStackLayerNoCommitsFn(featureID, repoName, layerPosition)
 	}
 	return m.DefaultError
 }

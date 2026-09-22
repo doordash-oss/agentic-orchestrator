@@ -146,7 +146,7 @@ function aftercareAction(id: CatalogActionId): AftercareAction {
         label: 'Start rebase pass',
         title: 'Bring branches up to date',
         description:
-          'Starts a pass immediately that merges each behind repository’s target branch into the feature. No setup needed.',
+          'Starts a pass immediately that restacks each behind repository onto its target branch, dropping merged layers and adopting reviewer commits. No setup needed.',
       };
     case 'refactor':
       return {
@@ -154,7 +154,7 @@ function aftercareAction(id: CatalogActionId): AftercareAction {
         label: 'Plan refactor',
         title: 'Start a refactor pass',
         description:
-          'Describe the improvement and run it as a separate pass that merges back on approval.',
+          'Describe the improvement and run it as a separate pass that appends new pull-request layers on top of the stack.',
       };
     case 'review-feedback':
       return {

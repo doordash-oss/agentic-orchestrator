@@ -47,9 +47,9 @@ type FeatureSummaryInput struct {
 
 // RepoSummaryInput carries per-repo state for summary generation.
 type RepoSummaryInput struct {
-	Status    string
-	Iteration int
-	PRURL     string
+	Status       string
+	Iteration    int
+	PullRequests []RepoSummaryPullRequest
 }
 
 // BuildFeatureSummaryInput is a convenience adapter that populates a
@@ -132,8 +132,8 @@ func writeFeatureSummaryImpl(input FeatureSummaryInput) error {
 	repos := make(map[string]RepoSummary)
 	for name, rs := range input.RepoStates {
 		repos[name] = RepoSummary{
-			Status: rs.Status,
-			PRURL:  rs.PRURL,
+			Status:       rs.Status,
+			PullRequests: rs.PullRequests,
 		}
 	}
 

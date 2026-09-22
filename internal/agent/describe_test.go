@@ -19,33 +19,56 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-func TestBuildPRDescriptionPrompt(t *testing.T) {
+// twoLayerStack is the shared two-layer stack fixture: layer 2 is the top.
+func twoLayerStack() []prompts.PRStackLayerView {
+	return []prompts.PRStackLayerView{
+		{Position: 1, Title: "Foundations", Phases: []int{1, 2}, Branch: "feature/feat-x-1/foundations"},
+		{Position: 2, Title: "Review loop", Phases: []int{3}, Branch: "feature/feat-x-2/review-loop"},
+	}
+}
+
+func TestBuildPRDescriptionPrompt_LayerOfStack(t *testing.T) {
 	prompt := BuildPRDescriptionPrompt(PRContext{
 		FeatureName:        "my-feature",
 		FeatureDescription: "feature desc",
-		Roadmap:            "plan content",
+		LayerPosition:      2,
+		LayerTitle:         "Review loop",
+		LayerPhases:        []int{3},
+		LayerRationale:     "Keeps review feedback inside one pull request.",
+		Stack:              twoLayerStack(),
 		CommitBodies:       "commit body content",
 		DiffStat:           " internal/foo.go | 42 ++++++++",
 	})
 	wantContains := []string{
 		"my-feature",
 		"feature desc",
-		"plan content",
+		"Position: Layer 2 of 2",
+		"Title: Review loop",
+		"Phases: [3]",
+		"Rationale: Keeps review feedback inside one pull request.",
+		"- Layer 1: Foundations — phases [1 2], branch feature/feat-x-1/foundations",
+		"- Layer 2: Review loop (top layer) — phases [3], branch feature/feat-x-2/review-loop",
 		"commit body content",
 		"internal/foo.go",
+		"Describe only this layer's changes",
 		"Do not request or invoke tools",
-		"TITLE:",
-		"BODY:",
+		"Output the body in markdown only. Do not include a pull request title.",
 	}
 	for _, s := range wantContains {
 		if !strings.Contains(prompt, s) {
 			t.Errorf("prompt missing %q", s)
+		}
+	}
+	for _, s := range []string{"TITLE:", "BODY:", "## Roadmap", "concise title"} {
+		if strings.Contains(prompt, s) {
+			t.Errorf("prompt must not contain %q", s)
 		}
 	}
 	if strings.Contains(prompt, "```diff") {
@@ -54,84 +77,66 @@ func TestBuildPRDescriptionPrompt(t *testing.T) {
 }
 
 func TestBuildPRDescriptionPrompt_EmitsOnlyPopulatedSections(t *testing.T) {
-	prompt := BuildPRDescriptionPrompt(PRContext{Roadmap: "plan only"})
-	if !strings.Contains(prompt, "plan only") {
-		t.Error("expected roadmap content in prompt")
+	prompt := BuildPRDescriptionPrompt(PRContext{FeatureName: "my-feature", LayerPosition: 1})
+	if !strings.Contains(prompt, "Name: my-feature") {
+		t.Error("expected feature name in prompt")
 	}
-	for _, s := range []string{"## Feature", "## Commit Messages", "## Changes (file stats)"} {
+	if !strings.Contains(prompt, "Position: Layer 1") {
+		t.Error("expected layer position in prompt")
+	}
+	for _, s := range []string{"## Commit Messages", "## Changes (file stats)", "## Delivery Stack"} {
 		if strings.Contains(prompt, s) {
 			t.Errorf("empty section %q should have been omitted", s)
 		}
 	}
 }
 
-func TestRunDescriptionGenerationCommand(t *testing.T) {
-	// We can't run the actual claude CLI in tests, but we can verify the
-	// prompt construction and parsing work end-to-end with known output.
-	sampleOutput := "TITLE: Add feature X\nBODY:\n## Summary\n\n- Added X\n\n## Test plan\n\n- [ ] Test X\n"
-	title, body := ParsePRDescription(sampleOutput)
-	if title != "Add feature X" {
-		t.Errorf("title = %q, want 'Add feature X'", title)
-	}
-	if !strings.Contains(body, "Added X") {
-		t.Error("expected body to contain 'Added X'")
-	}
-	if !strings.Contains(body, "Test plan") {
-		t.Error("expected body to contain 'Test plan'")
-	}
-}
-
 func TestParsePRDescription(t *testing.T) {
 	tests := []struct {
-		name      string
-		output    string
-		wantTitle string
-		wantBody  string
+		name     string
+		output   string
+		wantBody string
 	}{
 		{
-			name:      "full marked output",
-			output:    "TITLE: Fix authentication bug\nBODY:\n## Summary\n\n- Fixed auth\n",
-			wantTitle: "Fix authentication bug",
-			wantBody:  "## Summary\n\n- Fixed auth",
+			name:     "body-only reply is the body",
+			output:   "## Summary\n\n- Added X\n\n## Test plan\n\n- [ ] Test X\n",
+			wantBody: "## Summary\n\n- Added X\n\n## Test plan\n\n- [ ] Test X",
 		},
 		{
-			name:      "marked without BODY tag",
-			output:    "TITLE: Quick patch\n\nSome description continues here.\n",
-			wantTitle: "Quick patch",
-			wantBody:  "Some description continues here.",
+			name:     "legacy marked output strips title and body markers",
+			output:   "TITLE: Fix authentication bug\nBODY:\n## Summary\n\n- Fixed auth\n",
+			wantBody: "## Summary\n\n- Fixed auth",
 		},
 		{
-			name:      "unmarked with heading",
-			output:    "# Refactor auth\n\nBody line.\n",
-			wantTitle: "Refactor auth",
-			wantBody:  "Body line.",
+			name:     "legacy marked output without BODY marker",
+			output:   "TITLE: Quick patch\n\nSome description continues here.\n",
+			wantBody: "Some description continues here.",
 		},
 		{
-			name:      "unmarked plain text",
-			output:    "First line as title\nrest of body\n",
-			wantTitle: "First line as title",
-			wantBody:  "rest of body",
+			name:     "unmarked single-paragraph reply stays whole",
+			output:   "First line is body\nrest of body\n",
+			wantBody: "First line is body\nrest of body",
 		},
 		{
-			name:      "empty output returns empty",
-			output:    "",
-			wantTitle: "",
-			wantBody:  "",
+			name:     "empty output returns empty body",
+			output:   "",
+			wantBody: "",
 		},
 		{
-			name:      "title only",
-			output:    "TITLE: Simple fix\nBODY:\n",
-			wantTitle: "Simple fix",
-			wantBody:  "",
+			name:     "whitespace-only output returns empty body",
+			output:   "  \n\n",
+			wantBody: "",
+		},
+		{
+			name:     "title-only legacy reply has no body",
+			output:   "TITLE: Simple fix\nBODY:\n",
+			wantBody: "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			title, body := ParsePRDescription(tt.output)
-			if title != tt.wantTitle {
-				t.Errorf("title = %q, want %q", title, tt.wantTitle)
-			}
+			body := ParsePRDescription(tt.output)
 			if body != tt.wantBody {
 				t.Errorf("body = %q, want %q", body, tt.wantBody)
 			}
@@ -147,8 +152,8 @@ func TestExtractTextFromStreamJSON(t *testing.T) {
 	}{
 		{
 			name:   "assistant text blocks",
-			output: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"TITLE: Fix bug"}]}}` + "\n" + `{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.01}`,
-			want:   "TITLE: Fix bug",
+			output: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"## Summary"}]}}` + "\n" + `{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.01}`,
+			want:   "## Summary",
 		},
 		{
 			name:   "result text fallback",
@@ -179,7 +184,7 @@ func TestExtractTextFromStreamJSON(t *testing.T) {
 
 func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n## Summary\n- Test change"))
+	sess.msgLog.Append(mocks.AssistantTextMessage("## Summary\n- Test change"))
 	sess.result = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
@@ -189,16 +194,18 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	sess.statusCh <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
-	prCtx := PRContext{FeatureName: "test", Roadmap: "plan content"}
-	title, body, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", prCtx)
+	prCtx := PRContext{
+		FeatureName:   "test",
+		LayerPosition: 1,
+		LayerTitle:    "Only layer",
+		Stack:         twoLayerStack()[:1],
+	}
+	body, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", prCtx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if title != "Test PR" {
-		t.Errorf("expected title 'Test PR', got %q", title)
-	}
-	if body == "" {
-		t.Error("expected non-empty body")
+	if !strings.Contains(body, "Test change") {
+		t.Errorf("expected generated body, got %q", body)
 	}
 	if len(runner.capturedOpts) != 1 {
 		t.Fatalf("captured opts = %d, want 1", len(runner.capturedOpts))
@@ -249,18 +256,18 @@ func TestPhaseRunnerRunDescriptionGeneration_ReturnsHelperErrorWithoutFallback(t
 		FeatureDescription: "feature desc",
 	}
 
-	title, body, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", prCtx)
+	body, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", prCtx)
 	if err == nil {
 		t.Fatal("RunDescriptionGeneration() error = nil, want helper error")
 	}
-	if title != "" || body != "" {
-		t.Errorf("RunDescriptionGeneration() = %q / %q, want empty output on error", title, body)
+	if body != "" {
+		t.Errorf("RunDescriptionGeneration() = %q, want empty output on error", body)
 	}
 }
 
-func TestPhaseRunnerRunDescriptionGeneration_RejectsIncompleteOutput(t *testing.T) {
+func TestPhaseRunnerRunDescriptionGeneration_RejectsEmptyBody(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n"))
+	sess.msgLog.Append(mocks.AssistantTextMessage("   "))
 	sess.result = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
@@ -270,16 +277,16 @@ func TestPhaseRunnerRunDescriptionGeneration_RejectsIncompleteOutput(t *testing.
 	sess.statusCh <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
-	title, body, err := runner.pr.RunDescriptionGeneration(
+	body, err := runner.pr.RunDescriptionGeneration(
 		context.Background(),
 		"feat-publish",
 		"sonnet",
-		PRContext{FeatureName: "test"},
+		PRContext{FeatureName: "test", LayerPosition: 1},
 	)
 	if err == nil {
-		t.Fatal("RunDescriptionGeneration() error = nil, want incomplete-output error")
+		t.Fatal("RunDescriptionGeneration() error = nil, want empty-body error")
 	}
-	if title != "" || body != "" {
-		t.Errorf("RunDescriptionGeneration() = %q / %q, want empty output on incomplete result", title, body)
+	if body != "" {
+		t.Errorf("RunDescriptionGeneration() = %q, want empty output on incomplete result", body)
 	}
 }

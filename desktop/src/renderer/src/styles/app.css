@@ -2434,6 +2434,20 @@ body {
   outline-offset: 2px;
 }
 
+/* The cross-repository PR count under the headline pull-request link. */
+.aftercare-facts__pr-count {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--muted);
+}
+
+/* The server-authored rebase hint under the freshness fact: plain advisory
+ * text in the pane's own voice — never error markup, which ErrorSurface owns. */
+.aftercare-facts__rebase-hint {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+}
+
 /* ─── The sheet family ────────────────────────────────────────────────────
  * The generic window-modal sheet: the scrim covers the entire window,
  * sidebar included, and the sheet descends from the window's top edge —
@@ -2851,6 +2865,11 @@ body {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-2);
+}
+
+/* The Depth step's delivery pairing: two cards on the profile grid. */
+.creation-sheet__profiles--pair {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .creation-sheet__profile {
@@ -8317,8 +8336,12 @@ body {
   padding: var(--space-5);
 }
 
+/* The sheet's publish rows bound both columns: an unconstrained auto column
+ * lets a long rebase hint starve the repository name down to zero, so the
+ * name column keeps a fixed share and the hint wraps inside its own
+ * bounded column instead. */
 .completion-publish-sheet .completion-workspace__publish-repo {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
   gap: var(--space-2) var(--space-3);
 }
 
@@ -8327,6 +8350,11 @@ body {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+}
+
+.completion-workspace__publish-repo-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .completion-workspace__publish-repo-meta {
@@ -8341,6 +8369,74 @@ body {
   grid-column: 1 / -1;
   border-left: 2px solid var(--attention);
   padding-left: var(--space-2);
+}
+
+/* The server-authored freshness phrase and rebase hint in a publish row:
+ * advisory text in the sheet's voice — never error markup, which
+ * ErrorSurface owns. */
+.completion-workspace__freshness {
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+  overflow-wrap: anywhere;
+}
+
+/* The per-repository stack preview under a publish row: one line per layer
+ * with position, title, verb, and the existing PR's link. */
+.completion-workspace__stack-preview {
+  grid-column: 1 / -1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.completion-workspace__stack-preview-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  font: 12px var(--bench-font-text);
+}
+
+.completion-workspace__stack-preview-position {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--bench-font-mono);
+  font-size: 12px;
+}
+
+.completion-workspace__stack-preview-title {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.completion-workspace__stack-preview-verb {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.35rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  white-space: nowrap;
+}
+
+.completion-workspace__stack-preview-verb[data-verb='will-rewrite'] {
+  border-color: var(--attention);
+  color: var(--attention);
+}
+
+.completion-workspace__stack-preview-verb[data-verb='merged'] {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .completion-publish-sheet__details {
@@ -8392,17 +8488,6 @@ body {
 
 .completion-workspace__merge-repo {
   grid-template-columns: minmax(0, 1fr) auto;
-}
-
-.completion-workspace__published-repo-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-2);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  padding: var(--space-2) var(--space-3);
-  background: var(--raised);
 }
 
 .completion-workspace__ineligible-repo-row {
@@ -10018,6 +10103,105 @@ body {
   word-break: break-all;
 }
 
+/* The rewind's per-repository pull-request stack: one block per repository,
+ * one row per layer (position, title, verdict badge, external link only
+ * where the layer has a pull request), mirroring the repository
+ * instrument's stack rows so both surfaces read as the same list. */
+.rewind-journey__pr-repos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.rewind-journey__pr-repo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rewind-journey__pr-repo-name {
+  color: var(--text);
+  font: 500 12px var(--bench-font-mono);
+}
+
+.rewind-journey__pr-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.rewind-journey__pr-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.rewind-journey__pr-position {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--bench-font-mono);
+  font-size: 12px;
+}
+
+.rewind-journey__pr-title {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.rewind-journey__pr-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.35rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  white-space: nowrap;
+}
+
+.rewind-journey__pr-badge[data-verdict='keep'] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.rewind-journey__pr-badge[data-verdict='close'] {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.rewind-journey__pr-badge[data-verdict='merged'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rewind-journey__pr-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.rewind-journey__pr-link:hover {
+  text-decoration: underline;
+}
+
 .rewind-journey__confirm-summary {
   display: flex;
   flex-direction: column;
@@ -10364,6 +10548,69 @@ body {
   text-decoration: underline;
 }
 
+/* The per-repository stack: one row per layer (position, title, state badge,
+ * external link only where the layer has a published PR). */
+.repo-instrument__pr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.repo-instrument__pr-row {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.repo-instrument__pr-position {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: var(--bench-font-mono);
+  font-size: 12px;
+}
+
+.repo-instrument__pr-title {
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.repo-instrument__pr-badge {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.35rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  white-space: nowrap;
+}
+
+.repo-instrument__pr-badge[data-state='open'] {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.repo-instrument__pr-badge[data-state='merged'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.repo-instrument__pr-badge[data-state='closed'] {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
 .repo-instrument__rebase-target {
   font-family: var(--bench-font-mono);
   font-size: 12px;
@@ -10425,8 +10672,11 @@ body {
   color: #fff;
 }
 
-/* The row card sits below the repository's own meta row. */
+/* The row card sits below the repository's own meta row and spans every
+   column of the publish row, so a squeezed name column can never shrink the
+   recovery card or bury its controls. */
 .completion-workspace__publish-repo .error-surface {
+  grid-column: 1 / -1;
   margin-top: var(--space-2);
 }
 
@@ -11374,7 +11624,41 @@ body {
   color: var(--muted);
 }
 
-.review-feedback-section__pr {
+/* One open layer pull request inside a repository section: a quieter
+   sub-header than the repository's own, so the stack hierarchy stays
+   legible — repository first, layer second. */
+.review-feedback-pr {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+}
+
+.review-feedback-pr__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+}
+
+.review-feedback-pr__title {
+  margin: 0;
+  font: 600 12px var(--bench-font-text);
+  color: var(--muted);
+}
+
+.review-feedback-pr__name {
+  font: 600 12px var(--bench-font-text);
+  color: var(--text);
+}
+
+.review-feedback-pr__ledger {
+  font: 12px var(--bench-font-text);
+  color: var(--muted);
+}
+
+.review-feedback-pr__open {
   margin-left: auto;
   font-family: var(--bench-font-text);
   font-size: 12px;
@@ -11386,7 +11670,7 @@ body {
   text-decoration: none;
 }
 
-.review-feedback-section__pr:hover {
+.review-feedback-pr__open:hover {
   text-decoration: underline;
 }
 

@@ -32,22 +32,33 @@ type Params struct {
 // ManagerDeps is the runtime dependency surface the feature manager needs.
 type ManagerDeps struct {
 	fx.In
-	Worktrees WorktreeOps `optional:"true"`
-	PRs       PRCloser    `optional:"true"`
+	Worktrees WorktreeOps     `optional:"true"`
+	PRs       RewindRemoteOps `optional:"true"`
 }
 
-// gitPRCloser is the production implementation of the feature-owned PR-close
-// seam.
-type gitPRCloser struct{}
+// gitRewindRemoteOps is the production implementation of the feature-owned
+// rewind remote-operations seam.
+type gitRewindRemoteOps struct{}
 
-func (gitPRCloser) ClosePR(prURL string) error { return git.ClosePR(prURL) }
+func (gitRewindRemoteOps) ClosePR(prURL string) error { return git.ClosePR(prURL) }
+
+// The repository-path parameter of git.PRState exists for signature
+// stability only; the URL fully identifies the pull request.
+func (gitRewindRemoteOps) PRState(prURL string) (string, error) {
+	return git.PRState("", prURL)
+}
+
+func (gitRewindRemoteOps) DeleteRemoteBranch(repoPath, branch string) error {
+	return git.DeleteRemoteBranch(repoPath, branch)
+}
 
 var _ WorktreeOps = (*git.WorktreeManager)(nil)
-var _ PRCloser = gitPRCloser{}
+var _ RewindRemoteOps = gitRewindRemoteOps{}
 
-// Module provides the feature store, manager, and feature-owned PR closer.
+// Module provides the feature store, manager, and feature-owned rewind
+// remote operations.
 var Module = fx.Module("feature",
-	fx.Provide(func() PRCloser { return gitPRCloser{} }),
+	fx.Provide(func() RewindRemoteOps { return gitRewindRemoteOps{} }),
 	fx.Provide(func(p Params) *git.WorktreeManager {
 		return git.NewWorktreeManager(filepath.Join(filepath.Dir(p.StateDir), "worktrees"))
 	}),

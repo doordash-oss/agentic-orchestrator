@@ -21,7 +21,7 @@ import type {
   RelationshipChildView,
   RunDetailView,
 } from '../../../shared/ipc';
-import { ErrorSurface } from '../components/ErrorSurface';
+import { ErrorSurface, type ErrorSurfaceAction } from '../components/ErrorSurface';
 import { formatDuration } from './featureView';
 import { AftercareShipped } from './AftercareShipped';
 import { AftercareSymbol } from './AftercareSymbol';
@@ -38,6 +38,14 @@ export interface AftercareWorkspaceProps {
   preflight?: CompletionPreflightResult | null;
   evidence?: AftercareEvidence;
   actionError?: AftercareActionError | null;
+  /**
+   * Resolves the action-error card's referenced remediation actions against
+   * the feature's action catalog; the rebase launcher's refusal carries a
+   * canonical closed-pull-request conflict whose resolutions render here.
+   */
+  actionErrorResolveAction?: (actionId: string) => ErrorSurfaceAction | undefined;
+  /** Dispatches an action chosen from the action-error card. */
+  actionErrorOnAction?: (actionId: string) => void;
   /** Action currently dispatching a one-click launch; its row renders busy. */
   busyAction?: { id: AftercareAction['id']; label: string };
   /** Fetches the complete pass history — bodies included — from the feature detail. */
@@ -61,6 +69,8 @@ export function AftercareWorkspace({
   preflight = null,
   evidence = EMPTY_AFTERCARE_EVIDENCE,
   actionError = null,
+  actionErrorResolveAction,
+  actionErrorOnAction,
   busyAction,
   onLoadFullChildHistory,
   onAction,
@@ -87,6 +97,10 @@ export function AftercareWorkspace({
               error={actionError.error}
               variant="compact"
               caption={`${actionError.action} was rejected`}
+              {...(actionErrorResolveAction === undefined
+                ? {}
+                : { resolveAction: actionErrorResolveAction })}
+              {...(actionErrorOnAction === undefined ? {} : { onAction: actionErrorOnAction })}
             />
           )}
           {actions.length === 0 ? (

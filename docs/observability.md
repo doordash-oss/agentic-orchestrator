@@ -201,11 +201,58 @@ Partial Implement rewinds add:
 
 Full phase rewinds omit `roadmap_phase` and the roadmap range labels.
 
+### `feature.layer_boundary`
+
+Roadmap layer boundaries emit `feature.layer_boundary` after the boundary's
+single persistence write. Common `data` keys:
+
+- `layer_position`: completed layer's position.
+- `layer_title`: completed layer's title.
+- `layer_branch`: completed layer's branch.
+- `repo_tips`: per-repository tip SHAs the boundary recorded.
+- `next_layer_position` / `next_layer_branch`: the next layer when the
+  boundary split the worktrees onto its branch.
+
+### `feature.layer_publish`
+
+Each stack layer a publish pass acts on emits one `feature.layer_publish`
+event per repository, after the layer's persistence write. Common `data`
+keys:
+
+- `repository`: repository the layer belongs to.
+- `layer_position`: layer's stack position.
+- `layer_title`: layer's title.
+- `layer_branch`: layer's branch.
+- `pr_url`: the layer's pull request URL, when one exists.
+- `pr_state`: recorded pull request state (`open`, `merged`, or `closed`).
+- `action`: what the pass did — `created` (new pull request), `pushed`
+  (fast-forward push onto an existing pull request's branch), `rewritten`
+  (lease-protected force push replacing remote history), `merged` (pull
+  request found merged), `blocked` (pull request found closed without
+  merge), or `failed` (the layer's publish step failed).
+
+### Repository status events and the layer field
+
+Domain `repo.status_changed` events carry a `layer_position` data key
+whenever exactly one stack layer is known: publish emits one event per
+changed layer (instead of one per repository), a Final Review fix
+relocation names the layer it landed on, and a layer-boundary split names
+the next layer. Events that are not layer-scoped omit the key. The SSE
+projection renders them as lifecycle updates exactly as before.
+
 ## Feature Summary
 
 `observe-summary.yaml` is rebuilt from active-run events and durable feature
 state. The `sealed_runs` section lists sealed rewind history in ascending
 `run_number` order.
+
+Each repository entry under `repos` carries:
+
+- `status`: `published`, `touched`, `failed`, or `untouched`.
+- `pull_requests`: every delivery layer's pull request for the repository,
+  each with `position`, `title`, `url`, and `state`. Omitted when the
+  repository has no pull requests.
+- `cost_usd`, `input_tokens`, `output_tokens`: session-derived aggregates.
 
 Each sealed run summary may include:
 

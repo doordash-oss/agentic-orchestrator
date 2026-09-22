@@ -33,10 +33,31 @@ export interface ReviewFeedbackDraftCommentView extends ReviewFeedbackCommentVie
   createdAt?: string;
 }
 
+/**
+ * One open layer pull request's comment group inside a repository's draft
+ * view: the stack layer's position and title, the pull request's URL, and
+ * that pull request's comments, in the server's position order.
+ */
+export interface ReviewFeedbackDraftPullRequestGroup {
+  /** Stack layer position of the pull request's layer (1 = lowest). */
+  position: number;
+  /** Title of the pull request's stack layer. */
+  title: string;
+  /** The pull request's URL; empty for a pre-layer-tagging draft group. */
+  url: string;
+  comments: ReviewFeedbackDraftCommentView[];
+}
+
 export interface ReviewFeedbackDraftRepoGroup {
   repo: string;
-  prUrl: string;
-  comments: ReviewFeedbackDraftCommentView[];
+  pullRequests: ReviewFeedbackDraftPullRequestGroup[];
+}
+
+/** Flattens a repository's comments across its pull-request groups, in group order. */
+export function repoDraftComments(
+  group: ReviewFeedbackDraftRepoGroup,
+): ReviewFeedbackDraftCommentView[] {
+  return group.pullRequests.flatMap((pr) => pr.comments);
 }
 
 /** The durable pending draft, as fetched or acknowledged by the server. */

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -38,15 +39,19 @@ type childFakeWorktrees struct {
 	clean func(string, int) (*git.CleanlinessReport, error)
 }
 
-func (f *childFakeWorktrees) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+func (f *childFakeWorktrees) Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 	return "", nil
 }
-func (f *childFakeWorktrees) Remove(string, bool) error              { return nil }
-func (f *childFakeWorktrees) RemoveRef(string, string, string) error { return nil }
-func (f *childFakeWorktrees) ResetToBase(string, string) error       { return nil }
-func (f *childFakeWorktrees) ResetToBaseLocal(string, string) error  { return nil }
-func (f *childFakeWorktrees) ResetToCommit(string, string) error     { return nil }
-func (f *childFakeWorktrees) ExpectedPath(slug, repo string) string  { return "" }
+func (f *childFakeWorktrees) RenameBranch(string, string, string) error { return nil }
+func (f *childFakeWorktrees) CreateBranchAtHead(string, string) error   { return nil }
+func (f *childFakeWorktrees) SwitchBranch(string, string) error         { return nil }
+func (f *childFakeWorktrees) DeleteBranch(string, string) error         { return nil }
+func (f *childFakeWorktrees) Remove(string, bool) error                 { return nil }
+func (f *childFakeWorktrees) RemoveRef(string, string, string) error    { return nil }
+func (f *childFakeWorktrees) ResetToBase(string, string) error          { return nil }
+func (f *childFakeWorktrees) ResetToBaseLocal(string, string) error     { return nil }
+func (f *childFakeWorktrees) ResetToCommit(string, string) error        { return nil }
+func (f *childFakeWorktrees) ExpectedPath(slug, repo string) string     { return "" }
 func (f *childFakeWorktrees) CurrentHeadSHA(p string) (string, error) {
 	sha, ok := f.heads[p]
 	if !ok || sha == "" {
@@ -54,21 +59,29 @@ func (f *childFakeWorktrees) CurrentHeadSHA(p string) (string, error) {
 	}
 	return sha, nil
 }
-func (f *childFakeWorktrees) CurrentBranch(string) string                    { return "" }
-func (f *childFakeWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
-func (f *childFakeWorktrees) UpdateRef(string, string, string, string) error { return nil }
+func (f *childFakeWorktrees) CurrentBranch(string) string           { return "" }
+func (f *childFakeWorktrees) RefSHA(string, string) (string, error) { return "", nil }
+func (f *childFakeWorktrees) RefSHAOrAbsent(string, string) (string, bool, error) {
+	return "", false, nil
+}
 func (f *childFakeWorktrees) IsAncestor(string, string, string) (bool, error) {
 	return false, nil
 }
-func (f *childFakeWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
-	return nil, nil
-}
+func (f *childFakeWorktrees) UpdateRef(string, string, string, string) error { return nil }
 func (f *childFakeWorktrees) InspectCleanliness(path string, max int) (*git.CleanlinessReport, error) {
 	if f.clean != nil {
 		return f.clean(path, max)
 	}
 	return &git.CleanlinessReport{}, nil
 }
+func (f *childFakeWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (f *childFakeWorktrees) RestackChainWithResolver(string, []git.RestackCutPoint, []git.RestackOp, git.RestackConflictResolver, string) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (f *childFakeWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
+func (f *childFakeWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 
 func newChildTestManager(t *testing.T, heads map[string]string, clean func(string, int) (*git.CleanlinessReport, error)) *feature.Manager {
 	t.Helper()
@@ -227,12 +240,19 @@ func TestCreateRefactorChildPersistsRelationshipAndIntent(t *testing.T) {
 	if child.Parent.Bases[0].ParentBranch != "feature/parent-1-x" {
 		t.Fatalf("parent branch provenance = %+v", child.Parent.Bases[0])
 	}
-	// Inherits repos in order with unique child branch identities.
+	// Inherits repos in order with unique child branch identities: the
+	// child's own provisional layer-1 branch, never the parent's namespace.
 	if len(child.Repos) != 2 || child.Repos[0].Name != "repo-a" || child.Repos[1].Name != "repo-b" {
 		t.Fatalf("repos = %+v", child.Repos)
 	}
-	if child.Repos[0].Branch == "" || child.Repos[0].Branch == "feature/parent-1-x" {
-		t.Fatalf("child branch not unique: %q", child.Repos[0].Branch)
+	wantChildBranch := git.LayerBranchName(feature.WorkspaceSlug(child.Slug, child.ID), 1, child.Slug)
+	for _, repo := range child.Repos {
+		if repo.Branch != wantChildBranch {
+			t.Fatalf("child branch for %s = %q, want %q", repo.Name, repo.Branch, wantChildBranch)
+		}
+		if strings.HasPrefix(repo.Branch, "feature/parent-1-x") {
+			t.Fatalf("child branch %q leaks into the parent namespace", repo.Branch)
+		}
 	}
 	if child.Repos[0].WorktreePath != "" {
 		t.Fatalf("child worktree path must be deferred to setup, got %q", child.Repos[0].WorktreePath)
@@ -312,6 +332,117 @@ func assertSharedReviewConfigMatches(t *testing.T, parent, child *feature.Featur
 	}
 	if parent.Inquireness != child.Inquireness {
 		t.Fatalf("inquireness parent=%v child=%v", parent.Inquireness, child.Inquireness)
+	}
+}
+
+func TestCreateRefactorChildInheritsParentDeliveryMode(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp store and fakes isolate state.
+	tests := []struct {
+		name        string
+		parent      feature.DeliveryMode // stored value; "" models a legacy record
+		wantPersist feature.DeliveryMode // child's persisted mode
+	}{
+		{"single parent", feature.DeliveryModeSingle, feature.DeliveryModeSingle},
+		{"stack parent", feature.DeliveryModeStack, feature.DeliveryModeStack},
+		{"legacy parent with no stored mode", "", feature.DeliveryModeStack},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := newChildTestManager(t, map[string]string{"/wt/repo": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, cleanEverywhere())
+			parent := &feature.Feature{
+				ID:           "parent-delivery",
+				Slug:         "parent",
+				Status:       feature.StatusPublished,
+				Repos:        []feature.FeatureRepo{{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "feature/parent-x", BaseBranch: "main"}},
+				Pipeline:     feature.PipelineMoonshot,
+				DeliveryMode: tt.parent,
+			}
+			saveChildTestParent(t, mgr, parent)
+
+			child, err := mgr.CreateRefactorChild(parent.ID, childTestSpec())
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if child.DeliveryMode != parent.EffectiveDeliveryMode() {
+				t.Fatalf("child DeliveryMode = %q, want parent effective %q", child.DeliveryMode, parent.EffectiveDeliveryMode())
+			}
+			if child.DeliveryMode != tt.wantPersist {
+				t.Fatalf("child DeliveryMode = %q, want persisted %q", child.DeliveryMode, tt.wantPersist)
+			}
+
+			loaded, err := mgr.Store.Load(child.ID)
+			if err != nil {
+				t.Fatalf("reload child: %v", err)
+			}
+			if loaded.DeliveryMode != tt.wantPersist {
+				t.Fatalf("reloaded DeliveryMode = %q, want %q", loaded.DeliveryMode, tt.wantPersist)
+			}
+
+			// The paired-config back-sync must not copy the delivery mode:
+			// a legacy parent stays empty even though the child stores the
+			// inherited effective mode.
+			reloadedParent, err := mgr.Store.Load(parent.ID)
+			if err != nil {
+				t.Fatalf("reload parent: %v", err)
+			}
+			if reloadedParent.DeliveryMode != tt.parent {
+				t.Fatalf("parent DeliveryMode = %q, want untouched %q", reloadedParent.DeliveryMode, tt.parent)
+			}
+		})
+	}
+}
+
+func TestCreateRebaseChildInheritsParentDeliveryMode(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp store and fakes isolate state.
+	tests := []struct {
+		name        string
+		parent      feature.DeliveryMode
+		wantPersist feature.DeliveryMode
+	}{
+		{"single parent", feature.DeliveryModeSingle, feature.DeliveryModeSingle},
+		{"stack parent", feature.DeliveryModeStack, feature.DeliveryModeStack},
+		{"legacy parent with no stored mode", "", feature.DeliveryModeStack},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := newChildTestManager(t, nil, cleanEverywhere())
+			parent := &feature.Feature{
+				ID:           "rebase-parent-delivery",
+				Slug:         "rebase-parent",
+				Status:       feature.StatusPublished,
+				Repos:        []feature.FeatureRepo{{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "feature/parent-x", BaseBranch: "main"}},
+				Pipeline:     feature.PipelineMoonshot,
+				DeliveryMode: tt.parent,
+			}
+			saveChildTestParent(t, mgr, parent)
+
+			child, err := mgr.CreateRebaseChild(parent.ID, feature.RebaseChildSpec{
+				Bases: []feature.ChildRepoBase{{Repo: "repo", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ParentBranch: "feature/parent-x"}},
+				Targets: []feature.RebaseRepoTarget{
+					{Repo: "repo", Target: "main", Ref: "origin/main", Publishable: true, TargetSHA: "1111111111111111111111111111111111111111"},
+				},
+				WorkRepos: []string{"repo"},
+			})
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if child.DeliveryMode != tt.wantPersist {
+				t.Fatalf("child DeliveryMode = %q, want %q", child.DeliveryMode, tt.wantPersist)
+			}
+			if child.EffectiveDeliveryMode() != parent.EffectiveDeliveryMode() {
+				t.Fatalf("child effective DeliveryMode = %q, want parent effective %q", child.EffectiveDeliveryMode(), parent.EffectiveDeliveryMode())
+			}
+
+			loaded, err := mgr.Store.Load(child.ID)
+			if err != nil {
+				t.Fatalf("reload child: %v", err)
+			}
+			if loaded.DeliveryMode != tt.wantPersist {
+				t.Fatalf("reloaded DeliveryMode = %q, want %q", loaded.DeliveryMode, tt.wantPersist)
+			}
+		})
 	}
 }
 
@@ -657,31 +788,43 @@ type reuseWorktrees struct {
 	created bool
 }
 
-func (f *reuseWorktrees) Create(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+func (f *reuseWorktrees) Create(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 	f.created = true
 	return "", nil
 }
-func (f *reuseWorktrees) Remove(string, bool) error              { return nil }
-func (f *reuseWorktrees) RemoveRef(string, string, string) error { return nil }
-func (f *reuseWorktrees) ResetToBase(string, string) error       { return nil }
-func (f *reuseWorktrees) ResetToBaseLocal(string, string) error  { return nil }
-func (f *reuseWorktrees) ResetToCommit(string, string) error     { return nil }
-func (f *reuseWorktrees) ExpectedPath(slug, repo string) string  { return "" }
+func (f *reuseWorktrees) RenameBranch(string, string, string) error { return nil }
+func (f *reuseWorktrees) CreateBranchAtHead(string, string) error   { return nil }
+func (f *reuseWorktrees) SwitchBranch(string, string) error         { return nil }
+func (f *reuseWorktrees) DeleteBranch(string, string) error         { return nil }
+func (f *reuseWorktrees) Remove(string, bool) error                 { return nil }
+func (f *reuseWorktrees) RemoveRef(string, string, string) error    { return nil }
+func (f *reuseWorktrees) ResetToBase(string, string) error          { return nil }
+func (f *reuseWorktrees) ResetToBaseLocal(string, string) error     { return nil }
+func (f *reuseWorktrees) ResetToCommit(string, string) error        { return nil }
+func (f *reuseWorktrees) ExpectedPath(slug, repo string) string     { return "" }
 func (f *reuseWorktrees) CurrentHeadSHA(p string) (string, error) {
 	return f.heads[p], nil
 }
-func (f *reuseWorktrees) CurrentBranch(string) string                    { return "" }
-func (f *reuseWorktrees) RefSHA(string, string) (string, error)          { return "", nil }
-func (f *reuseWorktrees) UpdateRef(string, string, string, string) error { return nil }
+func (f *reuseWorktrees) CurrentBranch(string) string           { return "" }
+func (f *reuseWorktrees) RefSHA(string, string) (string, error) { return "", nil }
+func (f *reuseWorktrees) RefSHAOrAbsent(string, string) (string, bool, error) {
+	return "", false, nil
+}
 func (f *reuseWorktrees) IsAncestor(string, string, string) (bool, error) {
 	return false, nil
 }
-func (f *reuseWorktrees) CreateMergeCandidate(string, string, string, string) (*git.MergeCandidateResult, error) {
-	return nil, nil
-}
+func (f *reuseWorktrees) UpdateRef(string, string, string, string) error { return nil }
 func (f *reuseWorktrees) InspectCleanliness(string, int) (*git.CleanlinessReport, error) {
 	return &git.CleanlinessReport{}, nil
 }
+func (f *reuseWorktrees) RestackChain(string, []git.RestackCutPoint, []git.RestackOp) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (f *reuseWorktrees) RestackChainWithResolver(string, []git.RestackCutPoint, []git.RestackOp, git.RestackConflictResolver, string) (*git.RestackResult, error) {
+	return nil, nil
+}
+func (f *reuseWorktrees) CommitTreeSHA(string, string) (string, error)        { return "", nil }
+func (f *reuseWorktrees) UpdateRefsTransaction(string, []git.RefUpdate) error { return nil }
 
 func TestRunSetupValidatesExactBaseOnReuse(t *testing.T) {
 	t.Parallel()
@@ -741,6 +884,35 @@ func TestRunSetupValidatesExactBaseOnReuse(t *testing.T) {
 		}
 		if done.Status != feature.StatusCreated || done.Run().Setup.Status != feature.SetupStatusDone {
 			t.Fatalf("status=%v setup=%v", done.Status, done.Run().Setup.Status)
+		}
+		// The empty task branch fell back to the repository record's branch,
+		// never to a recomputed name.
+		task := done.Run().Setup.Tasks["worktree:repo-a"]
+		if task.Branch != done.Repos[0].Branch {
+			t.Fatalf("task branch = %q, want the repository record's %q", task.Branch, done.Repos[0].Branch)
+		}
+	})
+
+	t.Run("worktree on another branch fails safely", func(t *testing.T) {
+		mgr, wt, childID := newManager(t)
+		existing, err := mgr.Store.Load(childID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wtPath := existing.Run().Setup.Tasks["worktree:repo-a"].Path
+		wt.heads[wtPath] = sha
+		// The live worktree sits on some other branch than the task's.
+		testutil.CreateBranch(t, wtPath, "feature/someone-else")
+		err = mgr.RunSetup(childID)
+		if err == nil || !strings.Contains(err.Error(), "is on branch") {
+			t.Fatalf("err = %v, want branch mismatch", err)
+		}
+		failed, ferr := mgr.Store.Load(childID)
+		if ferr != nil {
+			t.Fatal(ferr)
+		}
+		if failed.Status != feature.StatusFailed || failed.Run().Setup.Status != feature.SetupStatusFailed {
+			t.Fatalf("status=%v setup=%v", failed.Status, failed.Run().Setup.Status)
 		}
 	})
 
@@ -1127,10 +1299,12 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 			Transaction: &feature.TransactionJournal{
 				Phase: feature.TransactionPhaseMerged,
 				Entries: []feature.RepoTransactionEntry{{
-					ParentBranch:    "feature/parent",
-					ParentAnchorSHA: "aaaa1111",
-					ChildHeadSHA:    "bbbb2222",
-					MergeHEAD:       "cccc3333",
+					Repo:         "repoA",
+					ChildHeadSHA: "bbbb2222",
+					Refs: []feature.RepoTransactionRef{{
+						Branch: "feature/parent", AnchorSHA: "aaaa1111",
+						CandidateSHA: "cccc3333", ObservedSHA: "cccc3333",
+					}},
 					Cleanup: &errcat.FailureRecord{
 						Code:        errcat.ChildCleanupIncomplete,
 						Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: "repoA"}}},
@@ -1139,17 +1313,18 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 					PendingSync: true,
 				}},
 				Attention: &errcat.FailureRecord{
-					Code: errcat.IntegrationMergeConflict,
+					Code: errcat.IntegrationRebaseConflict,
 					Context: &errcat.RecordContext{
 						Repositories: []errcat.CodeRepository{{
-							Name:            "repoA",
-							Branch:          "feature/parent",
-							ConflictFiles:   []string{"internal/api.go"},
-							ParentAnchorSHA: "aaaa1111",
-							ChildHeadSHA:    "bbbb2222",
+							Name:          "repoA",
+							Branch:        "feature/parent",
+							ConflictFiles: []string{"internal/api.go"},
+							ChildHeadSHA:  "bbbb2222",
+							CommitSHA:     "1a2b3c4d",
+							Attempts:      3,
 						}},
 					},
-					Diagnostics: "repoA: merge conflict: [internal/api.go]",
+					Diagnostics: "repoA: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repoA/1a2b3c4d/attempt-03",
 				},
 			},
 		},
@@ -1173,14 +1348,15 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 		t.Fatalf("transaction entries = %d, want 1", len(tx.Entries))
 	}
 	entry := tx.Entries[0]
-	if entry.ParentBranch != "feature/parent" || entry.ParentAnchorSHA != "aaaa1111" ||
-		entry.ChildHeadSHA != "bbbb2222" || entry.MergeHEAD != "cccc3333" ||
+	if len(entry.Refs) != 1 || entry.Refs[0].Branch != "feature/parent" ||
+		entry.Refs[0].AnchorSHA != "aaaa1111" || entry.Refs[0].CandidateSHA != "cccc3333" ||
+		entry.ChildHeadSHA != "bbbb2222" ||
 		entry.Cleanup == nil || entry.Cleanup.Code != errcat.ChildCleanupIncomplete ||
 		entry.Cleanup.Diagnostics != "worktree busy" || !entry.PendingSync {
 		t.Fatalf("transaction entry = %+v, want full round-trip", entry)
 	}
 	rec := tx.Attention
-	if rec == nil || rec.Code != errcat.IntegrationMergeConflict || rec.Diagnostics != "repoA: merge conflict: [internal/api.go]" {
+	if rec == nil || rec.Code != errcat.IntegrationRebaseConflict || rec.Diagnostics != "repoA: resolving segment phase:2..phase:3 commit 1a2b3c4d exhausted 3 attempts on: internal/api.go; last failure: conflict markers remain in internal/api.go; attempt directory: /state/features/f1/rebase-resolution/repoA/1a2b3c4d/attempt-03" {
 		t.Fatalf("attention record = %+v, want round-trip", rec)
 	}
 	if rec.Context == nil || len(rec.Context.Repositories) != 1 {
@@ -1189,7 +1365,8 @@ func TestChildIntegrationRecordPersists(t *testing.T) {
 	repo := rec.Context.Repositories[0]
 	if repo.Name != "repoA" || repo.Branch != "feature/parent" ||
 		len(repo.ConflictFiles) != 1 || repo.ConflictFiles[0] != "internal/api.go" ||
-		repo.ParentAnchorSHA != "aaaa1111" || repo.ChildHeadSHA != "bbbb2222" {
+		repo.ChildHeadSHA != "bbbb2222" ||
+		repo.CommitSHA != "1a2b3c4d" || repo.Attempts != 3 {
 		t.Fatalf("attention repository = %+v, want round-trip", repo)
 	}
 }
@@ -1211,7 +1388,9 @@ func TestIntegrationResumable(t *testing.T) {
 			},
 		}
 	}
-	merged := &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333"}}}
+	merged := &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{
+		Refs: []feature.RepoTransactionRef{{Branch: "main", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333"}},
+	}}}
 	for _, tc := range []struct {
 		name string
 		f    *feature.Feature
@@ -1223,7 +1402,9 @@ func TestIntegrationResumable(t *testing.T) {
 		{"active phase attention", mk("", &feature.TransactionJournal{Phase: feature.TransactionPhaseAttention}, "/tmp/wt"), true},
 		{"active phase merged", mk("", merged, "/tmp/wt"), true},
 		{"closed completed settled", mk(feature.ChildCloseOutcomeCompleted, merged, ""), false},
-		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{MergeHEAD: "cccc3333", Cleanup: &errcat.FailureRecord{Code: errcat.ChildCleanupIncomplete, Diagnostics: "worktree busy"}}}}, ""), false},
+		{"closed completed with cleanup warning", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhaseMerged, Entries: []feature.RepoTransactionEntry{{
+			Refs:    []feature.RepoTransactionRef{{Branch: "main", CandidateSHA: "cccc3333"}},
+			Cleanup: &errcat.FailureRecord{Code: errcat.ChildCleanupIncomplete, Diagnostics: "worktree busy"}}}}, ""), false},
 		{"closed completed with pending worktree", mk(feature.ChildCloseOutcomeCompleted, merged, "/tmp/wt"), false},
 		{"closed completed without merge head", mk(feature.ChildCloseOutcomeCompleted, &feature.TransactionJournal{Phase: feature.TransactionPhasePreparing}, ""), false},
 	} {
@@ -1265,14 +1446,24 @@ func TestRebaseDescriptionIsWorktreeAnchored(t *testing.T) {
 	if strings.Contains(desc, "working branch") {
 		t.Errorf("description still uses branch-anchored phrasing:\n%s", desc)
 	}
+	for _, banned := range []string{
+		"merge the resolved target",
+		"Merge the resolved target",
+		"git merge",
+		"merge commit",
+		"merge cleanly",
+	} {
+		if strings.Contains(desc, banned) {
+			t.Errorf("description carries merge wording %q:\n%s", banned, desc)
+		}
+	}
 	for _, want := range []string{
-		"already been merged",
+		"has already replayed",
 		"this repository's worktree",
-		"in-progress merge",
-		"resolve every conflict",
-		"complete the merge commit",
-		"never squash or rewrite history",
-		"Leave up-to-date repositories completely untouched",
+		"replayed onto the resolved target commit",
+		"merged layers were dropped",
+		"original messages and authors",
+		"Leave pass-through repositories completely untouched",
 		"Never push to any remote",
 		"Do not fetch from any remote",
 		"worktrees provisioned for this pass",
@@ -1307,17 +1498,81 @@ func TestRebaseExitCriteriaIsWorktreeAnchored(t *testing.T) {
 	for _, want := range []string{
 		"this repository's worktree",
 		"git merge-base --is-ancestor origin/main HEAD",
-		"No merge is in progress",
+		"No rebase is in progress",
 		"No conflict markers remain",
 		"git status --porcelain",
+		"byte-identical to the creation-time fork point",
 		"No other checkout of any repository was modified",
 		"Nothing was pushed to any remote",
+		"Nothing was fetched from any remote",
 	} {
 		if !strings.Contains(criteria, want) {
 			t.Errorf("exit criteria missing %q:\n%s", want, criteria)
 		}
 	}
+	if strings.Contains(criteria, "No merge is in progress") {
+		t.Errorf("exit criteria carry merge wording:\n%s", criteria)
+	}
 	if strings.Contains(criteria, "repo-current") {
 		t.Errorf("exit criteria mention the up-to-date repo by section:\n%s", criteria)
+	}
+}
+
+// TestCreateRebaseChildCarriesDivergedClassification proves the created
+// child's relationship carries the preflight's divergence classification —
+// the diverged flag, the observed remote tip, and the ordered foreign
+// commits — together with the work list, so the restack loop and closure
+// read the creation-time decision instead of recomputing.
+func TestCreateRebaseChildCarriesDivergedClassification(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: per-test temp store and fakes isolate state.
+	mgr := newChildTestManager(t, nil, cleanEverywhere())
+	parent := &feature.Feature{
+		ID:           "rebase-parent-diverged",
+		Slug:         "rebase-parent-diverged",
+		Status:       feature.StatusPublished,
+		Repos:        []feature.FeatureRepo{{Name: "repo", Path: "/src/repo", WorktreePath: "/wt/repo", Branch: "feature/parent-x", BaseBranch: "main"}},
+		Pipeline:     feature.PipelineMoonshot,
+		DeliveryMode: feature.DeliveryModeStack,
+	}
+	saveChildTestParent(t, mgr, parent)
+
+	child, err := mgr.CreateRebaseChild(parent.ID, feature.RebaseChildSpec{
+		Bases: []feature.ChildRepoBase{{Repo: "repo", SHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ParentBranch: "feature/parent-x"}},
+		Targets: []feature.RebaseRepoTarget{
+			{Repo: "repo", Target: "main", Ref: "origin/main", Publishable: true, TargetSHA: "1111111111111111111111111111111111111111"},
+		},
+		LayerStates: []feature.RebaseLayerClassification{
+			{Repo: "repo", LayerPosition: 1, LayerTitle: "Layer one", Branch: "stack/1", State: feature.RebaseLayerStateKept},
+			{
+				Repo: "repo", LayerPosition: 2, LayerTitle: "Layer two", Branch: "stack/2",
+				State: feature.RebaseLayerStateKept, Diverged: true,
+				RemoteTip:         "fedcba9876543210fedcba9876543210fedcba98",
+				RemoteOnlyCommits: 2,
+				ForeignCommits: []feature.RebaseForeignCommit{
+					{SHA: "1111111111111111111111111111111111111111", Subject: "reviewer fix one", Author: "Reviewer One <reviewer1@example.com>"},
+					{SHA: "2222222222222222222222222222222222222222", Subject: "reviewer fix two", Author: "Reviewer Two <reviewer2@example.com>"},
+				},
+			},
+		},
+		WorkRepos: []string{"repo"},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	loaded, err := mgr.Store.Load(child.ID)
+	if err != nil {
+		t.Fatalf("reload child: %v", err)
+	}
+	if !reflect.DeepEqual(loaded.Parent.RebaseWorkRepos, []string{"repo"}) {
+		t.Fatalf("child RebaseWorkRepos = %+v, want [repo]", loaded.Parent.RebaseWorkRepos)
+	}
+	diverged := loaded.RebaseDivergedLayers("repo")
+	if len(diverged) != 1 || diverged[0].LayerPosition != 2 || diverged[0].RemoteTip != "fedcba9876543210fedcba9876543210fedcba98" {
+		t.Fatalf("child diverged layers = %+v, want layer 2 with the pinned remote tip", diverged)
+	}
+	if len(diverged[0].ForeignCommits) != 2 || diverged[0].ForeignCommits[0].SHA != "1111111111111111111111111111111111111111" {
+		t.Fatalf("child foreign commits = %+v, want the two recorded reviewer commits in order", diverged[0].ForeignCommits)
 	}
 }

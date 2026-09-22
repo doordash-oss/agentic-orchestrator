@@ -176,8 +176,10 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	)
 	assertSchemaProperties(
 		t, spec, "ErrorRepositoryContext",
-		"name", "branch", "conflict_files", "dirty_files", "parent_anchor_sha",
-		"expected_ref_sha", "child_head_sha", "candidate_sha", "merge_head", "observed_sha",
+		"name", "branch", "conflict_files", "dirty_files",
+		"child_head_sha", "candidate_sha", "observed_sha",
+		"commit_sha", "attempts",
+		"layer_position", "layer_title", "pull_request_url",
 	)
 	errorProps := schemaProperties(spec.Components.Schemas["Error"])
 	for _, forbidden := range []string{"message", "status", "target"} {
@@ -214,6 +216,29 @@ func TestIntegrationAttentionSchemasCollapsedToCanonicalError(t *testing.T) {
 	}
 }
 
+// TestDeliveryModeSchemaSurfaces pins the delivery-mode contract: the create
+// request and the feature detail / feature-defaults read surfaces carry the
+// enum, while neither the child launch requests nor the per-feature config
+// surface accept it (the mode is immutable after creation).
+func TestDeliveryModeSchemaSurfaces(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	assertSchemaProperties(t, spec, "CreateFeatureMutationRequest", "delivery_mode")
+	assertSchemaProperties(t, spec, "FeatureDetail", "delivery_mode")
+	assertSchemaProperties(t, spec, "FeatureDefaults", "delivery_mode")
+	for _, schema := range []string{"RefactorFeatureRequest", "FeatureConfig"} {
+		if props := schemaProperties(spec.Components.Schemas[schema]); props["delivery_mode"] {
+			t.Fatalf("components.schemas.%s must not accept delivery_mode; the mode is immutable after creation", schema)
+		}
+	}
+	// The generated create-request enum admits exactly stack and single.
+	if !Single.Valid() || !Stack.Valid() {
+		t.Fatal("generated CreateFeatureMutationRequestDeliveryMode must admit stack and single")
+	}
+	if CreateFeatureMutationRequestDeliveryMode("pr-per-phase").Valid() {
+		t.Fatal("generated CreateFeatureMutationRequestDeliveryMode must reject unknown values")
+	}
+}
+
 // TestRefactorRequestSchemaOmitsRepoSelection pins the refactor contract:
 // repository and base-branch selection are inherited from the parent and must
 // never re-enter the refactor request schema.
@@ -243,6 +268,60 @@ const apiPathReviewFeedbackFetch = "/api/v1/features/{feature_id}/actions/review
 const apiPathReviewFeedbackSelection = "/api/v1/features/{feature_id}/actions/review-feedback/selection"
 
 const apiPathReviewFeedbackAction = "/api/v1/features/{feature_id}/actions/review-feedback"
+
+const apiPathReopenPullRequestAction = "/api/v1/features/{feature_id}/actions/reopen-pull-request"
+const apiPathRecreatePullRequestAction = "/api/v1/features/{feature_id}/actions/recreate-pull-request"
+
+// TestPullRequestResolutionOperationsBindTypedSchemas pins the statically
+// documented reopen/recreate operations: each request body references its
+// typed schema (repository, layer, source_revision), the generated action
+// enum admits both action ids, and the success/typed error responses are
+// declared.
+func TestPullRequestResolutionOperationsBindTypedSchemas(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	for _, tc := range []struct {
+		path            string
+		operationID     string
+		requestSchema   string
+		responseSchema  string
+		actionID        string
+		generatedAction FeatureAction
+	}{
+		{apiPathReopenPullRequestAction, "reopenPullRequestFeature", "ReopenPullRequestRequest", "ReopenPullRequestResponse", "reopen-pull-request", FeatureActionReopenPullRequest},
+		{apiPathRecreatePullRequestAction, "recreatePullRequestFeature", "RecreatePullRequestRequest", "RecreatePullRequestResponse", "recreate-pull-request", FeatureActionRecreatePullRequest},
+	} {
+		op := lookupOpenAPIOperation(t, spec, http.MethodPost, tc.path)
+		if op.OperationID != tc.operationID {
+			t.Fatalf("%s operationId = %q, want %s", tc.path, op.OperationID, tc.operationID)
+		}
+		schemaRef := nestedYAMLRef(t, op.RequestBody, "content", "application/json", "schema")
+		if schemaRef != "#/components/schemas/"+tc.requestSchema {
+			t.Fatalf("%s requestBody schema = %q, want %s", tc.path, schemaRef, tc.requestSchema)
+		}
+		resp200 := declaredOpenAPIResponse(t, op, "200")
+		respSchemaRef := nestedYAMLRef(t, responseContentMap(t, resp200), "schema")
+		if respSchemaRef != "#/components/schemas/"+tc.responseSchema {
+			t.Fatalf("%s 200 schema = %q, want %s", tc.path, respSchemaRef, tc.responseSchema)
+		}
+		declaredOpenAPIResponse(t, op, "400")
+		declaredOpenAPIResponse(t, op, "409")
+
+		schema, ok := spec.Components.Schemas[tc.requestSchema]
+		if !ok {
+			t.Fatalf("components.schemas.%s missing", tc.requestSchema)
+		}
+		props := schemaProperties(schema)
+		for _, required := range []string{"repository", "layer", "source_revision"} {
+			if !props[required] {
+				t.Fatalf("%s missing property %q", tc.requestSchema, required)
+			}
+		}
+
+		if tc.generatedAction != FeatureAction(tc.actionID) || !tc.generatedAction.Valid() {
+			t.Fatalf("generated action enum must include %q", tc.actionID)
+		}
+	}
+}
 
 // TestRefactorOperationBindsTypedSchemas pins the statically documented
 // refactor operation: the request body must reference RefactorFeatureRequest
@@ -285,6 +364,26 @@ func TestReviewFeedbackFetchOperationBindsTypedSchemas(t *testing.T) {
 	declaredOpenAPIResponse(t, op, "400")
 	declaredOpenAPIResponse(t, op, "404")
 	declaredOpenAPIResponse(t, op, "502")
+}
+
+// TestReviewFeedbackDraftViewSchemaCarriesPullRequestGroups pins the
+// stack-aware fetch/selection view: each repository entry groups its
+// comments by open layer pull request (position, title, URL) in position
+// order, every draft comment carries its PR and layer identity, and the
+// removed group-level single PR URL stays gone.
+func TestReviewFeedbackDraftViewSchemaCarriesPullRequestGroups(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	assertSchemaProperties(t, spec, "ReviewFeedbackRepoComments", "repo", "pull_requests")
+	repoProps := schemaProperties(spec.Components.Schemas["ReviewFeedbackRepoComments"])
+	if repoProps["pr_url"] {
+		t.Fatal("ReviewFeedbackRepoComments must not carry the removed group-level pr_url")
+	}
+	if repoProps["comments"] {
+		t.Fatal("ReviewFeedbackRepoComments must not carry a repository-level comment list; comments live inside pull-request groups")
+	}
+	assertSchemaProperties(t, spec, "ReviewFeedbackPullRequestGroup", "position", "title", "url", "comments")
+	assertSchemaProperties(t, spec, "ReviewFeedbackDraftComment", "pr_url", "pr_number", "layer_position", "layer_title")
+	assertSchemaProperties(t, spec, "ReviewFeedbackComment", "pr_url", "pr_number", "layer_position", "layer_title")
 }
 
 func TestReviewFeedbackLaunchOperationBindsTypedSchemas(t *testing.T) {
@@ -607,6 +706,8 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/{action}", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/refactor", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/actions/rebase", mutation: true},
+		{method: httpMethodPost, path: apiPathReopenPullRequestAction, mutation: true},
+		{method: httpMethodPost, path: apiPathRecreatePullRequestAction, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackAction, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackFetch, mutation: true},
 		{method: httpMethodPost, path: apiPathReviewFeedbackSelection, mutation: true},

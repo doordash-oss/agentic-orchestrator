@@ -28,9 +28,9 @@ import (
 
 // TestPublishFailureRecordClassifiesEveryFailureSite pins the one-code-per-
 // remediation contract: every publish failure site classifies into its code
-// with the repositories block naming the repository, its branch, and the
-// rebase target or remote-only commit count where known, with the raw error
-// as diagnostics.
+// with the repositories block naming the repository, its branch, and — for
+// layer-scoped failures — the stack layer position and title, with the raw
+// error as diagnostics.
 func TestPublishFailureRecordClassifiesEveryFailureSite(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -40,63 +40,63 @@ func TestPublishFailureRecordClassifiesEveryFailureSite(t *testing.T) {
 		checkRecord func(t *testing.T, repo errcat.CodeRepository)
 	}{
 		{
-			name:       "pull-rebase conflict",
-			err:        &PublishConflictError{RepoName: "web", Branch: "agentico/f", RebaseTarget: "main"},
-			wantCode:   errcat.PublishRebaseConflict,
+			name:        "rewritten-push diverged",
+			err:         &PublishRemoteDivergedError{RepoName: "web", Branch: "agentico/f", RemoteOnlyCommits: 3, LayerPosition: 2, LayerTitle: "Fix auth"},
+			wantCode:    errcat.PublishRemoteDiverged,
+			wantBranch:  "agentico/f",
+			checkRecord: layerCheck(2, "Fix auth", remoteOnlyCheck(3)),
+		},
+		{
+			name:        "rewritten-push changed",
+			err:         &PublishRemoteChangedError{RepoName: "web", Branch: "agentico/f", LayerPosition: 2, LayerTitle: "Fix auth"},
+			wantCode:    errcat.PublishRemoteChanged,
+			wantBranch:  "agentico/f",
+			checkRecord: layerCheck(2, "Fix auth", nil),
+		},
+		{
+			name:       "stack pull request closed",
+			err:        &PublishStackClosedError{RepoName: "web", Branch: "agentico/f", LayerPosition: 1, LayerTitle: "Foundation", PRURL: "https://github.example/org/web/pull/9", State: "closed"},
+			wantCode:   errcat.PublishStackPullRequestClosed,
 			wantBranch: "agentico/f",
 			checkRecord: func(t *testing.T, repo errcat.CodeRepository) {
-				if repo.RebaseTarget != "main" {
-					t.Errorf("rebase target = %q, want main", repo.RebaseTarget)
+				if repo.LayerPosition != 1 || repo.LayerTitle != "Foundation" {
+					t.Errorf("layer = %d (%q), want 1 (Foundation)", repo.LayerPosition, repo.LayerTitle)
+				}
+				if repo.PullRequestURL != "https://github.example/org/web/pull/9" {
+					t.Errorf("pull request URL = %q, want the closed pull request's link", repo.PullRequestURL)
 				}
 			},
 		},
 		{
-			name:       "rewritten-push diverged",
-			err:        &PublishRemoteDivergedError{RepoName: "web", Branch: "agentico/f", RemoteOnlyCommits: 3},
-			wantCode:   errcat.PublishRemoteDiverged,
-			wantBranch: "agentico/f",
-			checkRecord: func(t *testing.T, repo errcat.CodeRepository) {
-				if repo.RemoteOnlyCommits != 3 {
-					t.Errorf("remote-only commits = %d, want 3", repo.RemoteOnlyCommits)
-				}
-			},
-		},
-		{
-			name:       "rewritten-push changed",
-			err:        &PublishRemoteChangedError{RepoName: "web", Branch: "agentico/f"},
-			wantCode:   errcat.PublishRemoteChanged,
+			name:       "run without an approved stack",
+			err:        &PublishStackMissingError{RepoName: "web", Branch: "agentico/f"},
+			wantCode:   errcat.PublishStackMissing,
 			wantBranch: "agentico/f",
 		},
 		{
-			name:       "closed pull request",
-			err:        &PublishPRClosedError{RepoName: "web", PRURL: "https://github.example/org/web/pull/9", State: "merged"},
-			wantCode:   errcat.PublishPullRequestClosed,
-			wantBranch: "agentico/f",
-			checkRecord: func(t *testing.T, repo errcat.CodeRepository) {
-				_ = repo
-			},
+			name:        "pull-request creation",
+			err:         &PublishPRCreateError{RepoName: "web", LayerPosition: 3, LayerTitle: "Top", Err: errors.New("POST /repos/org/web/pulls: 502 Bad Gateway")},
+			wantCode:    errcat.PublishPullRequestFailed,
+			wantBranch:  "agentico/f",
+			checkRecord: layerCheck(3, "Top", nil),
 		},
 		{
-			name:       "pull-request creation",
-			err:        &PublishPRCreateError{RepoName: "web", Err: errors.New("POST /repos/org/web/pulls: 502 Bad Gateway")},
-			wantCode:   errcat.PublishPullRequestFailed,
-			wantBranch: "agentico/f",
+			name:        "description generation",
+			err:         &PublishDescriptionError{RepoName: "web", LayerPosition: 3, LayerTitle: "Top", Err: errors.New("generating description: model unavailable")},
+			wantCode:    errcat.PublishDescriptionFailed,
+			wantBranch:  "agentico/f",
+			checkRecord: layerCheck(3, "Top", nil),
 		},
 		{
-			name:       "description generation",
-			err:        &PublishDescriptionError{RepoName: "web", Err: errors.New("generating description: model unavailable")},
-			wantCode:   errcat.PublishDescriptionFailed,
-			wantBranch: "agentico/f",
+			name:        "layer push failure",
+			err:         &PublishPushError{RepoName: "web", Branch: "agentico/f-2", LayerPosition: 2, LayerTitle: "Fix auth", Err: errors.New("remote rejected")},
+			wantCode:    errcat.PublishPushFailed,
+			wantBranch:  "agentico/f-2",
+			checkRecord: layerCheck(2, "Fix auth", nil),
 		},
 		{
 			name:       "commit failure",
 			err:        fmt.Errorf("commit failed: exit status 1"),
-			wantCode:   errcat.PublishPushFailed,
-			wantBranch: "agentico/f",
-		},
-		{
-			name:       "non-conflict pull-rebase failure",
-			err:        errors.New("pull-rebase failed: fetch origin: dial tcp: refused"),
 			wantCode:   errcat.PublishPushFailed,
 			wantBranch: "agentico/f",
 		},
@@ -143,14 +143,47 @@ func TestPublishFailureRecordClassifiesEveryFailureSite(t *testing.T) {
 	}
 }
 
-// TestPublishFailureRecordClosedPRCarriesURLInDiagnostics pins the closed-PR
-// contract: the pull-request URL travels in diagnostics because the row
-// already renders the link.
-func TestPublishFailureRecordClosedPRCarriesURLInDiagnostics(t *testing.T) {
-	closed := &PublishPRClosedError{RepoName: "web", PRURL: "https://github.example/org/web/pull/9", State: "merged"}
+func remoteOnlyCheck(want int) func(t *testing.T, repo errcat.CodeRepository) {
+	return func(t *testing.T, repo errcat.CodeRepository) {
+		if repo.RemoteOnlyCommits != want {
+			t.Errorf("remote-only commits = %d, want %d", repo.RemoteOnlyCommits, want)
+		}
+	}
+}
+
+func layerCheck(wantPosition int, wantTitle string, extra func(t *testing.T, repo errcat.CodeRepository)) func(t *testing.T, repo errcat.CodeRepository) {
+	return func(t *testing.T, repo errcat.CodeRepository) {
+		if repo.LayerPosition != wantPosition || repo.LayerTitle != wantTitle {
+			t.Errorf("layer = %d (%q), want %d (%q)", repo.LayerPosition, repo.LayerTitle, wantPosition, wantTitle)
+		}
+		if extra != nil {
+			extra(t, repo)
+		}
+	}
+}
+
+// TestPublishFailureRecordStackClosedCarriesLayerAndURL pins the closed-stack
+// contract: the repositories block names the layer and the closed pull
+// request's URL, and the URL also travels in diagnostics.
+func TestPublishFailureRecordStackClosedCarriesLayerAndURL(t *testing.T) {
+	closed := &PublishStackClosedError{
+		RepoName:      "web",
+		Branch:        "agentico/f",
+		LayerPosition: 2,
+		LayerTitle:    "Fix auth",
+		PRURL:         "https://github.example/org/web/pull/9",
+		State:         "closed",
+	}
 	record := publishFailureRecord("web", "agentico/f", closed)
-	if record.Code != errcat.PublishPullRequestClosed {
-		t.Fatalf("code = %q, want publish_pull_request_closed", record.Code)
+	if record.Code != errcat.PublishStackPullRequestClosed {
+		t.Fatalf("code = %q, want publish_stack_pull_request_closed", record.Code)
+	}
+	repo := record.Context.Repositories[0]
+	if repo.LayerPosition != 2 || repo.LayerTitle != "Fix auth" {
+		t.Errorf("layer = %d (%q), want 2 (Fix auth)", repo.LayerPosition, repo.LayerTitle)
+	}
+	if repo.PullRequestURL != "https://github.example/org/web/pull/9" {
+		t.Errorf("pull request URL = %q, want the closed pull request's link", repo.PullRequestURL)
 	}
 	if !strings.Contains(record.Diagnostics, "https://github.example/org/web/pull/9") {
 		t.Errorf("diagnostics = %q, want the pull-request URL", record.Diagnostics)
@@ -158,18 +191,15 @@ func TestPublishFailureRecordClosedPRCarriesURLInDiagnostics(t *testing.T) {
 }
 
 // TestPublishConflictRecordCoversTheConflictFamily pins the server mapper's
-// shared classification: exactly the conflict, diverged, and changed errors
-// produce a record, with the same code and repository block the stored
-// record carries.
+// shared classification: exactly the diverged and changed errors produce a
+// record, with the same code and repository block the stored record carries.
 func TestPublishConflictRecordCoversTheConflictFamily(t *testing.T) {
-	conflict := &PublishConflictError{RepoName: "web", Branch: "agentico/f", RebaseTarget: "main"}
-	diverged := &PublishRemoteDivergedError{RepoName: "web", Branch: "agentico/f", RemoteOnlyCommits: 2}
-	changed := &PublishRemoteChangedError{RepoName: "web", Branch: "agentico/f"}
+	diverged := &PublishRemoteDivergedError{RepoName: "web", Branch: "agentico/f", RemoteOnlyCommits: 2, LayerPosition: 1, LayerTitle: "Foundation"}
+	changed := &PublishRemoteChangedError{RepoName: "web", Branch: "agentico/f", LayerPosition: 1, LayerTitle: "Foundation"}
 	for _, tc := range []struct {
 		err      error
 		wantCode errcat.Code
 	}{
-		{conflict, errcat.PublishRebaseConflict},
 		{diverged, errcat.PublishRemoteDiverged},
 		{changed, errcat.PublishRemoteChanged},
 	} {
@@ -188,16 +218,20 @@ func TestPublishConflictRecordCoversTheConflictFamily(t *testing.T) {
 			len(stored.Context.Repositories) != 1 ||
 			record.Context.Repositories[0].Name != stored.Context.Repositories[0].Name ||
 			record.Context.Repositories[0].Branch != stored.Context.Repositories[0].Branch ||
-			record.Context.Repositories[0].RebaseTarget != stored.Context.Repositories[0].RebaseTarget ||
-			record.Context.Repositories[0].RemoteOnlyCommits != stored.Context.Repositories[0].RemoteOnlyCommits {
+			record.Context.Repositories[0].RemoteOnlyCommits != stored.Context.Repositories[0].RemoteOnlyCommits ||
+			record.Context.Repositories[0].LayerPosition != stored.Context.Repositories[0].LayerPosition ||
+			record.Context.Repositories[0].LayerTitle != stored.Context.Repositories[0].LayerTitle {
 			t.Errorf("%v: envelope record %+v disagrees with stored record %+v", tc.err, record, stored)
 		}
 	}
-	if _, ok := PublishConflictRecord(errors.New("not a publish conflict")); ok {
-		t.Error("PublishConflictRecord = ok for a generic error, want false")
-	}
-	if _, ok := PublishConflictRecord(&PublishPRCreateError{RepoName: "web", Err: errors.New("502")}); ok {
-		t.Error("PublishConflictRecord = ok for a PR creation failure, want false")
+	for _, err := range []error{
+		errors.New("not a publish conflict"),
+		&PublishPRCreateError{RepoName: "web", Err: errors.New("502")},
+		&PublishStackClosedError{RepoName: "web", LayerPosition: 1, PRURL: "https://github.example/org/web/pull/9", State: "closed"},
+	} {
+		if _, ok := PublishConflictRecord(err); ok {
+			t.Errorf("PublishConflictRecord = ok for %v, want false", err)
+		}
 	}
 }
 
@@ -205,14 +239,14 @@ func TestPublishConflictRecordCoversTheConflictFamily(t *testing.T) {
 // the wrapper keeps the underlying error reachable through errors.Is/As so
 // conflict routing and sentinel checks still work.
 func TestPublishDispatchErrorPreservesItsChain(t *testing.T) {
-	inner := &PublishConflictError{RepoName: "web", Branch: "agentico/f", RebaseTarget: "main"}
+	inner := &PublishRemoteDivergedError{RepoName: "web", Branch: "agentico/f", RemoteOnlyCommits: 2, LayerPosition: 1, LayerTitle: "Foundation"}
 	wrapped := &PublishDispatchError{Err: inner}
 	if wrapped.Error() != inner.Error() {
 		t.Errorf("Error() = %q, want the underlying text %q", wrapped.Error(), inner.Error())
 	}
-	var conflict *PublishConflictError
-	if !errors.As(wrapped, &conflict) {
-		t.Fatal("errors.As does not find the conflict through the wrapper")
+	var diverged *PublishRemoteDivergedError
+	if !errors.As(wrapped, &diverged) {
+		t.Fatal("errors.As does not find the diverged error through the wrapper")
 	}
 	generic := errors.New("publish exploded")
 	wrapped = &PublishDispatchError{Err: generic}
@@ -237,7 +271,7 @@ func TestSurfaceDispatchCompletionErrorSkipsPublishFailures(t *testing.T) {
 	o := New(Deps{Lifecycle: lc, Store: fs}, Hooks{})
 
 	o.surfaceDispatchCompletionError("feat-surface", &PublishDispatchError{
-		Err: &PublishPRCreateError{RepoName: "r1", Err: errors.New("502 Bad Gateway")},
+		Err: &PublishPRCreateError{RepoName: "r1", LayerPosition: 2, LayerTitle: "Fix auth", Err: errors.New("502 Bad Gateway")},
 	})
 
 	for _, call := range lc.Calls {

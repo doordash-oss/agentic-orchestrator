@@ -40,8 +40,8 @@ func TestServerMutationTargetCreateFeatureReturnsUnavailableBranchProbeWarning(t
 	manager := feature.NewManager(store, cfg)
 	manager.BranchProbeOptions.Runner = gitpkg.BranchProbeRunnerFunc(
 		func(_ context.Context, _ string, args []string, _ int) gitpkg.BranchProbeCommandResult {
-			if len(args) > 0 && args[0] == "show-ref" {
-				return gitpkg.BranchProbeCommandResult{ExitCode: 1}
+			if len(args) > 0 && args[0] == "for-each-ref" {
+				return gitpkg.BranchProbeCommandResult{ExitCode: 0}
 			}
 			return gitpkg.BranchProbeCommandResult{
 				ExitCode: 128, Diagnostics: "fatal: https://user:secret@example.invalid/repo unavailable\x1b[31m",

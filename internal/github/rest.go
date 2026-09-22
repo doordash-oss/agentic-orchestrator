@@ -198,9 +198,35 @@ func (c *Client) UpdatePRBody(owner, repo string, number int, body string) error
 	return c.patchPR(owner, repo, number, map[string]any{"body": body})
 }
 
+// UpdatePRBase retargets a PR's base branch.
+func (c *Client) UpdatePRBase(owner, repo string, number int, base string) error {
+	return c.patchPR(owner, repo, number, map[string]any{"base": base})
+}
+
 // ClosePR closes a PR without merging.
 func (c *Client) ClosePR(owner, repo string, number int) error {
 	return c.patchPR(owner, repo, number, map[string]any{"state": "closed"})
+}
+
+// ErrHeadBranchDeleted reports GitHub's 422 refusal to change a pull
+// request whose head branch no longer exists on the remote.
+var ErrHeadBranchDeleted = errors.New("pull request head branch has been deleted")
+
+// ReopenPR sets a closed PR back to open. A merged PR answers 422 and the
+// refusal is returned with the API text. A 422 whose message says the
+// branch has been deleted maps to ErrHeadBranchDeleted so callers can
+// offer recreation instead of another reopen.
+func (c *Client) ReopenPR(owner, repo string, number int) error {
+	err := c.patchPR(owner, repo, number, map[string]any{"state": "open"})
+	if err == nil {
+		return nil
+	}
+	var httpErr *api.HTTPError
+	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnprocessableEntity &&
+		strings.Contains(strings.ToLower(err.Error()), "branch has been deleted") {
+		return fmt.Errorf("reopening PR %d: %w", number, ErrHeadBranchDeleted)
+	}
+	return fmt.Errorf("reopening PR: %w", err)
 }
 
 func (c *Client) postComment(path, body string) error {

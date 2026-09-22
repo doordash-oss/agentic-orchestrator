@@ -27,28 +27,35 @@ import (
 const attentionDiagnosticsBudget = maxStoredDiagnosticsLen + 3
 
 // removedEntryWireKeys are the per-entry journal properties deleted with the
-// free-form attention era; they must never reappear on the wire.
-var removedEntryWireKeys = []string{"conflict_files", "dirty", "diagnostics", "gate_code"}
+// free-form attention era and the single-ref journal era; they must never
+// reappear on the entry (per-ref detail lives in the refs list).
+var removedEntryWireKeys = []string{
+	"conflict_files", "dirty", "diagnostics", "gate_code",
+	"parent_branch", "parent_anchor_sha", "expected_ref_sha",
+	"candidate_sha", "merge_head", "observed_sha",
+}
 
 // removedAttentionItemCodes are the synthesized per-repository attention item
 // codes the read model no longer emits; attention is one canonical object or
 // nothing.
 var removedAttentionItemCodes = []string{"dirty_parent", "integration_conflict", "integration_attention"}
 
-// mergeConflictRecord is the stored canonical record for a child parked on a
-// merge conflict: one repository with two conflict files and oversized raw
+// mergeConflictRecord is the stored canonical record for a child parked on
+// exhausted rebase conflict resolution: one repository with a replayed
+// commit, three spent attempts, two conflict files, and oversized raw
 // diagnostics, so projections pin both the catalog rendering and the
 // diagnostics bound.
 func mergeConflictRecord() *errcat.FailureRecord {
 	return &errcat.FailureRecord{
-		Code: errcat.IntegrationMergeConflict,
+		Code: errcat.IntegrationRebaseConflict,
 		Context: &errcat.RecordContext{
 			Repositories: []errcat.CodeRepository{{
-				Name:            repoNameSelf,
-				Branch:          "main",
-				ConflictFiles:   []string{"internal/api.go", "internal/server/handler.go"},
-				ParentAnchorSHA: "3f2c1d0b7e9a",
-				ChildHeadSHA:    "9b1e7a2c4d6f",
+				Name:          repoNameSelf,
+				Branch:        "main",
+				ConflictFiles: []string{"internal/api.go", "internal/server/handler.go"},
+				ChildHeadSHA:  "9b1e7a2c4d6f",
+				CommitSHA:     "1a2b3c4d5e6f",
+				Attempts:      3,
 			}},
 		},
 		Diagnostics: strings.Repeat("conflict hunk ", 160),
@@ -84,23 +91,24 @@ func canonicalAttentionFrom(t *testing.T, projection map[string]any) map[string]
 
 // assertCanonicalMergeConflict pins the catalog-rendered canonical object for
 // the merge-conflict record: needs_action class, authored title, a summary
-// naming the repository and the conflict-file count, the repositories block
-// with the conflict files, a retry-referencing remediation, and bounded
-// diagnostics.
+// naming the repository, the replayed commit, the attempt count, and the
+// conflict-file count, the repositories block with the conflict files, a
+// retry-referencing remediation, and bounded diagnostics.
 func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	t.Helper()
-	if attention["code"] != string(errcat.IntegrationMergeConflict) {
-		t.Fatalf("attention code = %v, want %q", attention["code"], errcat.IntegrationMergeConflict)
+	if attention["code"] != string(errcat.IntegrationRebaseConflict) {
+		t.Fatalf("attention code = %v, want %q", attention["code"], errcat.IntegrationRebaseConflict)
 	}
 	if attention["class"] != string(errcat.ClassNeedsAction) {
 		t.Fatalf("attention class = %v, want %q", attention["class"], errcat.ClassNeedsAction)
 	}
-	if attention["title"] != "Integration merge conflict" {
-		t.Fatalf("attention title = %v, want the catalog title %q", attention["title"], "Integration merge conflict")
+	if attention["title"] != "Rebase conflict resolution exhausted" {
+		t.Fatalf("attention title = %v, want the catalog title %q", attention["title"], "Rebase conflict resolution exhausted")
 	}
 	summary, _ := attention["summary"].(string)
-	if !strings.Contains(summary, repoNameSelf) || !strings.Contains(summary, "2 files") {
-		t.Fatalf("attention summary = %q, want %q and the conflict-file count named", summary, repoNameSelf)
+	if !strings.Contains(summary, repoNameSelf) || !strings.Contains(summary, "2 files") ||
+		!strings.Contains(summary, "1a2b3c4") || !strings.Contains(summary, "3 attempts") {
+		t.Fatalf("attention summary = %q, want %q, the commit, the attempt count, and the conflict-file count named", summary, repoNameSelf)
 	}
 	context, ok := attention["context"].(map[string]any)
 	if !ok {
@@ -114,8 +122,11 @@ func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	if repo["name"] != repoNameSelf || repo["branch"] != "main" {
 		t.Fatalf("attention repository = %#v, want %q on main", repo, repoNameSelf)
 	}
-	if repo["parent_anchor_sha"] != "3f2c1d0b7e9a" || repo["child_head_sha"] != "9b1e7a2c4d6f" {
-		t.Fatalf("attention repository SHAs = %#v, want the recorded anchor and child head", repo)
+	if _, has := repo["parent_anchor_sha"]; has {
+		t.Fatalf("attention repository = %#v, want no parent_anchor_sha on the wire", repo)
+	}
+	if repo["child_head_sha"] != "9b1e7a2c4d6f" {
+		t.Fatalf("attention repository SHAs = %#v, want the recorded child head", repo)
 	}
 	files, _ := repo["conflict_files"].([]any)
 	if len(files) != 2 || files[0] != "internal/api.go" || files[1] != "internal/server/handler.go" {
@@ -125,8 +136,8 @@ func assertCanonicalMergeConflict(t *testing.T, attention map[string]any) {
 	if !ok {
 		t.Fatalf("attention remediation = %#v, want remediation block", attention["remediation"])
 	}
-	if hint, _ := remediation["hint"].(string); !strings.Contains(strings.ToLower(hint), "retry") {
-		t.Fatalf("attention remediation hint = %q, want a retry reference", hint)
+	if hint, _ := remediation["hint"].(string); !strings.Contains(strings.ToLower(hint), "start the pass again") {
+		t.Fatalf("attention remediation hint = %q, want a start-the-pass-again reference", hint)
 	}
 	sawRetryAction := false
 	if actions, ok := remediation["actions"].([]any); ok {
@@ -160,7 +171,7 @@ func assertEntryCarriesOnlyProgressState(t *testing.T, entry map[string]any) {
 
 // TestIntegrationAttentionProjectsCanonicalRecordOnBothSurfaces pins the
 // single-owner read model: a child parked with a stored
-// integration_merge_conflict record renders the same canonical error object
+// integration_rebase_conflict record renders the same canonical error object
 // on the child's transaction and on the parent's active-child summary on both
 // the detail and list routes, and a clean child carries no attention on
 // either surface.
@@ -174,9 +185,9 @@ func TestIntegrationAttentionProjectsCanonicalRecordOnBothSurfaces(t *testing.T)
 			Phase:     feature.TransactionPhaseAttention,
 			Attention: mergeConflictRecord(),
 			Entries: []feature.RepoTransactionEntry{{
-				Repo:         repoNameSelf,
-				ParentBranch: "main",
-				PrepState:    feature.RepoPrepFailed,
+				Repo:      repoNameSelf,
+				Refs:      []feature.RepoTransactionRef{{Branch: "main"}},
+				PrepState: feature.RepoPrepFailed,
 			}},
 		})
 		handler := NewHandler(baseReadHandlerOptions(store))
@@ -220,11 +231,10 @@ func TestIntegrationAttentionProjectsCanonicalRecordOnBothSurfaces(t *testing.T)
 		seedIntegrationChild(t, store, parent.ID, &feature.TransactionJournal{
 			Phase: feature.TransactionPhaseApplied,
 			Entries: []feature.RepoTransactionEntry{{
-				Repo:         repoNameSelf,
-				ParentBranch: "main",
-				ApplyState:   feature.RepoApplyApplied,
-				MergeHEAD:    "cccc3333",
-				PendingSync:  true,
+				Repo:        repoNameSelf,
+				Refs:        []feature.RepoTransactionRef{{Branch: "main", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333"}},
+				ApplyState:  feature.RepoApplyApplied,
+				PendingSync: true,
 			}},
 		})
 		handler := NewHandler(baseReadHandlerOptions(store))
@@ -279,9 +289,10 @@ func TestRelationshipProjectionCarriesNoAttentionItemStrings(t *testing.T) {
 		seedIntegrationChild(t, store, parent.ID, &feature.TransactionJournal{
 			Phase: feature.TransactionPhaseMerged,
 			Entries: []feature.RepoTransactionEntry{{
-				Repo:         repoNameSelf,
-				ParentBranch: "main",
-				MergeHEAD:    "cccc3333",
+				Repo: repoNameSelf,
+				Refs: []feature.RepoTransactionRef{{
+					Branch: "main", CandidateSHA: "cccc3333", ObservedSHA: "cccc3333",
+				}},
 				Cleanup: &errcat.FailureRecord{
 					Code:        errcat.ChildCleanupIncomplete,
 					Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},

@@ -50,14 +50,13 @@ const (
 // feature.
 const resultCreated = "created"
 
-// resultAnswered, resultGenerated, resultRecovered, resultRewound,
+// resultAnswered, resultRecovered, resultRewound,
 // resultStarted and resultUpdated are further
 // ActionResult/RecoveryActionResponse Result values for
-// permission/ask-user answers, generated publish descriptions, and the
+// permission/ask-user answers and the
 // default results of recovery, rewind, start-cycle and update actions.
 const (
 	resultAnswered     = "answered"
-	resultGenerated    = "generated"
 	resultRecovered    = "recovered"
 	resultRewound      = "rewound"
 	resultSetupStarted = "setup_started"
@@ -125,8 +124,9 @@ type MutationTarget interface {
 	StartChat(req ChatStartRequest, hiddenContext string) (ChatStartResponse, error)
 	EndChat() (ChatEndResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
-	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
 	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
+	ReopenPullRequestFeature(featureID string, req ReopenPullRequestRequest) (ReopenPullRequestResponse, error)
+	RecreatePullRequestFeature(featureID string, req RecreatePullRequestRequest) (RecreatePullRequestResponse, error)
 	MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error)
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
 	RetryFeature(featureID string) (RetryFeatureResponse, error)
@@ -192,6 +192,7 @@ type CreateFeatureRequest struct {
 	Attachments             []string                `json:"attachments,omitempty"`
 	AttachmentUploads       []string                `json:"attachment_uploads,omitempty"`
 	RiskLevel               feature.RiskLevel       `json:"risk_level,omitempty"`
+	DeliveryMode            feature.DeliveryMode    `json:"delivery_mode,omitempty"`
 	Pipeline                feature.PipelineProfile `json:"pipeline,omitempty"`
 	IdempotencyKey          string                  `json:"idempotency_key,omitempty"`
 }
@@ -289,6 +290,7 @@ type RuntimeDefaultsMutation struct {
 	ExitCriteria             string                               `json:"exit_criteria,omitempty"`
 	Inquireness              string                               `json:"inquireness,omitempty"`
 	Pipeline                 string                               `json:"pipeline,omitempty"`
+	DeliveryMode             string                               `json:"delivery_mode,omitempty"`
 	MaxIterations            int                                  `json:"max_iterations,omitempty"`
 	MaxConsecutiveFailures   int                                  `json:"max_consecutive_failures,omitempty"`
 	MaxConsecutiveNoProgress int                                  `json:"max_consecutive_no_progress,omitempty"`
@@ -374,16 +376,10 @@ func ModelConfigToPatch(m config.ModelConfig) ModelConfigPatch {
 type PublishFeatureRequest struct {
 	SourceRevision string   `json:"source_revision,omitempty"`
 	Repos          []string `json:"repos,omitempty"`
-	Title          string   `json:"title,omitempty"`
-	Body           string   `json:"body,omitempty"`
 }
 
 type GuardedFeatureActionRequest struct {
 	SourceRevision string `json:"source_revision,omitempty"`
-}
-
-type PublishDescriptionRequest struct {
-	Repos []string `json:"repos,omitempty"`
 }
 
 type RewindFeatureRequest struct {
@@ -580,11 +576,7 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 		for _, target := range upToDate.Targets {
 			// The target ref is where the rebase would land, not the
 			// repository's own branch: RebaseTarget is its carrier.
-			repo := errcat.CodeRepository{Name: target.Repo, RebaseTarget: target.Target}
-			if target.TargetSHA != "" {
-				repo.ExpectedRefSHA = target.TargetSHA
-			}
-			repos = append(repos, repo)
+			repos = append(repos, errcat.CodeRepository{Name: target.Repo, RebaseTarget: target.Target})
 		}
 		writeAPIError(w, http.StatusConflict, errcat.RebaseAlreadyUpToDate,
 			errcat.WithRepositories(repos...))
@@ -603,6 +595,8 @@ func writeChildLaunchError(w http.ResponseWriter, err error) bool {
 		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackUnknownRepo)
 	case errors.Is(err, feature.ErrReviewFeedbackRepoHasNoPR):
 		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackRepoHasNoPR)
+	case errors.Is(err, feature.ErrReviewFeedbackCommentPRNotOpen):
+		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackCommentPRNotOpen)
 	case errors.Is(err, feature.ErrReviewFeedbackDraftNotFound):
 		writeAPIError(w, http.StatusBadRequest, errcat.ReviewFeedbackDraftNotFound)
 	case errors.Is(err, feature.ErrReviewFeedbackUnknownReference):
@@ -768,11 +762,8 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionRefactor, actionReviewFeedback, actionNeedUserInput, actionNeedInputDraft, actionTestingContractWaive, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
+		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionRefactor, actionReviewFeedback, actionNeedUserInput, actionNeedInputDraft, actionTestingContractWaive, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard, actionReopenPullRequest, actionRecreatePullRequest:
 			if len(parts) == 3 {
-				return []string{http.MethodPost}, true
-			}
-			if parts[2] == actionPublish && parts[3] == phaseNameDescription {
 				return []string{http.MethodPost}, true
 			}
 			if parts[2] == actionReviewFeedback && (parts[3] == reviewFeedbackSubactionFetch || parts[3] == reviewFeedbackSubactionSelection) {
@@ -833,7 +824,7 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("name is required"))
 		return
 	}
-	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) {
+	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) || !validateDeliveryMode(w, req.DeliveryMode) {
 		return
 	}
 	if !h.validateRequestedModels(w, req.Models) {
@@ -1098,20 +1089,6 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 		defaultActionFields(&resp, featureID, "drafted")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionPublish:
-		if subaction == phaseNameDescription {
-			var req PublishDescriptionRequest
-			if !decodeMutationJSON(w, r, &req) || !validateRepoList(w, req.Repos, false) {
-				return true
-			}
-			resp, err := h.mutations.GeneratePublishDescription(featureID, req)
-			if err != nil {
-				writeMutationError(w, err)
-				return true
-			}
-			defaultActionFields(&resp, featureID, resultGenerated)
-			writeActionJSON(w, http.StatusOK, &resp)
-			return true
-		}
 		if subaction != "" {
 			return false
 		}
@@ -1125,6 +1102,36 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		defaultActionFields(&resp, featureID, "published")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionReopenPullRequest:
+		if subaction != "" {
+			return false
+		}
+		var req ReopenPullRequestRequest
+		if !decodeMutationJSON(w, r, &req) || !validatePullRequestResolutionRequest(w, req.Repository, req.Layer) {
+			return true
+		}
+		resp, err := h.mutations.ReopenPullRequestFeature(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "reopened")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionRecreatePullRequest:
+		if subaction != "" {
+			return false
+		}
+		var req RecreatePullRequestRequest
+		if !decodeMutationJSON(w, r, &req) || !validatePullRequestResolutionRequest(w, req.Repository, req.Layer) {
+			return true
+		}
+		resp, err := h.mutations.RecreatePullRequestFeature(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "recreated")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionMerge, actionMarkDone, actionDelete:
 		if subaction != "" {
@@ -1273,6 +1280,12 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 			models = ApplyModelConfigPatch(models, *req.Defaults.Models)
 		}
 		if !validateEffortConfig(w, req.Defaults.Effort, models, h.registry) {
+			return
+		}
+		// An invalid workspace delivery default would fail every later
+		// feature creation, so it is rejected before persistence. (The
+		// runtime-defaults inquireness default has no equivalent check.)
+		if !validateDeliveryMode(w, feature.DeliveryMode(req.Defaults.DeliveryMode)) {
 			return
 		}
 		if req.WorkspaceRoots != nil && !validateWorkspaceRootPaths(w, *req.WorkspaceRoots) {
@@ -1682,6 +1695,19 @@ func validateRiskLevel(w http.ResponseWriter, risk feature.RiskLevel) bool {
 	}
 }
 
+// validateDeliveryMode rejects unknown delivery modes with a 400 before any
+// mutation runs. An empty value is valid: the mutation target resolves it
+// from the workspace default (and finally stack).
+func validateDeliveryMode(w http.ResponseWriter, mode feature.DeliveryMode) bool {
+	switch mode {
+	case "", feature.DeliveryModeStack, feature.DeliveryModeSingle:
+		return true
+	default:
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("delivery_mode must be stack or single"))
+		return false
+	}
+}
+
 func validateInquireness(w http.ResponseWriter, inq feature.Inquireness) bool {
 	switch inq {
 	case "", feature.InquirenessNone, feature.InquirenessMedium, feature.InquirenessHigh:
@@ -1790,6 +1816,19 @@ func validateEffortConfig(w http.ResponseWriter, effort config.EffortConfig, mod
 				errcat.WithDiagnostics("effort."+r.label+" value "+r.val+" is not supported by the selected "+r.label+" model"))
 			return false
 		}
+	}
+	return true
+}
+
+// validatePullRequestResolutionRequest validates the shared reopen/recreate
+// request shape: a required repository name and a positive layer position.
+func validatePullRequestResolutionRequest(w http.ResponseWriter, repo string, layer int) bool {
+	if !validateRepoName(w, repo, true) {
+		return false
+	}
+	if layer < 1 {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("layer must be a positive stack layer position"))
+		return false
 	}
 	return true
 }

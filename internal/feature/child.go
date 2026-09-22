@@ -64,6 +64,11 @@ var (
 	// ErrReviewFeedbackRepoHasNoPR rejects a comment whose parent repository
 	// does not have a pull request to receive the eventual integration tail.
 	ErrReviewFeedbackRepoHasNoPR = errors.New("review feedback repository has no pull request")
+	// ErrReviewFeedbackCommentPRNotOpen rejects a comment whose recorded pull
+	// request is not an open layer pull request of its repository: merged and
+	// closed layers are never rewritten, so their comments cannot receive a
+	// relocated fix.
+	ErrReviewFeedbackCommentPRNotOpen = errors.New("review feedback comment pull request is not an open layer pull request")
 	// ErrRefactorParentNotFound: the requested parent feature does not exist.
 	ErrRefactorParentNotFound = errors.New("refactor parent feature not found")
 	// ErrRefactorParentIsChild: children are one level deep; a child cannot
@@ -301,10 +306,329 @@ type ChildRelationship struct {
 	// RebaseTargets captures the resolved per-repo merge targets at rebase
 	// child creation time. Only set for rebase children.
 	RebaseTargets []RebaseRepoTarget `yaml:"rebase_targets,omitempty" json:"rebase_targets,omitempty"`
-	// RebaseBehind captures the set of repositories that were behind their
-	// resolved target at rebase child creation time. Only set for rebase
-	// children.
-	RebaseBehind []string `yaml:"rebase_behind,omitempty" json:"rebase_behind,omitempty"`
+	// RebaseLayerStates records the launch-time classification of every
+	// stack layer entry per repository: kept, merged, or closed. Only set
+	// for rebase children; the classification is the preflight's live read
+	// of each layer's pull request frozen at creation time.
+	RebaseLayerStates []RebaseLayerClassification `yaml:"rebase_layer_states,omitempty" json:"rebase_layer_states,omitempty"`
+	// RebaseWorkRepos lists the repositories the rebase pass must reconcile:
+	// each has at least one kept layer with commits and is either behind its
+	// resolved target, has a merged layer whose entry still holds a tip, or
+	// has a diverged layer whose remote branch held commits Agentico never
+	// pushed. Repositories absent from the list are pass-through. Only set
+	// for rebase children.
+	RebaseWorkRepos []string `yaml:"rebase_work_repos,omitempty" json:"rebase_work_repos,omitempty"`
+	// RebaseRestacks records the harness restack's result per work
+	// repository: per kept layer the rebuilt tip, per dropped layer a
+	// marker, the anchor remap, and the rebuilt top. Only set for rebase
+	// children; integration reads it instead of recomputing. Persisted
+	// before the Created → ReviewPassed transition, so a crash mid-restack
+	// leaves the child at Created and a restart recomputes it.
+	RebaseRestacks []RebaseRepoRestack `yaml:"rebase_restacks,omitempty" json:"rebase_restacks,omitempty"`
+}
+
+// RebaseRepoRestack is one work repository's harness restack result,
+// persisted on the rebase child relationship.
+type RebaseRepoRestack struct {
+	Repo string `yaml:"repo" json:"repo"`
+	// RebuiltTips maps a kept layer's position to the rebuilt tip the
+	// restack produced. The top kept layer's entry is the rebuilt top
+	// before any fix-round commits.
+	RebuiltTips map[int]string `yaml:"rebuilt_tips,omitempty" json:"rebuilt_tips,omitempty"`
+	// DroppedLayers lists the positions of merged layers whose segments the
+	// restack removed in this repository.
+	DroppedLayers []int `yaml:"dropped_layers,omitempty" json:"dropped_layers,omitempty"`
+	// AnchorRemap maps a roadmap phase whose anchor sat on the restacked
+	// chain to its new SHA. Anchors inside dropped layers map to the
+	// resolved target SHA — the base already contains that work.
+	AnchorRemap map[int]string `yaml:"anchor_remap,omitempty" json:"anchor_remap,omitempty"`
+	// RebuiltTop is the rewritten chain's top commit in this repository.
+	RebuiltTop string `yaml:"rebuilt_top,omitempty" json:"rebuilt_top,omitempty"`
+	// ResolvedConflicts records every replay conflict a bounded agent
+	// session resolved in this repository, so the verification round and the
+	// read model can scrutinize those commits specifically. Additive on the
+	// persisted relationship; no schema version bump.
+	ResolvedConflicts []RebaseResolvedConflict `yaml:"resolved_conflicts,omitempty" json:"resolved_conflicts,omitempty"`
+	// AdoptedCommits records every reviewer commit the restack adopted onto
+	// a diverged layer's replayed segment, so the verification round and the
+	// read model can scrutinize those commits specifically. Additive on the
+	// persisted relationship; no schema version bump.
+	AdoptedCommits []RebaseAdoptedCommit `yaml:"adopted_commits,omitempty" json:"adopted_commits,omitempty"`
+	// SkippedMergeCommits counts the remote-only merge commits the preflight
+	// observed on this repository's diverged layers and the restack never
+	// adopted.
+	SkippedMergeCommits int `yaml:"skipped_merge_commits,omitempty" json:"skipped_merge_commits,omitempty"`
+}
+
+// RebaseAdoptedCommit records one reviewer commit the restack adopted onto a
+// diverged layer's replayed segment: the layer it extends, the original
+// remote SHA, the new SHA the replay produced (or the dropped marker when
+// the commit's change was already present on the replayed tip), and the
+// original subject and author identity.
+type RebaseAdoptedCommit struct {
+	LayerPosition int    `yaml:"layer_position" json:"layer_position"`
+	OriginalSHA   string `yaml:"original_sha" json:"original_sha"`
+	NewSHA        string `yaml:"new_sha,omitempty" json:"new_sha,omitempty"`
+	Dropped       bool   `yaml:"dropped,omitempty" json:"dropped,omitempty"`
+	Subject       string `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Author        string `yaml:"author,omitempty" json:"author,omitempty"`
+}
+
+// RebaseResolvedConflict records one agent-resolved replay conflict: the
+// original commit, the segment it belonged to, the conflicted files, the
+// resolution attempts used, and whether the continued cherry-pick turned out
+// empty (dropped) — the resolution took the target's side entirely.
+type RebaseResolvedConflict struct {
+	Commit   string   `yaml:"commit" json:"commit"`
+	Segment  string   `yaml:"segment" json:"segment"`
+	Files    []string `yaml:"files,omitempty" json:"files,omitempty"`
+	Attempts int      `yaml:"attempts,omitempty" json:"attempts,omitempty"`
+	Dropped  bool     `yaml:"dropped,omitempty" json:"dropped,omitempty"`
+}
+
+// ExtendRebaseDescriptionWithResolutions appends a section naming every
+// agent-resolved conflict the pass recorded, so the Final Review description
+// directs the verification round to scrutinize those commits specifically.
+// Repositories without resolutions are untouched.
+func ExtendRebaseDescriptionWithResolutions(description string, restacks []RebaseRepoRestack) string {
+	var withResolutions []RebaseRepoRestack
+	for _, rs := range restacks {
+		if len(rs.ResolvedConflicts) > 0 {
+			withResolutions = append(withResolutions, rs)
+		}
+	}
+	if len(withResolutions) == 0 {
+		return description
+	}
+	var sb strings.Builder
+	sb.WriteString(description)
+	sb.WriteString("\n## Agent-resolved replay conflicts\n\n")
+	sb.WriteString("The conflicts listed below were resolved by bounded agent sessions inside a temporary worktree during the restack — no human resolved them. Scrutinize each commit's replayed result specifically: the conflict resolution must preserve the commit's intent on the new base, leave no conflict markers, and touch nothing outside the conflicted files.\n")
+	for _, rs := range withResolutions {
+		sb.WriteString("\n### Repository: ")
+		sb.WriteString(rs.Repo)
+		sb.WriteString("\n\n")
+		for _, rc := range rs.ResolvedConflicts {
+			sb.WriteString("- Commit `")
+			sb.WriteString(rc.Commit)
+			sb.WriteString("` (segment ")
+			sb.WriteString(rc.Segment)
+			if rc.Attempts > 0 {
+				sb.WriteString(", resolved after ")
+				sb.WriteString(strconv.Itoa(rc.Attempts))
+				sb.WriteString(" attempt")
+				if rc.Attempts > 1 {
+					sb.WriteString("s")
+				}
+			}
+			if rc.Dropped {
+				sb.WriteString("; the resolution took the target's side entirely, so the replay was dropped as empty")
+			}
+			sb.WriteString(") on: ")
+			sb.WriteString(strings.Join(rc.Files, ", "))
+			sb.WriteString(".\n")
+		}
+	}
+	return sb.String()
+}
+
+// ExtendRebaseExitCriteriaWithResolutions appends one completion fact per
+// agent-resolved conflict: the verification round must check the commit's
+// resolution is complete and faithful on the new base.
+func ExtendRebaseExitCriteriaWithResolutions(criteria string, restacks []RebaseRepoRestack) string {
+	var withResolutions []RebaseRepoRestack
+	for _, rs := range restacks {
+		if len(rs.ResolvedConflicts) > 0 {
+			withResolutions = append(withResolutions, rs)
+		}
+	}
+	if len(withResolutions) == 0 {
+		return criteria
+	}
+	var sb strings.Builder
+	sb.WriteString(criteria)
+	sb.WriteString("\n## Agent-resolved conflicts\n")
+	for _, rs := range withResolutions {
+		for _, rc := range rs.ResolvedConflicts {
+			sb.WriteString("\n- Repository `")
+			sb.WriteString(rs.Repo)
+			sb.WriteString("`: the agent-resolved commit `")
+			sb.WriteString(rc.Commit)
+			sb.WriteString("` (")
+			sb.WriteString(strings.Join(rc.Files, ", "))
+			sb.WriteString(") was replayed with a complete, faithful resolution — the commit's intent survives on the new base and no conflict markers remain.\n")
+		}
+	}
+	return sb.String()
+}
+
+// ExtendRebaseDescriptionWithAdoptions appends a section naming every
+// reviewer commit the restack adopted onto a diverged layer's replayed
+// segment, plus the count of remote-only merge commits that were skipped and
+// never adopted, so the Final Review description directs the verification
+// round to scrutinize those commits specifically. Repositories without
+// adoptions or skipped merges are untouched.
+func ExtendRebaseDescriptionWithAdoptions(description string, restacks []RebaseRepoRestack) string {
+	type adoptionSection struct {
+		repo     string
+		adopted  []RebaseAdoptedCommit
+		skippedM int
+	}
+	var sections []adoptionSection
+	for _, rs := range restacks {
+		if len(rs.AdoptedCommits) == 0 && rs.SkippedMergeCommits == 0 {
+			continue
+		}
+		sections = append(sections, adoptionSection{repo: rs.Repo, adopted: rs.AdoptedCommits, skippedM: rs.SkippedMergeCommits})
+	}
+	if len(sections) == 0 {
+		return description
+	}
+	var sb strings.Builder
+	sb.WriteString(description)
+	sb.WriteString("\n## Adopted reviewer commits\n\n")
+	sb.WriteString("The commits listed below were pushed to a layer branch's remote by a reviewer and adopted by the harness restack: each was cherry-picked onto its layer's replayed segment, keeping its original author, message, and trailers. Scrutinize each adopted commit's replayed result specifically: its intent must survive on the new base, and a conflicting adoption must have been resolved through the same bounded agent sessions as any replayed commit.\n")
+	for _, s := range sections {
+		sb.WriteString("\n### Repository: ")
+		sb.WriteString(s.repo)
+		sb.WriteString("\n\n")
+		for _, ac := range s.adopted {
+			sb.WriteString("- Layer ")
+			sb.WriteString(strconv.Itoa(ac.LayerPosition))
+			sb.WriteString(": commit `")
+			sb.WriteString(ac.OriginalSHA)
+			sb.WriteString("` (")
+			sb.WriteString(ac.Subject)
+			sb.WriteString(", author ")
+			sb.WriteString(ac.Author)
+			if ac.Dropped {
+				sb.WriteString("; its change was already present on the replayed tip, so the adoption was dropped as empty")
+			} else if ac.NewSHA != "" {
+				sb.WriteString("; adopted as ")
+				sb.WriteString(ac.NewSHA)
+			}
+			sb.WriteString(").\n")
+		}
+		if s.skippedM > 0 {
+			sb.WriteString("- ")
+			sb.WriteString(strconv.Itoa(s.skippedM))
+			sb.WriteString(" remote-only merge commit(s) were skipped and never adopted: content a base or lower-layer merge brought in is subsumed by the replay onto the target, while a merge of an unrelated branch loses its content — a known limitation of this pass.\n")
+		}
+	}
+	return sb.String()
+}
+
+// ExtendRebaseExitCriteriaWithAdoptions appends one completion fact per
+// adopted reviewer commit: the verification round must check the commit's
+// adoption is complete and faithful on the replayed chain.
+func ExtendRebaseExitCriteriaWithAdoptions(criteria string, restacks []RebaseRepoRestack) string {
+	type adoptionRepo struct {
+		repo    string
+		adopted []RebaseAdoptedCommit
+	}
+	var withAdoptions []adoptionRepo
+	for _, rs := range restacks {
+		if len(rs.AdoptedCommits) == 0 {
+			continue
+		}
+		withAdoptions = append(withAdoptions, adoptionRepo{repo: rs.Repo, adopted: rs.AdoptedCommits})
+	}
+	if len(withAdoptions) == 0 {
+		return criteria
+	}
+	var sb strings.Builder
+	sb.WriteString(criteria)
+	sb.WriteString("\n## Adopted reviewer commits\n")
+	for _, ar := range withAdoptions {
+		for _, ac := range ar.adopted {
+			sb.WriteString("\n- Repository `")
+			sb.WriteString(ar.repo)
+			sb.WriteString("`: the reviewer commit `")
+			sb.WriteString(ac.OriginalSHA)
+			sb.WriteString("` (layer ")
+			sb.WriteString(strconv.Itoa(ac.LayerPosition))
+			sb.WriteString(", ")
+			sb.WriteString(ac.Subject)
+			if ac.Dropped {
+				sb.WriteString(") was correctly dropped: its change is already present on the replayed tip.\n")
+			} else {
+				sb.WriteString(") was adopted onto its layer's replayed segment with a complete, faithful replay — its intent survives on the new base with its original author and message.\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
+// RebaseLayerState is the launch-time classification of one stack layer's
+// entry in one repository: kept (the layer still has work to deliver),
+// merged (its pull request read merged live), or closed (its pull request
+// read closed without merge).
+type RebaseLayerState string
+
+const (
+	RebaseLayerStateKept   RebaseLayerState = "kept"
+	RebaseLayerStateMerged RebaseLayerState = "merged"
+	RebaseLayerStateClosed RebaseLayerState = "closed"
+)
+
+// RebaseLayerClassification is one stack layer's classification for one
+// repository, persisted on the rebase child relationship at creation time.
+type RebaseLayerClassification struct {
+	Repo string `yaml:"repo" json:"repo"`
+	// LayerPosition and LayerTitle name the stack layer the classification
+	// belongs to; Branch is the layer's shared branch name.
+	LayerPosition int              `yaml:"layer_position,omitempty" json:"layer_position,omitempty"`
+	LayerTitle    string           `yaml:"layer_title,omitempty" json:"layer_title,omitempty"`
+	Branch        string           `yaml:"branch,omitempty" json:"branch,omitempty"`
+	State         RebaseLayerState `yaml:"state" json:"state"`
+	// Diverged records that the layer branch's remote tip held, at the
+	// preflight fetch, commits Agentico never pushed: the remote tip
+	// existed, differed from the entry's last-pushed SHA, and was not an
+	// ancestor of the local tip. Only set for kept layers of publishable
+	// repositories; additive and optional so relationships persisted before
+	// the field existed load with no diverged layers.
+	Diverged bool `yaml:"diverged,omitempty" json:"diverged,omitempty"`
+	// RemoteTip is the layer branch's observed remote-tracking tip at the
+	// preflight fetch, pinned so the restack loop, closure, and the tail
+	// all read the same SHA across re-runs.
+	RemoteTip string `yaml:"remote_tip,omitempty" json:"remote_tip,omitempty"`
+	// ForeignCommits lists the layer's adoptable remote-only commits — the
+	// non-merge commits reachable from the remote tip but from neither the
+	// local tip nor the last-pushed SHA — oldest first. Merge commits are
+	// never adopted; RemoteOnlyCommits counts them alongside the foreign
+	// ones.
+	ForeignCommits []RebaseForeignCommit `yaml:"foreign_commits,omitempty" json:"foreign_commits,omitempty"`
+	// RemoteOnlyCommits counts every commit reachable from the remote tip
+	// but from neither the local tip nor the last-pushed SHA, including the
+	// merge commits excluded from ForeignCommits.
+	RemoteOnlyCommits int `yaml:"remote_only_commits,omitempty" json:"remote_only_commits,omitempty"`
+}
+
+// RebaseForeignCommit is one adoptable reviewer commit recorded on a diverged
+// layer's classification: the original SHA pinned at preflight, plus the
+// subject and author identity the restack result and the Final Review
+// description report.
+type RebaseForeignCommit struct {
+	SHA     string `yaml:"sha" json:"sha"`
+	Subject string `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Author  string `yaml:"author,omitempty" json:"author,omitempty"`
+}
+
+// RebaseDivergedLayers returns the relationship's diverged layer
+// classifications for the named repository, in recorded order. Only kept
+// layers of publishable repositories can carry the flag; a relationship
+// persisted before the divergence fields existed yields none.
+func (f *Feature) RebaseDivergedLayers(repoName string) []RebaseLayerClassification {
+	if f == nil || f.Parent == nil {
+		return nil
+	}
+	var diverged []RebaseLayerClassification
+	for _, c := range f.Parent.RebaseLayerStates {
+		if c.Repo == repoName && c.Diverged {
+			diverged = append(diverged, c)
+		}
+	}
+	return diverged
 }
 
 // IsChild reports whether the feature was launched as a child of another.
@@ -374,18 +698,33 @@ func (f *Feature) RebaseTargetForRepo(repoName string) (RebaseRepoTarget, bool) 
 	return RebaseRepoTarget{}, false
 }
 
-// IsRebaseBehindRepo reports whether the named repository was behind its
-// resolved target at rebase child creation time.
-func (f *Feature) IsRebaseBehindRepo(repoName string) bool {
+// IsRebaseWorkRepo reports whether the named repository is in the rebase
+// child's work list: the pass must reconcile it, while every other repository
+// is a pass-through.
+func (f *Feature) IsRebaseWorkRepo(repoName string) bool {
 	if f == nil || f.Parent == nil {
 		return false
 	}
-	for _, r := range f.Parent.RebaseBehind {
+	for _, r := range f.Parent.RebaseWorkRepos {
 		if r == repoName {
 			return true
 		}
 	}
 	return false
+}
+
+// RebaseRestackForRepo returns the persisted harness restack result for the
+// named repository on a rebase child, or the zero value if not found.
+func (f *Feature) RebaseRestackForRepo(repoName string) (RebaseRepoRestack, bool) {
+	if f == nil || f.Parent == nil {
+		return RebaseRepoRestack{}, false
+	}
+	for _, r := range f.Parent.RebaseRestacks {
+		if r.Repo == repoName {
+			return r, true
+		}
+	}
+	return RebaseRepoRestack{}, false
 }
 
 // ChildCreationIntent is the durable record of an in-flight child creation.
@@ -439,14 +778,16 @@ type RefactorChildSpec struct {
 	// Inquireness is the submitted inquiry behavior; empty inherits the
 	// parent's setting.
 	Inquireness Inquireness
-	// RebaseMergeTargets maps behind repo name to the resolved target ref the
-	// setup runner must merge into that repo's worktree. Only set for rebase
-	// children.
-	RebaseMergeTargets map[string]string
 }
 
 // ReviewFeedbackComment is the complete selected GitHub comment payload that
-// a review-feedback child needs for planning and later reply routing.
+// a review-feedback child needs for planning and later reply routing. The
+// PRURL, PRNumber, LayerPosition, and LayerTitle fields identify the open
+// layer pull request the comment was left on, resolved from the parent's
+// stack at fetch time and again at launch; the stable reference stays
+// `<repo>:<type>:<id>` because GitHub comment identifiers are global, so a
+// draft persisted before these fields existed loads with them absent and is
+// reconciled against a fresh fetch.
 type ReviewFeedbackComment struct {
 	Repo      string `yaml:"repo" json:"repo"`
 	ID        int    `yaml:"id" json:"id"`
@@ -458,6 +799,12 @@ type ReviewFeedbackComment struct {
 	DiffHunk  string `yaml:"diff_hunk,omitempty" json:"diff_hunk,omitempty"`
 	InReplyTo int    `yaml:"in_reply_to_id,omitempty" json:"in_reply_to_id,omitempty"`
 	CreatedAt string `yaml:"created_at,omitempty" json:"created_at,omitempty"`
+	PRURL     string `yaml:"pr_url,omitempty" json:"pr_url,omitempty"`
+	PRNumber  int    `yaml:"pr_number,omitempty" json:"pr_number,omitempty"`
+	// LayerPosition is the stack layer position of the PR the comment was
+	// left on; zero for a comment recorded before layer tagging existed.
+	LayerPosition int    `yaml:"layer_position,omitempty" json:"layer_position,omitempty"`
+	LayerTitle    string `yaml:"layer_title,omitempty" json:"layer_title,omitempty"`
 }
 
 // ReviewFeedbackChildSpec carries the only launch-time choices supported by
@@ -481,17 +828,23 @@ type ReviewFeedbackChildSpec struct {
 	Receipt *ReviewFeedbackLaunchReceipt
 }
 
-// RebaseChildSpec carries the creation-time resolved per-repo targets and
-// behind set produced by the orchestrator preflight. The feature manager
-// persists them on the child relationship so integration and future phases
-// read the creation-time decision rather than re-resolving.
+// RebaseChildSpec carries the creation-time per-repo targets, layer
+// classifications, and work list produced by the orchestrator preflight. The
+// feature manager persists them on the child relationship so integration and
+// future phases read the creation-time decision rather than re-resolving.
 type RebaseChildSpec struct {
 	// Bases are the captured parent tip SHAs per repo (fork-point pinning).
 	Bases []ChildRepoBase
 	// Targets are the resolved per-repo merge targets.
 	Targets []RebaseRepoTarget
-	// Behind is the set of repo names that were behind their resolved target.
-	Behind []string
+	// LayerStates is the per-layer classification (kept/merged/closed) per
+	// repository observed at preflight.
+	LayerStates []RebaseLayerClassification
+	// WorkRepos is the list of repositories the pass must reconcile; a
+	// repository has work when it has at least one kept layer with commits
+	// and is either behind its target, has a merged layer whose entry still
+	// holds a tip, or has a diverged layer.
+	WorkRepos []string
 }
 
 // CreateReviewFeedbackChild atomically launches a fixed-Medium child for the
@@ -593,14 +946,14 @@ func (m *Manager) CreateReviewFeedbackChild(parentID string, spec ReviewFeedback
 }
 
 // CreateRebaseChild atomically launches a fixed-Medium child that
-// merge-reconciles behind parent repositories against their resolved targets.
-// The orchestrator preflight resolves targets, fetches, and computes
-// behind-ness before calling this method; the spec carries the results so
-// the child relationship persists the creation-time decision. The parent
-// must be a top-level Published or CodeReady feature with no active child
-// and clean worktrees.
+// reconciles the parent's work repositories against their resolved targets.
+// The orchestrator preflight resolves targets, fetches, classifies stack
+// layers, and computes the work list before calling this method; the spec
+// carries the results so the child relationship persists the creation-time
+// decision. The parent must be a top-level Published or CodeReady feature
+// with no active child and clean worktrees.
 func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Feature, error) {
-	if len(spec.Behind) == 0 {
+	if len(spec.WorkRepos) == 0 {
 		return nil, &RebaseAlreadyUpToDateError{Targets: spec.Targets}
 	}
 	parent, err := m.Store.Load(parentID)
@@ -628,16 +981,16 @@ func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Fea
 			return nil, nil, err
 		}
 		child := m.buildRefactorChild(lockedParent, RefactorChildSpec{
-			Name:               RebaseChildName,
-			Description:        rebaseDescription(lockedParent, spec.Targets, spec.Behind),
-			Pipeline:           PipelineMedium,
-			Checkpoints:        lockedParent.Checkpoints,
-			ExitCriteria:       rebaseExitCriteria(spec.Targets, spec.Behind),
-			RebaseMergeTargets: rebaseMergeTargets(spec.Targets, spec.Behind),
+			Name:         RebaseChildName,
+			Description:  rebaseDescription(lockedParent, spec.Targets, spec.WorkRepos),
+			Pipeline:     PipelineMedium,
+			Checkpoints:  lockedParent.Checkpoints,
+			ExitCriteria: rebaseExitCriteria(spec.Targets, spec.WorkRepos),
 		}, bases, now)
 		child.Parent.Kind = ChildKindRebase
 		child.Parent.RebaseTargets = append([]RebaseRepoTarget(nil), spec.Targets...)
-		child.Parent.RebaseBehind = append([]string(nil), spec.Behind...)
+		child.Parent.RebaseLayerStates = append([]RebaseLayerClassification(nil), spec.LayerStates...)
+		child.Parent.RebaseWorkRepos = append([]string(nil), spec.WorkRepos...)
 
 		savedExitCriteria := lockedParent.ExitCriteria
 		applyResolvedReviewConfig(lockedParent, child)
@@ -657,39 +1010,16 @@ func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Fea
 	return child, nil
 }
 
-// rebaseMergeTargets maps each behind repo to the ref its setup merge task
-// must apply: the creation-time pinned target SHA when captured (matching
-// exactly what the integration gate later checks), else the resolved ref.
-func rebaseMergeTargets(targets []RebaseRepoTarget, behind []string) map[string]string {
-	behindSet := make(map[string]bool, len(behind))
-	for _, r := range behind {
-		behindSet[r] = true
-	}
-	refs := make(map[string]string, len(behind))
-	for _, t := range targets {
-		if !behindSet[t.Repo] {
-			continue
-		}
-		ref := t.TargetSHA
-		if ref == "" {
-			ref = t.Ref
-		}
-		if ref != "" {
-			refs[t.Repo] = ref
-		}
-	}
-	return refs
-}
-
 // rebaseDescription generates the deterministic, machine-authored description
-// for a rebase child. The mechanical merge already happened during setup, so
-// the text anchors every instruction to the pass's own worktrees and never
-// names any branch: the pass verifies or completes the merge in place,
-// adapting the feature's code to the base's new APIs.
-func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, behind []string) string {
-	behindSet := make(map[string]bool, len(behind))
-	for _, r := range behind {
-		behindSet[r] = true
+// for a rebase child. The harness restack already replayed every work
+// repository's stack onto its resolved target before the verification round
+// started, so the description anchors every instruction to the pass's own
+// worktrees, never names any branch, and scopes the pass to reviewing the
+// replayed result and committing requested fixes there.
+func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, workRepos []string) string {
+	workSet := make(map[string]bool, len(workRepos))
+	for _, r := range workRepos {
+		workSet[r] = true
 	}
 	targetByRepo := make(map[string]RebaseRepoTarget, len(targets))
 	for _, t := range targets {
@@ -697,18 +1027,18 @@ func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, behind []str
 	}
 
 	var sb strings.Builder
-	sb.WriteString("This pass reconciles the feature with its resolved base targets. For each behind repository listed below, the resolved target has already been merged into the branch checked out in this repository's worktree before this pass started.\n")
+	sb.WriteString("This pass reconciles the feature with its resolved base targets. For each work repository listed below, the harness has already replayed the feature's stack onto the resolved target commit: layers whose pull requests merged were dropped, and the remaining layers were replayed in order on top of the target. This pass reviews that replayed result and, where the review requests changes, commits the fixes in the pass's own worktrees.\n")
 	sb.WriteString("\n## Instructions\n\n")
-	sb.WriteString("- If the merge completed cleanly, verify the feature still works against the base's changes and adapt the feature's code where the base's new APIs collide with it.\n")
-	sb.WriteString("- If the merge stopped on conflicts, the worktree contains an in-progress merge: resolve every conflict by adapting the feature's code to the base's new APIs, then complete the merge commit. Keep the merge commit — never squash or rewrite history.\n")
-	sb.WriteString("- Keep clean merges minimal: do not opportunistically refactor or reformat code that merged cleanly.\n")
-	sb.WriteString("- Leave up-to-date repositories completely untouched. Do not merge, rebase, or modify them in any way.\n")
-	sb.WriteString("- Never push to any remote. All work is local; integration lands through the parent merge transaction.\n")
+	sb.WriteString("- Review the replayed history in this repository's worktree: every kept layer's commits sit above the resolved target commit, in order, with their original messages and authors.\n")
+	sb.WriteString("- When the review requests changes, commit each fix on the branch checked out in this repository's worktree. The pass's fix relocation places every fix on the layer that owns it.\n")
+	sb.WriteString("- Keep the replayed history minimal: do not opportunistically refactor or reformat code that replayed cleanly.\n")
+	sb.WriteString("- Leave pass-through repositories completely untouched. Do not rebase, merge, or modify them in any way.\n")
+	sb.WriteString("- Never push to any remote. All work is local; integration lands through the parent restack transaction.\n")
 	sb.WriteString("- Do not fetch from any remote. The target refs were fetched at creation time and are already available in the shared object store.\n")
 	sb.WriteString("- All work happens inside the worktrees provisioned for this pass — never enter, inspect state from, or modify any other checkout of these repositories.\n")
 
 	for _, repo := range parent.Repos {
-		if !behindSet[repo.Name] {
+		if !workSet[repo.Name] {
 			continue
 		}
 		t := targetByRepo[repo.Name]
@@ -716,30 +1046,27 @@ func rebaseDescription(parent *Feature, targets []RebaseRepoTarget, behind []str
 		sb.WriteString(repo.Name)
 		sb.WriteString("\n\nResolved target ref: ")
 		sb.WriteString(t.Ref)
-		sb.WriteString("\n\nThe target `")
+		sb.WriteString("\n\nThe stack in this repository's worktree has been replayed onto the resolved target commit (`")
 		sb.WriteString(t.Ref)
-		sb.WriteString("` has already been merged into the branch checked out in this repository's worktree. If that merge stopped on conflicts, resolve every conflict there by adapting the feature's code to the base's new APIs and complete the merge commit.\n")
+		sb.WriteString("`); merged layers were dropped from the replayed chain. Review the replayed result in this repository's worktree and, where the review requests changes, commit the fixes there.\n")
 	}
 	return sb.String()
 }
 
 // rebaseExitCriteria generates deterministic exit criteria for a rebase child.
-// It states the per-behind-repo git-level completion facts the final review
-// can check semantically, plus the invariants that up-to-date repos are
-// unchanged and nothing was pushed.
-func rebaseExitCriteria(targets []RebaseRepoTarget, behind []string) string {
-	behindSet := make(map[string]bool, len(behind))
-	for _, r := range behind {
-		behindSet[r] = true
-	}
+// It states the per-work-repo git-level completion facts the single
+// verification round checks semantically — the restack invariants — plus the
+// guarantees that pass-through repos are unchanged and nothing was pushed or
+// fetched.
+func rebaseExitCriteria(targets []RebaseRepoTarget, workRepos []string) string {
 	targetByRepo := make(map[string]RebaseRepoTarget, len(targets))
 	for _, t := range targets {
 		targetByRepo[t.Repo] = t
 	}
 
 	var sb strings.Builder
-	sb.WriteString("This pass is complete when all of the following git-level completion facts hold in this repository's worktree — the worktree provisioned for this pass — for every behind repository:\n")
-	for _, r := range behind {
+	sb.WriteString("This pass is complete when all of the following git-level completion facts hold in this repository's worktree — the worktree provisioned for this pass — for every work repository:\n")
+	for _, r := range workRepos {
 		t := targetByRepo[r]
 		sb.WriteString("\n### Repository: ")
 		sb.WriteString(r)
@@ -748,14 +1075,15 @@ func rebaseExitCriteria(targets []RebaseRepoTarget, behind []string) string {
 		sb.WriteString("`) is an ancestor of HEAD (`git merge-base --is-ancestor ")
 		sb.WriteString(t.Ref)
 		sb.WriteString(" HEAD` run in this repository's worktree succeeds).\n")
-		sb.WriteString("- No merge is in progress in this repository's worktree (no `rebase-merge` or `rebase-apply` directory, no `MERGE_HEAD`).\n")
+		sb.WriteString("- No rebase is in progress in this repository's worktree (no `rebase-merge` or `rebase-apply` directory, no `MERGE_HEAD`).\n")
 		sb.WriteString("- No conflict markers remain in any tracked file in this repository's worktree (content scan for literal `<<<<<<<`, `=======`, `>>>>>>>` sequences is empty).\n")
 		sb.WriteString("- This repository's worktree is clean (`git status --porcelain` is empty).\n")
 	}
 	sb.WriteString("\n## Invariants\n\n")
-	sb.WriteString("- Up-to-date repositories (not listed above) are completely unchanged: their worktree HEAD and content are byte-identical to the creation-time fork point.\n")
+	sb.WriteString("- Pass-through repositories (not listed above) are completely unchanged: their worktree HEAD and content are byte-identical to the creation-time fork point.\n")
 	sb.WriteString("- No other checkout of any repository was modified at any stage; all work happened inside the worktrees provisioned for this pass.\n")
 	sb.WriteString("- Nothing was pushed to any remote at any stage. All work is local.\n")
+	sb.WriteString("- Nothing was fetched from any remote at any stage. The target refs were fetched at creation time.\n")
 	return sb.String()
 }
 
@@ -782,21 +1110,34 @@ func validateReviewFeedbackCommentRepos(parent *Feature, comments []ReviewFeedba
 		if _, ok := parentRepos[comment.Repo]; !ok {
 			return fmt.Errorf("%w: %q", ErrReviewFeedbackUnknownRepo, comment.Repo)
 		}
-		state := parent.RepoStates[comment.Repo]
-		if state == nil || strings.TrimSpace(state.PRURL) == "" {
+		openPRs := parent.OpenReviewFeedbackLayerPRs(comment.Repo)
+		if len(openPRs) == 0 {
 			return fmt.Errorf("%w: %q", ErrReviewFeedbackRepoHasNoPR, comment.Repo)
+		}
+		// A comment that records its pull request must name one of the
+		// repository's open layer pull requests. Comments without PR fields
+		// (a draft persisted before layer tagging) validate against the
+		// repository-level check only; the launch path re-resolves every
+		// selected comment from a fresh walk of the open layer PRs, so a
+		// comment whose PR closed since the draft is omitted there instead.
+		if comment.PRURL == "" {
+			continue
+		}
+		open := false
+		for _, pr := range openPRs {
+			if pr.URL == comment.PRURL {
+				open = true
+				break
+			}
+		}
+		if !open {
+			return fmt.Errorf("%w: %q", ErrReviewFeedbackCommentPRNotOpen, comment.PRURL)
 		}
 	}
 	return nil
 }
 
 func reviewFeedbackDescription(parent *Feature, comments []ReviewFeedbackComment) string {
-	prURLs := make(map[string]string, len(parent.RepoStates))
-	for repo, state := range parent.RepoStates {
-		if state != nil {
-			prURLs[repo] = state.PRURL
-		}
-	}
 	commentsByRepo := make(map[string][]ReviewFeedbackComment)
 	repoOrder := make([]string, 0)
 	for _, comment := range comments {
@@ -812,7 +1153,7 @@ func reviewFeedbackDescription(parent *Feature, comments []ReviewFeedbackComment
 		description.WriteString("\n## Repository: ")
 		description.WriteString(repo)
 		description.WriteString("\n\nPull request: ")
-		description.WriteString(prURLs[repo])
+		description.WriteString(parent.TopStackLayerPRURL(repo))
 		description.WriteString("\n")
 		for _, comment := range commentsByRepo[repo] {
 			description.WriteString("\n### Comment ")
@@ -1023,7 +1364,9 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	id := generateID()
 	slug := Slugify(spec.Name)
 	workspaceSlug := WorkspaceSlug(slug, id)
-	branch := git.BranchName(workspaceSlug)
+	// The child's own provisional layer-1 branch, in the child's own
+	// namespace: it never touches the parent's feature/<slug>-<id>/ prefix.
+	branch := git.LayerBranchName(workspaceSlug, 1, slug)
 
 	childRepos := make([]FeatureRepo, 0, len(parent.Repos))
 	for _, pr := range parent.Repos {
@@ -1060,6 +1403,10 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	if inquireness == "" {
 		inquireness = parent.Inquireness
 	}
+	// Delivery mode is not part of the child spec: children inherit the
+	// parent's effective mode unconditionally, so a feature's delivery
+	// shape can never diverge across its child passes.
+	deliveryMode := parent.EffectiveDeliveryMode()
 
 	exactStart := make(map[string]string, len(bases))
 	for _, b := range bases {
@@ -1082,6 +1429,7 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 		Inquireness:  inquireness,
 		Checkpoints:  spec.Checkpoints,
 		RiskLevel:    risk,
+		DeliveryMode: deliveryMode,
 		Parent: &ChildRelationship{
 			ParentID: parent.ID,
 			Kind:     ChildKindRefactor,
@@ -1100,7 +1448,6 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 	}
 	run.Setup = NewActiveSetupState(childRepos, spec.Images, spec.Attachments, now, SetupInitOptions{
 		ExactStartPointPerRepo: exactStart,
-		MergeTargetPerRepo:     spec.RebaseMergeTargets,
 	})
 	child.SetRun(run)
 	return child

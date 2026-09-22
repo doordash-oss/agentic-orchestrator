@@ -19,13 +19,14 @@ import type {
   CompletionPreflightResult,
   FeatureActionResult,
   FeatureActionView,
-  PublishFeatureActionRequest,
+  PullRequestEntryView,
+  PublishFamilyActionRequest,
 } from '../../../../shared/ipc';
 import { E_REQUEST_TIMEOUT, buildCanonicalError } from '../../../../shared/errors';
 import { ErrorSurface, type ErrorSurfaceAction } from '../../components/ErrorSurface';
-import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../../components/FieldError';
 import { useModalDismiss } from '../../components/useModalDismiss';
-import { catalogErrorAction } from '../featureView';
+import { sentenceCase } from '../aftercareReceipt';
+import { catalogErrorAction, errorLayerContext } from '../featureView';
 import { parseIpcError } from '../../wizard/ipcError';
 import type { CanonicalError } from '../../../../shared/ipc';
 import { PrLinkButton, isEligibleForPublish } from './completionShared';
@@ -34,6 +35,29 @@ import { UNPUBLISHED_CHANGES, pendingDeliveryDetail } from './pendingDelivery';
 const PUBLISH_TIMEOUT_LOCKED_MESSAGE =
   'Publish may still be running. Quit and reopen Agentico before publishing again.';
 const PUBLISH_ACTION_ID = 'publish';
+const REOPEN_ACTION_ID = 'reopen-pull-request';
+const RECREATE_ACTION_ID = 'recreate-pull-request';
+
+type LayerActionId = typeof REOPEN_ACTION_ID | typeof RECREATE_ACTION_ID;
+
+/** The remediation action ids a repository row card knows how to resolve. */
+const RESOLVABLE_ACTION_IDS: ReadonlySet<string> = new Set([
+  PUBLISH_ACTION_ID,
+  REOPEN_ACTION_ID,
+  RECREATE_ACTION_ID,
+]);
+
+/**
+ * The needs-action codes whose stored record parks a repository on a closed
+ * stack layer pull request; their remediation offers the layer-scoped
+ * resolutions.
+ */
+const CLOSED_PR_ERROR_CODES: ReadonlySet<string> = new Set([
+  'publish_stack_pull_request_closed',
+  'publish_reopen_failed',
+  'publish_head_branch_missing',
+  'publish_recreate_failed',
+]);
 
 /**
  * The publish timeout's canonical warning: the request outran its bound and
@@ -63,11 +87,7 @@ export interface PublishModalProps {
   preflight: CompletionPreflightResult;
   /** The feature's server action catalog; each row card resolves `publish` in it. */
   actions: readonly FeatureActionView[];
-  dispatchAction(request: PublishFeatureActionRequest): Promise<FeatureActionResult>;
-  generatePublishDescription(
-    featureId: string,
-    repos: string[],
-  ): Promise<{ featureId: string; title: string; body: string }>;
+  dispatchAction(request: PublishFamilyActionRequest): Promise<FeatureActionResult>;
   openExternal(url: string): Promise<{ ok: boolean }>;
   onDispatched(): void | Promise<void>;
   onClose(): void;
@@ -114,7 +134,6 @@ export function PublishModal({
   preflight,
   actions,
   dispatchAction,
-  generatePublishDescription,
   openExternal,
   onDispatched,
   onClose,
@@ -122,7 +141,6 @@ export function PublishModal({
   setPublishTimeoutLocked,
 }: PublishModalProps): React.ReactElement {
   const dialogRef = useRef<HTMLDivElement>(null);
-  const titleRef = useRef<HTMLInputElement>(null);
   const failureRef = useRef<HTMLDivElement>(null);
   const [publishRepos, setPublishRepos] = useState<Set<string>>(
     () =>
@@ -132,11 +150,6 @@ export function PublishModal({
           .map((repo) => repo.repo),
       ),
   );
-  const [publishTitle, setPublishTitle] = useState('');
-  const [publishBody, setPublishBody] = useState('');
-  const [titleVisited, setTitleVisited] = useState(false);
-  const [generatingDescription, setGeneratingDescription] = useState(false);
-  const [publishGenResult, setPublishGenResult] = useState<CanonicalError | null>(null);
   const [publishBusy, setPublishBusy] = useState(false);
   const [timedOutThisOpen, setTimedOutThisOpen] = useState(false);
   const [publishResult, setPublishResult] = useState<PublishOutcome | null>(null);
@@ -158,11 +171,6 @@ export function PublishModal({
       ),
     [preflight],
   );
-  const titleRequired = useMemo(
-    () => eligibleRepos.some((repo) => publishRepos.has(repo.repo)),
-    [eligibleRepos, publishRepos],
-  );
-  const titleInvalid = titleRequired && titleVisited && publishTitle.trim() === '';
   const dirtySelected = useMemo(
     () =>
       preflight.repos.filter((repo) => publishRepos.has(repo.repo) && repo.pendingDirty === true),
@@ -176,7 +184,6 @@ export function PublishModal({
   const canPublish =
     preflight.sourceRevision.trim() !== '' &&
     publishRepos.size > 0 &&
-    (!titleRequired || publishTitle.trim() !== '') &&
     (dirtySelected.length === 0 || commitConfirmed) &&
     !publishBusy &&
     !publishLocked;
@@ -204,13 +211,10 @@ export function PublishModal({
   }, [preflight]);
 
   useEffect(() => {
-    if (
-      (publishResult !== null && !publishResult.ok && publishResult.reconciling !== true) ||
-      (publishGenResult !== null && publishResult === null)
-    ) {
+    if (publishResult !== null && !publishResult.ok && publishResult.reconciling !== true) {
       failureRef.current?.focus();
     }
-  }, [publishGenResult, publishResult]);
+  }, [publishResult]);
 
   const togglePublishRepo = useCallback((repo: string) => {
     setPublishRepos((previous) => {
@@ -221,33 +225,8 @@ export function PublishModal({
     });
   }, []);
 
-  const handleGeneratePublishDescription = useCallback(async () => {
-    setGeneratingDescription(true);
-    setPublishGenResult(null);
-    try {
-      const result = await generatePublishDescription(featureId, Array.from(publishRepos));
-      setPublishTitle(result.title);
-      setPublishBody(result.body);
-    } catch (error) {
-      setPublishGenResult(parseIpcError(error));
-    } finally {
-      setGeneratingDescription(false);
-    }
-  }, [featureId, generatePublishDescription, publishRepos]);
-
-  const runPublish = useCallback(
-    async (repos: string[]) => {
-      const title = publishTitle.trim();
-      const request: PublishFeatureActionRequest = {
-        featureId,
-        action: 'publish',
-        body: {
-          source_revision: preflight.sourceRevision,
-          repos,
-          ...(title === '' ? {} : { title }),
-          ...(publishBody.trim() === '' ? {} : { body: publishBody }),
-        },
-      };
+  const runActionRequest = useCallback(
+    async (request: PublishFamilyActionRequest) => {
       setPublishBusy(true);
       setPublishResult(null);
       try {
@@ -282,42 +261,79 @@ export function PublishModal({
         setPublishBusy(false);
       }
     },
-    [
-      dispatchAction,
-      featureId,
-      onDispatched,
-      preflight.sourceRevision,
-      setPublishTimeoutLocked,
-      publishBody,
-      publishTitle,
-    ],
+    [dispatchAction, onDispatched, setPublishTimeoutLocked],
+  );
+
+  const runPublish = useCallback(
+    (repos: string[]) =>
+      runActionRequest({
+        featureId,
+        action: 'publish',
+        body: {
+          source_revision: preflight.sourceRevision,
+          repos,
+        },
+      }),
+    [featureId, preflight.sourceRevision, runActionRequest],
   );
 
   const handlePublish = useCallback(async () => {
-    const title = publishTitle.trim();
-    if (titleRequired && title === '') {
-      setTitleVisited(true);
-      titleRef.current?.focus();
-      return;
-    }
     if (!canPublish) return;
     await runPublish(Array.from(publishRepos));
-  }, [canPublish, publishRepos, runPublish, titleRef, titleRequired, publishTitle]);
+  }, [canPublish, publishRepos, runPublish]);
 
   const handleRetryPublish = useCallback(
     async (repo: PublishRepo) => {
       // The retry button is disabled under these preconditions; the guard
       // keeps a stale dispatch from racing a just-changed form.
       if (publishBusy || publishLocked || preflight.sourceRevision.trim() === '') return;
-      if (repo.prUrl === undefined && publishTitle.trim() === '') return;
       await runPublish([repo.repo]);
     },
-    [preflight.sourceRevision, publishBody, publishLocked, publishTitle, publishBusy, runPublish],
+    [preflight.sourceRevision, publishLocked, publishBusy, runPublish],
   );
 
-  // One resolver per row card: the label is fixed, the enabled state is the
-  // catalog's `publish` state plus the modal's own preconditions for that
-  // single repository, and the disabled reason reports whichever blocks it.
+  // Reopen and recreate dispatch with the repository and layer read from the
+  // row's own error context and the preflight's source revision, then refresh
+  // exactly as retry publish does — the same runner owns busy, timeout lock,
+  // and the post-dispatch preflight refresh.
+  const handleLayerAction = useCallback(
+    async (repo: PublishRepo, action: LayerActionId) => {
+      if (publishBusy || publishLocked || preflight.sourceRevision.trim() === '') return;
+      const layer = closedPullRequestLayerOf(repo);
+      if (layer === null) return;
+      const body = {
+        repository: layer.repository,
+        layer: layer.layer,
+        source_revision: preflight.sourceRevision,
+      };
+      await runActionRequest(
+        action === REOPEN_ACTION_ID
+          ? { featureId, action: 'reopen-pull-request', body }
+          : { featureId, action: 'recreate-pull-request', body },
+      );
+    },
+    [featureId, preflight.sourceRevision, publishLocked, publishBusy, runActionRequest],
+  );
+
+  // One action handler per row card: the layer-scoped resolutions dispatch
+  // their own typed requests; every other resolved id (publish) retries only
+  // this repository.
+  const rowActionHandler = useCallback(
+    (repo: PublishRepo) => (actionId: string) => {
+      if (actionId === REOPEN_ACTION_ID || actionId === RECREATE_ACTION_ID) {
+        void handleLayerAction(repo, actionId);
+        return;
+      }
+      void handleRetryPublish(repo);
+    },
+    [handleLayerAction, handleRetryPublish],
+  );
+
+  // One resolver per row card: the labels are fixed, the enabled state is the
+  // catalog's state plus the modal's own preconditions, and the disabled
+  // reason reports whichever blocks it. The layer-scoped resolutions are
+  // offered only when the row's own error is a closed-PR family record whose
+  // context names the failing layer.
   const retryActionFor = useCallback(
     (repo: PublishRepo) => {
       const modalReason =
@@ -325,12 +341,18 @@ export function PublishModal({
           ? 'A publish is already running.'
           : preflight.sourceRevision.trim() === ''
             ? 'Refresh the preflight, then retry.'
-            : repo.prUrl === undefined && publishTitle.trim() === ''
-              ? 'Add a PR title to retry this publish.'
-              : undefined;
+            : undefined;
+      const layer = closedPullRequestLayerOf(repo);
       return (actionId: string): ErrorSurfaceAction | undefined => {
-        if (actionId !== PUBLISH_ACTION_ID) return undefined;
-        const base = catalogErrorAction({ actions }, actionId, 'Retry publish');
+        if (!RESOLVABLE_ACTION_IDS.has(actionId)) return undefined;
+        if (actionId !== PUBLISH_ACTION_ID && layer === null) return undefined;
+        const label =
+          actionId === REOPEN_ACTION_ID
+            ? 'Reopen pull request'
+            : actionId === RECREATE_ACTION_ID
+              ? 'Recreate pull request'
+              : 'Retry publish';
+        const base = catalogErrorAction({ actions }, actionId, label);
         if (base === undefined) return undefined;
         const reason = base.enabled ? modalReason : base.disabledReason;
         return {
@@ -340,14 +362,13 @@ export function PublishModal({
         };
       };
     },
-    [actions, preflight.sourceRevision, publishBusy, publishLocked, publishTitle],
+    [actions, preflight.sourceRevision, publishBusy, publishLocked],
   );
 
   const rejection =
     publishResult !== null && !publishResult.ok && publishResult.reconciling !== true
       ? publishResult.error
       : null;
-  const genRejection = publishResult === null ? publishGenResult : null;
 
   return (
     <div className="sheet-scrim completion-publish-sheet__scrim" onMouseDown={requestClose}>
@@ -365,9 +386,7 @@ export function PublishModal({
             <div>
               <h3>Publish updates</h3>
               <p className="completion-workspace__publish-hint">
-                {titleRequired
-                  ? 'Choose the repositories whose reviewed work is ready. Existing pull requests are updated without changing their narrative.'
-                  : 'Agentico will update the selected pull-request branches.'}
+                Agentico generates each pull request's narrative from its own changes.
               </p>
             </div>
             <div className="completion-workspace__publish-repos">
@@ -380,7 +399,7 @@ export function PublishModal({
                   onToggle={togglePublishRepo}
                   openExternal={openExternal}
                   resolveAction={retryActionFor(repo)}
-                  onRetryPublish={() => void handleRetryPublish(repo)}
+                  onAction={rowActionHandler(repo)}
                 />
               ))}
               {unpublishedRepos.length > 0 ? (
@@ -395,7 +414,7 @@ export function PublishModal({
                       onToggle={togglePublishRepo}
                       openExternal={openExternal}
                       resolveAction={retryActionFor(repo)}
-                      onRetryPublish={() => void handleRetryPublish(repo)}
+                      onAction={rowActionHandler(repo)}
                     />
                   ))}
                 </div>
@@ -406,74 +425,25 @@ export function PublishModal({
                 </p>
               ) : null}
               {publishedRepos.length > 0 ? (
-                <RepoGroup
-                  title="Already published"
-                  repos={publishedRepos}
-                  openExternal={openExternal}
-                />
-              ) : null}
-              {ineligibleRepos.length > 0 ? (
-                <RepoGroup
-                  title="Not publishable"
-                  repos={ineligibleRepos}
-                  openExternal={openExternal}
-                />
-              ) : null}
-            </div>
-            {titleRequired ? (
-              <section
-                className="completion-publish-sheet__details"
-                aria-label="Pull request details"
-              >
-                <div className="completion-publish-sheet__details-heading">
-                  <h4>Pull request details</h4>
-                  <button
-                    type="button"
-                    className="completion-workspace__secondary-action"
-                    disabled={generatingDescription}
-                    onClick={() => void handleGeneratePublishDescription()}
-                  >
-                    {generatingDescription ? 'Generating…' : 'Generate narrative'}
-                  </button>
+                <div className="completion-workspace__published-repos">
+                  <h4>Already published</h4>
+                  {publishedRepos.map((repo) => (
+                    <PublishRepoRow
+                      key={repo.repo}
+                      repo={repo}
+                      featureId={featureId}
+                      checked={publishRepos.has(repo.repo)}
+                      onToggle={togglePublishRepo}
+                      openExternal={openExternal}
+                      resolveAction={retryActionFor(repo)}
+                      onAction={rowActionHandler(repo)}
+                      selectable={false}
+                    />
+                  ))}
                 </div>
-                <label className="completion-workspace__field">
-                  <span>
-                    PR title <em>Required</em>
-                  </span>
-                  <input
-                    ref={titleRef}
-                    aria-label="PR title"
-                    aria-invalid={fieldAriaInvalid(titleInvalid)}
-                    aria-describedby={fieldAriaDescribedBy('publish-title-error', titleInvalid)}
-                    value={publishTitle}
-                    onChange={(event) => {
-                      setPublishTitle(event.target.value);
-                      if (event.target.value.trim() !== '') setTitleVisited(false);
-                    }}
-                    onBlur={() => setTitleVisited(true)}
-                    maxLength={200}
-                    placeholder="Enter PR title"
-                  />
-                </label>
-                <FieldError
-                  id="publish-title-error"
-                  message={titleInvalid ? 'Add a title to create the pull request.' : undefined}
-                />
-                <label className="completion-workspace__field">
-                  <span>
-                    PR body <em>Optional</em>
-                  </span>
-                  <textarea
-                    aria-label="PR body"
-                    value={publishBody}
-                    onChange={(event) => setPublishBody(event.target.value)}
-                    maxLength={4000}
-                    rows={5}
-                    placeholder="Enter PR description"
-                  />
-                </label>
-              </section>
-            ) : null}
+              ) : null}
+              {ineligibleRepos.length > 0 ? <IneligibleRepoGroup repos={ineligibleRepos} /> : null}
+            </div>
             {dirtySelected.length > 0 ? (
               <div className="completion-workspace__dirty-notice">
                 <h4>Uncommitted changes</h4>
@@ -504,15 +474,6 @@ export function PublishModal({
                 rootTabIndex={-1}
               />
             ) : null}
-            {rejection === null && genRejection !== null ? (
-              <ErrorSurface
-                error={genRejection}
-                variant="compact"
-                caption="Narrative generation was rejected"
-                rootRef={failureRef}
-                rootTabIndex={-1}
-              />
-            ) : null}
           </div>
         </div>
         <footer className="sheet__footer">
@@ -525,13 +486,7 @@ export function PublishModal({
             disabled={!canPublish}
             onClick={() => void handlePublish()}
           >
-            {publishBusy
-              ? 'Publishing…'
-              : publishLocked
-                ? 'Reconciling…'
-                : titleRequired
-                  ? 'Publish'
-                  : 'Publish updates'}
+            {publishBusy ? 'Publishing…' : publishLocked ? 'Reconciling…' : 'Publish updates'}
           </button>
         </footer>
       </div>
@@ -541,6 +496,99 @@ export function PublishModal({
 
 type PublishRepo = CompletionPreflightResult['repos'][number];
 
+/**
+ * The closed stack layer the row's own error names: the repository and layer
+ * position read from a closed-PR family record's repository context. Null
+ * when the row carries no such record or its context names no layer, in
+ * which case the layer-scoped resolutions are not offerable.
+ */
+function closedPullRequestLayerOf(repo: PublishRepo): { repository: string; layer: number } | null {
+  const error = repo.error;
+  if (error === undefined || !CLOSED_PR_ERROR_CODES.has(error.code)) return null;
+  return errorLayerContext(error);
+}
+
+/**
+ * The publish row's freshness line: the server's freshness phrase with the
+ * rebase hint appended, joined by an em dash — nothing when the preflight
+ * carries neither. The hint is advisory text in the sheet's own voice, never
+ * error markup (ErrorSurface owns that).
+ */
+function repoFreshnessHint(repo: PublishRepo): string | null {
+  const parts: string[] = [];
+  if (repo.freshness !== undefined) parts.push(sentenceCase(repo.freshness));
+  if (repo.rebaseHint !== undefined) parts.push(repo.rebaseHint);
+  return parts.length === 0 ? null : parts.join(' — ');
+}
+
+/**
+ * The publish verb for one stack layer: the no-commits marker and merged/closed
+ * states speak for themselves, a carried push mode is quoted verbatim, and a
+ * push-mode-less entry (a snapshot-sourced preview) derives from the recorded
+ * state — an open, not-pushed-up-to-date PR reads as an update.
+ */
+function stackPreviewVerb(entry: PullRequestEntryView): string {
+  if (entry.noCommits) return 'no changes in this repository';
+  if (entry.state === 'merged') return 'merged';
+  if (entry.state === 'closed') return 'closed';
+  switch (entry.pushMode) {
+    case 'create':
+      return 'will create';
+    case 'fast_forward':
+      return 'will update';
+    case 'rewrite':
+      return 'will rewrite';
+    case 'none':
+      return 'up to date';
+    default:
+      break;
+  }
+  if (entry.state === 'open') return entry.pushedUpToDate ? 'up to date' : 'will update';
+  return 'will create';
+}
+
+function stackPreviewVerbKey(verb: string): string {
+  return verb.replaceAll(' ', '-');
+}
+
+/**
+ * The per-repository stack preview: one line per layer with its position,
+ * title, and publish verb, linking the layers that already have a PR.
+ */
+function StackPreview({
+  entries,
+  openExternal,
+}: {
+  entries: PullRequestEntryView[];
+  openExternal(url: string): Promise<{ ok: boolean }>;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <ul className="completion-workspace__stack-preview">
+      {entries.map((entry) => {
+        const verb = stackPreviewVerb(entry);
+        return (
+          <li key={entry.position} className="completion-workspace__stack-preview-line">
+            <span className="completion-workspace__stack-preview-position">
+              Layer {entry.position}
+            </span>
+            <span className="completion-workspace__stack-preview-title">{entry.title}</span>
+            <span
+              className="completion-workspace__stack-preview-verb"
+              data-verb={stackPreviewVerbKey(verb)}
+            >
+              {verb}
+            </span>
+            {entry.url === undefined ? null : (
+              <PrLinkButton url={entry.url} openExternal={openExternal} />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function PublishRepoRow({
   repo,
   featureId,
@@ -548,7 +596,8 @@ function PublishRepoRow({
   onToggle,
   openExternal,
   resolveAction,
-  onRetryPublish,
+  onAction,
+  selectable = true,
 }: {
   repo: PublishRepo;
   featureId: string;
@@ -556,17 +605,28 @@ function PublishRepoRow({
   onToggle(repo: string): void;
   openExternal(url: string): Promise<{ ok: boolean }>;
   resolveAction(actionId: string): ErrorSurfaceAction | undefined;
-  onRetryPublish(): void;
-}) {
+  onAction(actionId: string): void;
+  /**
+   * False for rows the modal cannot select for publish (already published):
+   * no checkbox, but the full row — stack preview, freshness with its rebase
+   * hint, and the canonical error with its catalog-resolved actions — still
+   * renders, because a parked repository needs its recovery controls
+   * regardless of publish eligibility.
+   */
+  selectable?: boolean;
+}): React.ReactElement {
+  const freshnessHint = repoFreshnessHint(repo);
   return (
     <div className="completion-workspace__publish-repo">
       <div className="completion-workspace__publish-repo-main">
-        <input
-          type="checkbox"
-          aria-label={repo.repo}
-          checked={checked}
-          onChange={() => onToggle(repo.repo)}
-        />
+        {selectable ? (
+          <input
+            type="checkbox"
+            aria-label={repo.repo}
+            checked={checked}
+            onChange={() => onToggle(repo.repo)}
+          />
+        ) : null}
         <span className="completion-workspace__publish-repo-name">{repo.repo}</span>
       </div>
       <div className="completion-workspace__publish-repo-meta">
@@ -578,10 +638,11 @@ function PublishRepoRow({
             })}
           </span>
         ) : null}
-        {repo.prUrl !== undefined ? (
-          <PrLinkButton url={repo.prUrl} openExternal={openExternal} />
-        ) : null}
+        {freshnessHint === null ? null : (
+          <span className="completion-workspace__freshness">{freshnessHint}</span>
+        )}
       </div>
+      <StackPreview entries={repo.pullRequests ?? []} openExternal={openExternal} />
       {repo.pushMode === 'rewrite' ? (
         <p className="completion-workspace__pending-note">
           Rewrites the pull-request branch with a safety lease.
@@ -591,7 +652,7 @@ function PublishRepoRow({
         <ErrorSurface
           error={repo.error}
           resolveAction={resolveAction}
-          onAction={onRetryPublish}
+          onAction={onAction}
           explain={{
             // The stored publish-failure record lives on the repository's
             // own state; the modal has no feature name in scope, so the
@@ -609,41 +670,16 @@ function PublishRepoRow({
   );
 }
 
-function RepoGroup({
-  title,
-  repos,
-  openExternal,
-}: {
-  title: string;
-  repos: PublishRepo[];
-  openExternal(url: string): Promise<{ ok: boolean }>;
-}) {
+function IneligibleRepoGroup({ repos }: { repos: PublishRepo[] }) {
   return (
-    <div
-      className={
-        title === 'Already published'
-          ? 'completion-workspace__published-repos'
-          : 'completion-workspace__ineligible-repos'
-      }
-    >
-      <h4>{title}</h4>
+    <div className="completion-workspace__ineligible-repos">
+      <h4>Not publishable</h4>
       {repos.map((repo) => (
-        <div
-          key={repo.repo}
-          className={
-            title === 'Already published'
-              ? 'completion-workspace__published-repo-row'
-              : 'completion-workspace__ineligible-repo-row'
-          }
-        >
+        <div key={repo.repo} className="completion-workspace__ineligible-repo-row">
           <span>{repo.repo}</span>
-          {title === 'Already published' && repo.prUrl !== undefined ? (
-            <PrLinkButton url={repo.prUrl} openExternal={openExternal} />
-          ) : (
-            <span className="completion-workspace__ineligible-repo-reason">
-              {repo.blocker ?? 'Local-only repository'}
-            </span>
-          )}
+          <span className="completion-workspace__ineligible-repo-reason">
+            {repo.blocker ?? 'Local-only repository'}
+          </span>
         </div>
       ))}
     </div>

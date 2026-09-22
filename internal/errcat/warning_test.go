@@ -27,11 +27,17 @@ var warningCodeList = []Code{
 	FeatureLoadFailed,
 	ChildCleanupIncomplete,
 	ReviewFeedbackTailIncomplete,
+	StackBaseRetargetFailed,
 	RewindPullRequestCloseFailed,
 	RewindBackupBranchFailed,
 	RewindWorktreeResetFailed,
+	RewindStackBranchFailed,
+	RewindRemoteBranchDeleteFailed,
 	RepositoryWorktreeUnavailable,
 	RepositoryDiffFailed,
+	RoadmapBranchRenameFailed,
+	FixRelocatedAboveLayer,
+	FixManifestEntryIgnored,
 }
 
 // orphanSessionCodeList is the closed set of orphan-session recovery codes.
@@ -44,8 +50,8 @@ var orphanSessionCodeList = []Code{
 // for every warning code: warning class and no action references. A warning
 // never blocks progress, never gates a lane, and never offers an action.
 func TestWarningCodesAreWarningClassWithoutActions(t *testing.T) {
-	if len(warningCodeList) != 10 {
-		t.Fatalf("warning code list has %d entries; want 10", len(warningCodeList))
+	if len(warningCodeList) != 16 {
+		t.Fatalf("warning code list has %d entries; want 16", len(warningCodeList))
 	}
 	for _, code := range warningCodeList {
 		entry, ok := Lookup(code)
@@ -98,7 +104,8 @@ func TestOrphanSessionCodesAreNeedsActionResume(t *testing.T) {
 // TestWarningSummaryTemplates pins the param-driven warning summaries: the
 // effort-drift message names role, effort, and model; a stored relationship
 // record names its repository; an orphan code names its phase, iteration,
-// and repository.
+// and repository; the relocation codes name their repository and layers or
+// ignored manifest entry.
 func TestWarningSummaryTemplates(t *testing.T) {
 	rendered := New(EffortCapabilityDrift, WithParams(EffortDriftParams{
 		Role:   "Implementation",
@@ -136,6 +143,46 @@ func TestWarningSummaryTemplates(t *testing.T) {
 		t.Fatalf("stored and fresh child_cleanup_incomplete summaries differ: %q vs %q", rendered.Summary, fresh.Summary)
 	}
 
+	retargetRepos := []CodeRepository{{
+		Name:           "web",
+		Branch:         "agentico/layer-2",
+		LayerPosition:  2,
+		LayerTitle:     "API surface",
+		PullRequestURL: "https://github.com/acme/web/pull/12",
+	}}
+	fresh = New(StackBaseRetargetFailed, WithParams(WarningRepoParams{Repositories: retargetRepos}))
+	want = `Retargeting the pull request for repository "web" (branch "agentico/layer-2") in layer 2 ("API surface") at https://github.com/acme/web/pull/12 to the parent layer's branch failed; the pull request keeps its current base.`
+	if fresh.Summary != want {
+		t.Fatalf("stack_base_retarget_failed summary is %q; want %q", fresh.Summary, want)
+	}
+	if fresh.Remediation == nil || !strings.Contains(fresh.Remediation.Hint, "intended parent-layer branch") {
+		t.Fatalf("stack_base_retarget_failed remediation = %#v; want the intended-base retarget hint", fresh.Remediation)
+	}
+	// The base-retarget warning is a relationship warning: a stored journal
+	// record must render the same text a freshly built warning renders, so
+	// the summary may only depend on the repositories block.
+	storedRetarget := RenderRecord(FailureRecord{
+		Code:    StackBaseRetargetFailed,
+		Context: &RecordContext{Repositories: retargetRepos},
+	})
+	if storedRetarget.Summary != fresh.Summary {
+		t.Fatalf("stored and fresh stack_base_retarget_failed summaries differ: %q vs %q", storedRetarget.Summary, fresh.Summary)
+	}
+	staticRetarget := New(StackBaseRetargetFailed)
+	if staticRetarget.Summary != "Retargeting a stack layer's pull request to the parent layer's branch failed." {
+		t.Fatalf("stack_base_retarget_failed summary without params is %q; want the static summary", staticRetarget.Summary)
+	}
+	entry, ok := Lookup(StackBaseRetargetFailed)
+	if !ok {
+		t.Fatalf("stack_base_retarget_failed: missing from catalog")
+	}
+	if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
+		t.Errorf("stack_base_retarget_failed: blocks = %#v; want exactly repositories", entry.Blocks)
+	}
+	if !IsRelationshipWarning(StackBaseRetargetFailed) {
+		t.Error("stack_base_retarget_failed: want a relationship warning code")
+	}
+
 	rendered = New(OrphanSessionLive, WithParams(OrphanSessionParams{
 		Phase:        "implement",
 		Iteration:    3,
@@ -154,5 +201,77 @@ func TestWarningSummaryTemplates(t *testing.T) {
 	}
 	if rendered.Remediation == nil || len(rendered.Remediation.Actions) != 1 || rendered.Remediation.Actions[0] != "resume" {
 		t.Fatalf("orphan_session_stale remediation = %#v; want the resume action", rendered.Remediation)
+	}
+
+	rendered = New(FixRelocatedAboveLayer, WithParams(WarningFixRelocatedParams{
+		Repositories:   []CodeRepository{{Name: "web", Branch: "agentico/layer-2"}},
+		RequestedLayer: 1,
+		RequestedTitle: "Foundation",
+		ActualLayer:    2,
+		ActualTitle:    "API surface",
+	}))
+	want = `The final review fix for repository "web" (branch "agentico/layer-2") landed in layer 2 ("API surface"), above the requested layer 1 ("Foundation").`
+	if rendered.Summary != want {
+		t.Fatalf("fix_relocated_above_layer summary is %q; want %q", rendered.Summary, want)
+	}
+
+	rendered = New(FixRelocatedAboveLayer)
+	if rendered.Summary != "A final review fix landed above its requested stack layer." {
+		t.Fatalf("fix_relocated_above_layer summary without params is %q; want the static summary", rendered.Summary)
+	}
+
+	rendered = New(FixManifestEntryIgnored, WithParams(WarningManifestIgnoredParams{
+		Repositories: []CodeRepository{{Name: "web"}},
+		Layer:        1,
+		Path:         "internal/web/handler.go",
+		Reason:       "duplicate path",
+	}))
+	want = `The fix manifest entry for repository "web" (layer 1, path "internal/web/handler.go") was ignored: duplicate path.`
+	if rendered.Summary != want {
+		t.Fatalf("fix_manifest_entry_ignored summary is %q; want %q", rendered.Summary, want)
+	}
+
+	rendered = New(FixManifestEntryIgnored, WithParams(WarningManifestIgnoredParams{Reason: "unparsable manifest"}))
+	want = `A fix manifest entry was ignored: unparsable manifest.`
+	if rendered.Summary != want {
+		t.Fatalf("fix_manifest_entry_ignored summary without a repository is %q; want %q", rendered.Summary, want)
+	}
+
+	for _, code := range []Code{FixRelocatedAboveLayer, FixManifestEntryIgnored} {
+		entry, ok := Lookup(code)
+		if !ok {
+			t.Fatalf("%s: missing from catalog", code)
+		}
+		if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
+			t.Errorf("%s: blocks = %#v; want exactly repositories", code, entry.Blocks)
+		}
+	}
+}
+
+// TestRewindRemoteBranchDeleteFailedRendersRepositorySummary pins the
+// remote-branch-delete rewind warning: the repo-keyed summary names the
+// repository and its branch, the remediation tells the user to delete the
+// remote branch before republishing, and the entry declares exactly the
+// repositories block.
+func TestRewindRemoteBranchDeleteFailedRendersRepositorySummary(t *testing.T) {
+	rendered := New(RewindRemoteBranchDeleteFailed, WithParams(WarningRepoParams{
+		Repositories: []CodeRepository{{Name: "web", Branch: "feature/x"}},
+	}))
+	if rendered.Title != "Remote branch deletion failed" {
+		t.Fatalf("title = %q; want %q", rendered.Title, "Remote branch deletion failed")
+	}
+	want := `Deleting the remote branch for repository "web" (branch "feature/x") failed during the rewind.`
+	if rendered.Summary != want {
+		t.Fatalf("rewind_remote_branch_delete_failed summary = %q; want %q", rendered.Summary, want)
+	}
+	if rendered.Remediation == nil || rendered.Remediation.Hint != "Delete the remote branch on the remote yourself before republishing the rewound layers." {
+		t.Fatalf("rewind_remote_branch_delete_failed remediation = %#v; want the delete-before-republish hint", rendered.Remediation)
+	}
+	entry, ok := Lookup(RewindRemoteBranchDeleteFailed)
+	if !ok {
+		t.Fatalf("rewind_remote_branch_delete_failed: missing from catalog")
+	}
+	if len(entry.Blocks) != 1 || entry.Blocks[0] != BlockRepositories {
+		t.Errorf("rewind_remote_branch_delete_failed: blocks = %#v; want exactly repositories", entry.Blocks)
 	}
 }

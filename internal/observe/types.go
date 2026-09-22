@@ -68,10 +68,20 @@ type PhaseSummary struct {
 	Reviews      int     `yaml:"reviews,omitempty"`
 }
 
+// RepoSummaryPullRequest is one delivery layer's pull request in the
+// observe summary's per-repository list: the layer position, its title,
+// the pull request URL, and its recorded state.
+type RepoSummaryPullRequest struct {
+	Position int    `yaml:"position"`
+	Title    string `yaml:"title,omitempty"`
+	URL      string `yaml:"url,omitempty"`
+	State    string `yaml:"state,omitempty"`
+}
+
 type RepoSummary struct {
-	Status       string  `yaml:"status,omitempty"`
-	PRURL        string  `yaml:"pr_url,omitempty"`
-	CostUSD      float64 `yaml:"cost_usd,omitempty"`
-	InputTokens  int64   `yaml:"input_tokens,omitempty"`
-	OutputTokens int64   `yaml:"output_tokens,omitempty"`
+	Status       string                   `yaml:"status,omitempty"`
+	PullRequests []RepoSummaryPullRequest `yaml:"pull_requests,omitempty"`
+	CostUSD      float64                  `yaml:"cost_usd,omitempty"`
+	InputTokens  int64                    `yaml:"input_tokens,omitempty"`
+	OutputTokens int64                    `yaml:"output_tokens,omitempty"`
 }

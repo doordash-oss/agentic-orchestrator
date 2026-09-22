@@ -65,6 +65,16 @@ type RoundCommitInput struct {
 	// historical single-commit-per-phase format.
 	FirstImplementCommit bool
 
+	// FixIterationDir is the Final Review fixer's iteration directory,
+	// populated only for Final Review fix rounds so the hook can locate the
+	// optional fix manifest. Zero value ("") means absent.
+	FixIterationDir string
+
+	// IterationDir is the round's iteration directory, carried by every
+	// round kind so the hook can locate the optional fix manifest and other
+	// per-round iteration artifacts. Zero value ("") means absent.
+	IterationDir string `yaml:"iteration_dir,omitempty" json:"iteration_dir,omitempty"`
+
 	// Repos maps repo name -> worktree path for every repo the round could
 	// have dirtied. The hook commits only those with uncommitted changes.
 	Repos map[string]string

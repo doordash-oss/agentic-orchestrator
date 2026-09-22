@@ -2209,3 +2209,89 @@ func TestObserver_ConfigChanged_NilAndDisabled(t *testing.T) {
 		t.Errorf("events.jsonl should not exist for disabled observer")
 	}
 }
+
+func TestObserver_LayerBoundaryCrossed_WritesEventsJSONL(t *testing.T) {
+	stateDir := t.TempDir()
+	featureID := "layer_boundary_feat"
+	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+	obs := New(true, stateDir, false, "", false, "agentic")
+
+	sc := SpanContextForFeature(featureID, "", "", "").WithRun(2)
+
+	obs.LayerBoundaryCrossed(sc, LayerBoundaryEvent{
+		LayerPosition:     1,
+		LayerTitle:        "Bootstrap",
+		LayerBranch:       "feature/demo-a1b2c3d4/1-bootstrap",
+		RepoTips:          map[string]string{"repo-a": "aaaa", "repo-b": "bbbb"},
+		NextLayerPosition: 2,
+		NextLayerBranch:   "feature/demo-a1b2c3d4/2-build-and-polish",
+	})
+
+	events := readEvents(t, stateDir, featureID)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	evt := events[0]
+	if evt.EventType != "feature.layer_boundary" {
+		t.Errorf("EventType = %q, want %q", evt.EventType, "feature.layer_boundary")
+	}
+	if evt.FeatureID != featureID {
+		t.Errorf("FeatureID = %q, want %q", evt.FeatureID, featureID)
+	}
+	if evt.RunNumber != 2 {
+		t.Errorf("RunNumber = %d, want 2", evt.RunNumber)
+	}
+	if evt.Data["layer_position"].(float64) != 1 {
+		t.Errorf("layer_position = %v, want 1", evt.Data["layer_position"])
+	}
+	if evt.Data["layer_title"] != "Bootstrap" {
+		t.Errorf("layer_title = %v, want Bootstrap", evt.Data["layer_title"])
+	}
+	if evt.Data["layer_branch"] != "feature/demo-a1b2c3d4/1-bootstrap" {
+		t.Errorf("layer_branch = %v, want the layer-1 branch", evt.Data["layer_branch"])
+	}
+	tips, ok := evt.Data["repo_tips"].(map[string]any)
+	if !ok {
+		t.Fatalf("Data[repo_tips] type = %T, want map[string]any", evt.Data["repo_tips"])
+	}
+	if tips["repo-a"] != "aaaa" || tips["repo-b"] != "bbbb" {
+		t.Errorf("repo_tips = %v, want both repository tips", tips)
+	}
+	if evt.Data["next_layer_position"].(float64) != 2 {
+		t.Errorf("next_layer_position = %v, want 2", evt.Data["next_layer_position"])
+	}
+	if evt.Data["next_layer_branch"] != "feature/demo-a1b2c3d4/2-build-and-polish" {
+		t.Errorf("next_layer_branch = %v, want the layer-2 branch", evt.Data["next_layer_branch"])
+	}
+
+	// A final-phase tip recording carries no next layer.
+	obs.LayerBoundaryCrossed(sc, LayerBoundaryEvent{
+		LayerPosition: 2,
+		LayerBranch:   "feature/demo-a1b2c3d4/2-build-and-polish",
+		RepoTips:      map[string]string{"repo-a": "cccc"},
+	})
+	events = readEvents(t, stateDir, featureID)
+	final := events[len(events)-1]
+	if _, ok := final.Data["next_layer_branch"]; ok {
+		t.Errorf("final-phase boundary event carries next_layer_branch = %v; want it absent", final.Data["next_layer_branch"])
+	}
+}
+
+func TestObserver_LayerBoundaryCrossed_NilAndDisabled(t *testing.T) {
+	sc := SpanContext{TraceID: "t", SpanID: "s", FeatureID: "f"}
+	boundary := LayerBoundaryEvent{LayerPosition: 1, LayerBranch: "feature/demo-a1b2c3d4/1-bootstrap"}
+
+	var nilObs *Observer
+	// Must not panic on nil receiver.
+	nilObs.LayerBoundaryCrossed(sc, boundary)
+
+	stateDir := t.TempDir()
+	featureID := "layer_boundary_disabled"
+	disabled := New(false, stateDir, false, "", false, "agentic")
+	disabled.LayerBoundaryCrossed(sc, boundary)
+
+	eventsPath := filepath.Join(stateDir, featureID, "events.jsonl")
+	if _, err := os.Stat(eventsPath); !os.IsNotExist(err) {
+		t.Errorf("events.jsonl should not exist for disabled observer")
+	}
+}

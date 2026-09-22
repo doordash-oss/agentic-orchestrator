@@ -225,6 +225,7 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t
 	for name, inner := range map[string]ports.PermissionHandler{
 		"BoundedHelperArtifactHandler":        &BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}},
 		"BoundedHelperArtifactHandlerGuarded": Guarded(&BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}}),
+		"ConflictResolverHandlerGuarded":      Guarded(&ConflictResolverHandler{WorkDir: root, ConflictPaths: []string{"a.go"}}),
 		"AMAHandler":                          &AMAHandler{},
 		"ReadOnlyHandler":                     &ReadOnlyHandler{},
 	} {

@@ -196,7 +196,7 @@ func TestFeatureLifecycleStateMachine(t *testing.T) {
 	}
 
 	// Step 8: Mark published
-	if err := fm.MarkPublished(f.ID, "https://github.com/example/repo/pull/1"); err != nil {
+	if err := fm.MarkPublished(f.ID); err != nil {
 		t.Fatalf("MarkPublished: %v", err)
 	}
 	f, _ = fm.Get(f.ID)

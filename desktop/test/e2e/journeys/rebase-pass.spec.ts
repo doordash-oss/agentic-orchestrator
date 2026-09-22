@@ -59,8 +59,9 @@ import {
  * Publishes the current feature tip as the existing pull-request branch, then
  * advances `origin/main` so the feature branch is behind its remote target.
  * Manual publish keeps the post-rebase parent work local until the user chooses
- * Publish updates, and the seeded PR URL makes the preflight classify it as a
- * fast-forward update to an existing pull request rather than a first publication.
+ * Publish updates, and the seeded stack entry's pull request makes the
+ * repository read as published with an existing pull request rather than a
+ * first publication.
  */
 function seedBehindFeature(world: ReturnType<typeof createWorld>, featureId: string): void {
   const featurePath = featureYamlPath(world, featureId);
@@ -86,15 +87,6 @@ function seedBehindFeature(world: ReturnType<typeof createWorld>, featureId: str
   ]);
   fs.writeFileSync(featurePath, featureYaml);
 
-  let runYaml = fs.readFileSync(activeRunYamlPath(world, featureId), 'utf8');
-  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
-    'repo_states:',
-    '    alpha:',
-    '        touched: true',
-    '        pr_url: https://github.example/agentico/alpha/pull/1',
-  ]);
-  fs.writeFileSync(activeRunYamlPath(world, featureId), runYaml);
-
   git(alphaWorktree, 'push', '-u', 'origin', 'HEAD');
 
   git(alphaRepo, 'checkout', 'main');
@@ -103,6 +95,34 @@ function seedBehindFeature(world: ReturnType<typeof createWorld>, featureId: str
   git(alphaRepo, 'commit', '-m', 'Remote advance for rebase pass journey');
   git(alphaRepo, 'push', 'origin', 'main');
   git(alphaRepo, 'checkout', '-');
+
+  // The single-PR-URL seed moved to the stack read model: the pull request a
+  // published feature records lives on the stack layer's repository entry,
+  // and the legacy repo_states pr_url key is ignored on load.
+  const branch = git(alphaWorktree, 'rev-parse', '--abbrev-ref', 'HEAD').trim();
+  const tipSHA = git(alphaWorktree, 'rev-parse', 'HEAD').trim();
+  let runYaml = fs.readFileSync(activeRunYamlPath(world, featureId), 'utf8');
+  runYaml = replaceTopLevelBlock(runYaml, 'repo_states', [
+    'repo_states:',
+    '    alpha:',
+    '        touched: true',
+  ]);
+  runYaml = replaceTopLevelBlock(runYaml, 'stack', [
+    'stack:',
+    '    - position: 1',
+    '      title: Rebase pass',
+    '      slug: rebase-pass',
+    '      phases:',
+    '        - 1',
+    `      branch: ${branch}`,
+    '      repos:',
+    '        alpha:',
+    `          tip_sha: ${tipSHA}`,
+    `          last_pushed_sha: ${tipSHA}`,
+    '          pr_url: https://github.example/agentico/alpha/pull/1',
+    '          pr_state: open',
+  ]);
+  fs.writeFileSync(activeRunYamlPath(world, featureId), runYaml);
 }
 
 test('rebase pass: behind feature → card click → pass workspace → completion → history', async ({}, testInfo: TestInfo) => {

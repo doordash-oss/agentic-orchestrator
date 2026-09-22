@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"gopkg.in/yaml.v3"
 )
@@ -204,9 +205,56 @@ func (s *reviewSessionService) ValidateDraft(featureID, reviewID string, req Rev
 		response.Valid = len(response.Findings) == 0
 		return response, nil
 	}
+	if meta.Roadmap || meta.ArtifactID == "roadmap" {
+		response.Applicable = true
+		response.Findings = s.roadmapValidationFindings(featureID, req.Text)
+		response.Valid = len(response.Findings) == 0
+		return response, nil
+	}
 	response.Applicable = false
 	response.Valid = true
 	return response, nil
+}
+
+// roadmapValidationFindings evaluates a roadmap review draft: the phase
+// headers must parse and the `## Pull Requests` table must satisfy the
+// grouping contract and the feature's delivery mode. Each problem is
+// surfaced verbatim as a finding.
+func (s *reviewSessionService) roadmapValidationFindings(featureID, text string) []ReviewDraftValidationFinding {
+	findings := make([]ReviewDraftValidationFinding, 0)
+	phases, err := agent.ParseRoadmap(text)
+	if err != nil {
+		return append(findings, ReviewDraftValidationFinding{
+			Code:    "roadmap_unparseable",
+			Message: "Roadmap needs ## Phase N: headers.",
+		})
+	}
+	for _, problem := range roadmapPullRequestsProblems(text, phases, s.featureDeliveryMode(featureID)) {
+		findings = append(findings, ReviewDraftValidationFinding{Code: "pull_requests_table", Message: problem})
+	}
+	return findings
+}
+
+// roadmapPullRequestsProblems returns the `## Pull Requests` table problems
+// of a roadmap draft — structural first, then the delivery-mode constraint —
+// or nil when the table is valid for the feature's delivery mode.
+func roadmapPullRequestsProblems(text string, phases []agent.RoadmapPhase, mode feature.DeliveryMode) []string {
+	_, problems := agent.ValidateRoadmapPullRequestsTableForMode(text, phases, mode)
+	return problems
+}
+
+// featureDeliveryMode loads the feature's effective delivery mode, falling
+// back to the stack default when the record cannot be read so a store hiccup
+// never blocks a structurally valid draft.
+func (s *reviewSessionService) featureDeliveryMode(featureID string) feature.DeliveryMode {
+	if s == nil || s.store == nil {
+		return feature.DeliveryModeStack
+	}
+	f, err := s.store.Load(featureID)
+	if err != nil || f == nil {
+		return feature.DeliveryModeStack
+	}
+	return f.EffectiveDeliveryMode()
 }
 
 func phasePlanValidationFindings(text string) []ReviewDraftValidationFinding {
@@ -257,6 +305,19 @@ func (s *reviewSessionService) SubmitDecision(featureID, reviewID string, req Re
 	draft, err := os.ReadFile(draftPath)
 	if err != nil {
 		return ReviewSessionDecisionResponse{}, fmt.Errorf("read review draft: %w", err)
+	}
+	// A roadmap proceed commits the draft over the canonical roadmap and
+	// asks the orchestrator to advance past approval, so the `## Pull
+	// Requests` table is re-validated on the saved draft first — structural
+	// rules plus the feature's delivery mode (a single-delivery feature must
+	// carry exactly one row). An invalid table keeps everything untouched:
+	// the canonical roadmap, the session, and its draft stay at the same
+	// revision, and the decider is never invoked. Iterate is never blocked —
+	// the reviser fixes the table in the next planning attempt.
+	if req.Decision == reviewDecisionProceed && (meta.Roadmap || meta.ArtifactID == "roadmap") {
+		if problems := s.roadmapDraftPullRequestsProblems(featureID, string(draft)); len(problems) > 0 {
+			return ReviewSessionDecisionResponse{}, invalidRoadmapPullRequestsError(problems)
+		}
 	}
 	if err := os.WriteFile(meta.SourcePath, draft, 0o644); err != nil {
 		return ReviewSessionDecisionResponse{}, fmt.Errorf("commit review draft: %w", err)
@@ -540,5 +601,26 @@ func reviewSessionResponseFromMeta(meta reviewSessionMeta, text string) ReviewSe
 func staleReviewRevisionError(reviewID, current string) error {
 	return &ActionConflictError{
 		Detail: fmt.Sprintf("review draft revision is stale (review %q, current revision %q)", reviewID, current),
+	}
+}
+
+// roadmapDraftPullRequestsProblems validates a roadmap draft's `## Pull
+// Requests` table — phase headers, structural rules, and the feature's
+// delivery mode — against the saved draft of a proceed decision.
+func (s *reviewSessionService) roadmapDraftPullRequestsProblems(featureID, text string) []string {
+	phases, err := agent.ParseRoadmap(text)
+	if err != nil {
+		return []string{"## Pull Requests: roadmap has no ## Phase N: headers, so the table cannot be validated"}
+	}
+	return roadmapPullRequestsProblems(text, phases, s.featureDeliveryMode(featureID))
+}
+
+// invalidRoadmapPullRequestsError is the canonical rejection for a roadmap
+// proceed whose saved draft carries a missing or invalid `## Pull Requests`
+// table. The problem list rides in diagnostics.
+func invalidRoadmapPullRequestsError(problems []string) error {
+	return &ActionConflictError{
+		Code:   errcat.RoadmapPullRequestsInvalid,
+		Detail: strings.Join(problems, "\n"),
 	}
 }

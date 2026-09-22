@@ -142,7 +142,6 @@ export const IPC_CHANNELS = {
   rewindExecute: 'agentico:rewind:execute',
   completionPreflight: 'agentico:completion:preflight',
   repositoryDiff: 'agentico:completion:repository-diff',
-  publishDescription: 'agentico:completion:publish-description',
   openExternal: 'agentico:open:external',
   revealPath: 'agentico:open:reveal',
   clipboardWriteText: 'agentico:clipboard:write-text',
@@ -1497,12 +1496,29 @@ export const FeaturesListResultSchema = z.strictObject({
 });
 export type FeaturesListResult = z.output<typeof FeaturesListResultSchema>;
 
+/**
+ * One stack layer's pull request as the renderer renders it, one row per
+ * layer in position order. The per-layer push mode is populated only by
+ * completion preflight.
+ */
+export const PullRequestEntryViewSchema = z.strictObject({
+  position: z.number().int().nonnegative(),
+  title: z.string(),
+  branch: z.string().optional(),
+  url: z.string().max(2048).optional(),
+  state: z.enum(['none', 'open', 'merged', 'closed']),
+  noCommits: z.boolean(),
+  pushedUpToDate: z.boolean(),
+  pushMode: z.enum(['create', 'fast_forward', 'rewrite', 'none']).optional(),
+});
+export type PullRequestEntryView = z.output<typeof PullRequestEntryViewSchema>;
+
 /** Per-repository operational status from the server feature detail. */
 export const RepoStatusViewSchema = z.strictObject({
   name: z.string(),
   publishable: z.boolean(),
   touched: z.boolean().optional(),
-  prUrl: z.string().optional(),
+  pullRequests: z.array(PullRequestEntryViewSchema).optional(),
   freshness: z.string().optional(),
   /** Canonical error rendering the repository's stored publish-failure record; absent when it has not failed. */
   error: CanonicalErrorSchema.optional(),
@@ -1571,6 +1587,12 @@ export const FeatureSnapshotSchema = z.strictObject({
   /** Run-contract axes surfaced so child launches can seed from the parent. */
   riskLevel: z.string().max(100).optional(),
   exitCriteria: z.string().max(4000).optional(),
+  /**
+   * The feature's immutable delivery mode ("stack" | "single"), as the
+   * server's effective read; legacy features without a stored value read
+   * as stack. Absent when the server omits it.
+   */
+  deliveryMode: z.string().max(100).optional(),
   waitReason: z.string().optional(),
   repos: z.array(z.string()),
   createdAt: z.string(),
@@ -1633,6 +1655,8 @@ export const FeatureOperationalActionSchema = z.enum([
   'mark-done',
   'cleanup',
   'delete',
+  'reopen-pull-request',
+  'recreate-pull-request',
 ]);
 export type FeatureOperationalAction = z.output<typeof FeatureOperationalActionSchema>;
 
@@ -1660,8 +1684,24 @@ export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
     body: z.strictObject({
       source_revision: CompletionSourceRevisionSchema,
       repos: z.array(CompletionRepoNameSchema).min(1).max(200),
-      title: z.string().trim().min(1).max(200).optional(),
-      body: z.string().max(4000).optional(),
+    }),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    action: z.literal('reopen-pull-request'),
+    body: z.strictObject({
+      repository: z.string().min(1).max(200),
+      layer: z.number().int().min(1),
+      source_revision: CompletionSourceRevisionSchema,
+    }),
+  }),
+  z.strictObject({
+    featureId: FeatureIdSchema,
+    action: z.literal('recreate-pull-request'),
+    body: z.strictObject({
+      repository: z.string().min(1).max(200),
+      layer: z.number().int().min(1),
+      source_revision: CompletionSourceRevisionSchema,
     }),
   }),
   z.strictObject({
@@ -1691,6 +1731,23 @@ export const FeatureActionRequestSchema = z.discriminatedUnion('action', [
 ]);
 export type FeatureActionRequest = z.output<typeof FeatureActionRequestSchema>;
 export type PublishFeatureActionRequest = Extract<FeatureActionRequest, { action: 'publish' }>;
+export type ReopenPullRequestFeatureActionRequest = Extract<
+  FeatureActionRequest,
+  { action: 'reopen-pull-request' }
+>;
+export type RecreatePullRequestFeatureActionRequest = Extract<
+  FeatureActionRequest,
+  { action: 'recreate-pull-request' }
+>;
+/**
+ * The publish-family mutation requests the completion surfaces dispatch:
+ * publish itself plus the two closed-pull-request resolutions, which carry
+ * the repository and stack layer position from the error's own context.
+ */
+export type PublishFamilyActionRequest = Extract<
+  FeatureActionRequest,
+  { action: 'publish' | 'reopen-pull-request' | 'recreate-pull-request' }
+>;
 
 // Compile-time drift guard: every FeatureOperationalActionSchema member must
 // appear as a FeatureActionRequestSchema branch's action literal. If an action
@@ -1711,6 +1768,8 @@ const _featureActionCatalogueSubset: {
   'mark-done': z.never(),
   cleanup: z.never(),
   delete: z.never(),
+  'reopen-pull-request': z.never(),
+  'recreate-pull-request': z.never(),
 };
 void _featureActionCatalogueSubset;
 
@@ -1752,9 +1811,12 @@ export const CompletionPreflightRepoSchema = z.strictObject({
   publishable: z.boolean(),
   touched: z.boolean(),
   status: z.string().max(50),
-  prUrl: z.string().max(2000).optional(),
+  /** Ordered per-layer stack view with per-layer push modes. */
+  pullRequests: z.array(PullRequestEntryViewSchema).max(32).optional(),
   blocker: z.string().max(500).optional(),
   freshness: z.string().max(50).optional(),
+  /** Server-authored rebase hint, present when a merged layer whose entry still holds a tip sits below a kept layer with commits. */
+  rebaseHint: z.string().max(500).optional(),
   /** Canonical error rendering the repository's stored publish-failure record; absent when it has not failed. */
   error: CanonicalErrorSchema.optional(),
   baseBranch: z.string().max(128).optional(),
@@ -1808,19 +1870,6 @@ export const RepositoryDiffResultSchema = z.strictObject({
   error: CanonicalErrorSchema.optional(),
 });
 export type RepositoryDiffResult = z.output<typeof RepositoryDiffResultSchema>;
-
-export const PublishDescriptionRequestSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  repos: z.array(CompletionRepoNameSchema).max(200).optional(),
-});
-export type PublishDescriptionRequest = z.output<typeof PublishDescriptionRequestSchema>;
-
-export const PublishDescriptionResultSchema = z.strictObject({
-  featureId: FeatureIdSchema,
-  title: z.string().max(200),
-  body: z.string().max(4000),
-});
-export type PublishDescriptionResult = z.output<typeof PublishDescriptionResultSchema>;
 
 export const OpenExternalRequestSchema = z.strictObject({
   url: z.string().max(2000),
@@ -1898,10 +1947,23 @@ export const ReviewFeedbackDraftCommentViewSchema = z.strictObject({
 });
 export type ReviewFeedbackDraftCommentView = z.output<typeof ReviewFeedbackDraftCommentViewSchema>;
 
+/**
+ * One open layer pull request's comment group inside a repository's draft
+ * view: the stack layer's position and title, the pull request's URL, and
+ * that pull request's comments. The position is required — a group without
+ * one never crosses the boundary.
+ */
+export const ReviewFeedbackPullRequestGroupSchema = z.strictObject({
+  position: z.number().int().nonnegative(),
+  title: z.string().max(500),
+  url: z.string().max(2048),
+  comments: z.array(ReviewFeedbackDraftCommentViewSchema).max(2000),
+});
+export type ReviewFeedbackPullRequestGroup = z.output<typeof ReviewFeedbackPullRequestGroupSchema>;
+
 export const ReviewFeedbackRepoGroupSchema = z.strictObject({
   repo: z.string().min(1).max(200),
-  prUrl: z.string().max(2048),
-  comments: z.array(ReviewFeedbackDraftCommentViewSchema).max(2000),
+  pullRequests: z.array(ReviewFeedbackPullRequestGroupSchema).max(200),
 });
 export type ReviewFeedbackRepoGroup = z.output<typeof ReviewFeedbackRepoGroupSchema>;
 
@@ -2191,13 +2253,20 @@ export type RewindChoiceView = z.output<typeof RewindChoiceViewSchema>;
 
 export const RewindPRConsequenceViewSchema = z.strictObject({
   repo: z.string(),
-  prUrl: z.string(),
+  position: z.number().int().positive(),
+  title: z.string(),
+  branch: z.string(),
+  prUrl: z.string().optional(),
+  prState: z.enum(['none', 'open', 'merged', 'closed']),
+  verdict: z.enum(['keep', 'close', 'merged', 'none']),
+  deleteRemoteBranch: z.boolean(),
 });
 export type RewindPRConsequenceView = z.output<typeof RewindPRConsequenceViewSchema>;
 
 export const RewindWorktreeConsequenceViewSchema = z.strictObject({
   repo: z.string(),
-  resetKind: z.enum(['anchor', 'base', 'base-local', 'none']),
+  resetKind: z.enum(['anchor', 'base', 'base-local', 'layer-tip', 'none']),
+  branch: z.string().optional(),
 });
 export type RewindWorktreeConsequenceView = z.output<typeof RewindWorktreeConsequenceViewSchema>;
 
@@ -2866,6 +2935,8 @@ export const CreateFeatureInputSchema = z.strictObject({
   pipeline: z.enum(['medium', 'large', 'moonshot']).default('medium'),
   riskLevel: z.enum(['low', 'medium', 'high']).default('medium'),
   inquireness: z.enum(['none', 'medium', 'high']).default('medium'),
+  /** How the work reaches review; the server treats stack as the default. */
+  deliveryMode: z.enum(['stack', 'single']).default('stack'),
   exitCriteria: z.string().max(4000).default(''),
   models: z.record(z.string().min(1).max(64), z.string().min(1).max(200)).default({}),
   effort: z.record(z.string().min(1).max(64), EffortLevelSchema).default({}),
@@ -2964,6 +3035,8 @@ export const CreationDefaultsSchema = z.strictObject({
   defaults: z.strictObject({
     pipeline: z.string().optional(),
     inquireness: z.string().optional(),
+    /** Workspace delivery default ("stack" | "single"); unknown ⇒ stack. */
+    delivery_mode: z.string().optional(),
     /** Per-phase default models, for read-only display. */
     models: z.array(z.strictObject({ phase: z.string(), model: z.string() })),
     /** Per-phase effort defaults, for read-only display. */
@@ -4432,10 +4505,6 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([RepositoryDiffRequestSchema]),
     response: RepositoryDiffResultSchema,
   },
-  [IPC_CHANNELS.publishDescription]: {
-    request: z.tuple([PublishDescriptionRequestSchema]),
-    response: PublishDescriptionResultSchema,
-  },
   [IPC_CHANNELS.openExternal]: {
     request: z.tuple([OpenExternalRequestSchema]),
     response: z.strictObject({ ok: z.boolean() }),
@@ -4739,7 +4808,6 @@ export interface AgenticoApi {
   executeRewind(request: RewindExecuteRequest): Promise<FeatureActionResult>;
   preflightCompletion(request: CompletionPreflightRequest): Promise<CompletionPreflightResult>;
   getRepositoryDiff(request: RepositoryDiffRequest): Promise<RepositoryDiffResult>;
-  generatePublishDescription(request: PublishDescriptionRequest): Promise<PublishDescriptionResult>;
   openExternal(request: OpenExternalRequest): Promise<{ ok: boolean }>;
   revealPath(request: RevealPathRequest): Promise<RevealPathResult>;
   /**

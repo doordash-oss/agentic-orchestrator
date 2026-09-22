@@ -14,7 +14,8 @@ A roadmap MUST contain these top-level sections, in this order:
 4. What We're NOT Doing
 5. Architecture Approach
 6. Phase 1..N: vertical-slice phases (one section per phase)
-7. Overall Exit Criteria
+7. Pull Requests (table)
+8. Overall Exit Criteria
 
 If the feature genuinely cannot be sliced (a pure data migration, a single-file fix), the roadmap may collapse to a single phase. The phase still uses `## Phase 1: Title`; the system detects collapsed mode from phase count, not from a header decoration.
 
@@ -42,6 +43,34 @@ A phase that joins independent concerns with "and", retires more than 3-4 explic
 Use exactly `## Phase N: Title` — no `Phase 1/3`, no `(Collapsed)`, no decorations before the colon. Single-phase collapsed roadmaps still use `## Phase 1: Title`.
 
 This rule matters operationally: section-matching downstream (sticky-approval `frozen_sections`, validator routing) keys off the exact heading text. Renames break section matching, invalidate sticky approvals, and force validators to re-evaluate axes they have already cleared.
+
+## Pull Requests Table
+
+The roadmap MUST contain a top-level `## Pull Requests` section holding exactly one markdown table that groups consecutive phases into pull requests. Row positions are `1..M`; the feature's delivery mode (below) decides whether that grouping spans multiple rows or collapses to one.
+
+Use exactly `## Pull Requests` — like every other heading, it participates in byte-equal section matching downstream (sticky-approval `frozen_sections`, validator routing). Place the section after the last `## Phase N:` section and before `## Overall Exit Criteria`.
+
+The table has exactly these columns: `#`, `Title`, `Phases`, `Rationale`.
+
+The `Phases` cell is either a single phase number (`3`) or a hyphen range spanning consecutive phases (`2-4`). An en dash and surrounding whitespace in the cell are tolerated. Comma lists and `Phase` prefixes (for example `2,4` or `Phase 3`) are rejected.
+
+The structural rules, all enforced by the Go validator:
+
+- Positions are `1..M` in order, starting at 1.
+- Every roadmap phase appears in exactly one row, and no row names an unknown phase.
+- Each row's phases are consecutive.
+- Rows are contiguous and ascending in phase order: taken together they cover the phases with no gaps and no reordering.
+- Titles are non-empty.
+- A single-phase (collapsed) roadmap has exactly one row covering phase 1.
+
+### Delivery Modes
+
+The feature's delivery mode is stated in the planning prompt's `## Delivery` section — it is not derived from the phase count:
+
+- **Stack delivery (default).** The table groups phases into the stacked pull requests that deliver the feature, applying the grouping heuristic in `create-roadmap/SKILL.md`.
+- **Single delivery.** The table must contain exactly one row whose `Phases` cell spans every phase (for example `1-3` for a three-phase roadmap). This is a delivery constraint on the table only; phase slicing is unchanged.
+
+A single-phase (collapsed) roadmap has exactly one row covering phase 1 because of its phase count — that is not single delivery. The one-row rule comes from the delivery mode stated in the prompt and applies even when the roadmap has many phases.
 
 ## Body Constraints
 
@@ -135,6 +164,13 @@ Only include this section when this phase retires named stubs from an earlier St
 ## Phase N: [Slice Name]
 
 [Same shape.]
+
+## Pull Requests
+
+| # | Title | Phases | Rationale |
+|---|-------|--------|-----------|
+| 1 | [Pull request title] | 1 | [One-line reason for this grouping.] |
+| 2 | [Pull request title] | 2-3 | [One-line reason for this grouping.] |
 
 ## Overall Exit Criteria
 

@@ -16,9 +16,11 @@ package mocks_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	gitpkg "github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -43,8 +45,183 @@ var _ ports.SessionManager = (*mocks.MockSessionManager)(nil)
 
 // Git seams
 var _ orchestrator.RemoteOps = (*mocks.MockRemoteOps)(nil)
-var _ feature.PRCloser = (*mocks.MockPRCloser)(nil)
+var _ feature.RewindRemoteOps = (*mocks.MockPRCloser)(nil)
 var _ feature.WorktreeOps = (*mocks.MockWorktreeOps)(nil)
+
+// TestMockWorktreeOpsRestackAndTransactionOverrides proves the shared mock
+// exposes overrides for the restack primitive and the multi-ref transaction
+// and records their calls.
+func TestMockWorktreeOpsRestackAndTransactionOverrides(t *testing.T) {
+	m := mocks.NewMockWorktreeOps()
+	wantResult := &gitpkg.RestackResult{HeadSHA: "abc123"}
+	cutPoints := []gitpkg.RestackCutPoint{{Label: "base", SHA: "0000"}}
+	ops := []gitpkg.RestackOp{{Kind: gitpkg.RestackInsertAfter, CutPointLabel: "base", CommitSHAs: []string{"1111"}}}
+	m.RestackChainFn = func(mainRepo string, cps []gitpkg.RestackCutPoint, os []gitpkg.RestackOp) (*gitpkg.RestackResult, error) {
+		return wantResult, nil
+	}
+	m.RestackChainWithResolverFn = func(mainRepo string, cps []gitpkg.RestackCutPoint, os []gitpkg.RestackOp, resolver gitpkg.RestackConflictResolver, attemptsRoot string) (*gitpkg.RestackResult, error) {
+		return wantResult, nil
+	}
+	m.CommitTreeSHAFn = func(repoPath, commitSHA string) (string, error) {
+		return "tree123", nil
+	}
+	updates := []gitpkg.RefUpdate{{Ref: "refs/heads/main", OldSHA: "0000", NewSHA: "1111"}}
+
+	gotResult, err := m.RestackChain("/repo", cutPoints, ops)
+	if err != nil {
+		t.Fatalf("RestackChain() error = %v", err)
+	}
+	if gotResult != wantResult {
+		t.Fatalf("RestackChain() = %v, want the configured result", gotResult)
+	}
+	resolverResult, err := m.RestackChainWithResolver("/repo", cutPoints, ops, nil, "/attempts")
+	if err != nil || resolverResult != wantResult {
+		t.Fatalf("RestackChainWithResolver() = %v, %v; want the configured result, nil", resolverResult, err)
+	}
+	tree, err := m.CommitTreeSHA("/repo", "abc123")
+	if err != nil || tree != "tree123" {
+		t.Fatalf("CommitTreeSHA() = %q, %v; want tree123, nil", tree, err)
+	}
+	if err := m.UpdateRefsTransaction("/repo", updates); err != nil {
+		t.Fatalf("UpdateRefsTransaction() error = %v", err)
+	}
+
+	methods := make(map[string]bool)
+	for _, call := range m.Calls {
+		methods[call.Method] = true
+	}
+	for _, want := range []string{"RestackChain", "RestackChainWithResolver", "CommitTreeSHA", "UpdateRefsTransaction"} {
+		if !methods[want] {
+			t.Errorf("mock did not record a %s call; calls = %v", want, m.Calls)
+		}
+	}
+
+	// Zero-value defaults: no override and no default error succeed with
+	// zero values.
+	bare := mocks.NewMockWorktreeOps()
+	if result, err := bare.RestackChain("/repo", nil, nil); err != nil || result != nil {
+		t.Errorf("default RestackChain() = %v, %v; want nil, nil", result, err)
+	}
+	if tree, err := bare.CommitTreeSHA("/repo", "abc"); err != nil || tree != "" {
+		t.Errorf("default CommitTreeSHA() = %q, %v; want empty, nil", tree, err)
+	}
+	if err := bare.UpdateRefsTransaction("/repo", nil); err != nil {
+		t.Errorf("default UpdateRefsTransaction() error = %v, want nil", err)
+	}
+}
+
+// TestMockWorktreeOpsRefSHAOrAbsentOverride proves the shared mock exposes
+// the absent-aware ref read with and without a function override and records
+// its calls.
+func TestMockWorktreeOpsRefSHAOrAbsentOverride(t *testing.T) {
+	m := mocks.NewMockWorktreeOps()
+	m.RefSHAOrAbsentFn = func(repoPath, ref string) (string, bool, error) {
+		if ref == "refs/heads/feature/gone" {
+			return "", true, nil
+		}
+		return "abc123", false, nil
+	}
+
+	sha, absent, err := m.RefSHAOrAbsent("/repo", "refs/heads/feature/there")
+	if err != nil || absent || sha != "abc123" {
+		t.Fatalf("RefSHAOrAbsent(present) = %q, %v, %v; want abc123, false, nil", sha, absent, err)
+	}
+	sha, absent, err = m.RefSHAOrAbsent("/repo", "refs/heads/feature/gone")
+	if err != nil || !absent || sha != "" {
+		t.Fatalf("RefSHAOrAbsent(absent) = %q, %v, %v; want empty, true, nil", sha, absent, err)
+	}
+	if len(m.Calls) != 2 || m.Calls[0].Method != "RefSHAOrAbsent" {
+		t.Fatalf("mock calls = %v, want two RefSHAOrAbsent calls", m.Calls)
+	}
+
+	// Zero-value defaults: no override and no default error answer with an
+	// empty present ref.
+	bare := mocks.NewMockWorktreeOps()
+	sha, absent, err = bare.RefSHAOrAbsent("/repo", "refs/heads/feature/x")
+	if err != nil || absent || sha != "" {
+		t.Fatalf("default RefSHAOrAbsent() = %q, %v, %v; want empty, false, nil", sha, absent, err)
+	}
+}
+
+// TestMockRemoteOpsRecordsUpdatePRBase proves the shared remote-operations
+// mock records the base-retarget call with its arguments, honors the
+// per-method override, and defaults to success with the default error.
+func TestMockRemoteOpsRecordsUpdatePRBase(t *testing.T) {
+	m := mocks.NewMockRemoteOps()
+	prURL := "https://github.com/acme/widgets/pull/7"
+	m.UpdatePRBaseFn = func(gotURL, gotBase string) error {
+		if gotURL != prURL || gotBase != "develop" {
+			t.Errorf("UpdatePRBaseFn args = %q, %q; want %q, %q", gotURL, gotBase, prURL, "develop")
+		}
+		return nil
+	}
+
+	if err := m.UpdatePRBase(prURL, "develop"); err != nil {
+		t.Fatalf("UpdatePRBase() error = %v", err)
+	}
+	if len(m.Calls) != 1 || m.Calls[0].Method != "UpdatePRBase" {
+		t.Fatalf("mock calls = %v; want exactly one UpdatePRBase call", m.Calls)
+	}
+	if got := fmt.Sprintf("%v", m.Calls[0].Args); got != fmt.Sprintf("%v", []any{prURL, "develop"}) {
+		t.Fatalf("UpdatePRBase recorded args = %s; want the PR URL and base", got)
+	}
+
+	// Zero-value default: no override and no default error succeed.
+	bare := mocks.NewMockRemoteOps()
+	if err := bare.UpdatePRBase(prURL, "develop"); err != nil {
+		t.Errorf("default UpdatePRBase() error = %v; want nil", err)
+	}
+	if len(bare.Calls) != 1 || bare.Calls[0].Method != "UpdatePRBase" {
+		t.Errorf("default call not recorded; calls = %v", bare.Calls)
+	}
+}
+
+// TestMockPRCloserRecordsCloseStateDeleteInOrder proves the shared mock
+// records the three rewind remote operations in call order and honors the
+// per-method overrides.
+func TestMockPRCloserRecordsCloseStateDeleteInOrder(t *testing.T) {
+	m := mocks.NewMockPRCloser()
+	m.PRStateFn = func(prURL string) (string, error) { return gitpkg.PRStateMerged, nil }
+	m.DeleteRemoteBranchFn = func(repoPath, branch string) error { return nil }
+
+	prURL := "https://github.com/owner/repo/pull/7"
+	if err := m.ClosePR(prURL); err != nil {
+		t.Fatalf("ClosePR() error = %v", err)
+	}
+	state, err := m.PRState(prURL)
+	if err != nil {
+		t.Fatalf("PRState() error = %v", err)
+	}
+	if state != gitpkg.PRStateMerged {
+		t.Fatalf("PRState() = %q; want the configured %q", state, gitpkg.PRStateMerged)
+	}
+	if err := m.DeleteRemoteBranch("/repo", "feature/wslug/2-layer"); err != nil {
+		t.Fatalf("DeleteRemoteBranch() error = %v", err)
+	}
+
+	wantMethods := []string{"ClosePR", "PRState", "DeleteRemoteBranch"}
+	if len(m.Calls) != len(wantMethods) {
+		t.Fatalf("mock calls = %v; want exactly %v", m.Calls, wantMethods)
+	}
+	for i, want := range wantMethods {
+		if m.Calls[i].Method != want {
+			t.Errorf("mock call %d = %q; want %q", i, m.Calls[i].Method, want)
+		}
+	}
+
+	// Zero-value defaults: no override and no default error answer with the
+	// indeterminate state and success.
+	bare := mocks.NewMockPRCloser()
+	if err := bare.ClosePR(prURL); err != nil {
+		t.Errorf("default ClosePR() error = %v; want nil", err)
+	}
+	if state, err := bare.PRState(prURL); err != nil || state != "" {
+		t.Errorf("default PRState() = %q, %v; want empty indeterminate answer", state, err)
+	}
+	if err := bare.DeleteRemoteBranch("/repo", "feature/wslug/2-layer"); err != nil {
+		t.Errorf("default DeleteRemoteBranch() error = %v; want nil", err)
+	}
+}
 
 // Agent ports
 var _ ports.CommandRunner = (*mocks.MockCommandRunner)(nil)

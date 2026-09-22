@@ -193,12 +193,35 @@ func (i Inquireness) IsValid() bool {
 	return false
 }
 
+// DeliveryMode selects how a feature is delivered: as a stack of pull
+// requests (one per reviewable slice) or as a single pull request covering
+// the whole feature. It is immutable after creation and inherited
+// unconditionally by child features.
+type DeliveryMode string
+
+const (
+	DeliveryModeStack  DeliveryMode = "stack"
+	DeliveryModeSingle DeliveryMode = "single"
+)
+
+// IsValid returns true for known delivery modes. The empty string is
+// treated as valid so callers can apply defaults after the fact (and so
+// legacy feature records load without a schema bump).
+func (d DeliveryMode) IsValid() bool {
+	switch d {
+	case DeliveryModeStack, DeliveryModeSingle, "":
+		return true
+	}
+	return false
+}
+
 // RepoState carries the minimal per-repo signal orchestration needs:
-// whether any phase touched the repo, the optional PR URL, and the optional
-// stored publish-failure record. Persisted on Run.RepoStates.
+// whether any phase touched the repo and the optional stored
+// publish-failure record. Persisted on Run.RepoStates. Pull-request state
+// lives on the stack's per-layer entries (StackRepoEntry); the legacy
+// per-repo `pr_url` key on old records is ignored on load.
 type RepoState struct {
 	Touched bool                  `yaml:"touched,omitempty"`
-	PRURL   string                `yaml:"pr_url,omitempty"`
 	Error   *errcat.FailureRecord `yaml:"error,omitempty"`
 
 	Freshness string `yaml:"-"`
@@ -206,8 +229,12 @@ type RepoState struct {
 
 // SchemaVersionCurrent is the current durable on-disk schema version stamped
 // onto fresh features at Manager.Create time. Schema 7 added
-// Run.RoadmapPhaseFrontendByPhase.
-const SchemaVersionCurrent = 7
+// Run.RoadmapPhaseFrontendByPhase. Schema 8 added StackLayer.Repos, the
+// per-repository layer entries (tip SHA, last pushed SHA, PR URL, PR state)
+// the layer boundaries record. Schema 9 reshaped the child transaction
+// journal entry into an ordered list of per-layer ref updates with the
+// closure remap and relocated-commit map.
+const SchemaVersionCurrent = 9
 
 // RiskLevel classifies the blast radius of a feature change.
 // Autonomy scales inversely with risk: low-risk changes get lightweight
@@ -599,6 +626,7 @@ type Feature struct {
 	MaxPlanIterations    int                 `yaml:"max_plan_iterations,omitempty"`
 	RiskLevel            RiskLevel           `yaml:"risk_level,omitempty"`
 	Pipeline             PipelineProfile     `yaml:"pipeline,omitempty"`
+	DeliveryMode         DeliveryMode        `yaml:"delivery_mode,omitempty"`
 	PipelineUpgradedFrom PipelineProfile     `yaml:"pipeline_upgraded_from,omitempty"` // original profile before UpgradePipeline; used to enforce KB restart on rewind
 	Checkpoints          Checkpoints         `yaml:"checkpoints,omitempty"`
 	LastAttachedRepo     string              `yaml:"last_attached_repo,omitempty"` // repo name for attach mode tab restoration
@@ -715,6 +743,8 @@ type Feature struct {
 	TotalRoadmapPhases          int          `yaml:"-"`
 	RoadmapPhaseType            string       `yaml:"-"`
 	RoadmapPhaseFrontendByPhase map[int]bool `yaml:"-"`
+	// Stack mirrors Run.Stack: the approved pull-request layer composition.
+	Stack []StackLayer `yaml:"-"`
 
 	// Transient: populated by Store.Load, not serialized. Exposed via Run().
 	run *Run `yaml:"-"`
@@ -813,6 +843,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.CurrentRoadmapPhase = f.CurrentRoadmapPhase
 	r.TotalRoadmapPhases = f.TotalRoadmapPhases
 	r.RoadmapPhaseType = f.RoadmapPhaseType
+	r.Stack = f.Stack
 	r.MaxPlanIterations = f.MaxPlanIterations
 	r.PendingNeedUserInputPath = f.PendingNeedUserInputPath
 	r.CurrentPhaseStatus = f.CurrentPhaseStatus
@@ -851,6 +882,7 @@ func (f *Feature) syncRunToShadows() {
 	f.CurrentRoadmapPhase = r.CurrentRoadmapPhase
 	f.TotalRoadmapPhases = r.TotalRoadmapPhases
 	f.RoadmapPhaseType = r.RoadmapPhaseType
+	f.Stack = r.Stack
 	f.MaxPlanIterations = r.MaxPlanIterations
 	f.PendingNeedUserInputPath = r.PendingNeedUserInputPath
 	f.CurrentPhaseStatus = r.CurrentPhaseStatus
@@ -927,18 +959,22 @@ func failureRecordNamesFinalReview(rec *errcat.FailureRecord) bool {
 
 // validTransitions maps each status to the set of statuses it can transition to.
 var validTransitions = map[Status][]Status{
-	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusFailed},
-	StatusResearching:         {StatusDesignReady, StatusPlanReady, StatusFailed, StatusInterrupted},
-	StatusBuildingKB:          {StatusCreated, StatusFailed, StatusInterrupted},
-	StatusInquiring:           {StatusInquireReady, StatusFailed, StatusInterrupted},
-	StatusInquireReady:        {StatusResearching, StatusFailed},
-	StatusDesignReady:         {StatusDesigning, StatusFailed},
-	StatusDesigning:           {StatusPlanReady, StatusFailed, StatusInterrupted},
-	StatusPlanReady:           {StatusPlanning, StatusFailed},
-	StatusPlanning:            {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
-	StatusImplementReady:      {StatusImplementing, StatusFailed},
-	StatusImplementing:        {StatusReviewPassed, StatusImplementReady, StatusNeedUserInput, StatusFailed, StatusInterrupted},
-	StatusNeedUserInput:       {StatusImplementing, StatusFailed, StatusInterrupted},
+	StatusResearching:    {StatusDesignReady, StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusBuildingKB:     {StatusCreated, StatusFailed, StatusInterrupted},
+	StatusInquiring:      {StatusInquireReady, StatusFailed, StatusInterrupted},
+	StatusInquireReady:   {StatusResearching, StatusFailed},
+	StatusDesignReady:    {StatusDesigning, StatusFailed},
+	StatusDesigning:      {StatusPlanReady, StatusFailed, StatusInterrupted},
+	StatusPlanReady:      {StatusPlanning, StatusFailed},
+	StatusPlanning:       {StatusImplementReady, StatusPlanNeedsReview, StatusFailed, StatusInterrupted},
+	StatusImplementReady: {StatusImplementing, StatusFailed},
+	StatusImplementing:   {StatusReviewPassed, StatusImplementReady, StatusNeedUserInput, StatusFailed, StatusInterrupted},
+	StatusNeedUserInput:  {StatusImplementing, StatusFailed, StatusInterrupted},
+	// Created → ReviewPassed exists for rebase children: the harness restack
+	// replaces the planning and implement phases, so a started pass lands
+	// directly at a durably approved-shaped state whose single verification
+	// round (the deferred Final Review) then dispatches.
+	StatusCreated:             {StatusInquiring, StatusResearching, StatusBuildingKB, StatusPlanReady, StatusReviewPassed, StatusFailed},
 	StatusReviewPassed:        {StatusCodeReady, StatusDone, StatusImplementing, StatusImplementReady, StatusFailed, StatusPlanning, StatusReviewing, StatusFinalReviewing},
 	StatusFinalReviewing:      {StatusCodeReady, StatusReviewPassed, StatusFailed, StatusInterrupted},
 	StatusReviewing:           {StatusCodeReady, StatusFailed, StatusInterrupted},
@@ -970,30 +1006,6 @@ func (f *Feature) accumulateActiveTime() {
 	}
 	f.PhaseTimings[f.ActiveTimingKey] += elapsed
 	f.ActivePhaseStart = nil
-}
-
-// PRURL returns the feature's primary PR URL. Source of truth is the
-// per-repo RepoStates[name].PRURL map; this accessor returns the first
-// non-empty entry in feature.Repos order, falling back to the run-level
-// shadow for legacy fixtures that haven't yet seeded RepoStates.
-func (f *Feature) PRURL() string {
-	if f == nil {
-		return ""
-	}
-	for _, repo := range f.Repos {
-		if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" {
-			return state.PRURL
-		}
-	}
-	return f.Run().PRURL
-}
-
-// SetPRURL updates the run-level PR URL shadow. New code should set
-// per-repo PR URLs via RepoStates[name].PRURL; this setter exists so the
-// publish path can record a feature-level URL until per-repo wiring is
-// complete on every caller.
-func (f *Feature) SetPRURL(url string) {
-	f.Run().PRURL = url
 }
 
 // SetRoadmapPhaseFrontend records whether a roadmap phase contains frontend
@@ -1035,6 +1047,66 @@ func (f *Feature) EffectivePipeline() PipelineProfile {
 		return PipelineMoonshot
 	}
 	return f.Pipeline
+}
+
+// EffectiveDeliveryMode returns the feature's delivery mode, defaulting to
+// DeliveryModeStack when the field is empty (backward compatibility with
+// features created before delivery modes existed). The mode is immutable
+// after creation; children inherit this effective value unconditionally.
+func (f *Feature) EffectiveDeliveryMode() DeliveryMode {
+	if f == nil || f.DeliveryMode == "" {
+		return DeliveryModeStack
+	}
+	return f.DeliveryMode
+}
+
+// StackLayerForPhase returns the stack layer whose phase list contains the
+// given roadmap phase. The layer's Branch is read from the stack recorded
+// at approval, never recomputed.
+func (f *Feature) StackLayerForPhase(phase int) (StackLayer, bool) {
+	if f == nil {
+		return StackLayer{}, false
+	}
+	for _, layer := range f.Stack {
+		for _, p := range layer.Phases {
+			if p == phase {
+				return layer, true
+			}
+		}
+	}
+	return StackLayer{}, false
+}
+
+// StackLayerAbove returns the layer positioned directly above the given
+// position. Positions are unique and ordered, so the entry with the
+// smallest position greater than the given one is the layer above.
+func (f *Feature) StackLayerAbove(position int) (StackLayer, bool) {
+	if f == nil {
+		return StackLayer{}, false
+	}
+	var above StackLayer
+	found := false
+	for _, layer := range f.Stack {
+		if layer.Position > position && (!found || layer.Position < above.Position) {
+			above = layer
+			found = true
+		}
+	}
+	return above, found
+}
+
+// IsLastPhaseOfStackLayer reports whether the given roadmap phase is the
+// final phase of the stack layer containing it. A phase no layer contains
+// is never a layer's last.
+func (f *Feature) IsLastPhaseOfStackLayer(phase int) bool {
+	if f == nil {
+		return false
+	}
+	layer, ok := f.StackLayerForPhase(phase)
+	if !ok || len(layer.Phases) == 0 {
+		return false
+	}
+	return layer.Phases[len(layer.Phases)-1] == phase
 }
 
 // IsPublishable returns true when ALL repos have an origin remote.
@@ -1161,22 +1233,38 @@ func (f *Feature) Transition(to Status) error {
 	return fmt.Errorf("%w from %s to %s", ErrInvalidTransition, f.Status, to)
 }
 
-// AllReposPublished returns true when every repo declared on f.Repos has
-// either never been touched by a phase (Touched=false → no work to publish)
-// or has a non-empty PR URL recorded. Returns false when f or f.Repos is
-// empty so callers cannot mistake an unconfigured feature for a published
-// one.
+// AllReposPublished returns true when every touched repository is fully
+// published under the delivery stack: a touched repository counts as
+// published only when every stack layer's Repos entry for it either carries
+// a pull request URL or is marked NoCommits (the layer delivered nothing
+// for that repository). A layer with no entry at all for a touched
+// repository blocks — neither the boundary nor the publish path has
+// recorded an outcome for it yet. Runs without a stack (approved before
+// the `## Pull Requests` table existed) are never published: a touched
+// repository there has no layer composition to settle, matching the
+// fail-closed publish walk. Untouched repositories never block, and an
+// unconfigured feature (nil or no repos) is never "published" so callers
+// cannot mistake it for a published one.
 func (f *Feature) AllReposPublished() bool {
 	if f == nil || len(f.Repos) == 0 {
 		return false
 	}
 	for _, repo := range f.Repos {
 		st := f.RepoStates[repo.Name]
-		if st == nil {
+		if st == nil || !st.Touched {
 			continue
 		}
-		if st.Touched && st.PRURL == "" {
+		if len(f.Stack) == 0 {
+			// A touched repository on a run without a stack has no layer
+			// composition to settle and publish fails closed for it, so it
+			// can never count as published.
 			return false
+		}
+		for _, layer := range f.Stack {
+			entry, ok := layer.Repos[repo.Name]
+			if !ok || (entry.PRURL == "" && !entry.NoCommits) {
+				return false
+			}
 		}
 	}
 	return true
@@ -1197,17 +1285,6 @@ func (f *Feature) TouchedRepos() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// FirstRepoPRURL returns the PR URL of the first repo (by Repos order) that has one.
-// Returns empty string if no repo has a PR URL.
-func (f *Feature) FirstRepoPRURL() string {
-	for _, repo := range f.Repos {
-		if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" {
-			return state.PRURL
-		}
-	}
-	return ""
 }
 
 // PhaseStatusFinalizing marks the synchronous end-of-roadmap-phase git
@@ -1232,20 +1309,4 @@ func (f *Feature) IsReviewing() bool {
 		return false
 	}
 	return f.Status == StatusFinalReviewing
-}
-
-// PRURLs returns the per-repo PR URL map. Each entry's value is the URL
-// from RepoStates[name].PRURL when populated. Repos with no PR URL are
-// omitted.
-func (f *Feature) PRURLs() map[string]string {
-	if f == nil {
-		return nil
-	}
-	out := make(map[string]string, len(f.Repos))
-	for _, repo := range f.Repos {
-		if state, ok := f.RepoStates[repo.Name]; ok && state != nil && state.PRURL != "" {
-			out[repo.Name] = state.PRURL
-		}
-	}
-	return out
 }

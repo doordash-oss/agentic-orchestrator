@@ -33,6 +33,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -1370,6 +1371,116 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 	}
 }
 
+// TestServerMutationTargetCreateFeatureDeliveryModeFlowsToFeatureAndPreference
+// verifies the create target resolves the delivery mode from the request or
+// the workspace default, and that the per-profile pipeline preference records
+// the delivery mode that was used.
+func TestServerMutationTargetCreateFeatureDeliveryModeFlowsToFeatureAndPreference(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		defaultsMode   string
+		requestMode    feature.DeliveryMode
+		wantFeature    feature.DeliveryMode
+		wantPreference string
+	}{
+		{name: "request single", defaultsMode: "stack", requestMode: feature.DeliveryModeSingle, wantFeature: feature.DeliveryModeSingle, wantPreference: "single"},
+		{name: "omitted uses workspace default", defaultsMode: "single", requestMode: "", wantFeature: feature.DeliveryModeSingle, wantPreference: "single"},
+		{name: "omitted with stack default", defaultsMode: "stack", requestMode: "", wantFeature: feature.DeliveryModeStack, wantPreference: "stack"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtimeDir := t.TempDir()
+			configPath := filepath.Join(runtimeDir, "config.yaml")
+			stateDir := filepath.Join(runtimeDir, "features")
+			repoPath := filepath.Join(runtimeDir, testRepoAName)
+			initMutationGitRepo(t, repoPath)
+			cfg := config.NewDefault()
+			cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
+			cfg.Defaults.DeliveryMode = tc.defaultsMode
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatalf("Save config error = %v", err)
+			}
+			store := feature.NewStore(stateDir)
+			manager := feature.NewManager(store, cfg)
+			target := newRESTCreateFeatureTarget(store, manager, cfg, configPath)
+
+			result, err := target.CreateFeature(serverruntime.CreateFeatureRequest{
+				Name:         "Delivery via REST",
+				Description:  "create via REST",
+				Repos:        []string{testRepoAName},
+				Pipeline:     feature.PipelineMedium,
+				DeliveryMode: tc.requestMode,
+			})
+			if err != nil {
+				t.Fatalf("CreateFeature() error = %v", err)
+			}
+			created, err := store.Load(result.FeatureID)
+			if err != nil {
+				t.Fatalf("Load created feature: %v", err)
+			}
+			if created.DeliveryMode != tc.wantFeature {
+				t.Fatalf("created DeliveryMode = %q; want %q", created.DeliveryMode, tc.wantFeature)
+			}
+
+			loaded, err := config.Load(configPath)
+			if err != nil {
+				t.Fatalf("Load config: %v", err)
+			}
+			pref := loaded.Defaults.PipelinePreferences["medium"]
+			if pref.DeliveryMode != tc.wantPreference {
+				t.Fatalf("persisted pipeline preference delivery mode = %q; want %q", pref.DeliveryMode, tc.wantPreference)
+			}
+		})
+	}
+}
+
+// TestServerMutationTargetRuntimeConfigUpdatesDeliveryMode verifies a
+// runtime-defaults mutation with a valid delivery mode updates the workspace
+// default durably, and an omitted mode preserves the stored default.
+func TestServerMutationTargetRuntimeConfigUpdatesDeliveryMode(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Defaults.DeliveryMode = "stack"
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Defaults: serverruntime.RuntimeDefaultsMutation{DeliveryMode: "single"},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() error = %v", err)
+	}
+	if cfg.Defaults.DeliveryMode != "single" {
+		t.Fatalf("in-memory delivery mode = %q; want single", cfg.Defaults.DeliveryMode)
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load config error = %v", err)
+	}
+	if loaded.Defaults.DeliveryMode != "single" {
+		t.Fatalf("persisted delivery mode = %q; want single", loaded.Defaults.DeliveryMode)
+	}
+	if result.Result != resultUpdated {
+		t.Fatalf("RuntimeConfig() result = %+v; want updated", result)
+	}
+
+	// A later patch that omits delivery_mode preserves the stored default.
+	result, err = target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Defaults: serverruntime.RuntimeDefaultsMutation{Inquireness: testInquirenessNone},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() follow-up error = %v", err)
+	}
+	if cfg.Defaults.DeliveryMode != "single" {
+		t.Fatalf("delivery mode = %q after unrelated patch; want preserved single", cfg.Defaults.DeliveryMode)
+	}
+	if result.Result != resultUpdated {
+		t.Fatalf("follow-up RuntimeConfig() result = %+v; want updated", result)
+	}
+}
+
 func TestServerMutationTargetCreateFeatureResolvesBlankExplicitRepoFromWorkspaceRoots(t *testing.T) {
 	runtimeDir := t.TempDir()
 	configPath := filepath.Join(runtimeDir, "config.yaml")
@@ -1423,7 +1534,7 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 	store := feature.NewStore(stateDir)
 	manager := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		return "", errors.New("worktree creation should be deferred to setup")
 	}
 	manager.Worktrees = worktrees
@@ -1461,8 +1572,8 @@ func TestServerMutationTargetSetupFeatureCompletesToStartableStateWithoutStartin
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
 
@@ -1521,12 +1632,12 @@ func TestServerMutationTargetSetupFeatureRetriesOnlyUnfinishedWorkWithoutStartin
 	failRepoB := true
 	creates := 0
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		creates++
 		if repoName == testRepoBName && failRepoB {
 			return "", errors.New("transient checkout failure")
 		}
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
 
@@ -1601,12 +1712,12 @@ func TestServerMutationTargetSetupFeatureOnFailedSetupChildRerunsUnfinishedAndPa
 	failRepoB := true
 	creates := 0
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		creates++
 		if repoName == testRepoBName && failRepoB {
 			return "", errors.New("transient checkout failure")
 		}
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
 
@@ -1696,11 +1807,11 @@ func TestServerMutationTargetRetryFeatureRoutesSetupFailureToSetupRetry(t *testi
 	manager := feature.NewManager(store, cfg)
 	failWorktree := true
 	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
+	worktrees.CreateFn = func(repoPath, workspaceSlug, branch, repoName, startPoint string) (string, error) {
 		if failWorktree {
 			return "", errors.New("repo checkout missing")
 		}
-		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
+		return filepath.Join(runtimeDir, "worktrees", workspaceSlug, repoName), nil
 	}
 	manager.Worktrees = worktrees
 	f, err := manager.Create("Retry setup via REST", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
@@ -2107,15 +2218,15 @@ func TestServerMutationTargetClosedChildConfigReturnsRelationshipClosed(t *testi
 
 func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata(t *testing.T) {
 	target, manager, store, f := newPublishActionTarget(t)
-	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+	target.orch.SetPublishRepoFn(func(featureID, repoName string) error {
 		if featureID != f.ID || repoName != testRepoAName {
 			t.Fatalf("publish repo call = %s/%s, want %s/repo-a", featureID, repoName, f.ID)
 		}
 		prURL := "https://github.com/acme/repo-a/pull/12"
-		if err := manager.SetRepoPublished(featureID, repoName, prURL); err != nil {
-			return "", err
+		if err := manager.RecordStackLayerPR(featureID, repoName, 1, prURL, "0000000000000000000000000000000000000000"); err != nil {
+			return err
 		}
-		return prURL, nil
+		return manager.SetRepoPublished(featureID, repoName)
 	})
 
 	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{Repos: []string{testRepoAName}})
@@ -2134,56 +2245,6 @@ func TestServerMutationTargetPublishActionPublishesFeatureAndReturnsSafeMetadata
 		t.Fatalf("PublishFeature() result = %+v; want published feature", result)
 	}
 	assertJSONDoesNotContain(t, result, "https://github.com/acme/repo-a/pull/12")
-}
-
-func TestServerMutationTargetPublishActionMapsConflictToRebaseConflictCode(t *testing.T) {
-	target, _, _, f := newPublishActionTarget(t)
-	target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
-		return "", &orchestrator.PublishConflictError{
-			RepoName:     repoName,
-			Branch:       "feature/publish-conflict",
-			RebaseTarget: "main",
-		}
-	})
-
-	result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{})
-	if err == nil {
-		t.Fatal("publishAction() error = nil, want publish conflict")
-	}
-	var conflict *orchestrator.PublishConflictError
-	if !errors.As(err, &conflict) {
-		t.Fatalf("publishAction() error = %T %v, want PublishConflictError", err, err)
-	}
-	var actionConflict *serverruntime.ActionConflictError
-	if !errors.As(err, &actionConflict) {
-		t.Fatalf("publishAction() error = %T %v; want ActionConflictError", err, err)
-	}
-	if result.FeatureID != f.ID || result.Result != resultConflict {
-		t.Fatalf("PublishFeature() result = %+v; want conflict feature", result)
-	}
-	if actionConflict.Code != errcat.PublishRebaseConflict {
-		t.Fatalf("ActionConflictError.Code = %q; want %q", actionConflict.Code, errcat.PublishRebaseConflict)
-	}
-	rendered := errcat.New(errcat.PublishRebaseConflict, actionConflict.Options...)
-	if rendered.Class != errcat.ClassNeedsAction {
-		t.Fatalf("rendered class = %q, want needs_action", rendered.Class)
-	}
-	if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
-		t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
-	}
-	repo := rendered.Context.Repositories[0]
-	if repo.Name != testRepoAName || repo.Branch != "feature/publish-conflict" {
-		t.Fatalf("rendered repository = %+v; want %s on feature/publish-conflict", repo, testRepoAName)
-	}
-	if repo.RebaseTarget != "main" {
-		t.Fatalf("rendered repository rebase target = %q, want main", repo.RebaseTarget)
-	}
-	if !strings.Contains(rendered.Summary, `"main"`) || !strings.Contains(rendered.Summary, testRepoAName) {
-		t.Fatalf("rendered summary = %q, want repo and rebase target named", rendered.Summary)
-	}
-	if !strings.Contains(rendered.Diagnostics, "pull-rebase conflict") {
-		t.Fatalf("rendered diagnostics = %q; want raw publish conflict detail", rendered.Diagnostics)
-	}
 }
 
 func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T) {
@@ -2222,8 +2283,8 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			target, _, _, f := newPublishActionTarget(t)
-			target.orch.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
-				return "", tc.publishErr
+			target.orch.SetPublishRepoFn(func(featureID, repoName string) error {
+				return tc.publishErr
 			})
 
 			result, err := target.PublishFeature(f.ID, serverruntime.PublishFeatureRequest{})
@@ -2266,7 +2327,6 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 				result, err := target.PublishFeature(featureID, serverruntime.PublishFeatureRequest{
 					SourceRevision: staleRevision,
 					Repos:          []string{testRepoAName},
-					Title:          "Publish completion",
 				})
 				return result.Result, err
 			},
@@ -2305,6 +2365,28 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 				return string(result.Status), err
 			},
 		},
+		{
+			name: "reopen pull request",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.ReopenPullRequestFeature(featureID, serverruntime.ReopenPullRequestRequest{
+					SourceRevision: staleRevision,
+					Repository:     testRepoAName,
+					Layer:          1,
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "recreate pull request",
+			run: func(target *serverMutationTarget, featureID, staleRevision string) (string, error) {
+				result, err := target.RecreatePullRequestFeature(featureID, serverruntime.RecreatePullRequestRequest{
+					SourceRevision: staleRevision,
+					Repository:     testRepoAName,
+					Layer:          1,
+				})
+				return result.Result, err
+			},
+		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -2339,6 +2421,174 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 			}
 			if _, err := store.Load(f.ID); err != nil {
 				t.Fatalf("feature was mutated or deleted despite stale preflight: %v", err)
+			}
+		})
+	}
+}
+
+// resolutionFixturePRURL is the closed pull request recorded on the
+// reopen/recreate adapter fixture's single stack layer.
+const resolutionFixturePRURL = "https://github.com/acme/repo-a/pull/12"
+
+// newPullRequestResolutionTarget builds the closed-layer fixture shared by
+// the reopen/recreate adapter tests: a code-ready publishable feature whose
+// single stack layer records a closed pull request, wired to an orchestrator
+// with a MockRemoteOps so resolution refusals surface hermetically.
+func newPullRequestResolutionTarget(t *testing.T) (serverMutationTarget, *feature.Store, *feature.Feature, *mocks.MockRemoteOps) {
+	t.Helper()
+	runtimeDir := t.TempDir()
+	cfg := config.NewDefault()
+	repoPath := filepath.Join(runtimeDir, testRepoAName)
+	initMutationGitRepo(t, repoPath)
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
+	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
+	manager := feature.NewManager(store, cfg)
+	f, err := manager.Create("resolve closed pull request", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil)
+	if err != nil {
+		t.Fatalf("Create feature: %v", err)
+	}
+	publishable := true
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusCodeReady
+		ff.CurrentPhase = feature.PhasePublish
+		for i := range ff.Repos {
+			ff.Repos[i].Publishable = &publishable
+			ff.Repos[i].Branch = "feature/resolve-closed-pull-request"
+			ff.Repos[i].Path = repoPath
+		}
+		// SetRepoPublishError stores the resolution record only for a
+		// repository whose state entry exists, so seed it like the publish
+		// fixture does.
+		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true}}
+		ff.Stack = []feature.StackLayer{{
+			Position: 1,
+			Title:    "Single layer",
+			Slug:     "single-layer",
+			Phases:   []int{1},
+			Branch:   "feature/resolve-closed-pull-request",
+			Repos: map[string]feature.StackRepoEntry{
+				testRepoAName: {
+					PRURL:         resolutionFixturePRURL,
+					PRState:       feature.StackPRStateClosed,
+					TipSHA:        "1111111111111111111111111111111111111111",
+					LastPushedSHA: "1111111111111111111111111111111111111111",
+				},
+			},
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("prepare feature: %v", err)
+	}
+	remote := mocks.NewMockRemoteOps()
+	remote.PRStateFn = func(repoPath, prURL string) (string, error) {
+		return git.PRStateClosed, nil
+	}
+	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Remote: remote}, orchestrator.Hooks{})
+	return serverMutationTarget{orch: orch, store: store}, store, f, remote
+}
+
+// TestServerMutationTargetPullRequestResolutionActionsMapStoredRecordConflicts
+// pins the adapter's conflict mapping for the closed-PR resolution actions:
+// a stored-record refusal from the orchestrator answers with the canonical
+// conflict envelope — code and repository context carrying the layer fields —
+// and the repository's stored record agrees, mirroring the publish adapter's
+// conflict mapping test.
+func TestServerMutationTargetPullRequestResolutionActionsMapStoredRecordConflicts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		code    errcat.Code
+		prepare func(*mocks.MockRemoteOps)
+		run     func(*serverMutationTarget, string) (string, error)
+	}{
+		{
+			name: "reopen refused",
+			code: errcat.PublishReopenFailed,
+			prepare: func(remote *mocks.MockRemoteOps) {
+				remote.ReopenPullRequestFn = func(repoPath, branch, prURL string) error {
+					return errors.New("GitHub refused the state change")
+				}
+			},
+			run: func(target *serverMutationTarget, featureID string) (string, error) {
+				result, err := target.ReopenPullRequestFeature(featureID, serverruntime.ReopenPullRequestRequest{
+					Repository: testRepoAName,
+					Layer:      1,
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "head branch missing",
+			code: errcat.PublishHeadBranchMissing,
+			prepare: func(remote *mocks.MockRemoteOps) {
+				remote.ReopenPullRequestFn = func(repoPath, branch, prURL string) error {
+					return fmt.Errorf("%w: branch %q", git.ErrPRHeadBranchMissing, branch)
+				}
+			},
+			run: func(target *serverMutationTarget, featureID string) (string, error) {
+				result, err := target.ReopenPullRequestFeature(featureID, serverruntime.ReopenPullRequestRequest{
+					Repository: testRepoAName,
+					Layer:      1,
+				})
+				return result.Result, err
+			},
+		},
+		{
+			name: "recreate failed at PR creation",
+			code: errcat.PublishRecreateFailed,
+			prepare: func(remote *mocks.MockRemoteOps) {
+				remote.PushLayerBranchFn = func(repoPath, branch, localSHA, lastPushedSHA string) (string, error) {
+					return "2222222222222222222222222222222222222222", nil
+				}
+				remote.GetPRBodyFn = func(prURL string) (string, error) {
+					return "closed pull request body", nil
+				}
+				remote.CreatePRFn = func(repoPath, branch, title, body, baseBranch string, draft bool) (string, error) {
+					return "", errors.New("GitHub create failed")
+				}
+			},
+			run: func(target *serverMutationTarget, featureID string) (string, error) {
+				result, err := target.RecreatePullRequestFeature(featureID, serverruntime.RecreatePullRequestRequest{
+					Repository: testRepoAName,
+					Layer:      1,
+				})
+				return result.Result, err
+			},
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			target, store, f, remote := newPullRequestResolutionTarget(t)
+			tc.prepare(remote)
+
+			result, err := tc.run(&target, f.ID)
+			if err == nil {
+				t.Fatal("resolution action error = nil, want stored-record conflict")
+			}
+			var conflict *serverruntime.ActionConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("resolution action error = %T %v; want ActionConflictError", err, err)
+			}
+			if conflict.Code != tc.code {
+				t.Fatalf("ActionConflictError.Code = %q; want %q", conflict.Code, tc.code)
+			}
+			if result != resultConflict {
+				t.Fatalf("resolution action result = %q; want %q", result, resultConflict)
+			}
+			rendered := errcat.New(tc.code, conflict.Options...)
+			if rendered.Context == nil || len(rendered.Context.Repositories) != 1 {
+				t.Fatalf("rendered context = %+v; want one repository", rendered.Context)
+			}
+			repo := rendered.Context.Repositories[0]
+			if repo.Name != testRepoAName || repo.LayerPosition != 1 || repo.LayerTitle != "Single layer" || repo.PullRequestURL != resolutionFixturePRURL {
+				t.Fatalf("rendered repository = %+v; want %s layer 1 with the closed pull request", repo, testRepoAName)
+			}
+			loaded, err := store.Load(f.ID)
+			if err != nil {
+				t.Fatalf("Load feature: %v", err)
+			}
+			state := loaded.RepoStates[testRepoAName]
+			if state == nil || state.Error == nil || state.Error.Code != tc.code {
+				t.Fatalf("stored repository record = %+v; want %s", state, tc.code)
 			}
 		})
 	}
@@ -2677,6 +2927,15 @@ func newPublishActionTarget(t *testing.T) (serverMutationTarget, *feature.Manage
 			ff.Repos[i].Branch = "feature/publish-via-rest"
 		}
 		ff.RepoStates = map[string]*feature.RepoState{testRepoAName: {Touched: true}}
+		// A one-layer stack so the publish path's per-layer writes and the
+		// stack-based all-published check run against this fixture.
+		ff.Stack = []feature.StackLayer{{
+			Position: 1,
+			Title:    "Single layer",
+			Slug:     "single-layer",
+			Phases:   []int{1},
+			Branch:   "feature/publish-via-rest",
+		}}
 		return nil
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
@@ -3177,6 +3436,22 @@ func TestServerMutationTargetCompletionPreflightCarriesRepoError(t *testing.T) {
 	repo := resp.Repos[0]
 	if repo.Repo != testRepoAName {
 		t.Fatalf("preflight repo = %q, want %q", repo.Repo, testRepoAName)
+	}
+	// The adapter maps the orchestrator's per-layer pull-request projection:
+	// one entry per stack layer with the recorded layer fields, state "none"
+	// before any pull request exists, and no repo-level push mode without a
+	// pull request.
+	if len(repo.PullRequests) != 1 {
+		t.Fatalf("preflight repo pull_requests = %+v, want the single layer entry", repo.PullRequests)
+	}
+	entry := repo.PullRequests[0]
+	if entry.Position != 1 || entry.Title != "Single layer" || entry.Branch != "feature/publish-via-rest" ||
+		entry.URL != "" || entry.State != serverruntime.PullRequestEntryStateNone ||
+		!entry.NoCommits || entry.PushedUpToDate || entry.PushMode != serverruntime.PullRequestEntryPushModeNone {
+		t.Fatalf("preflight pull_requests[0] = %+v, want the empty layer-1 entry", entry)
+	}
+	if repo.PushMode != "" {
+		t.Fatalf("preflight repo push_mode = %q, want none without a pull request", repo.PushMode)
 	}
 	if repo.Error == nil {
 		t.Fatalf("preflight repo error = nil, want the canonical object")

@@ -63,6 +63,7 @@ func TestImplementRoleSpecShape(t *testing.T) {
 		presence ArtifactPresence
 	}{
 		{name: "progress", root: "phase_dir", path: "progress.md", presence: ArtifactRequired},
+		{name: "fix_manifest", root: "iteration_dir", path: "fix-manifest.yaml", presence: ArtifactOptional},
 	}
 	for _, tt := range checks {
 		got, ok := artifacts[tt.name]
@@ -807,6 +808,50 @@ func mustLookupRoleSpecForTest(t testing.TB, phase feature.Phase, role Role) Rol
 		t.Fatalf("lookupRoleSpec(%v, %q) ok = false, want true", phase, role)
 	}
 	return spec
+}
+
+// TestConflictResolverRoleRegisteredWithLeanSkill pins the manifest facts
+// for the rebase conflict-resolution role: registered under the implement
+// phase with the resolve-rebase-conflict skill, a single attempt_dir output
+// root, and NO artifacts — so the skill file must not carry a generated
+// Output Files section and the role must stay out of SkillOutputRoleSpecs.
+func TestConflictResolverRoleRegisteredWithLeanSkill(t *testing.T) {
+	spec, ok := roles.Lookup(feature.PhaseImplement, roles.RoleResolveRebaseConflict)
+	if !ok {
+		t.Fatalf("roles.Lookup(%v, %q) ok = false, want true", feature.PhaseImplement, roles.RoleResolveRebaseConflict)
+	}
+	if spec.SkillName != "resolve-rebase-conflict" {
+		t.Fatalf("SkillName = %q, want resolve-rebase-conflict", spec.SkillName)
+	}
+	if spec.UserTemplate != "conflict_resolution.user" {
+		t.Fatalf("UserTemplate = %q, want conflict_resolution.user", spec.UserTemplate)
+	}
+	if got := rootNames(RoleSpec(spec)); !slices.Equal(got, []string{"attempt_dir"}) {
+		t.Fatalf("output roots = %v, want [attempt_dir]", got)
+	}
+	if len(spec.Artifacts) != 0 {
+		t.Fatalf("Artifacts = %+v, want none (the harness verifies the worktree)", spec.Artifacts)
+	}
+	if spec.ReadOnlyOutsideRoots {
+		t.Fatal("ReadOnlyOutsideRoots = true, want false (the session edits the conflicted files)")
+	}
+	if spec.SupportsRetryOutcome() {
+		t.Fatal("SupportsRetryOutcome() = true, want false (no iteration state)")
+	}
+
+	path := repoRootPath(t, "skills", "resolve-rebase-conflict", "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	if strings.Contains(string(data), "## Output Files") {
+		t.Fatalf("skills/resolve-rebase-conflict/SKILL.md carries an Output Files section; the role declares no artifacts:\n%s", data)
+	}
+	for _, skill := range SkillOutputRoleSpecs() {
+		if skill.SkillName == "resolve-rebase-conflict" {
+			t.Fatal("SkillOutputRoleSpecs() includes resolve-rebase-conflict; the role has no generated artifacts")
+		}
+	}
 }
 
 func TestSkillOutputFilesMatchRoleSpec(t *testing.T) {

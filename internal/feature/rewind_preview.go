@@ -21,12 +21,47 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-// RewindPRConsequence describes one PR that a rewind would close.
+// Rewind PR consequence verdicts: what a rewind would do to one stack
+// layer's pull request in one repository.
+const (
+	// RewindPRVerdictKeep marks a layer below the closing set: its pull
+	// request stays open and its remote branch stays.
+	RewindPRVerdictKeep = "keep"
+	// RewindPRVerdictClose marks a closing layer: its pull request is
+	// closed and its remote branch deleted.
+	RewindPRVerdictClose = "close"
+	// RewindPRVerdictMerged marks a closing layer whose pull request is
+	// already merged into the base branch: the rewind leaves it and its
+	// remote branch alone, the same rule the rebase pass applies to merged
+	// layers.
+	RewindPRVerdictMerged = "merged"
+	// RewindPRVerdictNone marks a layer without a pull request.
+	RewindPRVerdictNone = "none"
+)
+
+// RewindPRConsequence describes what a rewind would do to one stack layer's
+// pull request in one repository: the layer's position, title, and branch;
+// the recorded pull request URL and state when one exists; the verdict; and
+// the remote-deletion flag marking that the layer's remote branch would be
+// deleted. The preview computes every field from recorded state only — it
+// never inspects the remote — and the flag follows the execution rule
+// exactly: it is raised only for a closing layer whose entry records a
+// pull request URL or a last pushed SHA (the two facts that prove Agentico
+// pushed it), is not recorded merged, and belongs to a repository with a
+// worktree path, so preview and execution agree by construction.
 type RewindPRConsequence struct {
-	Repo  string `json:"repo"`
-	PRURL string `json:"pr_url"`
+	Repo               string `json:"repo"`
+	Position           int    `json:"position"`
+	Title              string `json:"title"`
+	Branch             string `json:"branch"`
+	PRURL              string `json:"pr_url,omitempty"`
+	PRState            string `json:"pr_state"`
+	Verdict            string `json:"verdict"`
+	DeleteRemoteBranch bool   `json:"delete_remote_branch"`
 }
 
 // ResetKind constants describe the worktree reset strategy a rewind would
@@ -36,14 +71,18 @@ const (
 	ResetKindAnchor    = "anchor"
 	ResetKindBase      = "base"
 	ResetKindBaseLocal = "base-local"
+	ResetKindLayerTip  = "layer-tip"
 	resetKindNone      = "none"
 )
 
 // RewindWorktreeConsequence describes one worktree reset a rewind would
-// perform. ResetKind is one of the ResetKind constants above.
+// perform. ResetKind is one of the ResetKind constants above. Branch is the
+// stack layer branch the worktree ends on after the rewind; it is empty on a
+// feature that carries no pull-request stack.
 type RewindWorktreeConsequence struct {
 	Repo      string `json:"repo"`
 	ResetKind string `json:"reset_kind"`
+	Branch    string `json:"branch,omitempty"`
 }
 
 // RewindPreviewResult is the authoritative, side-effect-free preview of a
@@ -81,7 +120,9 @@ type RewindPreviewResult struct {
 	// from the sealed run into the fork. CarriedFromRun is the source run.
 	CarriedPhases  []string `json:"carried_phases"`
 	CarriedFromRun int      `json:"carried_from_run"`
-	// PRConsequences lists PRs that would be closed (publishable features).
+	// PRConsequences lists, per publishable repository and per stack layer
+	// in position order, what the rewind would do to that layer's pull
+	// request and whether it would delete the layer's remote branch.
 	PRConsequences []RewindPRConsequence `json:"pr_consequences"`
 	// WorktreeConsequences lists worktree resets that would be performed.
 	WorktreeConsequences []RewindWorktreeConsequence `json:"worktree_consequences"`
@@ -120,12 +161,27 @@ func EffectiveRewindPhase(f *Feature, target Phase) Phase {
 
 // WorktreeResetKind decides the worktree reset strategy for a repo during a
 // rewind. Returns one of the ResetKind constants, or resetKindNone when no reset
-// applies for this repo/target combination. Shared by the preview and
-// RewindWithRequest so the decision tree never drifts.
-func WorktreeResetKind(repo FeatureRepo, partial bool, roadmapPhase int) string {
-	switch {
-	case partial && roadmapPhase > 1:
+// applies for this repo/target combination. On a stacked feature, a partial
+// rewind to the first phase of a layer above layer 1 resets to the layer
+// below's recorded per-repo tips (layer-tip); every other partial phase above 1
+// keeps the anchor reset. Shared by the preview and RewindWithRequest so the
+// decision tree never drifts.
+func WorktreeResetKind(f *Feature, repo FeatureRepo, partial bool, roadmapPhase int) string {
+	if partial && roadmapPhase > 1 {
+		if hasStack(f) {
+			layer, ok := f.StackLayerForPhase(roadmapPhase)
+			if !ok || layer.Branch == "" {
+				// Invalid target on a stacked feature; validation rejects
+				// the request before any consequence escapes.
+				return resetKindNone
+			}
+			if layer.Position > 1 && isFirstPhaseOfStackLayer(layer, roadmapPhase) {
+				return ResetKindLayerTip
+			}
+		}
 		return ResetKindAnchor
+	}
+	switch {
 	case repo.BaseBranch != "" && repo.Publishable != nil && !*repo.Publishable:
 		return ResetKindBaseLocal
 	case repo.BaseBranch != "":
@@ -133,6 +189,96 @@ func WorktreeResetKind(repo FeatureRepo, partial bool, roadmapPhase int) string 
 	default:
 		return resetKindNone
 	}
+}
+
+// rewindClosingLayerPosition returns the lowest stack layer position whose
+// pull requests a rewind closes: the layer containing the partial target
+// phase for a partial rewind, and every layer (position 1) for a full
+// rewind. Zero when the feature carries no stack or the partial target
+// belongs to no layer. Shared by the preview and RewindWithRequest so the
+// closing set never drifts between them.
+func rewindClosingLayerPosition(f *Feature, partial bool, roadmapPhase int) int {
+	if !hasStack(f) {
+		return 0
+	}
+	if !partial {
+		return 1
+	}
+	layer, ok := f.StackLayerForPhase(roadmapPhase)
+	if !ok {
+		return 0
+	}
+	return layer.Position
+}
+
+// rewindTargetBranch returns the stack layer branch the worktrees would be
+// left on after a rewind: the layer containing the target phase for a partial
+// rewind, and the provisional layer-1 name for a full rewind (the forked run
+// re-plans, clearing the recorded stack). Empty when the feature carries no
+// stack or the target layer is invalid; validation rejects those first.
+func rewindTargetBranch(f *Feature, partial bool, roadmapPhase int) string {
+	if !hasStack(f) {
+		return ""
+	}
+	if !partial {
+		return git.LayerBranchName(f.WorkspaceSlug(), 1, f.Slug)
+	}
+	layer, ok := f.StackLayerForPhase(roadmapPhase)
+	if !ok || layer.Branch == "" {
+		return ""
+	}
+	return layer.Branch
+}
+
+// hasStack reports whether f carries an approved pull-request stack
+// composition.
+func hasStack(f *Feature) bool {
+	return f != nil && len(f.Stack) > 0
+}
+
+// isFirstPhaseOfStackLayer reports whether phase is the first entry of the
+// layer's phase list.
+func isFirstPhaseOfStackLayer(layer StackLayer, phase int) bool {
+	return len(layer.Phases) > 0 && layer.Phases[0] == phase
+}
+
+// stackLayerBelow returns the layer positioned directly below the given
+// position (the entry with the largest position strictly less than it).
+func stackLayerBelow(f *Feature, position int) (StackLayer, bool) {
+	if f == nil {
+		return StackLayer{}, false
+	}
+	var below StackLayer
+	found := false
+	for _, layer := range f.Stack {
+		if layer.Position < position && (!found || layer.Position > below.Position) {
+			below = layer
+			found = true
+		}
+	}
+	return below, found
+}
+
+// stackLayerResetTips collects the per-repo reset points for a partial rewind
+// to the first phase of the given layer: the tip SHAs the layer below recorded
+// at its boundary, for every worktree repository.
+func stackLayerResetTips(f *Feature, layer StackLayer) (map[string]string, error) {
+	below, ok := stackLayerBelow(f, layer.Position)
+	if !ok {
+		return nil, fmt.Errorf("no stack layer below position %d for roadmap phase %d", layer.Position, layer.Phases[0])
+	}
+	tips := make(map[string]string)
+	for _, repo := range f.Repos {
+		if repo.WorktreePath == "" {
+			continue
+		}
+		sha := below.Repos[repo.Name].TipSHA
+		if sha == "" {
+			return nil, fmt.Errorf("missing layer %d tip for roadmap phase %d repo %s", below.Position, layer.Phases[0], repo.Name)
+		}
+		tips[repo.Name] = sha
+	}
+	return tips, nil
 }
 
 // FeatureWithUpgrade returns a copy of f with the pipeline set to upgrade and
@@ -234,31 +380,58 @@ func RewindPreviewForFeature(f *Feature, sealedRunDir string, request RewindRequ
 	}
 	result.CarriedPhases = dirs
 
-	// PR consequences: which PRs would close (publishable features only).
-	if f.IsPublishable() {
-		prURLs := f.PRURLs()
-		repos := make([]string, 0, len(prURLs))
-		for name := range prURLs {
-			if prURLs[name] != "" {
-				repos = append(repos, name)
+	// PR consequences: what the rewind would do to every stack layer's
+	// pull request in every publishable repository — one entry per layer
+	// per repository, positions never skipping, computed from recorded
+	// state only so the preview stays side-effect-free. A full rewind
+	// closes every layer; a partial one closes the target layer and every
+	// layer above it; layers below the closing set keep their pull
+	// requests. A feature without a stack yields no entries.
+	partial := request.RoadmapPhase > 0 && request.TargetPhase == PhaseImplement
+	closingPosition := rewindClosingLayerPosition(f, partial, request.RoadmapPhase)
+	if f.IsPublishable() && closingPosition > 0 {
+		for _, repo := range f.Repos {
+			for _, layer := range orderedStackLayersForRead(f.Stack) {
+				entry := layer.Repos[repo.Name]
+				state := stackLayerPRState(entry)
+				verdict := RewindPRVerdictNone
+				if entry.PRURL != "" {
+					switch {
+					case layer.Position < closingPosition:
+						verdict = RewindPRVerdictKeep
+					case state == StackPRStateMerged:
+						verdict = RewindPRVerdictMerged
+					default:
+						verdict = RewindPRVerdictClose
+					}
+				}
+				result.PRConsequences = append(result.PRConsequences, RewindPRConsequence{
+					Repo:     repo.Name,
+					Position: layer.Position,
+					Title:    layer.Title,
+					Branch:   layer.Branch,
+					PRURL:    entry.PRURL,
+					PRState:  string(state),
+					Verdict:  verdict,
+					DeleteRemoteBranch: layer.Position >= closingPosition &&
+						(entry.PRURL != "" || entry.LastPushedSHA != "") &&
+						state != StackPRStateMerged &&
+						repo.WorktreePath != "",
+				})
 			}
-		}
-		sort.Strings(repos)
-		for _, name := range repos {
-			result.PRConsequences = append(result.PRConsequences, RewindPRConsequence{Repo: name, PRURL: prURLs[name]})
 		}
 	}
 
 	// Worktree + backup consequences mirror RewindWithRequest's reset loop.
-	partial := request.RoadmapPhase > 0 && request.TargetPhase == PhaseImplement
+	branch := rewindTargetBranch(f, partial, request.RoadmapPhase)
 	for _, repo := range f.Repos {
 		if repo.WorktreePath == "" {
 			continue
 		}
 		if request.TargetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() {
-			kind := WorktreeResetKind(repo, partial, request.RoadmapPhase)
+			kind := WorktreeResetKind(f, repo, partial, request.RoadmapPhase)
 			if kind != resetKindNone {
-				result.WorktreeConsequences = append(result.WorktreeConsequences, RewindWorktreeConsequence{Repo: repo.Name, ResetKind: kind})
+				result.WorktreeConsequences = append(result.WorktreeConsequences, RewindWorktreeConsequence{Repo: repo.Name, ResetKind: kind, Branch: branch})
 			}
 			result.BackupBranchRepos = append(result.BackupBranchRepos, repo.Name)
 		}
@@ -291,7 +464,10 @@ func rewindUpgradeOptionsForPreview(f *Feature, upgrade PipelineProfile) []Pipel
 
 // validRoadmapPhasesForFeature returns the roadmap phases a partial Implement
 // rewind may target. Phase 1 is always valid (base reset). Phases 2..Total
-// require a complete per-repo commit anchor for the previous phase.
+// require a complete per-repo commit anchor for the previous phase. On a
+// stacked feature a phase is offered only when it belongs to a layer that has
+// a branch; the first phase of a layer above layer 1 instead requires the
+// layer below's per-repo tips to be complete across worktree repositories.
 func validRoadmapPhasesForFeature(f *Feature, target Phase) []int {
 	if target != PhaseImplement || f.TotalRoadmapPhases <= 1 {
 		return nil
@@ -300,8 +476,25 @@ func validRoadmapPhasesForFeature(f *Feature, target Phase) []int {
 	if run == nil {
 		return nil
 	}
-	valid := []int{1}
-	for p := 2; p <= f.TotalRoadmapPhases; p++ {
+	stacked := hasStack(f)
+	valid := []int{}
+	for p := 1; p <= f.TotalRoadmapPhases; p++ {
+		if stacked {
+			layer, ok := f.StackLayerForPhase(p)
+			if !ok || layer.Branch == "" {
+				continue
+			}
+			if layer.Position > 1 && isFirstPhaseOfStackLayer(layer, p) {
+				if _, err := stackLayerResetTips(f, layer); err == nil {
+					valid = append(valid, p)
+				}
+				continue
+			}
+		}
+		if p == 1 {
+			valid = append(valid, p)
+			continue
+		}
 		anchors := run.RoadmapPhaseCommitAnchors[p-1]
 		if len(anchors) == 0 {
 			continue
@@ -325,7 +518,10 @@ func validRoadmapPhasesForFeature(f *Feature, target Phase) []int {
 
 // validatePartialRewindRequestForFeature is the pure (non-Manager) form of
 // Manager.validatePartialRewindRequest, reused by the preview so the rule
-// never drifts from execution.
+// never drifts from execution. On a stacked feature the target phase must
+// belong to a layer that has a branch; the first phase of a layer above
+// layer 1 resets to the layer below's per-repo tips instead of the previous
+// phase's commit anchors.
 func validatePartialRewindRequestForFeature(f *Feature, request RewindRequest) (partialRewindPlan, error) {
 	if request.RoadmapPhase == 0 {
 		return partialRewindPlan{}, nil
@@ -340,6 +536,23 @@ func validatePartialRewindRequestForFeature(f *Feature, request RewindRequest) (
 		return partialRewindPlan{}, fmt.Errorf("roadmap phase %d out of range 1..%d", request.RoadmapPhase, f.TotalRoadmapPhases)
 	}
 	partial := partialRewindPlan{enabled: true, roadmapPhase: request.RoadmapPhase}
+	if hasStack(f) {
+		layer, ok := f.StackLayerForPhase(request.RoadmapPhase)
+		if !ok {
+			return partialRewindPlan{}, fmt.Errorf("roadmap phase %d belongs to no stack layer", request.RoadmapPhase)
+		}
+		if layer.Branch == "" {
+			return partialRewindPlan{}, fmt.Errorf("stack layer %d for roadmap phase %d has no branch", layer.Position, request.RoadmapPhase)
+		}
+		if layer.Position > 1 && isFirstPhaseOfStackLayer(layer, request.RoadmapPhase) {
+			tips, err := stackLayerResetTips(f, layer)
+			if err != nil {
+				return partialRewindPlan{}, err
+			}
+			partial.layerTips = tips
+			return partial, nil
+		}
+	}
 	if request.RoadmapPhase == 1 {
 		return partial, nil
 	}
@@ -380,22 +593,21 @@ type rewindRevisionState struct {
 	TotalRoadmapPhases int            `json:"total_roadmap_phases"`
 	Pipeline           string         `json:"pipeline"`
 	PipelineUpgraded   string         `json:"pipeline_upgraded_from"`
-	PRURLs             []string       `json:"pr_urls"`
+	StackPRs           []string       `json:"stack_prs"`
 	RepoStates         []repoStateSig `json:"repo_states"`
 }
 
 type repoStateSig struct {
 	Repo    string `json:"repo"`
 	Touched bool   `json:"touched"`
-	PRURL   string `json:"pr_url"`
 }
 
 // RewindRevision returns a short, stable hash of the rewind-relevant feature
 // state. The preview emits it as source_revision; execution must present the
 // same value or be rejected as stale before any side effect. The hash changes
-// when the active run, status, phase, roadmap progress, pipeline, PRs, or
-// per-repo state advance — i.e. whenever a preview would no longer match the
-// world it was computed against.
+// when the active run, status, phase, roadmap progress, pipeline, any
+// stack layer's pull request, or per-repo state advance — i.e. whenever a
+// preview would no longer match the world it was computed against.
 func RewindRevision(f *Feature) string {
 	if f == nil {
 		return ""
@@ -404,14 +616,17 @@ func RewindRevision(f *Feature) string {
 	if f.PendingReviewPhase != nil {
 		pendingReview = f.PendingReviewPhase.DirName()
 	}
-	prURLs := f.PRURLs()
-	prList := make([]string, 0, len(prURLs))
-	for name, url := range prURLs {
-		if url != "" {
-			prList = append(prList, name+":"+url)
+	// Hash every layer's pull request URL and state per repository, in
+	// repository and position order, so any layer's pull request moving —
+	// created, closed, merged, or its URL changing — invalidates a stale
+	// preview exactly like the legacy per-repo URL once did.
+	stackPRs := make([]string, 0)
+	for _, repo := range f.Repos {
+		for _, entry := range f.StackRepoPullRequestEntries(repo.Name) {
+			stackPRs = append(stackPRs, fmt.Sprintf("%s:%d:%s:%s", repo.Name, entry.Position, entry.URL, entry.State))
 		}
 	}
-	sort.Strings(prList)
+	sort.Strings(stackPRs)
 	repoNames := make([]string, 0, len(f.RepoStates))
 	for name := range f.RepoStates {
 		repoNames = append(repoNames, name)
@@ -423,7 +638,6 @@ func RewindRevision(f *Feature) string {
 		sig := repoStateSig{Repo: name}
 		if st != nil {
 			sig.Touched = st.Touched
-			sig.PRURL = st.PRURL
 		}
 		repoSigs = append(repoSigs, sig)
 	}
@@ -437,7 +651,7 @@ func RewindRevision(f *Feature) string {
 		TotalRoadmapPhases: f.TotalRoadmapPhases,
 		Pipeline:           string(f.Pipeline),
 		PipelineUpgraded:   string(f.PipelineUpgradedFrom),
-		PRURLs:             prList,
+		StackPRs:           stackPRs,
 		RepoStates:         repoSigs,
 	}
 	data, _ := json.Marshal(state)

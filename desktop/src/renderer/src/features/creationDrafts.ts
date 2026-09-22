@@ -37,7 +37,12 @@ import type {
   WorkspaceRootState,
 } from '../../../shared/ipc';
 import type { ComposerUploadItem } from './stagedItems';
-import { checkpointsForPipeline, type CheckpointState, type Pipeline } from './runContract';
+import {
+  checkpointsForPipeline,
+  type CheckpointState,
+  type DeliveryMode,
+  type Pipeline,
+} from './runContract';
 import type { RepoSelection } from './repoSelections';
 import type { SourceUpdateUncertainty } from './sourceUpdates';
 import type { EffortLevel } from '../../../shared/ipc';
@@ -68,6 +73,8 @@ export interface CreationDraftState {
   effortChoices: Partial<Record<PhaseKey, EffortLevel>>;
   riskLevel: 'low' | 'medium' | 'high';
   inquireness: 'none' | 'medium' | 'high';
+  /** Immutable after creation: how the work reaches review. */
+  delivery: DeliveryMode;
   exitCriteria: string;
   images: readonly string[];
   attachments: readonly string[];
@@ -234,6 +241,7 @@ export function freshCreationDraft(): CreationDraftState {
     effortChoices: {},
     riskLevel: 'medium',
     inquireness: 'medium',
+    delivery: 'stack',
     exitCriteria: '',
     images: [],
     attachments: [],

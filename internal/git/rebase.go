@@ -15,7 +15,6 @@
 package git
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,92 +23,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
-
-// PullRebaseOutcome categorises the result of a PullRebase operation.
-type PullRebaseOutcome int
-
-const (
-	// PullRebaseSuccess means the rebase succeeded or was a no-op.
-	PullRebaseSuccess PullRebaseOutcome = iota
-	// PullRebaseConflict means the rebase encountered merge conflicts and was aborted.
-	PullRebaseConflict
-	// PullRebaseFailure means a non-conflict failure occurred.
-	PullRebaseFailure
-)
-
-// PullRebaseResult is the outcome and error from a PullRebase operation.
-type PullRebaseResult struct {
-	Outcome PullRebaseOutcome
-	Err     error
-}
-
-// PullRebase fetches the remote counterpart of branch and rebases the
-// current branch onto it so local commits sit on top of remote changes
-// before a push. The branch is fetched by explicit refspec because a
-// single-branch clone's configured refspec never writes origin/<branch>,
-// which would make the rebase a silent no-op.
-//
-// Outcomes:
-//   - Success: remote branch absent (first publish), already up-to-date, or rebase succeeded
-//   - Conflict: rebase had conflicts; rebase aborted, worktree left clean
-//   - Failure: network/auth/fetch error or other non-conflict failure
-func PullRebase(worktreePath, branch string) PullRebaseResult {
-	// 1. ls-remote exit code 2 proves the remote branch is absent.
-	probeCmd := exec.Command("git", "-C", worktreePath, "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)
-	if out, err := probeCmd.CombinedOutput(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
-			// Remote branch doesn't exist (first publish) — no-op
-			return PullRebaseResult{Outcome: PullRebaseSuccess}
-		}
-		return PullRebaseResult{
-			Outcome: PullRebaseFailure,
-			Err:     fmt.Errorf("fetch failed: probing origin/%s: %s: %w", branch, strings.TrimSpace(string(out)), err),
-		}
-	}
-
-	// 2. Fetch the branch into its remote-tracking ref by explicit refspec.
-	target := "origin/" + branch
-	refspec := "+refs/heads/" + branch + ":refs/remotes/" + target
-	fetchCmd := exec.Command("git", "-C", worktreePath, "fetch", "--no-tags", "origin", refspec)
-	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return PullRebaseResult{
-			Outcome: PullRebaseFailure,
-			Err:     fmt.Errorf("fetch failed: %s: %w", strings.TrimSpace(string(out)), err),
-		}
-	}
-
-	// 3. Rebase onto origin/<branch>
-	rebaseCmd := exec.Command("git", "-C", worktreePath, "rebase", target)
-	if out, err := rebaseCmd.CombinedOutput(); err != nil {
-		// 4. Check if this is a conflict (rebase-merge or rebase-apply directory exists)
-		gitDir := resolveGitDir(worktreePath)
-		isConflict := false
-		for _, dir := range []string{"rebase-merge", "rebase-apply"} {
-			if _, statErr := os.Stat(filepath.Join(gitDir, dir)); statErr == nil {
-				isConflict = true
-				break
-			}
-		}
-
-		// Abort the rebase to leave the worktree clean
-		abortCmd := exec.Command("git", "-C", worktreePath, "rebase", "--abort")
-		_ = abortCmd.Run()
-
-		if isConflict {
-			return PullRebaseResult{
-				Outcome: PullRebaseConflict,
-				Err:     fmt.Errorf("pull-rebase conflict: %s", strings.TrimSpace(string(out))),
-			}
-		}
-		return PullRebaseResult{
-			Outcome: PullRebaseFailure,
-			Err:     fmt.Errorf("rebase failed: %s: %w", strings.TrimSpace(string(out)), err),
-		}
-	}
-
-	return PullRebaseResult{Outcome: PullRebaseSuccess}
-}
 
 // resolveGitDir returns the .git directory for a worktree path.
 // For worktrees, .git is a file pointing to the actual git dir.
@@ -136,136 +49,19 @@ func Fetch(worktreePath string) error {
 	return nil
 }
 
-// RebaseOutcome categorises the result of a RebaseOnto operation.
-type RebaseOutcome int
-
-const (
-	// RebaseSuccess means the rebase completed without conflicts.
-	RebaseSuccess RebaseOutcome = iota
-	// RebaseConflict means conflicts remain in the worktree.
-	RebaseConflict
-	// RebaseFailed means a non-conflict failure occurred and the rebase was aborted.
-	RebaseFailed
-)
-
-// RebaseResult is the outcome, conflict files, and error from RebaseOnto.
-type RebaseResult struct {
-	Outcome       RebaseOutcome
-	ConflictFiles []string
-	Err           error
-}
-
-// RebaseOnto rebases the current branch onto the given target ref (e.g.
-// "origin/master"). Unlike Rebase, on conflict the rebase is NOT aborted —
-// the worktree is left mid-rebase with conflict markers in the files so an
-// agent can resolve them and run "git rebase --continue".
-func RebaseOnto(worktreePath, target string) RebaseResult {
-	cmd := exec.Command("git", "-C", worktreePath, "rebase", target)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return RebaseResult{Outcome: RebaseSuccess}
-	}
-
-	// Check if this is a conflict (rebase-merge or rebase-apply directory exists)
-	gitDir := resolveGitDir(worktreePath)
-	isConflict := false
-	for _, dir := range []string{"rebase-merge", "rebase-apply"} {
-		if _, statErr := os.Stat(filepath.Join(gitDir, dir)); statErr == nil {
-			isConflict = true
-			break
-		}
-	}
-
-	if isConflict {
-		// List conflicted files — leave rebase in progress
-		conflictFiles := listConflictFiles(worktreePath)
-		return RebaseResult{
-			Outcome:       RebaseConflict,
-			ConflictFiles: conflictFiles,
-			Err:           fmt.Errorf("rebase conflicts: %s", strings.TrimSpace(string(out))),
-		}
-	}
-
-	// Non-conflict failure — abort to leave worktree clean
-	abortCmd := exec.Command("git", "-C", worktreePath, "rebase", "--abort")
-	_ = abortCmd.Run()
-	return RebaseResult{
-		Outcome: RebaseFailed,
-		Err:     fmt.Errorf("rebase failed: %s: %w", strings.TrimSpace(string(out)), err),
-	}
-}
-
-// listConflictFiles returns the list of files with unmerged conflicts.
-func listConflictFiles(worktreePath string) []string {
-	cmd := readGitCmd(worktreePath, "diff", "--name-only", "--diff-filter=U")
-	out, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line != "" {
-			files = append(files, line)
-		}
-	}
-	return files
-}
-
-// Rebase rebases the current branch onto the specified base branch.
-// Returns nil on success. If there are conflicts, returns an error and
-// aborts the rebase to leave the worktree clean.
-func Rebase(worktreePath, baseBranch string) error {
-	target := "origin/" + baseBranch
-	cmd := exec.Command("git", "-C", worktreePath, "rebase", target)
+// FetchBranch refreshes one branch's remote-tracking ref from origin. The
+// forced refspec guarantees refs/remotes/origin/<branch> lands at the remote
+// tip even when the checkout's fetch configuration is single-branch or the
+// branch moved non-fast-forward. The rebase preflight uses it to refresh
+// every stack layer branch before classification and behind-ness checks.
+func FetchBranch(worktreePath, branch string) error {
+	refspec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branch, branch)
+	cmd := exec.Command("git", "-C", worktreePath, "fetch", "origin", refspec)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// Abort the rebase to leave the worktree clean
-		abortCmd := exec.Command("git", "-C", worktreePath, "rebase", "--abort")
-		_ = abortCmd.Run()
-		return fmt.Errorf("rebase failed (conflicts likely): %s: %w", strings.TrimSpace(string(out)), err)
+		return fmt.Errorf("fetching origin/%s: %s: %w", branch, strings.TrimSpace(string(out)), err)
 	}
 	return nil
-}
-
-// ForcePushFunc is the function used by ForcePush. Tests can replace it to
-// avoid real git-push operations.
-var ForcePushFunc = defaultForcePush
-
-// UnmappedBranchError reports a force push refused because the clone's fetch
-// refspec does not map the branch, so git cannot compute a safe lease.
-type UnmappedBranchError struct {
-	Branch string
-}
-
-func (e *UnmappedBranchError) Error() string {
-	return fmt.Sprintf("force push refused: the clone's fetch refspec does not map %s, so git cannot derive a safe lease; add it with `git remote set-branches --add origin %s`", e.Branch, e.Branch)
-}
-
-// ForcePush force-pushes the current branch to origin.
-func ForcePush(worktreePath, branch string) error {
-	return ForcePushFunc(worktreePath, branch)
-}
-
-// defaultForcePush needs both guards and neither is redundant.
-// --force-with-lease alone derives its expectation from the remote-tracking
-// ref, so any unrelated `git fetch origin` refreshes that ref and makes the
-// lease compare the remote against itself. --force-if-includes additionally
-// requires the remote-tracking tip to be reachable from the local branch's
-// reflog, which only holds when this clone actually had that commit — so it
-// rejects exactly the case where the remote carries work we never saw.
-func defaultForcePush(worktreePath, branch string) error {
-	// Without a fetch refspec mapping git has no remote-tracking ref to
-	// derive the lease from and rejects every push as "stale info".
-	if covered, err := FetchRefspecCoversBranch(worktreePath, branch); err == nil && !covered {
-		return &UnmappedBranchError{Branch: branch}
-	}
-	cmd := exec.Command("git", "-C", worktreePath,
-		"push", "--force-with-lease", "--force-if-includes", "-u", "origin", branch)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("force pushing branch: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return syncRemoteTrackingRef(worktreePath, branch, "refs/heads/"+branch)
 }
 
 // PRBaseBranch returns the base branch of an open PR via the GitHub API.
@@ -339,19 +135,6 @@ func MergeFeatureBranch(repoPath, featureBranch, baseBranch string) error {
 	backCmd := exec.Command("git", "-C", repoPath, "checkout", featureBranch)
 	_ = backCmd.Run()
 
-	return nil
-}
-
-// RebaseLocal rebases the current branch onto a local base branch (no origin/ prefix).
-// Used for repos without a remote. Aborts on conflict to leave the worktree clean.
-func RebaseLocal(worktreePath, baseBranch string) error {
-	cmd := exec.Command("git", "-C", worktreePath, "rebase", baseBranch)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		abortCmd := exec.Command("git", "-C", worktreePath, "rebase", "--abort")
-		_ = abortCmd.Run()
-		return fmt.Errorf("rebase failed (conflicts likely): %s: %w", strings.TrimSpace(string(out)), err)
-	}
 	return nil
 }
 

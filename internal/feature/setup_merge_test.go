@@ -15,10 +15,8 @@
 package feature_test
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -43,22 +41,15 @@ func mergeTestGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// setupMergeRepo builds a real repo whose feature branch is behind main. When
-// conflicting is true main rewrites the same file the feature branch owns, so
-// merging main produces a conflict; otherwise main advances on a disjoint file.
+// setupRebaseRepo builds a real repo whose feature branch is behind main.
 // Returns the repo path, the feature branch tip SHA, and the target (main) SHA.
-func setupMergeRepo(t *testing.T, conflicting bool) (string, string, string) {
+func setupRebaseRepo(t *testing.T) (string, string, string) {
 	t.Helper()
 	repoDir := testutil.InitGitRepo(t)
 	testutil.CreateBranch(t, repoDir, "feature/behind")
 	featureSHA := testutil.CommitFile(t, repoDir, "base.txt", "feature v1\n", "feature base commit")
 	mergeTestGit(t, repoDir, "checkout", "main")
-	var targetSHA string
-	if conflicting {
-		targetSHA = testutil.CommitFile(t, repoDir, "base.txt", "upstream conflicting v2\n", "upstream conflicting change")
-	} else {
-		targetSHA = testutil.CommitFile(t, repoDir, "upstream.txt", "upstream change\n", "upstream advancement")
-	}
+	targetSHA := testutil.CommitFile(t, repoDir, "upstream.txt", "upstream change\n", "upstream advancement")
 	mergeTestGit(t, repoDir, "checkout", "feature/behind")
 	return repoDir, featureSHA, targetSHA
 }
@@ -79,9 +70,12 @@ func newRebaseSetupChild(t *testing.T, repoDir, featureSHA, targetSHA string) (*
 		},
 	})
 	child, err := mgr.CreateRebaseChild("p-merge", feature.RebaseChildSpec{
-		Bases:   []feature.ChildRepoBase{{Repo: "repo-a", SHA: featureSHA, ParentBranch: "feature/behind"}},
-		Targets: []feature.RebaseRepoTarget{{Repo: "repo-a", Target: "main", Ref: "main", TargetSHA: targetSHA}},
-		Behind:  []string{"repo-a"},
+		Bases:     []feature.ChildRepoBase{{Repo: "repo-a", SHA: featureSHA, ParentBranch: "feature/behind"}},
+		Targets:   []feature.RebaseRepoTarget{{Repo: "repo-a", Target: "main", Ref: "main", TargetSHA: targetSHA}},
+		WorkRepos: []string{"repo-a"},
+		LayerStates: []feature.RebaseLayerClassification{
+			{Repo: "repo-a", LayerPosition: 1, LayerTitle: "Parent delivery", Branch: "feature/behind", State: feature.RebaseLayerStateKept},
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateRebaseChild: %v", err)
@@ -89,9 +83,13 @@ func newRebaseSetupChild(t *testing.T, repoDir, featureSHA, targetSHA string) (*
 	return mgr, child.ID
 }
 
-func TestRunSetupMergesRebaseTargetCleanly(t *testing.T) {
+// TestRebaseChildSetupHasNoMergeTask pins the post-merge-setup world: a
+// rebase child's queued setup intent carries only the worktree task (with
+// exact-tip pinning), setup completes, and the child worktree sits at the
+// captured fork point — the pass performs the target merge itself.
+func TestRebaseChildSetupHasNoMergeTask(t *testing.T) {
 	t.Parallel()
-	repoDir, featureSHA, targetSHA := setupMergeRepo(t, false)
+	repoDir, featureSHA, targetSHA := setupRebaseRepo(t)
 	mgr, childID := newRebaseSetupChild(t, repoDir, featureSHA, targetSHA)
 
 	child, err := mgr.Store.Load(childID)
@@ -99,10 +97,13 @@ func TestRunSetupMergesRebaseTargetCleanly(t *testing.T) {
 		t.Fatal(err)
 	}
 	setup := child.Run().Setup
-	wtIdx := slices.Index(setup.TaskOrder, "worktree:repo-a")
-	mergeIdx := slices.Index(setup.TaskOrder, "merge:repo-a")
-	if wtIdx < 0 || mergeIdx < 0 || mergeIdx < wtIdx {
-		t.Fatalf("task order = %v, want merge:repo-a after worktree:repo-a", setup.TaskOrder)
+	for key, task := range setup.Tasks {
+		if strings.HasPrefix(key, "merge:") {
+			t.Fatalf("rebase child has merge task %q (%+v); the pass merges its target itself", key, task)
+		}
+	}
+	if _, ok := setup.Tasks["worktree:repo-a"]; !ok {
+		t.Fatalf("task order = %v, want the pinned worktree task", setup.TaskOrder)
 	}
 
 	if err := mgr.RunSetup(childID); err != nil {
@@ -116,56 +117,21 @@ func TestRunSetupMergesRebaseTargetCleanly(t *testing.T) {
 	if done.Status != feature.StatusCreated || done.Run().Setup.Status != feature.SetupStatusDone {
 		t.Fatalf("status=%v setup=%v, want Created/done", done.Status, done.Run().Setup.Status)
 	}
-	task := done.Run().Setup.Tasks["merge:repo-a"]
-	if task.Status != feature.SetupStatusDone {
-		t.Fatalf("merge task = %+v, want done", task)
-	}
 	wt := done.Repos[0].WorktreePath
 	if wt == "" || wt == repoDir {
 		t.Fatalf("child worktree path = %q, want a fresh child worktree", wt)
 	}
-	parents := mergeTestGit(t, wt, "rev-list", "--parents", "-n", "1", "HEAD")
-	if len(strings.Fields(parents)) != 3 {
-		t.Fatalf("child HEAD parents = %q, want a two-parent merge commit", parents)
+	// The worktree sits at the captured parent tip; the target is NOT merged
+	// by setup — the pass does that.
+	if got := mergeTestGit(t, wt, "rev-parse", "HEAD"); got != featureSHA {
+		t.Fatalf("child worktree HEAD = %s, want the pinned fork point %s", got, featureSHA)
 	}
-	if !git.IsAncestor(wt, targetSHA, "HEAD") {
-		t.Fatalf("target %s is not an ancestor of the child worktree HEAD", targetSHA)
+	if git.IsAncestor(wt, targetSHA, "HEAD") {
+		t.Fatalf("target %s already merged at setup; the pass must merge it itself", targetSHA)
 	}
 	// The parent branch itself is untouched.
 	if got := mergeTestGit(t, repoDir, "rev-parse", "feature/behind"); got != featureSHA {
 		t.Fatalf("parent branch moved: %s, want %s", got, featureSHA)
-	}
-}
-
-func TestRunSetupLeavesConflictedMergeInProgress(t *testing.T) {
-	t.Parallel()
-	repoDir, featureSHA, targetSHA := setupMergeRepo(t, true)
-	mgr, childID := newRebaseSetupChild(t, repoDir, featureSHA, targetSHA)
-
-	if err := mgr.RunSetup(childID); err != nil {
-		t.Fatalf("RunSetup: %v (a conflicted merge is not a setup failure)", err)
-	}
-
-	done, err := mgr.Store.Load(childID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if done.Status != feature.StatusCreated || done.Run().Setup.Status != feature.SetupStatusDone {
-		t.Fatalf("status=%v setup=%v, want Created/done", done.Status, done.Run().Setup.Status)
-	}
-	if task := done.Run().Setup.Tasks["merge:repo-a"]; task.Status != feature.SetupStatusDone {
-		t.Fatalf("merge task = %+v, want done despite conflicts", task)
-	}
-	wt := done.Repos[0].WorktreePath
-	if !git.MergeInProgress(wt) {
-		t.Fatalf("no in-progress merge (MERGE_HEAD) in child worktree %s", wt)
-	}
-	content, err := os.ReadFile(filepath.Join(wt, "base.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(content), "<<<<<<<") {
-		t.Fatalf("base.txt has no conflict markers:\n%s", content)
 	}
 }
 
@@ -184,75 +150,9 @@ func TestNonRebaseChildEmitsNoMergeTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRefactorChild: %v", err)
 	}
-	for key, task := range child.Run().Setup.Tasks {
-		if task.Kind == feature.SetupTaskMerge || strings.HasPrefix(key, "merge:") {
+	for key := range child.Run().Setup.Tasks {
+		if strings.HasPrefix(key, "merge:") {
 			t.Fatalf("non-rebase child has merge task %q", key)
 		}
-	}
-}
-
-func TestRetrySetupDoesNotReMerge(t *testing.T) {
-	t.Parallel()
-	repoDir, featureSHA, targetSHA := setupMergeRepo(t, false)
-	mgr, childID := newRebaseSetupChild(t, repoDir, featureSHA, targetSHA)
-
-	// Queue a failing image task after the merge so the first run fails
-	// mid-setup with the merge already performed.
-	goodImage := filepath.Join(t.TempDir(), "img.png")
-	if err := os.WriteFile(goodImage, []byte("png"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.Store.Modify(childID, func(f *feature.Feature) error {
-		setup := f.Run().Setup
-		setup.Tasks["image:1"] = feature.SetupTask{
-			Key: "image:1", Kind: feature.SetupTaskImage, Label: "Image 1",
-			Status: feature.SetupStatusQueued, SourcePath: filepath.Join(t.TempDir(), "missing.png"), Attempt: 1,
-		}
-		setup.TaskOrder = append(setup.TaskOrder, "image:1")
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.RunSetup(childID); err == nil {
-		t.Fatal("RunSetup succeeded, want image copy failure")
-	}
-
-	failed, err := mgr.Store.Load(childID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if failed.Run().Setup.Tasks["merge:repo-a"].Status != feature.SetupStatusDone {
-		t.Fatalf("merge task = %+v, want done before the failing task", failed.Run().Setup.Tasks["merge:repo-a"])
-	}
-	wt := failed.Repos[0].WorktreePath
-	headAfterMerge := mergeTestGit(t, wt, "rev-parse", "HEAD")
-
-	// Simulate a crash that lost the merge task's completion, then retry with
-	// the image source fixed: the re-executed merge must be a no-op.
-	if err := mgr.Store.Modify(childID, func(f *feature.Feature) error {
-		setup := f.Run().Setup
-		mergeTask := setup.Tasks["merge:repo-a"]
-		mergeTask.Status = feature.SetupStatusQueued
-		setup.Tasks["merge:repo-a"] = mergeTask
-		imageTask := setup.Tasks["image:1"]
-		imageTask.SourcePath = goodImage
-		setup.Tasks["image:1"] = imageTask
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := mgr.RetrySetup(childID); err != nil {
-		t.Fatalf("RetrySetup: %v", err)
-	}
-
-	done, err := mgr.Store.Load(childID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if done.Status != feature.StatusCreated || done.Run().Setup.Status != feature.SetupStatusDone {
-		t.Fatalf("status=%v setup=%v, want Created/done", done.Status, done.Run().Setup.Status)
-	}
-	if head := mergeTestGit(t, wt, "rev-parse", "HEAD"); head != headAfterMerge {
-		t.Fatalf("retry moved the child worktree HEAD: %s, want stable %s", head, headAfterMerge)
 	}
 }

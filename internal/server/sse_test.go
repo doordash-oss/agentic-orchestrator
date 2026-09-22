@@ -706,7 +706,7 @@ func TestRelationshipIntegrationChangedCarriesCanonicalError(t *testing.T) {
 	t.Parallel()
 
 	rendered := errcat.RenderRecord(errcat.FailureRecord{
-		Code: errcat.IntegrationMergeConflict,
+		Code: errcat.IntegrationRebaseConflict,
 		Context: &errcat.RecordContext{
 			Repositories: []errcat.CodeRepository{{
 				Name:          "repo-a",
@@ -727,14 +727,14 @@ func TestRelationshipIntegrationChangedCarriesCanonicalError(t *testing.T) {
 	if parked.Resource.Type != resourceTypeRelationship {
 		t.Fatalf("relationship integration event resource type = %q, want %q", parked.Resource.Type, resourceTypeRelationship)
 	}
-	if parked.Summary != "Integration merge conflict" {
-		t.Fatalf("relationship integration event summary = %q, want the catalog title %q", parked.Summary, "Integration merge conflict")
+	if parked.Summary != "Rebase conflict resolution exhausted" {
+		t.Fatalf("relationship integration event summary = %q, want the catalog title %q", parked.Summary, "Rebase conflict resolution exhausted")
 	}
 	if parked.Error == nil {
 		t.Fatal("relationship integration event error = nil, want canonical error object")
 	}
-	if parked.Error.Code != string(errcat.IntegrationMergeConflict) {
-		t.Fatalf("relationship integration event error.code = %q, want %q", parked.Error.Code, errcat.IntegrationMergeConflict)
+	if parked.Error.Code != string(errcat.IntegrationRebaseConflict) {
+		t.Fatalf("relationship integration event error.code = %q, want %q", parked.Error.Code, errcat.IntegrationRebaseConflict)
 	}
 	if parked.Error.Class != SSEEventErrorClassNeedsAction {
 		t.Fatalf("relationship integration event error.class = %q, want %q", parked.Error.Class, SSEEventErrorClassNeedsAction)

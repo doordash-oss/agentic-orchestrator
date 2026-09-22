@@ -19,7 +19,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -37,21 +36,27 @@ import (
 // --- Fixture ---
 
 type multiRepoE2EFixture struct {
-	t        *testing.T
-	repoDirs []string
-	store    *feature.Store
-	mgr      *feature.Manager
-	wm       *git.WorktreeManager
-	parent   *feature.Feature
-	child    *feature.Feature
-	childWTs []string
+	t              *testing.T
+	repoDirs       []string
+	parentSHAs     []string
+	store          *feature.Store
+	mgr            *feature.Manager
+	wm             *git.WorktreeManager
+	parent         *feature.Feature
+	child          *feature.Feature
+	childWTs       []string
+	parentBranch   string
+	appendedBranch string
 }
 
 func newMultiRepoE2EFixture(t *testing.T, numRepos int) *multiRepoE2EFixture {
 	t.Helper()
 	repoDirs := make([]string, numRepos)
+	parentSHAs := make([]string, numRepos)
+	childTips := make([]string, numRepos)
 	childWTs := make([]string, numRepos)
 	childBranch := "feature/child-tx"
+	parentBranch := "feature/parent"
 
 	parentRepos := make([]feature.FeatureRepo, 0, numRepos)
 	childRepos := make([]feature.FeatureRepo, 0, numRepos)
@@ -59,7 +64,7 @@ func newMultiRepoE2EFixture(t *testing.T, numRepos int) *multiRepoE2EFixture {
 
 	for i := 0; i < numRepos; i++ {
 		repoDir := testutil.InitGitRepo(t)
-		multiRepoGit(t, repoDir, "checkout", "-b", "feature/parent")
+		multiRepoGit(t, repoDir, "checkout", "-b", parentBranch)
 		testutil.CommitFile(t, repoDir, "base.txt", "v1\n", "parent base")
 		parentSHA := multiRepoGit(t, repoDir, "rev-parse", "HEAD")
 
@@ -70,17 +75,24 @@ func newMultiRepoE2EFixture(t *testing.T, numRepos int) *multiRepoE2EFixture {
 		repoName := "repo" + string(rune('A'+i))
 		publishable := true
 		repoDirs[i] = repoDir
+		parentSHAs[i] = parentSHA
 		childWTs[i] = childWT
 
 		parentRepos = append(parentRepos, feature.FeatureRepo{
 			Name: repoName, Path: repoDir, WorktreePath: repoDir,
-			Branch: "feature/parent", BaseBranch: "main", Publishable: &publishable,
+			Branch: parentBranch, BaseBranch: "main", Publishable: &publishable,
 		})
 		childRepos = append(childRepos, feature.FeatureRepo{
 			Name: repoName, Path: repoDir, WorktreePath: childWT,
 			Branch: childBranch, BaseBranch: "main",
 		})
-		bases = append(bases, feature.ChildRepoBase{Repo: repoName, SHA: parentSHA, ParentBranch: "feature/parent"})
+		bases = append(bases, feature.ChildRepoBase{Repo: repoName, SHA: parentSHA, ParentBranch: parentBranch})
+	}
+
+	// The child's recorded layer tip per repository: the head after the
+	// committed child change, before integration commits anything remaining.
+	for i, wt := range childWTs {
+		childTips[i] = multiRepoGit(t, wt, "rev-parse", "HEAD")
 	}
 
 	store := feature.NewStore(filepath.Join(t.TempDir(), "features"))
@@ -88,19 +100,35 @@ func newMultiRepoE2EFixture(t *testing.T, numRepos int) *multiRepoE2EFixture {
 		ID: "parent-tx", Name: "Parent TX", Slug: "parent-tx",
 		Status: feature.StatusPublished, CurrentPhase: feature.PhasePublish,
 		Created: time.Now(), ActiveRun: 1, RunCount: 1,
-		Checkpoints:   feature.Checkpoints{ManualPublish: true},
-		Repos:         parentRepos,
+		Checkpoints: feature.Checkpoints{ManualPublish: true},
+		Repos:       parentRepos,
+		// A one-layer stack on the checked-out parent branch, so refactor
+		// children append their layers onto it as position 2.
+		Stack: []feature.StackLayer{{
+			Position: 1, Title: "Parent layer", Slug: "parent-layer", Phases: []int{1}, Branch: parentBranch,
+		}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 	parent.RepoStates = make(map[string]*feature.RepoState, numRepos)
 	for _, pr := range parentRepos {
 		parent.RepoStates[pr.Name] = &feature.RepoState{Touched: true}
 	}
+	childStackRepos := make(map[string]feature.StackRepoEntry, numRepos)
+	for i := range childRepos {
+		childStackRepos[childRepos[i].Name] = feature.StackRepoEntry{TipSHA: childTips[i]}
+	}
 	child := &feature.Feature{
 		ID: "child-tx", Name: "Child TX", Slug: "child-tx",
 		Status: feature.StatusReviewPassed, CurrentPhase: feature.PhaseFinalReview,
 		Pipeline: feature.PipelineMedium, Created: time.Now(),
 		ActiveRun: 1, RunCount: 1, Repos: childRepos,
+		// A one-layer stack on the child branch namespace with the recorded
+		// per-repository tips, so refactor integration appends it as parent
+		// position 2 on the appended branch.
+		Stack: []feature.StackLayer{{
+			Position: 1, Title: "Child layer", Slug: "child-layer", Phases: []int{1}, Branch: childBranch,
+			Repos: childStackRepos,
+		}},
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Parent: &feature.ChildRelationship{
 			ParentID: parent.ID, Kind: feature.ChildKindRefactor, Bases: bases,
@@ -121,8 +149,11 @@ func newMultiRepoE2EFixture(t *testing.T, numRepos int) *multiRepoE2EFixture {
 	mgr := feature.NewManager(store, config.NewDefault())
 	mgr.Worktrees = wm
 	return &multiRepoE2EFixture{
-		t: t, repoDirs: repoDirs, store: store, mgr: mgr, wm: wm,
+		t: t, repoDirs: repoDirs, parentSHAs: parentSHAs,
+		store: store, mgr: mgr, wm: wm,
 		parent: parent, child: child, childWTs: childWTs,
+		parentBranch:   parentBranch,
+		appendedBranch: git.LayerBranchName(parent.WorkspaceSlug(), 2, "child-layer"),
 	}
 }
 
@@ -164,66 +195,90 @@ func (fx *multiRepoE2EFixture) saveJournal(journal *feature.TransactionJournal) 
 	}
 }
 
-// manualPrepare creates merge candidates for every repository and writes a
-// prepared journal to disk without going through the orchestrator. This
-// simulates a crash after all candidates are prepared but before any are
-// applied.
+// manualPrepare builds the append-shaped journal a prepared refactor child
+// carries — created refs for the appended layer at position 2, the previous
+// top, and the appended layer definitions — and writes it to disk without
+// going through the orchestrator. This simulates a crash after the append
+// candidates are prepared but before any ref is created.
 func (fx *multiRepoE2EFixture) manualPrepare(t *testing.T) *feature.TransactionJournal {
 	t.Helper()
 	child, _ := fx.store.Load(fx.child.ID)
-	parent, _ := fx.store.Load(fx.parent.ID)
-	journal := &feature.TransactionJournal{Phase: feature.TransactionPhasePrepared}
+	journal := &feature.TransactionJournal{
+		Phase: feature.TransactionPhasePrepared,
+		AppendedLayers: []feature.AppendedLayer{{
+			Position: 2, Title: "Child layer", Slug: "child-layer", Branch: fx.appendedBranch,
+			Origin: &feature.StackLayerOrigin{SourceFeatureID: child.ID, SourceLayerPosition: 1},
+		}},
+	}
 	for i := range child.Repos {
-		childRepo := child.Repos[i]
-		parentRepo := parent.Repos[i]
-		childHead := multiRepoGit(t, childRepo.WorktreePath, "rev-parse", "HEAD")
-		parentTip := multiRepoGit(t, parentRepo.Path, "rev-parse", "refs/heads/feature/parent")
-		result, err := git.CreateMergeCandidate(parentRepo.Path, parentTip, childHead, "test merge")
-		if err != nil {
-			t.Fatalf("create merge candidate repo %d: %v", i, err)
-		}
+		childHead := multiRepoGit(t, child.Repos[i].WorktreePath, "rev-parse", "HEAD")
+		parentTip := multiRepoGit(t, fx.repoDirs[i], "rev-parse", "refs/heads/"+fx.parentBranch)
 		journal.Entries = append(journal.Entries, feature.RepoTransactionEntry{
-			Repo: childRepo.Name, ParentBranch: parentRepo.Branch,
-			ParentAnchorSHA: parentTip, ExpectedRefSHA: parentTip,
-			ChildHeadSHA: childHead, CandidateSHA: result.CandidateSHA,
-			PrepState: feature.RepoPrepPrepared,
+			Repo: child.Repos[i].Name,
+			Refs: []feature.RepoTransactionRef{{
+				Kind: feature.RepoRefKindCreate, Branch: fx.appendedBranch, Layer: 2,
+				CandidateSHA: childHead,
+			}},
+			PreviousTop: &feature.RepoTransactionPreviousTop{
+				Branch: fx.parentBranch, Layer: 1, TipSHA: parentTip,
+			},
+			ChildHeadSHA: childHead,
+			PrepState:    feature.RepoPrepPrepared,
 		})
 	}
 	fx.saveJournal(journal)
 	return journal
 }
 
-// manualApplyRef moves a repo's parent ref to the candidate SHA and syncs
-// the worktree, simulating a completed apply step before a crash.
+// manualApplyRef creates a repo's appended branch at the candidate and
+// switches the worktree onto it, simulating a completed apply step before
+// a crash.
 func (fx *multiRepoE2EFixture) manualApplyRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
-	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-		t.Fatalf("manual apply repo %d: %v", idx, err)
-	}
-	multiRepoGit(t, fx.repoDirs[idx], "checkout", "feature/parent")
-	multiRepoGit(t, fx.repoDirs[idx], "reset", "--hard", entry.CandidateSHA)
+	top := entry.TopRef()
+	multiRepoGit(t, fx.repoDirs[idx], "branch", top.Branch, top.CandidateSHA)
+	multiRepoGit(t, fx.repoDirs[idx], "checkout", top.Branch)
 }
 
-// manualApplyRefNoSync moves a repo's parent ref to the candidate SHA
-// without syncing the worktree, simulating a crash between the apply-progress
-// write and the worktree sync.
+// manualApplyRefNoSync creates a repo's appended branch at the candidate
+// without switching the worktree, simulating a crash between the
+// apply-progress write and the worktree switch.
 func (fx *multiRepoE2EFixture) manualApplyRefNoSync(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
-	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-		t.Fatalf("manual apply no sync repo %d: %v", idx, err)
+	top := entry.TopRef()
+	multiRepoGit(t, fx.repoDirs[idx], "branch", top.Branch, top.CandidateSHA)
+}
+
+// manualRollbackRef deletes a repo's appended branch without switching the
+// worktree back, simulating a crash between the rollback's ref delete and
+// the worktree switch.
+func (fx *multiRepoE2EFixture) manualRollbackRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
+	t.Helper()
+	top := entry.TopRef()
+	multiRepoGit(t, fx.repoDirs[idx], "update-ref", "-d", "refs/heads/"+top.Branch)
+}
+
+// assertCreatedRefAt checks the appended branch ref sits at the candidate.
+func (fx *multiRepoE2EFixture) assertCreatedRefAt(t *testing.T, repoIdx int, candidate string) {
+	t.Helper()
+	if got := fx.refSHA(repoIdx, "refs/heads/"+fx.appendedBranch); got != candidate {
+		t.Fatalf("repo %d: appended branch ref = %s, want candidate %s", repoIdx, got, candidate)
 	}
 }
 
-// manualRollbackRef moves a repo's parent ref back to the anchor SHA without
-// syncing the worktree, simulating a crash between the ref CAS and the
-// worktree reset during rollback.
-func (fx *multiRepoE2EFixture) manualRollbackRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
+// assertCreatedRefAbsent checks the appended branch does not exist.
+func (fx *multiRepoE2EFixture) assertCreatedRefAbsent(t *testing.T, repoIdx int) {
 	t.Helper()
-	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
-		t.Fatalf("manual rollback repo %d: %v", idx, err)
+	if branches := multiRepoGit(t, fx.repoDirs[repoIdx], "branch", "--list", fx.appendedBranch); branches != "" {
+		t.Fatalf("repo %d: appended branch %s exists, want absent", repoIdx, fx.appendedBranch)
+	}
+}
+
+// assertWorktreeOn checks the repository's worktree checked-out branch.
+func (fx *multiRepoE2EFixture) assertWorktreeOn(t *testing.T, repoIdx int, branch string) {
+	t.Helper()
+	if got := multiRepoGit(t, fx.repoDirs[repoIdx], "branch", "--show-current"); got != branch {
+		t.Fatalf("repo %d: worktree branch = %q, want %q", repoIdx, got, branch)
 	}
 }
 
@@ -259,7 +314,11 @@ func attentionRepoBlock(rec *errcat.FailureRecord, repo string) *errcat.CodeRepo
 // --- Wrapping worktree managers for fault injection ---
 
 // raceInjectingWorktrees wraps *git.WorktreeManager and injects an external
-// ref movement when RefSHA is first called for the target repo during apply.
+// ref movement when RefSHAOrAbsent is first called for the target repo —
+// the read the append flow uses to inspect refs during preparation and
+// apply. Moving the parent branch makes the append transaction's verify of
+// the previous top fail, so the raced repository's refs are preserved as
+// integration attention.
 type raceInjectingWorktrees struct {
 	*git.WorktreeManager
 	t           *testing.T
@@ -268,13 +327,13 @@ type raceInjectingWorktrees struct {
 	injected    bool
 }
 
-func (w *raceInjectingWorktrees) RefSHA(repoPath, ref string) (string, error) {
+func (w *raceInjectingWorktrees) RefSHAOrAbsent(repoPath, ref string) (string, bool, error) {
 	if !w.injected && repoPath == w.raceRepoDir {
 		w.injected = true
 		multiRepoGit(w.t, w.raceRepoDir, "checkout", w.raceBranch)
 		testutil.CommitFile(w.t, w.raceRepoDir, "race.txt", "external\n", "external race before apply")
 	}
-	return w.WorktreeManager.RefSHA(repoPath, ref)
+	return w.WorktreeManager.RefSHAOrAbsent(repoPath, ref)
 }
 
 // cleanupFailingWorktrees wraps *git.WorktreeManager and fails the first N
@@ -293,21 +352,21 @@ func (w *cleanupFailingWorktrees) RemoveRef(worktreePath, mainRepo, branch strin
 	return w.WorktreeManager.RemoveRef(worktreePath, mainRepo, branch)
 }
 
-// resetFailingWorktrees wraps *git.WorktreeManager and fails the first
-// ResetToCommit call for the target repo, simulating a worktree-sync failure
-// after a successful apply CAS.
-type resetFailingWorktrees struct {
+// switchFailingWorktrees wraps *git.WorktreeManager and fails the first
+// SwitchBranch call for the target repo, simulating a worktree-sync failure
+// after a successful append ref transaction.
+type switchFailingWorktrees struct {
 	*git.WorktreeManager
 	failRepoDir string
 	failed      bool
 }
 
-func (w *resetFailingWorktrees) ResetToCommit(worktreePath, commitSHA string) error {
+func (w *switchFailingWorktrees) SwitchBranch(worktreePath, branch string) error {
 	if !w.failed && worktreePath == w.failRepoDir {
 		w.failed = true
-		return fmt.Errorf("simulated worktree sync failure")
+		return fmt.Errorf("simulated worktree switch failure")
 	}
-	return w.WorktreeManager.ResetToCommit(worktreePath, commitSHA)
+	return w.WorktreeManager.SwitchBranch(worktreePath, branch)
 }
 
 // failingStoreWrapper wraps *feature.Store and fails on the Nth Modify
@@ -391,19 +450,43 @@ func TestRefactorChildTransactionalMultiRepoIntegrationSuccess(t *testing.T) {
 		t.Fatalf("parent status = %s, want CodeReady", parent.Status)
 	}
 
-	for i, dir := range fx.repoDirs {
-		parents := multiRepoGit(t, dir, "rev-list", "--parents", "-n", "1", "HEAD")
-		if fields := len(strings.Fields(parents)); fields != 3 {
-			t.Fatalf("repo %d: merge parents = %q, want two-parent merge commit", i, parents)
-		}
-	}
-
 	tx := child.Parent.Transaction
 	if tx == nil || tx.Phase != feature.TransactionPhaseMerged {
 		t.Fatalf("transaction phase = %+v, want merged", tx)
 	}
 	if len(tx.Entries) != 2 {
 		t.Fatalf("transaction entries = %d, want 2", len(tx.Entries))
+	}
+
+	// Every repository's appended layer branch was created at the child
+	// head, the existing parent layer's ref is unchanged, and the worktree
+	// switched onto the appended branch.
+	for i := range fx.repoDirs {
+		fx.assertCreatedRefAt(t, i, tx.Entries[i].ChildHeadSHA)
+		if got := fx.refSHA(i, "refs/heads/"+fx.parentBranch); got != fx.parentSHAs[i] {
+			t.Fatalf("repo %d: parent branch ref = %s, want unchanged %s", i, got, fx.parentSHAs[i])
+		}
+		fx.assertWorktreeOn(t, i, fx.appendedBranch)
+	}
+
+	// Closure persisted the appended layer onto the parent's stack with
+	// per-repository tips equal to the candidates and the repository
+	// records pointing at the new top branch.
+	if len(parent.Stack) != 2 {
+		t.Fatalf("parent stack layers = %d, want 2 after closure", len(parent.Stack))
+	}
+	appended := parent.Stack[1]
+	if appended.Position != 2 || appended.Branch != fx.appendedBranch ||
+		appended.Origin == nil || appended.Origin.SourceFeatureID != child.ID || appended.Origin.SourceLayerPosition != 1 {
+		t.Fatalf("persisted appended layer = %+v, want position 2 on %s with the child origin", appended, fx.appendedBranch)
+	}
+	for i := range parent.Repos {
+		if got := appended.Repos[parent.Repos[i].Name].TipSHA; got != tx.Entries[i].ChildHeadSHA {
+			t.Fatalf("repo %d: appended layer tip = %s, want the created ref's candidate %s", i, got, tx.Entries[i].ChildHeadSHA)
+		}
+		if parent.Repos[i].Branch != fx.appendedBranch {
+			t.Fatalf("repo %d: record branch = %q, want the appended branch %q", i, parent.Repos[i].Branch, fx.appendedBranch)
+		}
 	}
 
 	for i, wt := range fx.childWTs {
@@ -414,14 +497,21 @@ func TestRefactorChildTransactionalMultiRepoIntegrationSuccess(t *testing.T) {
 }
 
 // TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewal
-// proves a later staged conflict leaves every parent ref unmoved, then
-// Restart uses the latest parent tips and renews final review after child
-// code changes. The test exercises:
-//   - one conflicting repository among clean peers,
+// proves a parent divergence — the append analog of a staged conflict, since
+// append preparation requires the candidates to descend from the parent
+// tip — leaves every parent ref unmoved and no appended branch created,
+// then Restart renews final review after the divergent child code changes.
+// The test exercises:
+//   - one diverged repository among clean peers, observed first as
+//     parent-ref drift and then, once acknowledged, as the ancestry
+//     violation (no replay is attempted),
+//   - a resolution that merges the parent-side commits into the child
+//     history — the append world absorbs parent movement through the
+//     child, never through a replayed candidate,
 //   - newer parent commits arriving before restart,
 //   - code-changing resolution followed by final-review rerun via
 //     RestartPhase → StartFeature (the desktop app's dispatch boundary),
-//   - explicit merge boundaries in every repository after re-prepare.
+//   - created refs at the child head in every repository after re-prepare.
 func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewal(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
@@ -429,12 +519,13 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	fx := newMultiRepoE2EFixture(t, 2)
 	o := fx.orchestrator()
 
-	// Create a conflicting change on the second repo's parent branch.
+	// Divergence: a parent-side commit on the second repo's parent branch
+	// that the child's history does not descend from.
 	testutil.CommitFile(t, fx.repoDirs[1], "child.txt", "parent-side conflict\n", "conflicting parent commit")
 
 	preRefs := make([]string, len(fx.repoDirs))
 	for i := range fx.repoDirs {
-		preRefs[i] = fx.refSHA(i, "refs/heads/feature/parent")
+		preRefs[i] = fx.refSHA(i, "refs/heads/"+fx.parentBranch)
 	}
 
 	// Initial integration attempt: parks once on parent-ref drift (the
@@ -451,25 +542,29 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	if driftRec == nil || driftRec.Code != errcat.IntegrationParentRefDrift {
 		t.Fatalf("attention record = %+v, want code %s", driftRec, errcat.IntegrationParentRefDrift)
 	}
-	// The drift block carries the creation-time base as the anchor and the
-	// moved tip as the observed SHA.
+	// The drift block carries the previous top's branch and the moved tip
+	// as the observed SHA.
 	if block := attentionRepoBlock(driftRec, child.Repos[1].Name); block == nil ||
-		block.ParentAnchorSHA != child.BaseSHA(child.Repos[1].Name) ||
+		block.Branch != fx.parentBranch ||
 		block.ObservedSHA != preRefs[1] {
-		t.Fatalf("repo 1: drift repositories block = %+v, want anchor %s and observed %s",
-			block, child.BaseSHA(child.Repos[1].Name), preRefs[1])
+		t.Fatalf("repo 1: drift repositories block = %+v, want branch %s and observed %s",
+			block, fx.parentBranch, preRefs[1])
 	}
 
-	// Acknowledged retry: hits the staged conflict on repo 1.
+	// Acknowledged retry: the drift gate passes, but the append cannot
+	// absorb a tip the child's history does not descend from — no replay
+	// is attempted — so preparation parks candidate-failed with the
+	// ancestry-chain diagnostics.
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("RunChildIntegration() retry error = %v, want nil with attention", err)
 	}
 
-	// All parent refs unchanged.
+	// All parent refs unchanged and no appended branch created.
 	for i := range fx.repoDirs {
-		if got := fx.refSHA(i, "refs/heads/feature/parent"); got != preRefs[i] {
-			t.Fatalf("repo %d: parent ref moved from %s to %s on conflict", i, preRefs[i], got)
+		if got := fx.refSHA(i, "refs/heads/"+fx.parentBranch); got != preRefs[i] {
+			t.Fatalf("repo %d: parent ref moved from %s to %s on divergence", i, preRefs[i], got)
 		}
+		fx.assertCreatedRefAbsent(t, i)
 	}
 
 	_, child = fx.reload()
@@ -477,27 +572,33 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 		t.Fatalf("transaction phase = %+v, want attention", tx)
 	}
-	conflictRec := tx.AttentionRecord()
-	if conflictRec == nil || conflictRec.Code != errcat.IntegrationMergeConflict {
-		t.Fatalf("attention record = %+v, want code %s", conflictRec, errcat.IntegrationMergeConflict)
+	divergenceRec := tx.AttentionRecord()
+	if divergenceRec == nil || divergenceRec.Code != errcat.IntegrationCandidateFailed {
+		t.Fatalf("attention record = %+v, want code %s", divergenceRec, errcat.IntegrationCandidateFailed)
 	}
-	if block := attentionRepoBlock(conflictRec, child.Repos[1].Name); block == nil ||
-		!slices.Contains(block.ConflictFiles, "child.txt") {
-		t.Fatalf("repo 1: conflict files missing from repositories block, block = %+v", block)
+	if !strings.Contains(divergenceRec.Diagnostics, "ancestry") {
+		t.Fatalf("attention diagnostics = %q, want the ancestry-chain violation named", divergenceRec.Diagnostics)
+	}
+	if block := attentionRepoBlock(divergenceRec, child.Repos[1].Name); block == nil {
+		t.Fatalf("repo 1: divergence repositories block missing, record = %+v", divergenceRec)
 	}
 
-	// Resolve the conflict: change child.txt to match the parent's
-	// conflicting version so the merge no longer conflicts, and add a
+	// Resolve the divergence: merge the parent's conflicting commit into
+	// the child's history — taking the parent's child.txt, the same
+	// resolution this test performed for the merge candidate — and add a
 	// new file so the child head unambiguously changes (requiring review
 	// renewal).
-	testutil.CommitFile(t, fx.childWTs[1], "child.txt", "parent-side conflict\n", "accept parent change to resolve conflict")
+	multiRepoGit(t, fx.childWTs[1], "merge", "-X", "theirs", fx.parentBranch)
 	testutil.CommitFile(t, fx.childWTs[1], "resolve.txt", "resolved\n", "add resolution marker")
 
 	// Newer parent commits arrive before restart: add a clean commit to
-	// repo 0's parent branch (not the conflicting repo). Restart must use
-	// the latest parent tips, including this newer commit.
+	// repo 0's parent branch (not the diverged repo). The append world
+	// never replays the child onto a moved tip, so the newer commit is
+	// merged into repo 0's child history too; the re-prepared journal then
+	// records it as the previous top.
 	testutil.CommitFile(t, fx.repoDirs[0], "newer-parent.txt", "newer\n", "newer parent commit before restart")
-	newerRepo0Tip := fx.refSHA(0, "refs/heads/feature/parent")
+	newerRepo0Tip := fx.refSHA(0, "refs/heads/"+fx.parentBranch)
+	multiRepoGit(t, fx.childWTs[0], "merge", fx.parentBranch)
 
 	// Install a mock final-review function so the e2e test can exercise
 	// the full RestartPhase → StartFeature → advanceAfterFinalReview →
@@ -531,19 +632,13 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	if child.Parent.Transaction != nil {
 		t.Fatalf("transaction journal = %+v, want nil (cleared by review invalidation)", child.Parent.Transaction)
 	}
-	if child.Status == feature.StatusReviewPassed {
-		// After RestartPhase reloads and returns, the status should be
-		// StatusReviewPassed + PhaseFinalReview (pre-final-review state).
-		// But after StartFeature runs Final Review, it will transition
-		// through StatusFinalReviewing and back to StatusReviewPassed.
-	}
 
 	// Dispatch Final Review via StartFeature — the same entry point the
 	// client uses for RestartDispatchPhase. invalidateFinalReview set
 	// CurrentPhase=PhaseFinalReview, so StartFeature dispatches it.
 	// The mock returns all_passed, then advanceAfterFinalReview calls
-	// RunChildIntegration to re-prepare candidates against the latest
-	// parent tips and complete.
+	// RunChildIntegration to re-prepare the append candidates against the
+	// latest parent tips and complete.
 	if err := o.StartFeature(fx.child.ID); err != nil {
 		t.Fatalf("StartFeature() after review invalidation: %v", err)
 	}
@@ -575,8 +670,9 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 		t.Fatalf("RunChildIntegration() acknowledging retry error = %v", err)
 	}
 
-	// The transaction should complete: child is Completed, parent is
-	// CodeReady, and every repo has an explicit merge boundary.
+	// The transaction completes: the child is Completed, the parent
+	// CodeReady, and every repository's appended branch sits at the child
+	// head while the parent branches never moved.
 	parent, child := fx.reload()
 	if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 		t.Fatalf("child close outcome = %q, want completed after restart and review renewal", child.Parent.CloseOutcome)
@@ -584,31 +680,38 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	if parent.Status != feature.StatusCodeReady {
 		t.Fatalf("parent status = %s, want CodeReady after restart", parent.Status)
 	}
-	for i, dir := range fx.repoDirs {
-		parents := multiRepoGit(t, dir, "rev-list", "--parents", "-n", "1", "HEAD")
-		if fields := len(strings.Fields(parents)); fields != 3 {
-			t.Fatalf("repo %d: merge parents = %q, want two-parent merge commit", i, parents)
-		}
-	}
-
-	// Verify repo 0's merge candidate was built against the newer parent
-	// tip, not the original launch base.
 	tx = child.Parent.Transaction
 	if tx == nil {
 		t.Fatal("transaction journal missing after completion")
 	}
+	for i := range fx.repoDirs {
+		fx.assertCreatedRefAt(t, i, tx.Entries[i].ChildHeadSHA)
+		fx.assertWorktreeOn(t, i, fx.appendedBranch)
+	}
+	if got := fx.refSHA(0, "refs/heads/"+fx.parentBranch); got != newerRepo0Tip {
+		t.Fatalf("repo 0: parent branch ref = %s, want unchanged newer tip %s", got, newerRepo0Tip)
+	}
+	if got := fx.refSHA(1, "refs/heads/"+fx.parentBranch); got != preRefs[1] {
+		t.Fatalf("repo 1: parent branch ref = %s, want unchanged diverged tip %s", got, preRefs[1])
+	}
+
+	// The re-prepared journal used the latest parent tips: repo 0's
+	// previous top records the newer tip, not the original launch base.
 	repo0Entry := tx.EntryByRepo(child.Repos[0].Name)
 	if repo0Entry == nil {
 		t.Fatal("repo 0 entry missing")
 	}
-	if repo0Entry.ParentAnchorSHA != newerRepo0Tip {
-		t.Fatalf("repo 0 anchor = %s, want newer parent tip %s", repo0Entry.ParentAnchorSHA, newerRepo0Tip)
+	if prev := repo0Entry.PreviousTopRef(); prev == nil || prev.TipSHA != newerRepo0Tip {
+		t.Fatalf("repo 0 previous top = %+v, want the newer parent tip %s", repo0Entry.PreviousTopRef(), newerRepo0Tip)
 	}
 }
 
 // TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention
 // proves an external ref race triggers only provable rollback and preserves
-// ambiguous movement as precise integration attention.
+// ambiguous movement as precise integration attention. The raced movement
+// targets the parent branch — the ref the append transaction verifies as
+// its previous top — so the third repository's ref transaction refuses the
+// moved tip after the first two repositories applied.
 func TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-git integration test")
@@ -617,16 +720,18 @@ func TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention(t *
 
 	oldSHAs := make([]string, len(fx.repoDirs))
 	for i := range fx.repoDirs {
-		oldSHAs[i] = fx.refSHA(i, "refs/heads/feature/parent")
+		oldSHAs[i] = fx.refSHA(i, "refs/heads/"+fx.parentBranch)
 	}
 
 	// Use a wrapping worktree manager that injects an external ref
-	// movement on the third repo during the apply phase.
+	// movement on the third repo when its refs are first read: the
+	// append preparation observes the created refs' absence, and the
+	// apply-time transaction then refuses the moved previous top.
 	raceWT := &raceInjectingWorktrees{
 		WorktreeManager: fx.wm,
 		t:               t,
 		raceRepoDir:     fx.repoDirs[2],
-		raceBranch:      "feature/parent",
+		raceBranch:      fx.parentBranch,
 	}
 	o := fx.orchestratorWithWorktrees(raceWT)
 
@@ -639,25 +744,23 @@ func TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention(t *
 	if tx == nil {
 		t.Fatal("transaction journal missing")
 	}
-	// Repos 0 and 1 should be rolled back (ref back at old SHA).
+	// Repos 0 and 1 are rolled back: their created refs deleted, their
+	// parent branches never moved, and their worktrees back on the parent
+	// branch.
 	for i := 0; i < 2; i++ {
-		got := fx.refSHA(i, "refs/heads/feature/parent")
-		if got != oldSHAs[i] {
-			t.Fatalf("repo %d: ref = %s after rollback, want old SHA %s", i, got, oldSHAs[i])
+		fx.assertCreatedRefAbsent(t, i)
+		if got := fx.refSHA(i, "refs/heads/"+fx.parentBranch); got != oldSHAs[i] {
+			t.Fatalf("repo %d: parent branch ref = %s after rollback, want previous top tip %s", i, got, oldSHAs[i])
 		}
+		fx.assertWorktreeOn(t, i, fx.parentBranch)
 	}
-	// The third repo's externally moved ref should be preserved.
-	externalSHA := fx.refSHA(2, "refs/heads/feature/parent")
+	// The third repo's externally moved parent branch is preserved, and
+	// its appended branch was never created.
+	externalSHA := fx.refSHA(2, "refs/heads/"+fx.parentBranch)
 	if externalSHA == oldSHAs[2] {
-		t.Fatal("repo 2: externally moved ref was rolled back; should be preserved")
+		t.Fatal("repo 2: externally moved parent branch was rolled back; should be preserved")
 	}
-	// Worktrees for repos 0 and 1 should be reset to the old SHA.
-	for i := 0; i < 2; i++ {
-		wtHead := multiRepoGit(t, fx.repoDirs[i], "rev-parse", "HEAD")
-		if wtHead != oldSHAs[i] {
-			t.Fatalf("repo %d: worktree HEAD = %s, want old SHA %s after rollback", i, wtHead, oldSHAs[i])
-		}
-	}
+	fx.assertCreatedRefAbsent(t, 2)
 
 	// The aggregate phase must be attention — not rolled_back — so the
 	// externally moved target is preserved as a precise, durable attention
@@ -671,8 +774,9 @@ func TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention(t *
 	}
 
 	// The raced entry must be in per-repo attention state, and the record's
-	// repositories block must carry its expected, candidate, and observed
-	// SHAs with raw diagnostics naming the repository, ref, and raced SHAs.
+	// repositories block must carry its created ref's branch and candidate
+	// SHA, with raw diagnostics naming the repository, the verified ref,
+	// the previous top tip it expected, and the externally observed SHA.
 	racedEntry := tx.EntryByRepo(child.Repos[2].Name)
 	if racedEntry == nil {
 		t.Fatal("raced repo entry missing from journal")
@@ -680,24 +784,25 @@ func TestRefactorChildTransactionalMultiRepoExternalRaceRollbackAndAttention(t *
 	if racedEntry.ApplyState != feature.RepoApplyAttention {
 		t.Fatalf("raced entry apply state = %q, want attention", racedEntry.ApplyState)
 	}
-	if racedEntry.ObservedSHA == "" {
-		t.Fatal("raced entry observed SHA empty; want the externally moved ref SHA")
+	racedTop := racedEntry.TopRef()
+	if racedTop == nil {
+		t.Fatal("raced entry records no refs")
 	}
-	if racedEntry.ObservedSHA == racedEntry.ExpectedRefSHA {
-		t.Fatal("raced entry observed SHA equals expected; want externally moved SHA")
+	racedPrev := racedEntry.PreviousTopRef()
+	if racedPrev == nil {
+		t.Fatal("raced entry records no previous top")
 	}
 	if block := attentionRepoBlock(raceRec, racedEntry.Repo); block == nil ||
-		block.ExpectedRefSHA != racedEntry.ExpectedRefSHA ||
-		block.CandidateSHA != racedEntry.CandidateSHA ||
-		block.ObservedSHA != racedEntry.ObservedSHA {
-		t.Fatalf("raced repo repositories block = %+v, want entry SHAs (expected %s candidate %s observed %s)",
-			block, racedEntry.ExpectedRefSHA, racedEntry.CandidateSHA, racedEntry.ObservedSHA)
+		block.Branch != racedTop.Branch ||
+		block.CandidateSHA != racedTop.CandidateSHA {
+		t.Fatalf("raced repo repositories block = %+v, want branch %s candidate %s",
+			block, racedTop.Branch, racedTop.CandidateSHA)
 	}
 	for _, needle := range []string{
 		racedEntry.Repo,
-		"refs/heads/" + racedEntry.ParentBranch,
-		racedEntry.ExpectedRefSHA,
-		racedEntry.ObservedSHA,
+		"refs/heads/" + fx.parentBranch,
+		racedPrev.TipSHA,
+		externalSHA,
 	} {
 		if !strings.Contains(raceRec.Diagnostics, needle) {
 			t.Fatalf("attention diagnostics %q missing %q", raceRec.Diagnostics, needle)
@@ -724,45 +829,33 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		t.Skip("real-git integration test")
 	}
 
-	// Cut point: partial candidate staging — crash after first candidate
-	// write but before second. Reconciliation leaves it retryable; restart
-	// re-prepares from scratch and completes.
+	// Cut point: interrupted staging. Refactor append staging is one
+	// computation and one persist, so an interrupted staging leaves a
+	// preparing-phase journal whose entries carry the child heads and
+	// previous tops but no created refs. Reconciliation leaves it
+	// retryable; restart re-prepares from scratch and completes.
 	t.Run("partial_staging", func(t *testing.T) {
 		fx := newMultiRepoE2EFixture(t, 2)
 		child, _ := fx.store.Load(fx.child.ID)
-		parent, _ := fx.store.Load(fx.parent.ID)
 
-		// Prepare the first repo's candidate only.
-		childHead0 := multiRepoGit(t, child.Repos[0].WorktreePath, "rev-parse", "HEAD")
-		parentTip0 := multiRepoGit(t, parent.Repos[0].Path, "rev-parse", "refs/heads/feature/parent")
-		result0, err := git.CreateMergeCandidate(parent.Repos[0].Path, parentTip0, childHead0, "merge 0")
-		if err != nil {
-			t.Fatalf("create merge candidate repo 0: %v", err)
-		}
-		childHead1 := multiRepoGit(t, child.Repos[1].WorktreePath, "rev-parse", "HEAD")
-		parentTip1 := multiRepoGit(t, parent.Repos[1].Path, "rev-parse", "refs/heads/feature/parent")
-
-		journal := &feature.TransactionJournal{
-			Phase: feature.TransactionPhasePreparing,
-			Entries: []feature.RepoTransactionEntry{
-				{
-					Repo: child.Repos[0].Name, ParentBranch: parent.Repos[0].Branch,
-					ParentAnchorSHA: parentTip0, ExpectedRefSHA: parentTip0,
-					ChildHeadSHA: childHead0, CandidateSHA: result0.CandidateSHA,
-					PrepState: feature.RepoPrepPrepared,
+		journal := &feature.TransactionJournal{Phase: feature.TransactionPhasePreparing}
+		for i := range child.Repos {
+			childHead := multiRepoGit(t, child.Repos[i].WorktreePath, "rev-parse", "HEAD")
+			parentTip := multiRepoGit(t, fx.repoDirs[i], "rev-parse", "refs/heads/"+fx.parentBranch)
+			journal.Entries = append(journal.Entries, feature.RepoTransactionEntry{
+				Repo: child.Repos[i].Name,
+				PreviousTop: &feature.RepoTransactionPreviousTop{
+					Branch: fx.parentBranch, Layer: 1, TipSHA: parentTip,
 				},
-				{
-					Repo: child.Repos[1].Name, ParentBranch: parent.Repos[1].Branch,
-					ParentAnchorSHA: parentTip1, ExpectedRefSHA: parentTip1,
-					ChildHeadSHA: childHead1, PrepState: feature.RepoPrepPending,
-				},
-			},
+				ChildHeadSHA: childHead,
+				PrepState:    feature.RepoPrepPending,
+			})
 		}
 		fx.saveJournal(journal)
 
 		preRefs := make([]string, len(fx.repoDirs))
 		for i := range fx.repoDirs {
-			preRefs[i] = fx.refSHA(i, "refs/heads/feature/parent")
+			preRefs[i] = fx.refSHA(i, "refs/heads/"+fx.parentBranch)
 		}
 
 		// Reconciliation should leave it unchanged (preparing → retryable).
@@ -771,9 +864,10 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			t.Fatalf("reconcile: %v", err)
 		}
 		for i := range fx.repoDirs {
-			if got := fx.refSHA(i, "refs/heads/feature/parent"); got != preRefs[i] {
+			if got := fx.refSHA(i, "refs/heads/"+fx.parentBranch); got != preRefs[i] {
 				t.Fatalf("repo %d: ref moved during reconciliation", i)
 			}
+			fx.assertCreatedRefAbsent(t, i)
 		}
 
 		// Restart should re-prepare from scratch and complete.
@@ -786,15 +880,15 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		}
 	})
 
-	// Cut point: all candidates prepared but not applied → restart applies
-	// and closes.
+	// Cut point: append candidates prepared but not applied → restart
+	// applies and closes.
 	t.Run("prepared_but_unapplied", func(t *testing.T) {
 		fx := newMultiRepoE2EFixture(t, 2)
 		fx.manualPrepare(t)
 
 		preRefs := make([]string, len(fx.repoDirs))
 		for i := range fx.repoDirs {
-			preRefs[i] = fx.refSHA(i, "refs/heads/feature/parent")
+			preRefs[i] = fx.refSHA(i, "refs/heads/"+fx.parentBranch)
 		}
 
 		o := fx.orchestrator()
@@ -802,30 +896,42 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			t.Fatalf("reconcile: %v", err)
 		}
 		for i := range fx.repoDirs {
-			if got := fx.refSHA(i, "refs/heads/feature/parent"); got != preRefs[i] {
+			if got := fx.refSHA(i, "refs/heads/"+fx.parentBranch); got != preRefs[i] {
 				t.Fatalf("repo %d: ref moved during reconciliation", i)
 			}
+			fx.assertCreatedRefAbsent(t, i)
+		}
+		// The journal stays retryable: a created ref that is absent
+		// classifies as at-anchor, so the scan neither applies, rolls
+		// back, nor parks.
+		_, child := fx.reload()
+		if stored := child.Parent.Transaction; stored == nil ||
+			stored.Phase != feature.TransactionPhasePrepared || stored.Attention != nil {
+			t.Fatalf("journal after scan = %+v, want the prepared phase without attention (left retryable)", stored)
 		}
 
 		if err := o.RunChildIntegration(fx.child.ID); err != nil {
 			t.Fatalf("RunChildIntegration() after prepared: %v", err)
 		}
-		_, child := fx.reload()
+		_, child = fx.reload()
 		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 			t.Fatalf("close outcome = %q, want completed after restart", child.Parent.CloseOutcome)
 		}
 	})
 
-	// Cut point: partial apply — crash after first ref applied but before
-	// second. Reconciliation rolls back the applied ref; restart completes.
+	// Cut point: partial apply — repo 0's ref transaction ran and its
+	// worktree switched, but no apply progress was persisted. The startup
+	// scan rolls back the provable partial apply; restart re-prepares and
+	// completes.
 	t.Run("partial_apply", func(t *testing.T) {
 		fx := newMultiRepoE2EFixture(t, 2)
 		journal := fx.manualPrepare(t)
 
-		// Manually apply the first repo's ref and sync worktree.
+		// Manually apply the first repo's created ref and switch its
+		// worktree, without persisting apply progress.
 		fx.manualApplyRef(t, 0, &journal.Entries[0])
 		journal.Entries[0].ApplyState = feature.RepoApplyApplied
-		journal.Entries[0].ObservedSHA = journal.Entries[0].CandidateSHA
+		journal.Entries[0].TopRef().ObservedSHA = journal.Entries[0].TopRef().CandidateSHA
 		journal.Phase = feature.TransactionPhaseApplying
 		fx.saveJournal(journal)
 
@@ -834,14 +940,19 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			t.Fatalf("reconcile: %v", err)
 		}
 
-		// The first repo's ref should be rolled back to the old SHA.
-		oldSHA := journal.Entries[0].ParentAnchorSHA
-		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != oldSHA {
-			t.Fatalf("repo 0: ref = %s after reconciliation, want old SHA %s", got, oldSHA)
+		// The provable partial apply is rolled back: the created ref is
+		// deleted, the parent branch never moved, and the worktree is
+		// back on the parent branch.
+		fx.assertCreatedRefAbsent(t, 0)
+		if got := fx.refSHA(0, "refs/heads/"+fx.parentBranch); got != journal.Entries[0].PreviousTopRef().TipSHA {
+			t.Fatalf("repo 0: parent branch ref = %s after reconciliation, want previous top tip %s",
+				got, journal.Entries[0].PreviousTopRef().TipSHA)
 		}
-		wtHead := multiRepoGit(t, fx.repoDirs[0], "rev-parse", "HEAD")
-		if wtHead != oldSHA {
-			t.Fatalf("repo 0: worktree HEAD = %s, want old SHA %s after rollback", wtHead, oldSHA)
+		fx.assertWorktreeOn(t, 0, fx.parentBranch)
+		stored, _ := fx.store.Load(fx.child.ID)
+		if stored.Parent.Transaction == nil ||
+			stored.Parent.Transaction.Phase != feature.TransactionPhaseRolledBack {
+			t.Fatalf("transaction phase = %+v, want rolled_back after the scan", stored.Parent.Transaction)
 		}
 
 		// Restart should re-prepare and complete.
@@ -854,8 +965,8 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		}
 	})
 
-	// Cut point: all refs applied but not closed → reconciliation completes
-	// closure.
+	// Cut point: all created refs applied but not closed → reconciliation
+	// completes closure and persists the appended layers.
 	t.Run("applied_not_closed", func(t *testing.T) {
 		fx := newMultiRepoE2EFixture(t, 2)
 		journal := fx.manualPrepare(t)
@@ -863,7 +974,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		for i := range journal.Entries {
 			fx.manualApplyRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyApplied
-			journal.Entries[i].ObservedSHA = journal.Entries[i].CandidateSHA
+			journal.Entries[i].TopRef().ObservedSHA = journal.Entries[i].TopRef().CandidateSHA
 		}
 		journal.Phase = feature.TransactionPhaseApplied
 		fx.saveJournal(journal)
@@ -880,32 +991,49 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		if child.Parent.Transaction.Phase != feature.TransactionPhaseMerged {
 			t.Fatalf("phase = %s, want merged", child.Parent.Transaction.Phase)
 		}
+		// The scan finished closure: every created ref confirmed at its
+		// candidate, every worktree on the new top branch, and the
+		// appended layer persisted onto the parent's stack.
+		for i := range fx.repoDirs {
+			fx.assertCreatedRefAt(t, i, child.Parent.Transaction.Entries[i].TopRef().CandidateSHA)
+			fx.assertWorktreeOn(t, i, fx.appendedBranch)
+		}
+		parent, _ := fx.reload()
+		if len(parent.Stack) != 2 || parent.Stack[1].Branch != fx.appendedBranch || parent.Stack[1].Origin == nil {
+			t.Fatalf("parent stack = %+v, want the appended layer persisted with its origin", parent.Stack)
+		}
+		for i := range parent.Repos {
+			if got := parent.Stack[1].Repos[parent.Repos[i].Name].TipSHA; got != child.Parent.Transaction.Entries[i].TopRef().CandidateSHA {
+				t.Fatalf("repo %d: appended layer tip = %s, want the created ref's candidate %s",
+					i, got, child.Parent.Transaction.Entries[i].TopRef().CandidateSHA)
+			}
+		}
 	})
 
-	// Cut point: all refs applied but one worktree not synced — crash
-	// between the apply-progress write and the worktree sync. Reconciliation
-	// must sync the stale worktree before closing.
+	// Cut point: all created refs applied but one worktree not switched —
+	// crash between the apply-progress write and the worktree switch.
+	// Reconciliation must sync the stale worktree before closing.
 	t.Run("applied_not_closed_worktree_unsynced", func(t *testing.T) {
 		fx := newMultiRepoE2EFixture(t, 2)
 		journal := fx.manualPrepare(t)
 
-		// Apply repo 0 fully (CAS + worktree sync).
+		// Apply repo 0 fully (created ref + worktree switch).
 		fx.manualApplyRef(t, 0, &journal.Entries[0])
 		journal.Entries[0].ApplyState = feature.RepoApplyApplied
-		journal.Entries[0].ObservedSHA = journal.Entries[0].CandidateSHA
-		// Apply repo 1's ref only (CAS without worktree sync — crash
-		// between the progress write and the worktree sync).
+		journal.Entries[0].TopRef().ObservedSHA = journal.Entries[0].TopRef().CandidateSHA
+		// Create repo 1's ref only (without the worktree switch — crash
+		// between the progress write and the switch).
 		fx.manualApplyRefNoSync(t, 1, &journal.Entries[1])
 		journal.Entries[1].ApplyState = feature.RepoApplyApplied
-		journal.Entries[1].ObservedSHA = journal.Entries[1].CandidateSHA
+		journal.Entries[1].TopRef().ObservedSHA = journal.Entries[1].TopRef().CandidateSHA
 		journal.Phase = feature.TransactionPhaseApplied
 		fx.saveJournal(journal)
 
-		// Verify repo 1's worktree is stale before reconciliation (files
-		// at old tree, ref at candidate after the manual CAS without sync).
-		if clean := multiRepoGit(t, fx.repoDirs[1], "status", "--porcelain"); clean == "" {
-			t.Fatal("repo 1: worktree should be stale (files at old tree, ref at candidate) before reconciliation")
-		}
+		// Verify repo 1's worktree is stale before reconciliation: still
+		// on the parent branch while its appended ref sits at the
+		// candidate.
+		fx.assertCreatedRefAt(t, 1, journal.Entries[1].TopRef().CandidateSHA)
+		fx.assertWorktreeOn(t, 1, fx.parentBranch)
 
 		o := fx.orchestrator()
 		if err := o.ReconcileIntegrationTransactions(); err != nil {
@@ -916,48 +1044,51 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 			t.Fatalf("close outcome = %q, want completed after reconciliation", child.Parent.CloseOutcome)
 		}
-		// The worktree should now be synced to the candidate (clean).
+		// The worktree should now be synced to the appended branch (clean).
+		fx.assertWorktreeOn(t, 1, fx.appendedBranch)
 		if clean := multiRepoGit(t, fx.repoDirs[1], "status", "--porcelain"); clean != "" {
 			t.Fatalf("repo 1: worktree dirty after reconciliation: %s", clean)
 		}
 	})
 
-	// Cut point: rollback ref CAS completed but worktree not reset — crash
-	// between ref CAS and worktree sync during rollback. Reconciliation
-	// detects the rolled-back ref and finishes the worktree reset.
+	// Cut point: rollback ref delete completed but worktree not switched
+	// back — crash between the ref delete and the worktree switch during
+	// rollback. Reconciliation detects the rolled-back created ref and
+	// finishes the worktree switch.
 	t.Run("rollback_after_cas_before_worktree", func(t *testing.T) {
 		fx := newMultiRepoE2EFixture(t, 2)
 		journal := fx.manualPrepare(t)
 
-		// Apply first repo's ref and sync worktree.
+		// Apply first repo's created ref and switch its worktree.
 		fx.manualApplyRef(t, 0, &journal.Entries[0])
-		// Roll back the ref (CAS from candidate to anchor) but leave the
-		// worktree at the candidate (simulating a crash before worktree sync).
+		// Roll back the created ref (delete it) but leave the worktree on
+		// the appended branch (simulating a crash before the switch back).
 		fx.manualRollbackRef(t, 0, &journal.Entries[0])
 
 		journal.Entries[0].ApplyState = feature.RepoApplyApplied
 		journal.Phase = feature.TransactionPhaseRollingBack
 		fx.saveJournal(journal)
 
-		// Verify the worktree is dirty before reconciliation (files at
-		// candidate, ref at anchor after the manual rollback CAS).
-		if clean := multiRepoGit(t, fx.repoDirs[0], "status", "--porcelain"); clean == "" {
-			t.Fatal("repo 0: worktree should be dirty before reconciliation (files at candidate, ref at anchor)")
-		}
+		// The crash state: the created ref is deleted while the durable
+		// journal still marks the entry applied.
+		fx.assertCreatedRefAbsent(t, 0)
 
 		o := fx.orchestrator()
 		if err := o.ReconcileIntegrationTransactions(); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
 
-		// The worktree should now be clean (reset to anchor).
+		// The worktree should now be switched back to the parent branch
+		// and clean.
+		fx.assertWorktreeOn(t, 0, fx.parentBranch)
 		if clean := multiRepoGit(t, fx.repoDirs[0], "status", "--porcelain"); clean != "" {
 			t.Fatalf("repo 0: worktree dirty after reconciliation: %s", clean)
 		}
-		// The ref should be at the anchor.
-		anchorSHA := journal.Entries[0].ParentAnchorSHA
-		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != anchorSHA {
-			t.Fatalf("repo 0: ref = %s, want anchor SHA %s after rollback convergence", got, anchorSHA)
+		// The parent branch should be unchanged (its ref was only ever
+		// verified, never moved).
+		if got := fx.refSHA(0, "refs/heads/"+fx.parentBranch); got != journal.Entries[0].PreviousTopRef().TipSHA {
+			t.Fatalf("repo 0: parent branch ref = %s, want previous top tip %s after rollback convergence",
+				got, journal.Entries[0].PreviousTopRef().TipSHA)
 		}
 	})
 
@@ -966,18 +1097,19 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		fx := newMultiRepoE2EFixture(t, 2)
 		fx.manualPrepare(t)
 
-		// Externally move the first repo's parent branch.
-		multiRepoGit(t, fx.repoDirs[0], "checkout", "feature/parent")
-		testutil.CommitFile(t, fx.repoDirs[0], "external.txt", "external\n", "external movement")
-		externalSHA := fx.refSHA(0, "refs/heads/feature/parent")
+		// Externally create the first repo's appended branch at an
+		// unrelated commit: a created ref observed anywhere other than
+		// absent or its candidate is a race.
+		multiRepoGit(t, fx.repoDirs[0], "branch", fx.appendedBranch, fx.parentSHAs[0])
+		externalSHA := fx.parentSHAs[0]
 
 		o := fx.orchestrator()
 		if err := o.ReconcileIntegrationTransactions(); err != nil {
 			t.Fatalf("reconcile: %v", err)
 		}
 
-		if got := fx.refSHA(0, "refs/heads/feature/parent"); got != externalSHA {
-			t.Fatalf("repo 0: ref = %s, want preserved external %s", got, externalSHA)
+		if got := fx.refSHA(0, "refs/heads/"+fx.appendedBranch); got != externalSHA {
+			t.Fatalf("repo 0: appended branch ref = %s, want preserved external %s", got, externalSHA)
 		}
 
 		_, child := fx.reload()
@@ -985,9 +1117,9 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		if tx == nil || tx.Phase != feature.TransactionPhaseAttention {
 			t.Fatalf("phase = %+v, want attention", tx)
 		}
-		// Startup reconciliation classifies the externally moved ref as a
-		// ref race; the record's repositories block carries the entry's
-		// old, candidate, and observed SHAs.
+		// Startup reconciliation classifies the externally created ref as
+		// a ref race; the record's repositories block carries the entry's
+		// branch, candidate, and observed SHAs.
 		if rec := tx.AttentionRecord(); rec == nil || rec.Code != errcat.IntegrationRefRace {
 			t.Fatalf("attention record = %+v, want code %s", rec, errcat.IntegrationRefRace)
 		}
@@ -995,26 +1127,29 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		if movedEntry == nil {
 			t.Fatal("moved entry missing from journal")
 		}
+		movedTop := movedEntry.TopRef()
 		if block := attentionRepoBlock(tx.AttentionRecord(), movedEntry.Repo); block == nil ||
-			block.ParentAnchorSHA != movedEntry.ParentAnchorSHA ||
-			block.CandidateSHA != movedEntry.CandidateSHA ||
+			movedTop == nil ||
+			block.Branch != movedTop.Branch ||
+			block.CandidateSHA != movedTop.CandidateSHA ||
 			block.ObservedSHA != externalSHA {
-			t.Fatalf("moved repo repositories block = %+v, want old %s candidate %s observed %s",
-				block, movedEntry.ParentAnchorSHA, movedEntry.CandidateSHA, externalSHA)
+			t.Fatalf("moved repo repositories block = %+v, want branch %s candidate %s observed %s",
+				block, movedTop.Branch, movedTop.CandidateSHA, externalSHA)
 		}
 	})
 
-	// Cut point: apply worktree-sync failure — the CAS succeeds for repo 1
-	// but its first worktree sync fails. The ref vector continues forward and
-	// idempotent closure retries the sync before completing.
+	// Cut point: apply worktree-switch failure — the ref transaction
+	// succeeds for repo 1 but its first branch switch fails. The ref
+	// vector continues forward and idempotent closure retries the switch
+	// before completing.
 	t.Run("apply_sync_failure", func(t *testing.T) {
 		fx := newMultiRepoE2EFixture(t, 3)
 
-		resetWT := &resetFailingWorktrees{
+		switchWT := &switchFailingWorktrees{
 			WorktreeManager: fx.wm,
 			failRepoDir:     fx.repoDirs[1],
 		}
-		o := fx.orchestratorWithWorktrees(resetWT)
+		o := fx.orchestratorWithWorktrees(switchWT)
 
 		if err := o.RunChildIntegration(fx.child.ID); err != nil {
 			t.Fatalf("RunChildIntegration() error = %v, want closure retry to converge", err)
@@ -1028,74 +1163,97 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			t.Fatalf("phase = %s, want merged", child.Parent.Transaction.Phase)
 		}
 
-		// All refs and parent worktrees converge to their candidates; none
-		// are compensated merely because the post-CAS sync was transient.
+		// All created refs and parent worktrees converge to their
+		// candidates; none are compensated merely because the post-
+		// transaction switch was transient.
 		for i := range fx.repoDirs {
-			candidate := child.Parent.Transaction.Entries[i].CandidateSHA
-			got := fx.refSHA(i, "refs/heads/feature/parent")
-			if got != candidate {
-				t.Fatalf("repo %d: ref = %s, want candidate %s", i, got, candidate)
-			}
-			wtHead := multiRepoGit(t, fx.repoDirs[i], "rev-parse", "HEAD")
-			if wtHead != candidate {
-				t.Fatalf("repo %d: worktree HEAD = %s, want candidate %s", i, wtHead, candidate)
+			candidate := child.Parent.Transaction.Entries[i].TopRef().CandidateSHA
+			fx.assertCreatedRefAt(t, i, candidate)
+			fx.assertWorktreeOn(t, i, fx.appendedBranch)
+			if head := multiRepoGit(t, fx.repoDirs[i], "rev-parse", "HEAD"); head != candidate {
+				t.Fatalf("repo %d: worktree HEAD = %s, want candidate %s", i, head, candidate)
 			}
 		}
 	})
 
 	// Persistence-failure crash matrix: inject a Store.Modify failure at
 	// each transaction boundary, then create a fresh store and orchestrator
-	// and prove convergence. Named constants derive each write ordinal
-	// from the number of repos so an unrelated durable write makes the
-	// shift obvious rather than silently re-targeting every later case.
+	// and prove convergence. Refactor staging is one computation and one
+	// persist, so the former per-candidate cut points are re-mapped onto
+	// the journal persists that exist: the prepared journal, the applying
+	// phase, the per-repo apply-progress writes, the parent branch-record
+	// writes the apply loop now interleaves, the applied phase, and the
+	// closure writes.
 	//
 	// The 2-repo clean transaction issues these Store.Modify / MarkCodeReady
-	// calls in order:
-	//   1. persist preparing (candidate 0)
-	//   2. persist preparing (candidate 1)
-	//   3. persist prepared phase
-	//   4. persist applying phase
-	//   5. persist apply progress (repo 0 applied)
-	//   6. persist apply progress (repo 1 applied)
+	// calls in order (the child close write runs through the store's
+	// CloseChild primitive, which bypasses the failing wrapper):
+	//   1. persist prepared journal (the append candidates)
+	//   2. persist applying phase
+	//   3. persist apply progress (repo 0)
+	//   4. parent branch record (repo 0)
+	//   5. persist apply progress (repo 1)
+	//   6. parent branch record (repo 1)
 	//   7. persist applied phase
-	//   8. MarkCodeReady (parent → CodeReady)
-	//   9. close child (CloseOutcome = completed)
+	//   8. parent remap + appended layers
+	//   9. MarkCodeReady (parent → CodeReady)
 	//  10. persist merged phase
 	//  11. clear worktree path (repo 0) — error caught as cleanup warning
-	//  12. record cleanup warning (repo 0)
-	//  13. clear worktree path (repo 1) — error caught as cleanup warning
+	//  12. clear worktree path (repo 1) — error caught as cleanup warning
+	//  13. record cleanup warning (repo 0)
 	//  14. record cleanup warning (repo 1)
 	const (
-		numCleanRepos            = 2
-		writeFirstCandidate      = 1
-		writeSecondCandidate     = writeFirstCandidate + numCleanRepos - 1
-		writePreparedPhase       = writeSecondCandidate + 1
-		writeApplyingPhase       = writePreparedPhase + 1
-		writeFirstApplyProgress  = writeApplyingPhase + 1
-		writeSecondApplyProgress = writeFirstApplyProgress + numCleanRepos - 1
-		writeAppliedPhase        = writeSecondApplyProgress + 1
-		writeParentCodeReady     = writeAppliedPhase + 1
-		writeChildClosure        = writeParentCodeReady + 1
-		writeMergedJournal       = writeChildClosure + 1
-		// 11 and 13 are the clear-worktree-path calls whose errors
-		// are caught as warnings; 12 and 14 are the warning persists.
-		writeFirstCleanupWarning  = writeMergedJournal + 2
-		writeSecondCleanupWarning = writeFirstCleanupWarning + 2
+		numCleanRepos             = 2
+		writePreparedJournal      = 1
+		writeApplyingPhase        = writePreparedJournal + 1
+		writeFirstApplyProgress   = writeApplyingPhase + 1
+		writeFirstParentRecord    = writeFirstApplyProgress + 1
+		writeSecondApplyProgress  = writeFirstParentRecord + 1
+		writeSecondParentRecord   = writeSecondApplyProgress + 1
+		writeAppliedPhase         = writeSecondParentRecord + 1
+		writeParentRemapAndLayers = writeAppliedPhase + 1
+		writeParentCodeReady      = writeParentRemapAndLayers + 1
+		writeMergedJournal        = writeParentCodeReady + 1
+		// 11 and 12 are the clear-worktree-path calls whose errors are
+		// caught as warnings; 13 and 14 are the warning persists.
+		writeFirstCleanupWarning  = writeMergedJournal + 1 + numCleanRepos
+		writeSecondCleanupWarning = writeFirstCleanupWarning + 1
 	)
 	persistenceCrashCases := []struct {
 		name   string
 		failAt int32
 	}{
-		{"fail_before_first_candidate_persist", writeFirstCandidate},
-		{"fail_after_first_candidate_persist", writeSecondCandidate},
-		{"fail_after_both_candidates_persist", writePreparedPhase},
-		{"fail_after_prepared_persist", writeApplyingPhase},
-		{"fail_after_first_apply_progress", writeFirstApplyProgress},
-		{"fail_after_second_apply_progress", writeSecondApplyProgress},
-		{"fail_after_applied_persist", writeAppliedPhase},
+		// Crash before the append candidates' single staging persist is
+		// durable: nothing on disk, restart re-prepares from scratch.
+		{"fail_before_first_candidate_persist", writePreparedJournal},
+		// The append candidates (one journal, both repositories) are
+		// durable; crash at the applying write.
+		{"fail_after_first_candidate_persist", writeApplyingPhase},
+		// Both repositories' candidates are durable and apply started;
+		// crash at repo 0's apply-progress write — its ref transaction
+		// ran but is not durable.
+		{"fail_after_both_candidates_persist", writeFirstApplyProgress},
+		// Repo 0 is applied and recorded durably; crash at its parent
+		// branch-record write, before repo 1's transaction.
+		{"fail_after_prepared_persist", writeFirstParentRecord},
+		// Repo 0 is fully applied; crash at repo 1's apply-progress write.
+		{"fail_after_first_apply_progress", writeSecondApplyProgress},
+		// Both apply-progress writes are durable; crash at repo 1's
+		// parent branch-record write.
+		{"fail_after_second_apply_progress", writeSecondParentRecord},
+		// Both repositories are applied durably; crash at the closure
+		// write that persists the appended layers onto the parent run.
+		{"fail_after_applied_persist", writeParentRemapAndLayers},
+		// The appended layers are durable on the parent; crash at the
+		// MarkCodeReady write.
 		{"fail_after_parent_codeready", writeParentCodeReady},
-		{"fail_after_child_closure", writeChildClosure},
-		{"fail_after_merged_journal", writeMergedJournal},
+		// The child is closed (the CloseChild primitive bypasses the
+		// wrapper); crash at the merged-journal persist.
+		{"fail_after_child_closure", writeMergedJournal},
+		// The merged journal is durable; crash at the first
+		// clear-worktree-path write in the closure tail (caught as a
+		// cleanup warning, so the run still returns nil).
+		{"fail_after_merged_journal", writeMergedJournal + 1},
 		{"fail_at_first_cleanup_warning", writeFirstCleanupWarning},
 		{"fail_at_second_cleanup_warning", writeSecondCleanupWarning},
 	}
@@ -1127,9 +1285,9 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 				}
 			}
 
-			// Verify convergence: child is Completed, parent is
-			// CodeReady, and every repo has an explicit two-parent
-			// merge commit.
+			// Verify convergence: the child is Completed, the parent is
+			// CodeReady, and every repository's appended branch sits at
+			// the child head while the parent branch never moved.
 			parent, child := fx.reload()
 			if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 				t.Fatalf("fail at %d: close outcome = %q, want completed", tc.failAt, child.Parent.CloseOutcome)
@@ -1137,61 +1295,74 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			if parent.Status != feature.StatusCodeReady {
 				t.Fatalf("fail at %d: parent status = %s, want CodeReady", tc.failAt, parent.Status)
 			}
-			for i, dir := range fx.repoDirs {
-				parents := multiRepoGit(t, dir, "rev-list", "--parents", "-n", "1", "HEAD")
-				if fields := len(strings.Fields(parents)); fields != 3 {
-					t.Fatalf("fail at %d: repo %d merge parents = %q, want two-parent merge commit", tc.failAt, i, parents)
+			tx := child.Parent.Transaction
+			if tx == nil || tx.Phase != feature.TransactionPhaseMerged {
+				t.Fatalf("fail at %d: transaction phase = %+v, want merged", tc.failAt, tx)
+			}
+			for i := range fx.repoDirs {
+				fx.assertCreatedRefAt(t, i, tx.Entries[i].ChildHeadSHA)
+				if got := fx.refSHA(i, "refs/heads/"+fx.parentBranch); got != fx.parentSHAs[i] {
+					t.Fatalf("fail at %d: repo %d parent branch ref = %s, want unchanged %s",
+						tc.failAt, i, got, fx.parentSHAs[i])
 				}
+				fx.assertWorktreeOn(t, i, fx.appendedBranch)
 			}
 		})
 	}
 
 	// Rollback persistence-failure crash matrix: inject a Store.Modify
 	// failure at each rollback boundary in a 3-repo transaction where an
-	// external ref race on the third repo triggers semantic rollback.
-	// This proves convergence at every crash cut point during rollback,
+	// external movement of the third repo's parent branch — the ref the
+	// append transaction verifies — triggers semantic rollback. This
+	// proves convergence at every crash cut point during rollback,
 	// including the aggregate attention-phase write after compensation.
 	//
 	// The 3-repo rollback scenario issues these Store.Modify calls:
-	//   1-3. persist preparing (candidates 0, 1, 2)
-	//   4. persist prepared phase
-	//   5. persist applying phase
-	//   6-7. persist apply progress (repos 0, 1 applied)
-	// (repo 2 ref moves externally → rollbackTransaction)
-	//   8. persist rolling_back phase
-	//   9-10. persist rollback progress (repos 0, 1 rolled back)
-	//  11. persist attention phase preserving repo 2's external ref
+	//   1. persist prepared journal
+	//   2. persist applying phase
+	//   3-6. apply progress and parent branch record (repos 0 and 1)
+	// (repo 2's transaction refuses the moved previous top → rollback)
+	//   7. persist rolling_back phase
+	//   8. parent branch record restore (repo 0)
+	//   9. persist rollback progress (repo 0)
+	//  10. parent branch record restore (repo 1)
+	//  11. persist rollback progress (repo 1)
+	//  12. persist attention phase preserving repo 2's external ref
 	const (
-		numRollbackRepos              = 3
-		rbWriteThirdCandidate         = numRollbackRepos
-		rbWritePreparedPhase          = rbWriteThirdCandidate + 1
-		rbWriteApplyingPhase          = rbWritePreparedPhase + 1
-		rbWriteSecondApplyProgress    = rbWriteApplyingPhase + 2
-		rbWriteRollingBackPhase       = rbWriteSecondApplyProgress + 1
-		rbWriteFirstRollbackProgress  = rbWriteRollingBackPhase + 1
-		rbWriteSecondRollbackProgress = rbWriteFirstRollbackProgress + 1
-		rbWriteAttentionPhase         = rbWriteSecondRollbackProgress + 1
+		numRollbackRepos = 3
+		// Only the first two repositories apply before the raced
+		// repository's transaction refuses the moved previous top; each
+		// consumes an apply-progress write and a parent-record write.
+		rbWriteFirstApplyProgress   = 3
+		rbWriteRollingBackPhase     = rbWriteFirstApplyProgress + 2*(numRollbackRepos-1)
+		rbWriteFirstRollbackRecord  = rbWriteRollingBackPhase + 1
+		rbWriteFirstRollbackWrite   = rbWriteFirstRollbackRecord + 1
+		rbWriteSecondRollbackRecord = rbWriteFirstRollbackWrite + 1
+		rbWriteSecondRollbackWrite  = rbWriteSecondRollbackRecord + 1
+		rbWriteAttentionPhase       = rbWriteSecondRollbackWrite + 1
 	)
 	rollbackCrashCases := []struct {
 		name   string
 		failAt int32
 	}{
 		{"fail_at_rolling_back_phase", rbWriteRollingBackPhase},
-		{"fail_after_first_rollback_progress", rbWriteFirstRollbackProgress},
-		{"fail_after_second_rollback_progress", rbWriteSecondRollbackProgress},
+		{"fail_after_first_rollback_progress", rbWriteFirstRollbackWrite},
+		{"fail_after_second_rollback_progress", rbWriteSecondRollbackWrite},
 		{"fail_before_attention_phase", rbWriteAttentionPhase},
 	}
 	for _, tc := range rollbackCrashCases {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newMultiRepoE2EFixture(t, 3)
 
-			// Inject an external ref movement when repo 2 is inspected,
-			// after the first two refs have been applied.
+			// Inject an external movement of the third repo's parent
+			// branch — the ref the append transaction verifies — when it
+			// is first read; the first two repositories apply before the
+			// third's transaction refuses the moved tip.
 			raceWT := &raceInjectingWorktrees{
 				WorktreeManager: fx.wm,
 				t:               t,
 				raceRepoDir:     fx.repoDirs[2],
-				raceBranch:      "feature/parent",
+				raceBranch:      fx.parentBranch,
 			}
 			failO := fx.orchestratorWithFailingStoreAndWorktree(tc.failAt, raceWT)
 
@@ -1211,26 +1382,23 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 				t.Fatalf("ReconcileIntegrationTransactions after rollback fail at %d: %v", tc.failAt, err)
 			}
 
-			// Re-enter the integration boundary. The externally raced
-			// ref is re-observed as parent drift and parks once; the
-			// retry acknowledges it and completes the remaining work.
+			// Remediate the raced repository before the retry: the append
+			// transaction can never absorb a parent tip the child's
+			// history does not descend from (no replay), so the moved
+			// branch is reset to its creation-time base instead of being
+			// acknowledged the way a merge candidate would have absorbed
+			// it.
+			multiRepoGit(t, fx.repoDirs[2], "reset", "--hard", fx.parentSHAs[2])
+
+			// Re-enter the integration boundary to complete the remaining
+			// work.
 			if err := freshO.RunChildIntegration(fx.child.ID); err != nil {
 				t.Fatalf("RunChildIntegration after rollback reconcile (fail at %d): %v", tc.failAt, err)
 			}
-			if _, c := fx.reload(); c.Parent.Transaction != nil &&
-				c.Parent.Transaction.Phase == feature.TransactionPhaseAttention {
-				if code := c.Parent.Transaction.AttentionCode(); code != errcat.IntegrationParentRefDrift {
-					t.Fatalf("rollback fail at %d: attention code = %q, want %s (externally raced ref re-observed as drift): %+v",
-						tc.failAt, code, errcat.IntegrationParentRefDrift, c.Parent.Transaction)
-				}
-				if err := freshO.RunChildIntegration(fx.child.ID); err != nil {
-					t.Fatalf("RunChildIntegration acknowledging drift (fail at %d): %v", tc.failAt, err)
-				}
-			}
 
-			// Verify convergence: child is Completed, parent is
-			// CodeReady, and every repo has an explicit two-parent
-			// merge commit.
+			// Verify convergence: the child is Completed, the parent is
+			// CodeReady, and every repository's appended branch sits at
+			// the child head while the parent branches never moved.
 			parent, child := fx.reload()
 			if child.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted {
 				t.Fatalf("rollback fail at %d: close outcome = %q, want completed", tc.failAt, child.Parent.CloseOutcome)
@@ -1238,11 +1406,17 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			if parent.Status != feature.StatusCodeReady {
 				t.Fatalf("rollback fail at %d: parent status = %s, want CodeReady", tc.failAt, parent.Status)
 			}
-			for i, dir := range fx.repoDirs {
-				parents := multiRepoGit(t, dir, "rev-list", "--parents", "-n", "1", "HEAD")
-				if fields := len(strings.Fields(parents)); fields != 3 {
-					t.Fatalf("rollback fail at %d: repo %d merge parents = %q, want two-parent merge commit", tc.failAt, i, parents)
+			tx := child.Parent.Transaction
+			if tx == nil || tx.Phase != feature.TransactionPhaseMerged {
+				t.Fatalf("rollback fail at %d: transaction phase = %+v, want merged", tc.failAt, tx)
+			}
+			for i := range fx.repoDirs {
+				fx.assertCreatedRefAt(t, i, tx.Entries[i].ChildHeadSHA)
+				if got := fx.refSHA(i, "refs/heads/"+fx.parentBranch); got != fx.parentSHAs[i] {
+					t.Fatalf("rollback fail at %d: repo %d parent branch ref = %s, want unchanged %s",
+						tc.failAt, i, got, fx.parentSHAs[i])
 				}
+				fx.assertWorktreeOn(t, i, fx.appendedBranch)
 			}
 		})
 	}
@@ -1255,18 +1429,21 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		fx := newMultiRepoE2EFixture(t, 2)
 		journal := fx.manualPrepare(t)
 
-		// Apply both repos' refs and sync worktrees.
+		// Apply both repos' created refs and switch worktrees.
 		for i := range journal.Entries {
 			fx.manualApplyRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyApplied
-			journal.Entries[i].ObservedSHA = journal.Entries[i].CandidateSHA
+			journal.Entries[i].TopRef().ObservedSHA = journal.Entries[i].TopRef().CandidateSHA
 		}
 
-		// Roll back both repos' refs (CAS from candidate to anchor).
+		// Roll back both repos' created refs (delete them without the
+		// worktree switch back).
 		for i := range journal.Entries {
 			fx.manualRollbackRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyRolledBack
-			journal.Entries[i].ObservedSHA = journal.Entries[i].ParentAnchorSHA
+			// A created ref's anchor is absence, so the rolled-back
+			// observation is the empty SHA.
+			journal.Entries[i].TopRef().ObservedSHA = journal.Entries[i].TopRef().AnchorSHA
 		}
 
 		// Leave the aggregate phase as rolling_back — simulating a crash
@@ -1312,13 +1489,13 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		for i := range journal.Entries {
 			fx.manualApplyRef(t, i, &journal.Entries[i])
 			journal.Entries[i].ApplyState = feature.RepoApplyApplied
-			journal.Entries[i].ObservedSHA = journal.Entries[i].CandidateSHA
+			journal.Entries[i].TopRef().ObservedSHA = journal.Entries[i].TopRef().CandidateSHA
 		}
 
 		// Roll back only repo 0.
 		fx.manualRollbackRef(t, 0, &journal.Entries[0])
 		journal.Entries[0].ApplyState = feature.RepoApplyRolledBack
-		journal.Entries[0].ObservedSHA = journal.Entries[0].ParentAnchorSHA
+		journal.Entries[0].TopRef().ObservedSHA = journal.Entries[0].TopRef().AnchorSHA
 
 		journal.Phase = feature.TransactionPhaseRollingBack
 		fx.saveJournal(journal)
@@ -1328,11 +1505,10 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 			t.Fatalf("reconcile: %v", err)
 		}
 
-		// Repo 1 should be rolled back by reconciliation.
-		oldSHA1 := journal.Entries[1].ParentAnchorSHA
-		if got := fx.refSHA(1, "refs/heads/feature/parent"); got != oldSHA1 {
-			t.Fatalf("repo 1: ref = %s after reconciliation, want old SHA %s", got, oldSHA1)
-		}
+		// Repo 1 should be rolled back by reconciliation: its created ref
+		// deleted and its worktree back on the parent branch.
+		fx.assertCreatedRefAbsent(t, 1)
+		fx.assertWorktreeOn(t, 1, fx.parentBranch)
 
 		// Restart should re-prepare and complete.
 		if err := o.RunChildIntegration(fx.child.ID); err != nil {
@@ -1355,7 +1531,9 @@ func TestRefactorChildTransactionalMultiRepoClosureCleanupAndPublicationHandoff(
 	}
 	fx := newMultiRepoE2EFixture(t, 2)
 
-	// Enable auto-publish on the parent.
+	// Enable auto-publish; the parent already carries its one-layer stack
+	// from the fixture, and closure appends the child's layer as position
+	// 2, so the publish walk has layer entries to record pull requests on.
 	if err := fx.store.Modify(fx.parent.ID, func(f *feature.Feature) error {
 		f.Checkpoints.ManualPublish = false
 		return nil
@@ -1372,17 +1550,20 @@ func TestRefactorChildTransactionalMultiRepoClosureCleanupAndPublicationHandoff(
 	o := fx.orchestratorWithWorktrees(cleanupWT)
 
 	// Install a counting publish hook to verify publication happens once.
+	// The hook records a pull request for every layer of the (now
+	// two-layer) stack — the parent's own layer and the appended layer —
+	// exactly as the real walk does, so the all-published check settles
+	// and the parent reaches Published.
 	var publishCount int32
-	o.SetPublishRepoFn(func(featureID, repoName string) (string, error) {
+	o.SetPublishRepoFn(func(featureID, repoName string) error {
 		atomic.AddInt32(&publishCount, 1)
-		prURL := "https://github.com/test/" + repoName + "/pull/1"
-		_ = fx.store.Modify(featureID, func(f *feature.Feature) error {
-			if st, ok := f.RepoStates[repoName]; ok && st != nil {
-				st.PRURL = prURL
+		for _, position := range []int{1, 2} {
+			if err := fx.mgr.RecordStackLayerPR(featureID, repoName, position,
+				fmt.Sprintf("https://github.com/test/%s/pull/%d", repoName, position), ""); err != nil {
+				return err
 			}
-			return nil
-		})
-		return prURL, nil
+		}
+		return nil
 	})
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
@@ -1409,6 +1590,16 @@ func TestRefactorChildTransactionalMultiRepoClosureCleanupAndPublicationHandoff(
 	firstCount := atomic.LoadInt32(&publishCount)
 	if firstCount != 2 {
 		t.Fatalf("publication count after first pass = %d, want 2", firstCount)
+	}
+
+	// The appended layer's pull request is recorded on the parent's stack.
+	if len(parent.Stack) != 2 {
+		t.Fatalf("parent stack layers = %d, want 2 after closure", len(parent.Stack))
+	}
+	for i := range parent.Repos {
+		if got := parent.Stack[1].Repos[parent.Repos[i].Name].PRURL; got == "" {
+			t.Fatalf("repo %d: appended layer pull request not recorded", i)
+		}
 	}
 
 	// One cleanup warning should be recorded (the failed repo).
@@ -1457,12 +1648,15 @@ func TestRefactorChildTransactionalMultiRepoClosureCleanupAndPublicationHandoff(
 		t.Fatalf("cleanup warning count after retry = %d, want 0 (all cleaned up)", warningCount)
 	}
 
-	// Every parent branch has an explicit two-parent merge commit.
-	for i, dir := range fx.repoDirs {
-		parents := multiRepoGit(t, dir, "rev-list", "--parents", "-n", "1", "HEAD")
-		if fields := len(strings.Fields(parents)); fields != 3 {
-			t.Fatalf("repo %d: merge parents = %q, want two-parent merge commit", i, parents)
+	// Every repository's appended branch sits at the child head, the
+	// parent branch never moved, and the worktree is on the appended
+	// branch.
+	for i := range fx.repoDirs {
+		fx.assertCreatedRefAt(t, i, tx.Entries[i].ChildHeadSHA)
+		if got := fx.refSHA(i, "refs/heads/"+fx.parentBranch); got != fx.parentSHAs[i] {
+			t.Fatalf("repo %d: parent branch ref = %s, want unchanged %s", i, got, fx.parentSHAs[i])
 		}
+		fx.assertWorktreeOn(t, i, fx.appendedBranch)
 	}
 
 	// Transaction is merged.

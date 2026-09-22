@@ -552,24 +552,52 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 	// approved top-level roadmap so the feature lands in Planning with
 	// CurrentRoadmapPhase=1.
 	if f.CurrentRoadmapPhase == 0 {
+		// Derivation stays best-effort so a mid-edit roadmap cannot wedge the
+		// auto-approval path. Branch names are filled in for every layer
+		// here, but the worktree rename only runs when approval is final on
+		// the no-gate path below; auto-approval that routes to the human
+		// review gate never renames — the gate's proceed does, after any
+		// table edits.
+		approvalPhaseCount := 0
+		approvalLayers := []feature.StackLayer(nil)
+		approvalValid := false
 		if roadmapPath := o.resolveArtifactPath(f, "roadmap"); roadmapPath != "" {
 			if data, readErr := os.ReadFile(roadmapPath); readErr == nil {
 				if phases, parseErr := agent.ParseRoadmap(string(data)); parseErr == nil {
-					_ = o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
-						ff.TotalRoadmapPhases = len(phases)
-						return nil
-					})
+					// The planning loop's contract validation rejects an
+					// invalid `## Pull Requests` table before approval, so a
+					// parseable table here is expected. The delivery-mode
+					// constraint rides along: a single-delivery feature with
+					// multiple rows also skips stack derivation while the
+					// phase count still persists.
+					approvalPhaseCount = len(phases)
+					rows, problems := agent.ValidateRoadmapPullRequestsTableForMode(string(data), phases, f.EffectiveDeliveryMode())
+					if len(problems) == 0 {
+						approvalLayers = stackLayersWithBranches(agent.DeriveStackLayers(rows), f.WorkspaceSlug())
+						approvalValid = true
+					}
 				}
 			}
 		}
 
-		// Re-load feature after Modify so subsequent logic sees fresh state.
+		// Re-load feature so subsequent logic sees fresh state.
 		ff, getErr := o.deps.Lifecycle.Get(featureID)
 		if getErr != nil {
 			return fmt.Errorf("reload feature: %w", getErr)
 		}
 		if ff.Checkpoints.RoadmapReview {
-			// Route through review gate.
+			// Route through review gate: the count and stack persist
+			// best-effort, but no rename happens — the human may still edit
+			// the table at the gate.
+			if approvalPhaseCount > 0 {
+				_ = o.deps.Store.Modify(featureID, func(mod *feature.Feature) error {
+					mod.TotalRoadmapPhases = approvalPhaseCount
+					if approvalValid {
+						mod.Stack = approvalLayers
+					}
+					return nil
+				})
+			}
 			if err := o.deps.Lifecycle.NeedsPlanReview(featureID); err != nil {
 				return fmt.Errorf("mark needs plan review: %w", err)
 			}
@@ -584,6 +612,29 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 				o.hooks.OnReviewRequired(featureID, phase)
 			}
 			return nil
+		}
+		// No-gate auto-approval: approval is final, so the worktree rename
+		// runs before the single persistence write. A failing repository
+		// emits a warning event and its record stays on the branch actually
+		// checked out while the run still advances.
+		var renames []repoBranchRename
+		if approvalValid {
+			renames = o.renameWorktreeBranchesToLayerOne(ff, approvalLayers)
+			for _, rename := range renames {
+				if rename.Err != nil {
+					o.emitRoadmapBranchRenameWarning(featureID, rename)
+				}
+			}
+		}
+		if approvalPhaseCount > 0 {
+			_ = o.deps.Store.Modify(featureID, func(mod *feature.Feature) error {
+				if approvalValid {
+					applyApprovedStack(mod, approvalPhaseCount, approvalLayers, renames)
+				} else {
+					mod.TotalRoadmapPhases = approvalPhaseCount
+				}
+				return nil
+			})
 		}
 		// Auto-advance into first phase-plan.
 		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
@@ -927,13 +978,20 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	}
 	o.emitPhaseCompleted(featureID, feature.PhaseImplement, nil)
 
-	// Roadmap mid-flight: record anchors + advance.
+	// Roadmap mid-flight: record anchors + cross the layer boundary + advance.
+	// The finalizing status stays set through tip recording and the split so
+	// no reader sees a startable steady state while the boundary is running;
+	// it is cleared just before the roadmap phase advances and the next plan
+	// dispatches.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase < f.TotalRoadmapPhases {
 		anchors := o.roadmapPhaseAnchors(f)
-		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
+		if err := o.crossLayerBoundary(featureID, f); err != nil {
+			return err
+		}
+		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.deps.Lifecycle.AdvanceRoadmapPhase(featureID); err != nil {
 			return fmt.Errorf("advance roadmap phase: %w", err)
 		}
@@ -947,20 +1005,24 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 		return nil
 	}
 
-	// Roadmap final phase: record anchors + fall through to review / publish.
+	// Roadmap final phase: record anchors + the top layer's tips + fall
+	// through to review / publish.
 	if f.CurrentRoadmapPhase > 0 && f.CurrentRoadmapPhase == f.TotalRoadmapPhases {
 		anchors := o.roadmapPhaseAnchors(f)
-		o.setFinalizingPhaseStatus(featureID, false)
 		if err := o.recordRoadmapPhaseCommitAnchors(featureID, f.CurrentRoadmapPhase, anchors); err != nil {
 			return err
 		}
+		if err := o.recordTopLayerTips(featureID, f); err != nil {
+			return err
+		}
+		o.setFinalizingPhaseStatus(featureID, false)
 	}
 
 	// Deferred end-of-feature Final Review. When the implementation pass
 	// completed leaving repos staged for FR and the pipeline runs Final
 	// Review, dispatch the FR pass synchronously here before marking code
 	// ready or auto-publishing.
-	if !f.EffectivePipeline().ShouldSkipFinalReview() && reposNeedFinalReview(f) {
+	if !f.EffectivePipeline().ShouldSkipFinalReview() && o.reposNeedFinalReview(f) {
 		if frErr := o.runDeferredFinalReview(featureID); frErr != nil {
 			if errors.Is(frErr, errFinalReviewInterrupted) {
 				// User pressed Stop during Final Review. InterruptFeature
@@ -1007,72 +1069,12 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 		return nil
 	}
 
-	// Non-roadmap, multi-repo auto-publish: now that every touched repo is
-	// past review, try to complete the feature-level publish. If the feature
-	// is not yet fully published (e.g. a repo publish failed or is still
-	// pending), fall back to MarkCodeReady so startup and resume paths can
-	// recover partially published features.
-	//
-	// When tryCompleteAndEmit reports published==true, the feature-level
-	// publish has just completed as a direct consequence of this handler
-	// finishing the cross-repo join. The phase-sequencing event contract
-	// requires emitting PublishCompleted (and firing OnPublishCompleted) on
-	// every publish-completion site, not only the Publish() pipeline.
-	if f.CurrentRoadmapPhase == 0 {
-		publishRepoFn := o.publishRepoFn
-		if publishRepoFn == nil {
-			publishRepoFn = o.publishRepo
-		}
-		for _, name := range f.TouchedRepos() {
-			st := f.RepoStates[name]
-			if st != nil && st.PRURL != "" {
-				continue
-			}
-			if repo, ok := findRepo(f, name); ok {
-				workDir := repo.WorktreePath
-				if workDir == "" {
-					workDir = repo.Path
-				}
-				if err := o.scrubFinalReviewRootArtifacts(context.Background(), workDir); err != nil {
-					o.storePublishFailure(f, name, err)
-					continue
-				}
-			}
-			_, _ = publishRepoFn(featureID, name)
-		}
-		published, err := o.tryCompleteAndEmit(featureID)
-		if err != nil {
-			return err
-		}
-		if !published {
-			if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
-				return fmt.Errorf("mark code ready: %w", err)
-			}
-			return nil
-		}
-		prURLs := make(map[string]string)
-		if freshF, freshErr := o.deps.Lifecycle.Get(featureID); freshErr == nil && freshF != nil {
-			for _, r := range freshF.Repos {
-				if st := freshF.RepoStates[r.Name]; st != nil && st.PRURL != "" {
-					prURLs[r.Name] = st.PRURL
-				}
-			}
-		}
-		o.emitEventBlocking(ports.Event{
-			Type:      ports.PublishCompleted,
-			FeatureID: featureID,
-		})
-		if o.hooks.OnPublishCompleted != nil {
-			o.hooks.OnPublishCompleted(featureID, prURLs, nil)
-		}
-		return nil
-	}
-
-	// Roadmap final multi-repo auto-publish: mark code ready, then route
-	// through the full Publish pipeline so PublishStarted/PublishCompleted
-	// events + hooks fire. Every publish failure is owned by the failing
-	// repository's stored record — never terminal, no run-level failure —
-	// so the dispatch error is wrapped for the completion surface to skip.
+	// Auto-publish tail — roadmap-final and non-roadmap features alike:
+	// mark code ready, then route through the full Publish pipeline so
+	// PublishStarted/PublishCompleted events + hooks fire. Every publish
+	// failure is owned by the failing repository's stored record — never
+	// terminal, no run-level failure — so the dispatch error is wrapped for
+	// the completion surface to skip.
 	if err := o.deps.Lifecycle.MarkCodeReady(featureID); err != nil {
 		return fmt.Errorf("mark code ready: %w", err)
 	}
@@ -1105,7 +1107,7 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 			}
 			o.emitEventBlocking(publishCompleted)
 			if o.hooks.OnPublishCompleted != nil {
-				o.hooks.OnPublishCompleted(featureID, nil, err)
+				o.hooks.OnPublishCompleted(featureID, err)
 			}
 			return &PublishDispatchError{Err: err}
 		}
@@ -1252,18 +1254,91 @@ func (o *Orchestrator) recordRoadmapPhaseCommitAnchors(featureID string, phase i
 	return nil
 }
 
-// reposNeedFinalReview returns true when at least one repo was touched by
-// the implement pass and is not yet published — i.e. it is staged for the
-// deferred end-of-feature Final Review. Repos with a non-empty PRURL have
-// already shipped and FR is a no-op for them; if every touched repo is
-// already published the FR pass is skipped.
-func reposNeedFinalReview(f *feature.Feature) bool {
+// reposNeedFinalReview returns true when at least one touched repository is
+// staged for the deferred end-of-feature Final Review pass: under a delivery
+// stack, any layer with commits — an entry whose recorded tip reaches past
+// the lower cut point — that lacks a pull request or whose tip differs from
+// its last-pushed SHA. A touched repository on a run without a stack has no
+// layer composition to deliver (publish fails closed for it), so it is
+// always staged; a touched non-publishable repository never delivers and is
+// always staged too.
+func (o *Orchestrator) reposNeedFinalReview(f *feature.Feature) bool {
 	if f == nil {
 		return false
 	}
 	for _, name := range f.TouchedRepos() {
 		st := f.RepoStates[name]
-		if st != nil && st.PRURL == "" {
+		if st == nil {
+			continue
+		}
+		if len(f.Stack) == 0 {
+			return true
+		}
+		repo, ok := findRepo(f, name)
+		if !ok {
+			// A touched repository missing from the configuration cannot be
+			// inspected; staging it for review is the safe default.
+			return true
+		}
+		if !repoPublishable(repo) {
+			// Delivery never runs for a non-publishable repository, so its
+			// stack entries can never carry pull requests; it always needs
+			// the Final Review pass.
+			return true
+		}
+		if o.repoStackNeedsReview(f, repo) {
+			return true
+		}
+	}
+	return false
+}
+
+// repoStackNeedsReview walks one repository's stack layers and reports
+// whether any of them still has undelivered work: a layer with commits that
+// lacks a pull request or whose tip differs from its last-pushed SHA. A layer
+// marked NoCommits is settled, and a layer with a pull request whose tip
+// equals the last-pushed SHA is delivered. Anything that cannot be measured —
+// no boundary-recorded tip on a layer without a settled pull request, an
+// unresolvable lower cut point, or no worktree — counts as needing review:
+// the deferred Final Review must not skip a touched repository whose delivery
+// state is unknown, matching the all-published check's treatment of an
+// unmarked, pull-request-less entry as unsettled.
+func (o *Orchestrator) repoStackNeedsReview(f *feature.Feature, repo feature.FeatureRepo) bool {
+	workDir := repoWorkDir(repo)
+	layers := orderedStackLayers(f)
+	entries := make(map[int]feature.StackRepoEntry, len(layers))
+	for _, layer := range layers {
+		entries[layer.Position] = layer.Repos[repo.Name]
+	}
+	baseSHA, baseOK := "", false
+	if workDir != "" {
+		if sha, err := resolveBaseCutSHA(workDir, repo.BaseBranch); err == nil {
+			baseSHA, baseOK = sha, true
+		}
+	}
+	for i, layer := range layers {
+		entry := entries[layer.Position]
+		if entry.NoCommits {
+			continue
+		}
+		if entry.PRURL != "" && entry.TipSHA == entry.LastPushedSHA {
+			continue
+		}
+		if entry.TipSHA == "" {
+			return true
+		}
+		cut := ""
+		if i == 0 {
+			if baseOK {
+				cut = baseSHA
+			}
+		} else {
+			cut = entries[layers[i-1].Position].TipSHA
+		}
+		if cut == "" {
+			return true
+		}
+		if workDir == "" || git.HasCommitsBeyond(workDir, entry.TipSHA, cut) {
 			return true
 		}
 	}
@@ -1387,11 +1462,36 @@ const (
 	completionStatusUnmergedChanges    = "unmerged_changes"
 )
 
-// Push modes describe how a republish reaches an existing pull-request branch.
+// Push modes describe how a republish reaches each layer's pull-request
+// branch. create means no pull request exists yet and the layer has commits
+// to deliver; fast_forward means the pull request exists, its tip moved, and
+// the remote branch is an ancestor of the tip; rewrite means the remote
+// branch is not an ancestor of the tip, so publish force-pushes under a
+// lease; none means nothing is to push (up to date, merged, closed, or no
+// commits in the repository).
 const (
+	completionPushModeCreate      = "create"
 	completionPushModeFastForward = "fast_forward"
 	completionPushModeRewrite     = "rewrite"
+	completionPushModeNone        = "none"
 )
+
+// CompletionPullRequestEntry is one stack layer's pull-request entry on a
+// repository's completion preflight result: the layer's position, title,
+// and branch; the pull request URL and recorded state when one exists; the
+// live no-commits marker computed from the layer's tip against the lower
+// cut point (the same rule the publish walk uses, so the preview is exact);
+// the pushed-up-to-date flag; and the per-layer push mode.
+type CompletionPullRequestEntry struct {
+	Position       int
+	Title          string
+	Branch         string
+	URL            string
+	State          string
+	NoCommits      bool
+	PushedUpToDate bool
+	PushMode       string
+}
 
 // CompletionRepoResult is the per-repository slice of a completion preflight.
 type CompletionRepoResult struct {
@@ -1399,22 +1499,32 @@ type CompletionRepoResult struct {
 	Publishable bool
 	Touched     bool
 	Status      string
-	PRURL       string
 	Blocker     string
 	Freshness   string
 	// Error is the repository's stored publish-failure record, when any.
 	// Adapters render it through the catalog at projection time.
-	Error          *errcat.FailureRecord
-	BaseBranch     string
-	Branch         string
+	Error      *errcat.FailureRecord
+	BaseBranch string
+	Branch     string
+	// PullRequests is the repository's ordered per-layer stack view, one
+	// entry per layer with its per-layer push mode. Nil for non-publishable
+	// repositories and runs without a stack.
+	PullRequests []CompletionPullRequestEntry
+	// PushMode is the repository-level aggregate: rewrite when any layer
+	// rewrites, else fast_forward. Present only when the repository has at
+	// least one pull request on some layer.
+	PushMode       string
 	PendingCommits int
 	PendingDirty   bool
-	PushMode       string
 	// PendingDirtyFiles is a bounded sample of the uncommitted paths a
 	// publish would commit; PendingDirtyFileTotal is the true count, which
 	// can exceed the sample length.
 	PendingDirtyFiles     []string
 	PendingDirtyFileTotal int
+	// RebaseHint names the merged layer that still holds a tip below kept
+	// work with commits and points at the rebase pass that restacks the
+	// chain. Empty when no merged layer sits below kept work.
+	RebaseHint string
 }
 
 // repoPublishable reports whether repo is publishable. A nil Publishable
@@ -1438,18 +1548,23 @@ type CompletionPreflightResult struct {
 
 // CompletionPreflight computes a side-effect-free preview of a feature's
 // completion readiness. It enumerates every repository with its completion
-// status, PR URL, blockers, and freshness, and returns a source revision
-// that mutations check for staleness. The worktree is never mutated.
+// status, per-layer pull-request entries and push modes, blockers, and
+// freshness, and returns a source revision that mutations check for
+// staleness. The worktree is never mutated.
 func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPreflightResult, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return CompletionPreflightResult{}, fmt.Errorf("load feature: %w", err)
 	}
 	result := CompletionPreflightResult{FeatureID: featureID}
-	prURLs := f.PRURLs()
 	for _, repo := range f.Repos {
 		state := f.RepoStates[repo.Name]
 		publishable := repoPublishable(repo)
+		if publishable && repo.Branch == "" {
+			// No fabricated branch name: a publishable repository without a
+			// recorded branch has no deliverable destination.
+			return CompletionPreflightResult{}, fmt.Errorf("repo %q has no feature branch recorded", repo.Name)
+		}
 		repoResult := CompletionRepoResult{
 			Repo:        repo.Name,
 			Publishable: publishable,
@@ -1458,15 +1573,30 @@ func (o *Orchestrator) CompletionPreflight(featureID string) (CompletionPrefligh
 		}
 		if state != nil {
 			repoResult.Touched = state.Touched
-			repoResult.PRURL = state.PRURL
 			repoResult.Error = state.Error
 		}
-		if prURLs[repo.Name] != "" {
-			repoResult.PRURL = prURLs[repo.Name]
+		repoResult.Status = completionRepoStatus(f, repo, state, publishable)
+		// The preflight is the stack's status refresh: read every layer
+		// pull request's live state and persist merged/closed monotonically
+		// before the per-layer entries are derived, so the entries and the
+		// run's stack agree on the remote fact.
+		liveStates := o.liveStackPRStates(f, repo, publishable)
+		repoResult = o.applyPendingDelivery(f, repo, repoResult, liveStates)
+		// A closed-unmerged pull request the refresh observed parks the
+		// repository on the closed record — after every state persist of the
+		// pass, so the store is the last write — and the preflight result
+		// carries the parked record.
+		if parked := o.parkClosedStackPullRequest(f, repo, liveStates); parked != nil {
+			repoResult.Error = parked
 		}
-		repoResult.Status = completionRepoStatus(f, repo, state, publishable, repoResult.PRURL)
-		repoResult = o.applyPendingDelivery(f, repo, repoResult)
 		freshness, blocker, _ := o.repoFreshnessAndBlocker(o.rebaseFreshnessInputForRepo(f, repo))
+		// A merged layer holding a tip below kept work means the chain needs
+		// the rebase pass even when the local remote-tracking comparison
+		// reports up to date: the layers above must be restacked onto the
+		// merged base.
+		if repoResult.RebaseHint != "" && freshness == preflightFreshnessUpToDate {
+			freshness = preflightFreshnessBehind
+		}
 		repoResult.Freshness = freshness
 		repoResult.Blocker = blocker
 		if repoResult.Blocker != "" {
@@ -1490,7 +1620,7 @@ func (o *Orchestrator) CompletionPreflightSourceRevision(featureID string) (stri
 	return preflightRevision(o.collectPreflightFingerprints(f)), nil
 }
 
-func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *feature.RepoState, publishable bool, prURL string) string {
+func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *feature.RepoState, publishable bool) string {
 	if state != nil && state.Touched {
 		if !publishable {
 			if f.Status == feature.StatusDone {
@@ -1498,7 +1628,7 @@ func completionRepoStatus(f *feature.Feature, repo feature.FeatureRepo, state *f
 			}
 			return completionStatusEligible
 		}
-		if prURL != "" {
+		if f.StackRepoHasPullRequest(repo.Name) {
 			if f.Status == feature.StatusDone {
 				return completionStatusCompleted
 			}

@@ -39,9 +39,11 @@ func TestBeginCascadeDeletePersistsCompleteStableManifest(t *testing.T) {
 		Parent: &ChildRelationship{
 			ParentID: "parent",
 			Transaction: &TransactionJournal{Entries: []RepoTransactionEntry{{
-				Repo: "repo-a", ParentBranch: "feature/parent",
-				ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor",
-				CandidateSHA: "candidate", ApplyState: RepoApplyApplied,
+				Repo: "repo-a",
+				Refs: []RepoTransactionRef{{
+					Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate",
+				}},
+				ApplyState: RepoApplyApplied,
 			}}},
 		},
 		Repos: []FeatureRepo{{
@@ -256,12 +258,16 @@ func TestBeginCascadeDeleteJournalsOneRefPerPromotedChild(t *testing.T) {
 	closedAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	entries := map[string]RepoTransactionEntry{
 		"first": {
-			Repo: "repo-a", ParentBranch: "feature/parent",
-			ParentAnchorSHA: "anchor", ExpectedRefSHA: "anchor", CandidateSHA: "candidate-1",
+			Repo: "repo-a",
+			Refs: []RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "anchor", CandidateSHA: "candidate-1",
+			}},
 		},
 		"second": {
-			Repo: "repo-a", ParentBranch: "feature/parent",
-			ParentAnchorSHA: "candidate-1", ExpectedRefSHA: "candidate-1", CandidateSHA: "candidate-2",
+			Repo: "repo-a",
+			Refs: []RepoTransactionRef{{
+				Branch: "feature/parent", AnchorSHA: "candidate-1", CandidateSHA: "candidate-2",
+			}},
 		},
 	}
 	for id, entry := range entries {
@@ -291,7 +297,7 @@ func TestBeginCascadeDeleteJournalsOneRefPerPromotedChild(t *testing.T) {
 			t.Fatalf("ref %+v names an unknown child", ref)
 		}
 		if ref.Repo != "repo-a" || ref.RepoPath != "/repos/a" || ref.Ref != "refs/heads/feature/parent" ||
-			ref.AnchorSHA != entry.ExpectedRefSHA || ref.CandidateSHA != entry.CandidateSHA {
+			ref.AnchorSHA != entry.Refs[0].AnchorSHA || ref.CandidateSHA != entry.Refs[0].CandidateSHA {
 			t.Fatalf("ref = %+v, want %s's own anchor and candidate on the shared parent ref", ref, ref.ChildID)
 		}
 	}

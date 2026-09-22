@@ -153,6 +153,7 @@ func newPollFailureFixture(t *testing.T) *pollFailureFixture {
 	if err := persistFeatureRecord(harness.stateDir, pollFailureFeatureID, record); err != nil {
 		t.Fatal(err)
 	}
+	harness.pending.setFromRecord(pollFailureFeatureID, record)
 
 	fixture := &pollFailureFixture{
 		harness:   harness,

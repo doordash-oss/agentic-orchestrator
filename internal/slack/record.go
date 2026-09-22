@@ -38,6 +38,7 @@ type featureRecord struct {
 	Destinations map[string]destinationRecord `yaml:"destinations"`
 	TagCounter   int                          `yaml:"tag_counter,omitempty"`
 	Pending      []pendingInputRecord         `yaml:"pending_inputs,omitempty"`
+	Resolved     []pendingInputRecord         `yaml:"resolved_inputs,omitempty"`
 }
 
 type pendingInputRecord struct {
@@ -95,6 +96,7 @@ type postingResolution struct {
 	ResponderID   string    `yaml:"responder_id,omitempty"`
 	ResponderName string    `yaml:"responder_name,omitempty"`
 	ResolvedAt    time.Time `yaml:"resolved_at"`
+	ClosureSent   bool      `yaml:"closure_sent,omitempty"`
 }
 
 const (

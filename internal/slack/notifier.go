@@ -565,7 +565,11 @@ func (n *Notifier) processItem(item queueItem) {
 	}
 	n.retryPendingRecord(owner.ID, record)
 
-	work := n.reconcilePending(settings, owner, eventFeature, record)
+	resolutionKind := resolutionAgentico
+	if item.event.Type == ports.FeatureInterrupted || item.event.Type == ports.FeatureRewound {
+		resolutionKind = resolutionCleared
+	}
+	work := n.reconcilePending(settings, owner, eventFeature, record, resolutionKind)
 	if item.recheckOnly ||
 		item.event.Type == ports.NeedUserInputRequired ||
 		item.event.Type == ports.ReviewRequired ||
@@ -621,7 +625,9 @@ func (n *Notifier) dispatchWork(item queueItem, work []workItem) {
 				event:       item.event,
 				reservation: n.queue.reserveProtected(item.event),
 			}
-			if item.event.Type == ports.FeatureRewound && len(remainingWork) > 0 {
+			if (item.event.Type == ports.FeatureInterrupted ||
+				item.event.Type == ports.FeatureRewound) &&
+				len(remainingWork) > 0 {
 				n.dispatchDeliveryGroup(item, remainingWork)
 				n.dispatchDeliveryGroup(protectedItem, needsInputWork)
 				return
@@ -649,6 +655,7 @@ func (n *Notifier) reconcilePending(
 	settings ports.SlackRuntimeSettings,
 	owner, trigger *feature.Feature,
 	record *featureRecord,
+	retiredResolutionKind string,
 ) []workItem {
 	if n.pending == nil {
 		return nil
@@ -693,6 +700,8 @@ func (n *Notifier) reconcilePending(
 	changed := false
 	n.recordMu.Lock()
 	kept := record.Pending[:0]
+	var retired []pendingInputRecord
+	var closures []pendingInputRecord
 	for _, tracked := range record.Pending {
 		if _, sourceKnown := sourceFeatures[tracked.SourceFeatureID]; !sourceKnown {
 			kept = append(kept, tracked)
@@ -701,6 +710,27 @@ func (n *Notifier) reconcilePending(
 		if _, live := liveByIdentity[tracked.Identity]; live {
 			kept = append(kept, tracked)
 		} else {
+			if tracked.Resolution == nil {
+				tracked.Resolution = &postingResolution{
+					Kind:       retiredResolutionKind,
+					ResolvedAt: n.clock.Now().UTC(),
+				}
+			}
+			if tracked.Resolution.Kind != resolutionSlack &&
+				!tracked.Resolution.ClosureSent {
+				tracked.Resolution.ClosureSent = true
+				closures = append(closures, tracked)
+			}
+			for key, destination := range record.Destinations {
+				for i := range destination.PostingIndex {
+					if destination.PostingIndex[i].Identity == tracked.Identity {
+						resolution := *tracked.Resolution
+						destination.PostingIndex[i].Resolution = &resolution
+					}
+				}
+				record.Destinations[key] = destination
+			}
+			retired = append(retired, tracked)
 			changed = true
 		}
 	}
@@ -746,6 +776,32 @@ func (n *Notifier) reconcilePending(
 			changed = true
 		}
 	}
+	hasPostedPending := false
+	for _, tracked := range record.Pending {
+		if pendingHasPostedMessage(tracked) {
+			hasPostedPending = true
+			break
+		}
+	}
+	if hasPostedPending {
+		for _, tracked := range retired {
+			if pendingHasPostedMessage(tracked) {
+				record.Resolved = append(record.Resolved, tracked)
+			}
+		}
+		if len(record.Resolved) > responderResolvedRetentionLimit {
+			record.Resolved = append(
+				[]pendingInputRecord(nil),
+				record.Resolved[len(record.Resolved)-responderResolvedRetentionLimit:]...,
+			)
+		}
+	} else if len(record.Resolved) > 0 || len(retired) > 0 {
+		record.Resolved = nil
+		for key, destination := range record.Destinations {
+			destination.PostingIndex = nil
+			record.Destinations[key] = destination
+		}
+	}
 	n.refreshTrackedInputsLocked()
 	if changed {
 		err := n.persistRecordLocked(owner.ID, record, settings.Recipients[0].Kind)
@@ -756,6 +812,33 @@ func (n *Notifier) reconcilePending(
 	}
 
 	var work []workItem
+	for _, tracked := range closures {
+		line := tracked.Tag + " was resolved in Agentico."
+		if tracked.Resolution.Kind == resolutionCleared {
+			line = tracked.Tag + " is no longer pending."
+		}
+		for _, recipient := range settings.Recipients {
+			key := destinationKey(string(recipient.Kind), recipient.ID)
+			if tracked.MessageTS[key] == "" {
+				continue
+			}
+			destination := record.Destinations[key]
+			if destination.ChannelID == "" || destination.RootTS == "" {
+				continue
+			}
+			work = append(work, workItem{
+				featureID:       owner.ID,
+				sourceFeatureID: tracked.SourceFeatureID,
+				destinationKey:  key,
+				kind:            string(recipient.Kind),
+				channelID:       destination.ChannelID,
+				responder:       true,
+				reply: replyPayload{
+					kind: kindNeedsInput, fallback: scrub(settings.Token, line),
+				},
+			})
+		}
+	}
 	for _, recipient := range settings.Recipients {
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
 		if err != nil {
@@ -834,6 +917,15 @@ func (n *Notifier) reconcilePending(
 		}
 	}
 	return work
+}
+
+func pendingHasPostedMessage(input pendingInputRecord) bool {
+	for _, messageTS := range input.MessageTS {
+		if messageTS != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func reviewDeliveryFor(input ports.SlackPendingInput, source *feature.Feature) *reviewDelivery {

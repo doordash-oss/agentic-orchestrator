@@ -121,6 +121,28 @@ func (s *fakePendingInputSource) set(featureID string, items ...ports.SlackPendi
 	s.mu.Unlock()
 }
 
+func (s *fakePendingInputSource) setFromRecord(featureID string, record *featureRecord) {
+	items := make([]ports.SlackPendingInput, 0, len(record.Pending))
+	for _, pending := range record.Pending {
+		items = append(items, ports.SlackPendingInput{
+			FeatureID:      pending.SourceFeatureID,
+			Kind:           ports.SlackPendingInputKind(pending.Kind),
+			RequestID:      pending.RequestID,
+			QuestionIndex:  pending.QuestionIndex,
+			GatePath:       pending.GatePath,
+			Iteration:      pending.Iteration,
+			WaitingSince:   pending.WaitingSince,
+			ReviewID:       pending.ReviewID,
+			ReviewMode:     pending.ReviewMode,
+			TargetPhase:    pending.TargetPhase,
+			ArtifactID:     pending.ArtifactID,
+			RunNumber:      pending.RunNumber,
+			SourceRevision: pending.SourceRevision,
+		})
+	}
+	s.set(featureID, items...)
+}
+
 func (o *fakeObserver) Emit(evt observe.Event) error {
 	o.mu.Lock()
 	o.events = append(o.events, evt)

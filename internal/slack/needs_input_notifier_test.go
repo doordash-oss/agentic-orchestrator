@@ -179,7 +179,7 @@ func TestSlackNeedsInputEvidence(t *testing.T) {
 	waitFor(t, 10*time.Second, func() bool {
 		record, ok := readFeatureRecord(harness.stateDir, "F-1")
 		return ok && len(record.Pending) == 4 && record.Pending[0].Tag == "#4" &&
-			threadReplyCount(harness.server.AllRequests()) == 14
+			threadReplyCount(harness.server.AllRequests()) == 20
 	})
 	steps = append(steps, captureNeedsInputEvidenceStep(t, harness, "partial_retirement"))
 
@@ -192,7 +192,7 @@ func TestSlackNeedsInputEvidence(t *testing.T) {
 	waitFor(t, 10*time.Second, func() bool {
 		record, ok := readFeatureRecord(harness.stateDir, "F-1")
 		return ok && len(record.Pending) == 0 &&
-			threadReplyCount(harness.server.AllRequests()) == beforeInterruption+2
+			threadReplyCount(harness.server.AllRequests()) == beforeInterruption+10
 	})
 	steps = append(steps, captureNeedsInputEvidenceStep(t, harness, "interruption"))
 
@@ -206,8 +206,8 @@ func TestSlackNeedsInputEvidence(t *testing.T) {
 		record, ok := readFeatureRecord(harness.stateDir, "F-1")
 		return ok && len(record.Pending) == 1 && record.Pending[0].Tag == ""
 	})
-	if got := threadReplyCount(harness.server.AllRequests()); got != beforeInterruption+2 {
-		t.Fatalf("Needs input off replies = %d; want %d", got, beforeInterruption+2)
+	if got := threadReplyCount(harness.server.AllRequests()); got != beforeInterruption+10 {
+		t.Fatalf("Needs input off replies = %d; want %d", got, beforeInterruption+10)
 	}
 	steps = append(steps, captureNeedsInputEvidenceStep(t, harness, "needs_input_off"))
 

@@ -223,6 +223,7 @@ func TestSlackResponderPollsOnCadenceOnlyWhilePostedInputIsPending(t *testing.T)
 	if err := persistFeatureRecord(harness.stateDir, "feature-1", record); err != nil {
 		t.Fatal(err)
 	}
+	harness.pending.setFromRecord("feature-1", record)
 	harness.server.SeedThread("C-ENG", "100.000001", []testsupport.Message{
 		{TS: "100.000001"},
 		{TS: "100.000002", ThreadTS: "100.000001", Text: "pending"},
@@ -294,6 +295,7 @@ func TestSlackResponderResumesCursorAfterPerTickPageBudget(t *testing.T) {
 	if err := persistFeatureRecord(harness.stateDir, "feature-1", record); err != nil {
 		t.Fatal(err)
 	}
+	harness.pending.setFromRecord("feature-1", record)
 	messages := make([]testsupport.Message, 301)
 	for i := range messages {
 		messages[i] = testsupport.Message{
@@ -496,6 +498,7 @@ func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
 	if err := persistFeatureRecord(harness.stateDir, featureID, record); err != nil {
 		t.Fatal(err)
 	}
+	harness.pending.setFromRecord(featureID, record)
 	answerPort := &fakeSlackAnswerPort{}
 	notifier := NewNotifier(NotifierOptions{
 		Settings: harness.settings,
@@ -657,6 +660,7 @@ func TestSlackResponderCheckMarkWinsDenyReaction(t *testing.T) {
 	if err := persistFeatureRecord(harness.stateDir, featureID, record); err != nil {
 		t.Fatal(err)
 	}
+	harness.pending.setFromRecord(featureID, record)
 	answerPort := &fakeSlackAnswerPort{}
 	notifier := NewNotifier(NotifierOptions{
 		Settings: harness.settings,

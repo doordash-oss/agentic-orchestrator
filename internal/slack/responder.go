@@ -27,9 +27,10 @@ import (
 )
 
 const (
-	responderPollInterval = 10 * time.Second
-	responderPageSize     = 100
-	responderPageBudget   = 3
+	responderPollInterval           = 10 * time.Second
+	responderPageSize               = 100
+	responderPageBudget             = 3
+	responderResolvedRetentionLimit = 16
 )
 
 type responderThread struct {
@@ -103,6 +104,41 @@ func (n *Notifier) responderTick() {
 	}
 
 	threads := n.responderThreads(settings)
+	if len(threads) == 0 {
+		return
+	}
+	featureIDs := make(map[string]struct{}, len(threads))
+	for _, thread := range threads {
+		featureIDs[thread.featureID] = struct{}{}
+	}
+	for featureID := range featureIDs {
+		owner, err := n.store.Load(featureID)
+		if err != nil || owner == nil {
+			continue
+		}
+		record, err := n.recordFor(featureID)
+		if err != nil {
+			continue
+		}
+		work := n.reconcilePending(
+			settings,
+			owner,
+			owner,
+			record,
+			resolutionAgentico,
+		)
+		if len(work) > 0 {
+			item := queueItem{
+				kind: kindNeedsInput,
+				event: ports.Event{
+					Type: ports.SessionOutput, FeatureID: featureID,
+				},
+			}
+			item.reservation = n.queue.reserveProtected(item.event)
+			n.dispatchDeliveryGroup(item, work)
+		}
+	}
+	threads = n.responderThreads(settings)
 	if len(threads) == 0 {
 		return
 	}
@@ -341,7 +377,10 @@ func (n *Notifier) responderThreads(settings ports.SlackRuntimeSettings) []respo
 				continue
 			}
 			oldest := ""
-			for _, pending := range record.Pending {
+			retained := make([]pendingInputRecord, 0, len(record.Pending)+len(record.Resolved))
+			retained = append(retained, record.Pending...)
+			retained = append(retained, record.Resolved...)
+			for _, pending := range retained {
 				messageTS := pending.MessageTS[key]
 				if messageTS != "" &&
 					(oldest == "" || compareSlackTimestamps(messageTS, oldest) < 0) {
@@ -605,6 +644,12 @@ func (n *Notifier) handleRejectedResponderReply(
 		n.rejectResponderReply(token, candidate, pending, "stale_revision", "warning",
 			pending.Tag+" changed in Agentico. Approve the current review there.")
 	case ports.SlackAnswerNoLongerPending:
+		if resolved, ok := n.resolveResponderTargetByAgentico(
+			candidate.Thread.featureID,
+			candidate.Target.Identity,
+		); ok {
+			n.enqueueResponderClosure(token, candidate.Thread.featureID, resolved)
+		}
 		n.rejectResponderReply(token, candidate, pending, "already_resolved", "warning",
 			pending.Tag+" was already answered by Agentico.")
 	case ports.SlackAnswerFailed:
@@ -632,6 +677,12 @@ func (n *Notifier) handleRejectedResponderReaction(
 	case ports.SlackAnswerNoLongerPending:
 		reason = "already_resolved"
 		line = pending.Tag + " was already answered by Agentico."
+		if resolved, ok := n.resolveResponderTargetByAgentico(
+			candidate.Thread.featureID,
+			candidate.Target.Identity,
+		); ok {
+			n.enqueueResponderClosure(token, candidate.Thread.featureID, resolved)
+		}
 	case ports.SlackAnswerFailed:
 		reason = "submit_failed"
 		line = pending.Tag + " could not be submitted. Answer again or in Agentico."
@@ -879,6 +930,11 @@ func (n *Notifier) pendingResponderTarget(
 			return pending, true
 		}
 	}
+	for _, resolved := range record.Resolved {
+		if resolved.Identity == identity {
+			return resolved, true
+		}
+	}
 	return pendingInputRecord{}, false
 }
 
@@ -925,6 +981,97 @@ func (n *Notifier) resolveResponderTarget(
 	return true
 }
 
+func (n *Notifier) resolveResponderTargetByAgentico(
+	featureID, identity string,
+) (pendingInputRecord, bool) {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[featureID]
+	if record == nil {
+		return pendingInputRecord{}, false
+	}
+	var resolved pendingInputRecord
+	for i := range record.Pending {
+		if record.Pending[i].Identity != identity {
+			continue
+		}
+		if record.Pending[i].Resolution != nil {
+			return pendingInputRecord{}, false
+		}
+		record.Pending[i].Resolution = &postingResolution{
+			Kind:        resolutionAgentico,
+			ResolvedAt:  n.responderClock.Now().UTC(),
+			ClosureSent: true,
+		}
+		resolved = record.Pending[i]
+		break
+	}
+	if resolved.Resolution == nil {
+		return pendingInputRecord{}, false
+	}
+	for key, destination := range record.Destinations {
+		for i := range destination.PostingIndex {
+			if destination.PostingIndex[i].Identity == identity {
+				resolution := *resolved.Resolution
+				destination.PostingIndex[i].Resolution = &resolution
+			}
+		}
+		record.Destinations[key] = destination
+	}
+	err := n.persistRecordLocked(featureID, record, "")
+	n.logPersistError(err, "")
+	return resolved, true
+}
+
+func (n *Notifier) enqueueResponderClosure(
+	token, featureID string,
+	pending pendingInputRecord,
+) {
+	n.recordMu.Lock()
+	record := n.records[featureID]
+	if record == nil {
+		n.recordMu.Unlock()
+		return
+	}
+	work := make([]workItem, 0, len(pending.MessageTS))
+	for key, messageTS := range pending.MessageTS {
+		if messageTS == "" {
+			continue
+		}
+		destination := record.Destinations[key]
+		if destination.ChannelID == "" || destination.RootTS == "" {
+			continue
+		}
+		work = append(work, workItem{
+			featureID:       featureID,
+			sourceFeatureID: pending.SourceFeatureID,
+			destinationKey:  key,
+			kind:            destination.Kind,
+			channelID:       destination.ChannelID,
+			responder:       true,
+			reply: replyPayload{
+				kind: kindNeedsInput,
+				fallback: scrub(
+					token,
+					pending.Tag+" was resolved in Agentico.",
+				),
+			},
+		})
+	}
+	n.recordMu.Unlock()
+	if len(work) == 0 {
+		return
+	}
+	item := queueItem{
+		kind: kindNeedsInput,
+		event: ports.Event{
+			Type: ports.SessionOutput, FeatureID: featureID,
+		},
+	}
+	item.reservation = n.queue.reserveProtected(item.event)
+	n.dispatchDeliveryGroup(item, work)
+}
+
 func (n *Notifier) judgeResponderReaction(candidate responderReactionCandidate) {
 	n.recordMu.Lock()
 	defer n.recordMu.Unlock()
@@ -937,6 +1084,18 @@ func (n *Notifier) judgeResponderReaction(candidate responderReactionCandidate) 
 			continue
 		}
 		record.Pending[i].judgedReactionAppend(
+			candidate.Thread.destinationKey,
+			candidate.MessageTS,
+			candidate.Name,
+			candidate.UserID,
+		)
+		break
+	}
+	for i := range record.Resolved {
+		if record.Resolved[i].Identity != candidate.Target.Identity {
+			continue
+		}
+		record.Resolved[i].judgedReactionAppend(
 			candidate.Thread.destinationKey,
 			candidate.MessageTS,
 			candidate.Name,

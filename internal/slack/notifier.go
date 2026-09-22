@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -140,6 +142,10 @@ type Notifier struct {
 
 	recheckMu     sync.Mutex
 	recheckQueued map[string]bool
+
+	inputMu           sync.Mutex
+	trackedInputs     map[string]bool
+	pendingDeliveries map[string]struct{}
 }
 
 // NewNotifier constructs the notifier and its intake queue. Call Start
@@ -175,6 +181,8 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		pendingPersistence: map[string]ports.SlackRecipientKind{},
 		workers:            map[string]*destinationWorker{},
 		recheckQueued:      map[string]bool{},
+		trackedInputs:      map[string]bool{},
+		pendingDeliveries:  map[string]struct{}{},
 	}
 	notifier.requestBase, notifier.cancelBase = context.WithCancel(context.Background())
 	dropCapacity := opts.QueueCapacity
@@ -222,6 +230,7 @@ func (n *Notifier) Start() {
 	if n.stopped.Load() {
 		return
 	}
+	n.warmPendingRecords()
 	n.dispatcherWG.Add(1)
 	go n.runDispatcher()
 }
@@ -288,7 +297,10 @@ func (n *Notifier) RuntimeMessageTap(message any) {
 }
 
 func (n *Notifier) enqueueRecheck(featureID string) {
-	if !n.hasTrackedInputs(featureID) {
+	n.inputMu.Lock()
+	tracked := n.trackedInputs[featureID]
+	n.inputMu.Unlock()
+	if !tracked {
 		return
 	}
 	n.recheckMu.Lock()
@@ -305,25 +317,6 @@ func (n *Notifier) enqueueRecheck(featureID string) {
 	}) {
 		n.clearRecheck(featureID)
 	}
-}
-
-func (n *Notifier) hasTrackedInputs(featureID string) bool {
-	ownerID := featureID
-	if current, err := n.store.Load(featureID); err == nil && current != nil && current.IsChild() {
-		ownerID = current.Parent.ParentID
-	}
-	record, err := n.recordFor(ownerID)
-	if err != nil {
-		return false
-	}
-	n.recordMu.Lock()
-	defer n.recordMu.Unlock()
-	for _, item := range record.Pending {
-		if item.SourceFeatureID == featureID {
-			return true
-		}
-	}
-	return len(record.Pending) > 0
 }
 
 func (n *Notifier) clearRecheck(featureID string) {
@@ -536,14 +529,10 @@ func (n *Notifier) processItem(item queueItem) {
 	}
 	n.retryPendingRecord(owner.ID, record)
 
-	work, reconciled := n.reconcilePending(settings, owner, eventFeature, record)
+	work := n.reconcilePending(settings, owner, eventFeature, record)
 	if item.recheckOnly ||
 		item.event.Type == ports.NeedUserInputRequired ||
 		item.event.Type == ports.SessionOutput {
-		if len(work) == 0 && !reconciled {
-			n.queue.complete(item)
-			return
-		}
 		n.dispatchWork(item, work)
 		return
 	}
@@ -590,9 +579,9 @@ func (n *Notifier) reconcilePending(
 	settings ports.SlackRuntimeSettings,
 	owner, trigger *feature.Feature,
 	record *featureRecord,
-) ([]workItem, bool) {
+) []workItem {
 	if n.pending == nil {
-		return nil, false
+		return nil
 	}
 	sourceIDs := map[string]bool{trigger.ID: true}
 	n.recordMu.Lock()
@@ -681,6 +670,7 @@ func (n *Notifier) reconcilePending(
 			changed = true
 		}
 	}
+	n.refreshTrackedInputsLocked()
 	if changed {
 		err := n.persistRecordLocked(owner.ID, record, settings.Recipients[0].Kind)
 		n.recordMu.Unlock()
@@ -700,22 +690,43 @@ func (n *Notifier) reconcilePending(
 		postedAny := false
 		if settings.Categories.NeedsInput {
 			n.recordMu.Lock()
-			pendingSnapshot := append([]pendingInputRecord(nil), record.Pending...)
+			type pendingDelivery struct {
+				sourceFeatureID string
+				kind            string
+				identity        string
+				tag             string
+			}
+			pendingSnapshot := make([]pendingDelivery, 0, len(record.Pending))
+			for _, tracked := range record.Pending {
+				if tracked.Tag == "" || tracked.MessageTS[key] != "" {
+					continue
+				}
+				if !n.reservePendingDelivery(owner.ID, tracked.Identity, key) {
+					continue
+				}
+				pendingSnapshot = append(pendingSnapshot, pendingDelivery{
+					sourceFeatureID: tracked.SourceFeatureID,
+					kind:            tracked.Kind,
+					identity:        tracked.Identity,
+					tag:             tracked.Tag,
+				})
+			}
 			n.recordMu.Unlock()
 			sort.SliceStable(pendingSnapshot, func(i, j int) bool {
-				return tagNumber(pendingSnapshot[i].Tag) < tagNumber(pendingSnapshot[j].Tag)
+				return tagNumber(pendingSnapshot[i].tag) < tagNumber(pendingSnapshot[j].tag)
 			})
 			for _, tracked := range pendingSnapshot {
-				input, live := liveByIdentity[tracked.Identity]
-				if !live || tracked.Tag == "" || tracked.MessageTS[key] != "" {
+				input, live := liveByIdentity[tracked.identity]
+				if !live {
+					n.releasePendingDelivery(owner.ID, tracked.identity, key)
 					continue
 				}
 				blocks, fallback := renderPendingInput(
-					settings.Token, tracked.Tag, input, sourceFeatures[tracked.SourceFeatureID],
+					settings.Token, tracked.tag, input, sourceFeatures[tracked.sourceFeatureID],
 				)
 				work = append(work, workItem{
 					featureID:       owner.ID,
-					sourceFeatureID: tracked.SourceFeatureID,
+					sourceFeatureID: tracked.sourceFeatureID,
 					destinationKey:  key,
 					kind:            string(recipient.Kind),
 					channelID:       channelID,
@@ -723,7 +734,7 @@ func (n *Notifier) reconcilePending(
 					refresh:         true,
 					reply: replyPayload{
 						kind: kindNeedsInput, fallback: fallback, blocks: blocks,
-						inputKind: tracked.Kind, identity: tracked.Identity, tag: tracked.Tag,
+						inputKind: tracked.kind, identity: tracked.identity, tag: tracked.tag,
 					},
 				})
 				postedAny = true
@@ -742,7 +753,7 @@ func (n *Notifier) reconcilePending(
 			})
 		}
 	}
-	return work, changed
+	return work
 }
 
 func (n *Notifier) waitingLine(record *featureRecord, repliesEnabled bool) string {
@@ -750,6 +761,98 @@ func (n *Notifier) waitingLine(record *featureRecord, repliesEnabled bool) strin
 	pending := append([]pendingInputRecord(nil), record.Pending...)
 	n.recordMu.Unlock()
 	return waitingSummary(pending, repliesEnabled)
+}
+
+func (n *Notifier) warmPendingRecords() {
+	entries, err := os.ReadDir(n.stateDir)
+	if err != nil {
+		return
+	}
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		featureID := entry.Name()
+		if _, loaded := n.records[featureID]; loaded {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(n.stateDir, featureID, recordFilename)); err != nil {
+			continue
+		}
+		record, err := loadFeatureRecord(n.stateDir, featureID)
+		if err == nil {
+			n.records[featureID] = record
+		}
+	}
+	n.refreshTrackedInputsLocked()
+}
+
+// refreshTrackedInputsLocked publishes the durable pending set as immutable
+// admission state for the runtime tap. The caller must hold recordMu.
+func (n *Notifier) refreshTrackedInputsLocked() {
+	tracked := make(map[string]bool)
+	for ownerID, record := range n.records {
+		if len(record.Pending) > 0 {
+			tracked[ownerID] = true
+		}
+		for _, item := range record.Pending {
+			tracked[item.SourceFeatureID] = true
+		}
+	}
+	n.inputMu.Lock()
+	n.trackedInputs = tracked
+	n.inputMu.Unlock()
+}
+
+func pendingDeliveryKey(featureID, identity, destinationKey string) string {
+	return featureID + "\x00" + identity + "\x00" + destinationKey
+}
+
+func (n *Notifier) reservePendingDelivery(featureID, identity, destinationKey string) bool {
+	key := pendingDeliveryKey(featureID, identity, destinationKey)
+	n.inputMu.Lock()
+	defer n.inputMu.Unlock()
+	if _, reserved := n.pendingDeliveries[key]; reserved {
+		return false
+	}
+	n.pendingDeliveries[key] = struct{}{}
+	return true
+}
+
+func (n *Notifier) releasePendingDelivery(featureID, identity, destinationKey string) {
+	if identity == "" {
+		return
+	}
+	n.inputMu.Lock()
+	delete(n.pendingDeliveries, pendingDeliveryKey(featureID, identity, destinationKey))
+	n.inputMu.Unlock()
+}
+
+func (n *Notifier) pendingDeliveryEligible(
+	record *featureRecord,
+	featureID, identity, destinationKey string,
+) bool {
+	if identity == "" {
+		return true
+	}
+	n.recordMu.Lock()
+	pending := false
+	for _, item := range record.Pending {
+		if item.Identity == identity && item.MessageTS[destinationKey] == "" {
+			pending = true
+			break
+		}
+	}
+	n.recordMu.Unlock()
+	if !pending {
+		return false
+	}
+	n.inputMu.Lock()
+	_, reserved := n.pendingDeliveries[pendingDeliveryKey(featureID, identity, destinationKey)]
+	n.inputMu.Unlock()
+	return reserved
 }
 
 func replyForEvent(token string, ev ports.Event, f *feature.Feature) replyPayload {
@@ -789,6 +892,7 @@ func (n *Notifier) recordFor(featureID string) (*featureRecord, error) {
 		return nil, err
 	}
 	n.records[featureID] = record
+	n.refreshTrackedInputsLocked()
 	return record, nil
 }
 

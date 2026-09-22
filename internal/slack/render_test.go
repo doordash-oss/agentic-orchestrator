@@ -108,6 +108,32 @@ func TestRenderRootCardEditedStateIncludesPullRequestLinks(t *testing.T) {
 	}
 }
 
+func TestRenderRootCardFallbackIncludesWaitingState(t *testing.T) {
+	f := &feature.Feature{
+		Name:         "Publish Slack notifications",
+		Status:       feature.StatusImplementing,
+		CurrentPhase: feature.PhaseImplement,
+		Pipeline:     feature.PipelineMoonshot,
+	}
+
+	_, fallback := renderRootCard(
+		"Local agent",
+		f,
+		nil,
+		time.Now(),
+		"#1 permission · #2 question",
+	)
+	for _, want := range []string{
+		"Publish Slack notifications",
+		"Implementing",
+		"Waiting on you: #1 permission · #2 question",
+	} {
+		if !strings.Contains(fallback, want) {
+			t.Errorf("renderRootCard() fallback = %q; want %q", fallback, want)
+		}
+	}
+}
+
 func TestPhaseWithRoadmapIncludesRoadmapPosition(t *testing.T) {
 	tests := []struct {
 		name         string

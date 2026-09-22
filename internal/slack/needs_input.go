@@ -26,7 +26,15 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-const inputFallbackTextLimit = 1200
+const (
+	inputFallbackTextLimit = 1200
+
+	permissionResponseInstructions   = "React ✅ to allow once or ❌ to deny, or reply allow, approve, yes, deny, or no. Remember rules are created only in Agentico. Anyone who can see this can respond"
+	singleSelectResponseInstructions = "Reply with an option number, its label, or react with a keycap number (1️⃣–9️⃣). Any other text is treated as a free-text answer. Anyone who can see this can respond"
+	multiSelectResponseInstructions  = "Reply with a comma- or space-separated list of option numbers or labels. Anyone who can see this can respond"
+	freeTextResponseInstructions     = "Reply with any text. Anyone who can see this can respond"
+	gateResponseInstructions         = "Resolution: In Agentico, waive the blocked checks or retry after signing in. Replies are not read here."
+)
 
 func pendingInputIdentity(item ports.SlackPendingInput) string {
 	switch item.Kind {
@@ -97,16 +105,23 @@ func renderPermissionInput(token, tag, prefix string, item ports.SlackPendingInp
 	if shortened {
 		code += note
 	}
-	context := "React ✅ to allow once or ❌ to deny, or reply allow, approve, yes, deny, or no. Remember rules are created only in Agentico. Anyone who can see this can respond"
 	blocks := []Block{
 		headerBlockFor(header),
 		sectionTextBlockFor(detail),
 		sectionTextBlockFor(code),
-		contextBlockFor([]textObject{{Type: textTypeMrkdwn, Text: safeText(context, contextTextLimit)}}),
+		contextBlockFor([]textObject{{
+			Type: textTypeMrkdwn,
+			Text: safeText(permissionResponseInstructions, contextTextLimit),
+		}}),
 	}
-	fallback := safePlain(
-		fmt.Sprintf("%s Permission: %s for %s in %s. %s", tag, tool, repo, phase, input),
-		inputFallbackTextLimit,
+	fallback := pendingInputFallback(
+		tag+" "+prefix+"Permission: "+tool,
+		[]string{
+			"Repository: " + repo,
+			"Phase: " + phase,
+			"Input: " + input,
+		},
+		permissionResponseInstructions,
 	)
 	return blocks, fallback
 }
@@ -155,16 +170,48 @@ func renderQuestionInput(token, tag, prefix string, item ports.SlackPendingInput
 			truncateMrkdwnTokens(strings.Join(lines, "\n"), sectionTextLimit),
 		))
 	}
-	context := "Reply with any text. Anyone who can see this can respond"
+	context := freeTextResponseInstructions
 	if len(item.Options) > 0 && item.MultiSelect {
-		context = "Reply with a comma- or space-separated list of option numbers or labels. Anyone who can see this can respond"
+		context = multiSelectResponseInstructions
 	} else if len(item.Options) > 0 {
-		context = "Reply with an option number, its label, or react with a keycap number (1️⃣–9️⃣). Any other text is treated as a free-text answer. Anyone who can see this can respond"
+		context = singleSelectResponseInstructions
 	}
 	sections = append(sections, contextBlockFor([]textObject{{
 		Type: textTypeMrkdwn, Text: safeText(context, contextTextLimit),
 	}}))
-	return sections, safePlain(tag+" "+scrub(token, headerText)+": "+question, inputFallbackTextLimit)
+
+	fallbackDetails := make([]string, 0, len(item.Options)+1)
+	if item.QuestionCount > 1 {
+		fallbackDetails = append(
+			fallbackDetails,
+			fmt.Sprintf("Question %d of %d: %s", item.QuestionIndex+1, item.QuestionCount, scrub(token, item.Question)),
+		)
+	} else {
+		fallbackDetails = append(fallbackDetails, "Question: "+scrub(token, item.Question))
+	}
+	recommended := recommendedOption(item)
+	for i, option := range item.Options {
+		label := scrub(token, option.Label)
+		if i == recommended && !strings.Contains(strings.ToLower(label), "recommended") {
+			label += " (recommended)"
+		}
+		optionParts := []string{fmt.Sprintf("%d. %s", i+1, label)}
+		if option.Description != "" {
+			optionParts = append(optionParts, scrub(token, option.Description))
+		}
+		if option.HasConfidence {
+			optionParts = append(
+				optionParts,
+				fmt.Sprintf("%d%% confidence", int(math.Round(option.Confidence*100))),
+			)
+		}
+		fallbackDetails = append(fallbackDetails, strings.Join(optionParts, " — "))
+	}
+	return sections, pendingInputFallback(
+		tag+" "+prefix+scrub(token, headerText),
+		fallbackDetails,
+		context,
+	)
 }
 
 func recommendedOption(item ports.SlackPendingInput) int {
@@ -189,10 +236,14 @@ func renderHelpInput(token, tag, prefix string, item ports.SlackPendingInput) ([
 		sectionTextBlockFor(safeText(question, sectionTextLimit)),
 		contextBlockFor([]textObject{{
 			Type: textTypeMrkdwn,
-			Text: safeText("Reply with any text. Anyone who can see this can respond", contextTextLimit),
+			Text: safeText(freeTextResponseInstructions, contextTextLimit),
 		}}),
 	}
-	return blocks, safePlain(tag+" Help request: "+question, inputFallbackTextLimit)
+	return blocks, pendingInputFallback(
+		tag+" "+prefix+"Help request",
+		[]string{"Question: " + question},
+		freeTextResponseInstructions,
+	)
 }
 
 func renderGateInput(token, tag, prefix string, item ports.SlackPendingInput) ([]Block, string) {
@@ -238,7 +289,81 @@ func renderGateInput(token, tag, prefix string, item ports.SlackPendingInput) ([
 			Text: safeText("Replies are not read here. Resolve this verification gate in Agentico.", contextTextLimit),
 		}}),
 	)
-	return blocks, safePlain(tag+" Verification needs your input: "+summary, inputFallbackTextLimit)
+
+	fallbackDetails := make([]string, 0, len(item.GateBlockers)+len(item.GateQuestions)+1)
+	if summary != "" {
+		fallbackDetails = append(fallbackDetails, "Summary: "+summary)
+	}
+	for i, blocker := range item.GateBlockers {
+		blockerParts := []string{
+			fmt.Sprintf(
+				"Blocker %d: %s",
+				i+1,
+				scrub(token, firstNonempty(blocker.Name, "Blocked check")),
+			),
+		}
+		if blocker.RepoName != "" {
+			blockerParts = append(blockerParts, "Repository: "+scrub(token, blocker.RepoName))
+		}
+		if blocker.Command != "" {
+			blockerParts = append(blockerParts, "Command: "+scrub(token, blocker.Command))
+		}
+		if blocker.Reason != "" {
+			blockerParts = append(blockerParts, "Reason: "+scrub(token, blocker.Reason))
+		}
+		if blocker.Remediation != "" {
+			blockerParts = append(blockerParts, "Remediation: "+scrub(token, blocker.Remediation))
+		}
+		fallbackDetails = append(fallbackDetails, strings.Join(blockerParts, "; "))
+	}
+	for i, question := range item.GateQuestions {
+		fallbackDetails = append(
+			fallbackDetails,
+			fmt.Sprintf("Question %d: %s", i+1, scrub(token, question)),
+		)
+	}
+	return blocks, pendingInputFallback(
+		tag+" "+prefix+"Verification needs your input",
+		fallbackDetails,
+		gateResponseInstructions,
+	)
+}
+
+func pendingInputFallback(title string, details []string, instructions string) string {
+	const (
+		partSeparator     = " | "
+		fullDetailPointer = "Open Agentico for full details."
+		preferredTitleMax = 240
+	)
+
+	title = strings.Join(strings.Fields(title), " ")
+	instructions = strings.Join(strings.Fields(instructions), " ")
+	normalizedDetails := make([]string, 0, len(details))
+	for _, detail := range details {
+		if detail = strings.Join(strings.Fields(detail), " "); detail != "" {
+			normalizedDetails = append(normalizedDetails, detail)
+		}
+	}
+
+	parts := make([]string, 0, len(normalizedDetails)+2)
+	parts = append(parts, title)
+	parts = append(parts, normalizedDetails...)
+	parts = append(parts, instructions)
+	if fallback := strings.Join(compactStrings(parts...), partSeparator); len(fallback) <= inputFallbackTextLimit {
+		return fallback
+	}
+
+	title = abbreviateFallbackText(title, preferredTitleMax)
+	required := compactStrings(title, instructions, fullDetailPointer)
+	detailBudget := inputFallbackTextLimit - len(strings.Join(required, partSeparator))
+	if len(normalizedDetails) > 0 {
+		detailBudget -= len(partSeparator)
+	}
+	detail := abbreviateFallbackText(strings.Join(normalizedDetails, partSeparator), max(0, detailBudget))
+	return safePlain(
+		strings.Join(compactStrings(title, detail, instructions, fullDetailPointer), partSeparator),
+		inputFallbackTextLimit,
+	)
 }
 
 func waitingSummary(pending []pendingInputRecord, repliesEnabled bool) string {

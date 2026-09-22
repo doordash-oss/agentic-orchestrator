@@ -15,7 +15,12 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +28,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/internal/slack"
+	"github.com/doordash-oss/agentic-orchestrator/internal/slack/testsupport"
 )
 
 func TestPendingSlackInputsSplitsQuestionBundle(t *testing.T) {
@@ -82,6 +90,58 @@ func TestPendingSlackInputsSplitsQuestionBundle(t *testing.T) {
 	}
 }
 
+func TestPendingSlackInputsPreservesRawQuestionData(t *testing.T) {
+	t.Parallel()
+
+	longQuestion := strings.Repeat("question", 600)
+	longDescription := strings.Repeat("description", 500)
+	input, err := json.Marshal(map[string]any{
+		"questions": []map[string]any{{
+			"header":   "Deployment scope",
+			"question": longQuestion,
+			"options": []map[string]any{{
+				"label":       "Focused",
+				"description": longDescription,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	request := pendingReadControl("question-request", toolNameAskUserQuestion, string(input))
+	session := &fakeSessionView{
+		id:        "question-session",
+		featureID: fixtureFeatureID,
+		phase:     feature.PhasePlan,
+		status:    ports.SessionWaitingHelp,
+		pending:   []*llm.ControlRequestMessage{request},
+	}
+	h := &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{session}}}
+
+	got, err := h.PendingSlackInputs(fixtureFeatureID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() length = %d; want 1", len(got))
+	}
+	if got[0].Question != longQuestion {
+		t.Errorf("PendingSlackInputs()[0].Question length = %d; want %d", len(got[0].Question), len(longQuestion))
+	}
+	if len(got[0].Options) != 1 || got[0].Options[0].Description != longDescription {
+		t.Errorf("PendingSlackInputs()[0].Options = %+v; want raw option description", got[0].Options)
+	}
+
+	dto := controlRequestDTO(session, request)
+	if len(dto.Questions) != 1 || len(dto.Questions[0].Question) != askUserQuestionDisplayLimit+3 {
+		t.Errorf("controlRequestDTO().Questions = %+v; want existing question display cap", dto.Questions)
+	}
+	if len(dto.Questions[0].Options) != 1 ||
+		len(dto.Questions[0].Options[0].Description) != askUserOptionDescriptionDisplayLimit+3 {
+		t.Errorf("controlRequestDTO().Questions[0].Options = %+v; want existing option display cap", dto.Questions[0].Options)
+	}
+}
+
 func TestPendingSlackInputsProjectsPermissionContext(t *testing.T) {
 	t.Parallel()
 
@@ -129,6 +189,219 @@ func TestPendingSlackInputsProjectsPermissionContext(t *testing.T) {
 	if input.RememberPattern == "" {
 		t.Error("PendingSlackInputs()[0].RememberPattern is empty; want inferred preview")
 	}
+}
+
+func TestPendingSlackInputsPreservesRawPermissionInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{
+			name:    "fitting Bash command beyond API display limit",
+			command: strings.Repeat("x", 2500),
+		},
+		{
+			name: "credential URL crossing API display limit",
+			command: "curl https://" +
+				strings.Repeat("u", 1980) +
+				":password@example.test/private",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input, err := json.Marshal(map[string]any{"command": tt.command})
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			request := pendingReadControl("permission-request", toolNameBash, string(input))
+			session := &fakeSessionView{
+				id:        "permission-session",
+				featureID: fixtureFeatureID,
+				phase:     feature.PhaseImplement,
+				repoName:  repoNameSelf,
+				status:    ports.SessionWaitingPermission,
+				pending:   []*llm.ControlRequestMessage{request},
+			}
+			h := &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{session}}}
+
+			got, err := h.PendingSlackInputs(fixtureFeatureID)
+			if err != nil {
+				t.Fatalf("PendingSlackInputs() error = %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("PendingSlackInputs() length = %d; want 1", len(got))
+			}
+			gotCommand, ok := got[0].Input["command"].(string)
+			if !ok {
+				t.Fatalf("PendingSlackInputs()[0].Input[command] = %#v; want string", got[0].Input["command"])
+			}
+			if gotCommand != tt.command {
+				t.Errorf("PendingSlackInputs()[0].Input[command] length = %d; want exact %d-byte command", len(gotCommand), len(tt.command))
+			}
+
+			dtoCommand, ok := controlRequestDTO(session, request).Input["command"].(string)
+			if !ok {
+				t.Fatalf("controlRequestDTO().Input[command] = %#v; want string", controlRequestDTO(session, request).Input["command"])
+			}
+			if len(dtoCommand) != 2003 || !strings.HasSuffix(dtoCommand, "...") {
+				t.Errorf("controlRequestDTO().Input[command] = %d bytes; want existing 2000-byte display cap plus ellipsis", len(dtoCommand))
+			}
+		})
+	}
+}
+
+func TestPendingSlackInputsRealPortPreservesThenRedactsPermissionInput(t *testing.T) {
+	const token = "xoxb-server-port-test-token"
+
+	fakeSlack := testsupport.New(t)
+	var responseCounter atomic.Int64
+	fakeSlack.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+		switch method {
+		case "chat.postMessage", "chat.update":
+			n := responseCounter.Add(1)
+			return testsupport.Response{Body: map[string]any{
+				"ok":      true,
+				"ts":      fmt.Sprintf("1758499200.%06d", n),
+				"channel": fmt.Sprint(request.Fields["channel"]),
+			}}
+		default:
+			return testsupport.Response{Body: map[string]any{"ok": false, "error": "unexpected " + method}}
+		}
+	})
+	t.Setenv(slack.EnvSlackAPIBase, fakeSlack.URL())
+
+	fittingCommand := strings.Repeat("x", 2500)
+	credentialCommand := "curl https://" +
+		strings.Repeat("u", 1980) +
+		":password@example.test/private"
+	fittingInput, err := json.Marshal(map[string]any{"command": fittingCommand})
+	if err != nil {
+		t.Fatalf("json.Marshal() fitting command error = %v", err)
+	}
+	credentialInput, err := json.Marshal(map[string]any{"command": credentialCommand})
+	if err != nil {
+		t.Fatalf("json.Marshal() credential command error = %v", err)
+	}
+	sessionView := &fakeSessionView{
+		id:        "permission-session",
+		featureID: fixtureFeatureID,
+		phase:     feature.PhaseImplement,
+		repoName:  repoNameSelf,
+		status:    ports.SessionWaitingPermission,
+		pending: []*llm.ControlRequestMessage{
+			pendingReadControl("fitting-command", toolNameBash, string(fittingInput)),
+			pendingReadControl("credential-command", toolNameBash, string(credentialInput)),
+		},
+	}
+
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	if err := store.Save(&feature.Feature{
+		ID:            fixtureFeatureID,
+		Name:          "Slack pending input projection",
+		Slug:          "slack-pending-input-projection",
+		Description:   "server port regression fixture",
+		Created:       time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC),
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Pipeline:      feature.PipelineMoonshot,
+		Repos:         []feature.FeatureRepo{{Name: repoNameSelf}},
+	}); err != nil {
+		t.Fatalf("Save() feature error = %v", err)
+	}
+	source := &apiHandler{
+		sessions: fakeSessionManager{views: []ports.SessionView{sessionView}},
+		store:    store,
+	}
+	notifier := slack.NewNotifier(slack.NotifierOptions{
+		Settings: slackPendingInputTestSettings{settings: ports.SlackRuntimeSettings{
+			Enabled: true,
+			Token:   token,
+			Recipients: []ports.SlackRecipient{{
+				TypedText: "#eng", Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng",
+			}},
+			Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+		}},
+		Store:    store,
+		StateDir: stateDir,
+		Pending:  source,
+	})
+	notifier.SetServerName("Local agent")
+	notifier.Start()
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+
+	notifier.RuntimeMessageTap(session.SDKEventMsg{
+		SessionID: "permission-session",
+		FeatureID: fixtureFeatureID,
+		Phase:     feature.PhaseImplement,
+		Message: llm.SDKMessage{
+			Type: "control_request",
+			ControlRequest: &llm.ControlRequestMessage{
+				Type:      "control_request",
+				RequestID: "fitting-command",
+				Request:   llm.ControlRequest{Subtype: "can_use_tool", ToolName: toolNameBash},
+			},
+		},
+	})
+
+	var threadPosts []testsupport.Request
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		threadPosts = threadSlackPosts(fakeSlack.Requests("chat.postMessage"))
+		if len(threadPosts) == 2 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if len(threadPosts) != 2 {
+		t.Fatalf("thread chat.postMessage calls = %d; want 2", len(threadPosts))
+	}
+
+	var fittingPayload, credentialPayload string
+	for _, post := range threadPosts {
+		blocks := fmt.Sprint(post.Fields["blocks"])
+		switch {
+		case strings.Contains(blocks, fittingCommand):
+			fittingPayload = blocks
+		case strings.Contains(blocks, "curl ") && strings.Contains(blocks, "[REDACTED]"):
+			credentialPayload = blocks
+		}
+	}
+	if fittingPayload == "" {
+		t.Error("Slack blocks omitted the complete 2500-byte Bash command")
+	}
+	if credentialPayload == "" {
+		t.Fatalf("Slack blocks omitted the credential command's surrounding text or redaction marker: %+v", threadPosts)
+	}
+	if strings.Contains(credentialPayload, "password") || strings.Contains(credentialPayload, strings.Repeat("u", 1980)) {
+		t.Errorf("Slack blocks leaked URL userinfo: %s", credentialPayload)
+	}
+	if !strings.Contains(credentialPayload, "[REDACTED]") {
+		t.Errorf("Slack blocks lack credential redaction marker: %s", credentialPayload)
+	}
+}
+
+type slackPendingInputTestSettings struct {
+	settings ports.SlackRuntimeSettings
+}
+
+func (s slackPendingInputTestSettings) SlackSettings() ports.SlackRuntimeSettings {
+	return s.settings
+}
+
+func threadSlackPosts(requests []testsupport.Request) []testsupport.Request {
+	var posts []testsupport.Request
+	for _, request := range requests {
+		threadTS, ok := request.Fields["thread_ts"]
+		if ok && fmt.Sprint(threadTS) != "" {
+			posts = append(posts, request)
+		}
+	}
+	return posts
 }
 
 func TestPendingSlackInputsIncludesStoredHelpOnly(t *testing.T) {

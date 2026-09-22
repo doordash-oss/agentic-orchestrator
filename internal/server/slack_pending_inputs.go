@@ -15,9 +15,11 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -31,15 +33,18 @@ func (h *apiHandler) PendingSlackInputs(featureID string) ([]ports.SlackPendingI
 				continue
 			}
 			for _, req := range sess.PendingControlRequests() {
-				dto := controlRequestDTO(sess, req)
-				if dto.ToolName == toolNameAskUserQuestion {
-					for i, question := range dto.Questions {
+				if req == nil {
+					continue
+				}
+				if req.Request.ToolName == toolNameAskUserQuestion {
+					questions := slackAskUserQuestions(sess, req)
+					for i, question := range questions {
 						item := ports.SlackPendingInput{
 							Kind:          ports.SlackPendingQuestion,
 							FeatureID:     featureID,
-							RequestID:     dto.RequestID,
+							RequestID:     req.RequestID,
 							QuestionIndex: i,
-							QuestionCount: len(dto.Questions),
+							QuestionCount: len(questions),
 							Header:        question.Header,
 							Question:      question.Question,
 							MultiSelect:   question.MultiSelect,
@@ -62,13 +67,13 @@ func (h *apiHandler) PendingSlackInputs(featureID string) ([]ports.SlackPendingI
 				pending = append(pending, ports.SlackPendingInput{
 					Kind:            ports.SlackPendingPermission,
 					FeatureID:       featureID,
-					RequestID:       dto.RequestID,
-					ToolName:        dto.ToolName,
-					Input:           dto.Input,
-					Phase:           dto.Phase,
+					RequestID:       req.RequestID,
+					ToolName:        req.Request.ToolName,
+					Input:           slackControlInput(req),
+					Phase:           sess.Phase().String(),
 					RepoName:        sess.RepoName(),
-					RememberPattern: rememberPattern(dto.Remember),
-					WaitingSince:    dto.WaitingSince,
+					RememberPattern: safeRememberPattern(req),
+					WaitingSince:    req.WaitingSince,
 				})
 			}
 		}
@@ -126,9 +131,81 @@ func (h *apiHandler) PendingSlackInputs(featureID string) ([]ports.SlackPendingI
 	return pending, nil
 }
 
-func rememberPattern(preview *PermissionRememberPreview) string {
-	if preview == nil {
-		return ""
+func slackControlInput(req *llm.ControlRequestMessage) map[string]any {
+	if req == nil || len(req.Request.Input) == 0 {
+		return nil
 	}
-	return preview.Pattern
+	var input map[string]any
+	if err := json.Unmarshal(req.Request.Input, &input); err != nil {
+		return nil
+	}
+	return input
+}
+
+func slackAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage) []AskUserQuestion {
+	if req == nil || req.Request.ToolName != toolNameAskUserQuestion {
+		return nil
+	}
+	questions := slackAskUserQuestionsFromInput(req.Request.Input)
+	if !askUserQuestionDTOsNeedConfidence(questions) || sess == nil || sess.MessageLog() == nil {
+		return questions
+	}
+	blocks := sess.MessageLog().ToolUseBlocks()
+	for i := len(blocks) - 1; i >= 0; i-- {
+		block := blocks[i]
+		if block.Name != toolNameAskUserQuestion || len(block.Input) == 0 {
+			continue
+		}
+		source := slackAskUserQuestionsFromInput(block.Input)
+		if askUserQuestionDTOBundlesMatch(questions, source) {
+			return copyAskUserQuestionDTOConfidence(questions, source)
+		}
+	}
+	return questions
+}
+
+func slackAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestion {
+	if len(input) == 0 {
+		return nil
+	}
+	var envelope struct {
+		Questions []struct {
+			Question         string `json:"question"`
+			Header           string `json:"header"`
+			MultiSelect      bool   `json:"multiSelect"`
+			MultiSelectSnake bool   `json:"multi_select"`
+			Options          []struct {
+				Label       string   `json:"label"`
+				Description string   `json:"description"`
+				Confidence  *float64 `json:"confidence"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal(input, &envelope); err != nil || len(envelope.Questions) == 0 {
+		return nil
+	}
+	questions := make([]AskUserQuestion, 0, len(envelope.Questions))
+	for _, rawQuestion := range envelope.Questions {
+		question := AskUserQuestion{
+			Question:    rawQuestion.Question,
+			Header:      rawQuestion.Header,
+			MultiSelect: rawQuestion.MultiSelect || rawQuestion.MultiSelectSnake,
+		}
+		for _, rawOption := range rawQuestion.Options {
+			option := AskUserOption{
+				Label:       rawOption.Label,
+				Description: rawOption.Description,
+				Confidence:  rawOption.Confidence,
+			}
+			if option.Label == "" && option.Description == "" && option.Confidence == nil {
+				continue
+			}
+			question.Options = append(question.Options, option)
+		}
+		if question.Question == "" && question.Header == "" && len(question.Options) == 0 {
+			continue
+		}
+		questions = append(questions, question)
+	}
+	return questions
 }

@@ -43,6 +43,7 @@ type Request struct {
 	Path          string
 	BearerPresent bool
 	Fields        map[string]any
+	ReturnedTS    string
 }
 
 // Server serves per-method scripted responses and records requests.
@@ -150,6 +151,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			Status: http.StatusOK,
 			Body:   map[string]any{"ok": false, "error": "unknown_method"},
 		}
+	}
+	if body, ok := response.Body.(map[string]any); ok {
+		request.ReturnedTS, _ = body["ts"].(string)
+		s.requests[len(s.requests)-1].ReturnedTS = request.ReturnedTS
 	}
 	s.mu.Unlock()
 

@@ -63,6 +63,9 @@ func renderRootCard(
 	fallback := safePlain(strings.TrimSpace(
 		fmt.Sprintf("%s — %s", name, status),
 	), fallbackTextLimit)
+	if len(waiting) > 0 && waiting[0] != "" {
+		fallback = safePlain(fallback+" — Waiting on you: "+waiting[0], fallbackTextLimit)
+	}
 	return blocks, fallback
 }
 

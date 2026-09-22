@@ -213,6 +213,11 @@ func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
 	if item.needsCard && rootTS == "" {
 		return true
 	}
+	if !w.notifier.pendingDeliveryEligible(
+		record, item.featureID, item.reply.identity, item.destinationKey,
+	) {
+		return false
+	}
 	_, _, ok := w.currentDelivery(item, item.reply.kind)
 	return ok && item.reply.fallback != ""
 }
@@ -221,6 +226,9 @@ func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
 // then mark the destination dirty for the coalesced refresh.
 func (w *destinationWorker) handle(item workItem) {
 	defer item.delivery.done()
+	defer w.notifier.releasePendingDelivery(
+		item.featureID, item.reply.identity, item.destinationKey,
+	)
 	if item.delivery != nil && item.delivery.item.reservation != nil &&
 		item.delivery.item.reservation.canceled.Load() {
 		return
@@ -329,6 +337,11 @@ func (w *destinationWorker) postReply(item workItem) error {
 	if rootTS == "" {
 		return errors.New("no root card to reply to")
 	}
+	if !notifier.pendingDeliveryEligible(
+		record, item.featureID, item.reply.identity, item.destinationKey,
+	) {
+		return errDeliveryIneligible
+	}
 
 	settings, _, ok := w.currentDelivery(item, item.reply.kind)
 	if !ok {
@@ -343,6 +356,11 @@ func (w *destinationWorker) postReply(item workItem) error {
 	}
 	defer w.recordWrite()
 	send := func() (PostMessageResult, deliveryCredential, error) {
+		if !notifier.pendingDeliveryEligible(
+			record, item.featureID, item.reply.identity, item.destinationKey,
+		) {
+			return PostMessageResult{}, deliveryCredential{}, errDeliveryIneligible
+		}
 		settings, _, ok = w.currentDelivery(item, item.reply.kind)
 		credential := deliveryCredential{
 			token: settings.Token, generation: settings.CredentialGeneration,
@@ -388,6 +406,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 			break
 		}
 	}
+	notifier.refreshTrackedInputsLocked()
 	persistErr := notifier.persistRecordLocked(
 		item.featureID, record, ports.SlackRecipientKind(item.kind),
 	)

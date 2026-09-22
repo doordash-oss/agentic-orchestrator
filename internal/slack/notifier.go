@@ -18,10 +18,12 @@ import (
 	"context"
 	"log"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -224,10 +226,10 @@ func (n *Notifier) Stop(ctx context.Context) {
 // supported orchestrator domain event. Other events are discarded
 // before any lookup.
 func (n *Notifier) DomainEventTap(ev ports.Event) {
-	if n.stopped.Load() || !handledEventType(ev.Type) {
+	if n.stopped.Load() || !handledEvent(ev) {
 		return
 	}
-	n.queue.enqueue(queueItem{kind: kindProgress, event: ev})
+	n.queue.enqueue(queueItem{kind: eventItemKind(ev), event: ev})
 }
 
 // RuntimeMessageTap is the non-blocking tap the SSE broker invokes for
@@ -235,19 +237,39 @@ func (n *Notifier) DomainEventTap(ev ports.Event) {
 // until a message category consumes them.
 func (n *Notifier) RuntimeMessageTap(any) {}
 
-func handledEventType(t ports.EventType) bool {
-	switch t {
+func handledEvent(ev ports.Event) bool {
+	switch ev.Type {
 	case ports.FeatureStarted,
 		ports.FeatureAdvanced,
 		ports.PhaseStarted,
 		ports.PhaseCompleted,
 		ports.PublishStarted,
 		ports.PublishCompleted,
-		ports.FeatureCompleted:
+		ports.FeatureCompleted,
+		ports.FeatureFailed,
+		ports.SetupFailed,
+		ports.FeatureInterrupted,
+		ports.FeatureRewound:
 		return true
+	case ports.RelationshipIntegrationChanged:
+		return ev.CanonicalError != nil
 	default:
 		return false
 	}
+}
+
+func eventItemKind(ev ports.Event) itemKind {
+	switch ev.Type {
+	case ports.FeatureFailed, ports.SetupFailed:
+		return kindProblems
+	case ports.PublishCompleted, ports.RelationshipIntegrationChanged:
+		if ev.CanonicalError != nil || ev.Error != nil {
+			return kindProblems
+		}
+	case ports.FeatureInterrupted, ports.FeatureRewound:
+		return kindLifecycle
+	}
+	return kindProgress
 }
 
 func eventTypeName(t ports.EventType) string {
@@ -266,6 +288,16 @@ func eventTypeName(t ports.EventType) string {
 		return "publish.completed"
 	case ports.FeatureCompleted:
 		return "feature.completed"
+	case ports.FeatureFailed:
+		return "feature.failed"
+	case ports.SetupFailed:
+		return "setup.failed"
+	case ports.FeatureInterrupted:
+		return "feature.interrupted"
+	case ports.FeatureRewound:
+		return "feature.rewound"
+	case ports.RelationshipIntegrationChanged:
+		return "relationship.integration_changed"
 	default:
 		return "event"
 	}
@@ -356,7 +388,7 @@ func (n *Notifier) processItem(item queueItem) {
 	}
 	n.retryPendingRecord(owner.ID, record)
 
-	progressText := renderProgress(item.event, eventFeature)
+	reply := replyForEvent(settings.Token, item.event, eventFeature)
 	var work []workItem
 	for _, recipient := range settings.Recipients {
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
@@ -373,7 +405,7 @@ func (n *Notifier) processItem(item queueItem) {
 			channelID:       channelID,
 			needsCard:       true,
 			refresh:         true,
-			progressText:    progressText,
+			reply:           reply,
 		})
 	}
 	if len(work) == 0 {
@@ -384,6 +416,29 @@ func (n *Notifier) processItem(item queueItem) {
 	for i := range work {
 		work[i].delivery = group
 		n.workerFor(work[i].channelID).enqueue(work[i])
+	}
+}
+
+func replyForEvent(token string, ev ports.Event, f *feature.Feature) replyPayload {
+	switch eventItemKind(ev) {
+	case kindProblems:
+		canonical := ev.CanonicalError
+		if canonical == nil {
+			detail := strings.TrimSpace(ev.Message)
+			if detail == "" && ev.Error != nil {
+				detail = ev.Error.Error()
+			}
+			fallback := errcat.New(errcat.InternalError, errcat.WithDiagnostics(detail))
+			canonical = &fallback
+		}
+		if canonical.Class == errcat.ClassWarning {
+			return replyPayload{kind: kindProblems}
+		}
+		blocks, fallback, code := renderProblem(token, *canonical, f)
+		return replyPayload{kind: kindProblems, blocks: blocks, fallback: fallback, errorCode: code}
+	default:
+		line := renderProgress(ev, f)
+		return replyPayload{kind: kindProgress, fallback: scrub(token, line)}
 	}
 }
 

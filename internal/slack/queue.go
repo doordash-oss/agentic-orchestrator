@@ -29,6 +29,7 @@ const (
 	kindProgress itemKind = iota
 	kindNeedsInput
 	kindProblems
+	kindLifecycle
 )
 
 func (k itemKind) protected() bool { return k != kindProgress }
@@ -39,6 +40,8 @@ func (k itemKind) String() string {
 		return "needs_input"
 	case kindProblems:
 		return "problems"
+	case kindLifecycle:
+		return "progress"
 	default:
 		return "progress"
 	}
@@ -62,7 +65,7 @@ type queueReservation struct {
 
 // itemQueue is the bounded, non-blocking intake queue. Producers never
 // wait: a full queue drops incoming Progress items, while a protected item
-// (Needs input, Problems) evicts the oldest queued Progress item or is
+// (Needs input, Problems, lifecycle edges) evicts the oldest queued Progress item or is
 // accepted over the bound when none remains, so protected categories are
 // never dropped while the process is alive.
 type itemQueue struct {

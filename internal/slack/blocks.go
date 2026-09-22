@@ -38,6 +38,7 @@ const (
 // after bounding and escaping, so a rendered block can never exceed them.
 const (
 	headerTextLimit   = 150
+	sectionTextLimit  = 3000
 	fieldTextLimit    = 2000
 	contextTextLimit  = 2000
 	fallbackTextLimit = 300
@@ -58,6 +59,7 @@ func (headerBlock) blockType() string { return blockTypeHeader }
 
 type sectionBlock struct {
 	Type   string       `json:"type"`
+	Text   *textObject  `json:"text,omitempty"`
 	Fields []textObject `json:"fields,omitempty"`
 }
 
@@ -79,6 +81,13 @@ func headerBlockFor(name string) headerBlock {
 
 func sectionBlockFor(fields []textObject) sectionBlock {
 	return sectionBlock{Type: blockTypeSection, Fields: fields}
+}
+
+func sectionTextBlockFor(text string) sectionBlock {
+	return sectionBlock{
+		Type: blockTypeSection,
+		Text: &textObject{Type: textTypeMrkdwn, Text: text},
+	}
 }
 
 func contextBlockFor(elements []textObject) contextBlock {

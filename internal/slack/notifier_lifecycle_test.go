@@ -269,7 +269,6 @@ func TestNotifierDiscardsEventsOutsideThePhaseSet(t *testing.T) {
 	requestsBefore := len(harness.server.AllRequests())
 	eventsBefore := len(harness.observer.all())
 
-	canonical := errcat.New(errcat.InternalError)
 	for _, ev := range []ports.Event{
 		{Type: ports.FeatureCreated, FeatureID: "F-1"},
 		{Type: ports.RelationshipChildCreated, FeatureID: "F-1", ParentID: "F-0", ChildID: "F-1"},
@@ -277,10 +276,6 @@ func TestNotifierDiscardsEventsOutsideThePhaseSet(t *testing.T) {
 		{Type: ports.RecoveryScanned, FeatureID: "F-1"},
 		{Type: ports.RecoveryExecuted, FeatureID: "F-1"},
 		{Type: ports.RuntimeShutdownStarted},
-		{Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &canonical},
-		{Type: ports.SetupFailed, FeatureID: "F-1"},
-		{Type: ports.FeatureInterrupted, FeatureID: "F-1"},
-		{Type: ports.FeatureRewound, FeatureID: "F-1"},
 		{Type: ports.FeatureConfigChanged, FeatureID: "F-1"},
 		{Type: ports.NeedUserInputRequired, FeatureID: "F-1"},
 		{Type: ports.ReviewRequired, FeatureID: "F-1"},
@@ -421,7 +416,7 @@ func TestNotifierSlackDisabledMidRunStopsRequests(t *testing.T) {
 	}
 }
 
-func TestNotifierErrorCompletionsRefreshWithoutLines(t *testing.T) {
+func TestNotifierErrorCompletionsRefreshAndPublishFailurePostsProblem(t *testing.T) {
 	harness := newNotifierHarness(t, defaultTestSettings(testToken, testRecipients()[1]))
 	harness.seedFeature("F-1", func(f *feature.Feature) { withRoadmap(f) })
 	harness.start(0)
@@ -441,10 +436,12 @@ func TestNotifierErrorCompletionsRefreshWithoutLines(t *testing.T) {
 		CanonicalError: &failure,
 	})
 	waitFor(t, 10*time.Second, func() bool {
-		return len(harness.server.Requests("chat.update")) == 2
+		return len(harness.server.Requests("chat.update")) >= 2 &&
+			len(harness.server.Requests("chat.postMessage")) == postsBefore+1
 	})
-	if got := len(harness.server.Requests("chat.postMessage")); got != postsBefore {
-		t.Fatalf("posts = %d; want %d: error completions post no line", got, postsBefore)
+	if got := len(harness.server.Requests("chat.postMessage")); got != postsBefore+1 {
+		t.Fatalf("posts = %d; want %d: phase error is refresh-only and publish error posts one Problem",
+			got, postsBefore+1)
 	}
 }
 

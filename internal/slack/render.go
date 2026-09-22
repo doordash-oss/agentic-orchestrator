@@ -20,6 +20,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -28,14 +29,15 @@ import (
 // with the feature name, a section with the server, pipeline, repositories,
 // phase, and status (plus pull request links once any exist), and a context
 // line with the last update rendered as a Slack date token.
-func renderRootCard(serverName string, f *feature.Feature, now time.Time) ([]Block, string) {
+func renderRootCard(serverName string, f, activeChild *feature.Feature, now time.Time) ([]Block, string) {
 	name := safePlain(f.Name, headerTextLimit)
+	status := cardStatus(f, activeChild)
 	fields := []textObject{
 		labeledField("Server", serverName),
 		labeledField("Pipeline", humanisePipeline(f.EffectivePipeline())),
 		labeledField("Repositories", repoList(f)),
 		labeledField("Phase", phaseWithRoadmap(f)),
-		labeledField("Status", humaniseStatus(f.Status.String())),
+		labeledField("Status", status),
 	}
 	if prs := prLinks(f); prs != "" {
 		fields = append(fields, labeledFieldRaw("Pull requests", prs))
@@ -49,9 +51,210 @@ func renderRootCard(serverName string, f *feature.Feature, now time.Time) ([]Blo
 		}}),
 	}
 	fallback := safePlain(strings.TrimSpace(
-		fmt.Sprintf("%s — %s", name, humaniseStatus(f.Status.String())),
+		fmt.Sprintf("%s — %s", name, status),
 	), fallbackTextLimit)
 	return blocks, fallback
+}
+
+func cardStatus(f, activeChild *feature.Feature) string {
+	var blocking, needsAction string
+	consider := func(record *errcat.FailureRecord) {
+		if record == nil {
+			return
+		}
+		rendered := errcat.RenderRecord(*record)
+		switch rendered.Class {
+		case errcat.ClassBlocking:
+			if blocking == "" {
+				blocking = rendered.Title
+			}
+		case errcat.ClassNeedsAction:
+			if needsAction == "" {
+				needsAction = rendered.Title
+			}
+		}
+	}
+	if task := f.FailedSetupTask(); task != nil && task.Error != nil {
+		consider(task.Error)
+	} else {
+		consider(f.FailureRecord())
+	}
+	for _, repo := range f.Repos {
+		if state := f.RepoStates[repo.Name]; state != nil {
+			consider(state.Error)
+		}
+	}
+	if activeChild != nil {
+		consider(activeChild.IntegrationAttentionRecord())
+		consider(activeChild.FailureRecord())
+	}
+	if blocking != "" {
+		return "Failed: " + blocking
+	}
+	if needsAction != "" {
+		return "Needs your action: " + needsAction
+	}
+	return humaniseStatus(f.Status.String())
+}
+
+func renderProblem(token string, problem errcat.Error, f *feature.Feature) ([]Block, string, string) {
+	problem = redactedError(token, problem)
+	prefix := ""
+	if f != nil && f.IsChild() {
+		prefix, _ = childAffix(f.Parent.Kind)
+		prefix = scrub(token, prefix)
+		if prefix != "" {
+			prefix += ": "
+		}
+	}
+	emoji := "🛑"
+	classLabel := "blocking"
+	if problem.Class == errcat.ClassNeedsAction {
+		emoji = "🚧"
+		classLabel = "needs your action"
+	}
+	title := prefix + problem.Title
+	titleLine := "*" + emoji + " " + safeText(title, 500) + "*"
+	summaryBudget := sectionTextLimit - len(titleLine) - 1
+	blocks := []Block{
+		sectionTextBlockFor(titleLine + "\n" + safeText(problem.Summary, summaryBudget)),
+	}
+	if problem.Remediation != nil {
+		text := problem.Remediation.Hint
+		if len(problem.Remediation.Actions) > 0 {
+			text += "\nActions: " + strings.Join(problem.Remediation.Actions, ", ")
+		}
+		if strings.TrimSpace(text) != "" {
+			blocks = append(blocks, sectionTextBlockFor("*What to do:* "+safeText(text, sectionTextLimit-14)))
+		}
+	}
+	if details := problemDetails(problem.Context); details != "" {
+		blocks = append(blocks, sectionTextBlockFor("*Details:* "+safeText(details, sectionTextLimit-12)))
+	}
+	if problem.Diagnostics != "" {
+		const note = "\n_Diagnostics were shortened. Open Agentico for the full text._"
+		diagnostics := strings.ReplaceAll(problem.Diagnostics, "```", "'''")
+		escaped := safeText(diagnostics, sectionTextLimit)
+		bodyBudget := sectionTextLimit - len("```\n\n```") - len(note)
+		cut := len(escaped) > bodyBudget
+		if cut {
+			escaped = truncateEscapedText(diagnostics, bodyBudget)
+		}
+		text := "```\n" + escaped + "\n```"
+		if cut {
+			text += note
+		}
+		blocks = append(blocks, sectionTextBlockFor(text))
+	}
+	blocks = append(blocks, contextBlockFor([]textObject{{
+		Type: textTypeMrkdwn,
+		Text: safeText(fmt.Sprintf("Code: %s · Class: %s", problem.Code, classLabel), contextTextLimit),
+	}}))
+	fallback := safePlain(fmt.Sprintf("%s %s — %s — %s", emoji, title, problem.Summary, problem.Code), fallbackTextLimit)
+	return blocks, fallback, string(problem.Code)
+}
+
+func redactedError(token string, problem errcat.Error) errcat.Error {
+	problem.Title = scrub(token, problem.Title)
+	problem.Summary = scrub(token, problem.Summary)
+	problem.Diagnostics = scrub(token, problem.Diagnostics)
+	if problem.Remediation != nil {
+		copy := *problem.Remediation
+		copy.Hint = scrub(token, copy.Hint)
+		copy.Actions = append([]string(nil), copy.Actions...)
+		for i := range copy.Actions {
+			copy.Actions[i] = scrub(token, copy.Actions[i])
+		}
+		problem.Remediation = &copy
+	}
+	if problem.Context != nil {
+		copy := *problem.Context
+		copy.Repositories = append([]errcat.CodeRepository(nil), copy.Repositories...)
+		for i := range copy.Repositories {
+			copy.Repositories[i].Name = scrub(token, copy.Repositories[i].Name)
+			copy.Repositories[i].Branch = scrub(token, copy.Repositories[i].Branch)
+			copy.Repositories[i].RebaseTarget = scrub(token, copy.Repositories[i].RebaseTarget)
+			copy.Repositories[i].ConflictFiles = redactStrings(token, copy.Repositories[i].ConflictFiles)
+			copy.Repositories[i].DirtyFiles = redactStrings(token, copy.Repositories[i].DirtyFiles)
+			copy.Repositories[i].ParentAnchorSHA = scrub(token, copy.Repositories[i].ParentAnchorSHA)
+			copy.Repositories[i].ExpectedRefSHA = scrub(token, copy.Repositories[i].ExpectedRefSHA)
+			copy.Repositories[i].ChildHeadSHA = scrub(token, copy.Repositories[i].ChildHeadSHA)
+			copy.Repositories[i].CandidateSHA = scrub(token, copy.Repositories[i].CandidateSHA)
+			copy.Repositories[i].MergeHEAD = scrub(token, copy.Repositories[i].MergeHEAD)
+			copy.Repositories[i].ObservedSHA = scrub(token, copy.Repositories[i].ObservedSHA)
+		}
+		if copy.Phase != nil {
+			value := *copy.Phase
+			value.Name = scrub(token, value.Name)
+			copy.Phase = &value
+		}
+		if copy.Command != nil {
+			value := *copy.Command
+			value.LogPaths = redactStrings(token, value.LogPaths)
+			copy.Command = &value
+		}
+		if copy.SetupTask != nil {
+			value := *copy.SetupTask
+			value.Key = scrub(token, value.Key)
+			value.Kind = scrub(token, value.Kind)
+			value.Label = scrub(token, value.Label)
+			copy.SetupTask = &value
+		}
+		problem.Context = &copy
+	}
+	return problem
+}
+
+func redactStrings(token string, values []string) []string {
+	out := append([]string(nil), values...)
+	for i := range out {
+		out[i] = scrub(token, out[i])
+	}
+	return out
+}
+
+func problemDetails(ctx *errcat.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	var parts []string
+	for _, repo := range ctx.Repositories {
+		value := repo.Name
+		if repo.Branch != "" {
+			value += " (" + repo.Branch + ")"
+		}
+		if repo.RebaseTarget != "" {
+			value += "; target: " + repo.RebaseTarget
+		}
+		if repo.RemoteOnlyCommits > 0 {
+			value += fmt.Sprintf("; remote-only commits: %d", repo.RemoteOnlyCommits)
+		}
+		if len(repo.ConflictFiles) > 0 {
+			value += "; conflicts: " + strings.Join(repo.ConflictFiles, ", ")
+		}
+		if len(repo.DirtyFiles) > 0 {
+			value += "; dirty: " + strings.Join(repo.DirtyFiles, ", ")
+		}
+		parts = append(parts, "repository "+value)
+	}
+	if ctx.Phase != nil {
+		value := ctx.Phase.Name
+		if ctx.Phase.Iteration > 0 {
+			value += fmt.Sprintf(" (iteration %d)", ctx.Phase.Iteration)
+		}
+		parts = append(parts, "phase "+value)
+	}
+	if ctx.SetupTask != nil {
+		parts = append(parts, "setup task "+firstNonempty(ctx.SetupTask.Label, ctx.SetupTask.Key))
+	}
+	if ctx.Command != nil {
+		value := fmt.Sprintf("command exit %d", ctx.Command.ExitCode)
+		if len(ctx.Command.LogPaths) > 0 {
+			value += "; logs: " + strings.Join(ctx.Command.LogPaths, ", ")
+		}
+		parts = append(parts, value)
+	}
+	return strings.Join(parts, " · ")
 }
 
 func labeledField(label, value string) textObject {
@@ -176,6 +379,17 @@ func renderProgress(ev ports.Event, f *feature.Feature) string {
 				formatCost(f.TotalCost()),
 			)
 		}
+	case ports.FeatureInterrupted:
+		text = "Interrupted. Open Agentico to review or resume the feature."
+		emoji = "⏹️"
+	case ports.FeatureRewound:
+		text = "Rewound to " + phaseTitle(ev.Phase)
+		if (ev.Phase == feature.PhasePlan || ev.Phase == feature.PhaseImplement) &&
+			f.CurrentRoadmapPhase > 0 {
+			text += fmt.Sprintf(" for roadmap phase %d", f.CurrentRoadmapPhase)
+		}
+		text += fmt.Sprintf(" in run %d", f.ActiveRun)
+		emoji = "⏪"
 	default:
 		return ""
 	}

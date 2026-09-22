@@ -60,3 +60,50 @@ func TestEmitEventCapturesLifecycleFeatureSnapshot(t *testing.T) {
 		t.Fatalf("snapshot phase timing = %s; want 1m", got)
 	}
 }
+
+func TestWithFeatureSnapshotCoversSlackFailureAndLifecycleEdges(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	if err := store.Save(&feature.Feature{
+		SchemaVersion: feature.SchemaVersionCurrent,
+		ID:            "F-edges",
+		Name:          "Snapshot edges",
+		Status:        feature.StatusInterrupted,
+		CurrentPhase:  feature.PhasePlan,
+		ActiveRun:     2,
+		RunCount:      2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	orchestrator := New(Deps{Store: store}, Hooks{})
+	for _, eventType := range []ports.EventType{
+		ports.FeatureFailed,
+		ports.SetupFailed,
+		ports.FeatureInterrupted,
+		ports.FeatureRewound,
+		ports.RelationshipIntegrationChanged,
+	} {
+		t.Run(eventTypeNameForSnapshotTest(eventType), func(t *testing.T) {
+			ev := orchestrator.withFeatureSnapshot(ports.Event{
+				Type: eventType, FeatureID: "F-edges",
+			})
+			if ev.Feature == nil || ev.Feature.ActiveRun != 2 {
+				t.Fatalf("withFeatureSnapshot(%v) feature = %#v; want run 2 snapshot", eventType, ev.Feature)
+			}
+		})
+	}
+}
+
+func eventTypeNameForSnapshotTest(eventType ports.EventType) string {
+	switch eventType {
+	case ports.FeatureFailed:
+		return "feature_failed"
+	case ports.SetupFailed:
+		return "setup_failed"
+	case ports.FeatureInterrupted:
+		return "feature_interrupted"
+	case ports.FeatureRewound:
+		return "feature_rewound"
+	default:
+		return "relationship_integration_changed"
+	}
+}

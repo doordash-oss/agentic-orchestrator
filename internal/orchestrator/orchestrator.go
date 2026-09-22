@@ -503,7 +503,12 @@ func (o *Orchestrator) withFeatureSnapshot(ev ports.Event) ports.Event {
 		ports.PhaseCompleted,
 		ports.PublishStarted,
 		ports.PublishCompleted,
-		ports.FeatureCompleted:
+		ports.FeatureCompleted,
+		ports.FeatureFailed,
+		ports.SetupFailed,
+		ports.FeatureInterrupted,
+		ports.FeatureRewound,
+		ports.RelationshipIntegrationChanged:
 	default:
 		return ev
 	}

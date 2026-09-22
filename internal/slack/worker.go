@@ -60,8 +60,15 @@ type workItem struct {
 	channelID       string
 	needsCard       bool
 	refresh         bool
-	progressText    string
+	reply           replyPayload
 	delivery        *deliveryGroup
+}
+
+type replyPayload struct {
+	kind      itemKind
+	fallback  string
+	blocks    []Block
+	errorCode string
 }
 
 // dirtyEntry tracks one feature whose card needs a refresh: markedAt is
@@ -198,8 +205,8 @@ func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
 	if item.needsCard && rootTS == "" {
 		return true
 	}
-	_, _, ok := w.currentDelivery(item, true)
-	return ok && item.progressText != ""
+	_, _, ok := w.currentDelivery(item, item.reply.kind)
+	return ok && item.reply.fallback != ""
 }
 
 // handle delivers one item: ensure the root card, post the Progress reply,
@@ -210,7 +217,7 @@ func (w *destinationWorker) handle(item workItem) {
 		item.delivery.item.reservation.canceled.Load() {
 		return
 	}
-	if _, _, ok := w.currentDelivery(item, false); !ok {
+	if _, _, ok := w.currentDelivery(item, itemKind(-1)); !ok {
 		return
 	}
 	if item.needsCard {
@@ -229,7 +236,7 @@ func (w *destinationWorker) handle(item workItem) {
 		}
 	}
 	if item.refresh {
-		if _, _, ok := w.currentDelivery(item, false); !ok {
+		if _, _, ok := w.currentDelivery(item, itemKind(-1)); !ok {
 			return
 		}
 		w.markDirty(item.featureID)
@@ -256,7 +263,7 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 	}
 	defer w.recordWrite()
 	send := func() (PostMessageResult, error) {
-		settings, current, ok := w.currentDelivery(item, false)
+		settings, current, ok := w.currentDelivery(item, itemKind(-1))
 		if !ok {
 			return PostMessageResult{}, errDeliveryIneligible
 		}
@@ -265,7 +272,7 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 			return PostMessageResult{}, err
 		}
 		blocks, fallback := renderRootCard(
-			notifier.resolvedServerName(), current, notifier.clock.Now(),
+			notifier.resolvedServerName(), current, notifier.activeChild(current), notifier.clock.Now(),
 		)
 		return client.PostMessageRich(notifier.requestBase, PostMessageInput{
 			Channel:      item.channelID,
@@ -310,11 +317,11 @@ func (w *destinationWorker) postReply(item workItem) error {
 		return errors.New("no root card to reply to")
 	}
 
-	settings, _, ok := w.currentDelivery(item, true)
+	settings, _, ok := w.currentDelivery(item, item.reply.kind)
 	if !ok {
 		return errDeliveryIneligible
 	}
-	line := item.progressText
+	line := item.reply.fallback
 	if line == "" {
 		return nil
 	}
@@ -323,7 +330,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 	}
 	defer w.recordWrite()
 	send := func() (PostMessageResult, error) {
-		settings, _, ok = w.currentDelivery(item, true)
+		settings, _, ok = w.currentDelivery(item, item.reply.kind)
 		if !ok {
 			return PostMessageResult{}, errDeliveryIneligible
 		}
@@ -334,7 +341,10 @@ func (w *destinationWorker) postReply(item workItem) error {
 		return client.PostMessageRich(notifier.requestBase, PostMessageInput{
 			Channel:      item.channelID,
 			FallbackText: line,
+			Blocks:       item.reply.blocks,
 			ThreadTS:     rootTS,
+			ReplyBroadcast: item.reply.kind == kindProblems &&
+				item.kind == string(ports.SlackRecipientChannel),
 		})
 	}
 	result, err := sendWithRetry(w, "progress reply", item, send)
@@ -351,10 +361,14 @@ func (w *destinationWorker) postReply(item workItem) error {
 	)
 	notifier.recordMu.Unlock()
 	notifier.logPersistError(persistErr, ports.SlackRecipientKind(item.kind))
-	notifier.emitEvent(item.featureID, "slack.message_posted", map[string]any{
+	data := map[string]any{
 		"destination_kind": item.kind,
-		"item_kind":        "progress",
-	})
+		"item_kind":        item.reply.kind.String(),
+	}
+	if item.reply.errorCode != "" {
+		data["error_code"] = item.reply.errorCode
+	}
+	notifier.emitEvent(item.featureID, "slack.message_posted", data)
 	return nil
 }
 
@@ -430,7 +444,7 @@ func (w *destinationWorker) flushOne(featureID string) {
 			return struct{}{}, err
 		}
 		blocks, fallback := renderRootCard(
-			notifier.resolvedServerName(), current, notifier.clock.Now(),
+			notifier.resolvedServerName(), current, notifier.activeChild(current), notifier.clock.Now(),
 		)
 		kind = currentKind
 		return struct{}{}, client.UpdateMessage(
@@ -472,13 +486,16 @@ func (w *destinationWorker) destinationFor(
 
 func (w *destinationWorker) currentDelivery(
 	item workItem,
-	progress bool,
+	category itemKind,
 ) (ports.SlackRuntimeSettings, *feature.Feature, bool) {
 	settings := w.notifier.settings.SlackSettings()
 	if !settings.Enabled || settings.Token == "" {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
-	if progress && !settings.Categories.Progress {
+	if category == kindProgress && !settings.Categories.Progress {
+		return ports.SlackRuntimeSettings{}, nil, false
+	}
+	if category == kindProblems && !settings.Categories.Problems {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	found := false
@@ -492,7 +509,7 @@ func (w *destinationWorker) currentDelivery(
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	featureID := item.featureID
-	if progress {
+	if category == kindProgress || category == kindProblems {
 		featureID = item.sourceFeatureID
 	}
 	current, err := w.notifier.store.Load(featureID)
@@ -500,6 +517,25 @@ func (w *destinationWorker) currentDelivery(
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	return settings, current, true
+}
+
+type relationshipChildLoader interface {
+	RelationshipChildren(parentID string) (*feature.RelationshipChildren, error)
+}
+
+func (n *Notifier) activeChild(f *feature.Feature) *feature.Feature {
+	if f == nil || f.IsChild() {
+		return nil
+	}
+	loader, ok := n.store.(relationshipChildLoader)
+	if !ok {
+		return nil
+	}
+	children, err := loader.RelationshipChildren(f.ID)
+	if err != nil || children == nil {
+		return nil
+	}
+	return children.Active
 }
 
 // pace waits until the destination may write again: at least

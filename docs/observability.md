@@ -80,8 +80,10 @@ Slack, and one for every event it had to drop:
   `channel`), for the two write events.
 - `action`: `posted` when the root card was first created, `edited` when an
   existing card was updated in place, for `slack.root_card_updated`.
-- `item_kind`: kind of the delivered item (`progress`), for
+- `item_kind`: kind of the delivered item (`progress` or `problems`), for
   `slack.message_posted`.
+- `error_code`: canonical error code for `problems` items; message text is
+  never included.
 - `event_type`: name of the dropped lifecycle event (`feature.started`,
   `phase.completed`, and so on), for `slack.event_dropped`.
 - `reason`: why the event was dropped: `queue_overflow` when the bounded intake

@@ -38,6 +38,7 @@ func TestRenderRootCardEscapesAndTruncatesRecordFields(t *testing.T) {
 	blocks, fallback := renderRootCard(
 		"agent & <@U-NOTIFY>",
 		f,
+		nil,
 		time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC),
 	)
 
@@ -91,7 +92,7 @@ func TestRenderRootCardEditedStateIncludesPullRequestLinks(t *testing.T) {
 		},
 	}
 
-	blocks, _ := renderRootCard("Local agent", f, time.Now())
+	blocks, _ := renderRootCard("Local agent", f, nil, time.Now())
 	section, ok := blocks[1].(sectionBlock)
 	if !ok {
 		t.Fatalf("renderRootCard() second block = %T; want sectionBlock", blocks[1])

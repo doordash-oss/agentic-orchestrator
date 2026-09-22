@@ -158,6 +158,7 @@ func problemFallback(emoji, title, classLabel string, problem errcat.Error) stri
 	const (
 		preferredSummaryBudget          = 300
 		preferredDiagnosticsBudget      = 180
+		preferredDetailsBudget          = 500
 		problemDiagnosticsPointer       = "Open Agentico for the full diagnostics."
 		problemFallbackPartSeparator    = " | "
 		problemFallbackDiagnosticsLabel = "Diagnostics: "
@@ -177,7 +178,10 @@ func problemFallback(emoji, title, classLabel string, problem errcat.Error) stri
 	}
 	detailsPart := ""
 	if details := problemDetails(problem.Context); details != "" {
-		detailsPart = "Details: " + safePlain(details, 0)
+		detailsPart = "Details: " + abbreviateFallbackDetails(
+			safePlain(details, 0),
+			preferredDetailsBudget-len("Details: "),
+		)
 	}
 	codePart := "Code: " + safePlain(
 		fmt.Sprintf("%s (%s)", problem.Code, classLabel),
@@ -275,6 +279,26 @@ func abbreviateFallbackText(text string, limit int) string {
 		candidate = strings.TrimRight(candidate, ".")
 	}
 	return candidate + ellipsis
+}
+
+func abbreviateFallbackDetails(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" || limit <= 0 {
+		return ""
+	}
+	if len(text) <= limit {
+		return text
+	}
+
+	const listEllipsis = ", ..."
+	if limit <= len(listEllipsis) {
+		return listEllipsis[:limit]
+	}
+	candidate := truncateUTF8(text, limit-len(listEllipsis))
+	if boundary := strings.LastIndex(candidate, ", "); boundary > 0 {
+		return strings.TrimSpace(candidate[:boundary]) + listEllipsis
+	}
+	return abbreviateFallbackText(text, limit)
 }
 
 func redactedError(token string, problem errcat.Error) errcat.Error {

@@ -16,6 +16,7 @@ package slack
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +162,13 @@ func TestRenderProblemDoesNotShortenDiagnosticsThatFit(t *testing.T) {
 func TestProblemsOutboundFallbackCarriesRecoveryGuidance(t *testing.T) {
 	longRepo := "alpha-" + strings.Repeat("service-", 24)
 	longBranch := "feature/" + strings.Repeat("accessible-fallback-", 16)
+	longConflictFiles := make([]string, 30)
+	for i := range longConflictFiles {
+		longConflictFiles[i] = fmt.Sprintf(
+			"internal/notifications/integration/conflict_handler_%02d_test.go",
+			i,
+		)
+	}
 	harness := newNotifierHarness(t, defaultTestSettings(
 		testToken,
 		ports.SlackRecipient{Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng"},
@@ -271,7 +279,11 @@ func TestProblemsOutboundFallbackCarriesRecoveryGuidance(t *testing.T) {
 					errcat.WithParams(errcat.IntegrationRepoParams{
 						Repositories: []errcat.CodeRepository{{Name: "alpha"}},
 					}),
-					errcat.WithRepositories(errcat.CodeRepository{Name: "alpha"}),
+					errcat.WithRepositories(errcat.CodeRepository{
+						Name:          "alpha",
+						Branch:        "feature/refactor",
+						ConflictFiles: longConflictFiles,
+					}),
 					errcat.WithDiagnostics(strings.Repeat(
 						"merge conflict in internal/slack/render.go; ",
 						30,
@@ -281,7 +293,8 @@ func TestProblemsOutboundFallbackCarriesRecoveryGuidance(t *testing.T) {
 			want: []string{
 				"Refactor: Integration merge conflict",
 				"Actions: retry. Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.",
-				"repository alpha",
+				"repository alpha (feature/refactor); conflicts: internal/notifications/integration/conflict_handler_00_test.go",
+				", ...",
 				"integration_merge_conflict (needs your action)",
 				"Open Agentico for the full diagnostics.",
 			},

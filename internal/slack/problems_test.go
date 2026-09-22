@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -118,6 +119,13 @@ func TestRenderProblemNeedsActionChildAndShortDiagnostics(t *testing.T) {
 func TestRenderProblemFallbackPreservesCatalogueRecoveryAndEssentialContext(t *testing.T) {
 	longRepo := "alpha-" + strings.Repeat("service-", 24)
 	longBranch := "feature/" + strings.Repeat("accessible-fallback-", 16)
+	longConflictFiles := make([]string, 30)
+	for i := range longConflictFiles {
+		longConflictFiles[i] = fmt.Sprintf(
+			"internal/notifications/integration/conflict_handler_%02d_test.go",
+			i,
+		)
+	}
 	tests := []struct {
 		name    string
 		problem errcat.Error
@@ -200,7 +208,11 @@ func TestRenderProblemFallbackPreservesCatalogueRecoveryAndEssentialContext(t *t
 				errcat.WithParams(errcat.IntegrationRepoParams{
 					Repositories: []errcat.CodeRepository{{Name: "alpha"}},
 				}),
-				errcat.WithRepositories(errcat.CodeRepository{Name: "alpha"}),
+				errcat.WithRepositories(errcat.CodeRepository{
+					Name:          "alpha",
+					Branch:        "feature/refactor",
+					ConflictFiles: longConflictFiles,
+				}),
 				errcat.WithDiagnostics(strings.Repeat(
 					"merge conflict in internal/slack/render.go; ",
 					30,
@@ -212,7 +224,8 @@ func TestRenderProblemFallbackPreservesCatalogueRecoveryAndEssentialContext(t *t
 			want: []string{
 				"Refactor: Integration merge conflict",
 				"Next: Actions: retry. Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.",
-				"Details: repository alpha",
+				"Details: repository alpha (feature/refactor); conflicts: internal/notifications/integration/conflict_handler_00_test.go",
+				", ...",
 				"Code: integration_merge_conflict (needs your action)",
 				"Open Agentico for the full diagnostics.",
 			},
@@ -235,6 +248,49 @@ func TestRenderProblemFallbackPreservesCatalogueRecoveryAndEssentialContext(t *t
 				}
 			}
 		})
+	}
+}
+
+func TestRenderProblemFallbackAbbreviatesConflictFilesAtItemBoundary(t *testing.T) {
+	conflictFiles := make([]string, 30)
+	for i := range conflictFiles {
+		conflictFiles[i] = fmt.Sprintf(
+			"internal/notifications/integration/conflict_handler_%02d_test.go",
+			i,
+		)
+	}
+	problem := errcat.New(
+		errcat.IntegrationMergeConflict,
+		errcat.WithRepositories(errcat.CodeRepository{
+			Name:          "alpha",
+			Branch:        "feature/refactor",
+			ConflictFiles: conflictFiles,
+		}),
+		errcat.WithDiagnostics("Merge conflict in the pass worktree."),
+	)
+	child := &feature.Feature{Parent: &feature.ChildRelationship{
+		ParentID: "parent-1", Kind: feature.ChildKindRefactor,
+	}}
+
+	_, fallback, _ := renderProblem(testToken, problem, child)
+
+	for _, want := range []string{
+		"Next: Actions: retry. Resolve the conflict in the pass worktree and retry; the pass re-enters final review if its code changed.",
+		"Details: repository alpha (feature/refactor); conflicts: internal/notifications/integration/conflict_handler_00_test.go",
+		", ...",
+		"Code: integration_merge_conflict (needs your action)",
+		"Open Agentico for the full diagnostics.",
+	} {
+		if !strings.Contains(fallback, want) {
+			t.Errorf("renderProblem() fallback = %q; want %q", fallback, want)
+		}
+	}
+	if len(fallback) > problemFallbackTextLimit {
+		t.Errorf(
+			"renderProblem() fallback length = %d; want <= %d",
+			len(fallback),
+			problemFallbackTextLimit,
+		)
 	}
 }
 
@@ -370,6 +426,15 @@ func TestSlackProblemsRedaction(t *testing.T) {
 	})
 	waitFor(t, 10*time.Second, func() bool {
 		return len(postsTo(harness.server, "C-ENG")) == 3
+	})
+	waitFor(t, 10*time.Second, func() bool {
+		problems := 0
+		for _, event := range harness.observer.ofKind("slack.message_posted") {
+			if event.Data["item_kind"] == "problems" {
+				problems++
+			}
+		}
+		return problems == 2
 	})
 
 	encoded, err := json.Marshal(harness.server.AllRequests())
@@ -583,7 +648,12 @@ func TestNotifierInterruptedAndRewoundUseProgressThread(t *testing.T) {
 			t.Errorf("rewound line = %q; missing %q", fieldString(posts[2], "text"), want)
 		}
 	}
-	destination := recordDestinations(t, harness.stateDir, "F-1")[destinationKey("channel", "C-ENG")]
+	key := destinationKey("channel", "C-ENG")
+	waitFor(t, 10*time.Second, func() bool {
+		ledger, ok := recordLedger(harness.stateDir, "F-1", key)
+		return ok && len(ledger) == 13
+	})
+	destination := recordDestinations(t, harness.stateDir, "F-1")[key]
 	rootTS := destination.RootTS
 	if rootTS == "" {
 		t.Fatal("persisted destination has no root timestamp")
@@ -638,7 +708,12 @@ func TestNotifierRewindOutsideImplementationLoopOmitsRoadmapPhase(t *testing.T) 
 	if strings.Contains(text, "roadmap phase") {
 		t.Errorf("rewound line = %q; roadmap wording should be absent outside implementation loop", text)
 	}
-	destination := recordDestinations(t, harness.stateDir, "F-1")[destinationKey("channel", "C-ENG")]
+	key := destinationKey("channel", "C-ENG")
+	waitFor(t, 10*time.Second, func() bool {
+		ledger, ok := recordLedger(harness.stateDir, "F-1", key)
+		return ok && len(ledger) == 2
+	})
+	destination := recordDestinations(t, harness.stateDir, "F-1")[key]
 	if got := fieldString(posts[1], "thread_ts"); got != destination.RootTS {
 		t.Errorf("rewound thread_ts = %q; want persisted root %q", got, destination.RootTS)
 	}

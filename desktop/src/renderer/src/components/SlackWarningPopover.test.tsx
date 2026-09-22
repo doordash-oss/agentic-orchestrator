@@ -14,14 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SlackSettingsSnapshot } from '../../../shared/ipc';
 import { SlackWarningPopover } from './SlackWarningPopover';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  delete document.documentElement.dataset['theme'];
+});
 
 const credentialError: SlackSettingsSnapshot = {
   supported: true,
@@ -127,12 +132,64 @@ describe('SlackWarningPopover', () => {
     expect(trigger).toHaveFocus();
 
     await user.click(trigger);
+    const settingsAction = screen.getByRole('button', { name: 'Open Slack settings' });
+    settingsAction.focus();
+    expect(settingsAction).toHaveFocus();
     await user.click(document.body);
     expect(screen.queryByRole('region', { name: 'Slack needs attention' })).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
 
     view.rerender(<Harness dismissed />);
     expect(
       screen.queryByRole('button', { name: 'Show Slack credential warning' }),
     ).not.toBeInTheDocument();
   });
+
+  it.each(['light', 'dark'] as const)(
+    'keeps its diagnosis and actions inside a 400px viewport in the %s theme',
+    async (theme) => {
+      let resizeViewport: (() => void) | undefined;
+      class TestResizeObserver {
+        constructor(callback: ResizeObserverCallback) {
+          resizeViewport = () => callback([], this as unknown as ResizeObserver);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+
+      document.documentElement.dataset['theme'] = theme;
+      vi.stubGlobal('ResizeObserver', TestResizeObserver);
+      vi.stubGlobal('innerWidth', 480);
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+        this: HTMLElement,
+      ) {
+        if (!this.classList.contains('slack-warning-popover')) {
+          return new DOMRect(0, 0, 0, 0);
+        }
+        const shift =
+          Number.parseFloat(
+            this.style.getPropertyValue('--toolbar-popover-viewport-shift').replace('px', ''),
+          ) || 0;
+        return new DOMRect(window.innerWidth - 499 + shift, 44, 368, 180);
+      });
+
+      const user = userEvent.setup();
+      render(<Harness />);
+      await user.click(screen.getByRole('button', { name: 'Show Slack credential warning' }));
+      vi.stubGlobal('innerWidth', 400);
+      resizeViewport?.();
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+
+      const popover = screen.getByRole('region', { name: 'Slack needs attention' });
+      const bounds = popover.getBoundingClientRect();
+      expect(bounds.left).toBeGreaterThanOrEqual(16);
+      expect(bounds.right).toBeLessThanOrEqual(384);
+      expect(
+        within(popover).getByRole('heading', { name: 'Slack rejected the saved token' }),
+      ).toBeVisible();
+      expect(within(popover).getByRole('button', { name: 'Open Slack settings' })).toBeVisible();
+      expect(within(popover).getByRole('button', { name: 'Dismiss' })).toBeVisible();
+    },
+  );
 });

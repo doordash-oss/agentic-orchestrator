@@ -126,34 +126,59 @@ func (h *apiHandler) handleSlackValidateRoute(w http.ResponseWriter, r *http.Req
 
 // ReportSlackDeliveryFailure records a credential-class delivery failure and
 // refreshes cached identity once at the start of each failure episode.
-func (h *apiHandler) ReportSlackDeliveryFailure(at time.Time, canonical errcat.Error) {
+func (h *apiHandler) ReportSlackDeliveryFailure(
+	at time.Time,
+	credentialGeneration uint64,
+	canonical errcat.Error,
+) {
 	if h.slack == nil {
 		return
 	}
 	h.slackCredentialMu.Lock()
 	defer h.slackCredentialMu.Unlock()
 
+	store, ok := h.mutations.(slackValidationStore)
+	if !ok {
+		return
+	}
+	token, currentGeneration := store.LoadSlackCredential()
+	if token == "" || currentGeneration != credentialGeneration {
+		return
+	}
 	status := h.slack.Status(ports.SlackStatusInput{Token: "configured"})
 	if status.State != ports.SlackCredentialError {
-		if store, ok := h.mutations.(slackValidationStore); ok {
-			token, generation := store.LoadSlackCredential()
-			if token != "" {
-				if validation, err := h.slack.Validate(context.Background(), token); err == nil {
-					_, _ = store.StoreSlackValidation(token, generation, &validation, at)
-				}
-			}
+		if validation, err := h.slack.Validate(context.Background(), token); err == nil {
+			_, _ = store.StoreSlackValidation(
+				token,
+				credentialGeneration,
+				&validation,
+				at,
+			)
 		}
+	}
+	if !store.SlackCredentialCurrent(token, credentialGeneration) {
+		return
 	}
 	h.slack.RecordDeliveryFailure(at, canonical)
 }
 
 // ReportSlackDeliverySuccess clears credential status after any successful
 // Slack write.
-func (h *apiHandler) ReportSlackDeliverySuccess(at time.Time) {
+func (h *apiHandler) ReportSlackDeliverySuccess(at time.Time, credentialGeneration uint64) {
 	if h.slack == nil {
 		return
 	}
 	h.slackCredentialMu.Lock()
+	store, ok := h.mutations.(slackValidationStore)
+	if !ok {
+		h.slackCredentialMu.Unlock()
+		return
+	}
+	token, currentGeneration := store.LoadSlackCredential()
+	if token == "" || currentGeneration != credentialGeneration {
+		h.slackCredentialMu.Unlock()
+		return
+	}
 	h.slack.RecordDeliverySuccess(at)
 	h.slackCredentialMu.Unlock()
 }

@@ -190,6 +190,46 @@ describe('Toolbar trailing notices', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('does not reopen Slack automatically after recovery and a later credential failure', async () => {
+    const warning = slackWarningProps();
+    const view = render(<Toolbar {...baseProps()} showTrailing={false} slackWarning={warning} />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: 'Show Slack credential warning' }));
+    expect(screen.getByRole('region', { name: 'Slack needs attention' })).toBeVisible();
+
+    view.rerender(
+      <Toolbar
+        {...baseProps()}
+        showTrailing={false}
+        slackWarning={{
+          ...warning,
+          snapshot:
+            warning.snapshot?.supported === true
+              ? {
+                  ...warning.snapshot,
+                  status: {
+                    state: 'connected',
+                    lastError: null,
+                    lastCheckedAt: '2026-09-22T10:05:00Z',
+                  },
+                }
+              : warning.snapshot,
+        }}
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: 'Show Slack credential warning' }),
+    ).not.toBeInTheDocument();
+
+    view.rerender(<Toolbar {...baseProps()} showTrailing={false} slackWarning={warning} />);
+    expect(screen.getByRole('button', { name: 'Show Slack credential warning' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(screen.queryByRole('region', { name: 'Slack needs attention' })).not.toBeInTheDocument();
+  });
+
   it('omits the update trigger entirely when nothing is pending', () => {
     render(
       <Toolbar

@@ -27,6 +27,8 @@ import {
   openSettings,
   persistAppLogs,
   selectSettingsPane,
+  setTheme,
+  setWindowSize,
   type AppHandle,
 } from '../helpers/app';
 import {
@@ -98,11 +100,27 @@ test('Slack credential failure warns in the toolbar and routes back to settings'
     await contractSettingsEvidenceShot(
       handle,
       settings,
-      'settings-window-on-the-slack-pane-in-the-credential-error-state-showing-the-cred-900x640',
+      'settings-window-on-the-slack-pane-credential-error-state-top-of-the-pane-the-cre-900x640',
       900,
       640,
       'light',
     );
+    const checkConnection = settings.getByRole('button', { name: 'Check connection' });
+    await checkConnection.scrollIntoViewIfNeeded();
+    await expect(checkConnection).toBeVisible();
+    await expect(checkConnection).toBeEnabled();
+    await contractSettingsEvidenceShot(
+      handle,
+      settings,
+      'settings-window-on-the-slack-pane-credential-error-state-scrolled-to-the-recover-900x640',
+      900,
+      640,
+      'light',
+    );
+    await settings
+      .getByText('Slack rejected the saved token', { exact: true })
+      .first()
+      .scrollIntoViewIfNeeded();
     await contractSettingsEvidenceShot(
       handle,
       settings,
@@ -138,7 +156,41 @@ test('Slack credential failure warns in the toolbar and routes back to settings'
       900,
       'dark',
     );
-    await trigger.click();
+
+    for (const theme of ['light', 'dark'] as const) {
+      await setWindowSize(handle, 400, 600);
+      await setTheme(handle, theme);
+      for (const locator of [
+        popover,
+        popover.getByRole('heading', { name: 'Slack token is invalid' }),
+        popover.getByRole('button', { name: 'Open Slack settings' }),
+        popover.getByRole('button', { name: 'Dismiss' }),
+      ]) {
+        const box = await locator.boundingBox();
+        expect(box, `${theme} Slack warning element should have bounds`).not.toBeNull();
+        expect(
+          box!.x,
+          `${theme} Slack warning element should start inside viewport`,
+        ).toBeGreaterThanOrEqual(0);
+        expect(
+          box!.x + box!.width,
+          `${theme} Slack warning element should end inside viewport`,
+        ).toBeLessThanOrEqual(400);
+      }
+    }
+    await handle.app.evaluate(({ BrowserWindow }, mainWebContentsId) => {
+      const main = BrowserWindow.getAllWindows().find(
+        (window) => window.webContents.id === mainWebContentsId,
+      );
+      main?.focus();
+    }, handle.mainWebContentsId);
+    await handle.page.bringToFront();
+    await popover.getByRole('button', { name: 'Open Slack settings' }).focus();
+    await handle.page.mouse.click(16, 300);
+    await expect(popover).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await setWindowSize(handle, 1440, 900);
+    await setTheme(handle, 'light');
 
     await selectSettingsPane(settings, 'Appearance');
     await trigger.click();

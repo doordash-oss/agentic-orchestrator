@@ -92,6 +92,14 @@ function connectedSlack(): SlackSettingsSnapshot {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   matchMediaState.darkScheme = true;
   matchMediaState.reducedMotion = false;
@@ -623,6 +631,34 @@ describe('App Slack credential warning', () => {
       await screen.findByRole('button', { name: 'Show Slack credential warning' }),
     ).toBeVisible();
     expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the newest Slack projection when overlapping refreshes finish out of order', async () => {
+    const older = deferred<SlackSettingsSnapshot>();
+    const newer = deferred<SlackSettingsSnapshot>();
+    const mock = installAgenticoMock({
+      connection: readyConnection('server-a'),
+      readiness: readySnapshot(),
+      slackSettings: connectedSlack(),
+    });
+    mock.api.getSlackSettings
+      .mockImplementationOnce(() => older.promise)
+      .mockImplementationOnce(() => newer.promise);
+    render(<App />);
+
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(1));
+    act(() => mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated' }));
+    await waitFor(() => expect(mock.api.getSlackSettings).toHaveBeenCalledTimes(2));
+
+    await act(async () => newer.resolve(slackCredentialError()));
+    expect(
+      await screen.findByRole('button', { name: 'Show Slack credential warning' }),
+    ).toBeVisible();
+
+    await act(async () => older.resolve(connectedSlack()));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Show Slack credential warning' })).toBeVisible(),
+    );
   });
 });
 

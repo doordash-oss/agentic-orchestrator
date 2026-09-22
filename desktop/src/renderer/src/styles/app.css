@@ -267,6 +267,7 @@ body {
     var(--shadow);
   color: var(--text);
   font: 13px var(--bench-font-text);
+  transform: translateX(var(--toolbar-popover-viewport-shift, 0));
 }
 
 /* The popover hangs off the toolbar, which is a window drag region on macOS —

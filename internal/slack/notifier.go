@@ -46,8 +46,12 @@ type EventObserver interface {
 
 // DeliveryReporter receives delivery-time credential state changes.
 type DeliveryReporter interface {
-	ReportSlackDeliveryFailure(at time.Time, canonical errcat.Error)
-	ReportSlackDeliverySuccess(at time.Time)
+	ReportSlackDeliveryFailure(
+		at time.Time,
+		credentialGeneration uint64,
+		canonical errcat.Error,
+	)
+	ReportSlackDeliverySuccess(at time.Time, credentialGeneration uint64)
 }
 
 // Clock abstracts time so pacing, retries, and rate-limit waits run
@@ -142,13 +146,19 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 	if jitter == nil {
 		jitter = defaultJitter
 	}
+	newClient := opts.NewClient
+	if newClient == nil {
+		newClient = func(token string) (slackClient, error) {
+			return NewClient(token)
+		}
+	}
 	notifier := &Notifier{
 		settings:           opts.Settings,
 		store:              opts.Store,
 		stateDir:           opts.StateDir,
 		observer:           opts.Observer,
 		reporter:           opts.Reporter,
-		newClient:          opts.NewClient,
+		newClient:          newClient,
 		clock:              clock,
 		jitter:             jitter,
 		stopCh:             make(chan struct{}),
@@ -618,15 +628,16 @@ func (n *Notifier) reportWriteFailure(
 	item workItem,
 	itemKind string,
 	attempts int,
+	credential deliveryCredential,
 	failure writeFailure,
 ) {
 	at := n.clock.Now()
 	if failure.class == deliveryFailureCredential {
 		if n.reporter != nil && failure.canonical != nil {
-			n.reporter.ReportSlackDeliveryFailure(at, *failure.canonical)
+			n.reporter.ReportSlackDeliveryFailure(at, credential.generation, *failure.canonical)
 		}
 	} else {
-		n.recordDestinationFailure(item, at, failure)
+		n.recordDestinationFailure(item, at, credential.token, failure)
 	}
 	n.reportDrop(observe.Event{
 		Timestamp: at,
@@ -643,7 +654,12 @@ func (n *Notifier) reportWriteFailure(
 	})
 }
 
-func (n *Notifier) recordDestinationFailure(item workItem, at time.Time, failure writeFailure) {
+func (n *Notifier) recordDestinationFailure(
+	item workItem,
+	at time.Time,
+	attemptToken string,
+	failure writeFailure,
+) {
 	if item.featureID == "" || item.destinationKey == "" {
 		return
 	}
@@ -656,11 +672,10 @@ func (n *Notifier) recordDestinationFailure(item workItem, at time.Time, failure
 		)
 		return
 	}
-	settings := n.settings.SlackSettings()
 	n.recordMu.Lock()
 	entry := record.Destinations[item.destinationKey]
-	entry.DisplayName = scrub(settings.Token, entry.DisplayName)
-	entry.recordFailure(failure.errorCode, scrub(settings.Token, failure.slackError), at)
+	entry.DisplayName = scrub(attemptToken, entry.DisplayName)
+	entry.recordFailure(failure.errorCode, scrub(attemptToken, failure.slackError), at)
 	record.Destinations[item.destinationKey] = entry
 	persistErr := n.persistRecordLocked(
 		item.featureID,
@@ -671,10 +686,10 @@ func (n *Notifier) recordDestinationFailure(item workItem, at time.Time, failure
 	n.logPersistError(persistErr, ports.SlackRecipientKind(item.kind))
 }
 
-func (n *Notifier) reportWriteSuccess(item workItem) {
+func (n *Notifier) reportWriteSuccess(item workItem, credentialGeneration uint64) {
 	at := n.clock.Now()
 	if n.reporter != nil {
-		n.reporter.ReportSlackDeliverySuccess(at)
+		n.reporter.ReportSlackDeliverySuccess(at, credentialGeneration)
 	}
 	if item.featureID == "" || item.destinationKey == "" {
 		return

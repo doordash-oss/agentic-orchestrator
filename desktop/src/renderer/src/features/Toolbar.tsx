@@ -40,6 +40,7 @@ limitations under the License.
  * child opts out via `-webkit-app-region: no-drag` (app.css).
  */
 import {
+  useEffect,
   useState,
   type Dispatch,
   type ReactNode,
@@ -48,7 +49,10 @@ import {
 } from 'react';
 import type { AttentionItem, SlackSettingsSnapshot, UpdateState } from '../../../shared/ipc';
 import { AttentionInbox, type AttentionDrafts } from './AttentionInbox';
-import { SlackWarningPopover } from '../components/SlackWarningPopover';
+import {
+  SlackWarningPopover,
+  slackCredentialWarningPending,
+} from '../components/SlackWarningPopover';
 import { UpdatePopover } from '../components/UpdatePopover';
 
 export interface ToolbarAttentionProps {
@@ -120,6 +124,15 @@ export function Toolbar({
   newFeatureButtonRef,
 }: ToolbarProps) {
   const [openPopover, setOpenPopover] = useState<'attention' | 'slack' | 'update' | null>(null);
+  const slackWarningPending =
+    slackWarning !== undefined &&
+    slackCredentialWarningPending(slackWarning.snapshot, slackWarning.dismissed);
+
+  useEffect(() => {
+    if (!slackWarningPending && openPopover === 'slack') {
+      setOpenPopover(null);
+    }
+  }, [openPopover, slackWarningPending]);
 
   return (
     <header className="toolbar" aria-label="Workspace toolbar">

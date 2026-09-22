@@ -166,16 +166,18 @@ export default function App() {
 
   useEffect(() => {
     let current = true;
+    let requestSequence = 0;
     setSlackSettingsSnapshot(null);
     setSlackWarningDismissed(false);
     if (!runtimeReady) return;
 
     const refreshSlackSettings = async () => {
+      const request = ++requestSequence;
       try {
         const snapshot = await window.agentico.getSlackSettings();
-        if (current) setSlackSettingsSnapshot(snapshot);
+        if (current && request === requestSequence) setSlackSettingsSnapshot(snapshot);
       } catch {
-        if (current) setSlackSettingsSnapshot(null);
+        if (current && request === requestSequence) setSlackSettingsSnapshot(null);
       }
     };
     void refreshSlackSettings();

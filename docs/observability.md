@@ -78,7 +78,7 @@ delivery failure, and lifecycle event it had to drop:
 `data` keys:
 
 - `destination_kind`: recipient kind of the destination written to (`user` or
-  `channel`), for the two write events.
+  `channel`), for the two successful-write events and `slack.delivery_failed`.
 - `action`: `posted` when the root card was first created, `edited` when an
   existing card was updated in place, for `slack.root_card_updated`.
 - `item_kind`: kind of the delivered or failed item (`progress`, `problems`, or

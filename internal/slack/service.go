@@ -191,7 +191,18 @@ func (s *Service) RecordDeliveryFailure(failedAt time.Time, canonical errcat.Err
 
 // RecordDeliverySuccess clears a transient error after Slack accepts a write.
 func (s *Service) RecordDeliverySuccess(succeededAt time.Time) bool {
-	return s.setSnapshot(succeededAt, nil)
+	succeededAt = succeededAt.UTC()
+	s.mu.Lock()
+	if s.lastError == nil {
+		s.mu.Unlock()
+		return false
+	}
+	s.lastError = nil
+	s.lastChecked = &succeededAt
+	publish := s.publish
+	s.mu.Unlock()
+	publish()
+	return true
 }
 
 // ClearStatus drops all transient validation state.

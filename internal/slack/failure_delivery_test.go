@@ -36,25 +36,34 @@ import (
 )
 
 type fakeDeliveryReporter struct {
-	mu        sync.Mutex
-	failures  []reportedDeliveryFailure
-	successes []time.Time
+	mu                 sync.Mutex
+	failures           []reportedDeliveryFailure
+	successes          []time.Time
+	successGenerations []uint64
 }
 
 type reportedDeliveryFailure struct {
-	at        time.Time
-	canonical errcat.Error
+	at                   time.Time
+	credentialGeneration uint64
+	canonical            errcat.Error
 }
 
-func (r *fakeDeliveryReporter) ReportSlackDeliveryFailure(at time.Time, canonical errcat.Error) {
+func (r *fakeDeliveryReporter) ReportSlackDeliveryFailure(
+	at time.Time,
+	credentialGeneration uint64,
+	canonical errcat.Error,
+) {
 	r.mu.Lock()
-	r.failures = append(r.failures, reportedDeliveryFailure{at: at, canonical: canonical})
+	r.failures = append(r.failures, reportedDeliveryFailure{
+		at: at, credentialGeneration: credentialGeneration, canonical: canonical,
+	})
 	r.mu.Unlock()
 }
 
-func (r *fakeDeliveryReporter) ReportSlackDeliverySuccess(at time.Time) {
+func (r *fakeDeliveryReporter) ReportSlackDeliverySuccess(at time.Time, generation uint64) {
 	r.mu.Lock()
 	r.successes = append(r.successes, at)
+	r.successGenerations = append(r.successGenerations, generation)
 	r.mu.Unlock()
 }
 
@@ -63,6 +72,15 @@ func (r *fakeDeliveryReporter) snapshot() ([]reportedDeliveryFailure, []time.Tim
 	defer r.mu.Unlock()
 	return append([]reportedDeliveryFailure(nil), r.failures...),
 		append([]time.Time(nil), r.successes...)
+}
+
+func (r *fakeDeliveryReporter) latestSuccessGeneration() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.successGenerations) == 0 {
+		return 0
+	}
+	return r.successGenerations[len(r.successGenerations)-1]
 }
 
 type failureFixture struct {
@@ -434,7 +452,7 @@ func TestSlackCredentialGiveUpsReportCanonicalErrorsWithoutDestinationFailure(t 
 	}
 }
 
-func TestSlackFailureSurfacingRedaction(t *testing.T) {
+func TestSlackFailureBoundaryRedaction(t *testing.T) {
 	const secondSecret = "xoxb-second-secret-1234567890"
 	logs := captureLogs(t)
 	fixture := newFailureFixture(t, "1758499200.000001")
@@ -480,8 +498,8 @@ func TestSlackFailureSurfacingRedaction(t *testing.T) {
 		"thread reply",
 		fixture.item,
 		"progress",
-		func() (struct{}, error) {
-			return struct{}{}, &APIError{
+		func() (struct{}, deliveryCredential, error) {
+			return struct{}{}, deliveryCredential{token: testToken}, &APIError{
 				SlackError: "is_archived: " + testToken + " " + secondSecret,
 			}
 		},
@@ -526,7 +544,7 @@ func TestSlackFailureSurfacingRedaction(t *testing.T) {
 	}
 }
 
-func TestSlackFailureSurfacingEvidence(t *testing.T) {
+func TestSlackFailureWorkerEvidence(t *testing.T) {
 	dir := strings.TrimSpace(os.Getenv("AGENTICO_EVIDENCE_DIR"))
 	if dir == "" {
 		t.Skip("AGENTICO_EVIDENCE_DIR is not set")
@@ -731,6 +749,84 @@ func TestSlackSuccessfulWriteReportsEveryWritePoint(t *testing.T) {
 	}
 }
 
+func TestSlackDelayedWriteReportsAttemptCredentialGeneration(t *testing.T) {
+	tests := []struct {
+		name     string
+		response testsupport.Response
+		wantFail bool
+	}{
+		{
+			name: "old failure after replacement",
+			response: testsupport.Response{
+				Body: map[string]any{"ok": false, "error": "token_revoked"},
+			},
+			wantFail: true,
+		},
+		{
+			name: "old success after current failure",
+			response: testsupport.Response{
+				Body: map[string]any{
+					"ok": true, "ts": "1758499200.000002", "channel": "C-ENG",
+				},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newFailureFixture(t, "1758499200.000001")
+			fixture.harness.settings.mutate(func(settings *ports.SlackRuntimeSettings) {
+				settings.CredentialGeneration = 4
+			})
+			started := make(chan struct{}, 1)
+			release := make(chan struct{})
+			tc.response.Started = started
+			tc.response.Release = release
+			fixture.harness.server.Script("chat.postMessage", tc.response)
+
+			done := make(chan error, 1)
+			go func() {
+				done <- fixture.worker.postReply(fixture.item)
+			}()
+			<-started
+			fixture.harness.settings.mutate(func(settings *ports.SlackRuntimeSettings) {
+				settings.Token = "xoxb-replacement"
+				settings.CredentialGeneration = 5
+			})
+			close(release)
+			err := <-done
+			if tc.wantFail && err == nil {
+				t.Fatal("postReply() error = nil; want delayed rejection")
+			}
+			if !tc.wantFail && err != nil {
+				t.Fatalf("postReply() error = %v; want delayed success", err)
+			}
+
+			failures, successes := fixture.reporter.snapshot()
+			if tc.wantFail {
+				if len(failures) != 1 || failures[0].credentialGeneration != 4 {
+					t.Fatalf("reported failures = %#v; want old generation 4", failures)
+				}
+				events := fixture.waitForFailureEvent(t, 1)
+				if fmt.Sprint(events[0].Data["attempts"]) != "1" ||
+					events[0].Data["failure_class"] != string(deliveryFailureCredential) {
+					t.Fatalf("delivery failure event = %#v; want one credential attempt", events[0])
+				}
+			} else {
+				if len(successes) != 1 || fixture.reporter.latestSuccessGeneration() != 4 {
+					t.Fatalf(
+						"reported successes/generation = %d/%d; want 1/4",
+						len(successes),
+						fixture.reporter.latestSuccessGeneration(),
+					)
+				}
+				if got := len(fixture.harness.observer.ofKind("slack.delivery_failed")); got != 0 {
+					t.Fatalf("delivery failure events = %d; want 0 after delayed success", got)
+				}
+			}
+		})
+	}
+}
+
 func TestSlackSilentCancellationDoesNotEmitDeliveryFailure(t *testing.T) {
 	stopped := make(chan struct{})
 	close(stopped)
@@ -747,8 +843,8 @@ func TestSlackSilentCancellationDoesNotEmitDeliveryFailure(t *testing.T) {
 		"thread reply",
 		workItem{kind: "channel"},
 		"progress",
-		func() (struct{}, error) {
-			return struct{}{}, &APIError{SlackError: "is_archived"}
+		func() (struct{}, deliveryCredential, error) {
+			return struct{}{}, deliveryCredential{}, &APIError{SlackError: "is_archived"}
 		},
 	)
 	if got := len(observer.ofKind("slack.delivery_failed")); got != 0 {
@@ -767,8 +863,8 @@ func TestSlackSilentCancellationDoesNotEmitDeliveryFailure(t *testing.T) {
 		"thread reply",
 		workItem{kind: "channel"},
 		"progress",
-		func() (struct{}, error) {
-			return struct{}{}, errDeliveryIneligible
+		func() (struct{}, deliveryCredential, error) {
+			return struct{}{}, deliveryCredential{}, errDeliveryIneligible
 		},
 	)
 	if got := len(observer.ofKind("slack.delivery_failed")); got != 0 {

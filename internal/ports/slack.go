@@ -108,10 +108,11 @@ func (e *SlackValidationError) Error() string {
 // at processing time. It is derived per read from the durable config so a
 // stored token is never cached.
 type SlackRuntimeSettings struct {
-	Enabled    bool
-	Token      string
-	Recipients []SlackRecipient
-	Categories SlackCategoryDefaults
+	Enabled              bool
+	Token                string
+	CredentialGeneration uint64
+	Recipients           []SlackRecipient
+	Categories           SlackCategoryDefaults
 }
 
 // SlackCategoryDefaults holds the effective per-category notification
@@ -152,8 +153,12 @@ type SlackService interface {
 // SlackDeliveryReporter receives notifier delivery outcomes without exposing
 // configuration persistence to the notifier.
 type SlackDeliveryReporter interface {
-	ReportSlackDeliveryFailure(at time.Time, canonical errcat.Error)
-	ReportSlackDeliverySuccess(at time.Time)
+	ReportSlackDeliveryFailure(
+		at time.Time,
+		credentialGeneration uint64,
+		canonical errcat.Error,
+	)
+	ReportSlackDeliverySuccess(at time.Time, credentialGeneration uint64)
 }
 
 // SlackWarningSource supplies read-time Slack delivery warnings for a feature.

@@ -96,6 +96,11 @@ type destinationWorker struct {
 	notBefore  time.Time
 }
 
+type deliveryCredential struct {
+	token      string
+	generation uint64
+}
+
 func (n *Notifier) workerFor(channelID string) *destinationWorker {
 	n.workerMu.Lock()
 	defer n.workerMu.Unlock()
@@ -262,23 +267,27 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 		return errWorkerStopped
 	}
 	defer w.recordWrite()
-	send := func() (PostMessageResult, error) {
+	send := func() (PostMessageResult, deliveryCredential, error) {
 		settings, current, ok := w.currentDelivery(item, itemKind(-1))
+		credential := deliveryCredential{
+			token: settings.Token, generation: settings.CredentialGeneration,
+		}
 		if !ok {
-			return PostMessageResult{}, errDeliveryIneligible
+			return PostMessageResult{}, credential, errDeliveryIneligible
 		}
 		client, err := notifier.newClient(settings.Token)
 		if err != nil {
-			return PostMessageResult{}, err
+			return PostMessageResult{}, credential, err
 		}
 		blocks, fallback := renderRootCard(
 			notifier.resolvedServerName(), current, notifier.activeChild(current), notifier.clock.Now(),
 		)
-		return client.PostMessageRich(notifier.requestBase, PostMessageInput{
+		result, err := client.PostMessageRich(notifier.requestBase, PostMessageInput{
 			Channel:      item.channelID,
 			FallbackText: fallback,
 			Blocks:       blocks,
 		})
+		return result, credential, err
 	}
 	result, err := sendWithRetry(w, "root card", item, "root_card", send)
 	if err != nil {
@@ -329,16 +338,19 @@ func (w *destinationWorker) postReply(item workItem) error {
 		return errWorkerStopped
 	}
 	defer w.recordWrite()
-	send := func() (PostMessageResult, error) {
+	send := func() (PostMessageResult, deliveryCredential, error) {
 		settings, _, ok = w.currentDelivery(item, item.reply.kind)
+		credential := deliveryCredential{
+			token: settings.Token, generation: settings.CredentialGeneration,
+		}
 		if !ok {
-			return PostMessageResult{}, errDeliveryIneligible
+			return PostMessageResult{}, credential, errDeliveryIneligible
 		}
 		client, err := notifier.newClient(settings.Token)
 		if err != nil {
-			return PostMessageResult{}, err
+			return PostMessageResult{}, credential, err
 		}
-		return client.PostMessageRich(notifier.requestBase, PostMessageInput{
+		result, err := client.PostMessageRich(notifier.requestBase, PostMessageInput{
 			Channel:      item.channelID,
 			FallbackText: line,
 			Blocks:       item.reply.blocks,
@@ -346,6 +358,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 			ReplyBroadcast: item.reply.kind == kindProblems &&
 				item.kind == string(ports.SlackRecipientChannel),
 		})
+		return result, credential, err
 	}
 	result, err := sendWithRetry(w, "thread reply", item, item.reply.kind.String(), send)
 	if err != nil {
@@ -421,35 +434,39 @@ func (w *destinationWorker) flushOne(featureID string) {
 		return
 	}
 	defer w.recordWrite()
-	send := func() (struct{}, error) {
+	send := func() (struct{}, deliveryCredential, error) {
 		currentSettings := notifier.settings.SlackSettings()
+		credential := deliveryCredential{
+			token: currentSettings.Token, generation: currentSettings.CredentialGeneration,
+		}
 		if !currentSettings.Enabled || currentSettings.Token == "" {
-			return struct{}{}, errDeliveryIneligible
+			return struct{}{}, credential, errDeliveryIneligible
 		}
 		currentRecord, err := notifier.recordFor(featureID)
 		if err != nil {
-			return struct{}{}, err
+			return struct{}{}, credential, err
 		}
 		_, currentRootTS, currentKind, currentChannelID, ok :=
 			w.destinationFor(currentSettings, currentRecord)
 		if !ok || currentRootTS == "" {
-			return struct{}{}, errDeliveryIneligible
+			return struct{}{}, credential, errDeliveryIneligible
 		}
 		current, err := notifier.store.Load(featureID)
 		if err != nil || current == nil {
-			return struct{}{}, errDeliveryIneligible
+			return struct{}{}, credential, errDeliveryIneligible
 		}
 		client, err := notifier.newClient(currentSettings.Token)
 		if err != nil {
-			return struct{}{}, err
+			return struct{}{}, credential, err
 		}
 		blocks, fallback := renderRootCard(
 			notifier.resolvedServerName(), current, notifier.activeChild(current), notifier.clock.Now(),
 		)
 		kind = currentKind
-		return struct{}{}, client.UpdateMessage(
+		err = client.UpdateMessage(
 			notifier.requestBase, currentChannelID, currentRootTS, fallback, blocks,
 		)
+		return struct{}{}, credential, err
 	}
 	updateItem := workItem{
 		featureID:      featureID,
@@ -613,16 +630,16 @@ func sendWithRetry[T any](
 	label string,
 	item workItem,
 	itemKind string,
-	send func() (T, error),
+	send func() (T, deliveryCredential, error),
 ) (T, error) {
 	var zero T
 	notifier := w.notifier
 	attempts := 0
 	for {
 		attempts++
-		result, err := send()
+		result, credential, err := send()
 		if err == nil {
-			notifier.reportWriteSuccess(item)
+			notifier.reportWriteSuccess(item, credential.generation)
 			return result, nil
 		}
 		if errors.Is(err, errDeliveryIneligible) {
@@ -636,14 +653,14 @@ func sendWithRetry[T any](
 
 		var apiErr *APIError
 		if errors.As(err, &apiErr) {
-			token := notifier.settings.SlackSettings().Token
 			log.Printf("slack-notifier: giving up on %s to %s destination: Slack error %s",
-				label, item.kind, scrub(token, apiErr.SlackError))
+				label, item.kind, scrub(credential.token, apiErr.SlackError))
 			notifier.reportWriteFailure(
 				item,
 				itemKind,
 				attempts,
-				classifyWriteFailure(token, err, false),
+				credential,
+				classifyWriteFailure(credential.token, err, false),
 			)
 			return zero, err
 		}
@@ -655,7 +672,8 @@ func sendWithRetry[T any](
 				item,
 				itemKind,
 				attempts,
-				classifyWriteFailure(notifier.settings.SlackSettings().Token, err, false),
+				credential,
+				classifyWriteFailure(credential.token, err, false),
 			)
 			return zero, err
 		}
@@ -673,7 +691,8 @@ func sendWithRetry[T any](
 					item,
 					itemKind,
 					attempts,
-					classifyWriteFailure(notifier.settings.SlackSettings().Token, err, true),
+					credential,
+					classifyWriteFailure(credential.token, err, true),
 				)
 				return zero, err
 			}
@@ -689,7 +708,8 @@ func sendWithRetry[T any](
 					item,
 					itemKind,
 					attempts,
-					classifyWriteFailure(notifier.settings.SlackSettings().Token, err, true),
+					credential,
+					classifyWriteFailure(credential.token, err, true),
 				)
 				return zero, err
 			}
@@ -701,7 +721,8 @@ func sendWithRetry[T any](
 				item,
 				itemKind,
 				attempts,
-				classifyWriteFailure(notifier.settings.SlackSettings().Token, err, false),
+				credential,
+				classifyWriteFailure(credential.token, err, false),
 			)
 			return zero, err
 		}

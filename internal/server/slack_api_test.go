@@ -33,21 +33,23 @@ import (
 )
 
 type fakeSlackService struct {
-	validation     ports.SlackValidation
-	err            error
-	resolved       ports.SlackRecipient
-	resolveErr     error
-	results        []ports.SlackDeliveryResult
-	sendErr        error
-	calls          atomic.Int64
-	lastToken      string
-	lastInput      string
-	lastName       string
-	lastRecipients []ports.SlackRecipient
-	successAt      time.Time
-	failureAt      time.Time
-	status         ports.SlackStatusSnapshot
-	publish        func()
+	validation      ports.SlackValidation
+	err             error
+	resolved        ports.SlackRecipient
+	resolveErr      error
+	results         []ports.SlackDeliveryResult
+	sendErr         error
+	calls           atomic.Int64
+	lastToken       string
+	lastInput       string
+	lastName        string
+	lastRecipients  []ports.SlackRecipient
+	successAt       time.Time
+	failureAt       time.Time
+	status          ports.SlackStatusSnapshot
+	publish         func()
+	validateStarted chan<- struct{}
+	validateRelease <-chan struct{}
 }
 
 func (s *fakeSlackService) Manifest() string         { return "{}" }
@@ -66,6 +68,12 @@ func (s *fakeSlackService) ClearStatus() bool {
 func (s *fakeSlackService) Validate(_ context.Context, token string) (ports.SlackValidation, error) {
 	s.calls.Add(1)
 	s.lastToken = token
+	if s.validateStarted != nil {
+		s.validateStarted <- struct{}{}
+	}
+	if s.validateRelease != nil {
+		<-s.validateRelease
+	}
 	return s.validation, s.err
 }
 func (s *fakeSlackService) ResolveRecipient(
@@ -801,7 +809,7 @@ func TestSlackDeliveryFailureRefreshesIdentityOnceAndPublishes(t *testing.T) {
 	defer api.broker.unsubscribe(events)
 
 	failure := errcat.New(errcat.SlackInvalidToken)
-	reporter.ReportSlackDeliveryFailure(at, failure)
+	reporter.ReportSlackDeliveryFailure(at, store.generation, failure)
 	if got := service.calls.Load(); got != 1 {
 		t.Fatalf("Validate() calls = %d; want 1", got)
 	}
@@ -822,9 +830,87 @@ func TestSlackDeliveryFailureRefreshesIdentityOnceAndPublishes(t *testing.T) {
 		t.Fatal("delivery failure published no runtime invalidation")
 	}
 
-	reporter.ReportSlackDeliveryFailure(at.Add(time.Minute), failure)
+	reporter.ReportSlackDeliveryFailure(at.Add(time.Minute), store.generation, failure)
 	if got := service.calls.Load(); got != 1 {
 		t.Fatalf("Validate() calls after repeated failure = %d; want 1", got)
+	}
+}
+
+func TestSlackDeliveryFailureFromReplacedCredentialDoesNotOverwriteStatus(t *testing.T) {
+	at := time.Date(2026, 9, 22, 15, 0, 0, 0, time.UTC)
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	service := &fakeSlackService{
+		validation: ports.SlackValidation{
+			TokenType: ports.SlackTokenBot,
+			Identity: ports.SlackIdentity{
+				TeamID: "T-old", TeamName: "Old team", UserID: "U-old", DisplayName: "Old bot",
+			},
+			GrantedScopes: []string{"chat:write"},
+		},
+		status:          ports.SlackStatusSnapshot{State: ports.SlackConnected},
+		validateStarted: started,
+		validateRelease: release,
+	}
+	store := &slackMutationRecorder{token: "xoxb-old", generation: 4}
+	var reporter ports.SlackDeliveryReporter
+	_ = newAPIHandler(HandlerOptions{
+		Config: config.NewDefault(), Slack: service, Mutations: store,
+		BindSlackDeliveryReporter: func(bound ports.SlackDeliveryReporter) {
+			reporter = bound
+		},
+		DisableHostValidation: true,
+	})
+
+	done := make(chan struct{})
+	go func() {
+		reporter.ReportSlackDeliveryFailure(
+			at,
+			4,
+			errcat.New(errcat.SlackTokenRejected),
+		)
+		close(done)
+	}()
+	<-started
+	store.mu.Lock()
+	store.token = "xoxb-new"
+	store.generation++
+	store.mu.Unlock()
+	close(release)
+	<-done
+
+	if service.status.State != ports.SlackConnected || service.status.LastError != nil {
+		t.Fatalf("status = %#v; want replacement credential status unchanged", service.status)
+	}
+}
+
+func TestSlackDeliverySuccessFromReplacedCredentialDoesNotClearCurrentFailure(t *testing.T) {
+	oldSuccessAt := time.Date(2026, 9, 22, 15, 5, 0, 0, time.UTC)
+	currentFailureAt := oldSuccessAt.Add(time.Minute)
+	currentFailure := errcat.New(errcat.SlackTokenRejected)
+	service := &fakeSlackService{status: ports.SlackStatusSnapshot{
+		State:       ports.SlackCredentialError,
+		LastError:   &currentFailure,
+		LastChecked: &currentFailureAt,
+	}}
+	store := &slackMutationRecorder{token: "xoxb-new", generation: 5}
+	var reporter ports.SlackDeliveryReporter
+	_ = newAPIHandler(HandlerOptions{
+		Config: config.NewDefault(), Slack: service, Mutations: store,
+		BindSlackDeliveryReporter: func(bound ports.SlackDeliveryReporter) {
+			reporter = bound
+		},
+		DisableHostValidation: true,
+	})
+
+	reporter.ReportSlackDeliverySuccess(oldSuccessAt, 4)
+
+	if service.status.State != ports.SlackCredentialError ||
+		service.status.LastError == nil ||
+		service.status.LastError.Code != errcat.SlackTokenRejected ||
+		service.status.LastChecked == nil ||
+		!service.status.LastChecked.Equal(currentFailureAt) {
+		t.Fatalf("status = %#v; want current credential failure retained", service.status)
 	}
 }
 

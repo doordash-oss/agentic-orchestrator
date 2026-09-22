@@ -1119,22 +1119,26 @@ func (r *slackDeliveryReporterRelay) bind(target ports.SlackDeliveryReporter) {
 
 func (r *slackDeliveryReporterRelay) ReportSlackDeliveryFailure(
 	at time.Time,
+	credentialGeneration uint64,
 	canonical errcat.Error,
 ) {
 	r.mu.Lock()
 	target := r.target
 	r.mu.Unlock()
 	if target != nil {
-		target.ReportSlackDeliveryFailure(at, canonical)
+		target.ReportSlackDeliveryFailure(at, credentialGeneration, canonical)
 	}
 }
 
-func (r *slackDeliveryReporterRelay) ReportSlackDeliverySuccess(at time.Time) {
+func (r *slackDeliveryReporterRelay) ReportSlackDeliverySuccess(
+	at time.Time,
+	credentialGeneration uint64,
+) {
 	r.mu.Lock()
 	target := r.target
 	r.mu.Unlock()
 	if target != nil {
-		target.ReportSlackDeliverySuccess(at)
+		target.ReportSlackDeliverySuccess(at, credentialGeneration)
 	}
 }
 
@@ -2137,9 +2141,10 @@ func (t *serverMutationTarget) SlackSettings() ports.SlackRuntimeSettings {
 	}
 	effective := t.cfg.Slack.Categories.Effective()
 	return ports.SlackRuntimeSettings{
-		Enabled:    t.cfg.Slack.Enabled,
-		Token:      t.cfg.Slack.Token,
-		Recipients: recipients,
+		Enabled:              t.cfg.Slack.Enabled,
+		Token:                t.cfg.Slack.Token,
+		CredentialGeneration: t.slackCredentialGeneration,
+		Recipients:           recipients,
 		Categories: ports.SlackCategoryDefaults{
 			Progress:   effective.Progress,
 			NeedsInput: effective.NeedsInput,

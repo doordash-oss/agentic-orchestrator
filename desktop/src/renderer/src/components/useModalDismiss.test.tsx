@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { useModalDismiss } from './useModalDismiss';
 
@@ -50,6 +50,58 @@ it('wraps Tab focus within the nested modal while the outer modal stays open', (
   fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
   expect(last).toHaveFocus();
   expect(screen.getByRole('dialog', { name: 'Outer dialog' })).toBeVisible();
+});
+
+it('restores the opener under StrictMode, whose effect rehearsal focuses the modal first', async () => {
+  function Harness() {
+    const [open, setOpen] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open
+        </button>
+        {open ? <StrictModal ref={ref} onClose={() => setOpen(false)} /> : null}
+      </>
+    );
+  }
+  function StrictModal({
+    ref,
+    onClose,
+  }: {
+    ref: React.RefObject<HTMLDivElement | null>;
+    onClose: () => void;
+  }) {
+    useModalDismiss(ref, onClose);
+    return (
+      <div ref={ref} role="dialog" aria-label="Strict dialog" tabIndex={-1}>
+        <button type="button" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    );
+  }
+  render(
+    <StrictMode>
+      <Harness />
+    </StrictMode>,
+  );
+  const opener = screen.getByRole('button', { name: 'Open' });
+  opener.focus();
+  fireEvent.click(opener);
+  const cancel = screen.getByRole('button', { name: 'Cancel' });
+  await waitFor(() => expect(cancel).toHaveFocus());
+  // Let the rehearsal cleanup's deferred restore settle before the real close.
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+  // A mouse click lands focus on Cancel before the modal unmounts.
+  cancel.focus();
+  fireEvent.click(cancel);
+  await waitFor(() =>
+    expect(screen.queryByRole('dialog', { name: 'Strict dialog' })).not.toBeInTheDocument(),
+  );
+  await waitFor(() => expect(opener).toHaveFocus());
 });
 
 it('wraps Tab focus within the active modal', () => {

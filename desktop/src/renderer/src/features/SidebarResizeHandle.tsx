@@ -16,7 +16,24 @@ limitations under the License.
 
 import { useEffect, useRef, useState } from 'react';
 
-/** Pointer capture keeps resizing active outside the narrow divider. */
+interface Gesture {
+  pointerId: number;
+  x: number;
+  width: number;
+  next: number;
+  /** Detaches the window listeners and clears the gesture; never commits. */
+  release(): void;
+}
+
+/**
+ * A drag lives on the window, not on pointer capture. Capture is still
+ * requested so the browser keeps hit-testing the divider, but the browser
+ * can take it away mid-drag — Chromium releases it whenever the window is
+ * deactivated — and a drag that then discarded its progress would leave the
+ * sidebar exactly where it started. Moves and the release are read from the
+ * window for as long as the gesture is active, so the drag survives losing
+ * capture, and a window blur commits the width the pointer had reached.
+ */
 export function SidebarResizeHandle({
   width,
   onPreview,
@@ -28,14 +45,15 @@ export function SidebarResizeHandle({
 }) {
   const [maximum, setMaximum] = useState(() => Math.min(520, Math.floor(window.innerWidth / 2)));
   const [resizing, setResizing] = useState(false);
-  const gesture = useRef<{ pointerId: number; x: number; width: number; next: number } | null>(
-    null,
-  );
+  const gesture = useRef<Gesture | null>(null);
   useEffect(() => {
     const resize = () => setMaximum(Math.min(520, Math.floor(window.innerWidth / 2)));
     window.addEventListener('resize', resize);
     return () => window.removeEventListener('resize', resize);
   }, []);
+  // An unmount mid-drag (the sidebar collapsing, a shell remount) must not
+  // leave window listeners driving a component that is gone.
+  useEffect(() => () => gesture.current?.release(), []);
   const clamp = (value: number) => Math.max(200, Math.min(maximum, Math.round(value)));
   return (
     <div
@@ -50,36 +68,48 @@ export function SidebarResizeHandle({
       tabIndex={0}
       data-resizing={resizing}
       onPointerDown={(event) => {
-        if (event.button !== 0) return;
+        if (event.button !== 0 || gesture.current !== null) return;
         event.preventDefault();
         event.currentTarget.focus();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        gesture.current = {
+        try {
+          event.currentTarget.setPointerCapture(event.pointerId);
+        } catch {
+          // Capture is a nicety here; the window listeners below carry the drag.
+        }
+        const start = clamp(width);
+        const active: Gesture = {
           pointerId: event.pointerId,
           x: event.clientX,
-          width: clamp(width),
-          next: clamp(width),
+          width: start,
+          next: start,
+          release: () => {
+            window.removeEventListener('pointermove', move);
+            window.removeEventListener('pointerup', finish);
+            window.removeEventListener('pointercancel', finish);
+            window.removeEventListener('blur', commit);
+            gesture.current = null;
+            setResizing(false);
+          },
         };
+        const move = (moveEvent: PointerEvent) => {
+          if (moveEvent.pointerId !== active.pointerId) return;
+          active.next = clamp(active.width + moveEvent.clientX - active.x);
+          onPreview(active.next);
+        };
+        const commit = () => {
+          active.release();
+          onCommit(active.next);
+        };
+        const finish = (endEvent: PointerEvent) => {
+          if (endEvent.pointerId !== active.pointerId) return;
+          commit();
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', finish);
+        window.addEventListener('pointercancel', finish);
+        window.addEventListener('blur', commit);
+        gesture.current = active;
         setResizing(true);
-      }}
-      onPointerMove={(event) => {
-        const active = gesture.current;
-        if (!active || active.pointerId !== event.pointerId) return;
-        active.next = clamp(active.width + event.clientX - active.x);
-        onPreview(active.next);
-      }}
-      onPointerUp={(event) => {
-        const active = gesture.current;
-        if (!active || active.pointerId !== event.pointerId) return;
-        gesture.current = null;
-        setResizing(false);
-        onCommit(active.next);
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      }}
-      onLostPointerCapture={() => {
-        gesture.current = null;
-        setResizing(false);
-        onPreview(null);
       }}
       onDoubleClick={() => onCommit(260)}
       onKeyDown={(event) => {

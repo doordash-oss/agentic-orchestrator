@@ -695,6 +695,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: apiPathFeatures, mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/config"},
+		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/testing-contract"},
 		{method: httpMethodPost, path: "/api/v1/features/{feature_id}/config", mutation: true},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/live-preview"},
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/reviews"},

@@ -93,6 +93,10 @@ type ImplementConfig struct {
 	// harness-owned command.
 	CommandRunner ports.CommandRunner
 
+	// CapabilityPolicy configures built-in capability probes (browser state
+	// location and remote-server restrictions). Nil uses the local default.
+	CapabilityPolicy *CapabilityPolicy
+
 	// BuildSession creates CLI command args, env vars, and session opts
 	// by routing through the provider registry. In tests, provide a mock
 	// function. In production, set to PhaseRunner.BuildSession.
@@ -427,6 +431,21 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if createErr != nil {
 				return nil, createErr
 			}
+			// Probe declared capabilities before the implementer starts so a
+			// missing login or environment feature opens the user gate now
+			// instead of after a spent iteration.
+			var capabilityEnv []string
+			if strings.TrimSpace(testingContractPath) != "" && cfg.CommandRunner != nil {
+				gated, env, probeErr := preIterationCapabilityGate(cfg, testingContractPath, iterDir, i)
+				if probeErr != nil {
+					return nil, probeErr
+				}
+				if gated != nil {
+					cfg.Observer.IterationEnded(iterCtx, i, observe.SessionUsage{}, time.Since(iterStart), gated.FinalStatus)
+					return gated, nil
+				}
+				capabilityEnv = env
+			}
 			// Build prompt. A review-feedback child whose parent
 			// delivers as a stack additionally receives the parent's
 			// layer list and the fix-manifest default instruction;
@@ -526,6 +545,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			if buildErr != nil {
 				return nil, fmt.Errorf("building session for iteration %d: %w", i, buildErr)
 			}
+			// Passing capability probes hand their state to the implementer
+			// (e.g. AGENTICO_BROWSER_STATE_<HOST>) so it never hunts for
+			// credentials itself.
+			env = append(env, capabilityEnv...)
 			// Copy the auto-review snapshot from sessOpts into implBuildOpts
 			// so crash-resume reuses the original values rather than reading
 			// the current (possibly edited) workspace config.
@@ -666,12 +689,14 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// SUCCESS by the waiter). For providers that can resume their
 			// native session, give the same conversation one fresh process to
 			// finish or report state before charging the iteration as FAILED.
-			if agentStatus == agentStatusFailed && sessOpts != nil && sessOpts.SupportsSessionResume &&
+			// An explicit terminal error is not a crash: replaying its input
+			// can only hide the diagnostic or repeat the same failed request.
+			if agentStatus == agentStatusFailed && waitResult.Err == nil && sessOpts != nil && sessOpts.SupportsSessionResume &&
 				!HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer) {
 				if resumeID := providerSessionID(sess); resumeID != "" {
 					// Account the dead session before replacing it.
 					deadCost := ExtractSessionCost(sess)
-					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+					cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(deadCost, sess), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
 					_ = accumulateSessionCostToFeature(cfg.FeatureStore, cfg.Feature.ID, "implement", deadCost, SessionCostMetadata{
 						SessionID:     sessionID,
 						ObserverPhase: "implement",
@@ -704,7 +729,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Read cost from session's ResultMessage
 			cost = ExtractSessionCost(sess)
-			cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(cost), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
+			cfg.Observer.SessionEnded(implSessionCtx, "implement", sessionID, cfg.RepoName, toSessionUsage(cost, sess), time.Since(iterStart), sessionErrFromLogicalAgentStatus(agentStatus, sess))
 			emitLargeCodexCommandOutputEvents(cfg.Observer, implSessionCtx, "implement", sessionID, cfg.RepoName, sess.ProviderName(), i, logPath)
 
 			// Read output from message log
@@ -782,7 +807,10 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 		// Handle based on agent status
 		if waitResult.Err != nil {
-			return nil, fmt.Errorf("committing implementer outcome: %w", waitResult.Err)
+			_ = am.WriteMeta(iterDir, meta)
+			_ = am.WriteSummary(summaryPath, meta)
+			cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), agentStatus)
+			return nil, fmt.Errorf("waiting for implementer outcome: %w", waitResult.Err)
 		}
 		if agentStatus == agentStatusProtocolViolation {
 			violations := waitResult.ProtocolViolations
@@ -842,6 +870,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					harnessVerification = ReconstructVerificationOutcome(cached)
 				} else {
 					verifyCtx, cancelVerify := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
+					verifyCtx = withConfiguredCapabilityPolicy(verifyCtx, cfg)
 					beginVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, contract, cfg.OnVerificationProgress)
 					verifyCtx = WithVerificationProgress(verifyCtx, func(name, state string) {
 						updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state, cfg.OnVerificationProgress)
@@ -919,6 +948,17 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// iteration starts fresh against the just-emitted progress.md
 			// (no reviewer feedback — RETRY is not a rejection).
 			if parsed.State == StateRetry {
+				if gated, gateErr := agentReportedBlockerGate(iterDir, testingContractPath, i); gateErr != nil {
+					return nil, gateErr
+				} else if gated != nil {
+					meta.ReviewStatus = "skipped_need_user_input"
+					meta.AgentStatus = "RETRY"
+					_ = am.WriteMeta(iterDir, meta)
+					_ = am.WriteSummary(summaryPath, meta)
+					consecutiveFailures = 0
+					cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
+					return gated, nil
+				}
 				madeProgress = pt.ObserveRetryOutcome(retryProgressFingerprints(progressPath, cfg))
 				meta.ReviewStatus = "skipped_retry"
 				meta.AgentStatus = "RETRY"
@@ -1570,7 +1610,7 @@ func prepareImplementationTestingContract(cfg ImplementConfig, planContent strin
 func verificationScopePlanRevisionFeedback(violations []ProtocolViolation) string {
 	var b strings.Builder
 	b.WriteString("## Verification Scope Errors\n\n")
-	b.WriteString("Repair the phase plan's command scopes without changing implementation scope. Multi-repo commands require `[repo: <name>]` and run from that repository root.\n")
+	b.WriteString("Repair the phase plan's verification declarations without changing implementation scope. Multi-repo commands require `[repo: <name>]` and run from that repository root; evidence that reaches an external host must declare the capability that reaches it.\n")
 	for _, violation := range violations {
 		fmt.Fprintf(&b, "\n- %s\n", violation.Reason)
 	}
@@ -2273,11 +2313,16 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 		if !sessionDone && status == agentStatusSuccess && alreadyAdjudicated() {
 			return PhaseOutcomeWaitResult{}, false
 		}
-		if status == agentStatusAPIError {
-			if sessionDone {
-				return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff}, true
+		if status == agentStatusAPIError || (classifiedResult != nil && classifiedResult.IsError) {
+			// A Result is terminal for this turn, even when the provider's
+			// multi-turn transport stays alive. Waiting for process exit here
+			// strands interactive phase sessions in WaitingHelp indefinitely.
+			detail := "provider returned a terminal error"
+			if classifiedResult != nil && strings.TrimSpace(classifiedResult.Result) != "" {
+				detail = strings.TrimSpace(classifiedResult.Result)
 			}
-			return PhaseOutcomeWaitResult{}, false
+			_ = sess.Stop()
+			return PhaseOutcomeWaitResult{Status: agentStatusFailed, Handoff: handoff, Err: errors.New(detail)}, true
 		}
 		if status != agentStatusSuccess {
 			_ = sess.Stop()
@@ -2579,9 +2624,8 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 			if result, done := handleStatus(status, false); done {
 				return result
 			}
-			// API error — the agent is stuck but still alive, or a
-			// truncated turn was auto-resumed. Keep waiting for the next
-			// terminal result.
+			// The turn is awaiting input/tasks or was nudged to continue.
+			// Keep waiting for the next terminal result.
 			continue
 		}
 	}
@@ -2773,4 +2817,106 @@ func isFeatureInterrupted(store ports.FeatureStore, featureID string) bool {
 		return false
 	}
 	return f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed
+}
+
+func withConfiguredCapabilityPolicy(ctx context.Context, cfg ImplementConfig) context.Context {
+	if cfg.CapabilityPolicy == nil {
+		return ctx
+	}
+	return WithCapabilityPolicy(ctx, *cfg.CapabilityPolicy)
+}
+
+// preIterationCapabilityGate probes every declared capability in the bound
+// contract. A planner defect routes to plan revision; a missing capability
+// writes the harness gate into iterDir and returns the need_user_input
+// result; nil means the iteration may start.
+func preIterationCapabilityGate(cfg ImplementConfig, contractPath, iterDir string, iteration int) (*LoopResult, []string, error) {
+	contract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading testing contract for capability probes: %w", err)
+	}
+	hasCapabilities := false
+	for _, item := range contract.Items {
+		if capabilityProbesApply(item) && item.Policy.Required && !IsTestingContractItemWaived(item) {
+			hasCapabilities = true
+			break
+		}
+	}
+	if !hasCapabilities {
+		return nil, nil, nil
+	}
+	var repos []feature.FeatureRepo
+	if cfg.Feature != nil {
+		repos = cfg.Feature.Repos
+		if strings.TrimSpace(cfg.RepoName) != "" {
+			repos = nil
+			for _, repo := range cfg.Feature.Repos {
+				if repo.Name == cfg.RepoName {
+					repos = append(repos, repo)
+				}
+			}
+		}
+	}
+	featureID := ""
+	if cfg.Feature != nil {
+		featureID = cfg.Feature.ID
+	}
+	ctx, cancel := verificationContext(cfg.FeatureStore, featureID)
+	defer cancel()
+	outcome, err := ProbeTestingContractCapabilities(withConfiguredCapabilityPolicy(ctx, cfg), cfg.CommandRunner, contract, contractPath, cfg.WorkDir, repos)
+	if err != nil {
+		return nil, nil, fmt.Errorf("probing testing contract capabilities: %w", err)
+	}
+	if len(outcome.ContractErrors) > 0 {
+		return &LoopResult{
+			FinalStatus:          "plan_revision_required",
+			Iterations:           iteration,
+			PlanRevisionFeedback: VerificationContractPlanRevisionFeedback(outcome.ContractErrors),
+		}, nil, nil
+	}
+	if len(outcome.BlockedItems) == 0 {
+		return nil, outcome.CapabilityEnv, nil
+	}
+	gatePath := NeedUserInputPath(iterDir)
+	rec := SynthesizeVerificationNeedUserInputGateWithContext(contractPath, contract, outcome.Report, outcome.BlockedItems, iteration)
+	if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		return nil, nil, fmt.Errorf("persisting pre-iteration capability gate: %w", err)
+	}
+	return &LoopResult{FinalStatus: "need_user_input", Iterations: iteration, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil, nil
+}
+
+// agentReportedBlockerGate routes a RETRY handoff to the user gate when the
+// implementer wrote a valid `agentico report-blocker` artifact into iterDir.
+// An invalid artifact is removed and ignored so a malformed escalation
+// degrades to an ordinary RETRY rather than pausing on a gate the user
+// cannot trust.
+func agentReportedBlockerGate(iterDir, contractPath string, iteration int) (*LoopResult, error) {
+	gatePath := NeedUserInputPath(iterDir)
+	rec, err := ReadNeedUserInputRecord(gatePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading implementer blocker gate: %w", err)
+	}
+	if rec.Source != NeedUserInputSourceAgent {
+		return nil, nil
+	}
+	if strings.TrimSpace(contractPath) == "" {
+		_ = os.Remove(gatePath)
+		return nil, nil
+	}
+	contract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading testing contract for implementer blocker gate: %w", err)
+	}
+	if err := ValidateAgentReportedBlockerGate(rec, contractPath, contract); err != nil {
+		_ = os.Remove(gatePath)
+		return nil, nil
+	}
+	rec.Iteration = iteration
+	if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
+		return nil, fmt.Errorf("persisting implementer blocker gate: %w", err)
+	}
+	return &LoopResult{FinalStatus: "need_user_input", Iterations: iteration, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil
 }

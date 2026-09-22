@@ -97,6 +97,8 @@ export const IPC_CHANNELS = {
   attentionSendHelp: 'agentico:attention:send-help',
   attentionSaveGateDraft: 'agentico:attention:save-gate-draft',
   attentionResolveGate: 'agentico:attention:resolve-gate',
+  attentionWaiveTestingContract: 'agentico:attention:waive-testing-contract',
+  attentionGetTestingContract: 'agentico:attention:get-testing-contract',
   chatStart: 'agentico:chat:start',
   chatEnd: 'agentico:chat:end',
   sessionsList: 'agentico:sessions:list',
@@ -2376,7 +2378,11 @@ export const AttentionHelpSchema = z.strictObject({
   /** Descriptions of the session's still-running background tasks. */
   runningTasks: z.array(z.string().max(500)).max(100).optional(),
 });
-export const VerificationGateActionSchema = z.enum(['WAIVE', 'RETRY_AFTER_AUTH']);
+export const VerificationGateActionSchema = z.enum([
+  'WAIVE',
+  'RETRY_AFTER_AUTH',
+  'ALLOW_SUBSTITUTE',
+]);
 export type VerificationGateAction = z.output<typeof VerificationGateActionSchema>;
 export const AttentionGateSchema = z.strictObject({
   kind: z.literal('gate'),
@@ -2413,7 +2419,7 @@ export const AttentionGateSchema = z.strictObject({
           }),
         )
         .max(100),
-      allowedActions: z.array(VerificationGateActionSchema).max(2),
+      allowedActions: z.array(VerificationGateActionSchema).max(3),
     })
     .optional(),
 });
@@ -2552,6 +2558,65 @@ export const AttentionActionResultSchema = z.strictObject({
   notice: z.string().max(500).optional(),
 });
 export type AttentionActionResult = z.output<typeof AttentionActionResultSchema>;
+/** User-authorized waivers on the current phase's testing contract, outside the gate. */
+export const TestingContractWaiveRequestSchema = z.strictObject({
+  featureId: FeatureIdSchema,
+  itemIds: z
+    .array(AttentionIDSchema.refine((value) => value.trim() !== ''))
+    .min(1)
+    .max(100),
+  reason: AttentionTextSchema.refine((value) => value.trim() !== ''),
+  // Bind the waiver to the contract the user saw; the server rejects a
+  // mismatch with 409 `conflict`. Phase and revision numbers restart after
+  // a rewind, so the run is part of the binding.
+  activeRun: z.number().int().positive(),
+  roadmapPhase: z.number().int().positive(),
+  contractRevision: z.number().int().positive(),
+});
+export type TestingContractWaiveRequest = z.output<typeof TestingContractWaiveRequestSchema>;
+export const TestingContractWaiveResultSchema = z.strictObject({
+  result: z.string().max(500),
+  contractRevision: z.number().int().positive(),
+  waivedItems: z.array(AttentionIDSchema).max(100),
+});
+export type TestingContractWaiveResult = z.output<typeof TestingContractWaiveResultSchema>;
+/** The current phase's compiled testing contract, read to drive the waiver checklist. */
+export const TestingContractRequestSchema = z.strictObject({ featureId: FeatureIdSchema });
+export type TestingContractRequest = z.output<typeof TestingContractRequestSchema>;
+export const TestingContractItemSchema = z.strictObject({
+  itemId: AttentionIDSchema,
+  source: z.string().min(1).max(100),
+  owner: z.string().min(1).max(100),
+  repo: z.string().max(500).optional(),
+  name: AttentionTextSchema,
+  command: AttentionTextSchema,
+  required: z.boolean(),
+  allowSubstitution: z.boolean(),
+  allowBlocked: z.boolean(),
+  allowWaiver: z.boolean(),
+  disposition: z
+    .strictObject({
+      status: z.string().min(1).max(100),
+      reason: z.string().max(2000).optional(),
+      changedBy: z.string().max(200).optional(),
+    })
+    .optional(),
+  capabilities: z.array(z.string().max(500)).max(20),
+});
+export type TestingContractItem = z.output<typeof TestingContractItemSchema>;
+/** `available: false` when the phase has no contract yet (server 404). */
+export const TestingContractSnapshotSchema = z.discriminatedUnion('available', [
+  z.strictObject({ available: z.literal(false) }),
+  z.strictObject({
+    available: z.literal(true),
+    featureId: FeatureIdSchema,
+    activeRun: z.number().int().positive(),
+    roadmapPhase: z.number().int().positive(),
+    revision: z.number().int().positive(),
+    items: z.array(TestingContractItemSchema).max(500),
+  }),
+]);
+export type TestingContractSnapshot = z.output<typeof TestingContractSnapshotSchema>;
 
 // --- Singleton AMA chat -----------------------------------------------------
 
@@ -4257,6 +4322,14 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([GateResumeRequestSchema]),
     response: AttentionActionResultSchema,
   },
+  [IPC_CHANNELS.attentionWaiveTestingContract]: {
+    request: z.tuple([TestingContractWaiveRequestSchema]),
+    response: TestingContractWaiveResultSchema,
+  },
+  [IPC_CHANNELS.attentionGetTestingContract]: {
+    request: z.tuple([TestingContractRequestSchema]),
+    response: TestingContractSnapshotSchema,
+  },
   [IPC_CHANNELS.chatStart]: {
     request: z.tuple([ChatStartRequestSchema]),
     response: ChatActionResultSchema,
@@ -4660,6 +4733,8 @@ export interface AgenticoApi {
   sendHelp(request: HelpAnswerRequest): Promise<AttentionActionResult>;
   saveGateDraft(request: GateDraftRequest): Promise<AttentionActionResult>;
   resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
+  waiveTestingContract(request: TestingContractWaiveRequest): Promise<TestingContractWaiveResult>;
+  getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot>;
   startChat(request: ChatStartRequest): Promise<ChatActionResult>;
   endChat(): Promise<ChatActionResult>;
   listSessions(): Promise<SessionSummary[]>;

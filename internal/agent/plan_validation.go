@@ -2349,7 +2349,7 @@ func handleCompletedPlanSession(
 ) (outcome planSessionOutcome, result *PlanLoopResult, newCriticFeedback string, newSessionAttempt int) {
 	agentStatus := waitResult.Status
 	cfg.Observer.SessionEnded(planSessionCtx, "plan", sessionID, cfg.RepoName,
-		toSessionUsage(cost), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
+		toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromAgentStatus(agentStatus))
 
 	output := sess.MessageLog().Text()
 	_ = os.WriteFile(logPath, []byte(output), 0o644)
@@ -2358,7 +2358,7 @@ func handleCompletedPlanSession(
 		return planOutcomeReturn, &PlanLoopResult{
 			FinalStatus: "failed",
 			Iterations:  attempt,
-			LastError:   fmt.Sprintf("committing planner outcome: %v", waitResult.Err),
+			LastError:   fmt.Sprintf("waiting for planner outcome: %v", waitResult.Err),
 		}, "", sessionAttempt
 	}
 	if agentStatus == agentStatusSuccess {

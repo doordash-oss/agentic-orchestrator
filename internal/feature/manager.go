@@ -54,6 +54,7 @@ type WorktreeOps interface {
 	// is an error.
 	RefSHAOrAbsent(repoPath, ref string) (sha string, absent bool, err error)
 	UpdateRef(repoPath, ref, oldSHA, newSHA string) error
+	IsAncestor(repoPath, ancestor, descendant string) (bool, error)
 	InspectCleanliness(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 	// RenameBranch renames the branch checked out in the worktree in place.
 	RenameBranch(worktreePath, oldName, newName string) error

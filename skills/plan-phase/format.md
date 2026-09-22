@@ -78,12 +78,18 @@ The harness automatically records each command's exit code, stdout, stderr, work
 
 Use `- [ ] None required: <reason>` only when the phase has no meaningful executable verification, such as a prose-only documentation change whose correctness requires semantic or rendered review.
 
-When a command needs an external login, credential, device, service, or
-permission, declare the capability and a safe non-mutating probe on that same
-line before the final command:
+When a checklist row (here or under Manual Verification, Visual Evidence, or
+Behavioral Evidence) needs an external login, credential, device, service, or
+permission, declare a built-in capability on that same line before the final
+command: `authenticated-browser(<host>)`, `display`, `docker`, or
+`network(<host[:port]>)`. The harness probes it in-process before each
+implementer iteration and again at post-handoff verification; a missing
+capability opens the user gate instead of failing the row, and a misspelled
+name is a contract error returned for plan revision.
 
-- [ ] [repo: api] Protected integration [agentico capability: Okta session; probe: okta auth status]: `make test-integration`
+- [ ] [repo: api] Protected integration [agentico capability: network(api.internal:443)]: `make test-integration`
 
+A custom probe is still accepted: `[agentico capability: Okta session; probe: okta auth status]`.
 Do not add capability metadata based only on an expected error message. The
 probe must directly answer whether the prerequisite is currently available.
 
@@ -102,6 +108,8 @@ Use `- [ ] None required: <reason>` only when the phase has no meaningful render
 Give each item a `[size: WxH]` tag naming the capture window size; one checklist item per surface/state/size/theme cell.
 
 Do not request a screenshot merely to prove an invariant already covered by an automated command.
+
+A Visual Evidence or Manual Verification row that names an external host (URL or domain) must declare the capability that reaches it, e.g. `[agentico capability: authenticated-browser(<host>)]`, or capture the repository's own surface instead; the harness returns the plan for revision otherwise.
 
 ### Behavioral Evidence
 

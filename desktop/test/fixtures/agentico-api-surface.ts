@@ -71,6 +71,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'getSession',
   'getSessionTranscript',
   'getSettings',
+  'getTestingContract',
   'getThemePreference',
   'getUpdates',
   'getWorkspaceDefaults',
@@ -145,6 +146,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'updateWorkspaceDefaults',
   'uploadCreationFiles',
   'validateReview',
+  'waiveTestingContract',
   'windowPurpose',
   'writeClipboardText',
 ];

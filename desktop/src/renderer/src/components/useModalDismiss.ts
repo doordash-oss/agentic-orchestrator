@@ -27,12 +27,19 @@ export function useModalDismiss(
 ): void {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  // The opener outlives the effect: StrictMode's mount/cleanup/mount rehearsal
+  // would otherwise capture the modal's own first control as the element to
+  // restore, and a real close would then hand focus to a detached node.
+  const openerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!active) return;
     const node = ref.current;
-    const previouslyFocused =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusedNow = document.activeElement;
+    if (focusedNow instanceof HTMLElement && node?.contains(focusedNow) !== true) {
+      openerRef.current = focusedNow;
+    }
+    const previouslyFocused = openerRef.current;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 

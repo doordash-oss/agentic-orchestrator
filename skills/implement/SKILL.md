@@ -48,11 +48,7 @@ For every testing-contract item with `owner: agent`, write the file named by `ex
 - `visual_artifact`: the actual image at the specified `screenshots/` path.
 - `behavioral_artifact`: one actual trace, recording, or interaction log covering the contract's consolidated primary-journey checklist at the specified `behaviors/` path.
 
-Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. Never create placeholder evidence.
-
-When a row's declared capability probe passed, the harness exports the signed-in browser state path as `AGENTICO_BROWSER_STATE_<HOST>` (host upper-cased, non-alphanumerics as `_`, e.g. `AGENTICO_BROWSER_STATE_SLACK_COM`); use it instead of signing in yourself. When a row carries `allow_substitution: true`, a faithful substitute (e.g. a local rendering instead of a third-party UI capture) is acceptable evidence; label it as a substitute in the manual observation.
-
-If required evidence needs authorization, hardware, or an environment this session lacks, run `"$AGENTICO_BIN" report-blocker --contract "{testing_contract_path}" --dir "{iteration_dir}" --items <id,id,...> --capability <name> --reason <text>` with the exact affected contract item ids, then end the iteration with `RETRY`. The harness pauses on the user gate and owns waivers and substitutions; never ask the user in chat to waive a check or edit the contract. Keep the formal AskUserQuestion control for genuine product or scope questions.
+Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs authorization, hardware, or an environment this session lacks, run `"$AGENTICO_BIN" report-blocker --contract "{testing_contract_path}" --dir "{iteration_dir}" --items <id,id,...> --capability <name> --reason <text>` with the affected contract item ids, then end the iteration with `RETRY`; the harness pauses on the user gate, which owns waivers and substitutions. A row with `allow_substitution: true` accepts a faithful, labelled substitute. Never create placeholder evidence.
 
 ## Handoff
 
@@ -101,4 +97,4 @@ Choose exactly one state:
 
 - `SUCCESS`: implementation, acceptance criteria, development tests, due deferrals, and all `owner: agent` evidence are complete. When a testing contract exists, the harness performs final contract verification next; otherwise your reported automated-verification runs are the record.
 - `RETRY`: useful implementation progress landed and a concrete in-scope next action is possible in the current environment.
-Emit `RETRY` for a missing capability only after `report-blocker` has recorded it; a bare `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware) is re-dispatched unchanged. A human product or scope decision still goes through the formal AskUserQuestion control; resume the same iteration after the answer.
+Never emit a bare `RETRY` for a blocker you cannot act on in this environment (missing credentials, absent hardware): the harness re-dispatches `RETRY` iterations unchanged. Record the blocker with `report-blocker` first, or call the formal AskUserQuestion control for a human decision and resume the same iteration after the answer.

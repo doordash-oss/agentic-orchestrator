@@ -109,7 +109,7 @@ Give each item a `[size: WxH]` tag naming the capture window size; one checklist
 
 Do not request a screenshot merely to prove an invariant already covered by an automated command.
 
-A Visual Evidence or Manual Verification row whose text names an external host (URL or domain) must declare a capability, or capture the repository's own surface instead; the harness returns the plan for revision otherwise. Prefer evidence producible headlessly from the repository: for a Slack-style integration, use JSON snapshot or golden tests plus captures of Agentico's own UI. A third-party authenticated UI is a last resort and must declare `authenticated-browser(<host>)`, e.g. `- [ ] Posted message rendered in the channel [agentico capability: authenticated-browser(slack.com)] [size: 1440x900]`.
+A Visual Evidence or Manual Verification row that names an external host (URL or domain) must declare the capability that reaches it, e.g. `[agentico capability: authenticated-browser(<host>)]`, or capture the repository's own surface instead; the harness returns the plan for revision otherwise.
 
 ### Behavioral Evidence
 

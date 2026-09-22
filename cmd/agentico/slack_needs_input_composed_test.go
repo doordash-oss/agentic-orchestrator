@@ -205,17 +205,22 @@ func TestSlackNeedsInputRedaction(t *testing.T) {
 		t.Fatalf("AnswerPermission() error = %v", err)
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
-	for needsInputSlackPosts(fake) < 6 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := needsInputSlackPosts(fake); got < 6 {
-		t.Fatalf(
-			"Needs-input Slack posts after permission answer = %d; want at least 6; pending=%v requests=%v",
-			got, pendingRequestIDs(sess), fake.AllRequests(),
-		)
-	}
+	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+		return hasPendingRequest(sess, "ask-human")
+	})
 	requirePendingRequestIDs(t, sess, "ask-human")
+	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+		record := readComposedSlackRecord(t, stateDir)
+		if record.TagCounter != 3 || len(record.PendingInputs) != 2 {
+			return false
+		}
+		for _, pending := range record.PendingInputs {
+			if pending.RequestID != "ask-human" || len(pending.MessageTS) != 2 {
+				return false
+			}
+		}
+		return true
+	})
 	if _, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
 		SessionID: composedNeedsInputSessionID,
 		RequestID: "ask-human",
@@ -243,8 +248,11 @@ func TestSlackNeedsInputRedaction(t *testing.T) {
 		t.Fatalf("SSE permission/prompt events = %v; want baseline %v", gotSSE, wantSSE)
 	}
 
-	if got := needsInputSlackPosts(fake); got != 6 {
-		t.Fatalf("Needs-input Slack posts = %d; want 3 per destination", got)
+	if got := needsInputSlackPosts(fake); got != 8 {
+		t.Fatalf("Needs-input Slack posts = %d; want 3 items and 1 closure per destination", got)
+	}
+	if got := composedSlackPostTextCount(fake, "#1 was resolved in Agentico."); got != 2 {
+		t.Fatalf("permission closure posts = %d; want one per destination", got)
 	}
 	assertComposedNeedsInputTags(t, fake)
 	if got := readTestFile(t, featurePath); !bytes.Equal(got, featureBefore) {
@@ -525,6 +533,16 @@ func needsInputSlackPosts(fake *testsupport.Server) int {
 	count := 0
 	for _, request := range fake.Requests("chat.postMessage") {
 		if threadTS, threaded := request.Fields["thread_ts"]; threaded && strings.TrimSpace(fmt.Sprint(threadTS)) != "" {
+			count++
+		}
+	}
+	return count
+}
+
+func composedSlackPostTextCount(fake *testsupport.Server, text string) int {
+	count := 0
+	for _, request := range fake.Requests("chat.postMessage") {
+		if fmt.Sprint(request.Fields["text"]) == text {
 			count++
 		}
 	}

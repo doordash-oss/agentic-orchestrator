@@ -65,6 +65,7 @@ type workItem struct {
 	needsCard                  bool
 	refresh                    bool
 	responder                  bool
+	responderFeedback          bool
 	poll                       bool
 	suppressDestinationFailure bool
 	reply                      replyPayload
@@ -245,6 +246,9 @@ func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
 // then mark the destination dirty for the coalesced refresh.
 func (w *destinationWorker) handle(item workItem) {
 	defer item.delivery.done()
+	if item.responderFeedback {
+		defer w.notifier.releaseResponderFeedback(item.channelID)
+	}
 	defer w.notifier.releasePendingDelivery(
 		item.featureID, item.reply.identity, item.destinationKey,
 	)

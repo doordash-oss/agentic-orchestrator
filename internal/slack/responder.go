@@ -31,6 +31,7 @@ const (
 	responderPageSize               = 100
 	responderPageBudget             = 3
 	responderResolvedRetentionLimit = 16
+	responderFeedbackLimit          = 16
 )
 
 type responderThread struct {
@@ -485,35 +486,73 @@ func (n *Notifier) processResponderReply(
 	token string,
 	candidate responderReplyCandidate,
 ) {
+	claimKey := responderReplyClaimKey(candidate)
+	if !n.claimResponderCandidate(claimKey) {
+		return
+	}
 	if !candidate.TargetFound {
-		n.rejectResponderReply(token, candidate, pendingInputRecord{}, "not_answerable", "question",
-			"This reply does not target an answerable item. Answer in Agentico.")
+		if !n.rejectResponderReply(
+			token,
+			candidate,
+			pendingInputRecord{},
+			"not_answerable",
+			"question",
+			"This reply does not target an answerable item. Answer in Agentico.",
+			claimKey,
+			false,
+		) {
+			n.releaseResponderClaim(claimKey)
+		}
 		return
 	}
 	pending, ok := n.pendingResponderTarget(candidate.Thread.featureID, candidate.Target.Identity)
 	if !ok {
-		return
+		if candidate.Target.Resolution == nil {
+			n.releaseResponderClaim(claimKey)
+			return
+		}
+		pending = pendingInputRecord{
+			Identity:        candidate.Target.Identity,
+			SourceFeatureID: candidate.Thread.featureID,
+			Tag:             candidate.Target.Tag,
+			Resolution:      candidate.Target.Resolution,
+		}
 	}
 	if pending.Resolution != nil {
-		n.rejectResolvedReply(token, candidate, pending, pending.Resolution)
+		if !n.rejectResolvedReply(token, candidate, pending, pending.Resolution, claimKey) {
+			n.releaseResponderClaim(claimKey)
+		}
 		return
 	}
 	decision, parsed := responderReplyDecision(pending.Kind, candidate.Message.Text)
 	if !parsed {
-		n.rejectResponderReply(
+		if !n.rejectResponderReply(
 			token,
 			candidate,
 			pending,
 			responderUnparseableReason(pending.Kind),
 			"question",
 			responderHint(pending),
-		)
+			claimKey,
+			false,
+		) {
+			n.releaseResponderClaim(claimKey)
+		}
 		return
 	}
 	responderName := n.responderName(client, token, candidate.Message.User)
 	result := n.submitResponderAnswer(pending, decision, responderName)
 	if result.Outcome != ports.SlackAnswerAccepted {
-		n.handleRejectedResponderReply(token, candidate, pending, decision, result)
+		if !n.handleRejectedResponderReply(
+			token,
+			candidate,
+			pending,
+			decision,
+			result,
+			claimKey,
+		) {
+			n.releaseResponderClaim(claimKey)
+		}
 		return
 	}
 	if n.resolveResponderTarget(
@@ -529,9 +568,12 @@ func (n *Notifier) processResponderReply(
 			candidate.Message.TS,
 			candidate.Message.User,
 			decision,
+			claimKey,
 		)
 		n.emitResponderAccepted(candidate.Thread, pending, decision, "reply")
+		return
 	}
+	n.releaseResponderClaim(claimKey)
 }
 
 func (n *Notifier) processResponderReaction(
@@ -539,6 +581,10 @@ func (n *Notifier) processResponderReaction(
 	token string,
 	candidate responderReactionCandidate,
 ) {
+	claimKey := responderReactionClaimKey(candidate)
+	if !n.claimResponderCandidate(claimKey) {
+		return
+	}
 	pending, ok := n.pendingResponderTarget(candidate.Thread.featureID, candidate.Target.Identity)
 	if !ok || pending.judgedReactionContains(
 		candidate.Thread.destinationKey,
@@ -546,22 +592,42 @@ func (n *Notifier) processResponderReaction(
 		candidate.Name,
 		candidate.UserID,
 	) {
+		n.releaseResponderClaim(claimKey)
 		return
 	}
 	if pending.Resolution != nil {
+		if !n.rejectResolvedReaction(
+			token,
+			candidate,
+			pending,
+			pending.Resolution,
+			claimKey,
+		) {
+			n.releaseResponderClaim(claimKey)
+			return
+		}
 		n.judgeResponderReaction(candidate)
-		n.rejectResolvedReaction(token, candidate, pending, pending.Resolution)
 		return
 	}
 	decision, parsed := responderReactionDecision(pending.Kind, candidate.Name)
 	if !parsed {
+		n.releaseResponderClaim(claimKey)
 		return
 	}
 	responderName := n.responderName(client, token, candidate.UserID)
 	result := n.submitResponderAnswer(pending, decision, responderName)
 	n.judgeResponderReaction(candidate)
 	if result.Outcome != ports.SlackAnswerAccepted {
-		n.handleRejectedResponderReaction(token, candidate, pending, decision, result)
+		if !n.handleRejectedResponderReaction(
+			token,
+			candidate,
+			pending,
+			decision,
+			result,
+			claimKey,
+		) {
+			n.releaseResponderClaim(claimKey)
+		}
 		return
 	}
 	if n.resolveResponderTarget(
@@ -577,9 +643,12 @@ func (n *Notifier) processResponderReaction(
 			"",
 			candidate.UserID,
 			decision,
+			claimKey,
 		)
 		n.emitResponderAccepted(candidate.Thread, pending, decision, "reaction")
+		return
 	}
+	n.releaseResponderClaim(claimKey)
 }
 
 func responderReplyDecision(inputKind, text string) (string, bool) {
@@ -638,11 +707,20 @@ func (n *Notifier) handleRejectedResponderReply(
 	pending pendingInputRecord,
 	decision string,
 	result ports.SlackAnswerResult,
-) {
+	claimKey string,
+) bool {
 	switch result.Outcome {
 	case ports.SlackAnswerRevisionMoved:
-		n.rejectResponderReply(token, candidate, pending, "stale_revision", "warning",
-			pending.Tag+" changed in Agentico. Approve the current review there.")
+		return n.rejectResponderReply(
+			token,
+			candidate,
+			pending,
+			"stale_revision",
+			"warning",
+			pending.Tag+" changed in Agentico. Approve the current review there.",
+			claimKey,
+			true,
+		)
 	case ports.SlackAnswerNoLongerPending:
 		if resolved, ok := n.resolveResponderTargetByAgentico(
 			candidate.Thread.featureID,
@@ -650,14 +728,31 @@ func (n *Notifier) handleRejectedResponderReply(
 		); ok {
 			n.enqueueResponderClosure(token, candidate.Thread.featureID, resolved)
 		}
-		n.rejectResponderReply(token, candidate, pending, "already_resolved", "warning",
-			pending.Tag+" was already answered by Agentico.")
+		return n.rejectResponderReply(
+			token,
+			candidate,
+			pending,
+			"already_resolved",
+			"warning",
+			pending.Tag+" was already answered by Agentico.",
+			claimKey,
+			true,
+		)
 	case ports.SlackAnswerFailed:
 		n.logResponderFailure(token, result.Cause)
-		n.rejectResponderReply(token, candidate, pending, "submit_failed", "warning",
-			pending.Tag+" could not be submitted. Answer again or in Agentico.")
+		return n.rejectResponderReply(
+			token,
+			candidate,
+			pending,
+			"submit_failed",
+			"warning",
+			pending.Tag+" could not be submitted. Answer again or in Agentico.",
+			claimKey,
+			true,
+		)
 	default:
 		n.emitResponderRejected(candidate.Thread, pending, decision, "reply", "submit_failed")
+		return false
 	}
 }
 
@@ -667,7 +762,8 @@ func (n *Notifier) handleRejectedResponderReaction(
 	pending pendingInputRecord,
 	decision string,
 	result ports.SlackAnswerResult,
-) {
+	claimKey string,
+) bool {
 	line := ""
 	reason := ""
 	switch result.Outcome {
@@ -688,10 +784,22 @@ func (n *Notifier) handleRejectedResponderReaction(
 		line = pending.Tag + " could not be submitted. Answer again or in Agentico."
 		n.logResponderFailure(token, result.Cause)
 	default:
-		return
+		return false
 	}
-	n.enqueueResponderFeedback(token, candidate.Thread, pending.SourceFeatureID, "", "", line)
+	if !n.enqueueResponderFeedback(
+		token,
+		candidate.Thread,
+		pending.SourceFeatureID,
+		"",
+		"",
+		line,
+		claimKey,
+		true,
+	) {
+		return false
+	}
 	n.emitResponderRejected(candidate.Thread, pending, decision, "reaction", reason)
+	return true
 }
 
 func (n *Notifier) rejectResolvedReply(
@@ -699,9 +807,18 @@ func (n *Notifier) rejectResolvedReply(
 	candidate responderReplyCandidate,
 	pending pendingInputRecord,
 	resolution *postingResolution,
-) {
-	n.rejectResponderReply(token, candidate, pending, "already_resolved", "warning",
-		alreadyAnsweredLine(pending.Tag, resolution))
+	claimKey string,
+) bool {
+	return n.rejectResponderReply(
+		token,
+		candidate,
+		pending,
+		"already_resolved",
+		"warning",
+		alreadyAnsweredLine(pending.Tag, resolution),
+		claimKey,
+		false,
+	)
 }
 
 func (n *Notifier) rejectResolvedReaction(
@@ -709,16 +826,22 @@ func (n *Notifier) rejectResolvedReaction(
 	candidate responderReactionCandidate,
 	pending pendingInputRecord,
 	resolution *postingResolution,
-) {
-	n.enqueueResponderFeedback(
+	claimKey string,
+) bool {
+	if !n.enqueueResponderFeedback(
 		token,
 		candidate.Thread,
 		pending.SourceFeatureID,
 		"",
 		"",
 		alreadyAnsweredLine(pending.Tag, resolution),
-	)
+		claimKey,
+		false,
+	) {
+		return false
+	}
 	n.emitResponderRejected(candidate.Thread, pending, "", "reaction", "already_resolved")
+	return true
 }
 
 func alreadyAnsweredLine(tag string, resolution *postingResolution) string {
@@ -752,17 +875,24 @@ func (n *Notifier) rejectResponderReply(
 	candidate responderReplyCandidate,
 	pending pendingInputRecord,
 	reason, reaction, line string,
-) {
-	n.enqueueResponderFeedback(
+	claimKey string,
+	force bool,
+) bool {
+	if !n.enqueueResponderFeedback(
 		token,
 		candidate.Thread,
 		firstNonempty(pending.SourceFeatureID, candidate.Thread.featureID),
 		candidate.Message.TS,
 		reaction,
 		line,
-	)
+		claimKey,
+		force,
+	) {
+		return false
+	}
 	decision, _ := responderReplyDecision(pending.Kind, candidate.Message.Text)
 	n.emitResponderRejected(candidate.Thread, pending, decision, "reply", reason)
+	return true
 }
 
 func (n *Notifier) enqueueResponderFeedback(
@@ -770,14 +900,17 @@ func (n *Notifier) enqueueResponderFeedback(
 	source responderThread,
 	sourceFeatureID string,
 	messageTS, reaction, line string,
-) {
+	claimKey string,
+	force bool,
+) bool {
 	work := make([]workItem, 0, 2)
 	if messageTS != "" && reaction != "" {
 		work = append(work, workItem{
 			featureID: source.featureID, sourceFeatureID: sourceFeatureID,
 			destinationKey: source.destinationKey,
 			kind:           candidateDestinationKind(source.destinationKey), channelID: source.channelID,
-			responder: true, reaction: reactionPayload{messageTS: messageTS, name: reaction},
+			responder: true, responderFeedback: true,
+			reaction: reactionPayload{messageTS: messageTS, name: reaction},
 		})
 	}
 	if line != "" {
@@ -785,20 +918,26 @@ func (n *Notifier) enqueueResponderFeedback(
 			featureID: source.featureID, sourceFeatureID: sourceFeatureID,
 			destinationKey: source.destinationKey,
 			kind:           candidateDestinationKind(source.destinationKey), channelID: source.channelID,
-			responder: true, reply: replyPayload{
+			responder: true, responderFeedback: true, reply: replyPayload{
 				kind: kindNeedsInput, fallback: scrub(token, line),
 			},
 		})
 	}
 	if len(work) == 0 {
-		return
+		return false
+	}
+	if !n.reserveResponderFeedback(source.channelID, len(work), force) {
+		return false
 	}
 	item := queueItem{
 		kind:  kindNeedsInput,
 		event: ports.Event{Type: ports.SessionOutput, FeatureID: source.featureID},
 	}
 	item.reservation = n.queue.reserveProtected(item.event)
-	n.dispatchDeliveryGroup(item, work)
+	n.dispatchDeliveryGroupWithDone(item, work, func() {
+		n.releaseResponderClaim(claimKey)
+	})
+	return true
 }
 
 func (n *Notifier) emitResponderAccepted(
@@ -840,6 +979,7 @@ func (n *Notifier) enqueueAcceptedResponderWrites(
 	pending pendingInputRecord,
 	source responderThread,
 	replyTS, responderID, decision string,
+	claimKey string,
 ) {
 	confirmation := responderConfirmation(
 		token,
@@ -888,6 +1028,7 @@ func (n *Notifier) enqueueAcceptedResponderWrites(
 	}
 	n.recordMu.Unlock()
 	if len(work) == 0 {
+		n.releaseResponderClaim(claimKey)
 		return
 	}
 	item := queueItem{
@@ -898,7 +1039,68 @@ func (n *Notifier) enqueueAcceptedResponderWrites(
 		},
 	}
 	item.reservation = n.queue.reserveProtected(item.event)
-	n.dispatchDeliveryGroup(item, work)
+	n.dispatchDeliveryGroupWithDone(item, work, func() {
+		n.releaseResponderClaim(claimKey)
+	})
+}
+
+func responderReplyClaimKey(candidate responderReplyCandidate) string {
+	return strings.Join([]string{
+		"reply",
+		candidate.Thread.featureID,
+		candidate.Thread.destinationKey,
+		candidate.Message.TS,
+	}, "\x00")
+}
+
+func responderReactionClaimKey(candidate responderReactionCandidate) string {
+	return strings.Join([]string{
+		"reaction",
+		candidate.Thread.featureID,
+		candidate.Thread.destinationKey,
+		candidate.MessageTS,
+		candidate.Name,
+		candidate.UserID,
+	}, "\x00")
+}
+
+func (n *Notifier) claimResponderCandidate(key string) bool {
+	n.responderFeedbackMu.Lock()
+	defer n.responderFeedbackMu.Unlock()
+	if _, exists := n.responderClaims[key]; exists {
+		return false
+	}
+	n.responderClaims[key] = struct{}{}
+	return true
+}
+
+func (n *Notifier) releaseResponderClaim(key string) {
+	n.responderFeedbackMu.Lock()
+	delete(n.responderClaims, key)
+	n.responderFeedbackMu.Unlock()
+}
+
+func (n *Notifier) reserveResponderFeedback(channelID string, count int, force bool) bool {
+	n.responderFeedbackMu.Lock()
+	defer n.responderFeedbackMu.Unlock()
+	outstanding := n.responderFeedback[channelID]
+	// A parsed mutation cannot be retried safely after the port has observed it.
+	if !force && outstanding+count > responderFeedbackLimit {
+		return false
+	}
+	n.responderFeedback[channelID] = outstanding + count
+	return true
+}
+
+func (n *Notifier) releaseResponderFeedback(channelID string) {
+	n.responderFeedbackMu.Lock()
+	defer n.responderFeedbackMu.Unlock()
+	outstanding := n.responderFeedback[channelID]
+	if outstanding <= 1 {
+		delete(n.responderFeedback, channelID)
+		return
+	}
+	n.responderFeedback[channelID] = outstanding - 1
 }
 
 func responderConfirmation(token, tag, inputKind, decision, responderID string) string {

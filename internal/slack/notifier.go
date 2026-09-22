@@ -161,6 +161,10 @@ type Notifier struct {
 
 	responderNameMu sync.Mutex
 	responderNames  map[string]string
+
+	responderFeedbackMu sync.Mutex
+	responderFeedback   map[string]int
+	responderClaims     map[string]struct{}
 }
 
 // NewNotifier constructs the notifier and its intake queue. Call Start
@@ -206,6 +210,8 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		pendingDeliveries:  map[string]struct{}{},
 		responderPolls:     map[string]responderPollState{},
 		responderNames:     map[string]string{},
+		responderFeedback:  map[string]int{},
+		responderClaims:    map[string]struct{}{},
 	}
 	notifier.requestBase, notifier.cancelBase = context.WithCancel(context.Background())
 	notifier.responderBase, notifier.cancelResponder = context.WithCancel(context.Background())
@@ -644,7 +650,16 @@ func (n *Notifier) dispatchWork(item queueItem, work []workItem) {
 }
 
 func (n *Notifier) dispatchDeliveryGroup(item queueItem, work []workItem) {
+	n.dispatchDeliveryGroupWithDone(item, work, nil)
+}
+
+func (n *Notifier) dispatchDeliveryGroupWithDone(
+	item queueItem,
+	work []workItem,
+	onDone func(),
+) {
 	group := newDeliveryGroup(n.queue, item, len(work))
+	group.onDone = onDone
 	for i := range work {
 		work[i].delivery = group
 		n.workerFor(work[i].channelID).enqueue(work[i])
@@ -1313,6 +1328,7 @@ type deliveryGroup struct {
 	queue     *itemQueue
 	item      queueItem
 	remaining atomic.Int64
+	onDone    func()
 }
 
 func newDeliveryGroup(queue *itemQueue, item queueItem, count int) *deliveryGroup {
@@ -1327,5 +1343,8 @@ func (g *deliveryGroup) done() {
 	}
 	if g.remaining.Add(-1) == 0 {
 		g.queue.complete(g.item)
+		if g.onDone != nil {
+			g.onDone()
+		}
 	}
 }

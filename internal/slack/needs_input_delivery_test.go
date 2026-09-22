@@ -61,9 +61,17 @@ func TestReviewGateUploadsBeforeMessageAndPersistsFile(t *testing.T) {
 	harness.feed(ports.Event{Type: ports.ReviewRequired, FeatureID: "F-1"})
 	waitFor(t, 5*time.Second, func() bool {
 		record, ok := readFeatureRecord(harness.stateDir, "F-1")
-		return ok && len(record.Pending) == 1 &&
+		if !ok {
+			return false
+		}
+		destination := record.Destinations["channel:C-ENG"]
+		return len(record.Pending) == 1 &&
 			record.Pending[0].MessageTS["channel:C-ENG"] != "" &&
-			record.Pending[0].FileIDs["channel:C-ENG"] != ""
+			record.Pending[0].FileIDs["channel:C-ENG"] != "" &&
+			len(destination.PostingIndex) == 1 &&
+			destination.PostingIndex[0].MessageTS ==
+				record.Pending[0].MessageTS["channel:C-ENG"] &&
+			destination.PostingIndex[0].Tag == record.Pending[0].Tag
 	})
 
 	requests := harness.server.AllRequests()

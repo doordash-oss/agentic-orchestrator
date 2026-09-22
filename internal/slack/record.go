@@ -65,13 +65,34 @@ type pendingInputRecord struct {
 // least once. Entries survive recipient removal so re-adding a recipient
 // continues the same thread.
 type destinationRecord struct {
-	Kind        string              `yaml:"kind"`
-	SlackID     string              `yaml:"slack_id"`
-	DisplayName string              `yaml:"display_name"`
-	ChannelID   string              `yaml:"channel_id,omitempty"`
-	RootTS      string              `yaml:"root_ts,omitempty"`
-	Ledger      []string            `yaml:"ledger,omitempty"`
-	Failure     *destinationFailure `yaml:"failure,omitempty"`
+	Kind                 string                `yaml:"kind"`
+	SlackID              string                `yaml:"slack_id"`
+	DisplayName          string                `yaml:"display_name"`
+	ChannelID            string                `yaml:"channel_id,omitempty"`
+	RootTS               string                `yaml:"root_ts,omitempty"`
+	Ledger               []string              `yaml:"ledger,omitempty"`
+	IntegrationReactions []reactionLedgerEntry `yaml:"integration_reactions,omitempty"`
+	PostingIndex         []postingIndexEntry   `yaml:"posting_index,omitempty"`
+	Failure              *destinationFailure   `yaml:"failure,omitempty"`
+}
+
+type reactionLedgerEntry struct {
+	MessageTS string `yaml:"message_ts"`
+	Name      string `yaml:"name"`
+}
+
+type postingIndexEntry struct {
+	Identity   string             `yaml:"identity"`
+	MessageTS  string             `yaml:"message_ts"`
+	Tag        string             `yaml:"tag"`
+	Resolution *postingResolution `yaml:"resolution,omitempty"`
+}
+
+type postingResolution struct {
+	Kind          string    `yaml:"kind"`
+	ResponderID   string    `yaml:"responder_id,omitempty"`
+	ResponderName string    `yaml:"responder_name,omitempty"`
+	ResolvedAt    time.Time `yaml:"resolved_at"`
 }
 
 type destinationFailure struct {
@@ -100,6 +121,61 @@ func (d *destinationRecord) ledgerAppend(ts string) {
 		}
 	}
 	d.Ledger = append(d.Ledger, ts)
+}
+
+func (d *destinationRecord) ledgerContains(ts string) bool {
+	for _, existing := range d.Ledger {
+		if existing == ts {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *destinationRecord) reactionAppend(messageTS, name string) {
+	if messageTS == "" || name == "" || d.reactionContains(messageTS, name) {
+		return
+	}
+	d.IntegrationReactions = append(d.IntegrationReactions, reactionLedgerEntry{
+		MessageTS: messageTS,
+		Name:      name,
+	})
+}
+
+func (d *destinationRecord) reactionContains(messageTS, name string) bool {
+	for _, reaction := range d.IntegrationReactions {
+		if reaction.MessageTS == messageTS && reaction.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *destinationRecord) hasReactionForMessage(messageTS string) bool {
+	for _, reaction := range d.IntegrationReactions {
+		if reaction.MessageTS == messageTS {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *destinationRecord) postingAppend(identity, messageTS, tag string) {
+	if identity == "" || messageTS == "" {
+		return
+	}
+	for i := range d.PostingIndex {
+		if d.PostingIndex[i].Identity == identity {
+			d.PostingIndex[i].MessageTS = messageTS
+			d.PostingIndex[i].Tag = tag
+			return
+		}
+	}
+	d.PostingIndex = append(d.PostingIndex, postingIndexEntry{
+		Identity:  identity,
+		MessageTS: messageTS,
+		Tag:       tag,
+	})
 }
 
 func (d *destinationRecord) recordFailure(code errcat.Code, slackError string, at time.Time) {

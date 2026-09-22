@@ -310,3 +310,114 @@ func TestSlackResponderResumesCursorAfterPerTickPageBudget(t *testing.T) {
 		t.Fatalf("resumed cursor = %q; want 300", got)
 	}
 }
+
+func TestSlackResponderExtractsCandidatesByLedgerProvenance(t *testing.T) {
+	harness := newNotifierHarness(t, defaultTestSettings(
+		"xoxp-responder",
+		ports.SlackRecipient{
+			TypedText: "#eng", Kind: ports.SlackRecipientChannel,
+			ID: "C-ENG", DisplayName: "#eng",
+		},
+	))
+	const (
+		featureID      = "feature-1"
+		destinationKey = "channel:C-ENG"
+		rootTS         = "100.000001"
+	)
+	harness.server.SeedThread("C-ENG", rootTS, []testsupport.Message{
+		{TS: rootTS, User: "U-OWNER", Text: "root"},
+		{
+			TS: "100.000002", ThreadTS: rootTS, User: "U-OWNER", Text: "permission",
+			Reactions: []testsupport.Reaction{
+				{Name: "white_check_mark", Count: 2, Users: []string{"U-OWNER", "U-OTHER"}},
+				{Name: "x", Count: 1, Users: []string{"U-DENY"}},
+				{Name: "eyes", Count: 1, Users: []string{"U-OTHER"}},
+			},
+		},
+		{TS: "100.000003", ThreadTS: rootTS, User: "U-OWNER", Text: "allow"},
+		{TS: "100.000004", ThreadTS: rootTS, User: "U-OWNER", Text: "integration confirmation"},
+		{TS: "100.000005", ThreadTS: rootTS, User: "U-OWNER", Text: "deny"},
+		{TS: "100.000006", ThreadTS: rootTS, BotID: "B-AGENTICO", Text: "approve"},
+		{TS: "100.000007", ThreadTS: rootTS, User: "U-OWNER", Text: "review"},
+	})
+
+	client, err := NewClient("xoxp-responder", WithBaseURL(harness.server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.ThreadReplies(
+		context.Background(), "C-ENG", rootTS, "100.000002", 100, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	notifier := NewNotifier(NotifierOptions{
+		Settings: harness.settings,
+		Store:    harness.store,
+		StateDir: harness.stateDir,
+		Observer: harness.observer,
+		Pending:  harness.pending,
+		Answer:   &fakeSlackAnswerPort{},
+		Clock:    harness.clock,
+	})
+	notifier.records[featureID] = &featureRecord{
+		Version: recordVersion,
+		Destinations: map[string]destinationRecord{
+			destinationKey: {
+				Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: rootTS,
+				Ledger: []string{rootTS, "100.000002", "100.000004", "100.000007"},
+				IntegrationReactions: []reactionLedgerEntry{
+					{MessageTS: "100.000002", Name: "white_check_mark"},
+					{MessageTS: "100.000005", Name: "white_check_mark"},
+				},
+				PostingIndex: []postingIndexEntry{
+					{Identity: "permission:1", MessageTS: "100.000002", Tag: "#1"},
+					{Identity: "review:2", MessageTS: "100.000007", Tag: "#2"},
+				},
+			},
+		},
+	}
+
+	replies, reactions := notifier.extractResponderCandidates(responderThread{
+		featureID: featureID, destinationKey: destinationKey,
+		channelID: "C-ENG", rootTS: rootTS, oldest: "100.000002",
+	}, page.Messages)
+
+	if len(replies) != 2 {
+		t.Fatalf("reply candidates = %#v; want owner and bot-authored unclaimed replies", replies)
+	}
+	for index, wantTS := range []string{"100.000003", "100.000006"} {
+		if replies[index].Message.TS != wantTS ||
+			!replies[index].TargetFound ||
+			replies[index].Target.Identity != "permission:1" {
+			t.Errorf("reply %d = %#v; want ts %s targeting permission:1", index, replies[index], wantTS)
+		}
+	}
+	if len(reactions) != 1 ||
+		reactions[0].Name != "x" ||
+		reactions[0].UserID != "U-DENY" ||
+		reactions[0].Target.Identity != "permission:1" {
+		t.Fatalf("reaction candidates = %#v; want only unclaimed deny", reactions)
+	}
+}
+
+func TestDestinationRecordPostingAndReactionLedgersAreIdempotent(t *testing.T) {
+	var destination destinationRecord
+	destination.postingAppend("permission:1", "100.000002", "#1")
+	destination.postingAppend("permission:1", "100.000002", "#1")
+	destination.reactionAppend("100.000003", "white_check_mark")
+	destination.reactionAppend("100.000003", "white_check_mark")
+
+	if len(destination.PostingIndex) != 1 ||
+		destination.PostingIndex[0].Identity != "permission:1" {
+		t.Fatalf("posting index = %#v; want one permission entry", destination.PostingIndex)
+	}
+	if len(destination.IntegrationReactions) != 1 ||
+		!destination.reactionContains("100.000003", "white_check_mark") {
+		t.Fatalf(
+			"integration reactions = %#v; want one check-mark entry",
+			destination.IntegrationReactions,
+		)
+	}
+}

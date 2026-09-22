@@ -416,6 +416,9 @@ func (w *destinationWorker) postReply(item workItem) error {
 	notifier.recordMu.Lock()
 	entry := record.Destinations[item.destinationKey]
 	entry.ledgerAppend(result.TS)
+	if item.reply.identity != "" {
+		entry.postingAppend(item.reply.identity, result.TS, item.reply.tag)
+	}
 	record.Destinations[item.destinationKey] = entry
 	if item.reply.identity != "" {
 		for i := range record.Pending {

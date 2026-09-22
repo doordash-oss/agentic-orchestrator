@@ -30,14 +30,29 @@ const (
 )
 
 type responderThread struct {
-	channelID string
-	rootTS    string
-	oldest    string
+	featureID      string
+	destinationKey string
+	channelID      string
+	rootTS         string
+	oldest         string
 }
 
 type responderPollState struct {
 	oldest string
 	cursor string
+}
+
+type responderReplyCandidate struct {
+	Message     Message
+	Target      postingIndexEntry
+	TargetFound bool
+}
+
+type responderReactionCandidate struct {
+	MessageTS string
+	Name      string
+	UserID    string
+	Target    postingIndexEntry
 }
 
 func parsePermissionReply(text string) (ports.SlackPermissionDecision, bool) {
@@ -102,6 +117,7 @@ func (n *Notifier) responderTick() {
 			if err != nil {
 				break
 			}
+			n.extractResponderCandidates(thread, page.Messages)
 			state.cursor = page.NextCursor
 			if state.cursor == "" {
 				break
@@ -121,7 +137,7 @@ func (n *Notifier) responderThreads() []responderThread {
 	defer n.recordMu.Unlock()
 
 	var threads []responderThread
-	for _, record := range n.records {
+	for featureID, record := range n.records {
 		for key, destination := range record.Destinations {
 			if destination.ChannelID == "" || destination.RootTS == "" {
 				continue
@@ -136,9 +152,11 @@ func (n *Notifier) responderThreads() []responderThread {
 			}
 			if oldest != "" {
 				threads = append(threads, responderThread{
-					channelID: destination.ChannelID,
-					rootTS:    destination.RootTS,
-					oldest:    oldest,
+					featureID:      featureID,
+					destinationKey: key,
+					channelID:      destination.ChannelID,
+					rootTS:         destination.RootTS,
+					oldest:         oldest,
 				})
 			}
 		}
@@ -150,6 +168,79 @@ func (n *Notifier) responderThreads() []responderThread {
 		return threads[i].rootTS < threads[j].rootTS
 	})
 	return threads
+}
+
+func (n *Notifier) extractResponderCandidates(
+	thread responderThread,
+	messages []Message,
+) ([]responderReplyCandidate, []responderReactionCandidate) {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+
+	record := n.records[thread.featureID]
+	if record == nil {
+		return nil, nil
+	}
+	destination, ok := record.Destinations[thread.destinationKey]
+	if !ok {
+		return nil, nil
+	}
+
+	postingsByTimestamp := make(map[string]postingIndexEntry, len(destination.PostingIndex))
+	for _, posting := range destination.PostingIndex {
+		postingsByTimestamp[posting.MessageTS] = posting
+	}
+
+	var replies []responderReplyCandidate
+	var reactions []responderReactionCandidate
+	for _, message := range messages {
+		if posting, posted := postingsByTimestamp[message.TS]; posted {
+			for _, reaction := range message.Reactions {
+				if reaction.Name != "white_check_mark" && reaction.Name != "x" {
+					continue
+				}
+				if destination.reactionContains(message.TS, reaction.Name) {
+					continue
+				}
+				for _, userID := range reaction.Users {
+					reactions = append(reactions, responderReactionCandidate{
+						MessageTS: message.TS,
+						Name:      reaction.Name,
+						UserID:    userID,
+						Target:    posting,
+					})
+				}
+			}
+			continue
+		}
+		if message.TS == "" ||
+			destination.ledgerContains(message.TS) ||
+			destination.hasReactionForMessage(message.TS) {
+			continue
+		}
+		target, found := newestPostingBefore(destination.PostingIndex, message.TS)
+		replies = append(replies, responderReplyCandidate{
+			Message:     message,
+			Target:      target,
+			TargetFound: found,
+		})
+	}
+	return replies, reactions
+}
+
+func newestPostingBefore(postings []postingIndexEntry, messageTS string) (postingIndexEntry, bool) {
+	var newest postingIndexEntry
+	found := false
+	for _, posting := range postings {
+		if compareSlackTimestamps(posting.MessageTS, messageTS) >= 0 {
+			continue
+		}
+		if !found || compareSlackTimestamps(posting.MessageTS, newest.MessageTS) > 0 {
+			newest = posting
+			found = true
+		}
+	}
+	return newest, found
 }
 
 func compareSlackTimestamps(left, right string) int {

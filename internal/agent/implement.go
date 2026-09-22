@@ -2865,7 +2865,7 @@ func preIterationCapabilityGate(cfg ImplementConfig, contractPath, iterDir strin
 	}
 	hasCapabilities := false
 	for _, item := range contract.Items {
-		if len(item.Capabilities) > 0 && item.Policy.Required && !IsTestingContractItemWaived(item) {
+		if capabilityProbesApply(item) && item.Policy.Required && !IsTestingContractItemWaived(item) {
 			hasCapabilities = true
 			break
 		}

@@ -547,3 +547,59 @@ func TestPreIterationCapabilityGateHandsStateToImplementer(t *testing.T) {
 		t.Fatalf("denied policy: gate = %+v, env = %v, err = %v", gated, env, err)
 	}
 }
+
+func TestMultiRepoCompileKeepsEvidenceCapabilities(t *testing.T) {
+	t.Parallel()
+	plan := strings.Join([]string{
+		"### Task 1: Render",
+		"**Repo:** repo",
+		"## Success Criteria",
+		"### Manual Verification",
+		"- [ ] Judge the Builder rendering [agentico capability: authenticated-browser(slack.com)].",
+		"### Visual Evidence",
+		"- [ ] Builder preview [agentico capability: authenticated-browser(slack.com)] [size: 100x100]",
+		"### Behavioral Evidence",
+		"- [ ] Journey A [agentico capability: display]",
+		"- [ ] Journey B [agentico capability: docker]",
+	}, "\n")
+	contract := CompileTestingContractMultiRepo(MultiRepoContractInput{Repos: []string{"repo"}, PlanText: plan, PlanPath: "/tmp/phase-01/plan.md", PhaseType: "collapsed"})
+	got := map[string][]string{}
+	for _, item := range contract.Items {
+		for _, capability := range item.Capabilities {
+			got[item.Source] = append(got[item.Source], capability.Registry)
+		}
+	}
+	if strings.Join(got[testingContractManualSource], ",") != CapabilityAuthenticatedBrowser ||
+		strings.Join(got[testingContractVisualSource], ",") != CapabilityAuthenticatedBrowser ||
+		strings.Join(got[testingContractBehavioralSource], ",") != "display,docker" {
+		t.Fatalf("capabilities by source = %v", got)
+	}
+}
+
+func TestReconcilePreservesUserSubstitutionAndSkipsProbe(t *testing.T) {
+	t.Parallel()
+	plan := "### Visual Evidence\n- [ ] Builder preview [agentico capability: authenticated-browser(slack.com)] [size: 100x100]\n"
+	existing := CompileTestingContract(plan, "/tmp/phase-01/plan.md", "collapsed")
+	revised, err := ReviseTestingContract(&existing, []TestingContractChange{{ItemID: existing.Items[0].ID, Action: TestingContractChangeAllowSubstitution, ChangeReason: "r", ChangedBy: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged := ReconcileTestingContract(revised, CompileTestingContract(plan, "/tmp/phase-01/plan.md", "collapsed"))
+	if !merged.Items[0].Policy.AllowSubstitution || len(merged.Changes) != 1 || merged.Revision != revised.Revision {
+		t.Fatalf("reconciled = %+v (changes %d, revision %d)", merged.Items[0].Policy, len(merged.Changes), merged.Revision)
+	}
+	if capabilityProbesApply(merged.Items[0]) {
+		t.Fatal("approved substitute must not be gated by the unavailable capability")
+	}
+	ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{AllowBrowserState: false})
+	out, err := ProbeTestingContractCapabilities(ctx, NewExecCommandRunner(), &merged, "", t.TempDir(), nil)
+	if err != nil || len(out.BlockedItems) != 0 {
+		t.Fatalf("probe pass = %+v, %v; want no block", out, err)
+	}
+	// A harness command keeps its probe even though plan rows allow
+	// substitution by default.
+	cmd := CompileTestingContract("### Automated Verification\n- [ ] Check [agentico capability: display]: `printf ok`\n", "", "collapsed")
+	if !capabilityProbesApply(cmd.Items[0]) {
+		t.Fatal("harness-owned command lost its capability gate")
+	}
+}

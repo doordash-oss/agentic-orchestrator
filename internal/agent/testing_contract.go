@@ -371,6 +371,7 @@ func ReconcileTestingContract(existing *TestingContract, fresh TestingContract) 
 		if oldIdx := testingContractItemIndex(existing.Items, merged.Items[i].ID); oldIdx >= 0 {
 			if testingContractItemDefinitionEqual(existing.Items[oldIdx], merged.Items[i]) {
 				merged.Items[i].Disposition = existing.Items[oldIdx].Disposition
+				merged.Items[i].Policy.AllowSubstitution = existing.Items[oldIdx].Policy.AllowSubstitution
 				unchangedIDs[merged.Items[i].ID] = true
 			}
 		}
@@ -399,9 +400,13 @@ func testingContractDefinitionsEqual(a, b []TestingContractItem) bool {
 	return true
 }
 
+// testingContractItemDefinitionEqual ignores the user-owned amendments
+// (disposition, substitution policy) so they survive plan regeneration.
 func testingContractItemDefinitionEqual(left, right TestingContractItem) bool {
 	left.Disposition = TestingContractItemDisposition{}
 	right.Disposition = TestingContractItemDisposition{}
+	left.Policy.AllowSubstitution = false
+	right.Policy.AllowSubstitution = false
 	leftYAML, _ := yaml.Marshal(left)
 	rightYAML, _ := yaml.Marshal(right)
 	return string(leftYAML) == string(rightYAML)
@@ -583,11 +588,12 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		}
 		seen[key] = true
 		contract.Items = append(contract.Items, TestingContractItem{
-			ID:      testingContractItemIDWithRepo(testingContractManualSource, repo, command),
-			Source:  testingContractManualSource,
-			Repo:    repo,
-			Name:    description,
-			Command: command,
+			ID:           testingContractItemIDWithRepo(testingContractManualSource, repo, command),
+			Source:       testingContractManualSource,
+			Repo:         repo,
+			Name:         description,
+			Command:      command,
+			Capabilities: testingContractCapabilitiesFor(step.Capabilities),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    testingContractManualKind,
 				Matcher: testingContractManualMatcher,
@@ -607,11 +613,12 @@ func CompileTestingContractMultiRepo(in MultiRepoContractInput) TestingContract 
 		}
 		seen[key] = true
 		item := TestingContractItem{
-			ID:      testingContractItemIDWithRepo(source, repo, command),
-			Source:  source,
-			Repo:    repo,
-			Name:    description,
-			Command: command,
+			ID:           testingContractItemIDWithRepo(source, repo, command),
+			Source:       source,
+			Repo:         repo,
+			Name:         description,
+			Command:      command,
+			Capabilities: testingContractCapabilitiesFor(step.Capabilities),
 			ExpectedEvidence: TestingContractExpectedEvidence{
 				Kind:    kind,
 				Matcher: testingContractEvidenceFileExistsMatcher,
@@ -840,7 +847,11 @@ func consolidatedBehavioralEvidence(steps []EvidenceRequirement) (EvidenceRequir
 		descriptions = append(descriptions, step.Description)
 	}
 	description, _ := consolidatedChecklist("Capture one phase behavioral evidence bundle covering:", descriptions)
-	return EvidenceRequirement{Description: description}, true
+	var capabilities []VerificationCapability
+	for _, step := range clean {
+		capabilities = append(capabilities, step.Capabilities...)
+	}
+	return EvidenceRequirement{Description: description, Capabilities: capabilities}, true
 }
 
 func consolidatedChecklist(title string, descriptions []string) (string, bool) {

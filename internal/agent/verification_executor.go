@@ -194,7 +194,7 @@ func ExecuteTestingContract(
 		}
 		if item.Owner == TestingContractOwnerAgent {
 			result := finalizeAgentOwnedEvidence(item, iterationDir)
-			if result.Status != VerificationStatusPassed && len(item.Capabilities) > 0 {
+			if result.Status != VerificationStatusPassed && capabilityProbesApply(item) {
 				// Missing agent evidence behind an unavailable capability is
 				// an environment block the user resolves, not an implementer
 				// defect. Probes run without a repo cwd: agent-owned items
@@ -1333,6 +1333,19 @@ func safeEvidenceComponent(value string) string {
 	return value
 }
 
+// capabilityProbesApply reports whether an item's declared capabilities gate
+// it. Agent-owned evidence with user-authorized substitution no longer needs
+// the third-party capability: the implementer produces the substitute.
+func capabilityProbesApply(item TestingContractItem) bool {
+	if len(item.Capabilities) == 0 {
+		return false
+	}
+	if item.Owner == TestingContractOwnerAgent && item.Policy.AllowSubstitution {
+		return false
+	}
+	return true
+}
+
 // capabilityProbeOutcome summarises one item's capability probes.
 type capabilityProbeOutcome struct {
 	// blocked is true when a probe failed (result recorded) or a probe was a
@@ -1457,7 +1470,7 @@ func ProbeTestingContractCapabilities(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, fmt.Errorf("probing testing contract capabilities: %w", ctxErr)
 		}
-		if len(item.Capabilities) == 0 || !item.Policy.Required || IsTestingContractItemWaived(item) {
+		if !capabilityProbesApply(item) || !item.Policy.Required || IsTestingContractItemWaived(item) {
 			continue
 		}
 		cwd := ""

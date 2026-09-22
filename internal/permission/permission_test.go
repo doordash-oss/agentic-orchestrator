@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1484,5 +1485,33 @@ func TestGuarded_UsesDefaultThreshold(t *testing.T) {
 	}
 	if guard.Inner != inner {
 		t.Error("Guarded did not preserve inner handler")
+	}
+}
+
+func TestSessionGuardHandler_AllowsBareHarnessCLIAgainstContract(t *testing.T) {
+	contract := filepath.Join(t.TempDir(), testingContractFilename)
+	handler := Guarded(&AutoApproveHandler{})
+	for _, cmd := range []string{
+		`"$AGENTICO_BIN" verify-evidence --contract "` + contract + `" --dir /tmp/iter`,
+		`"$AGENTICO_BIN" report-blocker --contract "` + contract + `" --dir /tmp/iter --items visual_1,manual_2 --capability authenticated-browser(slack.com) --reason "no signed-in session"`,
+		`/usr/local/bin/agentico capability-probe authenticated-browser(slack.com)`,
+	} {
+		requirePermissionAllowed(t, handler, toolNameBash, `{"command":`+strconv.Quote(cmd)+`}`)
+	}
+	for _, cmd := range []string{
+		`"$AGENTICO_BIN" report-blocker --contract ` + contract + ` --dir /tmp/iter; echo x > ` + contract,
+		`"$AGENTICO_BIN" verify-evidence --contract ` + contract + ` && sed -i s/waived// ` + contract,
+		`"$AGENTICO_BIN" server --contract ` + contract,
+		`cp "$AGENTICO_BIN" ` + contract,
+		`"$AGENTICO_BIN" report-blocker --contract $(echo ` + contract + `)`,
+		`"$OTHER_BIN" report-blocker --contract ` + contract,
+	} {
+		decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: toolNameBash, Input: `{"command":` + strconv.Quote(cmd) + `}`, ProviderName: "codex"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Behavior != DecisionDeny {
+			t.Fatalf("command %q allowed; want deny", cmd)
+		}
 	}
 }

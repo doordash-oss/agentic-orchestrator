@@ -128,13 +128,14 @@ type apiHandler struct {
 
 	// readinessMu guards the cached provider readiness probe results served
 	// by /api/v1/readiness and refreshed by /api/v1/readiness/refresh.
-	readinessMu       sync.Mutex
-	providerReadiness []ProviderReadiness
-	readinessProbedAt time.Time
-	providerRefreshMu sync.Mutex
-	creationMu        sync.Mutex
-	creationResults   map[string]creationResult
-	slackCredentialMu sync.Mutex
+	readinessMu           sync.Mutex
+	providerReadiness     []ProviderReadiness
+	readinessProbedAt     time.Time
+	providerRefreshMu     sync.Mutex
+	creationMu            sync.Mutex
+	creationResults       map[string]creationResult
+	slackCredentialMu     sync.Mutex
+	permissionAnswerLocks *permissionAnswerLockSet
 }
 
 type creationResult struct {
@@ -186,6 +187,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		initGitRepository:       opts.InitGitRepository,
 		initializeGitRepository: opts.InitializeGitRepository,
 		reviewSessionLocks:      newReviewSessionLockSet(),
+		permissionAnswerLocks:   newPermissionAnswerLockSet(),
 		creationResults:         make(map[string]creationResult),
 		originChecks:            newOriginCheckCoordinator(),
 		updateSourceDeadline:    defaultUpdateSourceDeadline,

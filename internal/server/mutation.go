@@ -1511,6 +1511,8 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope cannot be combined with deny"))
 		return
 	}
+	unlock := h.permissionAnswerLocks.lock(strings.TrimSpace(req.RequestID))
+	defer unlock()
 	resp, err := h.mutations.AnswerPermission(req)
 	if err != nil {
 		writeMutationError(w, err)

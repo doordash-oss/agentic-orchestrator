@@ -17,13 +17,58 @@ package server
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/clone"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 var _ ports.SlackAnswerPort = (*apiHandler)(nil)
+
+type permissionAnswerLockSet struct {
+	mu    sync.Mutex
+	locks map[string]*permissionAnswerLock
+}
+
+type permissionAnswerLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+func newPermissionAnswerLockSet() *permissionAnswerLockSet {
+	return &permissionAnswerLockSet{locks: make(map[string]*permissionAnswerLock)}
+}
+
+func (s *permissionAnswerLockSet) lock(requestID string) func() {
+	if s == nil {
+		return func() {}
+	}
+	s.mu.Lock()
+	if s.locks == nil {
+		s.locks = make(map[string]*permissionAnswerLock)
+	}
+	entry := s.locks[requestID]
+	if entry == nil {
+		entry = &permissionAnswerLock{}
+		s.locks[requestID] = entry
+	}
+	entry.refs++
+	s.mu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		s.mu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(s.locks, requestID)
+		}
+		s.mu.Unlock()
+	}
+}
 
 // AnswerSlackPermission submits the permission grammar exposed by Slack
 // through the same mutation target used by the REST endpoint.
@@ -49,11 +94,13 @@ func (h *apiHandler) AnswerSlackPermission(answer ports.SlackPermissionAnswer) p
 		return slackAnswerFailed(fmt.Errorf("unsupported Slack permission decision %q", answer.Decision))
 	}
 
+	unlock := h.permissionAnswerLocks.lock(requestID)
+	defer unlock()
 	sessionID, result := h.slackPermissionSession(featureID, requestID)
 	if result.Outcome != "" {
 		return result
 	}
-	source := answer.Source
+	source := scrubSlackAnswerSource(answer.Source)
 	_, err := h.mutations.AnswerPermission(PermissionAnswerRequest{
 		SessionID: sessionID,
 		RequestID: requestID,
@@ -63,6 +110,11 @@ func (h *apiHandler) AnswerSlackPermission(answer ports.SlackPermissionAnswer) p
 	if err != nil {
 		return slackPermissionFailure(err)
 	}
+	log.Printf(
+		"slack-answer: permission accepted request=%q responder=%q",
+		requestID,
+		source.Responder,
+	)
 	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
 }
 
@@ -116,7 +168,7 @@ func (h *apiHandler) ApproveSlackReview(approval ports.SlackReviewApproval) port
 			Cause:   fmt.Errorf("review source revision moved"),
 		}
 	}
-	source := approval.Source
+	source := scrubSlackAnswerSource(approval.Source)
 	_, err = service.SubmitDecision(featureID, reviewID, ReviewSessionDecisionRequest{
 		Decision:     reviewDecisionProceed,
 		BaseRevision: sourceRevision,
@@ -125,7 +177,18 @@ func (h *apiHandler) ApproveSlackReview(approval ports.SlackReviewApproval) port
 	if err != nil {
 		return slackReviewFailure(err)
 	}
+	log.Printf(
+		"slack-answer: review accepted feature=%q review=%q responder=%q",
+		featureID,
+		reviewID,
+		source.Responder,
+	)
 	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
+}
+
+func scrubSlackAnswerSource(source ports.AnswerSource) ports.AnswerSource {
+	source.Responder = clone.RedactDiagnostics(source.Responder)
+	return source
 }
 
 func slackPermissionFailure(err error) ports.SlackAnswerResult {

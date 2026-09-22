@@ -15,8 +15,11 @@
 package server
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -252,5 +255,96 @@ func TestSlackAnswerResultClassifiesWrappedNoLongerPending(t *testing.T) {
 	result = slackAnswerFailure(errors.Join(errors.New("outer"), ErrNoLongerPending))
 	if result.Outcome != ports.SlackAnswerNoLongerPending {
 		t.Fatalf("wrapped sentinel = %+v; want no longer pending", result)
+	}
+}
+
+func TestSlackAnswerPortScrubsResponderBeforeMutationAndLogging(t *testing.T) {
+	const (
+		token  = "xoxb-123456789012345678901234567890"
+		secret = "second-secret"
+	)
+	hostile := "Ada " + token + " https://alice:" + secret + "@example.com/private"
+	source := ports.AnswerSource{Kind: ports.AnswerSourceSlack, Responder: hostile}
+	session := &fakeSessionView{
+		id:        "session-1",
+		featureID: "feature-1",
+		pending: []*llm.ControlRequestMessage{{
+			RequestID: "permission-1",
+			Request:   llm.ControlRequest{ToolName: "Bash"},
+		}},
+	}
+	target := &slackAnswerMutationTarget{}
+	handler := &apiHandler{
+		sessions:              fakeSessionManager{views: []ports.SessionView{session}},
+		mutations:             target,
+		permissionAnswerLocks: newPermissionAnswerLockSet(),
+	}
+	var logs bytes.Buffer
+	oldOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldOutput) })
+
+	got := handler.AnswerSlackPermission(ports.SlackPermissionAnswer{
+		RequestID:       "permission-1",
+		SourceFeatureID: "feature-1",
+		Decision:        ports.SlackPermissionAllowOnce,
+		Source:          source,
+	})
+	if got.Outcome != ports.SlackAnswerAccepted {
+		t.Fatalf("AnswerSlackPermission() = %+v; want accepted", got)
+	}
+	if len(target.permissionRequests) != 1 || target.permissionRequests[0].Source == nil {
+		t.Fatalf("permission requests = %+v; want one sourced request", target.permissionRequests)
+	}
+	responder := target.permissionRequests[0].Source.Responder
+	for _, sensitive := range []string{token, secret} {
+		if strings.Contains(responder, sensitive) {
+			t.Fatalf("mutation responder %q leaked %q", responder, sensitive)
+		}
+		if strings.Contains(logs.String(), sensitive) {
+			t.Fatalf("logs %q leaked %q", logs.String(), sensitive)
+		}
+	}
+	if !strings.Contains(responder, "Ada") || !strings.Contains(logs.String(), "Ada") {
+		t.Fatalf("scrubbed responder/logs = %q/%q; want non-sensitive name retained", responder, logs.String())
+	}
+
+	store, f, _ := seedReviewSessionFeature(
+		t,
+		feature.StatusPlanNeedsReview,
+		nil,
+		"plan",
+		"# Plan\n",
+	)
+	reviewTarget := &slackAnswerMutationTarget{}
+	reviewHandler := &apiHandler{
+		store:              store,
+		mutations:          reviewTarget,
+		reviewSessionLocks: newReviewSessionLockSet(),
+	}
+	pending, err := reviewHandler.PendingSlackInputs(f.ID)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("PendingSlackInputs() = %+v, %v; want one review", pending, err)
+	}
+	review := reviewHandler.ApproveSlackReview(ports.SlackReviewApproval{
+		SourceFeatureID: f.ID,
+		ReviewID:        pending[0].ReviewID,
+		SourceRevision:  pending[0].SourceRevision,
+		Source:          source,
+	})
+	if review.Outcome != ports.SlackAnswerAccepted {
+		t.Fatalf("ApproveSlackReview() = %+v; want accepted", review)
+	}
+	if len(reviewTarget.reviewRequests) != 1 || reviewTarget.reviewRequests[0].Source == nil {
+		t.Fatalf("review requests = %+v; want one sourced request", reviewTarget.reviewRequests)
+	}
+	reviewResponder := reviewTarget.reviewRequests[0].Source.Responder
+	for _, sensitive := range []string{token, secret} {
+		if strings.Contains(reviewResponder, sensitive) {
+			t.Fatalf("review responder %q leaked %q", reviewResponder, sensitive)
+		}
+		if strings.Contains(logs.String(), sensitive) {
+			t.Fatalf("logs %q leaked %q", logs.String(), sensitive)
+		}
 	}
 }

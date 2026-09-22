@@ -41,24 +41,26 @@ type featureRecord struct {
 }
 
 type pendingInputRecord struct {
-	Identity        string            `yaml:"identity"`
-	SourceFeatureID string            `yaml:"source_feature_id"`
-	Kind            string            `yaml:"kind"`
-	RequestID       string            `yaml:"request_id,omitempty"`
-	QuestionIndex   int               `yaml:"question_index,omitempty"`
-	GatePath        string            `yaml:"gate_path,omitempty"`
-	Iteration       int               `yaml:"iteration,omitempty"`
-	WaitingSince    time.Time         `yaml:"waiting_since,omitempty"`
-	ReviewID        string            `yaml:"review_id,omitempty"`
-	ReviewMode      string            `yaml:"review_mode,omitempty"`
-	TargetPhase     string            `yaml:"target_phase,omitempty"`
-	ArtifactID      string            `yaml:"artifact_id,omitempty"`
-	RunNumber       int               `yaml:"run_number,omitempty"`
-	SourceRevision  string            `yaml:"source_revision,omitempty"`
-	Tag             string            `yaml:"tag,omitempty"`
-	PostedAt        time.Time         `yaml:"posted_at,omitempty"`
-	MessageTS       map[string]string `yaml:"message_timestamps,omitempty"`
-	FileIDs         map[string]string `yaml:"file_ids,omitempty"`
+	Identity        string             `yaml:"identity"`
+	SourceFeatureID string             `yaml:"source_feature_id"`
+	Kind            string             `yaml:"kind"`
+	RequestID       string             `yaml:"request_id,omitempty"`
+	QuestionIndex   int                `yaml:"question_index,omitempty"`
+	GatePath        string             `yaml:"gate_path,omitempty"`
+	Iteration       int                `yaml:"iteration,omitempty"`
+	WaitingSince    time.Time          `yaml:"waiting_since,omitempty"`
+	ReviewID        string             `yaml:"review_id,omitempty"`
+	ReviewMode      string             `yaml:"review_mode,omitempty"`
+	TargetPhase     string             `yaml:"target_phase,omitempty"`
+	ArtifactID      string             `yaml:"artifact_id,omitempty"`
+	RunNumber       int                `yaml:"run_number,omitempty"`
+	SourceRevision  string             `yaml:"source_revision,omitempty"`
+	Tag             string             `yaml:"tag,omitempty"`
+	PostedAt        time.Time          `yaml:"posted_at,omitempty"`
+	MessageTS       map[string]string  `yaml:"message_timestamps,omitempty"`
+	FileIDs         map[string]string  `yaml:"file_ids,omitempty"`
+	Resolution      *postingResolution `yaml:"resolution,omitempty"`
+	JudgedReactions []judgedReaction   `yaml:"judged_reactions,omitempty"`
 }
 
 // destinationRecord is one resolved destination the integration reached at
@@ -93,6 +95,48 @@ type postingResolution struct {
 	ResponderID   string    `yaml:"responder_id,omitempty"`
 	ResponderName string    `yaml:"responder_name,omitempty"`
 	ResolvedAt    time.Time `yaml:"resolved_at"`
+}
+
+const (
+	resolutionSlack    = "slack"
+	resolutionAgentico = "agentico"
+	resolutionCleared  = "cleared"
+)
+
+type judgedReaction struct {
+	DestinationKey string `yaml:"destination_key"`
+	MessageTS      string `yaml:"message_ts"`
+	Name           string `yaml:"name"`
+	UserID         string `yaml:"user_id"`
+}
+
+func (p *pendingInputRecord) judgedReactionAppend(
+	destinationKey, messageTS, name, userID string,
+) {
+	if destinationKey == "" || messageTS == "" || name == "" || userID == "" ||
+		p.judgedReactionContains(destinationKey, messageTS, name, userID) {
+		return
+	}
+	p.JudgedReactions = append(p.JudgedReactions, judgedReaction{
+		DestinationKey: destinationKey,
+		MessageTS:      messageTS,
+		Name:           name,
+		UserID:         userID,
+	})
+}
+
+func (p pendingInputRecord) judgedReactionContains(
+	destinationKey, messageTS, name, userID string,
+) bool {
+	for _, reaction := range p.JudgedReactions {
+		if reaction.DestinationKey == destinationKey &&
+			reaction.MessageTS == messageTS &&
+			reaction.Name == name &&
+			reaction.UserID == userID {
+			return true
+		}
+	}
+	return false
 }
 
 type destinationFailure struct {

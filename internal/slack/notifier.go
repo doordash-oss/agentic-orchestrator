@@ -157,6 +157,9 @@ type Notifier struct {
 	pendingDeliveries map[string]struct{}
 
 	responderPolls map[string]responderPollState
+
+	responderNameMu sync.Mutex
+	responderNames  map[string]string
 }
 
 // NewNotifier constructs the notifier and its intake queue. Call Start
@@ -201,6 +204,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		trackedInputs:      map[string]bool{},
 		pendingDeliveries:  map[string]struct{}{},
 		responderPolls:     map[string]responderPollState{},
+		responderNames:     map[string]string{},
 	}
 	notifier.requestBase, notifier.cancelBase = context.WithCancel(context.Background())
 	notifier.responderBase, notifier.cancelResponder = context.WithCancel(context.Background())

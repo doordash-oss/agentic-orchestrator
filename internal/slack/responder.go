@@ -30,11 +30,12 @@ const (
 )
 
 type responderThread struct {
-	featureID      string
-	destinationKey string
-	channelID      string
-	rootTS         string
-	oldest         string
+	featureID        string
+	destinationKey   string
+	destinationOrder int
+	channelID        string
+	rootTS           string
+	oldest           string
 }
 
 type responderPollState struct {
@@ -43,16 +44,20 @@ type responderPollState struct {
 }
 
 type responderReplyCandidate struct {
+	Thread      responderThread
 	Message     Message
 	Target      postingIndexEntry
 	TargetFound bool
 }
 
 type responderReactionCandidate struct {
-	MessageTS string
-	Name      string
-	UserID    string
-	Target    postingIndexEntry
+	Thread        responderThread
+	MessageTS     string
+	Name          string
+	UserID        string
+	Target        postingIndexEntry
+	reactionOrder int
+	userOrder     int
 }
 
 func parsePermissionReply(text string) (ports.SlackPermissionDecision, bool) {
@@ -89,7 +94,7 @@ func (n *Notifier) responderTick() {
 		return
 	}
 
-	threads := n.responderThreads()
+	threads := n.responderThreads(settings)
 	if len(threads) == 0 {
 		return
 	}
@@ -98,6 +103,8 @@ func (n *Notifier) responderTick() {
 		return
 	}
 	active := make(map[string]bool, len(threads))
+	var replies []responderReplyCandidate
+	var reactions []responderReactionCandidate
 	for _, thread := range threads {
 		key := thread.channelID + "\x00" + thread.rootTS
 		active[key] = true
@@ -117,13 +124,44 @@ func (n *Notifier) responderTick() {
 			if err != nil {
 				break
 			}
-			n.extractResponderCandidates(thread, page.Messages)
+			pageReplies, pageReactions := n.extractResponderCandidates(thread, page.Messages)
+			replies = append(replies, pageReplies...)
+			reactions = append(reactions, pageReactions...)
 			state.cursor = page.NextCursor
 			if state.cursor == "" {
 				break
 			}
 		}
 		n.responderPolls[key] = state
+	}
+	sort.SliceStable(replies, func(i, j int) bool {
+		return compareSlackTimestamps(replies[i].Message.TS, replies[j].Message.TS) < 0
+	})
+	sort.SliceStable(reactions, func(i, j int) bool {
+		if reactions[i].Thread.featureID != reactions[j].Thread.featureID {
+			return reactions[i].Thread.featureID < reactions[j].Thread.featureID
+		}
+		if reactions[i].Target.Identity != reactions[j].Target.Identity {
+			return reactions[i].Target.Identity < reactions[j].Target.Identity
+		}
+		if reactions[i].Thread.destinationOrder != reactions[j].Thread.destinationOrder {
+			return reactions[i].Thread.destinationOrder < reactions[j].Thread.destinationOrder
+		}
+		leftName := responderReactionOrder(reactions[i].Name)
+		rightName := responderReactionOrder(reactions[j].Name)
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		if reactions[i].reactionOrder != reactions[j].reactionOrder {
+			return reactions[i].reactionOrder < reactions[j].reactionOrder
+		}
+		return reactions[i].userOrder < reactions[j].userOrder
+	})
+	for _, candidate := range replies {
+		n.processResponderReply(client, settings.Token, candidate)
+	}
+	for _, candidate := range reactions {
+		n.processResponderReaction(client, settings.Token, candidate)
 	}
 	for key := range n.responderPolls {
 		if !active[key] {
@@ -132,12 +170,34 @@ func (n *Notifier) responderTick() {
 	}
 }
 
-func (n *Notifier) responderThreads() []responderThread {
+func (n *Notifier) responderThreads(settings ports.SlackRuntimeSettings) []responderThread {
 	n.recordMu.Lock()
 	defer n.recordMu.Unlock()
 
+	destinationOrders := make(map[string]int, len(settings.Recipients))
+	for index, recipient := range settings.Recipients {
+		destinationOrders[destinationKey(string(recipient.Kind), recipient.ID)] = index
+	}
 	var threads []responderThread
 	for featureID, record := range n.records {
+		active := false
+		for _, pending := range record.Pending {
+			if pending.Resolution != nil {
+				continue
+			}
+			for _, messageTS := range pending.MessageTS {
+				if messageTS != "" {
+					active = true
+					break
+				}
+			}
+			if active {
+				break
+			}
+		}
+		if !active {
+			continue
+		}
 		for key, destination := range record.Destinations {
 			if destination.ChannelID == "" || destination.RootTS == "" {
 				continue
@@ -152,20 +212,24 @@ func (n *Notifier) responderThreads() []responderThread {
 			}
 			if oldest != "" {
 				threads = append(threads, responderThread{
-					featureID:      featureID,
-					destinationKey: key,
-					channelID:      destination.ChannelID,
-					rootTS:         destination.RootTS,
-					oldest:         oldest,
+					featureID:        featureID,
+					destinationKey:   key,
+					destinationOrder: destinationOrders[key],
+					channelID:        destination.ChannelID,
+					rootTS:           destination.RootTS,
+					oldest:           oldest,
 				})
 			}
 		}
 	}
 	sort.Slice(threads, func(i, j int) bool {
-		if threads[i].channelID != threads[j].channelID {
-			return threads[i].channelID < threads[j].channelID
+		if threads[i].featureID != threads[j].featureID {
+			return threads[i].featureID < threads[j].featureID
 		}
-		return threads[i].rootTS < threads[j].rootTS
+		if threads[i].destinationOrder != threads[j].destinationOrder {
+			return threads[i].destinationOrder < threads[j].destinationOrder
+		}
+		return threads[i].destinationKey < threads[j].destinationKey
 	})
 	return threads
 }
@@ -195,19 +259,22 @@ func (n *Notifier) extractResponderCandidates(
 	var reactions []responderReactionCandidate
 	for _, message := range messages {
 		if posting, posted := postingsByTimestamp[message.TS]; posted {
-			for _, reaction := range message.Reactions {
+			for reactionOrder, reaction := range message.Reactions {
 				if reaction.Name != "white_check_mark" && reaction.Name != "x" {
 					continue
 				}
 				if destination.reactionContains(message.TS, reaction.Name) {
 					continue
 				}
-				for _, userID := range reaction.Users {
+				for userOrder, userID := range reaction.Users {
 					reactions = append(reactions, responderReactionCandidate{
-						MessageTS: message.TS,
-						Name:      reaction.Name,
-						UserID:    userID,
-						Target:    posting,
+						Thread:        thread,
+						MessageTS:     message.TS,
+						Name:          reaction.Name,
+						UserID:        userID,
+						Target:        posting,
+						reactionOrder: reactionOrder,
+						userOrder:     userOrder,
 					})
 				}
 			}
@@ -220,12 +287,226 @@ func (n *Notifier) extractResponderCandidates(
 		}
 		target, found := newestPostingBefore(destination.PostingIndex, message.TS)
 		replies = append(replies, responderReplyCandidate{
+			Thread:      thread,
 			Message:     message,
 			Target:      target,
 			TargetFound: found,
 		})
 	}
 	return replies, reactions
+}
+
+func responderReactionOrder(name string) int {
+	if name == "white_check_mark" {
+		return 0
+	}
+	return 1
+}
+
+func (n *Notifier) processResponderReply(
+	client slackClient,
+	token string,
+	candidate responderReplyCandidate,
+) {
+	if !candidate.TargetFound {
+		return
+	}
+	pending, ok := n.pendingResponderTarget(candidate.Thread.featureID, candidate.Target.Identity)
+	if !ok || pending.Resolution != nil {
+		return
+	}
+	if pending.Kind != string(ports.SlackPendingPermission) {
+		return
+	}
+	decision, parsed := parsePermissionReply(candidate.Message.Text)
+	if !parsed {
+		return
+	}
+	responderName := n.responderName(client, token, candidate.Message.User)
+	result := n.answer.AnswerSlackPermission(ports.SlackPermissionAnswer{
+		RequestID:       pending.RequestID,
+		SourceFeatureID: pending.SourceFeatureID,
+		Decision:        decision,
+		Source: ports.AnswerSource{
+			Kind:      ports.AnswerSourceSlack,
+			Responder: responderName,
+		},
+	})
+	if result.Outcome != ports.SlackAnswerAccepted {
+		return
+	}
+	if n.resolveResponderTarget(
+		candidate.Thread.featureID,
+		candidate.Target.Identity,
+		candidate.Message.User,
+		responderName,
+	) {
+		n.emitEvent(candidate.Thread.featureID, "slack.answer_received", map[string]any{
+			"destination_kind": candidateDestinationKind(candidate.Thread.destinationKey),
+			"input_kind":       pending.Kind,
+			"tag":              pending.Tag,
+			"decision":         string(decision),
+			"medium":           "reply",
+		})
+	}
+}
+
+func (n *Notifier) processResponderReaction(
+	client slackClient,
+	token string,
+	candidate responderReactionCandidate,
+) {
+	pending, ok := n.pendingResponderTarget(candidate.Thread.featureID, candidate.Target.Identity)
+	if !ok || pending.judgedReactionContains(
+		candidate.Thread.destinationKey,
+		candidate.MessageTS,
+		candidate.Name,
+		candidate.UserID,
+	) {
+		return
+	}
+	if pending.Resolution != nil {
+		n.judgeResponderReaction(candidate)
+		return
+	}
+	if pending.Kind != string(ports.SlackPendingPermission) {
+		return
+	}
+	decision := ports.SlackPermissionAllowOnce
+	if candidate.Name == "x" {
+		decision = ports.SlackPermissionDeny
+	}
+	responderName := n.responderName(client, token, candidate.UserID)
+	result := n.answer.AnswerSlackPermission(ports.SlackPermissionAnswer{
+		RequestID:       pending.RequestID,
+		SourceFeatureID: pending.SourceFeatureID,
+		Decision:        decision,
+		Source: ports.AnswerSource{
+			Kind:      ports.AnswerSourceSlack,
+			Responder: responderName,
+		},
+	})
+	n.judgeResponderReaction(candidate)
+	if result.Outcome != ports.SlackAnswerAccepted {
+		return
+	}
+	if n.resolveResponderTarget(
+		candidate.Thread.featureID,
+		candidate.Target.Identity,
+		candidate.UserID,
+		responderName,
+	) {
+		n.emitEvent(candidate.Thread.featureID, "slack.answer_received", map[string]any{
+			"destination_kind": candidateDestinationKind(candidate.Thread.destinationKey),
+			"input_kind":       pending.Kind,
+			"tag":              pending.Tag,
+			"decision":         string(decision),
+			"medium":           "reaction",
+		})
+	}
+}
+
+func (n *Notifier) pendingResponderTarget(
+	featureID, identity string,
+) (pendingInputRecord, bool) {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[featureID]
+	if record == nil {
+		return pendingInputRecord{}, false
+	}
+	for _, pending := range record.Pending {
+		if pending.Identity == identity {
+			return pending, true
+		}
+	}
+	return pendingInputRecord{}, false
+}
+
+func (n *Notifier) resolveResponderTarget(
+	featureID, identity, responderID, responderName string,
+) bool {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[featureID]
+	if record == nil {
+		return false
+	}
+	var resolution *postingResolution
+	for i := range record.Pending {
+		if record.Pending[i].Identity != identity {
+			continue
+		}
+		if record.Pending[i].Resolution != nil {
+			return false
+		}
+		record.Pending[i].Resolution = &postingResolution{
+			Kind:          resolutionSlack,
+			ResponderID:   responderID,
+			ResponderName: responderName,
+			ResolvedAt:    n.responderClock.Now().UTC(),
+		}
+		resolution = record.Pending[i].Resolution
+		break
+	}
+	if resolution == nil {
+		return false
+	}
+	for key, destination := range record.Destinations {
+		for i := range destination.PostingIndex {
+			if destination.PostingIndex[i].Identity == identity {
+				copy := *resolution
+				destination.PostingIndex[i].Resolution = &copy
+			}
+		}
+		record.Destinations[key] = destination
+	}
+	err := n.persistRecordLocked(featureID, record, "")
+	n.logPersistError(err, "")
+	return true
+}
+
+func (n *Notifier) judgeResponderReaction(candidate responderReactionCandidate) {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[candidate.Thread.featureID]
+	if record == nil {
+		return
+	}
+	for i := range record.Pending {
+		if record.Pending[i].Identity != candidate.Target.Identity {
+			continue
+		}
+		record.Pending[i].judgedReactionAppend(
+			candidate.Thread.destinationKey,
+			candidate.MessageTS,
+			candidate.Name,
+			candidate.UserID,
+		)
+		break
+	}
+	err := n.persistRecordLocked(candidate.Thread.featureID, record, "")
+	n.logPersistError(err, "")
+}
+
+func (n *Notifier) responderName(client slackClient, token, userID string) string {
+	n.responderNameMu.Lock()
+	defer n.responderNameMu.Unlock()
+	if name, ok := n.responderNames[userID]; ok {
+		return name
+	}
+	name := userID
+	if user, err := client.UserInfo(n.responderBase, userID); err == nil {
+		name = firstNonempty(user.DisplayName, user.RealName, user.Name, userID)
+	}
+	name = scrub(token, name)
+	n.responderNames[userID] = name
+	return name
+}
+
+func candidateDestinationKind(destinationKey string) string {
+	kind, _, _ := strings.Cut(destinationKey, ":")
+	return kind
 }
 
 func newestPostingBefore(postings []postingIndexEntry, messageTS string) (postingIndexEntry, bool) {

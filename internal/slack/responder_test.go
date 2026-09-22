@@ -77,12 +77,22 @@ func (c *manualResponderClock) tick(t *testing.T) {
 }
 
 type fakeSlackAnswerPort struct {
-	mu sync.Mutex
+	mu                sync.Mutex
+	permissionAnswers []ports.SlackPermissionAnswer
+	permissionResults []ports.SlackAnswerResult
 }
 
-func (*fakeSlackAnswerPort) AnswerSlackPermission(
-	ports.SlackPermissionAnswer,
+func (p *fakeSlackAnswerPort) AnswerSlackPermission(
+	answer ports.SlackPermissionAnswer,
 ) ports.SlackAnswerResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.permissionAnswers = append(p.permissionAnswers, answer)
+	if len(p.permissionResults) > 0 {
+		result := p.permissionResults[0]
+		p.permissionResults = p.permissionResults[1:]
+		return result
+	}
 	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
 }
 
@@ -90,6 +100,12 @@ func (*fakeSlackAnswerPort) ApproveSlackReview(
 	ports.SlackReviewApproval,
 ) ports.SlackAnswerResult {
 	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
+}
+
+func (p *fakeSlackAnswerPort) permissionSubmissions() []ports.SlackPermissionAnswer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]ports.SlackPermissionAnswer(nil), p.permissionAnswers...)
 }
 
 func TestSlackResponderReplyGrammar(t *testing.T) {
@@ -399,6 +415,227 @@ func TestSlackResponderExtractsCandidatesByLedgerProvenance(t *testing.T) {
 		reactions[0].UserID != "U-DENY" ||
 		reactions[0].Target.Identity != "permission:1" {
 		t.Fatalf("reaction candidates = %#v; want only unclaimed deny", reactions)
+	}
+}
+
+func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
+	harness := newNotifierHarness(t, defaultTestSettings(
+		"xoxb-responder",
+		ports.SlackRecipient{
+			TypedText: "#eng", Kind: ports.SlackRecipientChannel,
+			ID: "C-ENG", DisplayName: "#eng",
+		},
+	))
+	harness.server.Script("users.info", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"user": map[string]any{
+			"id":   "U-REPLIER",
+			"name": "replier",
+			"profile": map[string]any{
+				"display_name": "Ada",
+				"real_name":    "Ada Lovelace",
+			},
+		},
+	}})
+	const (
+		featureID      = "feature-1"
+		destinationKey = "channel:C-ENG"
+		rootTS         = "100.000001"
+		messageTS      = "100.000002"
+	)
+	harness.server.SeedThread("C-ENG", rootTS, []testsupport.Message{
+		{TS: rootTS},
+		{
+			TS: messageTS, ThreadTS: rootTS, Text: "permission",
+			Reactions: []testsupport.Reaction{{
+				Name: "x", Count: 1, Users: []string{"U-REACTOR"},
+			}},
+		},
+		{
+			TS: "100.000003", ThreadTS: rootTS,
+			User: "U-REPLIER", Text: "allow",
+		},
+	})
+	record := &featureRecord{
+		Version: recordVersion,
+		Destinations: map[string]destinationRecord{
+			destinationKey: {
+				Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: rootTS,
+				Ledger: []string{rootTS, messageTS},
+				PostingIndex: []postingIndexEntry{{
+					Identity: "permission:request-1", MessageTS: messageTS, Tag: "#1",
+				}},
+			},
+		},
+		Pending: []pendingInputRecord{{
+			Identity:        "permission:request-1",
+			SourceFeatureID: featureID,
+			Kind:            string(ports.SlackPendingPermission),
+			RequestID:       "request-1",
+			Tag:             "#1",
+			MessageTS:       map[string]string{destinationKey: messageTS},
+		}},
+	}
+	if err := persistFeatureRecord(harness.stateDir, featureID, record); err != nil {
+		t.Fatal(err)
+	}
+	answerPort := &fakeSlackAnswerPort{}
+	notifier := NewNotifier(NotifierOptions{
+		Settings: harness.settings,
+		Store:    harness.store,
+		StateDir: harness.stateDir,
+		Observer: harness.observer,
+		Pending:  harness.pending,
+		Answer:   answerPort,
+		Clock:    harness.clock,
+		NewClient: func(token string) (slackClient, error) {
+			return NewClient(token, WithBaseURL(harness.server.URL()))
+		},
+	})
+	notifier.records[featureID] = record
+
+	notifier.responderTick()
+
+	submissions := answerPort.permissionSubmissions()
+	if len(submissions) != 1 {
+		t.Fatalf("permission submissions = %#v; want one reply winner", submissions)
+	}
+	if submissions[0].RequestID != "request-1" ||
+		submissions[0].Decision != ports.SlackPermissionAllowOnce ||
+		submissions[0].Source.Kind != ports.AnswerSourceSlack ||
+		submissions[0].Source.Responder != "Ada" {
+		t.Fatalf("permission submission = %#v; want Slack allow_once by Ada", submissions[0])
+	}
+
+	persisted, err := loadFeatureRecord(harness.stateDir, featureID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.Pending) != 1 || persisted.Pending[0].Resolution == nil {
+		t.Fatalf("pending resolution = %#v; want durable Slack resolution", persisted.Pending)
+	}
+	resolution := persisted.Pending[0].Resolution
+	if resolution.Kind != resolutionSlack ||
+		resolution.ResponderID != "U-REPLIER" ||
+		resolution.ResponderName != "Ada" {
+		t.Fatalf("resolution = %#v; want Slack reply winner", resolution)
+	}
+	if persisted.Destinations[destinationKey].PostingIndex[0].Resolution == nil {
+		t.Fatal("posting index resolution = nil; want reply target fixed as resolved")
+	}
+	if !persisted.Pending[0].judgedReactionContains(
+		destinationKey, messageTS, "x", "U-REACTOR",
+	) {
+		t.Fatalf(
+			"judged reactions = %#v; want losing reaction recorded",
+			persisted.Pending[0].JudgedReactions,
+		)
+	}
+	if got := harness.server.CallCount("users.info"); got != 1 {
+		t.Fatalf("users.info calls = %d; want one cached lookup", got)
+	}
+
+	notifier.responderTick()
+	if got := len(answerPort.permissionSubmissions()); got != 1 {
+		t.Fatalf("permission submissions after idle tick = %d; want no resubmission", got)
+	}
+	if got := harness.server.CallCount("conversations.replies"); got != 1 {
+		t.Fatalf("polls after only pending item resolved = %d; want polling stopped", got)
+	}
+}
+
+func TestSlackResponderCheckMarkWinsDenyReaction(t *testing.T) {
+	harness := newNotifierHarness(t, defaultTestSettings(
+		"xoxb-responder",
+		ports.SlackRecipient{
+			TypedText: "#eng", Kind: ports.SlackRecipientChannel,
+			ID: "C-ENG", DisplayName: "#eng",
+		},
+	))
+	harness.server.Script("users.info", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"user": map[string]any{
+			"id":      "U-ALLOW",
+			"profile": map[string]any{"display_name": "Allow User"},
+		},
+	}})
+	const (
+		featureID      = "feature-1"
+		destinationKey = "channel:C-ENG"
+		rootTS         = "100.000001"
+		messageTS      = "100.000002"
+	)
+	harness.server.SeedThread("C-ENG", rootTS, []testsupport.Message{
+		{TS: rootTS},
+		{
+			TS: messageTS, ThreadTS: rootTS, Text: "permission",
+			Reactions: []testsupport.Reaction{
+				{Name: "x", Count: 1, Users: []string{"U-DENY"}},
+				{Name: "white_check_mark", Count: 1, Users: []string{"U-ALLOW"}},
+			},
+		},
+	})
+	record := &featureRecord{
+		Version: recordVersion,
+		Destinations: map[string]destinationRecord{
+			destinationKey: {
+				Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: rootTS,
+				Ledger: []string{rootTS, messageTS},
+				PostingIndex: []postingIndexEntry{{
+					Identity: "permission:request-1", MessageTS: messageTS, Tag: "#1",
+				}},
+			},
+		},
+		Pending: []pendingInputRecord{{
+			Identity:        "permission:request-1",
+			SourceFeatureID: featureID,
+			Kind:            string(ports.SlackPendingPermission),
+			RequestID:       "request-1",
+			Tag:             "#1",
+			MessageTS:       map[string]string{destinationKey: messageTS},
+		}},
+	}
+	if err := persistFeatureRecord(harness.stateDir, featureID, record); err != nil {
+		t.Fatal(err)
+	}
+	answerPort := &fakeSlackAnswerPort{}
+	notifier := NewNotifier(NotifierOptions{
+		Settings: harness.settings,
+		Store:    harness.store,
+		StateDir: harness.stateDir,
+		Observer: harness.observer,
+		Pending:  harness.pending,
+		Answer:   answerPort,
+		Clock:    harness.clock,
+		NewClient: func(token string) (slackClient, error) {
+			return NewClient(token, WithBaseURL(harness.server.URL()))
+		},
+	})
+	notifier.records[featureID] = record
+
+	notifier.responderTick()
+
+	submissions := answerPort.permissionSubmissions()
+	if len(submissions) != 1 ||
+		submissions[0].Decision != ports.SlackPermissionAllowOnce ||
+		submissions[0].Source.Responder != "Allow User" {
+		t.Fatalf("permission submissions = %#v; want check-mark user to win", submissions)
+	}
+	persisted, err := loadFeatureRecord(harness.stateDir, featureID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Pending[0].Resolution == nil ||
+		persisted.Pending[0].Resolution.ResponderID != "U-ALLOW" {
+		t.Fatalf("resolution = %#v; want check-mark user", persisted.Pending[0].Resolution)
+	}
+	if !persisted.Pending[0].judgedReactionContains(
+		destinationKey, messageTS, "x", "U-DENY",
+	) {
+		t.Fatalf(
+			"judged reactions = %#v; want losing deny recorded",
+			persisted.Pending[0].JudgedReactions,
+		)
 	}
 }
 

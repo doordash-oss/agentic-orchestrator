@@ -16,9 +16,12 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -104,7 +107,11 @@ func (h *apiHandler) PendingSlackInputs(featureID string) ([]ports.SlackPendingI
 	if f.Status.IsNeedsReview() {
 		ctx, resolveErr := resolveReviewSessionContext(h.store, f)
 		if resolveErr != nil {
-			log.Printf("slack pending review resolution failed for feature %q: %v", featureID, resolveErr)
+			log.Printf(
+				"slack pending review resolution failed for feature %q: %s",
+				featureID,
+				slackReviewResolutionFailureClass(resolveErr),
+			)
 		} else {
 			pending = append(pending, ports.SlackPendingInput{
 				Kind:                      ports.SlackPendingReview,
@@ -158,6 +165,24 @@ func (h *apiHandler) PendingSlackInputs(featureID string) ([]ports.SlackPendingI
 		pending = append(pending, item)
 	}
 	return pending, nil
+}
+
+func slackReviewResolutionFailureClass(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "artifact_missing"
+	case errors.Is(err, fs.ErrPermission):
+		return "artifact_unreadable"
+	case strings.Contains(err.Error(), "invalid review artifact target"):
+		return "artifact_invalid"
+	case strings.Contains(err.Error(), "review artifact") &&
+		strings.Contains(err.Error(), "not found"):
+		return "artifact_missing"
+	case strings.Contains(err.Error(), "unavailable"):
+		return "artifact_unavailable"
+	default:
+		return "resolution_failed"
+	}
 }
 
 func slackControlInput(req *llm.ControlRequestMessage) map[string]any {

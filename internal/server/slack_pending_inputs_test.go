@@ -777,12 +777,22 @@ func TestPendingSlackInputsOmitsNonReviewAndManualPublish(t *testing.T) {
 	}
 }
 
-func TestPendingSlackInputsLogsUnresolvableReviewWithoutDroppingOtherKinds(t *testing.T) {
+func TestSlackReviewGateRedactionResolverFailureKeepsOtherKinds(t *testing.T) {
 	store, f := seedReadFeature(t)
 	f.Status = feature.StatusPlanNeedsReview
 	f.CurrentRoadmapPhase = 4
 	f.TotalRoadmapPhases = 6
-	f.Artifacts = map[string]string{}
+	const (
+		token        = "xoxb-review-resolution-token-123456789"
+		secondSecret = "ghp_review_resolution_secret_123456789"
+	)
+	missingArtifact := filepath.Join(
+		store.RunDir(f.ID, 1),
+		"phase-4-plan",
+		"plan-"+token+"-"+secondSecret+".md",
+	)
+	f.Artifacts = map[string]string{"phase-4-plan": missingArtifact}
+	f.Run().Artifacts = f.Artifacts
 	f.HelpQueue = []feature.HelpRequest{{
 		Question: "Keep the existing help request",
 		Time:     time.Date(2026, 9, 22, 13, 0, 0, 0, time.UTC),
@@ -835,10 +845,15 @@ func TestPendingSlackInputsLogsUnresolvableReviewWithoutDroppingOtherKinds(t *te
 		kinds[ports.SlackPendingReview] != 0 {
 		t.Errorf("PendingSlackInputs() kinds = %+v; want existing kinds and no review", kinds)
 	}
-	if logText := logs.String(); !strings.Contains(logText, f.ID) ||
-		!strings.Contains(logText, "review artifact") ||
-		!strings.Contains(logText, "not found") {
-		t.Errorf("PendingSlackInputs() log = %q; want feature and resolution reason", logText)
+	logText := logs.String()
+	if !strings.Contains(logText, f.ID) ||
+		!strings.Contains(logText, "artifact_missing") {
+		t.Errorf("PendingSlackInputs() log = %q; want feature and safe resolution class", logText)
+	}
+	for _, secret := range []string{token, secondSecret, missingArtifact} {
+		if strings.Contains(logText, secret) {
+			t.Errorf("PendingSlackInputs() log leaked %q: %s", secret, logText)
+		}
 	}
 }
 

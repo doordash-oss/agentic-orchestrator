@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -1812,6 +1813,8 @@ func TestRoadmapLoopValidatorInfrastructureFailureDoesNotRevisePlan(t *testing.T
 		t.Fatal(err)
 	}
 
+	restoreBackoff := zeroValidationBackoff(t)
+	defer restoreBackoff()
 	sm := session.NewManager(make(chan interface{}, 100))
 	defer sm.Shutdown()
 	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
@@ -1840,9 +1843,9 @@ func TestRoadmapLoopValidatorInfrastructureFailureDoesNotRevisePlan(t *testing.T
 	if plannerCalls != 1 {
 		t.Fatalf("planner calls = %d, want 1; validator failure must not trigger plan revision", plannerCalls)
 	}
-	wantCriticCalls := len(roadmapValidatorsForRisk(feature.RiskLow)) * maxValidatorInfrastructureSessionAttempts
+	wantCriticCalls := len(roadmapValidatorsForRisk(feature.RiskLow)) * maxValidatorInfrastructureSessionAttempts * maxValidationInfrastructureRounds
 	if criticCalls != wantCriticCalls {
-		t.Fatalf("critic calls = %d, want %d validation-only retries", criticCalls, wantCriticCalls)
+		t.Fatalf("critic calls = %d, want %d validation-only retries across backoff rounds", criticCalls, wantCriticCalls)
 	}
 	if _, err := os.Stat(filepath.Join(roadmapDir, "attempt-02")); !os.IsNotExist(err) {
 		t.Fatalf("attempt-02 stat error = %v, want no second plan attempt", err)
@@ -3290,4 +3293,156 @@ func TestAxisStallState_ChangedSectionResetsCount(t *testing.T) {
 	if stalled {
 		t.Error("changed section should have reset the structural counter to 1")
 	}
+}
+
+// zeroValidationBackoff removes the wait between validator infrastructure
+// rounds for the duration of a test.
+func zeroValidationBackoff(t *testing.T) func() {
+	t.Helper()
+	previous := validationInfrastructureBackoff
+	validationInfrastructureBackoff = func(int) time.Duration { return 0 }
+	return func() { validationInfrastructureBackoff = previous }
+}
+
+// TestPhasePlanningLoopValidatorInfrastructureFailureRetriesThenResumes covers
+// the two paths a busy review model must take without re-planning: a later
+// validation round succeeds after backoff, and a restart after an exhausted
+// FAILED validation re-validates the committed plan instead of opening a new
+// planning attempt against empty critic feedback.
+func TestPhasePlanningLoopValidatorInfrastructureFailureRetriesThenResumes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	for _, d := range []string{workDir, phasePlanDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The critic fails like a model at capacity while the marker exists and
+	// approves once it is gone.
+	capacityMarker := filepath.Join(tmpDir, "model-at-capacity")
+	if err := os.WriteFile(capacityMarker, []byte("busy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const receivePrompt = "read -r _initialize\nread -r _prompt\n"
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+receivePrompt+
+			testutil.WritePhasePlanSuccessArtifacts(phasePlanDir, planTextWithVisualEvidenceRow())+"\n"+
+			testutil.JSONLSuccess+"\n")
+	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
+		testutil.JSONLInit+"\n"+receivePrompt+
+			"if [ -f "+capacityMarker+" ]; then\n"+testutil.JSONLError("Selected model is at capacity. Please try a different model.")+"\nexit 0\nfi\n"+
+			testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
+	buildSession := mockBuildSession(planScript, criticScript)
+	var callsMu sync.Mutex
+	plannerCalls, criticCalls := 0, 0
+	counting := func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		callsMu.Lock()
+		if isReviewHelper(opts.PermHandler) {
+			criticCalls++
+		} else {
+			plannerCalls++
+		}
+		callsMu.Unlock()
+		return buildSession(opts)
+	}
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMoonshot
+	f.RiskLevel = feature.RiskLow
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	sm := session.NewManager(make(chan interface{}, 100))
+	defer sm.Shutdown()
+	cfg := PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir,
+			MaxAttempts: 3, DangerouslySkipPermissions: true, BuildSession: counting,
+		},
+		Phase: RoadmapPhase{Number: 1, Name: "Test Phase", Type: "tdd-fill-in", Goal: "Survive a busy model"},
+	}
+
+	t.Run("capacity clears during backoff", func(t *testing.T) {
+		previous := validationInfrastructureBackoff
+		defer func() { validationInfrastructureBackoff = previous }()
+		validationInfrastructureBackoff = func(round int) time.Duration {
+			// The model recovers while the harness waits.
+			_ = os.Remove(capacityMarker)
+			return 0
+		}
+		result, err := RunPhasePlanningLoop(cfg, sm)
+		if err != nil {
+			t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+		}
+		if result.FinalStatus != "approved" || result.Iterations != 1 {
+			t.Fatalf("result = %+v, want attempt-1 approval after a validation retry round", result)
+		}
+		if plannerCalls != 1 {
+			t.Fatalf("planner calls = %d, want 1; a busy model must not trigger plan revision", plannerCalls)
+		}
+		if criticCalls <= len(phasePlanValidatorsForRisk(feature.RiskLow)) {
+			t.Fatalf("critic calls = %d, want more than one round", criticCalls)
+		}
+	})
+
+	t.Run("restart after exhausted failure re-validates", func(t *testing.T) {
+		restore := zeroValidationBackoff(t)
+		defer restore()
+		// Fresh phase so attempt numbering starts again.
+		phase2Dir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-02", "plan")
+		if err := os.MkdirAll(phase2Dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		plan2Script := testutil.WriteScript(t, scriptsDir, "plan2.sh",
+			testutil.JSONLInit+"\n"+receivePrompt+
+				testutil.WritePhasePlanSuccessArtifacts(phase2Dir, planTextWithVisualEvidenceRow())+"\n"+
+				testutil.JSONLSuccess+"\n")
+		build2 := mockBuildSession(plan2Script, criticScript)
+		planner2, critic2 := 0, 0
+		cfg2 := cfg
+		cfg2.Phase = RoadmapPhase{Number: 2, Name: "Phase Two", Type: "tdd-fill-in", Goal: "Resume validation"}
+		cfg2.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			callsMu.Lock()
+			if isReviewHelper(opts.PermHandler) {
+				critic2++
+			} else {
+				planner2++
+			}
+			callsMu.Unlock()
+			return build2(opts)
+		}
+		if err := os.WriteFile(capacityMarker, []byte("busy"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		result, err := RunPhasePlanningLoop(cfg2, sm)
+		if err != nil {
+			t.Fatalf("first RunPhasePlanningLoop() error = %v", err)
+		}
+		if result.FinalStatus != "failed" || result.Iterations != 1 || planner2 != 1 {
+			t.Fatalf("result = %+v (planner calls %d), want infrastructure failure on attempt 1 without revision", result, planner2)
+		}
+		if _, err := os.Stat(filepath.Join(phase2Dir, "attempt-02")); !os.IsNotExist(err) {
+			t.Fatalf("attempt-02 exists after infrastructure failure: %v", err)
+		}
+		// The model recovers; the user restarts the phase.
+		_ = os.Remove(capacityMarker)
+		resumed, err := RunPhasePlanningLoop(cfg2, sm)
+		if err != nil {
+			t.Fatalf("resumed RunPhasePlanningLoop() error = %v", err)
+		}
+		if resumed.FinalStatus != "approved" || resumed.Iterations != 1 {
+			t.Fatalf("resumed result = %+v, want the committed attempt-1 plan approved", resumed)
+		}
+		if planner2 != 1 {
+			t.Fatalf("planner calls after restart = %d, want 1; restart must re-validate, not re-plan", planner2)
+		}
+		if _, err := os.Stat(filepath.Join(phase2Dir, "attempt-02")); !os.IsNotExist(err) {
+			t.Fatalf("restart opened attempt-02: %v", err)
+		}
+	})
 }

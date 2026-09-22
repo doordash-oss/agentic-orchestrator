@@ -16,9 +16,12 @@ package testsupport
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -102,5 +105,124 @@ func TestServerDefaultResponderAnswersUnscriptedCalls(t *testing.T) {
 		strings.NewReader("channel=C1&text=scripted"))
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("scripted response bypassed the default: responder calls = %d", got)
+	}
+}
+
+func TestServerExternalUploadDefaultsAndRawMetadata(t *testing.T) {
+	server := New(t)
+
+	resp, err := http.Post(
+		server.URL()+"files.getUploadURLExternal",
+		"application/x-www-form-urlencoded",
+		strings.NewReader("filename=phase-plan.md&length=12"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uploadURL struct {
+		OK        bool   `json:"ok"`
+		UploadURL string `json:"upload_url"`
+		FileID    string `json:"file_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&uploadURL); err != nil {
+		_ = resp.Body.Close()
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if !uploadURL.OK || uploadURL.FileID != "F00000001" ||
+		uploadURL.UploadURL != strings.TrimSuffix(server.URL(), "/api/")+"/upload/F00000001" {
+		t.Fatalf("getUploadURLExternal response = %#v; want local upload URL and file ID", uploadURL)
+	}
+
+	payload := []byte("hello upload")
+	req, err := http.NewRequest(http.MethodPost, uploadURL.UploadURL, bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("raw upload status = %d; want 200", resp.StatusCode)
+	}
+
+	files, _ := json.Marshal([]map[string]string{{
+		"id": uploadURL.FileID, "title": "Phase 3 plan",
+	}})
+	resp, err = http.Post(
+		server.URL()+"files.completeUploadExternal",
+		"application/x-www-form-urlencoded",
+		strings.NewReader(url.Values{
+			"files":      {string(files)},
+			"channel_id": {"C12345678"},
+			"thread_ts":  {"1.0"},
+		}.Encode()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var completion map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&completion); err != nil {
+		_ = resp.Body.Close()
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if completion["ok"] != true {
+		t.Fatalf("completeUploadExternal response = %#v; want ok", completion)
+	}
+
+	requests := server.AllRequests()
+	if len(requests) != 3 {
+		t.Fatalf("AllRequests() = %#v; want three upload steps", requests)
+	}
+	digest := sha256.Sum256(payload)
+	raw := requests[1]
+	if raw.Method != http.MethodPost || raw.Path != "/upload/F00000001" ||
+		raw.BearerPresent || raw.ContentType != "application/octet-stream" ||
+		raw.ContentLength != int64(len(payload)) || raw.Digest != fmt.Sprintf("%x", digest) {
+		t.Fatalf("raw request = %#v; want recorded content metadata", raw)
+	}
+}
+
+func TestServerExternalUploadStepsAreScriptedIndependently(t *testing.T) {
+	server := New(t)
+	server.Script("files.getUploadURLExternal", Response{
+		Status: http.StatusCreated,
+		Body: map[string]any{
+			"ok": true, "upload_url": strings.TrimSuffix(server.URL(), "/api/") + "/arbitrary-upload-target",
+			"file_id": "FSCRIPTED",
+		},
+	})
+	server.Script("upload", Response{Status: http.StatusAccepted, Body: "accepted"})
+	server.Script("files.completeUploadExternal", Response{
+		Status: http.StatusNoContent,
+	})
+
+	responses := make([]*http.Response, 0, 3)
+	for _, request := range []struct {
+		target      string
+		contentType string
+		body        io.Reader
+	}{
+		{server.URL() + "files.getUploadURLExternal", "application/x-www-form-urlencoded", nil},
+		{strings.TrimSuffix(server.URL(), "/api/") + "/arbitrary-upload-target", "application/octet-stream", strings.NewReader("bytes")},
+		{server.URL() + "files.completeUploadExternal", "application/x-www-form-urlencoded", nil},
+	} {
+		resp, err := http.Post(request.target, request.contentType, request.body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		responses = append(responses, resp)
+		t.Cleanup(func() { _ = resp.Body.Close() })
+	}
+	if responses[0].StatusCode != http.StatusCreated ||
+		responses[1].StatusCode != http.StatusAccepted ||
+		responses[2].StatusCode != http.StatusNoContent {
+		t.Fatalf("scripted statuses = %d, %d, %d; want 201, 202, 204",
+			responses[0].StatusCode, responses[1].StatusCode, responses[2].StatusCode)
 	}
 }

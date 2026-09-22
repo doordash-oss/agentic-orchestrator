@@ -18,6 +18,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -50,18 +52,21 @@ const backoffBase = 500 * time.Millisecond
 // abstraction: at most this much time per wait slice.
 const sleepChunk = 100 * time.Millisecond
 
+const reviewArtifactSizeLimit = int64(1024 * 1024)
+
 // workItem is one destination-bound unit of delivery prepared by the
 // dispatcher.
 type workItem struct {
-	featureID       string
-	sourceFeatureID string
-	destinationKey  string
-	kind            string
-	channelID       string
-	needsCard       bool
-	refresh         bool
-	reply           replyPayload
-	delivery        *deliveryGroup
+	featureID                  string
+	sourceFeatureID            string
+	destinationKey             string
+	kind                       string
+	channelID                  string
+	needsCard                  bool
+	refresh                    bool
+	suppressDestinationFailure bool
+	reply                      replyPayload
+	delivery                   *deliveryGroup
 }
 
 type replyPayload struct {
@@ -72,6 +77,12 @@ type replyPayload struct {
 	inputKind string
 	identity  string
 	tag       string
+	review    *reviewDelivery
+}
+
+type reviewDelivery struct {
+	input  ports.SlackPendingInput
+	source *feature.Feature
 }
 
 // dirtyEntry tracks one feature whose card needs a refresh: markedAt is
@@ -348,6 +359,21 @@ func (w *destinationWorker) postReply(item workItem) error {
 		return errDeliveryIneligible
 	}
 	line := item.reply.fallback
+	blocks := item.reply.blocks
+	if item.reply.review != nil {
+		attachmentNote := w.uploadReviewArtifact(item, rootTS)
+		settings, _, ok = w.currentDelivery(item, item.reply.kind)
+		if !ok {
+			return errDeliveryIneligible
+		}
+		blocks, line = renderReviewInput(
+			settings.Token,
+			item.reply.tag,
+			reviewPrefix(settings.Token, item.reply.review.source),
+			item.reply.review.input,
+			attachmentNote,
+		)
+	}
 	if line == "" {
 		return nil
 	}
@@ -375,7 +401,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 		result, err := client.PostMessageRich(notifier.requestBase, PostMessageInput{
 			Channel:      item.channelID,
 			FallbackText: line,
-			Blocks:       item.reply.blocks,
+			Blocks:       blocks,
 			ThreadTS:     rootTS,
 			ReplyBroadcast: (item.reply.kind == kindProblems || item.reply.kind == kindNeedsInput) &&
 				item.kind == string(ports.SlackRecipientChannel),
@@ -427,6 +453,239 @@ func (w *destinationWorker) postReply(item workItem) error {
 	}
 	notifier.emitEvent(item.featureID, "slack.message_posted", data)
 	return nil
+}
+
+func reviewPrefix(token string, source *feature.Feature) string {
+	if source == nil || !source.IsChild() {
+		return ""
+	}
+	value, _ := childAffix(source.Parent.Kind)
+	if value == "" {
+		return ""
+	}
+	return scrub(token, value) + ": "
+}
+
+func (w *destinationWorker) uploadReviewArtifact(item workItem, rootTS string) string {
+	review := item.reply.review
+	if review == nil {
+		return ""
+	}
+	if w.reviewFileID(item) != "" {
+		return ""
+	}
+	if review.input.ArtifactUnavailableReason == "too_large" {
+		log.Printf(
+			"slack-notifier: review artifact for feature %s is too large to attach; posting the review without an attachment",
+			item.sourceFeatureID,
+		)
+		return "The artifact is too large to attach. Read it in Agentico."
+	}
+	if review.input.ArtifactUnavailableReason != "" {
+		log.Printf(
+			"slack-notifier: review artifact for feature %s is unavailable for attachment; posting the review without an attachment",
+			item.sourceFeatureID,
+		)
+		return "The artifact could not be attached because it is not available as text. Read it in Agentico."
+	}
+	data := append([]byte(nil), review.input.ArtifactBytes...)
+	if data == nil {
+		info, err := os.Stat(review.input.ArtifactPath)
+		if err != nil || info.IsDir() {
+			log.Printf(
+				"slack-notifier: review artifact for feature %s could not be read; posting the review without an attachment",
+				item.sourceFeatureID,
+			)
+			return "The artifact could not be attached because its file could not be read. Read it in Agentico."
+		}
+		review.input.ArtifactSize = info.Size()
+		if info.Size() > reviewArtifactSizeLimit {
+			log.Printf(
+				"slack-notifier: review artifact for feature %s is too large to attach; posting the review without an attachment",
+				item.sourceFeatureID,
+			)
+			return "The artifact is too large to attach. Read it in Agentico."
+		}
+		data, err = os.ReadFile(review.input.ArtifactPath)
+		if err != nil {
+			log.Printf(
+				"slack-notifier: review artifact for feature %s could not be read; posting the review without an attachment",
+				item.sourceFeatureID,
+			)
+			return "The artifact could not be attached because its file could not be read. Read it in Agentico."
+		}
+	}
+	settings, _, ok := w.currentDelivery(item, kindNeedsInput)
+	if !ok {
+		return "The artifact could not be attached. Read it in Agentico."
+	}
+	redacted := []byte(scrub(settings.Token, string(data)))
+	review.input.ArtifactSize = int64(len(redacted))
+	filename := review.input.ArtifactFilename
+	if filename == "" {
+		filename = filepath.Base(review.input.ArtifactPath)
+	}
+	if filename == "." || filename == string(filepath.Separator) || filename == "" {
+		filename = review.input.ArtifactID + ".md"
+	}
+	label := reviewArtifactLabel(settings.Token, review.input)
+	uploadItem := item
+	uploadItem.suppressDestinationFailure = true
+	uploaderFor := func() (reviewUploadClient, deliveryCredential, error) {
+		record, err := w.notifier.recordFor(item.featureID)
+		if err != nil || !w.notifier.pendingDeliveryEligible(
+			record,
+			item.featureID,
+			item.reply.identity,
+			item.destinationKey,
+		) {
+			return nil, deliveryCredential{}, errDeliveryIneligible
+		}
+		settings, _, ok := w.currentDelivery(item, kindNeedsInput)
+		credential := deliveryCredential{
+			token: settings.Token, generation: settings.CredentialGeneration,
+		}
+		if !ok {
+			return nil, credential, errDeliveryIneligible
+		}
+		client, err := w.notifier.newClient(settings.Token)
+		if err != nil {
+			return nil, credential, err
+		}
+		uploader, ok := client.(reviewUploadClient)
+		if !ok {
+			return nil, credential, errors.New("Slack client does not support file uploads")
+		}
+		return uploader, credential, nil
+	}
+	if !w.pace() {
+		return "The artifact could not be attached. Read it in Agentico."
+	}
+	target, err := sendWithRetry(
+		w,
+		"review artifact upload URL",
+		uploadItem,
+		"review_artifact",
+		func() (UploadURLResult, deliveryCredential, error) {
+			uploader, credential, err := uploaderFor()
+			if err != nil {
+				return UploadURLResult{}, credential, err
+			}
+			result, err := uploader.RequestUploadURL(
+				w.notifier.requestBase,
+				filename,
+				len(redacted),
+			)
+			return result, credential, err
+		},
+	)
+	w.recordWrite()
+	if err != nil {
+		return "The artifact could not be attached by Slack. Read it in Agentico."
+	}
+	if !w.pace() {
+		return "The artifact could not be attached. Read it in Agentico."
+	}
+	_, err = sendWithRetry(
+		w,
+		"review artifact bytes",
+		uploadItem,
+		"review_artifact",
+		func() (struct{}, deliveryCredential, error) {
+			uploader, credential, err := uploaderFor()
+			if err != nil {
+				return struct{}{}, credential, err
+			}
+			err = uploader.UploadBytes(w.notifier.requestBase, target.UploadURL, redacted)
+			return struct{}{}, credential, err
+		},
+	)
+	w.recordWrite()
+	if err != nil {
+		return "The artifact could not be attached by Slack. Read it in Agentico."
+	}
+	if !w.pace() {
+		return "The artifact could not be attached. Read it in Agentico."
+	}
+	result, err := sendWithRetry(
+		w,
+		"review artifact completion",
+		uploadItem,
+		"review_artifact",
+		func() (UploadFileResult, deliveryCredential, error) {
+			uploader, credential, err := uploaderFor()
+			if err != nil {
+				return UploadFileResult{}, credential, err
+			}
+			result, err := uploader.CompleteUploadToThread(
+				w.notifier.requestBase,
+				CompleteUploadInput{
+					FileID:    target.FileID,
+					Title:     item.reply.tag + " · " + label,
+					ChannelID: item.channelID,
+					ThreadTS:  rootTS,
+				},
+			)
+			return result, credential, err
+		},
+	)
+	w.recordWrite()
+	if err != nil {
+		return "The artifact could not be attached by Slack. Read it in Agentico."
+	}
+	w.recordReviewUpload(item, result)
+	w.notifier.emitEvent(item.featureID, "slack.message_posted", map[string]any{
+		"destination_kind": item.kind,
+		"item_kind":        "review_artifact",
+		"tag":              item.reply.tag,
+	})
+	return ""
+}
+
+func (w *destinationWorker) reviewFileID(item workItem) string {
+	record, err := w.notifier.recordFor(item.featureID)
+	if err != nil {
+		return ""
+	}
+	w.notifier.recordMu.Lock()
+	defer w.notifier.recordMu.Unlock()
+	for _, pending := range record.Pending {
+		if pending.Identity == item.reply.identity {
+			return pending.FileIDs[item.destinationKey]
+		}
+	}
+	return ""
+}
+
+func (w *destinationWorker) recordReviewUpload(item workItem, result UploadFileResult) {
+	notifier := w.notifier
+	record, err := notifier.recordFor(item.featureID)
+	if err != nil {
+		log.Printf("slack-notifier: recording review artifact upload failed: %v", err)
+		return
+	}
+	notifier.recordMu.Lock()
+	entry := record.Destinations[item.destinationKey]
+	entry.ledgerAppend(result.ShareTS)
+	record.Destinations[item.destinationKey] = entry
+	for i := range record.Pending {
+		if record.Pending[i].Identity != item.reply.identity {
+			continue
+		}
+		if record.Pending[i].FileIDs == nil {
+			record.Pending[i].FileIDs = map[string]string{}
+		}
+		record.Pending[i].FileIDs[item.destinationKey] = result.FileID
+		break
+	}
+	notifier.refreshTrackedInputsLocked()
+	persistErr := notifier.persistRecordLocked(
+		item.featureID,
+		record,
+		ports.SlackRecipientKind(item.kind),
+	)
+	notifier.recordMu.Unlock()
+	notifier.logPersistError(persistErr, ports.SlackRecipientKind(item.kind))
 }
 
 // takeDueRefresh reserves the next write slot for a dirty card once its

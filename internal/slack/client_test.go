@@ -16,8 +16,10 @@ package slack
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -506,5 +508,261 @@ func TestClientRichMethodsMapErrorsAndScrubToken(t *testing.T) {
 	err = client.UpdateMessage(t.Context(), "C1", "1.0", "x", nil)
 	if !errors.As(err, new(*TransportError)) || err.(*TransportError).StatusCode != http.StatusBadGateway {
 		t.Fatalf("update transport error = %#v; want 502 TransportError", err)
+	}
+}
+
+func TestClientUploadFileToThreadUsesExternalUploadPair(t *testing.T) {
+	const (
+		channelID = "C12345678"
+		threadTS  = "1758000000.000001"
+		shareTS   = "1758499200.000001"
+	)
+	payload := []byte("# Phase 3 plan\n\nImplementation details.\n")
+	server := testsupport.New(t)
+	server.Script("files.completeUploadExternal", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"files": []any{map[string]any{
+			"id": "F00000001",
+			"shares": map[string]any{
+				"public": map[string]any{
+					channelID: []any{map[string]any{"ts": shareTS, "thread_ts": threadTS}},
+				},
+			},
+		}},
+	}})
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := client.UploadFileToThread(t.Context(), UploadFileInput{
+		Filename:  "phase-plan.md",
+		Title:     "Review: Phase 3 plan",
+		Data:      payload,
+		ChannelID: channelID,
+		ThreadTS:  threadTS,
+	})
+	if err != nil {
+		t.Fatalf("UploadFileToThread() error = %v", err)
+	}
+	if result.FileID != "F00000001" || result.ShareTS != shareTS {
+		t.Fatalf("UploadFileToThread() = %#v; want file and share timestamps", result)
+	}
+
+	requests := server.AllRequests()
+	if len(requests) != 3 {
+		t.Fatalf("AllRequests() length = %d; want 3: %#v", len(requests), requests)
+	}
+	if requests[0].Path != "/api/files.getUploadURLExternal" ||
+		requests[0].Fields["filename"] != "phase-plan.md" ||
+		requests[0].Fields["length"] != fmt.Sprint(len(payload)) {
+		t.Fatalf("upload URL request = %#v; want filename and exact byte length", requests[0])
+	}
+	digest := sha256.Sum256(payload)
+	if requests[1].Method != http.MethodPost || requests[1].Path != "/upload/F00000001" ||
+		requests[1].BearerPresent || requests[1].ContentType != "application/octet-stream" ||
+		requests[1].ContentLength != int64(len(payload)) {
+		t.Fatalf("raw upload request = %#v; want bearer-less octet stream", requests[1])
+	}
+	if requests[1].Digest != fmt.Sprintf("%x", digest) {
+		t.Fatalf("raw upload request = %#v; want bearer-less payload digest %x", requests[1], digest)
+	}
+	if requests[2].Path != "/api/files.completeUploadExternal" ||
+		requests[2].Fields["channel_id"] != channelID ||
+		requests[2].Fields["thread_ts"] != threadTS {
+		t.Fatalf("completion request = %#v; want channel and thread", requests[2])
+	}
+	var files []map[string]string
+	if err := json.Unmarshal([]byte(requests[2].Fields["files"].(string)), &files); err != nil {
+		t.Fatalf("completion files are not JSON: %v", err)
+	}
+	if len(files) != 1 || files[0]["id"] != "F00000001" ||
+		files[0]["title"] != "Review: Phase 3 plan" {
+		t.Fatalf("completion files = %#v; want issued file ID and title", files)
+	}
+}
+
+func TestClientUploadFileToThreadReturnsEmptyShareTimestampWhenAbsent(t *testing.T) {
+	server := testsupport.New(t)
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.UploadFileToThread(t.Context(), UploadFileInput{
+		Filename: "roadmap.md", Title: "Roadmap", Data: []byte("roadmap"),
+		ChannelID: "D12345678", ThreadTS: "1.0",
+	})
+	if err != nil {
+		t.Fatalf("UploadFileToThread() error = %v", err)
+	}
+	if result.FileID != "F00000001" || result.ShareTS != "" {
+		t.Fatalf("UploadFileToThread() = %#v; want issued ID and no share timestamp", result)
+	}
+}
+
+func TestClientUploadFileToThreadScrubsFilenameAndTitle(t *testing.T) {
+	const (
+		token       = "xoxb-distinctive-secret-1234"
+		secondToken = "xoxp-another-secret-5678"
+	)
+	server := testsupport.New(t)
+	client, err := NewClient(token, WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.UploadFileToThread(t.Context(), UploadFileInput{
+		Filename:  "plan-" + token + "-" + secondToken + ".md",
+		Title:     "Review " + token + " " + secondToken,
+		Data:      []byte("safe"),
+		ChannelID: "C12345678",
+		ThreadTS:  "1.0",
+	})
+	if err != nil {
+		t.Fatalf("UploadFileToThread() error = %v", err)
+	}
+	requestText := ""
+	for _, request := range server.AllRequests() {
+		encoded, marshalErr := json.Marshal(request.Fields)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		requestText += string(encoded)
+	}
+	if strings.Contains(requestText, token) || strings.Contains(requestText, secondToken) {
+		t.Fatalf("upload request fields leaked credentials: %s", requestText)
+	}
+	if strings.Count(requestText, "[REDACTED]") < 2 {
+		t.Fatalf("upload request fields = %s; want redaction markers", requestText)
+	}
+}
+
+func TestClientUploadFileToThreadEnvelopeErrorsStopTheSequence(t *testing.T) {
+	const token = "xoxb-distinctive-secret-1234"
+	for _, tc := range []struct {
+		name         string
+		method       string
+		wantRequests int
+	}{
+		{name: "upload URL", method: "files.getUploadURLExternal", wantRequests: 1},
+		{name: "completion", method: "files.completeUploadExternal", wantRequests: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := testsupport.New(t)
+			server.Script(tc.method, testsupport.Response{Body: map[string]any{
+				"ok": false, "error": "invalid_auth: " + token,
+			}})
+			client, err := NewClient(token, WithBaseURL(server.URL()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.UploadFileToThread(t.Context(), UploadFileInput{
+				Filename: "plan.md", Title: "Plan", Data: []byte("plan"),
+				ChannelID: "C12345678", ThreadTS: "1.0",
+			})
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("UploadFileToThread() error = %#v; want APIError", err)
+			}
+			if apiErr.SlackError != "invalid_auth: [REDACTED]" || strings.Contains(err.Error(), token) {
+				t.Fatalf("UploadFileToThread() error = %#v; want scrubbed Slack error", err)
+			}
+			if got := len(server.AllRequests()); got != tc.wantRequests {
+				t.Fatalf("AllRequests() length = %d; want %d", got, tc.wantRequests)
+			}
+		})
+	}
+}
+
+func TestClientUploadFileToThreadRawTransportErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		response   testsupport.Response
+		wantStatus int
+		wantRetry  time.Duration
+	}{
+		{
+			name:       "server error",
+			response:   testsupport.Response{Status: http.StatusInternalServerError},
+			wantStatus: http.StatusInternalServerError,
+		},
+		{
+			name: "rate limit",
+			response: testsupport.Response{
+				Status: http.StatusTooManyRequests,
+				Headers: http.Header{
+					"Retry-After": []string{"9"},
+				},
+			},
+			wantStatus: http.StatusTooManyRequests,
+			wantRetry:  9 * time.Second,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := testsupport.New(t)
+			server.Script("upload", tc.response)
+			client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.UploadFileToThread(t.Context(), UploadFileInput{
+				Filename: "plan.md", Title: "Plan", Data: []byte("plan"),
+				ChannelID: "C12345678", ThreadTS: "1.0",
+			})
+			var transportErr *TransportError
+			if !errors.As(err, &transportErr) {
+				t.Fatalf("UploadFileToThread() error = %#v; want TransportError", err)
+			}
+			if transportErr.StatusCode != tc.wantStatus || transportErr.RetryAfter != tc.wantRetry {
+				t.Fatalf("TransportError = %#v; want status %d retry %s",
+					transportErr, tc.wantStatus, tc.wantRetry)
+			}
+			if got := len(server.AllRequests()); got != 2 {
+				t.Fatalf("AllRequests() length = %d; want upload URL and byte upload", got)
+			}
+		})
+	}
+}
+
+func TestClientUploadFileToThreadRawUploadHasIndependentLongerTimeout(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("upload", testsupport.Response{
+		Delay: 60 * time.Millisecond,
+		Body:  map[string]any{"ok": true},
+	})
+	client, err := NewClient(
+		"xoxb-secret-1234",
+		WithBaseURL(server.URL()),
+		WithTimeout(20*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UploadFileToThread(t.Context(), UploadFileInput{
+		Filename: "plan.md", Title: "Plan", Data: []byte("plan"),
+		ChannelID: "C12345678", ThreadTS: "1.0",
+	}); err != nil {
+		t.Fatalf("UploadFileToThread() with delayed raw upload error = %v", err)
+	}
+
+	server = testsupport.New(t)
+	server.Script("upload", testsupport.Response{
+		Delay: 500 * time.Millisecond,
+		Body:  map[string]any{"ok": true},
+	})
+	client, err = NewClient(
+		"xoxb-secret-1234",
+		WithBaseURL(server.URL()),
+		WithUploadTimeout(40*time.Millisecond),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.UploadFileToThread(t.Context(), UploadFileInput{
+		Filename: "plan.md", Title: "Plan", Data: []byte("plan"),
+		ChannelID: "C12345678", ThreadTS: "1.0",
+	})
+	var transportErr *TransportError
+	if !errors.As(err, &transportErr) || !strings.Contains(transportErr.Detail, "deadline exceeded") {
+		t.Fatalf("UploadFileToThread() timeout error = %#v; want deadline TransportError", err)
 	}
 }

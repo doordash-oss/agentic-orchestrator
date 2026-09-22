@@ -39,6 +39,12 @@ type slackClient interface {
 	UpdateMessage(ctx context.Context, channelID, ts, fallbackText string, blocks []Block) error
 }
 
+type reviewUploadClient interface {
+	RequestUploadURL(ctx context.Context, filename string, length int) (UploadURLResult, error)
+	UploadBytes(ctx context.Context, uploadURL string, data []byte) error
+	CompleteUploadToThread(ctx context.Context, input CompleteUploadInput) (UploadFileResult, error)
+}
+
 // ClientFactory constructs the token-bound client used for one operation.
 type ClientFactory func(token string) (slackClient, error)
 

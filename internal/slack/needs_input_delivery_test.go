@@ -16,6 +16,9 @@ package slack
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +32,149 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/slack/testsupport"
 )
+
+func TestReviewGateUploadsBeforeMessageAndPersistsFile(t *testing.T) {
+	harness := newNotifierHarness(t, defaultTestSettings(testToken, testRecipients()[1]))
+	harness.seedFeature("F-1", nil)
+	artifact := []byte("# Phase 3 plan\n\nShip the review gate.\n")
+	artifactPath := t.TempDir() + "/phase-plan.md"
+	if err := os.WriteFile(artifactPath, artifact, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	harness.pending.set("F-1", ports.SlackPendingInput{
+		Kind:               ports.SlackPendingReview,
+		FeatureID:          "F-1",
+		ReviewID:           "review-phase-3",
+		ReviewMode:         "plan",
+		TargetPhase:        "implement",
+		ArtifactID:         "phase-3-plan",
+		ArtifactPath:       artifactPath,
+		ArtifactSize:       int64(len(artifact)),
+		RunNumber:          1,
+		SourceRevision:     "sha256:revision",
+		PhasePlan:          true,
+		RoadmapPhase:       3,
+		TotalRoadmapPhases: 11,
+	})
+
+	harness.start(0)
+	harness.feed(ports.Event{Type: ports.ReviewRequired, FeatureID: "F-1"})
+	waitFor(t, 5*time.Second, func() bool {
+		record, ok := readFeatureRecord(harness.stateDir, "F-1")
+		return ok && len(record.Pending) == 1 &&
+			record.Pending[0].MessageTS["channel:C-ENG"] != "" &&
+			record.Pending[0].FileIDs["channel:C-ENG"] != ""
+	})
+
+	requests := harness.server.AllRequests()
+	var ordered []testsupport.Request
+	for _, request := range requests {
+		if request.Path == "/api/files.getUploadURLExternal" ||
+			strings.HasPrefix(request.Path, "/upload/") ||
+			request.Path == "/api/files.completeUploadExternal" ||
+			(request.Path == "/api/chat.postMessage" && fieldString(request, "thread_ts") != "") {
+			ordered = append(ordered, request)
+		}
+	}
+	if len(ordered) != 4 {
+		t.Fatalf("review requests = %+v; want upload URL, bytes, completion, message", ordered)
+	}
+	wantPaths := []string{
+		"/api/files.getUploadURLExternal",
+		"/upload/",
+		"/api/files.completeUploadExternal",
+		"/api/chat.postMessage",
+	}
+	for i, want := range wantPaths {
+		if i == 1 {
+			if !strings.HasPrefix(ordered[i].Path, want) {
+				t.Errorf("request %d path = %q; want prefix %q", i, ordered[i].Path, want)
+			}
+		} else if ordered[i].Path != want {
+			t.Errorf("request %d path = %q; want %q", i, ordered[i].Path, want)
+		}
+	}
+	sum := sha256.Sum256(artifact)
+	if ordered[1].BearerPresent ||
+		ordered[1].ContentLength != int64(len(artifact)) ||
+		ordered[1].Digest != fmt.Sprintf("%x", sum[:]) {
+		t.Errorf("raw upload = %+v; want bearer-less matching artifact", ordered[1])
+	}
+	if fieldString(ordered[3], "reply_broadcast") != "true" {
+		t.Errorf("review message reply_broadcast = %q; want true", fieldString(ordered[3], "reply_broadcast"))
+	}
+
+	record, _ := readFeatureRecord(harness.stateDir, "F-1")
+	pending := record.Pending[0]
+	if pending.ReviewID != "review-phase-3" ||
+		pending.ReviewMode != "plan" ||
+		pending.TargetPhase != "implement" ||
+		pending.ArtifactID != "phase-3-plan" ||
+		pending.RunNumber != 1 ||
+		pending.SourceRevision != "sha256:revision" ||
+		pending.Tag != "#1" {
+		t.Errorf("pending review record = %+v; want review identity and tag", pending)
+	}
+	posted := harness.observer.ofKind("slack.message_posted")
+	if len(posted) != 2 {
+		t.Fatalf("message_posted events = %+v; want artifact and review message", posted)
+	}
+}
+
+func TestReviewGateUploadFailureStillPostsWithoutDestinationWarning(t *testing.T) {
+	harness := newNotifierHarness(t, defaultTestSettings(testToken, testRecipients()[1]))
+	harness.seedFeature("F-1", nil)
+	artifactPath := t.TempDir() + "/phase-plan.md"
+	if err := os.WriteFile(artifactPath, []byte("# Plan\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	harness.pending.set("F-1", ports.SlackPendingInput{
+		Kind:           ports.SlackPendingReview,
+		FeatureID:      "F-1",
+		ReviewID:       "review-failure",
+		ReviewMode:     "plan",
+		TargetPhase:    "implement",
+		ArtifactID:     "plan",
+		ArtifactPath:   artifactPath,
+		ArtifactSize:   7,
+		RunNumber:      1,
+		SourceRevision: "sha256:failure",
+	})
+	harness.server.Script("files.getUploadURLExternal", testsupport.Response{
+		Body: map[string]any{"ok": false, "error": "file_uploads_disabled"},
+	})
+
+	harness.start(0)
+	harness.feed(ports.Event{Type: ports.ReviewRequired, FeatureID: "F-1"})
+	waitFor(t, 5*time.Second, func() bool {
+		record, ok := readFeatureRecord(harness.stateDir, "F-1")
+		return ok && len(record.Pending) == 1 &&
+			record.Pending[0].MessageTS["channel:C-ENG"] != ""
+	})
+
+	if got := harness.server.CallCount("upload"); got != 0 {
+		t.Errorf("raw upload calls = %d; want 0", got)
+	}
+	if got := harness.server.CallCount("files.completeUploadExternal"); got != 0 {
+		t.Errorf("completion calls = %d; want 0", got)
+	}
+	posts := reviewThreadPostsTo(harness.server, "C-ENG")
+	if len(posts) != 1 ||
+		!strings.Contains(fieldString(posts[0], "text"), "could not be attached by Slack") ||
+		!strings.Contains(fieldString(posts[0], "text"), "Read it in Agentico") {
+		t.Errorf("review failure message = %+v; want actionable attachment note", posts)
+	}
+	failures := harness.observer.ofKind("slack.delivery_failed")
+	if len(failures) != 1 ||
+		failures[0].Data["item_kind"] != "review_artifact" ||
+		failures[0].Data["tag"] != "#1" {
+		t.Errorf("delivery_failed events = %+v; want tagged review artifact failure", failures)
+	}
+	record, _ := readFeatureRecord(harness.stateDir, "F-1")
+	if record.Destinations["channel:C-ENG"].Failure != nil {
+		t.Errorf("destination failure = %+v; want no feature warning for artifact upload", record.Destinations["channel:C-ENG"].Failure)
+	}
+}
 
 func TestNeedsInputDeliveryReservedWhileQueued(t *testing.T) {
 	harness := newNotifierHarness(t, defaultTestSettings(testToken, testRecipients()[1]))

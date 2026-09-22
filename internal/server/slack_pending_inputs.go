@@ -17,6 +17,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"path/filepath"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -96,6 +98,33 @@ func (h *apiHandler) PendingSlackInputs(featureID string) ([]ports.SlackPendingI
 				FeatureID:    featureID,
 				HelpQuestion: help.Question,
 				WaitingSince: help.Time,
+			})
+		}
+	}
+	if f.Status.IsNeedsReview() {
+		ctx, resolveErr := resolveReviewSessionContext(h.store, f)
+		if resolveErr != nil {
+			log.Printf("slack pending review resolution failed for feature %q: %v", featureID, resolveErr)
+		} else {
+			pending = append(pending, ports.SlackPendingInput{
+				Kind:                      ports.SlackPendingReview,
+				FeatureID:                 featureID,
+				ReviewID:                  ctx.reviewID,
+				ReviewMode:                ctx.reviewMode,
+				TargetPhase:               ctx.targetPhase.DirName(),
+				ArtifactID:                ctx.artifactID,
+				ArtifactPath:              ctx.sourcePath,
+				ArtifactFilename:          filepath.Base(ctx.sourcePath),
+				ArtifactBytes:             append([]byte(nil), ctx.source...),
+				ArtifactSize:              ctx.artifactSize,
+				ArtifactUnavailableReason: ctx.unavailableReason,
+				RunNumber:                 ctx.run.RunNumber,
+				SourceRevision:            ctx.sourceRevision,
+				CanIterate:                ctx.canIterate,
+				Roadmap:                   ctx.roadmap,
+				PhasePlan:                 ctx.phasePlan,
+				RoadmapPhase:              ctx.roadmapPhase,
+				TotalRoadmapPhases:        ctx.roadmapTotal,
 			})
 		}
 	}

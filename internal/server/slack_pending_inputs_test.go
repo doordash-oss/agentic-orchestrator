@@ -15,9 +15,12 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -448,6 +451,438 @@ func TestPendingSlackInputsIncludesStoredHelpOnly(t *testing.T) {
 		!got[0].WaitingSince.Equal(storedAt) {
 		t.Errorf("PendingSlackInputs()[0] = %+v; want pending stored help entry", got[0])
 	}
+}
+
+func TestPendingSlackInputsProjectsReviewContextForAllNeedsReviewStatuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		status             feature.Status
+		artifactID         string
+		roadmapPhase       int
+		totalRoadmapPhases int
+		wantMode           string
+		wantTarget         feature.Phase
+		wantRoadmap        bool
+		wantPhasePlan      bool
+	}{
+		{
+			name:       "prompt review",
+			status:     feature.StatusPromptNeedsReview,
+			artifactID: reviewArtifactPrompt,
+			wantMode:   reviewModeGate,
+			wantTarget: feature.PhaseInquire,
+		},
+		{
+			name:       "inquiry review",
+			status:     feature.StatusInquiryNeedsReview,
+			artifactID: feature.PhaseInquire.DirName(),
+			wantMode:   reviewModeGate,
+			wantTarget: feature.PhaseResearch,
+		},
+		{
+			name:       "research review",
+			status:     feature.StatusResearchNeedsReview,
+			artifactID: feature.PhaseResearch.DirName(),
+			wantMode:   reviewModeGate,
+			wantTarget: feature.PhaseDesign,
+		},
+		{
+			name:       "design review",
+			status:     feature.StatusDesignNeedsReview,
+			artifactID: feature.PhaseDesign.DirName(),
+			wantMode:   reviewModeGate,
+			wantTarget: feature.PhasePlan,
+		},
+		{
+			name:               "phase plan review",
+			status:             feature.StatusPlanNeedsReview,
+			artifactID:         "phase-3-plan",
+			roadmapPhase:       3,
+			totalRoadmapPhases: 11,
+			wantMode:           reviewModePlan,
+			wantTarget:         feature.PhaseImplement,
+			wantPhasePlan:      true,
+		},
+		{
+			name:               "roadmap review",
+			status:             feature.StatusPlanNeedsReview,
+			artifactID:         "roadmap",
+			totalRoadmapPhases: 11,
+			wantMode:           reviewModePlan,
+			wantTarget:         feature.PhaseImplement,
+			wantRoadmap:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := "# " + tt.name + "\n"
+			store, f, artifactPath := seedSlackReviewFeature(
+				t,
+				tt.status,
+				tt.artifactID,
+				body,
+				tt.roadmapPhase,
+				tt.totalRoadmapPhases,
+			)
+			service := newReviewSessionService(store, nil)
+			resolved, err := service.resolveContext(f.ID)
+			if err != nil {
+				t.Fatalf("resolveContext() error = %v", err)
+			}
+
+			got, err := (&apiHandler{store: store}).PendingSlackInputs(f.ID)
+			if err != nil {
+				t.Fatalf("PendingSlackInputs() error = %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("PendingSlackInputs() = %+v; want one review", got)
+			}
+			review := got[0]
+			if review.Kind != ports.SlackPendingReview ||
+				review.FeatureID != f.ID ||
+				review.ReviewID != resolved.reviewID ||
+				review.ReviewMode != tt.wantMode ||
+				review.TargetPhase != tt.wantTarget.DirName() ||
+				review.ArtifactID != tt.artifactID ||
+				review.ArtifactPath != artifactPath ||
+				review.RunNumber != 1 ||
+				review.SourceRevision != resolved.sourceRevision ||
+				review.CanIterate != resolved.canIterate ||
+				review.Roadmap != tt.wantRoadmap ||
+				review.PhasePlan != tt.wantPhasePlan ||
+				review.RoadmapPhase != tt.roadmapPhase ||
+				review.TotalRoadmapPhases != tt.totalRoadmapPhases ||
+				review.ArtifactSize != int64(len(body)) {
+				t.Errorf("PendingSlackInputs()[0] = %+v; resolved context = %+v", review, resolved)
+			}
+			if _, err := os.Stat(filepath.Join(store.RunDir(f.ID, 1), "reviews")); !os.IsNotExist(err) {
+				t.Errorf("PendingSlackInputs() review session directory error = %v; want not created", err)
+			}
+		})
+	}
+}
+
+func TestPendingSlackInputsReviewRevisionTracksArtifactBytes(t *testing.T) {
+	t.Parallel()
+
+	store, f, artifactPath := seedSlackReviewFeature(
+		t,
+		feature.StatusPlanNeedsReview,
+		"phase-2-plan",
+		"# Phase 2 plan\n",
+		2,
+		5,
+	)
+	h := &apiHandler{store: store}
+
+	before, err := h.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() before rewrite error = %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("PendingSlackInputs() before rewrite = %+v; want one review", before)
+	}
+	revised := "# Phase 2 plan\n\nRevised.\n"
+	if err := os.WriteFile(artifactPath, []byte(revised), 0o644); err != nil {
+		t.Fatalf("WriteFile() revised artifact error = %v", err)
+	}
+
+	after, err := h.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() after rewrite error = %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("PendingSlackInputs() after rewrite = %+v; want one review", after)
+	}
+	if after[0].ReviewID != before[0].ReviewID {
+		t.Errorf("ReviewID after rewrite = %q; want stable %q", after[0].ReviewID, before[0].ReviewID)
+	}
+	if after[0].SourceRevision == before[0].SourceRevision {
+		t.Errorf("SourceRevision after rewrite = %q; want change from %q", after[0].SourceRevision, before[0].SourceRevision)
+	}
+	if after[0].SourceRevision != textRevision([]byte(revised)) {
+		t.Errorf("SourceRevision after rewrite = %q; want %q", after[0].SourceRevision, textRevision([]byte(revised)))
+	}
+	if after[0].ArtifactSize != int64(len(revised)) {
+		t.Errorf("ArtifactSize after rewrite = %d; want %d", after[0].ArtifactSize, len(revised))
+	}
+}
+
+func TestPendingSlackInputsProjectsRewindReviewRoadmapPhase(t *testing.T) {
+	t.Parallel()
+
+	store, f, artifactPath := seedSlackReviewFeature(
+		t,
+		feature.StatusPlanNeedsReview,
+		"phase-4-plan",
+		"# Phase 4 plan\n",
+		1,
+		6,
+	)
+	target := feature.PhaseImplement
+	rewindRoadmapPhase := 4
+	f.PendingReviewPhase = &target
+	f.PendingRewindReviewRoadmapPhase = &rewindRoadmapPhase
+	f.IsRewind = true
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() rewind review error = %v", err)
+	}
+
+	got, err := (&apiHandler{store: store}).PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() = %+v; want one rewind review", got)
+	}
+	review := got[0]
+	if review.Kind != ports.SlackPendingReview ||
+		review.ReviewMode != reviewModeRewind ||
+		review.TargetPhase != feature.PhaseImplement.DirName() ||
+		review.ArtifactID != "phase-4-plan" ||
+		review.ArtifactPath != artifactPath ||
+		review.RunNumber != 1 ||
+		review.CanIterate ||
+		review.Roadmap ||
+		!review.PhasePlan ||
+		review.RoadmapPhase != 4 ||
+		review.TotalRoadmapPhases != 6 {
+		t.Errorf("PendingSlackInputs()[0] = %+v; want rewind phase-plan context", review)
+	}
+}
+
+func TestPendingSlackInputsProjectsMediumRewindToPlanDescriptionReview(t *testing.T) {
+	t.Parallel()
+
+	store, f, _ := seedSlackReviewFeature(
+		t,
+		feature.StatusDesignNeedsReview,
+		feature.PhaseResearch.DirName(),
+		"stale research\n",
+		0,
+		0,
+	)
+	target := feature.PhasePlan
+	f.Pipeline = feature.PipelineMedium
+	f.PendingReviewPhase = &target
+	f.IsRewind = true
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() medium rewind review error = %v", err)
+	}
+	description := "edited medium description\n"
+	descriptionPath := filepath.Join(store.BaseDir, f.ID, "description-review.md")
+	if err := os.WriteFile(descriptionPath, []byte(description), 0o644); err != nil {
+		t.Fatalf("WriteFile() description review error = %v", err)
+	}
+
+	got, err := (&apiHandler{store: store}).PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() = %+v; want one medium rewind review", got)
+	}
+	review := got[0]
+	if review.Kind != ports.SlackPendingReview ||
+		review.ReviewMode != reviewModeRewind ||
+		review.TargetPhase != feature.PhasePlan.DirName() ||
+		review.ArtifactID != descriptionReviewArtifact ||
+		review.ArtifactPath != descriptionPath ||
+		review.ArtifactSize != int64(len(description)) ||
+		review.SourceRevision != textRevision([]byte(description)) ||
+		review.CanIterate ||
+		review.Roadmap ||
+		review.PhasePlan {
+		t.Errorf("PendingSlackInputs()[0] = %+v; want medium description review context", review)
+	}
+}
+
+func TestPendingSlackInputsResolvesReviewFromSingleFeatureLoad(t *testing.T) {
+	t.Parallel()
+
+	store, f, _ := seedSlackReviewFeature(
+		t,
+		feature.StatusPlanNeedsReview,
+		"phase-2-plan",
+		"# Phase 2 plan\n",
+		2,
+		5,
+	)
+	reader := &singleLoadFeatureReader{Store: store}
+
+	got, err := (&apiHandler{store: reader}).PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != ports.SlackPendingReview {
+		t.Fatalf("PendingSlackInputs() = %+v; want one review", got)
+	}
+	if loads := reader.loads.Load(); loads != 1 {
+		t.Errorf("PendingSlackInputs() feature loads = %d; want 1", loads)
+	}
+}
+
+type singleLoadFeatureReader struct {
+	*feature.Store
+	loads atomic.Int64
+}
+
+func (r *singleLoadFeatureReader) Load(featureID string) (*feature.Feature, error) {
+	r.loads.Add(1)
+	return r.Store.Load(featureID)
+}
+
+func TestPendingSlackInputsOmitsNonReviewAndManualPublish(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		status      feature.Status
+		checkpoints feature.Checkpoints
+	}{
+		{name: "non review", status: feature.StatusImplementing},
+		{
+			name:        "manual publish",
+			status:      feature.StatusCodeReady,
+			checkpoints: feature.Checkpoints{ManualPublish: true},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store, f := seedReadFeature(t)
+			f.Status = tt.status
+			f.Checkpoints = tt.checkpoints
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+
+			got, err := (&apiHandler{store: store}).PendingSlackInputs(f.ID)
+			if err != nil {
+				t.Fatalf("PendingSlackInputs() error = %v", err)
+			}
+			if len(got) != 0 {
+				t.Errorf("PendingSlackInputs() = %+v; want no review", got)
+			}
+		})
+	}
+}
+
+func TestPendingSlackInputsLogsUnresolvableReviewWithoutDroppingOtherKinds(t *testing.T) {
+	store, f := seedReadFeature(t)
+	f.Status = feature.StatusPlanNeedsReview
+	f.CurrentRoadmapPhase = 4
+	f.TotalRoadmapPhases = 6
+	f.Artifacts = map[string]string{}
+	f.HelpQueue = []feature.HelpRequest{{
+		Question: "Keep the existing help request",
+		Time:     time.Date(2026, 9, 22, 13, 0, 0, 0, time.UTC),
+		Pending:  true,
+	}}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	session := &fakeSessionView{
+		id:        "review-projection-session",
+		featureID: f.ID,
+		phase:     feature.PhasePlan,
+		status:    ports.SessionWaitingPermission,
+		pending: []*llm.ControlRequestMessage{
+			pendingReadControl("permission-request", toolNameBash, `{"command":"go test ./internal/server"}`),
+			pendingReadControl("question-request", toolNameAskUserQuestion, `{"questions":[{"question":"Continue?"}]}`),
+		},
+	}
+
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	oldFlags := log.Flags()
+	oldPrefix := log.Prefix()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+	})
+
+	got, err := (&apiHandler{
+		store:    store,
+		sessions: fakeSessionManager{views: []ports.SessionView{session}},
+	}).PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("PendingSlackInputs() = %+v; want permission, question, and help", got)
+	}
+	kinds := map[ports.SlackPendingInputKind]int{}
+	for _, item := range got {
+		kinds[item.Kind]++
+	}
+	if kinds[ports.SlackPendingPermission] != 1 ||
+		kinds[ports.SlackPendingQuestion] != 1 ||
+		kinds[ports.SlackPendingHelp] != 1 ||
+		kinds[ports.SlackPendingReview] != 0 {
+		t.Errorf("PendingSlackInputs() kinds = %+v; want existing kinds and no review", kinds)
+	}
+	if logText := logs.String(); !strings.Contains(logText, f.ID) ||
+		!strings.Contains(logText, "review artifact") ||
+		!strings.Contains(logText, "not found") {
+		t.Errorf("PendingSlackInputs() log = %q; want feature and resolution reason", logText)
+	}
+}
+
+func seedSlackReviewFeature(
+	t *testing.T,
+	status feature.Status,
+	artifactID, body string,
+	roadmapPhase, totalRoadmapPhases int,
+) (*feature.Store, *feature.Feature, string) {
+	t.Helper()
+
+	store := feature.NewStore(t.TempDir())
+	f := &feature.Feature{
+		ID:                  "feat-slack-review-" + strings.ReplaceAll(artifactID, "_", "-"),
+		Name:                "Slack review projection",
+		Slug:                "slack-review-projection",
+		Status:              status,
+		CurrentPhase:        feature.PhasePlan,
+		ActiveRun:           1,
+		RunCount:            1,
+		Pipeline:            feature.PipelineLarge,
+		SchemaVersion:       feature.SchemaVersionCurrent,
+		CurrentRoadmapPhase: roadmapPhase,
+		TotalRoadmapPhases:  totalRoadmapPhases,
+		Artifacts:           map[string]string{},
+	}
+	artifactPath := filepath.Join(store.RunDir(f.ID, 1), artifactID, artifactID+".md")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() artifact directory error = %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile() artifact error = %v", err)
+	}
+	f.Artifacts[artifactID] = artifactPath
+	f.SetRun(&feature.Run{
+		RunNumber:           1,
+		Artifacts:           f.Artifacts,
+		CurrentRoadmapPhase: roadmapPhase,
+		TotalRoadmapPhases:  totalRoadmapPhases,
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() review feature error = %v", err)
+	}
+	return store, f, artifactPath
 }
 
 func TestPendingSlackInputsExcludesChatControlRequests(t *testing.T) {

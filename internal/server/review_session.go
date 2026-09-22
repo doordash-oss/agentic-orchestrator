@@ -68,18 +68,23 @@ func (s *reviewSessionLockSet) lock(featureID, reviewID string) func() {
 }
 
 type reviewSessionContext struct {
-	feature        *feature.Feature
-	run            *feature.Run
-	runDir         string
-	reviewID       string
-	reviewMode     string
-	targetPhase    feature.Phase
-	artifactID     string
-	sourcePath     string
-	sourceRevision string
-	canIterate     bool
-	roadmap        bool
-	phasePlan      bool
+	feature           *feature.Feature
+	run               *feature.Run
+	runDir            string
+	reviewID          string
+	reviewMode        string
+	targetPhase       feature.Phase
+	artifactID        string
+	sourcePath        string
+	source            []byte
+	artifactSize      int64
+	unavailableReason string
+	sourceRevision    string
+	canIterate        bool
+	roadmap           bool
+	phasePlan         bool
+	roadmapPhase      int
+	roadmapTotal      int
 }
 
 type reviewSessionMeta struct {
@@ -121,10 +126,7 @@ func (s *reviewSessionService) Create(featureID string) (ReviewSessionResponse, 
 	}
 	unlock := s.locks.lock(featureID, ctx.reviewID)
 	defer unlock()
-	source, err := os.ReadFile(ctx.sourcePath)
-	if err != nil {
-		return ReviewSessionResponse{}, fmt.Errorf("read review artifact: %w", err)
-	}
+	source := append([]byte(nil), ctx.source...)
 	sessionDir := reviewSessionDir(ctx.runDir, ctx.reviewID)
 	metaPath := filepath.Join(sessionDir, "metadata.yaml")
 	draftPath := filepath.Join(sessionDir, "draft.md")
@@ -328,6 +330,17 @@ func (s *reviewSessionService) resolveContext(featureID string) (reviewSessionCo
 	if err != nil {
 		return reviewSessionContext{}, err
 	}
+	return resolveReviewSessionContext(s.store, f)
+}
+
+func resolveReviewSessionContext(store FeatureReader, f *feature.Feature) (reviewSessionContext, error) {
+	if store == nil {
+		return reviewSessionContext{}, fmt.Errorf("review session store is unavailable")
+	}
+	if f == nil {
+		return reviewSessionContext{}, fmt.Errorf("review feature is unavailable")
+	}
+	featureID := f.ID
 	if !f.Status.IsNeedsReview() {
 		return reviewSessionContext{}, &ActionConflictError{Detail: fmt.Sprintf("feature %q is not paused on a review gate", featureID)}
 	}
@@ -335,7 +348,13 @@ func (s *reviewSessionService) resolveContext(featureID string) (reviewSessionCo
 	if run == nil || run.RunNumber <= 0 {
 		return reviewSessionContext{}, fmt.Errorf("active run is unavailable")
 	}
-	ctx := reviewSessionContext{feature: f, run: run, runDir: s.store.RunDir(featureID, run.RunNumber)}
+	ctx := reviewSessionContext{
+		feature:      f,
+		run:          run,
+		runDir:       store.RunDir(featureID, run.RunNumber),
+		roadmapPhase: f.CurrentRoadmapPhase,
+		roadmapTotal: f.TotalRoadmapPhases,
+	}
 	ctx.reviewMode, ctx.targetPhase = reviewSessionTarget(f)
 	ctx.artifactID, ctx.roadmap, ctx.phasePlan = reviewArtifactIDForContext(f, ctx.reviewMode, ctx.targetPhase)
 	if ctx.artifactID == "" {
@@ -367,8 +386,21 @@ func (s *reviewSessionService) resolveContext(featureID string) (reviewSessionCo
 		return reviewSessionContext{}, fmt.Errorf("read review artifact: %w", err)
 	}
 	ctx.sourcePath = path
+	ctx.source = append([]byte(nil), data...)
+	ctx.artifactSize = int64(len(data))
+	switch {
+	case int64(len(data)) > maxTextLimit*4:
+		ctx.unavailableReason = "too_large"
+	case !textArtifact(path, int64(len(data))):
+		ctx.unavailableReason = "unsupported_type"
+	}
 	ctx.sourceRevision = textRevision(data)
 	ctx.canIterate = planReviewCanIterate(ctx)
+	if ctx.reviewMode == reviewModeRewind &&
+		f.PendingRewindReviewRoadmapPhase != nil &&
+		*f.PendingRewindReviewRoadmapPhase > 0 {
+		ctx.roadmapPhase = *f.PendingRewindReviewRoadmapPhase
+	}
 	ctx.reviewID = deterministicReviewID(featureID, run.RunNumber, ctx.reviewMode, ctx.targetPhase.DirName(), ctx.artifactID)
 	return ctx, nil
 }
@@ -424,6 +456,9 @@ func reviewArtifactIDForContext(f *feature.Feature, mode string, target feature.
 		case feature.PhaseDesign:
 			return feature.PhaseResearch.DirName(), false, false
 		case feature.PhasePlan:
+			if f.EffectivePipeline() == feature.PipelineMedium {
+				return descriptionReviewArtifact, false, false
+			}
 			if hasArtifactID(f, feature.PhaseDesign.DirName()) {
 				return feature.PhaseDesign.DirName(), false, false
 			}

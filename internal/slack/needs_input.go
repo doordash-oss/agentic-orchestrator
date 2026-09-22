@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -34,6 +35,7 @@ const (
 	multiSelectResponseInstructions  = "Reply with a comma- or space-separated list of option numbers or labels. Anyone who can see this can respond"
 	freeTextResponseInstructions     = "Reply with any text. Anyone who can see this can respond"
 	gateResponseInstructions         = "Resolution: In Agentico, waive the blocked checks or retry after signing in. Replies are not read here."
+	reviewResponseInstructions       = "React ✅ or reply approve to approve. Requesting changes is done in Agentico. Anyone who can see this can respond"
 )
 
 func pendingInputIdentity(item ports.SlackPendingInput) string {
@@ -47,6 +49,8 @@ func pendingInputIdentity(item ports.SlackPendingInput) string {
 			"gate:%s:%s:%d:%s",
 			item.FeatureID, item.GatePath, item.Iteration, item.WaitingSince.UTC().Format(timeLayout),
 		)
+	case ports.SlackPendingReview:
+		return "review:" + item.ReviewID + ":" + item.SourceRevision
 	case ports.SlackPendingHelp:
 		digest := sha256.Sum256([]byte(item.HelpQuestion))
 		return fmt.Sprintf(
@@ -80,9 +84,132 @@ func renderPendingInput(
 		return renderHelpInput(token, tag, prefix, item)
 	case ports.SlackPendingGate:
 		return renderGateInput(token, tag, prefix, item)
+	case ports.SlackPendingReview:
+		return renderReviewInput(token, tag, prefix, item, "")
 	default:
 		return nil, ""
 	}
+}
+
+func renderReviewInput(
+	token, tag, prefix string,
+	item ports.SlackPendingInput,
+	attachmentNote string,
+) ([]Block, string) {
+	label := reviewArtifactLabel(token, item)
+	filename := filepath.Base(item.ArtifactPath)
+	if filename == "." || filename == string(filepath.Separator) || filename == "" {
+		filename = item.ArtifactID
+	}
+	label = scrub(token, label)
+	filename = scrub(token, filename)
+	size := formatArtifactSize(item.ArtifactSize)
+	header := safePlain(tag+" · "+prefix+"Review: "+label, headerTextLimit)
+	detail := fmt.Sprintf(
+		"*Artifact:* %s (`%s`, %s)\n*On approval:* %s",
+		safeText(label, 500),
+		safeText(filename, 500),
+		size,
+		safeText(reviewApprovalAction(item), 1000),
+	)
+	if attachmentNote == "" {
+		attachmentNote = "The artifact is attached above."
+	}
+	attachmentNote = scrub(token, attachmentNote)
+	agenticoNote := "Edit the artifact or request changes in Agentico."
+	blocks := []Block{
+		headerBlockFor(header),
+		sectionTextBlockFor(detail),
+		sectionTextBlockFor(safeText(attachmentNote, sectionTextLimit)),
+		sectionTextBlockFor(agenticoNote),
+		contextBlockFor([]textObject{{
+			Type: textTypeMrkdwn,
+			Text: safeText(reviewResponseInstructions, contextTextLimit),
+		}}),
+	}
+	return blocks, pendingInputFallback(
+		tag+" "+prefix+"Review: "+label,
+		[]string{
+			fmt.Sprintf("Artifact: %s (%s, %s)", label, filename, size),
+			"On approval: " + reviewApprovalAction(item),
+			attachmentNote,
+			agenticoNote,
+		},
+		reviewResponseInstructions,
+	)
+}
+
+func reviewArtifactLabel(token string, item ports.SlackPendingInput) string {
+	switch {
+	case item.ReviewMode == "rewind":
+		return fmt.Sprintf("Run %d rewind", item.RunNumber)
+	case item.Roadmap:
+		return "Roadmap"
+	case item.PhasePlan:
+		if item.RoadmapPhase > 0 {
+			return fmt.Sprintf("Phase %d plan", item.RoadmapPhase)
+		}
+		return "Phase plan"
+	}
+	artifactID := scrub(token, item.ArtifactID)
+	switch artifactID {
+	case "prompt":
+		return "Prompt"
+	case "inquire":
+		return "Inquiry"
+	case "research":
+		return "Research"
+	case "design":
+		return "Design"
+	case "plan":
+		return "Plan"
+	case "description-review":
+		return "Description"
+	default:
+		if artifactID != "" {
+			return strings.ReplaceAll(strings.Title(strings.ReplaceAll(artifactID, "-", " ")), " Md", "")
+		}
+		return "Artifact"
+	}
+}
+
+func reviewApprovalAction(item ports.SlackPendingInput) string {
+	if item.ReviewMode == "rewind" {
+		return fmt.Sprintf("restart the rewind from the attached artifact for run %d", item.RunNumber)
+	}
+	if item.Roadmap {
+		if item.TotalRoadmapPhases > 0 {
+			return fmt.Sprintf("start planning roadmap phase 1 of %d", item.TotalRoadmapPhases)
+		}
+		return "start planning roadmap phase 1"
+	}
+	if item.PhasePlan {
+		if item.RoadmapPhase > 0 && item.TotalRoadmapPhases > 0 {
+			return fmt.Sprintf(
+				"start implementation of roadmap phase %d of %d",
+				item.RoadmapPhase,
+				item.TotalRoadmapPhases,
+			)
+		}
+		return "start implementation"
+	}
+	if strings.EqualFold(item.TargetPhase, feature.PhasePlan.DirName()) {
+		return "start the Plan phase"
+	}
+	if item.TargetPhase != "" {
+		return "start the " + strings.Title(item.TargetPhase) + " phase"
+	}
+	return "continue the feature"
+}
+
+func formatArtifactSize(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d bytes", size)
+	}
+	if size < 1024*1024 {
+		return fmt.Sprintf("%.1f KiB", float64(size)/1024)
+	}
+	return fmt.Sprintf("%.1f MiB", float64(size)/(1024*1024))
 }
 
 func renderPermissionInput(token, tag, prefix string, item ports.SlackPendingInput) ([]Block, string) {
@@ -419,6 +546,7 @@ func waitingSummary(pending []pendingInputRecord, repliesEnabled bool) string {
 			string(ports.SlackPendingQuestion),
 			string(ports.SlackPendingGate),
 			string(ports.SlackPendingHelp),
+			string(ports.SlackPendingReview),
 		} {
 			if count := counts[kind]; count > 0 {
 				label := pendingKindLabel(kind)

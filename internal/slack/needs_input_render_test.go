@@ -177,6 +177,32 @@ func TestRenderPendingInputKinds(t *testing.T) {
 			},
 			doesNotWant: []string{"Anyone who can see this can respond"},
 		},
+		{
+			name: "roadmap phase plan review",
+			tag:  "#7",
+			input: ports.SlackPendingInput{
+				Kind:               ports.SlackPendingReview,
+				ReviewMode:         "plan",
+				TargetPhase:        "implement",
+				ArtifactID:         "phase-3-plan",
+				ArtifactPath:       "/state/F-1/runs/1/phase-03/plan/phase-plan.md",
+				ArtifactSize:       1536,
+				RunNumber:          1,
+				PhasePlan:          true,
+				RoadmapPhase:       3,
+				TotalRoadmapPhases: 11,
+			},
+			want: []string{
+				"#7 · Review: Phase 3 plan",
+				"*Artifact:* Phase 3 plan (`phase-plan.md`, 1.5 KiB)",
+				"*On approval:* start implementation of roadmap phase 3 of 11",
+				"The artifact is attached above.",
+				"Edit the artifact or request changes in Agentico.",
+				"React ✅ or reply approve to approve",
+				"Requesting changes is done in Agentico",
+				"Anyone who can see this can respond",
+			},
+		},
 	}
 
 	for _, tt := range tests {

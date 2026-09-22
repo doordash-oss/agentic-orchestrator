@@ -174,6 +174,7 @@ const (
 	SlackPendingPermission SlackPendingInputKind = "permission"
 	SlackPendingHelp       SlackPendingInputKind = "help"
 	SlackPendingGate       SlackPendingInputKind = "gate"
+	SlackPendingReview     SlackPendingInputKind = "review"
 )
 
 // SlackPendingInputOption is one AskUserQuestion option.
@@ -197,27 +198,43 @@ type SlackPendingInputBlocker struct {
 // notifier. Text is rendered and redacted by the notifier and is never
 // persisted in the Slack-owned record.
 type SlackPendingInput struct {
-	Kind            SlackPendingInputKind
-	FeatureID       string
-	RequestID       string
-	QuestionIndex   int
-	QuestionCount   int
-	Header          string
-	Question        string
-	Options         []SlackPendingInputOption
-	MultiSelect     bool
-	ToolName        string
-	Input           map[string]any
-	Phase           string
-	RepoName        string
-	RememberPattern string
-	HelpQuestion    string
-	GatePath        string
-	Iteration       int
-	WaitingSince    time.Time
-	GateSummary     string
-	GateQuestions   []string
-	GateBlockers    []SlackPendingInputBlocker
+	Kind                      SlackPendingInputKind
+	FeatureID                 string
+	RequestID                 string
+	QuestionIndex             int
+	QuestionCount             int
+	Header                    string
+	Question                  string
+	Options                   []SlackPendingInputOption
+	MultiSelect               bool
+	ToolName                  string
+	Input                     map[string]any
+	Phase                     string
+	RepoName                  string
+	RememberPattern           string
+	HelpQuestion              string
+	GatePath                  string
+	Iteration                 int
+	WaitingSince              time.Time
+	GateSummary               string
+	GateQuestions             []string
+	GateBlockers              []SlackPendingInputBlocker
+	ReviewID                  string
+	ReviewMode                string
+	TargetPhase               string
+	ArtifactID                string
+	ArtifactPath              string
+	ArtifactFilename          string
+	ArtifactBytes             []byte
+	ArtifactSize              int64
+	ArtifactUnavailableReason string
+	RunNumber                 int
+	SourceRevision            string
+	CanIterate                bool
+	Roadmap                   bool
+	PhasePlan                 bool
+	RoadmapPhase              int
+	TotalRoadmapPhases        int
 }
 
 // SlackPendingInputSource returns the current human-answerable items for one

@@ -82,9 +82,9 @@ delivery failure, and lifecycle event it had to drop:
 - `action`: `posted` when the root card was first created, `edited` when an
   existing card was updated in place, for `slack.root_card_updated`.
 - `item_kind`: kind of the delivered or failed item (`progress`, `needs_input`,
-  `problems`, or `root_card`), for `slack.message_posted` and
+  `review_artifact`, `problems`, or `root_card`), for `slack.message_posted` and
   `slack.delivery_failed`.
-- `input_kind`: pending input kind (`question`, `permission`, `help`, or
+- `input_kind`: pending input kind (`question`, `permission`, `help`, `review`, or
   `gate`) for `slack.message_posted` events whose `item_kind` is
   `needs_input`.
 - `failure_class`: `credential` or `destination`, for

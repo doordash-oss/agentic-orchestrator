@@ -278,7 +278,6 @@ func TestNotifierDiscardsEventsOutsideThePhaseSet(t *testing.T) {
 		{Type: ports.RuntimeShutdownStarted},
 		{Type: ports.FeatureConfigChanged, FeatureID: "F-1"},
 		{Type: ports.NeedUserInputRequired, FeatureID: "F-1"},
-		{Type: ports.ReviewRequired, FeatureID: "F-1"},
 		{Type: ports.SessionOutput, FeatureID: "F-1"},
 	} {
 		harness.feed(ev)

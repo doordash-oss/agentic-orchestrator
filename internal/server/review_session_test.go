@@ -178,6 +178,60 @@ func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForRewindToIn
 	}
 }
 
+func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForMediumRewindToPlan(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	target := feature.PhasePlan
+	f := &feature.Feature{
+		ID:            "feat-medium-rewind-plan-description-review",
+		Name:          "Medium rewind plan description review",
+		Status:        feature.StatusDesignNeedsReview,
+		CurrentPhase:  feature.PhaseImplement,
+		ActiveRun:     1,
+		RunCount:      1,
+		Pipeline:      feature.PipelineMedium,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Artifacts:     map[string]string{},
+	}
+	runDir := store.RunDir(f.ID, 1)
+	researchPath := filepath.Join(runDir, feature.PhaseResearch.DirName(), "research.md")
+	if err := os.MkdirAll(filepath.Dir(researchPath), 0o755); err != nil {
+		t.Fatalf("mkdir research artifact dir: %v", err)
+	}
+	if err := os.WriteFile(researchPath, []byte("stale research\n"), 0o644); err != nil {
+		t.Fatalf("write research artifact: %v", err)
+	}
+	f.Artifacts[feature.PhaseResearch.DirName()] = researchPath
+	f.SetRun(&feature.Run{
+		RunNumber:          1,
+		PendingReviewPhase: &target,
+		IsRewind:           true,
+		Artifacts:          f.Artifacts,
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
+	descPath := filepath.Join(store.BaseDir, f.ID, "description-review.md")
+	if err := os.WriteFile(descPath, []byte("edited medium description\n"), 0o644); err != nil {
+		t.Fatalf("write description-review.md: %v", err)
+	}
+	service := newReviewSessionService(store, nil)
+
+	resp, err := service.Create(f.ID)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if resp.ReviewMode != reviewModeRewind || resp.TargetPhase != feature.PhasePlan.DirName() {
+		t.Fatalf("review target = mode %q phase %q, want rewind plan", resp.ReviewMode, resp.TargetPhase)
+	}
+	if resp.ArtifactID != descriptionReviewArtifact {
+		t.Fatalf("ArtifactID = %q, want %q", resp.ArtifactID, descriptionReviewArtifact)
+	}
+	if resp.Text != "edited medium description\n" {
+		t.Fatalf("Text = %q, want feature-root description review content", resp.Text)
+	}
+}
+
 func TestReviewSessionServiceCreateSuppressesIterateForApprovedPlanAttempt(t *testing.T) {
 	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	if err := agent.WritePlanAttemptMeta(filepath.Dir(planPath), agent.PlanAttemptMeta{

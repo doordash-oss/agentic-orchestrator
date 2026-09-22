@@ -385,7 +385,8 @@ func handledEvent(ev ports.Event) bool {
 		ports.SetupFailed,
 		ports.FeatureInterrupted,
 		ports.FeatureRewound,
-		ports.NeedUserInputRequired:
+		ports.NeedUserInputRequired,
+		ports.ReviewRequired:
 		return true
 	case ports.RelationshipIntegrationChanged:
 		return ev.CanonicalError != nil
@@ -398,7 +399,7 @@ func eventItemKind(ev ports.Event) itemKind {
 	switch ev.Type {
 	case ports.FeatureFailed, ports.SetupFailed:
 		return kindProblems
-	case ports.NeedUserInputRequired:
+	case ports.NeedUserInputRequired, ports.ReviewRequired:
 		return kindNeedsInput
 	case ports.PublishCompleted, ports.RelationshipIntegrationChanged:
 		if ev.CanonicalError != nil || ev.Error != nil {
@@ -434,6 +435,8 @@ func eventTypeName(t ports.EventType) string {
 		return "feature.interrupted"
 	case ports.FeatureRewound:
 		return "feature.rewound"
+	case ports.ReviewRequired:
+		return "review.required"
 	case ports.RelationshipIntegrationChanged:
 		return "relationship.integration_changed"
 	default:
@@ -532,6 +535,7 @@ func (n *Notifier) processItem(item queueItem) {
 	work := n.reconcilePending(settings, owner, eventFeature, record)
 	if item.recheckOnly ||
 		item.event.Type == ports.NeedUserInputRequired ||
+		item.event.Type == ports.ReviewRequired ||
 		item.event.Type == ports.SessionOutput {
 		n.dispatchWork(item, work)
 		return
@@ -583,6 +587,11 @@ func (n *Notifier) dispatchWork(item queueItem, work []workItem) {
 				kind:        kindNeedsInput,
 				event:       item.event,
 				reservation: n.queue.reserveProtected(item.event),
+			}
+			if item.event.Type == ports.FeatureRewound && len(remainingWork) > 0 {
+				n.dispatchDeliveryGroup(item, remainingWork)
+				n.dispatchDeliveryGroup(protectedItem, needsInputWork)
+				return
 			}
 			n.dispatchDeliveryGroup(protectedItem, needsInputWork)
 			if len(remainingWork) == 0 {
@@ -681,6 +690,12 @@ func (n *Notifier) reconcilePending(
 			GatePath:        input.GatePath,
 			Iteration:       input.Iteration,
 			WaitingSince:    input.WaitingSince.UTC(),
+			ReviewID:        scrub(settings.Token, input.ReviewID),
+			ReviewMode:      scrub(settings.Token, input.ReviewMode),
+			TargetPhase:     scrub(settings.Token, input.TargetPhase),
+			ArtifactID:      scrub(settings.Token, input.ArtifactID),
+			RunNumber:       input.RunNumber,
+			SourceRevision:  scrub(settings.Token, input.SourceRevision),
 		})
 		existing[identity] = len(record.Pending) - 1
 		changed = true
@@ -763,6 +778,10 @@ func (n *Notifier) reconcilePending(
 					reply: replyPayload{
 						kind: kindNeedsInput, fallback: fallback, blocks: blocks,
 						inputKind: tracked.kind, identity: tracked.identity, tag: tracked.tag,
+						review: reviewDeliveryFor(
+							input,
+							sourceFeatures[tracked.sourceFeatureID],
+						),
 					},
 				})
 				postedAny = true
@@ -782,6 +801,13 @@ func (n *Notifier) reconcilePending(
 		}
 	}
 	return work
+}
+
+func reviewDeliveryFor(input ports.SlackPendingInput, source *feature.Feature) *reviewDelivery {
+	if input.Kind != ports.SlackPendingReview {
+		return nil
+	}
+	return &reviewDelivery{input: input, source: source}
 }
 
 func (n *Notifier) waitingLine(record *featureRecord, repliesEnabled bool) string {
@@ -1035,21 +1061,25 @@ func (n *Notifier) reportWriteFailure(
 		if n.reporter != nil && failure.canonical != nil {
 			n.reporter.ReportSlackDeliveryFailure(at, credential.generation, *failure.canonical)
 		}
-	} else {
+	} else if !item.suppressDestinationFailure {
 		n.recordDestinationFailure(item, at, credential.token, failure)
+	}
+	data := map[string]any{
+		"destination_kind": item.kind,
+		"item_kind":        itemKind,
+		"failure_class":    string(failure.class),
+		"slack_error":      failure.slackError,
+		"error_code":       string(failure.errorCode),
+		"attempts":         attempts,
+	}
+	if itemKind == "review_artifact" && item.reply.tag != "" {
+		data["tag"] = item.reply.tag
 	}
 	n.reportDrop(observe.Event{
 		Timestamp: at,
 		EventType: "slack.delivery_failed",
 		FeatureID: item.featureID,
-		Data: map[string]any{
-			"destination_kind": item.kind,
-			"item_kind":        itemKind,
-			"failure_class":    string(failure.class),
-			"slack_error":      failure.slackError,
-			"error_code":       string(failure.errorCode),
-			"attempts":         attempts,
-		},
+		Data:      data,
 	})
 }
 
@@ -1089,6 +1119,9 @@ func (n *Notifier) reportWriteSuccess(item workItem, credentialGeneration uint64
 	at := n.clock.Now()
 	if n.reporter != nil {
 		n.reporter.ReportSlackDeliverySuccess(at, credentialGeneration)
+	}
+	if item.suppressDestinationFailure {
+		return
 	}
 	if item.featureID == "" || item.destinationKey == "" {
 		return

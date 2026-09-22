@@ -49,9 +49,16 @@ type pendingInputRecord struct {
 	GatePath        string            `yaml:"gate_path,omitempty"`
 	Iteration       int               `yaml:"iteration,omitempty"`
 	WaitingSince    time.Time         `yaml:"waiting_since,omitempty"`
+	ReviewID        string            `yaml:"review_id,omitempty"`
+	ReviewMode      string            `yaml:"review_mode,omitempty"`
+	TargetPhase     string            `yaml:"target_phase,omitempty"`
+	ArtifactID      string            `yaml:"artifact_id,omitempty"`
+	RunNumber       int               `yaml:"run_number,omitempty"`
+	SourceRevision  string            `yaml:"source_revision,omitempty"`
 	Tag             string            `yaml:"tag,omitempty"`
 	PostedAt        time.Time         `yaml:"posted_at,omitempty"`
 	MessageTS       map[string]string `yaml:"message_timestamps,omitempty"`
+	FileIDs         map[string]string `yaml:"file_ids,omitempty"`
 }
 
 // destinationRecord is one resolved destination the integration reached at

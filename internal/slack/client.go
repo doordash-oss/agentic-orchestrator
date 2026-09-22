@@ -15,6 +15,7 @@
 package slack
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -31,9 +32,10 @@ import (
 )
 
 const (
-	defaultAPIBase = "https://slack.com/api/"
-	defaultTimeout = 10 * time.Second
-	userAgent      = "Agentico/1 Slack"
+	defaultAPIBase       = "https://slack.com/api/"
+	defaultTimeout       = 10 * time.Second
+	defaultUploadTimeout = 60 * time.Second
+	userAgent            = "Agentico/1 Slack"
 
 	// EnvSlackAPIBase overrides the Slack Web API base URL.
 	EnvSlackAPIBase = "AGENTICO_SLACK_API_BASE"
@@ -117,9 +119,11 @@ type ConversationsPage struct {
 type ClientOption func(*clientConfig)
 
 type clientConfig struct {
-	baseURL    string
-	timeout    time.Duration
-	httpClient *http.Client
+	baseURL          string
+	timeout          time.Duration
+	uploadTimeout    time.Duration
+	uploadTimeoutSet bool
+	httpClient       *http.Client
 }
 
 // WithBaseURL overrides the Slack Web API base URL.
@@ -136,6 +140,14 @@ func WithTimeout(timeout time.Duration) ClientOption {
 	}
 }
 
+// WithUploadTimeout overrides the raw byte upload timeout.
+func WithUploadTimeout(timeout time.Duration) ClientOption {
+	return func(cfg *clientConfig) {
+		cfg.uploadTimeout = timeout
+		cfg.uploadTimeoutSet = true
+	}
+}
+
 // WithHTTPClient overrides the HTTP client while retaining request timeouts.
 func WithHTTPClient(client *http.Client) ClientOption {
 	return func(cfg *clientConfig) {
@@ -145,10 +157,11 @@ func WithHTTPClient(client *http.Client) ClientOption {
 
 // Client is a token-bound Slack Web API client.
 type Client struct {
-	token      string
-	baseURL    *url.URL
-	timeout    time.Duration
-	httpClient *http.Client
+	token         string
+	baseURL       *url.URL
+	timeout       time.Duration
+	uploadTimeout time.Duration
+	httpClient    *http.Client
 }
 
 // NewClient constructs a client without making a network request.
@@ -158,15 +171,22 @@ func NewClient(token string, opts ...ClientOption) (*Client, error) {
 		baseURL = defaultAPIBase
 	}
 	cfg := clientConfig{
-		baseURL:    baseURL,
-		timeout:    defaultTimeout,
-		httpClient: &http.Client{},
+		baseURL:       baseURL,
+		timeout:       defaultTimeout,
+		uploadTimeout: defaultUploadTimeout,
+		httpClient:    &http.Client{},
 	}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
 	if cfg.timeout <= 0 {
 		return nil, errors.New("Slack request timeout must be positive")
+	}
+	if cfg.uploadTimeout <= 0 {
+		return nil, errors.New("Slack upload timeout must be positive")
+	}
+	if !cfg.uploadTimeoutSet && cfg.uploadTimeout <= cfg.timeout {
+		cfg.uploadTimeout = 2 * cfg.timeout
 	}
 	if cfg.httpClient == nil {
 		return nil, errors.New("Slack HTTP client must not be nil")
@@ -179,10 +199,11 @@ func NewClient(token string, opts ...ClientOption) (*Client, error) {
 		base.Path += "/"
 	}
 	return &Client{
-		token:      token,
-		baseURL:    base,
-		timeout:    cfg.timeout,
-		httpClient: cfg.httpClient,
+		token:         token,
+		baseURL:       base,
+		timeout:       cfg.timeout,
+		uploadTimeout: cfg.uploadTimeout,
+		httpClient:    cfg.httpClient,
 	}, nil
 }
 
@@ -387,6 +408,132 @@ type PostMessageResult struct {
 	Channel string
 }
 
+// UploadFileInput describes a file uploaded and shared into a thread.
+type UploadFileInput struct {
+	Filename  string
+	Title     string
+	Data      []byte
+	ChannelID string
+	ThreadTS  string
+}
+
+// UploadFileResult identifies the uploaded file and its share message.
+type UploadFileResult struct {
+	FileID  string
+	ShareTS string
+}
+
+// UploadURLResult identifies the raw upload target allocated by Slack.
+type UploadURLResult struct {
+	UploadURL string
+	FileID    string
+}
+
+// CompleteUploadInput binds one uploaded file to a channel thread.
+type CompleteUploadInput struct {
+	FileID    string
+	Title     string
+	ChannelID string
+	ThreadTS  string
+}
+
+// UploadFileToThread uploads bytes through Slack's external upload pair and
+// shares the completed file into one channel thread.
+func (c *Client) UploadFileToThread(
+	ctx context.Context,
+	input UploadFileInput,
+) (UploadFileResult, error) {
+	target, err := c.RequestUploadURL(ctx, input.Filename, len(input.Data))
+	if err != nil {
+		return UploadFileResult{}, err
+	}
+	if err := c.UploadBytes(ctx, target.UploadURL, input.Data); err != nil {
+		return UploadFileResult{}, err
+	}
+	return c.CompleteUploadToThread(ctx, CompleteUploadInput{
+		FileID:    target.FileID,
+		Title:     input.Title,
+		ChannelID: input.ChannelID,
+		ThreadTS:  input.ThreadTS,
+	})
+}
+
+// RequestUploadURL allocates one external upload target.
+func (c *Client) RequestUploadURL(
+	ctx context.Context,
+	filename string,
+	length int,
+) (UploadURLResult, error) {
+	var uploadURLResponse struct {
+		OK        bool   `json:"ok"`
+		Error     string `json:"error"`
+		Needed    string `json:"needed"`
+		UploadURL string `json:"upload_url"`
+		FileID    string `json:"file_id"`
+	}
+	if _, err := c.call(ctx, "files.getUploadURLExternal", url.Values{
+		"filename": {scrub(c.token, filename)},
+		"length":   {strconv.Itoa(length)},
+	}, &uploadURLResponse); err != nil {
+		return UploadURLResult{}, err
+	}
+	if !uploadURLResponse.OK {
+		return UploadURLResult{}, c.apiError(uploadURLResponse.Error, uploadURLResponse.Needed)
+	}
+	return UploadURLResult{
+		UploadURL: uploadURLResponse.UploadURL,
+		FileID:    uploadURLResponse.FileID,
+	}, nil
+}
+
+// UploadBytes posts the raw file body to Slack's allocated upload URL.
+func (c *Client) UploadBytes(ctx context.Context, uploadURL string, data []byte) error {
+	return c.uploadBytes(ctx, uploadURL, data)
+}
+
+// CompleteUploadToThread shares an uploaded file into one channel thread.
+func (c *Client) CompleteUploadToThread(
+	ctx context.Context,
+	input CompleteUploadInput,
+) (UploadFileResult, error) {
+	files, err := json.Marshal([]map[string]string{{
+		"id":    input.FileID,
+		"title": scrub(c.token, input.Title),
+	}})
+	if err != nil {
+		return UploadFileResult{}, c.transportError(0, 0, err)
+	}
+	var completionResponse struct {
+		OK     bool      `json:"ok"`
+		Error  string    `json:"error"`
+		Needed string    `json:"needed"`
+		File   apiFile   `json:"file"`
+		Files  []apiFile `json:"files"`
+	}
+	if _, err := c.call(ctx, "files.completeUploadExternal", url.Values{
+		"files":      {string(files)},
+		"channel_id": {input.ChannelID},
+		"thread_ts":  {input.ThreadTS},
+	}, &completionResponse); err != nil {
+		return UploadFileResult{}, err
+	}
+	if !completionResponse.OK {
+		return UploadFileResult{}, c.apiError(completionResponse.Error, completionResponse.Needed)
+	}
+	completedFiles := completionResponse.Files
+	if completionResponse.File.ID != "" {
+		completedFiles = append(completedFiles, completionResponse.File)
+	}
+	return UploadFileResult{
+		FileID: input.FileID,
+		ShareTS: fileShareTimestamp(
+			completedFiles,
+			input.FileID,
+			input.ChannelID,
+		),
+	}, nil
+}
+
 // PostMessageRich posts a Block Kit message, optionally as a thread reply,
 // and returns the message timestamp Slack echoes back.
 func (c *Client) PostMessageRich(ctx context.Context, input PostMessageInput) (PostMessageResult, error) {
@@ -485,6 +632,34 @@ type apiConversation struct {
 	IsArchived bool   `json:"is_archived"`
 }
 
+type apiFile struct {
+	ID     string `json:"id"`
+	Shares struct {
+		Public  map[string][]apiFileShare `json:"public"`
+		Private map[string][]apiFileShare `json:"private"`
+	} `json:"shares"`
+}
+
+type apiFileShare struct {
+	TS string `json:"ts"`
+}
+
+func fileShareTimestamp(files []apiFile, fileID, channelID string) string {
+	for _, file := range files {
+		if file.ID != "" && file.ID != fileID {
+			continue
+		}
+		for _, shares := range []map[string][]apiFileShare{file.Shares.Public, file.Shares.Private} {
+			for _, share := range shares[channelID] {
+				if timestamp := strings.TrimSpace(share.TS); timestamp != "" {
+					return timestamp
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func (c apiConversation) conversation() Conversation {
 	return Conversation{
 		ID:         c.ID,
@@ -544,6 +719,34 @@ func (c *Client) call(
 		return nil, c.transportError(resp.StatusCode, 0, fmt.Errorf("decoding JSON response: %v", err))
 	}
 	return parseScopes(resp.Header.Get("X-OAuth-Scopes")), nil
+}
+
+func (c *Client) uploadBytes(ctx context.Context, uploadURL string, data []byte) error {
+	requestCtx, cancel := context.WithTimeout(ctx, c.uploadTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(
+		requestCtx,
+		http.MethodPost,
+		uploadURL,
+		bytes.NewReader(data),
+	)
+	if err != nil {
+		return c.transportError(0, 0, err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set("User-Agent", userAgent)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return c.transportError(0, 0, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 32<<10))
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return c.transportError(resp.StatusCode, retryAfter(resp.Header), nil)
+	}
+	return nil
 }
 
 func (c *Client) transportError(status int, retry time.Duration, err error) *TransportError {

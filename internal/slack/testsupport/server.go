@@ -16,7 +16,9 @@
 package testsupport
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +28,8 @@ import (
 	"testing"
 	"time"
 )
+
+const rawUploadMethod = "upload"
 
 // Response is one queued Slack method response.
 type Response struct {
@@ -39,11 +43,15 @@ type Response struct {
 
 // Request is a credential-scrubbed record of one received request.
 type Request struct {
-	Method        string
-	Path          string
-	BearerPresent bool
-	Fields        map[string]any
-	ReturnedTS    string
+	Method         string
+	Path           string
+	BearerPresent  bool
+	ContentType    string
+	ContentLength  int64
+	Digest         string
+	Fields         map[string]any
+	ReturnedTS     string
+	ReturnedFileID string
 }
 
 // Server serves per-method scripted responses and records requests.
@@ -53,6 +61,7 @@ type Server struct {
 	mu       sync.Mutex
 	scripts  map[string][]Response
 	requests []Request
+	nextFile int64
 	// defaultResponder answers unscripted calls (empty or missing method
 	// queue) so lifecycle tests need not pre-count posts. Nil keeps the
 	// unknown_method fallback.
@@ -130,11 +139,21 @@ func (s *Server) AllRequests() []Request {
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	method := slackMethod(r.URL.Path)
+	contentType := r.Header.Get("Content-Type")
+	if isRawUpload(method, contentType) {
+		method = rawUploadMethod
+	}
 	request := Request{
 		Method:        r.Method,
 		Path:          r.URL.Path,
 		BearerPresent: strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "),
-		Fields:        decodeFields(r),
+		ContentType:   contentType,
+	}
+	if method == rawUploadMethod {
+		request.ContentLength, request.Digest = rawMetadata(r.Body)
+		request.Fields = map[string]any{}
+	} else {
+		request.Fields = decodeFields(r)
 	}
 
 	s.mu.Lock()
@@ -144,6 +163,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(queue) > 0 {
 		response = queue[0]
 		s.scripts[method] = queue[1:]
+	} else if uploadResponse, ok := s.defaultUploadResponse(method, request); ok {
+		response = uploadResponse
 	} else if s.defaultResponder != nil {
 		response = s.defaultResponder(method, cloneRequest(request))
 	} else {
@@ -152,10 +173,9 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			Body:   map[string]any{"ok": false, "error": "unknown_method"},
 		}
 	}
-	if body, ok := response.Body.(map[string]any); ok {
-		request.ReturnedTS, _ = body["ts"].(string)
-		s.requests[len(s.requests)-1].ReturnedTS = request.ReturnedTS
-	}
+	request.ReturnedTS, request.ReturnedFileID = returnedMetadata(response.Body)
+	s.requests[len(s.requests)-1].ReturnedTS = request.ReturnedTS
+	s.requests[len(s.requests)-1].ReturnedFileID = request.ReturnedFileID
 	s.mu.Unlock()
 
 	if response.Started != nil {
@@ -204,6 +224,80 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func isRawUpload(method, contentType string) bool {
+	if method == rawUploadMethod {
+		return true
+	}
+	return contentType != "" &&
+		!strings.HasPrefix(contentType, "application/json") &&
+		!strings.HasPrefix(contentType, "application/x-www-form-urlencoded")
+}
+
+func (s *Server) defaultUploadResponse(method string, request Request) (Response, bool) {
+	switch method {
+	case "files.getUploadURLExternal":
+		s.nextFile++
+		fileID := "F" + fmt.Sprintf("%08d", s.nextFile)
+		return Response{Body: map[string]any{
+			"ok":         true,
+			"upload_url": s.server.URL + "/upload/" + fileID,
+			"file_id":    fileID,
+		}}, true
+	case rawUploadMethod:
+		return Response{Body: "OK"}, true
+	case "files.completeUploadExternal":
+		fileID := completionFileID(request.Fields["files"])
+		return Response{Body: map[string]any{
+			"ok": true,
+			"files": []any{map[string]any{
+				"id": fileID,
+			}},
+		}}, true
+	default:
+		return Response{}, false
+	}
+}
+
+func rawMetadata(body io.Reader) (int64, string) {
+	digest := sha256.New()
+	length, _ := io.Copy(digest, body)
+	return length, fmt.Sprintf("%x", digest.Sum(nil))
+}
+
+func completionFileID(value any) string {
+	raw, _ := value.(string)
+	var files []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal([]byte(raw), &files) == nil && len(files) > 0 {
+		return files[0].ID
+	}
+	return ""
+}
+
+func returnedMetadata(body any) (string, string) {
+	fields, ok := body.(map[string]any)
+	if !ok {
+		return "", ""
+	}
+	timestamp, _ := fields["ts"].(string)
+	if fileID, ok := fields["file_id"].(string); ok {
+		return timestamp, fileID
+	}
+	if file, ok := fields["file"].(map[string]any); ok {
+		fileID, _ := file["id"].(string)
+		return timestamp, fileID
+	}
+	files, _ := fields["files"].([]any)
+	if len(files) > 0 {
+		if file, ok := files[0].(map[string]any); ok {
+			fileID, _ := file["id"].(string)
+			return timestamp, fileID
+		}
+	}
+	return timestamp, ""
+}
+
 func decodeFields(r *http.Request) map[string]any {
 	contentType := r.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "application/json") {
@@ -230,6 +324,9 @@ func formFields(values url.Values) map[string]any {
 }
 
 func slackMethod(path string) string {
+	if strings.HasPrefix(path, "/upload/") {
+		return rawUploadMethod
+	}
 	return strings.TrimPrefix(path, "/api/")
 }
 

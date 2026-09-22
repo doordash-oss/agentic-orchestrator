@@ -579,9 +579,10 @@ func parseScopes(header string) []string {
 }
 
 var (
-	slackTokenPattern    = regexp.MustCompile(`(?i)\bxox[a-z]-[A-Za-z0-9-]{8,}\b`)
-	authHeaderPattern    = regexp.MustCompile(`(?i)(authorization\s*:\s*)(?:basic|bearer)?\s*[^\s,;]+`)
-	urlCredentialPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
+	slackTokenPattern       = regexp.MustCompile(`(?i)\bxox[a-z]-[A-Za-z0-9-]{8,}\b`)
+	quotedAuthHeaderPattern = regexp.MustCompile(`(?i)(["']?authorization["']?\s*[:=]\s*["'])[^"'\r\n]*(["'])`)
+	authHeaderPattern       = regexp.MustCompile(`(?i)(\bauthorization\s*[:=]\s*)[^\r\n,;}\]]+`)
+	urlCredentialPattern    = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
 )
 
 func scrub(token, text string) string {
@@ -589,6 +590,7 @@ func scrub(token, text string) string {
 		text = strings.ReplaceAll(text, token, "[REDACTED]")
 	}
 	text = slackTokenPattern.ReplaceAllString(text, "[REDACTED]")
+	text = quotedAuthHeaderPattern.ReplaceAllString(text, `${1}[REDACTED]${2}`)
 	text = authHeaderPattern.ReplaceAllString(text, `${1}[REDACTED]`)
 	return urlCredentialPattern.ReplaceAllString(text, `${1}[REDACTED]@`)
 }

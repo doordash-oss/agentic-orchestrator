@@ -134,15 +134,13 @@ func renderProblem(token string, problem errcat.Error, f *feature.Feature) ([]Bl
 	if problem.Diagnostics != "" {
 		const note = "\n_Diagnostics were shortened. Open Agentico for the full text._"
 		diagnostics := strings.ReplaceAll(problem.Diagnostics, "```", "'''")
-		escaped := safeText(diagnostics, sectionTextLimit)
-		bodyBudget := sectionTextLimit - len("```\n\n```") - len(note)
-		cut := len(escaped) > bodyBudget
-		if cut {
-			escaped = truncateEscapedText(diagnostics, bodyBudget)
-		}
+		escaped := safeText(diagnostics, 0)
 		text := "```\n" + escaped + "\n```"
+		cut := len(text) > sectionTextLimit
 		if cut {
-			text += note
+			bodyBudget := sectionTextLimit - len("```\n\n```") - len(note)
+			escaped = truncateEscapedText(diagnostics, bodyBudget)
+			text = "```\n" + escaped + "\n```" + note
 		}
 		blocks = append(blocks, sectionTextBlockFor(text))
 	}
@@ -150,8 +148,38 @@ func renderProblem(token string, problem errcat.Error, f *feature.Feature) ([]Bl
 		Type: textTypeMrkdwn,
 		Text: safeText(fmt.Sprintf("Code: %s · Class: %s", problem.Code, classLabel), contextTextLimit),
 	}}))
-	fallback := safePlain(fmt.Sprintf("%s %s — %s — %s", emoji, title, problem.Summary, problem.Code), fallbackTextLimit)
+	fallback := problemFallback(emoji, title, classLabel, problem)
 	return blocks, fallback, string(problem.Code)
+}
+
+func problemFallback(emoji, title, classLabel string, problem errcat.Error) string {
+	parts := []string{
+		emoji + " " + safePlain(title, 35),
+		"Summary: " + safePlain(problem.Summary, 20),
+	}
+	if problem.Remediation != nil {
+		recovery := ""
+		if len(problem.Remediation.Actions) > 0 {
+			recovery = "Actions: " + strings.Join(problem.Remediation.Actions, ", ") + ". "
+		}
+		recovery += problem.Remediation.Hint
+		if recovery = strings.TrimSpace(recovery); recovery != "" {
+			parts = append(parts, "Next: "+safePlain(recovery, 50))
+		}
+	}
+	if details := problemDetails(problem.Context); details != "" {
+		parts = append(parts, "Details: "+safePlain(details, 35))
+	}
+	parts = append(parts, "Code: "+safePlain(
+		fmt.Sprintf("%s (%s)", problem.Code, classLabel),
+		50,
+	))
+	if problem.Diagnostics != "" {
+		parts = append(parts,
+			"Diagnostics: "+safePlain(problem.Diagnostics, 15)+". Full text in Agentico.",
+		)
+	}
+	return safePlain(strings.Join(parts, " | "), fallbackTextLimit)
 }
 
 func redactedError(token string, problem errcat.Error) errcat.Error {

@@ -16,16 +16,19 @@ package slack
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/slack/testsupport"
 )
 
 func TestRenderProblemCarriesCanonicalShapeAndBoundsDiagnostics(t *testing.T) {
@@ -114,22 +117,40 @@ func TestRenderProblemNeedsActionChildAndShortDiagnostics(t *testing.T) {
 
 func TestRenderProblemRedactsBeforeDiagnosticsTruncation(t *testing.T) {
 	secret := "xoxb-TRUNCATION-SECRET-123456789"
-	for _, diagnostics := range []string{
-		strings.Repeat("a", sectionTextLimit-40) + secret,
-		strings.Repeat("b", sectionTextLimit-8) + secret + " tail",
-	} {
-		problem := errcat.New(errcat.SessionCrashed, errcat.WithDiagnostics(diagnostics))
-		blocks, fallback, _ := renderProblem(secret, problem, &feature.Feature{})
-		encoded, err := json.Marshal(blocks)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(encoded), secret) || strings.Contains(fallback, secret) {
-			t.Fatalf("renderProblem() leaked secret around truncation point")
-		}
-		if strings.Contains(string(encoded), "TRUNCATION") {
-			t.Fatalf("renderProblem() left a recognizable secret fragment around truncation point")
-		}
+	const note = "\n_Diagnostics were shortened. Open Agentico for the full text._"
+	bodyBudget := sectionTextLimit - len("```\n\n```") - len(note)
+	tests := []struct {
+		name        string
+		secretStart int
+	}{
+		{name: "beyond final content cut", secretStart: bodyBudget + 8},
+		{name: "straddles final content cut", secretStart: bodyBudget - len(secret)/2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			diagnostics := strings.Repeat("a", tt.secretStart) + secret + strings.Repeat("z", 160)
+			secretEnd := tt.secretStart + len(secret)
+			if tt.name == "straddles final content cut" &&
+				!(tt.secretStart < bodyBudget && secretEnd > bodyBudget) {
+				t.Fatalf("secret range [%d,%d) does not straddle diagnostics budget %d",
+					tt.secretStart, secretEnd, bodyBudget)
+			}
+			problem := errcat.New(errcat.SessionCrashed, errcat.WithDiagnostics(diagnostics))
+			blocks, fallback, _ := renderProblem(secret, problem, &feature.Feature{})
+			encoded, err := json.Marshal(blocks)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(encoded), secret) || strings.Contains(fallback, secret) {
+				t.Fatalf("renderProblem() leaked secret around truncation point")
+			}
+			if strings.Contains(string(encoded), "TRUNCATION") {
+				t.Fatalf("renderProblem() left a recognizable secret fragment around truncation point")
+			}
+			if !strings.Contains(string(encoded), "Diagnostics were shortened") {
+				t.Fatalf("renderProblem() did not exercise the final diagnostics cut")
+			}
+		})
 	}
 }
 
@@ -354,12 +375,44 @@ func TestNotifierInterruptedAndRewoundUseProgressThread(t *testing.T) {
 		f.CurrentRoadmapPhase = 2
 		f.TotalRoadmapPhases = 3
 	})
-	harness.start(0)
+	first := harness.start(0)
 	harness.feed(ports.Event{Type: ports.FeatureInterrupted, FeatureID: "F-1"})
 	harness.feed(ports.Event{Type: ports.FeatureRewound, FeatureID: "F-1", Phase: feature.PhasePlan})
 	waitFor(t, 10*time.Second, func() bool {
 		return len(postsTo(harness.server, "C-ENG")) == 3
 	})
+	postRewind := []ports.Event{
+		startedEvent("F-1", feature.PhaseResearch),
+		completedEvent("F-1", feature.PhaseResearch),
+		startedEvent("F-1", feature.PhaseDesign),
+		completedEvent("F-1", feature.PhaseDesign),
+		startedEvent("F-1", feature.PhaseKnowledgeBase),
+		completedEvent("F-1", feature.PhaseKnowledgeBase),
+		startedEvent("F-1", feature.PhaseInquire),
+		completedEvent("F-1", feature.PhaseInquire),
+		startedEvent("F-1", feature.PhasePlan),
+		completedEvent("F-1", feature.PhasePlan),
+	}
+	for i, ev := range postRewind[:5] {
+		harness.feed(ev)
+		want := 4 + i
+		waitFor(t, 10*time.Second, func() bool {
+			return len(postsTo(harness.server, "C-ENG")) == want
+		})
+	}
+	first.Stop(context.Background())
+	second := harness.newNotifier(0)
+	second.Start()
+	t.Cleanup(func() { second.Stop(context.Background()) })
+	harness.notifier = second
+	for i, ev := range postRewind[5:] {
+		harness.feed(ev)
+		want := 9 + i
+		waitFor(t, 10*time.Second, func() bool {
+			return len(postsTo(harness.server, "C-ENG")) == want
+		})
+	}
+
 	posts := postsTo(harness.server, "C-ENG")
 	if !strings.Contains(fieldString(posts[1], "text"), "Interrupted") {
 		t.Errorf("interrupted line = %q", fieldString(posts[1], "text"))
@@ -369,12 +422,132 @@ func TestNotifierInterruptedAndRewoundUseProgressThread(t *testing.T) {
 			t.Errorf("rewound line = %q; missing %q", fieldString(posts[2], "text"), want)
 		}
 	}
-	rootTS := fieldString(posts[0], "ts")
-	_ = rootTS
+	destination := recordDestinations(t, harness.stateDir, "F-1")[destinationKey("channel", "C-ENG")]
+	rootTS := destination.RootTS
+	if rootTS == "" {
+		t.Fatal("persisted destination has no root timestamp")
+	}
+	if got := len(posts); got != 13 {
+		t.Fatalf("posts = %d; want one root, interruption, rewind, and ten later lifecycle replies", got)
+	}
 	for _, post := range posts[1:] {
+		if got := fieldString(post, "thread_ts"); got != rootTS {
+			t.Errorf("reply thread_ts = %q; want persisted root %q", got, rootTS)
+		}
 		if fieldString(post, "reply_broadcast") != "" {
 			t.Errorf("Progress reply broadcast unexpectedly set: %#v", post.Fields)
 		}
+	}
+	if got := len(destination.Ledger); got != 13 {
+		t.Fatalf("persisted ledger entries = %d; want all thirteen posts across notifier reconstruction", got)
+	}
+}
+
+func TestNotifierChildInterruptionUsesParentThread(t *testing.T) {
+	harness := newNotifierHarness(t, defaultTestSettings(
+		testToken,
+		ports.SlackRecipient{Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng"},
+	))
+	harness.seedFeature("F-1", func(f *feature.Feature) { withRoadmap(f) })
+	harness.seedFeature("F-2", func(f *feature.Feature) {
+		f.Status = feature.StatusInterrupted
+		f.Parent = &feature.ChildRelationship{ParentID: "F-1", Kind: feature.ChildKindRefactor}
+	})
+	harness.start(0)
+	harness.feed(ports.Event{Type: ports.FeatureInterrupted, FeatureID: "F-2"})
+	waitFor(t, 10*time.Second, func() bool {
+		return len(postsTo(harness.server, "C-ENG")) == 2
+	})
+
+	posts := postsTo(harness.server, "C-ENG")
+	reply := posts[1]
+	for _, want := range []string{"Refactor:", "Interrupted"} {
+		if !strings.Contains(fieldString(reply, "text"), want) {
+			t.Errorf("child interruption = %q; missing %q", fieldString(reply, "text"), want)
+		}
+	}
+	parent := recordDestinations(t, harness.stateDir, "F-1")[destinationKey("channel", "C-ENG")]
+	if got := fieldString(reply, "thread_ts"); got != parent.RootTS {
+		t.Errorf("child interruption thread_ts = %q; want parent root %q", got, parent.RootTS)
+	}
+	if recordExists(harness.stateDir, "F-2") {
+		t.Fatal("child interruption created a child Slack record")
+	}
+}
+
+func TestNotifierLifecycleEdgesRespectProgressAndConfigurationGates(t *testing.T) {
+	t.Run("Progress off refreshes the card without thread replies", func(t *testing.T) {
+		settings := defaultTestSettings(
+			testToken,
+			ports.SlackRecipient{Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng"},
+		)
+		harness := newNotifierHarness(t, settings)
+		harness.seedFeature("F-1", func(f *feature.Feature) {
+			f.ActiveRun = 2
+			f.RunCount = 2
+		})
+		harness.start(0)
+		harness.feed(ports.Event{Type: ports.FeatureStarted, FeatureID: "F-1"})
+		waitFor(t, 10*time.Second, func() bool {
+			return len(postsTo(harness.server, "C-ENG")) == 1 &&
+				len(harness.server.Requests("chat.update")) >= 1
+		})
+		harness.settings.mutate(func(s *ports.SlackRuntimeSettings) {
+			s.Categories.Progress = false
+		})
+
+		modifyProblemsEvidenceFeature(t, harness, "F-1", func(f *feature.Feature) {
+			f.Status = feature.StatusInterrupted
+		})
+		updatesBefore := len(harness.server.Requests("chat.update"))
+		harness.feed(ports.Event{Type: ports.FeatureInterrupted, FeatureID: "F-1"})
+		waitForProblemsEvidenceUpdate(t, harness, updatesBefore, "*Status:* Interrupted")
+		if got := len(postsTo(harness.server, "C-ENG")); got != 1 {
+			t.Fatalf("Progress-off interruption posts = %d; want only the root card", got)
+		}
+
+		modifyProblemsEvidenceFeature(t, harness, "F-1", func(f *feature.Feature) {
+			f.Status = feature.StatusPlanning
+			f.CurrentPhase = feature.PhasePlan
+		})
+		updatesBefore = len(harness.server.Requests("chat.update"))
+		harness.feed(ports.Event{Type: ports.FeatureRewound, FeatureID: "F-1", Phase: feature.PhasePlan})
+		waitForProblemsEvidenceUpdate(t, harness, updatesBefore, "*Phase:* Plan", "*Status:* Planning")
+		if got := len(postsTo(harness.server, "C-ENG")); got != 1 {
+			t.Fatalf("Progress-off rewind posts = %d; want only the root card", got)
+		}
+	})
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ports.SlackRuntimeSettings)
+	}{
+		{name: "Slack disabled", mutate: func(s *ports.SlackRuntimeSettings) { s.Enabled = false }},
+		{name: "tokenless", mutate: func(s *ports.SlackRuntimeSettings) { s.Token = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			settings := defaultTestSettings(
+				testToken,
+				ports.SlackRecipient{Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng"},
+			)
+			tc.mutate(&settings)
+			harness := newNotifierHarness(t, settings)
+			harness.seedFeature("F-1", func(f *feature.Feature) {
+				f.Status = feature.StatusInterrupted
+				f.ActiveRun = 2
+				f.RunCount = 2
+			})
+			harness.start(0)
+			harness.feed(ports.Event{Type: ports.FeatureInterrupted, FeatureID: "F-1"})
+			harness.feed(ports.Event{Type: ports.FeatureRewound, FeatureID: "F-1", Phase: feature.PhasePlan})
+			time.Sleep(50 * time.Millisecond)
+			if got := len(harness.server.AllRequests()); got != 0 {
+				t.Fatalf("requests = %d; want zero", got)
+			}
+			if recordExists(harness.stateDir, "F-1") {
+				t.Fatal("unusable Slack configuration wrote a record")
+			}
+		})
 	}
 }
 
@@ -419,6 +592,29 @@ func TestCardStatusErrorPrecedence(t *testing.T) {
 	if got := cardStatus(f, child); got != "Code ready" {
 		t.Errorf("cardStatus(cleared child attention) = %q", got)
 	}
+
+	setupFailure := &errcat.FailureRecord{
+		Code: errcat.WorktreeSetupFailed,
+		Context: &errcat.RecordContext{SetupTask: &errcat.CodeSetupTask{
+			Key: "worktree:alpha", Kind: "worktree", Label: "Worktree: alpha",
+		}},
+	}
+	f.Run().Failure = setupFailure
+	f.Run().Setup = &feature.SetupState{Tasks: map[string]feature.SetupTask{
+		"worktree:alpha": {
+			Key: "worktree:alpha", Kind: feature.SetupTaskWorktree, Label: "Worktree: alpha",
+			Repo: "alpha", Status: feature.SetupStatusFailed, Error: setupFailure,
+		},
+	}}
+	if got := cardStatus(f, nil); got != "Failed: Worktree setup failed" {
+		t.Errorf("cardStatus(failed setup task) = %q", got)
+	}
+
+	f.Run().Setup = nil
+	f.Run().Failure = &errcat.FailureRecord{Code: errcat.RebaseAlreadyUpToDate}
+	if got := cardStatus(f, nil); got != "Code ready" {
+		t.Errorf("cardStatus(warning only) = %q", got)
+	}
 }
 
 func TestEventItemKindProtectsProblemsAndLifecycleEdges(t *testing.T) {
@@ -443,6 +639,129 @@ func TestEventItemKindProtectsProblemsAndLifecycleEdges(t *testing.T) {
 			}
 			if tt.want != kindProgress && !eventItemKind(tt.ev).protected() {
 				t.Errorf("eventItemKind(%s) is not protected", tt.name)
+			}
+		})
+	}
+}
+
+func TestNotifierProtectedProblemsAndLifecycleEdgesSurviveProgressOverflow(t *testing.T) {
+	problem := errcat.New(
+		errcat.SessionCrashed,
+		errcat.WithDiagnostics("provider exited while running alpha"),
+	)
+	tests := []struct {
+		name          string
+		event         ports.Event
+		wantText      string
+		wantItemKind  string
+		wantErrorCode string
+	}{
+		{
+			name: "Problems",
+			event: ports.Event{
+				Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &problem,
+			},
+			wantText:      "Session crashed",
+			wantItemKind:  "problems",
+			wantErrorCode: string(errcat.SessionCrashed),
+		},
+		{
+			name:         "interrupted",
+			event:        ports.Event{Type: ports.FeatureInterrupted, FeatureID: "F-1"},
+			wantText:     "Interrupted",
+			wantItemKind: "progress",
+		},
+		{
+			name:         "rewound",
+			event:        ports.Event{Type: ports.FeatureRewound, FeatureID: "F-1", Phase: feature.PhasePlan},
+			wantText:     "Rewound to Plan",
+			wantItemKind: "progress",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			harness := newNotifierHarness(t, defaultTestSettings(
+				testToken,
+				ports.SlackRecipient{Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng"},
+			))
+			harness.seedFeature("F-1", func(f *feature.Feature) {
+				f.Status = feature.StatusInterrupted
+				f.ActiveRun = 3
+				f.RunCount = 3
+				f.CurrentPhase = feature.PhasePlan
+				f.CurrentRoadmapPhase = 2
+				f.TotalRoadmapPhases = 3
+			})
+
+			inner, _ := defaultOKResponder()
+			updateEntered := make(chan struct{})
+			releaseUpdate := make(chan struct{})
+			var blockOnce sync.Once
+			var releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(releaseUpdate) }) })
+			harness.server.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+				if method == "chat.update" {
+					blockOnce.Do(func() {
+						close(updateEntered)
+						<-releaseUpdate
+					})
+				}
+				return inner(method, request)
+			})
+
+			notifier := harness.start(3)
+			harness.feed(ports.Event{Type: ports.FeatureStarted, FeatureID: "F-1"})
+			select {
+			case <-updateEntered:
+			case <-time.After(10 * time.Second):
+				t.Fatal("worker did not reach the held card update")
+			}
+
+			for _, phase := range []feature.Phase{
+				feature.PhaseResearch,
+				feature.PhaseDesign,
+				feature.PhaseInquire,
+			} {
+				harness.feed(startedEvent("F-1", phase))
+			}
+			waitFor(t, 10*time.Second, func() bool { return notifier.queue.len() == 3 })
+			harness.feed(tt.event)
+			waitFor(t, 10*time.Second, func() bool {
+				return len(harness.observer.ofKind("slack.event_dropped")) == 1
+			})
+			releaseOnce.Do(func() { close(releaseUpdate) })
+
+			waitFor(t, 10*time.Second, func() bool {
+				for _, post := range postsTo(harness.server, "C-ENG") {
+					if strings.Contains(fieldString(post, "text"), tt.wantText) {
+						return true
+					}
+				}
+				return false
+			})
+			waitFor(t, 10*time.Second, func() bool { return notifier.queue.len() == 0 })
+
+			dropped := harness.observer.ofKind("slack.event_dropped")
+			if dropped[0].Data["event_type"] != "phase.started" ||
+				dropped[0].Data["reason"] != "queue_overflow" {
+				t.Fatalf("drop event = %#v; want evicted phase.started Progress", dropped[0].Data)
+			}
+			for _, post := range postsTo(harness.server, "C-ENG") {
+				if strings.Contains(fieldString(post, "text"), "Research started") {
+					t.Fatal("evicted oldest Progress item was delivered")
+				}
+			}
+			posted := harness.observer.ofKind("slack.message_posted")
+			if len(posted) == 0 {
+				t.Fatal("missing slack.message_posted event")
+			}
+			last := posted[len(posted)-1]
+			if last.Data["item_kind"] != tt.wantItemKind {
+				t.Fatalf("last delivered item kind = %v; want %s", last.Data["item_kind"], tt.wantItemKind)
+			}
+			if tt.wantErrorCode != "" && last.Data["error_code"] != tt.wantErrorCode {
+				t.Fatalf("last delivered error code = %v; want %s",
+					last.Data["error_code"], tt.wantErrorCode)
 			}
 		})
 	}

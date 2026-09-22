@@ -158,8 +158,31 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	harness.feed(ports.Event{Type: ports.FeatureRewound, FeatureID: "F-1", Phase: feature.PhasePlan})
 	waitForProblemsEvidencePosts(t, harness, 6)
 	waitForProblemsEvidenceUpdateAll(t, harness, updatesBefore, "*Phase:* Plan", "*Status:* Planning")
-	harness.feed(startedEvent("F-1", feature.PhasePlan))
-	waitForProblemsEvidencePosts(t, harness, 7)
+	postRewind := []ports.Event{
+		startedEvent("F-1", feature.PhaseResearch),
+		completedEvent("F-1", feature.PhaseResearch),
+		startedEvent("F-1", feature.PhaseDesign),
+		completedEvent("F-1", feature.PhaseDesign),
+		startedEvent("F-1", feature.PhaseKnowledgeBase),
+		completedEvent("F-1", feature.PhaseKnowledgeBase),
+		startedEvent("F-1", feature.PhaseInquire),
+		completedEvent("F-1", feature.PhaseInquire),
+		startedEvent("F-1", feature.PhasePlan),
+		completedEvent("F-1", feature.PhasePlan),
+	}
+	for i, event := range postRewind[:5] {
+		harness.feed(event)
+		waitForProblemsEvidencePosts(t, harness, 7+i)
+	}
+	notifier.Stop(context.Background())
+	notifier = harness.newNotifier(0)
+	notifier.Start()
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+	harness.notifier = notifier
+	for i, event := range postRewind[5:] {
+		harness.feed(event)
+		waitForProblemsEvidencePosts(t, harness, 12+i)
+	}
 
 	attentionRecord := &errcat.FailureRecord{
 		Code: errcat.IntegrationMergeConflict,
@@ -187,7 +210,7 @@ func TestSlackProblemsEvidence(t *testing.T) {
 		ChildID:        "F-2",
 		CanonicalError: &attentionProblem,
 	})
-	waitForProblemsEvidencePosts(t, harness, 8)
+	waitForProblemsEvidencePosts(t, harness, 17)
 	waitForProblemsEvidenceUpdateAll(t, harness, updatesBefore, "Needs your action: Integration merge conflict")
 	if recordExists(harness.stateDir, "F-2") {
 		t.Fatal("refactor child received its own Slack record")
@@ -206,7 +229,7 @@ func TestSlackProblemsEvidence(t *testing.T) {
 		Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &warning,
 	})
 	waitForProblemsEvidenceUpdate(t, harness, updatesBefore, "*Status:* Planning")
-	assertProblemsEvidencePostCount(t, harness, 8)
+	assertProblemsEvidencePostCount(t, harness, 17)
 
 	updatesBefore = len(harness.server.Requests("chat.update"))
 	harness.feed(ports.Event{
@@ -214,7 +237,7 @@ func TestSlackProblemsEvidence(t *testing.T) {
 		Error: errString("phase failed before the terminal event"),
 	})
 	waitForProblemsEvidenceUpdate(t, harness, updatesBefore, "*Status:* Planning")
-	assertProblemsEvidencePostCount(t, harness, 8)
+	assertProblemsEvidencePostCount(t, harness, 17)
 
 	diagnostics := "repository alpha path /tmp/worktrees/alpha exit 17 configured=" +
 		testToken + " echoed=" + secondSecret + "\n" +
@@ -238,12 +261,12 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	harness.feed(ports.Event{
 		Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &blockingProblem,
 	})
-	waitForProblemsEvidencePosts(t, harness, 9)
+	waitForProblemsEvidencePosts(t, harness, 18)
 	waitForProblemsEvidenceUpdateAll(t, harness, updatesBefore, "Failed: Session crashed")
 	waitFor(t, 10*time.Second, func() bool {
 		for _, channel := range []string{"D-U-ADA", "C-ENG"} {
 			posts := postsTo(harness.server, channel)
-			if len(posts) != 9 {
+			if len(posts) != 18 {
 				return false
 			}
 			last, err := json.Marshal(posts[len(posts)-1].Fields)
@@ -264,7 +287,7 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	} {
 		waitFor(t, 10*time.Second, func() bool {
 			ledger, ok := recordLedger(harness.stateDir, "F-1", key)
-			return ok && len(ledger) == 9
+			return ok && len(ledger) == 18
 		})
 	}
 	notifier.Stop(context.Background())
@@ -416,7 +439,9 @@ func assertProblemsEvidenceTranscript(
 		"Worktree setup failed",
 		"Interrupted",
 		"Rewound to Plan for roadmap phase 2 in run 2",
-		"Plan started",
+		"Research started",
+		"Knowledge Base completed",
+		"Plan completed",
 		"Refactor: Integration merge conflict",
 		"Failed: Session crashed",
 	} {
@@ -438,10 +463,12 @@ func assertProblemsEvidenceTranscript(
 			continue
 		}
 		postTimestamps[entry.Channel] = append(postTimestamps[entry.Channel], entry.ReturnedTS)
-		isProblem := strings.Contains(entry.Text, "Pull-rebase conflict") ||
-			strings.Contains(entry.Text, "Integration merge conflict") ||
-			strings.Contains(entry.Text, "Session crashed") ||
-			strings.Contains(entry.Text, "Worktree setup failed")
+		blockJSON, err := json.Marshal(entry.Blocks)
+		if err != nil {
+			t.Fatalf("encode transcript blocks: %v", err)
+		}
+		isProblem := strings.Contains(string(blockJSON), "Code:") &&
+			strings.Contains(string(blockJSON), "Class:")
 		if entry.ThreadTS == "" {
 			if roots[entry.Channel] != "" {
 				t.Fatalf("destination %s received duplicate root cards", entry.Channel)
@@ -469,8 +496,8 @@ func assertProblemsEvidenceTranscript(
 		if roots[channel] == "" {
 			t.Fatalf("destination %s has no root card", channel)
 		}
-		if got := len(postTimestamps[channel]); got != 9 {
-			t.Fatalf("destination %s posts = %d; want one root and eight replies", channel, got)
+		if got := len(postTimestamps[channel]); got != 18 {
+			t.Fatalf("destination %s posts = %d; want one root and seventeen replies", channel, got)
 		}
 		if got := problemReplies[channel]; got != 4 {
 			t.Fatalf("destination %s Problems replies = %d; want four", channel, got)

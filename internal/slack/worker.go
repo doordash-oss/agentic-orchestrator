@@ -209,7 +209,7 @@ func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
 	return ok && item.reply.fallback != ""
 }
 
-// handle delivers one item: ensure the root card, post the Progress reply,
+// handle delivers one item: ensure the root card, post its thread reply,
 // then mark the destination dirty for the coalesced refresh.
 func (w *destinationWorker) handle(item workItem) {
 	defer item.delivery.done()
@@ -231,7 +231,7 @@ func (w *destinationWorker) handle(item workItem) {
 	}
 	if err := w.postReply(item); err != nil {
 		if !errors.Is(err, errDeliveryIneligible) {
-			log.Printf("slack-notifier: progress reply for feature %s to %s destination was not delivered: %v",
+			log.Printf("slack-notifier: thread reply for feature %s to %s destination was not delivered: %v",
 				item.featureID, item.kind, err)
 		}
 	}
@@ -302,7 +302,7 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 	return nil
 }
 
-// postReply sends one Progress line into the card's thread and records the
+// postReply sends one reply into the card's thread and records the
 // timestamp in the ledger before the item completes.
 func (w *destinationWorker) postReply(item workItem) error {
 	notifier := w.notifier
@@ -347,7 +347,7 @@ func (w *destinationWorker) postReply(item workItem) error {
 				item.kind == string(ports.SlackRecipientChannel),
 		})
 	}
-	result, err := sendWithRetry(w, "progress reply", item, send)
+	result, err := sendWithRetry(w, "thread reply", item, send)
 	if err != nil {
 		return err
 	}

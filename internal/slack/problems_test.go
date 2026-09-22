@@ -307,6 +307,8 @@ func TestRenderProblemBoundsCombinedTitleAndSummary(t *testing.T) {
 func TestSlackProblemsRedaction(t *testing.T) {
 	const secondSecret = "xoxp-SECONDSECRET-123456789"
 	const digestSecret = "DIGEST_REVIEW_SENTINEL"
+	const arraySecret = "ARRAY_REVIEW_SENTINEL"
+	const semicolonSecret = "SEMICOLON_REVIEW_SENTINEL"
 	var logs bytes.Buffer
 	previousLogOutput := log.Writer()
 	log.SetOutput(&logs)
@@ -327,7 +329,11 @@ func TestSlackProblemsRedaction(t *testing.T) {
 		" " + secondSecret + " Authorization: Bearer header-secret" +
 		" https://user:password@example.test/repo\n" +
 		"Authorization: Digest username=\"operator\", response=\"" + digestSecret +
-		"\"\nrepo gamma path /tmp/digest exit 29"
+		"\"\nrepo gamma path /tmp/digest exit 29\n" +
+		"{\"Authorization\":[\"Bearer " + arraySecret +
+		"\"],\"path\":\"/tmp/array\",\"exit\":31}\n" +
+		"Authorization: Digest username=\"ops;bot\", response=\"" + semicolonSecret +
+		"\"; repo delta path /tmp/semicolon exit 37"
 	problem := errcat.Error{
 		Code:    errcat.SessionCrashed,
 		Class:   errcat.ClassBlocking,
@@ -356,7 +362,11 @@ func TestSlackProblemsRedaction(t *testing.T) {
 		Type: ports.FeatureFailed, FeatureID: "F-1",
 		Message: "fallback repo beta " + testToken + " " + secondSecret +
 			" Authorization: Digest username=\"operator\", response=\"" + digestSecret +
-			"\"\npath /tmp/fallback exit 23",
+			"\"\npath /tmp/fallback exit 23\n" +
+			"{\"Authorization\":[\"Bearer " + arraySecret +
+			"\"],\"path\":\"/tmp/fallback-array\",\"exit\":41}\n" +
+			"Authorization: Digest username=\"ops;bot\", response=\"" + semicolonSecret +
+			"\"; repo epsilon path /tmp/fallback-semicolon exit 43",
 	})
 	waitFor(t, 10*time.Second, func() bool {
 		return len(postsTo(harness.server, "C-ENG")) == 3
@@ -368,7 +378,7 @@ func TestSlackProblemsRedaction(t *testing.T) {
 	}
 	body := string(encoded)
 	for _, secret := range []string{
-		testToken, secondSecret, digestSecret, "operator",
+		testToken, secondSecret, digestSecret, arraySecret, semicolonSecret, "operator", "ops;bot",
 		"header-secret", "another-secret", "user:password",
 	} {
 		if strings.Contains(body, secret) {
@@ -380,6 +390,8 @@ func TestSlackProblemsRedaction(t *testing.T) {
 		"repo alpha", "/tmp/worktree", "exit 17",
 		"repo gamma", "/tmp/digest", "exit 29",
 		"repo beta", "/tmp/fallback", "exit 23",
+		"/tmp/array", "31", "repo delta", "/tmp/semicolon", "exit 37",
+		"/tmp/fallback-array", "41", "repo epsilon", "/tmp/fallback-semicolon", "exit 43",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Slack request missing non-sensitive detail %q: %s", want, body)
@@ -399,7 +411,7 @@ func TestSlackProblemsRedaction(t *testing.T) {
 		"observability": string(observed),
 	} {
 		for _, secret := range []string{
-			testToken, secondSecret, digestSecret, "operator",
+			testToken, secondSecret, digestSecret, arraySecret, semicolonSecret, "operator", "ops;bot",
 			"header-secret", "another-secret", "user:password",
 		} {
 			if strings.Contains(value, secret) {

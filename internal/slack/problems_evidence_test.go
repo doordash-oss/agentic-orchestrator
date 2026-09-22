@@ -44,6 +44,8 @@ type problemsEvidenceEntry struct {
 func TestSlackProblemsEvidence(t *testing.T) {
 	const secondSecret = "xoxp-PROBLEMS-EVIDENCE-987654321"
 	const digestSecret = "PROBLEMS_DIGEST_SECRET"
+	const arraySecret = "PROBLEMS_ARRAY_SECRET"
+	const semicolonSecret = "PROBLEMS_SEMICOLON_SECRET"
 
 	harness := newNotifierHarness(t, defaultTestSettings(testToken, testRecipients()...))
 	harness.seedFeature("F-1", func(f *feature.Feature) {
@@ -244,13 +246,21 @@ func TestSlackProblemsEvidence(t *testing.T) {
 		Type:      ports.FeatureFailed,
 		FeatureID: "F-1",
 		Message: "fallback repository beta exit 23 Authorization: Digest username=\"operator\", response=\"" +
-			digestSecret + "\"\npath /tmp/worktrees/beta",
+			digestSecret + "\"\npath /tmp/worktrees/beta\n" +
+			"{\"Authorization\":[\"Bearer " + arraySecret +
+			"\"],\"path\":\"/tmp/worktrees/beta-array\",\"exit\":31}\n" +
+			"Authorization: Digest username=\"ops;bot\", response=\"" + semicolonSecret +
+			"\"; repository beta path /tmp/worktrees/beta-semicolon exit 37",
 	})
 	waitForProblemsEvidencePosts(t, harness, 18)
 
 	diagnostics := "repository alpha path /tmp/worktrees/alpha exit 17 configured=" +
 		testToken + " echoed=" + secondSecret + "\n" +
 		"Authorization: Digest username=\"operator\", response=\"" + digestSecret + "\"\n" +
+		"{\"Authorization\":[\"Bearer " + arraySecret +
+		"\"],\"path\":\"/tmp/worktrees/alpha-array\",\"exit\":41}\n" +
+		"Authorization: Digest username=\"ops;bot\", response=\"" + semicolonSecret +
+		"\"; repository alpha path /tmp/worktrees/alpha-semicolon exit 43\n" +
 		strings.Repeat("provider stack frame in /tmp/worktrees/alpha/internal/slack/notifier.go\n", 120)
 	failureRecord := &errcat.FailureRecord{
 		Code: errcat.SessionCrashed,
@@ -309,7 +319,17 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read final Slack record: %v", err)
 	}
-	assertProblemsEvidenceTranscript(t, entries, record, testToken, secondSecret, digestSecret)
+	assertProblemsEvidenceTranscript(
+		t,
+		entries,
+		record,
+		testToken,
+		secondSecret,
+		digestSecret,
+		arraySecret,
+		semicolonSecret,
+		"ops;bot",
+	)
 
 	dir := strings.TrimSpace(os.Getenv("AGENTICO_EVIDENCE_DIR"))
 	if dir == "" {
@@ -455,6 +475,10 @@ func assertProblemsEvidenceTranscript(
 		"Refactor: Integration merge conflict",
 		"fallback repository beta exit 23",
 		"/tmp/worktrees/beta",
+		"/tmp/worktrees/beta-array",
+		"/tmp/worktrees/beta-semicolon",
+		"/tmp/worktrees/alpha-array",
+		"/tmp/worktrees/alpha-semicolon",
 		"Failed: Session crashed",
 	} {
 		if !strings.Contains(transcriptText, want) {

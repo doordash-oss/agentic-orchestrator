@@ -30,8 +30,10 @@ func TestScrubRedactsCompleteAuthorizationHeaderValues(t *testing.T) {
 		"Authorization: Token REVIEW_SENTINEL",
 		"authorization=Custom REVIEW_SENTINEL",
 		`Authorization: Digest username="operator", response="REVIEW_SENTINEL"`,
+		`Authorization: Digest username="ops;bot", response="REVIEW_SENTINEL"`,
 		`"Authorization": "Bearer REVIEW_SENTINEL"`,
 		`{"Authorization":"Token REVIEW_SENTINEL","path":"/tmp/alpha"}`,
+		`{"Authorization":["Bearer REVIEW_SENTINEL"],"path":"/tmp/alpha"}`,
 	} {
 		t.Run(input, func(t *testing.T) {
 			got := scrub("", input)
@@ -46,10 +48,10 @@ func TestScrubRedactsCompleteAuthorizationHeaderValues(t *testing.T) {
 }
 
 func TestScrubPreservesDiagnosticsAroundDigestAuthorizationHeader(t *testing.T) {
-	input := `repo alpha; Authorization: Digest username="operator", response="REVIEW_SENTINEL"; path /tmp/worktree exit 17`
+	input := `repo alpha; Authorization: Digest username="ops;bot", response="REVIEW_SENTINEL"; path /tmp/worktree exit 17`
 	got := scrub("", input)
 
-	if strings.Contains(got, "operator") || strings.Contains(got, "REVIEW_SENTINEL") {
+	if strings.Contains(got, "ops;bot") || strings.Contains(got, "REVIEW_SENTINEL") {
 		t.Fatalf("scrub(%q) = %q; Digest credentials remain", input, got)
 	}
 	for _, want := range []string{"repo alpha", "[REDACTED]", "path /tmp/worktree", "exit 17"} {
@@ -59,7 +61,7 @@ func TestScrubPreservesDiagnosticsAroundDigestAuthorizationHeader(t *testing.T) 
 	}
 }
 
-func TestProblemsOutboundRedactsDigestAuthorizationParameters(t *testing.T) {
+func TestProblemsOutboundRedactsAuthorizationRepresentations(t *testing.T) {
 	harness := newNotifierHarness(t, defaultTestSettings(
 		testToken,
 		ports.SlackRecipient{Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng"},
@@ -71,44 +73,64 @@ func TestProblemsOutboundRedactsDigestAuthorizationParameters(t *testing.T) {
 		return len(postsTo(harness.server, "C-ENG")) == 1
 	})
 
-	canonicalSecret := "CANONICAL_REVIEW_SENTINEL"
-	canonicalDiagnostics := `repo alpha; Authorization: Digest username="operator", response="` +
-		canonicalSecret + `"; path /tmp/canonical exit 17`
-	problem := errcat.New(
-		errcat.SessionCrashed,
-		errcat.WithDiagnostics(canonicalDiagnostics),
-	)
-	harness.feed(ports.Event{
-		Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &problem,
-	})
-	waitFor(t, 10*time.Second, func() bool {
-		return len(postsTo(harness.server, "C-ENG")) == 2
-	})
+	tests := []struct {
+		canonicalDetail string
+		fallbackDetail  string
+	}{
+		{
+			canonicalDetail: `{"Authorization":["Bearer CANONICAL_ARRAY_REVIEW_SENTINEL"],"path":"/tmp/canonical-array","exit":17}`,
+			fallbackDetail:  `{"Authorization":["Bearer FALLBACK_ARRAY_REVIEW_SENTINEL"],"path":"/tmp/fallback-array","exit":23}`,
+		},
+		{
+			canonicalDetail: `repo alpha; Authorization: Digest username="ops;bot", response="CANONICAL_DIGEST_REVIEW_SENTINEL"; path /tmp/canonical-digest exit 29`,
+			fallbackDetail:  `repo beta; Authorization: Digest username="ops;bot", response="FALLBACK_DIGEST_REVIEW_SENTINEL"; path /tmp/fallback-digest exit 31`,
+		},
+	}
+	for _, tt := range tests {
+		wantPosts := len(postsTo(harness.server, "C-ENG")) + 1
+		problem := errcat.New(
+			errcat.SessionCrashed,
+			errcat.WithDiagnostics(tt.canonicalDetail),
+		)
+		harness.feed(ports.Event{
+			Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &problem,
+		})
+		waitFor(t, 10*time.Second, func() bool {
+			return len(postsTo(harness.server, "C-ENG")) == wantPosts
+		})
 
-	fallbackSecret := "FALLBACK_REVIEW_SENTINEL"
-	harness.feed(ports.Event{
-		Type:      ports.FeatureFailed,
-		FeatureID: "F-1",
-		Message: `repo beta; Authorization: Digest username="operator", response="` +
-			fallbackSecret + `"; path /tmp/fallback exit 23`,
-	})
-	waitFor(t, 10*time.Second, func() bool {
-		return len(postsTo(harness.server, "C-ENG")) == 3
-	})
+		wantPosts++
+		harness.feed(ports.Event{
+			Type:      ports.FeatureFailed,
+			FeatureID: "F-1",
+			Message:   tt.fallbackDetail,
+		})
+		waitFor(t, 10*time.Second, func() bool {
+			return len(postsTo(harness.server, "C-ENG")) == wantPosts
+		})
+	}
 
 	encoded, err := json.Marshal(postsTo(harness.server, "C-ENG")[1:])
 	if err != nil {
 		t.Fatal(err)
 	}
 	body := string(encoded)
-	for _, secret := range []string{"operator", canonicalSecret, fallbackSecret} {
+	for _, secret := range []string{
+		"CANONICAL_ARRAY_REVIEW_SENTINEL",
+		"FALLBACK_ARRAY_REVIEW_SENTINEL",
+		"CANONICAL_DIGEST_REVIEW_SENTINEL",
+		"FALLBACK_DIGEST_REVIEW_SENTINEL",
+		"ops;bot",
+	} {
 		if strings.Contains(body, secret) {
 			t.Errorf("Problems outbound body leaked %q: %s", secret, body)
 		}
 	}
 	for _, want := range []string{
-		"repo alpha", "/tmp/canonical", "exit 17",
-		"repo beta", "/tmp/fallback", "exit 23",
+		"/tmp/canonical-array", "17",
+		"/tmp/fallback-array", "23",
+		"repo alpha", "/tmp/canonical-digest", "exit 29",
+		"repo beta", "/tmp/fallback-digest", "exit 31",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Problems outbound body missing neighboring diagnostic %q: %s", want, body)

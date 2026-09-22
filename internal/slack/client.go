@@ -579,10 +579,9 @@ func parseScopes(header string) []string {
 }
 
 var (
-	slackTokenPattern       = regexp.MustCompile(`(?i)\bxox[a-z]-[A-Za-z0-9-]{8,}\b`)
-	quotedAuthHeaderPattern = regexp.MustCompile(`(?i)(["']?authorization["']?\s*[:=]\s*["'])[^"'\r\n]*(["'])`)
-	authHeaderPattern       = regexp.MustCompile(`(?i)(\bauthorization\s*[:=]\s*)[^\r\n;}\]]+`)
-	urlCredentialPattern    = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
+	slackTokenPattern    = regexp.MustCompile(`(?i)\bxox[a-z]-[A-Za-z0-9-]{8,}\b`)
+	authHeaderKeyPattern = regexp.MustCompile(`(?i)(?:["']authorization["']|\bauthorization)\s*[:=]\s*`)
+	urlCredentialPattern = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
 )
 
 func scrub(token, text string) string {
@@ -590,7 +589,104 @@ func scrub(token, text string) string {
 		text = strings.ReplaceAll(text, token, "[REDACTED]")
 	}
 	text = slackTokenPattern.ReplaceAllString(text, "[REDACTED]")
-	text = quotedAuthHeaderPattern.ReplaceAllString(text, `${1}[REDACTED]${2}`)
-	text = authHeaderPattern.ReplaceAllString(text, `${1}[REDACTED]`)
+	text = scrubAuthorizationHeaders(text)
 	return urlCredentialPattern.ReplaceAllString(text, `${1}[REDACTED]@`)
+}
+
+func scrubAuthorizationHeaders(text string) string {
+	var result strings.Builder
+	for {
+		match := authHeaderKeyPattern.FindStringIndex(text)
+		if match == nil {
+			result.WriteString(text)
+			return result.String()
+		}
+
+		result.WriteString(text[:match[1]])
+		text = text[match[1]:]
+		end, replacement := authorizationValueBoundary(text)
+		result.WriteString(replacement)
+		text = text[end:]
+	}
+}
+
+func authorizationValueBoundary(text string) (int, string) {
+	if text == "" {
+		return 0, "[REDACTED]"
+	}
+	switch text[0] {
+	case '"', '\'':
+		if end := quotedValueEnd(text, text[0]); end > 0 {
+			return end, string(text[0]) + "[REDACTED]" + string(text[0])
+		}
+	case '[':
+		if end := delimitedValueEnd(text, '[', ']'); end > 0 {
+			return end, `["[REDACTED]"]`
+		}
+	}
+	return rawAuthorizationValueEnd(text), "[REDACTED]"
+}
+
+func quotedValueEnd(text string, quote byte) int {
+	escaped := false
+	for i := 1; i < len(text); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case text[i] == '\\':
+			escaped = true
+		case text[i] == quote:
+			return i + 1
+		}
+	}
+	return 0
+}
+
+func delimitedValueEnd(text string, open, close byte) int {
+	depth := 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(text); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case quote != 0 && text[i] == '\\':
+			escaped = true
+		case quote != 0 && text[i] == quote:
+			quote = 0
+		case quote != 0:
+		case text[i] == '"' || text[i] == '\'':
+			quote = text[i]
+		case text[i] == open:
+			depth++
+		case text[i] == close:
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return 0
+}
+
+func rawAuthorizationValueEnd(text string) int {
+	var quote byte
+	escaped := false
+	for i := 0; i < len(text); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case quote != 0 && text[i] == '\\':
+			escaped = true
+		case quote != 0 && text[i] == quote:
+			quote = 0
+		case quote != 0:
+		case text[i] == '"' || text[i] == '\'':
+			quote = text[i]
+		case text[i] == '\r' || text[i] == '\n' || text[i] == ';' ||
+			text[i] == '}' || text[i] == ']':
+			return i
+		}
+	}
+	return len(text)
 }

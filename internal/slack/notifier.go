@@ -1236,6 +1236,10 @@ func (n *Notifier) resolveDestination(
 	n.recordMu.Unlock()
 
 	if recipient.Kind == ports.SlackRecipientUser {
+		current := n.settings.SlackSettings()
+		if !recipientEligible(current, key) {
+			return "", errDeliveryIneligible
+		}
 		// Until the DM channel is known, the user ID is the stable pacing key.
 		worker := n.workerFor(key)
 		if !worker.pace() {
@@ -1248,10 +1252,14 @@ func (n *Notifier) resolveDestination(
 		}
 		channelID, err := sendWithRetry(worker, "conversation open", item, "conversation_open",
 			func() (string, deliveryCredential, error) {
+				current := n.settings.SlackSettings()
 				credential := deliveryCredential{
-					token: settings.Token, generation: settings.CredentialGeneration,
+					token: current.Token, generation: current.CredentialGeneration,
 				}
-				client, err := n.newClient(settings.Token)
+				if !recipientEligible(current, key) {
+					return "", credential, errDeliveryIneligible
+				}
+				client, err := n.newClient(current.Token)
 				if err != nil {
 					return "", credential, err
 				}
@@ -1261,11 +1269,14 @@ func (n *Notifier) resolveDestination(
 		if err != nil {
 			return "", err
 		}
+		if !recipientEligible(n.settings.SlackSettings(), key) {
+			return "", errDeliveryIneligible
+		}
 		n.recordMu.Lock()
 		entry = record.Destinations[key]
 		entry.Kind = string(recipient.Kind)
 		entry.SlackID = recipient.ID
-		entry.DisplayName = scrub(settings.Token, recipient.DisplayName)
+		entry.DisplayName = scrub(n.settings.SlackSettings().Token, recipient.DisplayName)
 		entry.ChannelID = channelID
 		record.Destinations[key] = entry
 		persistErr := n.persistRecordLocked(featureID, record, recipient.Kind)
@@ -1287,6 +1298,18 @@ func (n *Notifier) resolveDestination(
 	n.recordMu.Unlock()
 	n.logPersistError(persistErr, recipient.Kind)
 	return recipient.ID, nil
+}
+
+func recipientEligible(settings ports.SlackRuntimeSettings, key string) bool {
+	if !settings.Enabled || settings.Token == "" {
+		return false
+	}
+	for _, recipient := range settings.Recipients {
+		if destinationKey(string(recipient.Kind), recipient.ID) == key {
+			return true
+		}
+	}
+	return false
 }
 
 // persistRecordLocked writes the authoritative in-memory record and tracks a

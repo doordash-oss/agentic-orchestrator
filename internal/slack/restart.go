@@ -132,13 +132,91 @@ func (n *Notifier) runRestartPass() bool {
 	if n.pending == nil || n.resolvedServerName() == "" {
 		return false
 	}
+	owners := n.restartFeatures()
+	ready, opening := n.partitionOpeningRecipients(settings, owners)
+	if len(opening.Recipients) == 0 {
+		readable, scanned, dispatched := n.runRestartPassFor(settings, owners)
+		log.Printf("slack-notifier: reconciliation complete: features=%d deliveries=%d", scanned, dispatched)
+		return readable
+	}
+	type passResult struct {
+		readable bool
+		scanned  int
+		sent     int
+	}
+	done := make(chan passResult, len(opening.Recipients))
+	for _, recipient := range opening.Recipients {
+		destination := opening
+		destination.Recipients = []ports.SlackRecipient{recipient}
+		go func() {
+			readable, scanned, sent := n.runRestartPassFor(destination, owners)
+			done <- passResult{readable, scanned, sent}
+		}()
+	}
+	readable, scanned, dispatched := n.runRestartPassFor(ready, owners)
+	for i := 0; i < len(opening.Recipients); i++ {
+		select {
+		case opened := <-done:
+			scanned = max(scanned, opened.scanned)
+			dispatched += opened.sent
+			readable = readable && opened.readable
+		case <-n.stopCh:
+			for ; i < len(opening.Recipients); i++ {
+				<-done
+			}
+			return false
+		}
+	}
+	log.Printf("slack-notifier: reconciliation complete: features=%d deliveries=%d", scanned, dispatched)
+	return readable
+}
+
+// A new DM is resolved in its own pass so its pacing and retry waits cannot
+// withhold writes to destinations whose channel is already known.
+func (n *Notifier) partitionOpeningRecipients(
+	settings ports.SlackRuntimeSettings, owners []*feature.Feature,
+) (ports.SlackRuntimeSettings, ports.SlackRuntimeSettings) {
+	ready, opening := settings, settings
+	ready.Recipients = nil
+	opening.Recipients = nil
+	for _, recipient := range settings.Recipients {
+		unresolved := false
+		if recipient.Kind == ports.SlackRecipientUser {
+			key := destinationKey(string(recipient.Kind), recipient.ID)
+			for _, owner := range owners {
+				if terminalFeature(owner.Status) {
+					continue
+				}
+				record, err := n.recordFor(owner.ID)
+				if err != nil {
+					continue
+				}
+				n.recordMu.Lock()
+				entry := record.Destinations[key]
+				n.recordMu.Unlock()
+				if entry.ChannelID == "" {
+					unresolved = true
+					break
+				}
+			}
+		}
+		if unresolved {
+			opening.Recipients = append(opening.Recipients, recipient)
+		} else {
+			ready.Recipients = append(ready.Recipients, recipient)
+		}
+	}
+	return ready, opening
+}
+
+func (n *Notifier) runRestartPassFor(settings ports.SlackRuntimeSettings, owners []*feature.Feature) (bool, int, int) {
 	var scanned, dispatched int
 	allReadable := true
 	failedResolutions := make(map[string]bool)
-	for _, owner := range n.restartFeatures() {
+	for _, owner := range owners {
 		select {
 		case <-n.stopCh:
-			return false
+			return false, scanned, dispatched
 		default:
 		}
 		record, err := n.recordFor(owner.ID)
@@ -206,11 +284,10 @@ func (n *Notifier) runRestartPass() bool {
 		}
 		dispatched += len(work)
 		if !n.dispatchRestartWork(owner.ID, work) {
-			return false
+			return false, scanned, dispatched
 		}
 	}
-	log.Printf("slack-notifier: reconciliation complete: features=%d deliveries=%d", scanned, dispatched)
-	return allReadable
+	return allReadable, scanned, dispatched
 }
 
 func (n *Notifier) closureWork(
@@ -294,11 +371,42 @@ func (n *Notifier) sweepDestinations() {
 	if n.pending == nil {
 		return
 	}
+	owners := n.restartFeatures()
+	ready, opening := n.partitionOpeningRecipients(settings, owners)
+	var opened chan bool
+	if len(opening.Recipients) > 0 {
+		opened = make(chan bool, len(opening.Recipients))
+		for _, recipient := range opening.Recipients {
+			destination := opening
+			destination.Recipients = []ports.SlackRecipient{recipient}
+			go func() { opened <- n.sweepDestinationsFor(destination, owners) }()
+		}
+	}
+	readableSweep := n.sweepDestinationsFor(ready, owners)
+	if opened != nil {
+		for i := 0; i < len(opening.Recipients); i++ {
+			select {
+			case success := <-opened:
+				readableSweep = readableSweep && success
+			case <-n.stopCh:
+				for ; i < len(opening.Recipients); i++ {
+					<-opened
+				}
+				return
+			}
+		}
+	}
+	if readableSweep {
+		n.sweepKey = key
+	}
+}
+
+func (n *Notifier) sweepDestinationsFor(settings ports.SlackRuntimeSettings, owners []*feature.Feature) bool {
 	readableSweep := true
 	failedResolutions := make(map[string]bool)
-	for _, owner := range n.restartFeatures() {
+	for _, owner := range owners {
 		if n.stopped.Load() {
-			return
+			return false
 		}
 		if terminalFeature(owner.Status) {
 			continue
@@ -320,12 +428,10 @@ func (n *Notifier) sweepDestinations() {
 		}
 		work = n.appendMissingCardWork(settings, owner.ID, record, work, failedResolutions)
 		if !n.dispatchRestartWork(owner.ID, work) {
-			return
+			return false
 		}
 	}
-	if readableSweep {
-		n.sweepKey = key
-	}
+	return readableSweep
 }
 
 func (n *Notifier) appendMissingCardWork(

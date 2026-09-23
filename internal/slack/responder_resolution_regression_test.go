@@ -254,6 +254,115 @@ func TestSlackResponderFirstValidReplyWinsAcrossDestinationTimestampOrder(t *tes
 	}
 }
 
+func TestSlackRestartResponderSameThreadDifferentUserReplyAndReaction(t *testing.T) {
+	first := resolutionPendingInput(1)
+	second := resolutionPendingInput(2)
+	record := resolutionRecord(first, second)
+	answerPort := &fakeSlackAnswerPort{}
+	harness, notifier := newResolutionResponder(t, record, answerPort)
+	harness.pending.setFromRecord(resolutionFeatureID, record)
+	harness.server.Script("users.info", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"user": map[string]any{
+			"id":      "U-REPLY",
+			"profile": map[string]any{"display_name": "Reply User"},
+		},
+	}})
+	seedResolutionThread(harness, resolutionUserChannel, resolutionUserRoot, first.MessageTS[resolutionUserKey],
+		testsupport.Message{TS: second.MessageTS[resolutionUserKey], ThreadTS: resolutionUserRoot},
+	)
+	harness.server.SeedThread(resolutionChannel, resolutionChannelRoot, []testsupport.Message{
+		{TS: resolutionChannelRoot},
+		{
+			TS: first.MessageTS[resolutionChannelKey], ThreadTS: resolutionChannelRoot,
+			Reactions: []testsupport.Reaction{{
+				Name: "white_check_mark", Count: 1, Users: []string{"U-REACT"},
+			}},
+		},
+		{TS: "200.0000025", ThreadTS: resolutionChannelRoot, User: "U-REPLY", Text: "allow"},
+		{TS: second.MessageTS[resolutionChannelKey], ThreadTS: resolutionChannelRoot},
+	})
+
+	notifier.responderTick()
+	if got := answerPort.permissionSubmissions(); len(got) != 1 ||
+		got[0].RequestID != first.RequestID ||
+		got[0].Decision != ports.SlackPermissionAllowOnce {
+		t.Fatalf("permission submissions = %#v; want reply to win once", got)
+	}
+	waitFor(t, time.Second, func() bool {
+		return harness.server.CallCount("chat.postMessage") == 3 &&
+			harness.server.CallCount("reactions.add") == 1
+	})
+	var confirmations, losingReactions int
+	for _, request := range harness.server.Requests("chat.postMessage") {
+		text := fieldString(request, "text")
+		switch {
+		case strings.Contains(text, "via Slack."):
+			confirmations++
+		case strings.Contains(text, "already answered by"):
+			losingReactions++
+			if got := fieldString(request, "channel"); got != resolutionChannel {
+				t.Errorf("losing-reaction channel = %q; want %q", got, resolutionChannel)
+			}
+			if !strings.Contains(text, "<@U-REPLY>") {
+				t.Errorf("losing-reaction notification = %q; want winner mention", text)
+			}
+		}
+	}
+	if confirmations != 2 || losingReactions != 1 {
+		t.Fatalf("confirmations=%d losingReactions=%d; want 2 and 1", confirmations, losingReactions)
+	}
+	if got := harness.observer.ofKind("slack.answer_received"); len(got) != 1 ||
+		got[0].Data["medium"] != "reply" {
+		t.Errorf("answer_received events = %#v; want one reply", got)
+	}
+	if got := harness.observer.ofKind("slack.answer_rejected"); len(got) != 1 ||
+		got[0].Data["medium"] != "reaction" ||
+		got[0].Data["reason"] != "already_resolved" {
+		t.Errorf("answer_rejected events = %#v; want one losing reaction", got)
+	}
+
+	reloaded, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Pending) != 2 || reloaded.Pending[1].Identity != second.Identity {
+		t.Fatalf("pending = %#v; want second item to keep polling active", reloaded.Pending)
+	}
+	if !reloaded.Pending[0].judgedReactionContains(
+		resolutionChannelKey, first.MessageTS[resolutionChannelKey],
+		"white_check_mark", "U-REACT",
+	) {
+		t.Fatalf("judged reactions = %#v; want losing action persisted", reloaded.Pending[0].JudgedReactions)
+	}
+	notifier.Stop(context.Background())
+	next := NewNotifier(NotifierOptions{
+		Settings: harness.settings, Store: harness.store, StateDir: harness.stateDir,
+		Observer: harness.observer, Pending: harness.pending, Answer: answerPort,
+		Clock: harness.clock, ResponderClock: newManualResponderClock(),
+		NewClient: func(token string) (slackClient, error) {
+			return NewClient(token, WithBaseURL(harness.server.URL()))
+		},
+	})
+	next.Start()
+	t.Cleanup(func() { next.Stop(context.Background()) })
+	beforePolls := harness.server.CallCount("conversations.replies")
+	next.responderTick()
+	next.responderTick()
+	if got := harness.server.CallCount("conversations.replies"); got <= beforePolls {
+		t.Fatalf("polls after reload = %d; want more than %d", got, beforePolls)
+	}
+	if got := len(answerPort.permissionSubmissions()); got != 1 {
+		t.Errorf("permission submissions after reload = %d; want 1", got)
+	}
+	if got := harness.server.CallCount("chat.postMessage"); got != 3 {
+		t.Errorf("posts after reload = %d; want 3", got)
+	}
+	if got := len(harness.observer.ofKind("slack.answer_rejected")); got != 1 {
+		t.Errorf("answer_rejected events after reload = %d; want 1", got)
+	}
+}
+
 func TestSlackResponderNoLongerPendingClosesEveryDestinationImmediately(t *testing.T) {
 	input := resolutionPendingInput(1)
 	record := resolutionRecord(input)

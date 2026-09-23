@@ -255,31 +255,16 @@ func (n *Notifier) responderTick() {
 		return reactions[i].userOrder < reactions[j].userOrder
 	})
 	unjudged := make(map[string]string)
-	resolvedByReply := make(map[[3]string]bool)
 	for _, candidate := range replies {
-		before, found := n.pendingResponderTarget(candidate.Thread.featureID, candidate.Target.Identity)
 		if !n.processResponderReply(client, settings.Token, candidate) {
 			key := responderPollKey(candidate.Thread.featureID, candidate.Thread.destinationKey)
 			if unjudged[key] == "" ||
 				compareSlackTimestamps(candidate.Message.TS, unjudged[key]) < 0 {
 				unjudged[key] = candidate.Message.TS
 			}
-		} else if found && before.Resolution == nil {
-			after, current := n.pendingResponderTarget(candidate.Thread.featureID, candidate.Target.Identity)
-			if current && after.Resolution != nil && after.Resolution.Kind == resolutionSlack {
-				resolvedByReply[[3]string{
-					candidate.Thread.featureID, candidate.Target.Identity, candidate.Thread.destinationKey,
-				}] = true
-			}
 		}
 	}
 	for _, candidate := range reactions {
-		if resolvedByReply[[3]string{
-			candidate.Thread.featureID, candidate.Target.Identity, candidate.Thread.destinationKey,
-		}] {
-			n.judgeResponderReaction(candidate)
-			continue
-		}
 		n.processResponderReaction(client, settings.Token, candidate)
 	}
 	for _, thread := range threads {

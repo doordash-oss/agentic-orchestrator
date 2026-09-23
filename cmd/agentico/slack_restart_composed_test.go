@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -96,10 +97,11 @@ func TestSlackRestartComposedRealSessionAndReviewDecision(t *testing.T) {
 	})
 	t.Setenv(slackintegration.EnvSlackAPIBase, fake.URL())
 	observer := observe.New(true, stateDir, false, "", false, "")
+	deliveryClock := &slackRestartDeliveryClock{now: time.Now()}
 	makeNotifier := func(pending *slackPendingInputRelay, answer *slackAnswerRelay, clock *composedResponderClock) *slackintegration.Notifier {
 		n := slackintegration.NewNotifier(slackintegration.NotifierOptions{
 			Settings: target, Store: store, StateDir: stateDir, Observer: observer,
-			Pending: pending, Answer: answer, ResponderClock: clock,
+			Pending: pending, Answer: answer, Clock: deliveryClock, ResponderClock: clock,
 		})
 		n.Start()
 		return n
@@ -144,13 +146,13 @@ func TestSlackRestartComposedRealSessionAndReviewDecision(t *testing.T) {
 		return len(pendingRecord.Pending) == 1 && len(reviewRecord.Pending) == 1 &&
 			len(pendingRecord.Pending[0].MessageTS) == 2 && len(reviewRecord.Pending[0].MessageTS) == 2
 	})
+	if err := firstStop(first); err != nil {
+		t.Fatal(err)
+	}
 	initialRoots := rootSlackPosts(fake)
 	initialEdits := fake.CallCount("chat.update")
 	if initialRoots != 4 {
 		t.Fatalf("root cards before restart = %d, want four", initialRoots)
-	}
-	if err := firstStop(first); err != nil {
-		t.Fatal(err)
 	}
 	if err := sessions.StopSession("restart-session"); err != nil {
 		t.Fatal(err)
@@ -230,6 +232,28 @@ func TestSlackRestartComposedRealSessionAndReviewDecision(t *testing.T) {
 		t.Fatalf("review decision did not clear the real review gate: status=%s pending=%v",
 			reviewed.Status, reviewed.PendingReviewPhase)
 	}
+}
+
+// Delivery pacing is virtual here; the responder's polling clock stays manually stepped.
+type slackRestartDeliveryClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *slackRestartDeliveryClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *slackRestartDeliveryClock) Sleep(ctx context.Context, duration time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	c.mu.Lock()
+	c.now = c.now.Add(duration)
+	c.mu.Unlock()
+	return ctx.Err() == nil
 }
 
 func slackRestartStoppedSessionSSEBaseline(t *testing.T, script string) []composedNeedsInputSSEEvent {

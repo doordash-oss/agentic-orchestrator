@@ -290,8 +290,11 @@ func (n *Notifier) sweepDestinations() {
 	if key == n.sweepKey {
 		return
 	}
-	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 ||
-		n.pending == nil {
+	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 {
+		n.sweepKey = key
+		return
+	}
+	if n.pending == nil {
 		return
 	}
 	readableSweep := true

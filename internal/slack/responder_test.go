@@ -557,7 +557,7 @@ func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
 	}
 	waitFor(t, time.Second, func() bool {
 		if harness.server.CallCount("reactions.add") != 1 ||
-			harness.server.CallCount("chat.postMessage") != 1 {
+			harness.server.CallCount("chat.postMessage") != 2 {
 			return false
 		}
 		current, err := loadFeatureRecord(harness.stateDir, featureID)
@@ -565,7 +565,7 @@ func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
 			return false
 		}
 		destination := current.Destinations[destinationKey]
-		return len(destination.Ledger) == 3 &&
+		return len(destination.Ledger) == 4 &&
 			destination.reactionContains("100.000003", "white_check_mark")
 	})
 	reaction := harness.server.Requests("reactions.add")[0]
@@ -582,6 +582,15 @@ func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
 	if got := fieldString(confirmation, "text"); got != "#1 was allowed once by <@U-REPLIER> via Slack." {
 		t.Fatalf("confirmation text = %q; want accepted-answer attribution", got)
 	}
+	losingReaction := harness.server.Requests("chat.postMessage")[1]
+	if got := fieldString(losingReaction, "text"); got != "#1 was already answered by <@U-REPLIER>." {
+		t.Fatalf("losing reaction text = %q; want already-answered feedback", got)
+	}
+	if events := harness.observer.ofKind("slack.answer_rejected"); len(events) != 1 ||
+		events[0].Data["medium"] != "reaction" ||
+		events[0].Data["reason"] != "already_resolved" {
+		t.Errorf("answer_rejected events = %#v; want one losing reaction", events)
+	}
 	persisted, err = loadFeatureRecord(harness.stateDir, featureID)
 	if err != nil {
 		t.Fatal(err)
@@ -593,8 +602,8 @@ func TestSlackResponderReplyWinsReactionAndPersistsResolution(t *testing.T) {
 			destination.IntegrationReactions,
 		)
 	}
-	if len(destination.Ledger) != 3 {
-		t.Fatalf("ledger = %#v; want root, pending item, and confirmation", destination.Ledger)
+	if len(destination.Ledger) != 4 {
+		t.Fatalf("ledger = %#v; want root, pending item, confirmation, and losing-action feedback", destination.Ledger)
 	}
 
 	notifier.responderTick()

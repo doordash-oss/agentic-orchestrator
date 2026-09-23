@@ -265,8 +265,7 @@ func runSlackAnswerGrammarComposed(t *testing.T, token string, identity composed
 		Reactions: []testsupport.Reaction{{Name: "one", Count: 1, Users: []string{composedResponderOwnerID}}},
 	})
 	grammarSeedThreads(t, fake, record, identity, replies)
-	clock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	clock.tickUntil(t, 10*time.Second, func() bool {
 		return composedSlackPostTextCount(fake, firstTag+" was answered 'Focused' by <@U-OWNER> via Slack - 1 of 2 collected, not yet submitted; still waiting on "+secondTag+".") == 2
 	})
 	if got, _ := target.submissions(); len(got) != 0 {
@@ -278,8 +277,7 @@ func runSlackAnswerGrammarComposed(t *testing.T, token string, identity composed
 		User: composedResponderOwnerID, Text: secondTag + " 2",
 	})
 	grammarSeedThreads(t, fake, grammarReadRecord(t, stateDir), identity, replies)
-	clock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	clock.tickUntil(t, 10*time.Second, func() bool {
 		submitted, _ := target.submissions()
 		return len(submitted) == 1 && hasSlackReaction(fake, secondReplyTS, "white_check_mark")
 	})
@@ -304,8 +302,7 @@ func runSlackAnswerGrammarComposed(t *testing.T, token string, identity composed
 		User: composedResponderOwnerID, Text: freeText,
 	})
 	grammarSeedThreads(t, fake, record, identity, replies)
-	clock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	clock.tickUntil(t, 10*time.Second, func() bool {
 		submitted, _ := target.submissions()
 		return len(submitted) == 2 && hasSlackReaction(fake, freeReplyTS, "white_check_mark")
 	})
@@ -397,8 +394,7 @@ while IFS= read -r response; do :; done
 		User: composedResponderOwnerID, Text: gateTag + " acknowledge gate",
 	})
 	grammarSeedThreads(t, fake, record, identity, replies)
-	clock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	clock.tickUntil(t, 10*time.Second, func() bool {
 		return hasSlackReaction(fake, gateReplyTS, "question")
 	})
 	if _, got := target.submissions(); len(got) != 0 {
@@ -411,8 +407,7 @@ while IFS= read -r response; do :; done
 		User: composedResponderOwnerID, Text: helpTag + " use staging",
 	})
 	grammarSeedThreads(t, fake, grammarReadRecord(t, stateDir), identity, replies)
-	clock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	clock.tickUntil(t, 10*time.Second, func() bool {
 		_, submitted := target.submissions()
 		return len(submitted) == 1 && hasSlackReaction(fake, helpReplyTS, "white_check_mark")
 	})

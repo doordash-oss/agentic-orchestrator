@@ -218,8 +218,7 @@ func TestSlackRestartComposedRealSessionAndReviewDecision(t *testing.T) {
 		TS: approveTS, ThreadTS: channel.RootTS, User: composedResponderOwnerID, Text: "approve",
 	})
 	fake.SeedThread("C-ENG", channel.RootTS, messages)
-	clock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	clock.tickUntil(t, 10*time.Second, func() bool {
 		_, reviews := target.captured()
 		return len(reviews) == 1 && hasSlackReaction(fake, approveTS, "white_check_mark") &&
 			composedSlackPostTextCount(fake, "#1 was approved by <@U-OWNER> via Slack.") == 2

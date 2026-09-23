@@ -237,9 +237,12 @@ func TestSlackNeedsInputRedaction(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for scripted session")
 	}
+	// Closure posts are paced one write per second per destination; wait for
+	// the terminal count rather than a snapshot.
 	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
 		record := readComposedSlackRecord(t, stateDir)
-		return record.TagCounter == 3 && len(record.PendingInputs) == 0 && cardWithoutWaitingLine(fake)
+		return record.TagCounter == 3 && len(record.PendingInputs) == 0 && cardWithoutWaitingLine(fake) &&
+			needsInputSlackPosts(fake) == 12
 	})
 
 	gotSSE := collectComposedNeedsInputSSE(t, sse.blocks, composedNeedsInputSessionID)
@@ -248,11 +251,13 @@ func TestSlackNeedsInputRedaction(t *testing.T) {
 		t.Fatalf("SSE permission/prompt events = %v; want baseline %v", gotSSE, wantSSE)
 	}
 
-	if got := needsInputSlackPosts(fake); got != 8 {
-		t.Fatalf("Needs-input Slack posts = %d; want 3 items and 1 closure per destination", got)
+	if got := needsInputSlackPosts(fake); got != 12 {
+		t.Fatalf("Needs-input Slack posts = %d; want 3 items and 3 closures per destination", got)
 	}
-	if got := composedSlackPostTextCount(fake, "#1 was resolved in Agentico."); got != 2 {
-		t.Fatalf("permission closure posts = %d; want one per destination", got)
+	for _, tag := range []string{"#1", "#2", "#3"} {
+		if got := composedSlackPostTextCount(fake, tag+" was resolved in Agentico."); got != 2 {
+			t.Fatalf("%s closure posts = %d; want one per destination", tag, got)
+		}
 	}
 	assertComposedNeedsInputTags(t, fake)
 	if got := readTestFile(t, featurePath); !bytes.Equal(got, featureBefore) {

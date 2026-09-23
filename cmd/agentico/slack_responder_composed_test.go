@@ -100,6 +100,26 @@ func (c *composedResponderClock) tick(t *testing.T) {
 	c.advance <- struct{}{}
 }
 
+// tickUntil re-polls until condition holds: a poll that lands while a delivery
+// holds the thread lock defers judgment to the next poll, as in production.
+func (c *composedResponderClock) tickUntil(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		c.tick(t)
+		settle := time.Now().Add(250 * time.Millisecond)
+		for time.Now().Before(settle) {
+			if condition() {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("condition not met within %s", timeout)
+		}
+	}
+}
+
 type composedResponderMutationTarget struct {
 	*serverMutationTarget
 
@@ -333,8 +353,7 @@ func runSlackResponderComposedJourney(
 		},
 	)
 
-	responderClock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	responderClock.tickUntil(t, 10*time.Second, func() bool {
 		raw, readErr := os.ReadFile(providerResult)
 		return readErr == nil &&
 			bytes.Contains(raw, []byte(`"behavior":"allow"`)) &&
@@ -379,8 +398,7 @@ func runSlackResponderComposedJourney(
 			TS: lgtmTS, ThreadTS: rootTS, User: composedResponderOwnerID, Text: "lgtm",
 		},
 	)
-	responderClock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	responderClock.tickUntil(t, 10*time.Second, func() bool {
 		return hasSlackReaction(fake, lgtmTS, "question") &&
 			hasSlackPostContaining(fake, "approve") &&
 			hasSlackPostContaining(fake, "Agentico")
@@ -406,8 +424,7 @@ func runSlackResponderComposedJourney(
 			TS: approveTS, ThreadTS: rootTS, User: composedResponderOwnerID, Text: "approve",
 		},
 	)
-	responderClock.tick(t)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
+	responderClock.tickUntil(t, 10*time.Second, func() bool {
 		dispatchMu.Lock()
 		defer dispatchMu.Unlock()
 		return dispatches == 1 &&

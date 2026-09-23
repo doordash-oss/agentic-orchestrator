@@ -475,7 +475,8 @@ func (n *Notifier) extractResponderCandidates(
 		}
 		if message.TS == "" ||
 			destination.ledgerContains(message.TS) ||
-			destination.hasReactionForMessage(message.TS) {
+			destination.hasReactionForMessage(message.TS) ||
+			destination.submittedReplyContains(message.TS) {
 			continue
 		}
 		target, found := newestPostingBefore(destination.PostingIndex, message.TS)
@@ -520,7 +521,8 @@ func (n *Notifier) refreshResponderReplyCandidate(
 	destination, ok := record.Destinations[candidate.Thread.destinationKey]
 	if !ok ||
 		destination.ledgerContains(candidate.Message.TS) ||
-		destination.hasReactionForMessage(candidate.Message.TS) {
+		destination.hasReactionForMessage(candidate.Message.TS) ||
+		destination.submittedReplyContains(candidate.Message.TS) {
 		return responderReplyCandidate{}, false
 	}
 	candidate.Target, candidate.TargetFound = newestPostingBefore(
@@ -626,6 +628,7 @@ func (n *Notifier) processResponderReply(
 	defer n.endResponderSubmission(candidate.Thread.featureID, candidate.Target.Identity)
 	responderName := n.responderName(client, token, candidate.Message.User)
 	result := n.submitResponderAnswer(pending, decision, responderName)
+	n.markResponderReplySubmitted(candidate)
 	if result.Outcome != ports.SlackAnswerAccepted {
 		if !n.handleRejectedResponderReply(
 			token,
@@ -1493,6 +1496,23 @@ func (n *Notifier) judgeResponderReaction(candidate responderReactionCandidate) 
 		)
 		break
 	}
+	err := n.persistRecordLocked(candidate.Thread.featureID, record, "")
+	n.logPersistError(err, "")
+}
+
+func (n *Notifier) markResponderReplySubmitted(candidate responderReplyCandidate) {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[candidate.Thread.featureID]
+	if record == nil {
+		return
+	}
+	destination, ok := record.Destinations[candidate.Thread.destinationKey]
+	if !ok {
+		return
+	}
+	destination.submittedReplyAppend(candidate.Message.TS)
+	record.Destinations[candidate.Thread.destinationKey] = destination
 	err := n.persistRecordLocked(candidate.Thread.featureID, record, "")
 	n.logPersistError(err, "")
 }

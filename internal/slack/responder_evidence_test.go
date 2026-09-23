@@ -1032,6 +1032,13 @@ func assertResponderEvidenceOutcome(
 		if len(destination.PostingIndex) != 0 {
 			t.Errorf("final posting index %s = %#v; want pruned", key, destination.PostingIndex)
 		}
+		if len(destination.SubmittedReplies) != 0 {
+			t.Errorf(
+				"final submitted replies %s = %#v; want pruned",
+				key,
+				destination.SubmittedReplies,
+			)
+		}
 	}
 }
 

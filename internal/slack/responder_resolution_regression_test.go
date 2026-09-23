@@ -692,6 +692,13 @@ func TestSlackResponderIdlePrunesTwentyResolvedItemsAndPostingIndex(t *testing.T
 		if len(destination.PostingIndex) != 0 {
 			t.Errorf("posting index %s = %#v; want pruned", key, destination.PostingIndex)
 		}
+		if len(destination.SubmittedReplies) != 0 {
+			t.Errorf(
+				"submitted replies %s = %#v; want pruned",
+				key,
+				destination.SubmittedReplies,
+			)
+		}
 	}
 	if got := harness.server.CallCount("conversations.replies"); got != 0 {
 		t.Fatalf("polls after idle pruning = %d; want 0", got)

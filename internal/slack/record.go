@@ -93,6 +93,7 @@ type destinationRecord struct {
 	RootTS               string                `yaml:"root_ts,omitempty"`
 	Ledger               []string              `yaml:"ledger,omitempty"`
 	IntegrationReactions []reactionLedgerEntry `yaml:"integration_reactions,omitempty"`
+	SubmittedReplies     []string              `yaml:"submitted_replies,omitempty"`
 	PostingIndex         []postingIndexEntry   `yaml:"posting_index,omitempty"`
 	Failure              *destinationFailure   `yaml:"failure,omitempty"`
 }
@@ -218,6 +219,22 @@ func (d *destinationRecord) reactionContains(messageTS, name string) bool {
 func (d *destinationRecord) hasReactionForMessage(messageTS string) bool {
 	for _, reaction := range d.IntegrationReactions {
 		if reaction.MessageTS == messageTS {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *destinationRecord) submittedReplyAppend(messageTS string) {
+	if messageTS == "" || d.submittedReplyContains(messageTS) {
+		return
+	}
+	d.SubmittedReplies = append(d.SubmittedReplies, messageTS)
+}
+
+func (d *destinationRecord) submittedReplyContains(messageTS string) bool {
+	for _, submitted := range d.SubmittedReplies {
+		if submitted == messageTS {
 			return true
 		}
 	}

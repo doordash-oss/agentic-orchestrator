@@ -817,6 +817,7 @@ func (n *Notifier) reconcilePending(
 		record.Resolved = nil
 		for key, destination := range record.Destinations {
 			destination.PostingIndex = nil
+			destination.SubmittedReplies = nil
 			record.Destinations[key] = destination
 		}
 	}

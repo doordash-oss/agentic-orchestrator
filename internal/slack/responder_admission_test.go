@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -98,6 +99,70 @@ func TestSlackResponderInFlightClaimPreventsFailedReplyResubmission(t *testing.T
 	notifier.responderTick()
 	if got := len(answerPort.permissionSubmissions()); got != 1 {
 		t.Fatalf("permission submissions after warning claim persisted = %d; want 1", got)
+	}
+}
+
+func TestSlackResponderFailedPermissionReplyStaysDeduplicatedAfterWarningExhaustion(t *testing.T) {
+	harness, notifier, answerPort := newPermissionResponderAdmissionFixture(
+		t,
+		[]testsupport.Message{{
+			TS: "100.000003", ThreadTS: "100.000001", User: "U-ADA", Text: "allow",
+		}},
+		[]ports.SlackAnswerResult{
+			{
+				Outcome: ports.SlackAnswerFailed,
+				Cause:   errors.New("temporary mutation failure"),
+			},
+			{Outcome: ports.SlackAnswerAccepted},
+		},
+	)
+	clock := notifier.clock.(*gatedDeliveryClock)
+	clock.open()
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+	for range retryLimit + 1 {
+		harness.server.Script("reactions.add", testsupport.Response{
+			Status: http.StatusInternalServerError,
+			Body:   map[string]any{"ok": false},
+		})
+	}
+
+	notifier.responderTick()
+	waitFor(t, time.Second, func() bool {
+		return harness.server.CallCount("reactions.add") == retryLimit+1 &&
+			harness.server.CallCount("chat.postMessage") == 1 &&
+			notifier.responderFeedbackOutstanding("C-ENG") == 0
+	})
+	notifier.responderTick()
+
+	if got := len(answerPort.permissionSubmissions()); got != 1 {
+		t.Fatalf("permission submissions after warning exhaustion = %d; want 1", got)
+	}
+	record, err := notifier.recordFor("feature-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := record.Destinations["channel:C-ENG"]
+	if destination.hasReactionForMessage("100.000003") {
+		t.Fatalf(
+			"integration reactions = %#v; want no provenance for failed warning",
+			destination.IntegrationReactions,
+		)
+	}
+	if !destination.submittedReplyContains("100.000003") {
+		t.Fatalf("submitted replies = %#v; want failed reply timestamp", destination.SubmittedReplies)
+	}
+
+	harness.server.SeedThread("C-ENG", "100.000001", []testsupport.Message{
+		{TS: "100.000001"},
+		{TS: "100.000002", ThreadTS: "100.000001", Text: "permission"},
+		{TS: "100.000003", ThreadTS: "100.000001", User: "U-ADA", Text: "allow"},
+		{TS: "100.000004", ThreadTS: "100.000001", User: "U-ADA", Text: "deny"},
+	})
+	notifier.responderTick()
+
+	submissions := answerPort.permissionSubmissions()
+	if len(submissions) != 2 || submissions[1].Decision != ports.SlackPermissionDeny {
+		t.Fatalf("permission submissions after fresh reply = %#v; want fresh deny", submissions)
 	}
 }
 

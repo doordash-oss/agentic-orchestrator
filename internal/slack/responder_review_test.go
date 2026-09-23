@@ -17,6 +17,7 @@ package slack
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -319,6 +320,66 @@ func TestSlackResponderReviewSubmissionFailure(t *testing.T) {
 			t.Fatalf("accepted reaction timestamp = %q; want fresh reply", got)
 		}
 	})
+}
+
+func TestSlackResponderFailedReviewReplyStaysDeduplicatedAfterWarningExhaustion(t *testing.T) {
+	harness, notifier, answerPort := newReviewResponderFixture(
+		t,
+		ports.SlackAnswerResult{
+			Outcome: ports.SlackAnswerFailed,
+			Cause:   errors.New("review submission failed"),
+		},
+		"approve",
+	)
+	answerPort.reviewResults = append(
+		answerPort.reviewResults,
+		ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted},
+	)
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+	for range retryLimit + 1 {
+		harness.server.Script("reactions.add", testsupport.Response{
+			Status: http.StatusInternalServerError,
+			Body:   map[string]any{"ok": false},
+		})
+	}
+
+	notifier.responderTick()
+	waitFor(t, time.Second, func() bool {
+		return harness.server.CallCount("reactions.add") == retryLimit+1 &&
+			harness.server.CallCount("chat.postMessage") == 1 &&
+			notifier.responderFeedbackOutstanding("C-ENG") == 0
+	})
+	notifier.responderTick()
+
+	if got := len(answerPort.reviewSubmissions()); got != 1 {
+		t.Fatalf("review submissions after warning exhaustion = %d; want 1", got)
+	}
+	record, err := notifier.recordFor("feature-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := record.Destinations["channel:C-ENG"]
+	if destination.hasReactionForMessage("100.000003") {
+		t.Fatalf(
+			"integration reactions = %#v; want no provenance for failed warning",
+			destination.IntegrationReactions,
+		)
+	}
+	if !destination.submittedReplyContains("100.000003") {
+		t.Fatalf("submitted replies = %#v; want failed reply timestamp", destination.SubmittedReplies)
+	}
+
+	harness.server.SeedThread("C-ENG", "100.000001", []testsupport.Message{
+		{TS: "100.000001"},
+		{TS: "100.000002", ThreadTS: "100.000001", Text: "review"},
+		{TS: "100.000003", ThreadTS: "100.000001", User: "U-ADA", Text: "approve"},
+		{TS: "100.000004", ThreadTS: "100.000001", User: "U-ADA", Text: "approve"},
+	})
+	notifier.responderTick()
+
+	if got := len(answerPort.reviewSubmissions()); got != 2 {
+		t.Fatalf("review submissions after fresh reply = %d; want 2", got)
+	}
 }
 
 func TestSlackResponderReviewExcludesFileShareAndIntegrationMessages(t *testing.T) {

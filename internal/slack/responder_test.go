@@ -427,6 +427,10 @@ func TestSlackResponderExtractsCandidatesByLedgerProvenance(t *testing.T) {
 	})
 	notifier.records[featureID] = &featureRecord{
 		Version: recordVersion,
+		Pending: []pendingInputRecord{
+			{Identity: "permission:1", Kind: string(ports.SlackPendingPermission)},
+			{Identity: "review:2", Kind: string(ports.SlackPendingReview)},
+		},
 		Destinations: map[string]destinationRecord{
 			destinationKey: {
 				Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: rootTS,

@@ -141,7 +141,7 @@ func (n *Notifier) responderTick() {
 	}
 	unavailable := make(map[string]bool)
 	unavailableItems := make(map[string]map[string]bool)
-	liveInputs := make(map[string]ports.SlackPendingInput)
+	liveInputs := make(map[string]map[string]ports.SlackPendingInput, len(featureIDs))
 	for featureID := range featureIDs {
 		owner, err := n.store.Load(featureID)
 		if err != nil || owner == nil {
@@ -170,9 +170,7 @@ func (n *Notifier) responderTick() {
 			false,
 		)
 		unavailableItems[featureID] = unreadable
-		for identity, input := range live {
-			liveInputs[identity] = input
-		}
+		liveInputs[featureID] = live
 		if !readable {
 			unavailable[featureID] = true
 		}
@@ -288,7 +286,7 @@ func (n *Notifier) responderTick() {
 			}
 			continue
 		}
-		if !n.processResponderReply(client, settings.Token, candidate, liveInputs) {
+		if !n.processResponderReply(client, settings.Token, candidate, liveInputs[candidate.Thread.featureID]) {
 			key := responderPollKey(candidate.Thread.featureID, candidate.Thread.destinationKey)
 			if unjudged[key] == "" ||
 				compareSlackTimestamps(candidate.Message.TS, unjudged[key]) < 0 {
@@ -300,7 +298,7 @@ func (n *Notifier) responderTick() {
 		if unavailableItems[candidate.Thread.featureID][candidate.Target.Identity] {
 			continue
 		}
-		n.processResponderReaction(client, settings.Token, candidate, liveInputs)
+		n.processResponderReaction(client, settings.Token, candidate, liveInputs[candidate.Thread.featureID])
 	}
 	for _, thread := range threads {
 		key := responderPollKey(thread.featureID, thread.destinationKey)
@@ -535,20 +533,16 @@ func (n *Notifier) extractResponderCandidates(
 	for _, message := range messages {
 		if posting, posted := postingsByTimestamp[message.TS]; posted {
 			for reactionOrder, reaction := range message.Reactions {
-				if reaction.Name != "white_check_mark" && reaction.Name != "x" &&
-					keycapOption(reaction.Name) == 0 {
-					continue
-				}
-				if keycapOption(reaction.Name) > 0 {
-					question := false
-					for _, item := range record.Pending {
-						if item.Identity == posting.Identity && item.Kind == string(ports.SlackPendingQuestion) {
-							question = true
+				var eligible bool
+				for _, items := range [][]pendingInputRecord{record.Pending, record.Resolved} {
+					for _, item := range items {
+						if item.Identity == posting.Identity && responderReactionEligible(item.Kind, reaction.Name) {
+							eligible = true
 						}
 					}
-					if !question {
-						continue
-					}
+				}
+				if !eligible {
+					continue
 				}
 				if destination.reactionContains(message.TS, reaction.Name) {
 					continue
@@ -596,6 +590,14 @@ func responderReactionOrder(name string) int {
 		return 0
 	}
 	return 1
+}
+
+func responderReactionEligible(kind, name string) bool {
+	if kind == string(ports.SlackPendingQuestion) {
+		return keycapOption(name) > 0
+	}
+	_, ok := responderReactionDecision(kind, name)
+	return ok
 }
 
 func (n *Notifier) responderThreadLock(featureID, destinationKey string) *sync.RWMutex {
@@ -870,6 +872,10 @@ func (n *Notifier) processResponderReaction(
 		candidate.Name,
 		candidate.UserID,
 	) {
+		n.releaseResponderClaim(claimKey)
+		return
+	}
+	if !responderReactionEligible(pending.Kind, candidate.Name) {
 		n.releaseResponderClaim(claimKey)
 		return
 	}

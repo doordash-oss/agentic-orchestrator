@@ -267,7 +267,7 @@ func runSlackAnswerGrammarComposed(t *testing.T, token string, identity composed
 	grammarSeedThreads(t, fake, record, identity, replies)
 	clock.tick(t)
 	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
-		return composedSlackPostTextCount(fake, firstTag+" was answered 'Focused' by <@U-OWNER> via Slack - 1 of 2 answered, still waiting on "+secondTag+".") == 2
+		return composedSlackPostTextCount(fake, firstTag+" was answered 'Focused' by <@U-OWNER> via Slack - 1 of 2 collected, not yet submitted; still waiting on "+secondTag+".") == 2
 	})
 	if got, _ := target.submissions(); len(got) != 0 {
 		t.Fatalf("bundle submitted before second answer: %+v", got)

@@ -1,3 +1,17 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package slack
 
 import (
@@ -120,7 +134,7 @@ func (n *Notifier) acceptQuestionAnswer(
 	if count == 0 {
 		count = len(items)
 	}
-	if len(items) != count || count == 0 || count > 9 {
+	if len(items) != count || count == 0 {
 		n.releaseResponderClaim(claimKey)
 		return false
 	}
@@ -150,7 +164,7 @@ func (n *Notifier) acceptQuestionAnswer(
 		if medium == "reply" {
 			n.markResponderReplySubmitted(responderReplyCandidate{Thread: thread, Message: Message{TS: replyTS}})
 		}
-		line := fmt.Sprintf("%s was answered%s by <@%s> via Slack - %d of %d answered, still waiting on %s.",
+		line := fmt.Sprintf("%s was answered%s by <@%s> via Slack - %d of %d collected, not yet submitted; still waiting on %s.",
 			pending.Tag, optionEcho(held), held.ResponderID, len(answers), count, strings.Join(missing, ", "))
 		n.enqueueAcceptedResponderWrites(token, pending, thread, replyTS,
 			held.ResponderID, held.Decision, claimKey, line)
@@ -180,22 +194,21 @@ func (n *Notifier) acceptQuestionAnswer(
 				}
 			}
 		}
-		line := pending.Tag + " could not be submitted. Answer again or in Agentico."
-		reason := "submit_failed"
-		if result.Outcome == ports.SlackAnswerNoLongerPending {
-			line, reason = pending.Tag+" was already answered by Agentico.", "already_resolved"
-		} else {
-			n.logResponderFailure(token, result.Cause)
-		}
 		if medium == "reply" {
-			candidate := responderReplyCandidate{Thread: thread, Message: Message{TS: replyTS}}
-			if !n.rejectResponderReply(token, candidate, pending, reason, "warning", line, claimKey) {
+			candidate := responderReplyCandidate{
+				Thread: thread, Target: postingIndexEntry{Identity: pending.Identity},
+				Message: Message{TS: replyTS},
+			}
+			if !n.handleRejectedResponderReply(token, candidate, pending, held.Decision, result, claimKey) {
 				n.releaseResponderClaim(claimKey)
 			}
-		} else if n.enqueueResponderFeedback(token, thread, pending.SourceFeatureID, "", "", line, claimKey) {
-			n.emitResponderRejected(thread, pending, "", medium, reason)
 		} else {
-			n.releaseResponderClaim(claimKey)
+			candidate := responderReactionCandidate{
+				Thread: thread, Target: postingIndexEntry{Identity: pending.Identity},
+			}
+			if !n.handleRejectedResponderReaction(token, candidate, pending, held.Decision, result, claimKey) {
+				n.releaseResponderClaim(claimKey)
+			}
 		}
 		return true
 	}

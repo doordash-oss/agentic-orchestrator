@@ -16,7 +16,9 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -316,6 +318,11 @@ func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHel
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if err := scratch.release(); err != nil {
+			log.Printf("live-run review %s: %v", cfg.SessionID, err)
+		}
+	}()
 	prompt := liveRunReviewPrompt(cfg.Prompt, scratch)
 	if cfg.PromptPath != "" {
 		if err := os.WriteFile(cfg.PromptPath, []byte(prompt), 0o644); err != nil {
@@ -457,12 +464,16 @@ type liveRunReviewScratch struct {
 	TempRoot       string
 }
 
-func prepareLiveRunReviewScratch(helperDir string) (liveRunReviewScratch, error) {
-	scratch := liveRunReviewScratch{
+func newLiveRunReviewScratch(helperDir string) liveRunReviewScratch {
+	return liveRunReviewScratch{
 		EvidenceRoot:   filepath.Join(helperDir, "evidence"),
 		BuildCacheRoot: filepath.Join(helperDir, "build-cache"),
 		TempRoot:       filepath.Join(helperDir, "tmp"),
 	}
+}
+
+func prepareLiveRunReviewScratch(helperDir string) (liveRunReviewScratch, error) {
+	scratch := newLiveRunReviewScratch(helperDir)
 	for _, dir := range append(scratch.roots(), scratch.cacheSubdirs()...) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return liveRunReviewScratch{}, fmt.Errorf("preparing live-run review scratch root %s: %w", dir, err)
@@ -473,6 +484,18 @@ func prepareLiveRunReviewScratch(helperDir string) (liveRunReviewScratch, error)
 
 func (s liveRunReviewScratch) roots() []string {
 	return []string{s.EvidenceRoot, s.BuildCacheRoot, s.TempRoot}
+}
+
+// release deletes the cache and temp roots, which can reach tens of GiB per
+// review. Evidence stays with the review artifacts.
+func (s liveRunReviewScratch) release() error {
+	var errs []error
+	for _, dir := range []string{s.BuildCacheRoot, s.TempRoot} {
+		if err := feature.RemoveAllResilient(dir); err != nil {
+			errs = append(errs, fmt.Errorf("removing live-run review scratch %s: %w", dir, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (s liveRunReviewScratch) cacheSubdirs() []string {
@@ -513,6 +536,7 @@ func liveRunReviewPrompt(prompt string, scratch liveRunReviewScratch) string {
 	fmt.Fprintf(&b, "Build cache root: %s\n", scratch.BuildCacheRoot)
 	fmt.Fprintf(&b, "Temp root: %s\n\n", scratch.TempRoot)
 	b.WriteString("Cache and temp environment variables are already pointed at these roots. ")
+	b.WriteString("The build cache and temp roots are deleted when the review ends; only the evidence root is kept. ")
 	b.WriteString("Write screenshots, recordings, command logs, and other QA evidence under the evidence root. ")
 	b.WriteString("Do not write into the reviewed source tree.\n\n")
 	b.WriteString(prompt)

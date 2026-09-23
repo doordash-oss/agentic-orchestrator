@@ -16,6 +16,7 @@ package slack
 
 import (
 	"context"
+	"net/http"
 	"testing"
 	"time"
 
@@ -23,6 +24,22 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/slack/testsupport"
 )
+
+type failFirstReaddedPollClient struct {
+	slackClient
+	status *int
+}
+
+func (c *failFirstReaddedPollClient) ThreadReplies(
+	ctx context.Context, channelID, rootTS, oldest string, limit int, cursor string,
+) (RepliesPage, error) {
+	if channelID == "C-ENG" && *c.status != 0 {
+		status := *c.status
+		*c.status = 0
+		return RepliesPage{}, &TransportError{StatusCode: status, RetryAfter: time.Second}
+	}
+	return c.slackClient.ThreadReplies(ctx, channelID, rootTS, oldest, limit, cursor)
+}
 
 func perFeatureResponderFixture(t *testing.T, section feature.SlackNotifications) (*notifierHarness, *Notifier, *fakeSlackAnswerPort) {
 	t.Helper()
@@ -81,15 +98,28 @@ func TestSlackPerFeatureResponderAnswerableWhileMutedOrOff(t *testing.T) {
 		name      string
 		section   feature.SlackNotifications
 		globalOff bool
+		switchOff bool
 	}{
 		{name: "muted", section: feature.SlackNotifications{Mode: feature.SlackMuted}},
 		{name: "needs input off", section: feature.SlackNotifications{NeedsInput: feature.SlackOff}},
 		{name: "override on global off", section: feature.SlackNotifications{NeedsInput: feature.SlackOn}, globalOff: true},
+		{name: "override on then off with global off", section: feature.SlackNotifications{NeedsInput: feature.SlackOn}, globalOff: true, switchOff: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, n, answers := perFeatureResponderFixture(t, tc.section)
 			if tc.globalOff {
 				h.settings.mutate(func(s *ports.SlackRuntimeSettings) { s.Categories.NeedsInput = false })
+			}
+			if tc.switchOff {
+				n.responderTick()
+				f, err := h.store.Load("F-1")
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.SlackNotifications.NeedsInput = feature.SlackOff
+				if err := h.store.Save(f); err != nil {
+					t.Fatal(err)
+				}
 			}
 			h.server.SeedThread("C-ENG", "100.000001", []testsupport.Message{
 				{TS: "100.000001"},
@@ -111,6 +141,14 @@ func TestSlackPerFeatureResponderAnswerableWhileMutedOrOff(t *testing.T) {
 }
 
 func TestSlackPerFeatureResponderRemovedDestinationHardStop(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			testSlackPerFeatureResponderRemovedDestinationHardStop(t, status)
+		})
+	}
+}
+
+func testSlackPerFeatureResponderRemovedDestinationHardStop(t *testing.T, status int) {
 	h, n, answers := perFeatureResponderFixture(t, feature.SlackNotifications{})
 	n.responderTick()
 	initial := h.server.CallCount("conversations.replies")
@@ -148,9 +186,34 @@ func TestSlackPerFeatureResponderRemovedDestinationHardStop(t *testing.T) {
 	h.settings.mutate(func(s *ports.SlackRuntimeSettings) {
 		s.Recipients = append(s.Recipients, testRecipients()[1])
 	})
+	n.newClient = func(token string) (slackClient, error) {
+		client, err := NewClient(token, WithBaseURL(h.server.URL()))
+		if err != nil {
+			return nil, err
+		}
+		return &failFirstReaddedPollClient{slackClient: client, status: &status}, nil
+	}
+	n.responderTick()
+	key := responderPollKey("F-1", "channel:C-ENG")
+	if !n.responderPolls[key].removed {
+		t.Error("failed catch-up must retain removed state")
+	}
+	if got := answers.permissionSubmissions(); len(got) != 0 {
+		t.Errorf("answers after failed re-add poll = %#v; want none", got)
+	}
+	if got := h.server.CallCount("reactions.add"); got != 0 {
+		t.Errorf("feedback after failed re-add poll = %d; want none", got)
+	}
+	h.clock.Sleep(context.Background(), time.Second)
 	n.responderTick()
 	if got := answers.permissionSubmissions(); len(got) != 0 {
 		t.Errorf("answers after re-add = %#v; want no retroactive answer", got)
+	}
+	if n.responderPolls[key].removed {
+		t.Error("complete catch-up must clear removed state")
+	}
+	if got := h.server.CallCount("reactions.add"); got != 0 {
+		t.Errorf("feedback for stale reaction = %d; want none", got)
 	}
 	if got := h.server.CallCount("chat.postMessage"); got != 0 {
 		t.Errorf("posts after re-add = %d; want original card and thread reused", got)
@@ -165,6 +228,10 @@ func TestSlackPerFeatureResponderRemovedDestinationHardStop(t *testing.T) {
 	if got := answers.permissionSubmissions(); len(got) != 1 {
 		t.Errorf("new reply answers = %#v; want one from resumed thread", got)
 	}
+	waitFor(t, 2*time.Second, func() bool {
+		return h.server.CallCount("chat.postMessage") == 2 &&
+			h.server.CallCount("reactions.add") == 1
+	})
 }
 
 func TestSlackPerFeatureResponderReconciliationWhileQuiet(t *testing.T) {

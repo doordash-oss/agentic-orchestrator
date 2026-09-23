@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -228,6 +229,7 @@ func (n *Notifier) responderTick() {
 			n.storeResponderPollState(key, state)
 			continue
 		}
+		caughtUp := false
 		for pageNumber := 0; pageNumber < responderPageBudget; pageNumber++ {
 			page, err := client.ThreadReplies(
 				n.responderBase,
@@ -263,10 +265,11 @@ func (n *Notifier) responderTick() {
 			}
 			state.cursor = page.NextCursor
 			if state.cursor == "" {
+				caughtUp = true
 				break
 			}
 		}
-		if state.removed && state.cursor == "" {
+		if state.removed && caughtUp {
 			state.removed = false
 		}
 		n.storeResponderPollState(key, state)
@@ -529,10 +532,14 @@ func (n *Notifier) responderThreads(settings ports.SlackRuntimeSettings, eligibl
 				owner = nil
 			}
 			_, effective := n.effectiveSettings(settings, owner)
+			// An explicit per-feature off stops new posts, but already-posted
+			// items remain answerable even when the global default is off.
+			continuing := owner != nil && owner.SlackNotifications != nil &&
+				owner.SlackNotifications.NeedsInput == feature.SlackOff
 			for index, recipient := range effective.Recipients {
 				key := destinationKey(recipient.Kind, recipient.ID)
 				keys[key] = true
-				if settings.Categories.NeedsInput || effective.NeedsInput.Enabled {
+				if settings.Categories.NeedsInput || effective.NeedsInput.Enabled || continuing {
 					byDestination[key] = index + 1
 				}
 			}

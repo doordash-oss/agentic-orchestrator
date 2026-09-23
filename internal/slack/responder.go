@@ -109,7 +109,7 @@ func normalizeResponderReply(text string) string {
 func (n *Notifier) runResponder() {
 	defer n.responderWG.Done()
 	for n.responderClock.Sleep(n.responderBase, responderPollInterval) {
-		if n.startupRun.Load() && !n.startupDone.Load() {
+		if !n.startupDone.Load() {
 			continue
 		}
 		n.sweepDestinations()

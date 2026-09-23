@@ -182,7 +182,7 @@ func (n *Notifier) runRestartPass() bool {
 				return entry.RootTS == ""
 			})
 		}
-		if !terminalFeature(owner.Status) || changed {
+		if !terminalFeature(owner.Status) || changed || hadOwed {
 			for _, recipient := range settings.Recipients {
 				key := destinationKey(string(recipient.Kind), recipient.ID)
 				n.recordMu.Lock()

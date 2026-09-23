@@ -251,6 +251,7 @@ func TestSlackResponderEvidence(t *testing.T) {
 	notifier.Start()
 	t.Cleanup(func() { notifier.Stop(context.Background()) })
 	harness.notifier = notifier
+	notifier.startupDone.Store(true)
 
 	notifier.DomainEventTap(startedEvent(responderEvidenceFeatureID, feature.PhaseImplement))
 	waitFor(t, 10*time.Second, func() bool {

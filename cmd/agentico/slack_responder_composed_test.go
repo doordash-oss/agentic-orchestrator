@@ -278,6 +278,7 @@ func runSlackResponderComposedJourney(
 		BindSlackAnswerPort:         answerRelay.bind,
 		DisableHostValidation:       true,
 	})
+	notifier.SignalReady()
 	httpServer := httptest.NewServer(httpHandler)
 	t.Cleanup(httpServer.Close)
 	sse := openComposedNeedsInputSSE(t, httpServer)

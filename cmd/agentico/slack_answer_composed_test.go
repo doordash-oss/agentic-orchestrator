@@ -1114,6 +1114,7 @@ func newComposedResponderRaceRuntime(
 	t.Cleanup(server.Close)
 	notifier.SetServerName("Composed responder race test")
 	notifier.Start()
+	notifier.SignalReady()
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

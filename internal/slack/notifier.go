@@ -128,7 +128,6 @@ type Notifier struct {
 	serverName   string
 	readyOnce    sync.Once
 	startupDone  atomic.Bool
-	startupRun   atomic.Bool
 	startupWG    sync.WaitGroup
 	sweepMu      sync.Mutex
 	sweepKey     string
@@ -287,7 +286,6 @@ func (n *Notifier) SignalReady() {
 		startupKey := destinationFingerprint(n.settings.SlackSettings())
 		n.sweepKey = startupKey
 		n.sweepMu.Unlock()
-		n.startupRun.Store(true)
 		n.startupWG.Add(1)
 		go func() {
 			defer n.startupWG.Done()
@@ -723,16 +721,6 @@ func (n *Notifier) reconcilePending(
 ) []workItem {
 	work, _, _ := n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, true)
 	return work
-}
-
-func (n *Notifier) reconcilePendingWithAvailability(
-	settings ports.SlackRuntimeSettings,
-	owner, trigger *feature.Feature,
-	record *featureRecord,
-	retiredResolutionKind string,
-) ([]workItem, bool) {
-	work, readable, _ := n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, false)
-	return work, readable
 }
 
 func (n *Notifier) reconcilePendingWithPolicy(

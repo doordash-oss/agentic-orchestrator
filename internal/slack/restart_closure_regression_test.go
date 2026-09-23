@@ -73,8 +73,8 @@ func TestSlackRestartClosureDebtAcrossEventsAndToggle(t *testing.T) {
 		record.Resolved[0].closureOwed("user:U-ADA") {
 		t.Fatalf("per-destination closure debt = %#v", record.Resolved[0].Resolution)
 	}
-	if timerWork, _ := n.reconcilePendingWithAvailability(
-		settings, owner, owner, record, resolutionAgentico,
+	if timerWork, _, _ := n.reconcilePendingWithPolicy(
+		settings, owner, owner, record, resolutionAgentico, false,
 	); closureCount(timerWork) != 0 {
 		t.Fatalf("responder tick retried permanent closure failure: %#v", timerWork)
 	}

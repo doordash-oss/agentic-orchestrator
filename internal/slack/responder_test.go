@@ -248,6 +248,7 @@ func TestSlackResponderPollsOnCadenceOnlyWhilePostedInputIsPending(t *testing.T)
 	if got := harness.server.CallCount("conversations.replies"); got != 0 {
 		t.Fatalf("polls before first interval = %d; want 0", got)
 	}
+	notifier.startupDone.Store(true)
 	responderClock.tick(t)
 	waitFor(t, time.Second, func() bool {
 		return harness.server.CallCount("conversations.replies") == 1
@@ -322,6 +323,7 @@ func TestSlackResponderResumesCursorAfterPerTickPageBudget(t *testing.T) {
 	notifier.Start()
 	t.Cleanup(func() { notifier.Stop(context.Background()) })
 
+	notifier.startupDone.Store(true)
 	responderClock.tick(t)
 	waitFor(t, time.Second, func() bool {
 		return harness.server.CallCount("conversations.replies") == responderPageBudget

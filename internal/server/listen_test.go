@@ -16,10 +16,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -213,30 +215,46 @@ func TestStartRejectsBusyListenAddr(t *testing.T) {
 	}
 }
 
+// startOnAvailablePort retries only when another listener claims the
+// ephemeral port between releasing the reservation and calling Start.
+func startOnAvailablePort(t *testing.T, bindHost, listenHost string) (*RuntimeServer, int) {
+	t.Helper()
+	for range 10 {
+		ln, err := net.Listen("tcp", net.JoinHostPort(bindHost, "0"))
+		if err != nil {
+			t.Fatalf("net.Listen() error = %v", err)
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		if err := ln.Close(); err != nil {
+			t.Fatalf("listener.Close() error = %v", err)
+		}
+		srv, err := Start(context.Background(), Options{
+			AllowUnauthenticated: true,
+			AuthToken:            "token",
+			ListenAddr:           net.JoinHostPort(listenHost, strconv.Itoa(port)),
+		})
+		if errors.Is(err, syscall.EADDRINUSE) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = srv.Close(ctx)
+		})
+		return srv, port
+	}
+	t.Fatal("Start() failed after 10 ephemeral port collisions")
+	return nil, 0
+}
+
 // TestStartHonorsExplicitLoopbackPin binds a named loopback address and
 // confirms the advertised base URL matches it.
 func TestStartHonorsExplicitLoopbackPin(t *testing.T) {
 	t.Parallel()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("net.Listen() error = %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-
-	srv, err := Start(context.Background(), Options{
-		AllowUnauthenticated: true,
-		AuthToken:            "token",
-		ListenAddr:           "127.0.0.1:" + strconv.Itoa(port),
-	})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = srv.Close(ctx)
-	})
+	srv, port := startOnAvailablePort(t, "127.0.0.1", "127.0.0.1")
 	if !strings.HasSuffix(srv.BaseURL(), ":"+strconv.Itoa(port)) {
 		t.Fatalf("BaseURL() = %q; want port %d", srv.BaseURL(), port)
 	}
@@ -255,26 +273,7 @@ func TestStartWildcardAdvertisesPrimaryAddress(t *testing.T) {
 	restoreProbe := probePrimaryIPv4
 	probePrimaryIPv4 = func() (string, error) { return "10.9.8.7", nil }
 	t.Cleanup(func() { probePrimaryIPv4 = restoreProbe })
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("net.Listen() error = %v", err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close()
-
-	srv, err := Start(context.Background(), Options{
-		AllowUnauthenticated: true,
-		AuthToken:            "token",
-		ListenAddr:           "0.0.0.0:" + strconv.Itoa(port),
-	})
-	if err != nil {
-		t.Fatalf("Start() error = %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_ = srv.Close(ctx)
-	})
+	srv, port := startOnAvailablePort(t, "127.0.0.1", "0.0.0.0")
 	want := "http://10.9.8.7:" + strconv.Itoa(port)
 	if srv.BaseURL() != want {
 		t.Fatalf("BaseURL() = %q; want advertised primary address %q", srv.BaseURL(), want)

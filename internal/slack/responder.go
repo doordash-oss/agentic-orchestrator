@@ -1204,16 +1204,25 @@ func (n *Notifier) deferResponderFeedback(
 }
 
 func (n *Notifier) drainDeferredResponderFeedback(token string) {
-	for {
+	blockedChannels := map[string]struct{}{}
+	for index := 0; ; {
 		n.responderFeedbackMu.Lock()
-		if len(n.responderDeferredOrder) == 0 {
+		if index >= len(n.responderDeferredOrder) {
 			n.responderFeedbackMu.Unlock()
 			return
 		}
-		claimKey := n.responderDeferredOrder[0]
+		claimKey := n.responderDeferredOrder[index]
 		feedback, ok := n.responderDeferred[claimKey]
 		if !ok {
-			n.responderDeferredOrder = n.responderDeferredOrder[1:]
+			n.responderDeferredOrder = append(
+				n.responderDeferredOrder[:index],
+				n.responderDeferredOrder[index+1:]...,
+			)
+			n.responderFeedbackMu.Unlock()
+			continue
+		}
+		if _, blocked := blockedChannels[feedback.thread.channelID]; blocked {
+			index++
 			n.responderFeedbackMu.Unlock()
 			continue
 		}
@@ -1228,11 +1237,25 @@ func (n *Notifier) drainDeferredResponderFeedback(token string) {
 			feedback.line,
 			claimKey,
 		) {
-			return
+			blockedChannels[feedback.thread.channelID] = struct{}{}
+			index++
+			continue
 		}
 		n.responderFeedbackMu.Lock()
 		delete(n.responderDeferred, claimKey)
-		n.responderDeferredOrder = n.responderDeferredOrder[1:]
+		for orderIndex, orderedKey := range n.responderDeferredOrder {
+			if orderedKey != claimKey {
+				continue
+			}
+			n.responderDeferredOrder = append(
+				n.responderDeferredOrder[:orderIndex],
+				n.responderDeferredOrder[orderIndex+1:]...,
+			)
+			if orderIndex < index {
+				index--
+			}
+			break
+		}
 		n.responderFeedbackMu.Unlock()
 		n.emitResponderRejected(
 			feedback.thread,

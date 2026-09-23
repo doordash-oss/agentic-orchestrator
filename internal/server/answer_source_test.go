@@ -101,7 +101,8 @@ func TestAnswerMutationRoutesPreserveOptionalAnswerSource(t *testing.T) {
 				t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
 			}
 			got := test.got(target)
-			if fmt.Sprintf("%+v", got) != fmt.Sprintf("%+v", test.want) {
+			if (got == nil) != (test.want == nil) ||
+				got != nil && *got != *test.want {
 				t.Fatalf("source = %+v, want %+v", got, test.want)
 			}
 		})

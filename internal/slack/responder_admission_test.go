@@ -341,6 +341,109 @@ func TestSlackResponderDeferredFailureDrainsAfterIdleBeforeNewAnswer(t *testing.
 	}
 }
 
+func TestSlackResponderDeferredFeedbackDrainsEligibleDestinationIndependently(t *testing.T) {
+	harness, notifier, answerPort := newPermissionResponderAdmissionFixture(t, nil, nil)
+	clock := notifier.clock.(*gatedDeliveryClock)
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+
+	answerPort.AnswerSlackPermission(ports.SlackPermissionAnswer{RequestID: "request-a"})
+	answerPort.AnswerSlackPermission(ports.SlackPermissionAnswer{RequestID: "request-b"})
+	harness.settings.mutate(func(settings *ports.SlackRuntimeSettings) {
+		settings.Recipients = append(settings.Recipients, ports.SlackRecipient{
+			TypedText: "#ops", Kind: ports.SlackRecipientChannel,
+			ID: "C-OPS", DisplayName: "#ops",
+		})
+	})
+
+	notifier.recordMu.Lock()
+	record := notifier.records["feature-1"]
+	record.Destinations["channel:C-OPS"] = destinationRecord{
+		Kind: "channel", SlackID: "C-OPS", ChannelID: "C-OPS", RootTS: "200.000001",
+		Ledger: []string{"200.000001"},
+	}
+	if err := persistFeatureRecord(harness.stateDir, "feature-1", record); err != nil {
+		notifier.recordMu.Unlock()
+		t.Fatal(err)
+	}
+	notifier.recordMu.Unlock()
+
+	threadA := responderThread{
+		featureID: "feature-1", destinationKey: "channel:C-ENG",
+		channelID: "C-ENG", rootTS: "100.000001",
+	}
+	threadB := responderThread{
+		featureID: "feature-1", destinationKey: "channel:C-OPS",
+		channelID: "C-OPS", rootTS: "200.000001",
+	}
+	pendingA := pendingInputRecord{
+		Kind: string(ports.SlackPendingPermission), Tag: "#1",
+	}
+	pendingB := pendingInputRecord{
+		Kind: string(ports.SlackPendingReview), Tag: "#2",
+	}
+	notifier.responderFeedbackMu.Lock()
+	notifier.responderFeedback["C-ENG"] = responderFeedbackLimit
+	notifier.responderFeedback["C-OPS"] = responderFeedbackLimit
+	notifier.responderClaims["claim-a"] = struct{}{}
+	notifier.responderClaims["claim-b"] = struct{}{}
+	notifier.responderFeedbackMu.Unlock()
+	notifier.deferResponderFeedback("claim-a", responderDeferredFeedback{
+		thread: threadA, pending: pendingA, sourceFeatureID: "feature-1",
+		messageTS: "100.000003", reaction: "warning",
+		line:     "#1 could not be submitted. Answer again or in Agentico.",
+		decision: string(ports.SlackPermissionAllowOnce),
+		medium:   "reply", reason: "submit_failed",
+	})
+	notifier.deferResponderFeedback("claim-b", responderDeferredFeedback{
+		thread: threadB, pending: pendingB, sourceFeatureID: "feature-1",
+		line:     "#2 changed in Agentico. Approve the current review there.",
+		decision: "approve", medium: "reaction", reason: "stale_revision",
+	})
+
+	notifier.responderFeedbackMu.Lock()
+	delete(notifier.responderFeedback, "C-OPS")
+	notifier.responderFeedbackMu.Unlock()
+	worker := notifier.workerFor("C-OPS")
+	worker.mu.Lock()
+	worker.lastWrite = clock.Now()
+	worker.mu.Unlock()
+
+	notifier.drainDeferredResponderFeedback("xoxb-admission")
+
+	notifier.responderFeedbackMu.Lock()
+	_, deferredA := notifier.responderDeferred["claim-a"]
+	_, deferredB := notifier.responderDeferred["claim-b"]
+	notifier.responderFeedbackMu.Unlock()
+	if !deferredA || deferredB {
+		t.Fatalf(
+			"deferred entries after releasing B = (A %t, B %t); want (true, false)",
+			deferredA,
+			deferredB,
+		)
+	}
+	if got := len(harness.observer.ofKind("slack.answer_rejected")); got != 1 {
+		t.Fatalf("rejection events after releasing B = %d; want 1", got)
+	}
+	if got := len(answerPort.permissionSubmissions()); got != 2 {
+		t.Fatalf("permission submissions after deferred drain = %d; want 2", got)
+	}
+
+	clock.open()
+	waitFor(t, 2*time.Second, func() bool {
+		return hasAdmissionPost(
+			harness.server.Requests("chat.postMessage"),
+			"#2 changed in Agentico. Approve the current review there.",
+		)
+	})
+	notifier.drainDeferredResponderFeedback("xoxb-admission")
+	if got := len(harness.observer.ofKind("slack.answer_rejected")); got != 1 {
+		t.Fatalf("rejection events after repeated drain = %d; want 1", got)
+	}
+	if got := len(answerPort.permissionSubmissions()); got != 2 {
+		t.Fatalf("permission submissions after repeated drain = %d; want 2", got)
+	}
+}
+
 func addAdmissionPendingItem(
 	t *testing.T,
 	harness *notifierHarness,

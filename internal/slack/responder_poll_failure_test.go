@@ -409,6 +409,9 @@ func TestSlackResponderPollFailureTransientBudgetSuspendsAndReportsEachEpisodeOn
 		failure.Count != 1 {
 		t.Fatalf("exhausted poll failure = %#v; want one retries-exhausted report", failure)
 	}
+	waitFor(t, time.Second, func() bool {
+		return len(fixture.harness.observer.ofKind("slack.delivery_failed")) == 1
+	})
 	events := fixture.harness.observer.ofKind("slack.delivery_failed")
 	if len(events) != 1 {
 		t.Fatalf("first episode events = %d; want one", len(events))

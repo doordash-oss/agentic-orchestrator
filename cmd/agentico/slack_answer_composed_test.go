@@ -393,11 +393,16 @@ func TestSlackResponderPermissionRaceWithRESTUsesRealSession(t *testing.T) {
 				}()
 			}
 			if slackFirst {
-				runtime.clock.tick(t)
+				waitForComposedRaceSignalWithTicks(
+					t,
+					runtime.clock,
+					target.entered,
+					"first permission mutation",
+				)
 			} else {
 				startREST()
+				waitForComposedRaceSignal(t, target.entered, "first permission mutation")
 			}
-			waitForComposedRaceSignal(t, target.entered, "first permission mutation")
 			if slackFirst {
 				startREST()
 				waitForComposedRaceValue(
@@ -407,9 +412,9 @@ func TestSlackResponderPermissionRaceWithRESTUsesRealSession(t *testing.T) {
 					"REST permission request",
 				)
 			} else {
-				runtime.clock.tick(t)
-				waitForComposedRaceValue(
+				waitForComposedRaceValueWithTicks(
 					t,
+					runtime.clock,
 					runtime.slackAttempts,
 					"permission",
 					"Slack permission answer",
@@ -807,11 +812,16 @@ func TestSlackResponderReviewRaceWithRESTUsesRealOrchestrator(t *testing.T) {
 				}()
 			}
 			if slackFirst {
-				runtime.clock.tick(t)
+				waitForComposedRaceSignalWithTicks(
+					t,
+					runtime.clock,
+					target.entered,
+					"first review mutation",
+				)
 			} else {
 				startREST()
+				waitForComposedRaceSignal(t, target.entered, "first review mutation")
 			}
-			waitForComposedRaceSignal(t, target.entered, "first review mutation")
 			if slackFirst {
 				startREST()
 				waitForComposedRaceValue(
@@ -822,9 +832,9 @@ func TestSlackResponderReviewRaceWithRESTUsesRealOrchestrator(t *testing.T) {
 					"REST review decision",
 				)
 			} else {
-				runtime.clock.tick(t)
-				waitForComposedRaceValue(
+				waitForComposedRaceValueWithTicks(
 					t,
+					runtime.clock,
 					runtime.slackAttempts,
 					"review",
 					"Slack review approval",
@@ -1138,6 +1148,27 @@ func waitForComposedRaceSignal(t *testing.T, signal <-chan struct{}, name string
 	}
 }
 
+func waitForComposedRaceSignalWithTicks(
+	t *testing.T,
+	clock *composedResponderClock,
+	signal <-chan struct{},
+	name string,
+) {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-signal:
+			return
+		case <-clock.sleeps:
+			clock.advance <- struct{}{}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for %s", name)
+		}
+	}
+}
+
 func waitForComposedRaceValue(
 	t *testing.T,
 	values <-chan string,
@@ -1152,6 +1183,31 @@ func waitForComposedRaceValue(
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for %s", name)
+	}
+}
+
+func waitForComposedRaceValueWithTicks(
+	t *testing.T,
+	clock *composedResponderClock,
+	values <-chan string,
+	want string,
+	name string,
+) {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case got := <-values:
+			if got != want {
+				t.Fatalf("%s = %q; want %q", name, got, want)
+			}
+			return
+		case <-clock.sleeps:
+			clock.advance <- struct{}{}
+		case <-timer.C:
+			t.Fatalf("timed out waiting for %s", name)
+		}
 	}
 }
 

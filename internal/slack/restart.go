@@ -1,3 +1,17 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package slack
 
 import (
@@ -109,17 +123,20 @@ func (n *Notifier) restartFeatures() []*feature.Feature {
 	return result
 }
 
-func (n *Notifier) runRestartPass() {
+func (n *Notifier) runRestartPass() bool {
 	settings := n.settings.SlackSettings()
-	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 ||
-		n.pending == nil || n.resolvedServerName() == "" {
-		return
+	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 {
+		return true
+	}
+	if n.pending == nil || n.resolvedServerName() == "" {
+		return false
 	}
 	var scanned, dispatched int
+	allReadable := true
 	for _, owner := range n.restartFeatures() {
 		select {
 		case <-n.stopCh:
-			return
+			return false
 		default:
 		}
 		record, err := n.recordFor(owner.ID)
@@ -143,14 +160,17 @@ func (n *Notifier) runRestartPass() {
 			continue
 		}
 		scanned++
-		work, readable := n.reconcilePendingWithAvailability(
-			settings, owner, owner, record, resolutionRestart,
+		work, readable := n.reconcilePendingWithPolicy(
+			settings, owner, owner, record, resolutionRestart, true,
 		)
-		work = append(work, n.owedClosureWork(settings, owner.ID, record, work)...)
+		if !readable {
+			allReadable = false
+			continue
+		}
 		n.recordMu.Lock()
 		changed := len(record.Pending) != oldCount
 		n.recordMu.Unlock()
-		if readable && (!terminalFeature(owner.Status) || changed) {
+		if !terminalFeature(owner.Status) || changed {
 			for _, recipient := range settings.Recipients {
 				key := destinationKey(string(recipient.Kind), recipient.ID)
 				n.recordMu.Lock()
@@ -181,50 +201,58 @@ func (n *Notifier) runRestartPass() {
 		}
 		dispatched += len(work)
 		if !n.dispatchRestartWork(owner.ID, work) {
-			return
+			return false
 		}
 	}
 	log.Printf("slack-notifier: reconciliation complete: features=%d deliveries=%d", scanned, dispatched)
+	return allReadable
 }
 
-func (n *Notifier) owedClosureWork(
+func (n *Notifier) closureWork(
 	settings ports.SlackRuntimeSettings, featureID string,
-	record *featureRecord, queued []workItem,
+	record *featureRecord, queued []workItem, onlyIdentities map[string]bool,
 ) []workItem {
 	n.recordMu.Lock()
 	defer n.recordMu.Unlock()
 	var work []workItem
-	for _, tracked := range record.Resolved {
-		for _, recipient := range settings.Recipients {
-			key := destinationKey(string(recipient.Kind), recipient.ID)
-			if !tracked.closureOwed(key) {
+	for _, inputs := range [][]pendingInputRecord{record.Pending, record.Resolved} {
+		for _, tracked := range inputs {
+			if onlyIdentities != nil && !onlyIdentities[tracked.Identity] {
 				continue
 			}
-			alreadyQueued := false
-			for _, item := range queued {
-				if item.destinationKey == key && item.reply.closure &&
-					item.reply.identity == tracked.Identity {
-					alreadyQueued = true
-					break
+			for _, recipient := range settings.Recipients {
+				key := destinationKey(string(recipient.Kind), recipient.ID)
+				if !tracked.closureOwed(key) {
+					continue
 				}
+				alreadyQueued := false
+				for _, item := range queued {
+					if item.destinationKey == key && item.reply.closure &&
+						item.reply.identity == tracked.Identity {
+						alreadyQueued = true
+						break
+					}
+				}
+				entry := record.Destinations[key]
+				if alreadyQueued || entry.ChannelID == "" || entry.RootTS == "" ||
+					!n.reserveClosureDelivery(featureID, tracked.Identity, key) {
+					continue
+				}
+				line := tracked.Tag + " was resolved in Agentico."
+				if tracked.Resolution.Kind == resolutionCleared {
+					line = tracked.Tag + " is no longer pending."
+				}
+				work = append(work, workItem{
+					featureID: featureID, sourceFeatureID: tracked.SourceFeatureID,
+					destinationKey: key, channelID: entry.ChannelID,
+					kind: string(recipient.Kind), responder: true,
+					closureReserved: true,
+					reply: replyPayload{
+						kind: kindNeedsInput, identity: tracked.Identity,
+						closure: true, fallback: scrub(settings.Token, line),
+					},
+				})
 			}
-			entry := record.Destinations[key]
-			if alreadyQueued || entry.ChannelID == "" || entry.RootTS == "" {
-				continue
-			}
-			line := tracked.Tag + " was resolved in Agentico."
-			if tracked.Resolution.Kind == resolutionCleared {
-				line = tracked.Tag + " is no longer pending."
-			}
-			work = append(work, workItem{
-				featureID: featureID, sourceFeatureID: tracked.SourceFeatureID,
-				destinationKey: key, channelID: entry.ChannelID,
-				kind: string(recipient.Kind), responder: true,
-				reply: replyPayload{
-					kind: kindNeedsInput, identity: tracked.Identity,
-					closure: true, fallback: scrub(settings.Token, line),
-				},
-			})
 		}
 	}
 	return work
@@ -252,7 +280,7 @@ func (n *Notifier) dispatchRestartWork(featureID string, work []workItem) bool {
 // sweepDestinations runs only when the effective recipient set changes. The
 // reconciliation path itself is idempotent for existing cards and item posts.
 func (n *Notifier) sweepDestinations() {
-	if n.startupRun.Load() && !n.startupDone.Load() {
+	if !n.startupDone.Load() {
 		return
 	}
 	settings := n.settings.SlackSettings()
@@ -262,11 +290,11 @@ func (n *Notifier) sweepDestinations() {
 	if key == n.sweepKey {
 		return
 	}
-	n.sweepKey = key
 	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 ||
 		n.pending == nil {
 		return
 	}
+	readableSweep := true
 	for _, owner := range n.restartFeatures() {
 		if n.stopped.Load() {
 			return
@@ -279,10 +307,11 @@ func (n *Notifier) sweepDestinations() {
 			log.Printf("slack-notifier: skipping unreadable Slack record during bootstrap: %v", err)
 			continue
 		}
-		work, readable := n.reconcilePendingWithAvailability(
-			settings, owner, owner, record, resolutionAgentico,
+		work, readable := n.reconcilePendingWithPolicy(
+			settings, owner, owner, record, resolutionAgentico, true,
 		)
 		if !readable {
+			readableSweep = false
 			continue
 		}
 		for _, recipient := range settings.Recipients {
@@ -317,6 +346,9 @@ func (n *Notifier) sweepDestinations() {
 		if !n.dispatchRestartWork(owner.ID, work) {
 			return
 		}
+	}
+	if readableSweep {
+		n.sweepKey = key
 	}
 }
 

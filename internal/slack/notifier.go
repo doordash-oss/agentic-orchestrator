@@ -165,6 +165,7 @@ type Notifier struct {
 	inputMu           sync.Mutex
 	trackedInputs     map[string]bool
 	pendingDeliveries map[string]struct{}
+	closureDeliveries map[string]struct{}
 
 	responderPollMu sync.Mutex
 	responderPolls  map[string]responderPollState
@@ -224,6 +225,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		recheckQueued:        map[string]bool{},
 		trackedInputs:        map[string]bool{},
 		pendingDeliveries:    map[string]struct{}{},
+		closureDeliveries:    map[string]struct{}{},
 		responderPolls:       map[string]responderPollState{},
 		responderNames:       map[string]string{},
 		responderThreadLocks: map[string]*sync.RWMutex{},
@@ -282,13 +284,20 @@ func (n *Notifier) SignalReady() {
 			return
 		}
 		n.sweepMu.Lock()
-		n.sweepKey = destinationFingerprint(n.settings.SlackSettings())
+		startupKey := destinationFingerprint(n.settings.SlackSettings())
+		n.sweepKey = startupKey
 		n.sweepMu.Unlock()
 		n.startupRun.Store(true)
 		n.startupWG.Add(1)
 		go func() {
 			defer n.startupWG.Done()
-			n.runRestartPass()
+			if !n.runRestartPass() {
+				n.sweepMu.Lock()
+				if n.sweepKey == startupKey {
+					n.sweepKey = ""
+				}
+				n.sweepMu.Unlock()
+			}
 			n.startupDone.Store(true)
 		}()
 	})
@@ -712,7 +721,7 @@ func (n *Notifier) reconcilePending(
 	record *featureRecord,
 	retiredResolutionKind string,
 ) []workItem {
-	work, _ := n.reconcilePendingWithAvailability(settings, owner, trigger, record, retiredResolutionKind)
+	work, _ := n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, true)
 	return work
 }
 
@@ -721,6 +730,16 @@ func (n *Notifier) reconcilePendingWithAvailability(
 	owner, trigger *feature.Feature,
 	record *featureRecord,
 	retiredResolutionKind string,
+) ([]workItem, bool) {
+	return n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, false)
+}
+
+func (n *Notifier) reconcilePendingWithPolicy(
+	settings ports.SlackRuntimeSettings,
+	owner, trigger *feature.Feature,
+	record *featureRecord,
+	retiredResolutionKind string,
+	retryOwed bool,
 ) ([]workItem, bool) {
 	if n.pending == nil {
 		log.Printf("slack-notifier: pending input source unavailable for feature %s", trigger.ID)
@@ -765,12 +784,15 @@ func (n *Notifier) reconcilePendingWithAvailability(
 			}
 		}
 	}
+	if !allSourcesReadable {
+		return nil, false
+	}
 
 	changed := false
 	n.recordMu.Lock()
 	kept := record.Pending[:0]
 	var retired []pendingInputRecord
-	var closures []pendingInputRecord
+	retiredIdentities := map[string]bool{}
 	for _, tracked := range record.Pending {
 		if _, sourceKnown := sourceFeatures[tracked.SourceFeatureID]; !sourceKnown {
 			kept = append(kept, tracked)
@@ -795,11 +817,9 @@ func (n *Notifier) reconcilePendingWithAvailability(
 					ResolvedAt: n.clock.Now().UTC(),
 				}
 			}
-			if tracked.Resolution.Kind != resolutionSlack {
-				closures = append(closures, tracked)
-			}
 			record.propagatePostingResolution(tracked.Identity, tracked.Resolution)
 			retired = append(retired, tracked)
+			retiredIdentities[tracked.Identity] = true
 			changed = true
 		}
 	}
@@ -896,35 +916,11 @@ func (n *Notifier) reconcilePendingWithAvailability(
 		n.recordMu.Unlock()
 	}
 
-	var work []workItem
-	for _, tracked := range closures {
-		line := tracked.Tag + " was resolved in Agentico."
-		if tracked.Resolution.Kind == resolutionCleared {
-			line = tracked.Tag + " is no longer pending."
-		}
-		for _, recipient := range settings.Recipients {
-			key := destinationKey(string(recipient.Kind), recipient.ID)
-			if tracked.MessageTS[key] == "" {
-				continue
-			}
-			destination := record.Destinations[key]
-			if destination.ChannelID == "" || destination.RootTS == "" {
-				continue
-			}
-			work = append(work, workItem{
-				featureID:       owner.ID,
-				sourceFeatureID: tracked.SourceFeatureID,
-				destinationKey:  key,
-				kind:            string(recipient.Kind),
-				channelID:       destination.ChannelID,
-				responder:       true,
-				reply: replyPayload{
-					kind: kindNeedsInput, fallback: scrub(settings.Token, line),
-					identity: tracked.Identity, closure: true,
-				},
-			})
-		}
+	var onlyIdentities map[string]bool
+	if !retryOwed {
+		onlyIdentities = retiredIdentities
 	}
+	work := n.closureWork(settings, owner.ID, record, nil, onlyIdentities)
 	for _, recipient := range settings.Recipients {
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
 		if err != nil {
@@ -1094,6 +1090,36 @@ func (n *Notifier) releasePendingDelivery(featureID, identity, destinationKey st
 	n.inputMu.Lock()
 	delete(n.pendingDeliveries, pendingDeliveryKey(featureID, identity, destinationKey))
 	n.inputMu.Unlock()
+}
+
+func (n *Notifier) reserveClosureDelivery(featureID, identity, destinationKey string) bool {
+	key := pendingDeliveryKey(featureID, identity, destinationKey)
+	n.inputMu.Lock()
+	defer n.inputMu.Unlock()
+	if _, reserved := n.closureDeliveries[key]; reserved {
+		return false
+	}
+	n.closureDeliveries[key] = struct{}{}
+	return true
+}
+
+func (n *Notifier) releaseClosureDelivery(featureID, identity, destinationKey string) {
+	n.inputMu.Lock()
+	delete(n.closureDeliveries, pendingDeliveryKey(featureID, identity, destinationKey))
+	n.inputMu.Unlock()
+}
+
+func (n *Notifier) closureDeliveryOwed(record *featureRecord, identity, destinationKey string) bool {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	for _, inputs := range [][]pendingInputRecord{record.Pending, record.Resolved} {
+		for _, item := range inputs {
+			if item.Identity == identity && item.closureOwed(destinationKey) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (n *Notifier) pendingDeliveryEligible(

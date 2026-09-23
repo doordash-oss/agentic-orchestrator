@@ -56,6 +56,14 @@ type Request struct {
 	ReturnedFileID string
 }
 
+// OrderedRequest identifies a write whose arrival must wait for earlier writes
+// in a test scenario. TextPrefix distinguishes successive writes to a thread.
+type OrderedRequest struct {
+	Method     string
+	Channel    string
+	TextPrefix string
+}
+
 // Reaction is one reaction summary on a seeded message.
 type Reaction struct {
 	Name  string   `json:"name"`
@@ -88,7 +96,11 @@ type Server struct {
 	requests  []Request
 	threads   map[threadKey][]Message
 	ownUserID string
+	echoPosts bool
 	nextFile  int64
+	order     []OrderedRequest
+	orderNext int
+	orderCond *sync.Cond
 	// defaultResponder answers unscripted calls (empty or missing method
 	// queue) so lifecycle tests need not pre-count posts. Nil keeps the
 	// unknown_method fallback.
@@ -109,6 +121,7 @@ func NewServer() *Server {
 		scripts: make(map[string][]Response),
 		threads: make(map[threadKey][]Message),
 	}
+	server.orderCond = sync.NewCond(&server.mu)
 	server.server = httptest.NewServer(http.HandlerFunc(server.serveHTTP))
 	return server
 }
@@ -128,6 +141,31 @@ func (s *Server) SetOwnUserID(userID string) {
 	s.ownUserID = userID
 }
 
+// EchoPostedMessages makes successful threaded posts visible to later replies
+// polls, as Slack does. It is opt-in to preserve existing scripted tests.
+func (s *Server) EchoPostedMessages(enabled bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.echoPosts = enabled
+}
+
+// SetRequestOrder serializes matching arrivals without changing their recorded
+// order. Calls not listed (such as replies polls and uploads) proceed normally.
+func (s *Server) SetRequestOrder(order []OrderedRequest) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.order = append([]OrderedRequest(nil), order...)
+	s.orderNext = 0
+	s.orderCond.Broadcast()
+}
+
+// OrderedRequestsRemaining reports writes that the scenario did not exercise.
+func (s *Server) OrderedRequestsRemaining() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.order) - s.orderNext
+}
+
 // SeedThread replaces the messages served for one channel and thread root.
 func (s *Server) SeedThread(channelID, rootTS string, messages []Message) {
 	s.mu.Lock()
@@ -137,6 +175,13 @@ func (s *Server) SeedThread(channelID, rootTS string, messages []Message) {
 		return timestampCompare(seeded[i].TS, seeded[j].TS) < 0
 	})
 	s.threads[threadKey{channel: channelID, rootTS: rootTS}] = seeded
+}
+
+// ThreadMessages returns the messages a replies poll currently sees.
+func (s *Server) ThreadMessages(channelID, rootTS string) []Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneMessages(s.threads[threadKey{channel: channelID, rootTS: rootTS}])
 }
 
 // URL returns a Slack-compatible API base URL.
@@ -205,6 +250,34 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.Lock()
+	for index := s.orderNext; index < len(s.order); index++ {
+		ordered := s.order[index]
+		channel, _ := request.Fields["channel"].(string)
+		text, _ := request.Fields["text"].(string)
+		if ordered.Method != method || ordered.Channel != channel ||
+			!strings.HasPrefix(text, ordered.TextPrefix) {
+			continue
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		timer := time.AfterFunc(time.Until(deadline), func() {
+			s.mu.Lock()
+			s.orderCond.Broadcast()
+			s.mu.Unlock()
+		})
+		for s.orderNext != index {
+			if !time.Now().Before(deadline) {
+				timer.Stop()
+				s.mu.Unlock()
+				http.Error(w, "ordered request timed out", http.StatusConflict)
+				return
+			}
+			s.orderCond.Wait()
+		}
+		timer.Stop()
+		s.orderNext++
+		s.orderCond.Broadcast()
+		break
+	}
 	s.requests = append(s.requests, request)
 	queue := s.scripts[method]
 	var response Response
@@ -226,6 +299,26 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	request.ReturnedTS, request.ReturnedFileID = returnedMetadata(response.Body)
 	s.requests[len(s.requests)-1].ReturnedTS = request.ReturnedTS
 	s.requests[len(s.requests)-1].ReturnedFileID = request.ReturnedFileID
+	if s.echoPosts && method == "chat.postMessage" && request.ReturnedTS != "" {
+		body, _ := response.Body.(map[string]any)
+		if ok, _ := body["ok"].(bool); ok {
+			channel, _ := request.Fields["channel"].(string)
+			root, _ := request.Fields["thread_ts"].(string)
+			if root != "" {
+				key := threadKey{channel: channel, rootTS: root}
+				if messages, exists := s.threads[key]; exists {
+					text, _ := request.Fields["text"].(string)
+					messages = append(messages, Message{
+						TS: request.ReturnedTS, ThreadTS: root, User: s.ownUserID, Text: text,
+					})
+					sort.SliceStable(messages, func(i, j int) bool {
+						return timestampCompare(messages[i].TS, messages[j].TS) < 0
+					})
+					s.threads[key] = messages
+				}
+			}
+		}
+	}
 	s.mu.Unlock()
 
 	if response.Started != nil {

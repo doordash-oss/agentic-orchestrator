@@ -65,6 +65,7 @@ type workItem struct {
 	needsCard                  bool
 	refresh                    bool
 	responder                  bool
+	closureReserved            bool
 	responderFeedback          bool
 	poll                       bool
 	suppressDestinationFailure bool
@@ -234,6 +235,11 @@ func (w *destinationWorker) itemRequiresWrite(item workItem) bool {
 	if item.needsCard && rootTS == "" {
 		return true
 	}
+	if item.reply.closure && !w.notifier.closureDeliveryOwed(
+		record, item.reply.identity, item.destinationKey,
+	) {
+		return false
+	}
 	if !item.responder && !w.notifier.pendingDeliveryEligible(
 		record, item.featureID, item.reply.identity, item.destinationKey,
 	) {
@@ -250,9 +256,15 @@ func (w *destinationWorker) handle(item workItem) {
 	if item.responderFeedback {
 		defer w.notifier.releaseResponderFeedback(item.channelID)
 	}
-	defer w.notifier.releasePendingDelivery(
-		item.featureID, item.reply.identity, item.destinationKey,
-	)
+	if item.closureReserved {
+		defer w.notifier.releaseClosureDelivery(
+			item.featureID, item.reply.identity, item.destinationKey,
+		)
+	} else if !item.reply.closure {
+		defer w.notifier.releasePendingDelivery(
+			item.featureID, item.reply.identity, item.destinationKey,
+		)
+	}
 	if item.delivery != nil && item.delivery.item.reservation != nil &&
 		item.delivery.item.reservation.canceled.Load() {
 		return
@@ -436,6 +448,11 @@ func (w *destinationWorker) postReply(item workItem) error {
 	) {
 		return errDeliveryIneligible
 	}
+	if item.reply.closure && !notifier.closureDeliveryOwed(
+		record, item.reply.identity, item.destinationKey,
+	) {
+		return errDeliveryIneligible
+	}
 	settings, _, ok := w.currentDelivery(item, item.reply.kind)
 	if !ok {
 		return errDeliveryIneligible
@@ -467,6 +484,11 @@ func (w *destinationWorker) postReply(item workItem) error {
 	defer threadLock.Unlock()
 	defer w.recordWrite()
 	send := func() (PostMessageResult, deliveryCredential, error) {
+		if item.reply.closure && !notifier.closureDeliveryOwed(
+			record, item.reply.identity, item.destinationKey,
+		) {
+			return PostMessageResult{}, deliveryCredential{}, errDeliveryIneligible
+		}
 		if !item.responder && !notifier.pendingDeliveryEligible(
 			record, item.featureID, item.reply.identity, item.destinationKey,
 		) {
@@ -973,7 +995,7 @@ func (w *destinationWorker) currentDelivery(
 	if category == kindProblems && !settings.Categories.Problems {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
-	if category == kindNeedsInput && !settings.Categories.NeedsInput {
+	if category == kindNeedsInput && !item.reply.closure && !settings.Categories.NeedsInput {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	found := false
@@ -987,7 +1009,8 @@ func (w *destinationWorker) currentDelivery(
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	featureID := item.featureID
-	if category == kindProgress || category == kindProblems || category == kindNeedsInput {
+	if !item.reply.closure &&
+		(category == kindProgress || category == kindProblems || category == kindNeedsInput) {
 		featureID = item.sourceFeatureID
 	}
 	current, err := w.notifier.store.Load(featureID)

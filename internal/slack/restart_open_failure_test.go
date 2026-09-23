@@ -18,10 +18,12 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/slack/testsupport"
 )
@@ -31,10 +33,11 @@ type heldRetryClock struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+	armed   atomic.Bool
 }
 
 func (c *heldRetryClock) Sleep(ctx context.Context, d time.Duration) bool {
-	if d == sleepChunk {
+	if c.armed.Load() && d == sleepChunk {
 		blocked := false
 		c.once.Do(func() { blocked = true })
 		if blocked {
@@ -47,6 +50,151 @@ func (c *heldRetryClock) Sleep(ctx context.Context, d time.Duration) bool {
 		}
 	}
 	return c.fakeClock.Sleep(ctx, d)
+}
+
+func TestSlackRestartEventOpeningWaitDoesNotBlockChannel(t *testing.T) {
+	h := newNotifierHarness(t, defaultTestSettings("xoxb-test", testRecipients()[1]))
+	owner := h.seedFeature("feature-1", nil)
+	record := &featureRecord{Version: recordVersion, Destinations: map[string]destinationRecord{
+		"channel:C-ENG": {Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: "100.000001"},
+	}, Pending: []pendingInputRecord{{
+		Identity: "permission:one", SourceFeatureID: owner.ID,
+		Kind: string(ports.SlackPendingPermission), RequestID: "one", Tag: "#1",
+		MessageTS: map[string]string{"channel:C-ENG": "100.000002"},
+	}}}
+	if err := persistFeatureRecord(h.stateDir, owner.ID, record); err != nil {
+		t.Fatal(err)
+	}
+	h.pending.setFromRecord(owner.ID, record)
+	n := h.newNotifier(0)
+	clock := &heldRetryClock{fakeClock: h.clock, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	n.clock = clock
+	n.Start()
+	t.Cleanup(func() {
+		select {
+		case <-clock.release:
+		default:
+			close(clock.release)
+		}
+		n.Stop(context.Background())
+	})
+	n.SignalReady()
+	waitFor(t, time.Second, func() bool { return n.startupDone.Load() })
+	clock.armed.Store(true)
+	baselinePosts := h.server.CallCount("chat.postMessage")
+	h.pending.set(owner.ID)
+	h.settings.mutate(func(s *ports.SlackRuntimeSettings) {
+		s.Recipients = append(s.Recipients, testRecipients()[0])
+	})
+	h.server.Script("conversations.open", testsupport.Response{
+		Status:  http.StatusTooManyRequests,
+		Headers: http.Header{"Retry-After": []string{"60"}},
+		Body:    map[string]any{"ok": false, "error": "ratelimited"},
+	})
+	n.DomainEventTap(ports.Event{Type: ports.PhaseStarted, FeatureID: owner.ID, Phase: feature.PhasePlan})
+	select {
+	case <-clock.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("event DM did not enter retry wait")
+	}
+	n.DomainEventTap(ports.Event{Type: ports.PhaseStarted, FeatureID: owner.ID, Phase: feature.PhaseImplement})
+	deadline := time.After(5 * time.Second)
+	for h.server.CallCount("chat.postMessage") < baselinePosts+3 {
+		select {
+		case <-deadline:
+			t.Fatalf("channel events held: posts=%#v", h.server.Requests("chat.postMessage"))
+		case <-time.After(time.Millisecond):
+		}
+	}
+	channel := postsTo(h.server, "C-ENG")
+	closures := 0
+	for _, post := range channel {
+		if fieldString(post, "text") == "#1 was resolved in Agentico." {
+			closures++
+		}
+	}
+	if closures != 1 {
+		t.Fatalf("channel closure count = %d; want one", closures)
+	}
+	close(clock.release)
+	n.sweepDestinations()
+	waitFor(t, 5*time.Second, func() bool { return h.server.CallCount("conversations.open") >= 2 })
+	waitFor(t, 5*time.Second, func() bool { return h.server.CallCount("chat.postMessage") >= baselinePosts+6 })
+	n.sweepDestinations()
+	if got := h.server.CallCount("chat.postMessage"); got != baselinePosts+6 {
+		t.Fatalf("posts after sweep = %d; want channel closure/two events and DM root/two events", got)
+	}
+}
+
+func TestSlackRestartResponderPollsWhileNewDMOpeningWaits(t *testing.T) {
+	h := newNotifierHarness(t, defaultTestSettings("xoxb-test", testRecipients()[1]))
+	owner := h.seedFeature("feature-1", nil)
+	record := &featureRecord{Version: recordVersion, Destinations: map[string]destinationRecord{
+		"channel:C-ENG": {
+			Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: "100.000001",
+			PostingIndex: []postingIndexEntry{{Identity: "permission:one", Tag: "#1", MessageTS: "100.000002"}},
+		},
+	}, Pending: []pendingInputRecord{{
+		Identity: "permission:one", SourceFeatureID: owner.ID,
+		Kind: string(ports.SlackPendingPermission), RequestID: "one", Tag: "#1",
+		MessageTS: map[string]string{"channel:C-ENG": "100.000002"},
+	}}}
+	if err := persistFeatureRecord(h.stateDir, owner.ID, record); err != nil {
+		t.Fatal(err)
+	}
+	h.pending.setFromRecord(owner.ID, record)
+	responderClock := newManualResponderClock()
+	answer := &fakeSlackAnswerPort{}
+	n := h.newNotifier(0)
+	n.responderClock = responderClock
+	n.answer = answer
+	clock := &heldRetryClock{fakeClock: h.clock, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	n.clock = clock
+	n.Start()
+	t.Cleanup(func() {
+		select {
+		case <-clock.release:
+		default:
+			close(clock.release)
+		}
+		n.Stop(context.Background())
+	})
+	n.SignalReady()
+	waitFor(t, time.Second, func() bool { return n.startupDone.Load() })
+	clock.armed.Store(true)
+	h.server.SeedThread("C-ENG", "100.000001", []testsupport.Message{
+		{TS: "100.000001"},
+		{TS: "100.000002", ThreadTS: "100.000001", Text: "pending"},
+		{TS: "100.000003", ThreadTS: "100.000001", Text: "allow", User: "U-ADA"},
+	})
+	h.settings.mutate(func(s *ports.SlackRuntimeSettings) {
+		s.Recipients = append(s.Recipients, testRecipients()[0])
+	})
+	h.server.Script("conversations.open", testsupport.Response{
+		Status:  http.StatusTooManyRequests,
+		Headers: http.Header{"Retry-After": []string{"60"}},
+		Body:    map[string]any{"ok": false, "error": "ratelimited"},
+	})
+	responderClock.tick(t)
+	select {
+	case <-clock.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sweep DM did not enter retry wait")
+	}
+	deadline := time.After(5 * time.Second)
+	for h.server.CallCount("conversations.replies") == 0 || len(answer.permissionSubmissions()) != 1 {
+		select {
+		case <-deadline:
+			t.Fatalf("polls=%#v submissions=%#v", h.server.Requests("conversations.replies"), answer.permissionSubmissions())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	close(clock.release)
+	waitFor(t, 5*time.Second, func() bool { return !n.sweepRunning.Load() })
+	responderClock.tick(t)
+	if got := len(answer.permissionSubmissions()); got != 1 {
+		t.Fatalf("permission submissions = %d; want one", got)
+	}
 }
 
 func TestSlackRestartOpeningWaitDoesNotBlockHealthyDestination(t *testing.T) {
@@ -73,6 +221,7 @@ func TestSlackRestartOpeningWaitDoesNotBlockHealthyDestination(t *testing.T) {
 			t.Cleanup(func() { n.Stop(context.Background()) })
 			clock := &heldRetryClock{fakeClock: h.clock, entered: make(chan struct{}, 1), release: make(chan struct{})}
 			n.clock = clock
+			clock.armed.Store(true)
 			defer func() {
 				select {
 				case <-clock.release:
@@ -133,6 +282,7 @@ func TestSlackRestartOpeningWaitDoesNotBlockAnotherNewDM(t *testing.T) {
 			t.Cleanup(func() { n.Stop(context.Background()) })
 			clock := &heldRetryClock{fakeClock: h.clock, entered: make(chan struct{}, 1), release: make(chan struct{})}
 			n.clock = clock
+			clock.armed.Store(true)
 			defer func() {
 				select {
 				case <-clock.release:
@@ -189,6 +339,7 @@ func TestSlackRestartOpeningRetryRechecksEligibility(t *testing.T) {
 			t.Cleanup(func() { n.Stop(context.Background()) })
 			clock := &heldRetryClock{fakeClock: h.clock, entered: make(chan struct{}, 1), release: make(chan struct{})}
 			n.clock = clock
+			clock.armed.Store(true)
 			h.server.Script("conversations.open", testsupport.Response{
 				Status:  http.StatusTooManyRequests,
 				Headers: http.Header{"Retry-After": []string{"60"}},
@@ -231,6 +382,7 @@ func TestSlackRestartOpeningRetryUsesCurrentCredential(t *testing.T) {
 	t.Cleanup(func() { n.Stop(context.Background()) })
 	clock := &heldRetryClock{fakeClock: h.clock, entered: make(chan struct{}, 1), release: make(chan struct{})}
 	n.clock = clock
+	clock.armed.Store(true)
 	defer func() {
 		select {
 		case <-clock.release:

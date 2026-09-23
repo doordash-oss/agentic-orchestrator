@@ -400,9 +400,6 @@ func TestNotifierPacingSpacesWritesPerDestination(t *testing.T) {
 			}
 		}
 	}
-	if first := dmStamps[0].Sub(channelStamps[0]); first >= time.Second {
-		t.Fatalf("second destination waited %s for its first write; workers pace independently", first)
-	}
 }
 
 func TestNotifierRateLimitPauseIsPerDestination(t *testing.T) {

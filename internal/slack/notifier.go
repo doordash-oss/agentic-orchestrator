@@ -132,6 +132,9 @@ type Notifier struct {
 	startupWG    sync.WaitGroup
 	sweepMu      sync.Mutex
 	sweepKey     string
+	sweepRunning atomic.Bool
+	openingMu    sync.Mutex
+	openingTail  map[string]chan struct{}
 
 	stopped  atomic.Bool
 	stopOnce sync.Once
@@ -231,6 +234,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		trackedInputs:        map[string]bool{},
 		pendingDeliveries:    map[string]struct{}{},
 		closureDeliveries:    map[string]struct{}{},
+		openingTail:          map[string]chan struct{}{},
 		responderPolls:       map[string]responderPollState{},
 		responderNames:       map[string]string{},
 		responderThreadLocks: map[string]*sync.RWMutex{},
@@ -636,6 +640,59 @@ func (n *Notifier) processItem(item queueItem) {
 	}
 	n.retryPendingRecord(owner.ID, record)
 
+	ready, opening := n.partitionOpeningRecipients(settings, []*feature.Feature{owner})
+	for _, recipient := range opening.Recipients {
+		destination := opening
+		destination.Recipients = []ports.SlackRecipient{recipient}
+		key := destinationKey(string(recipient.Kind), recipient.ID)
+		n.openingMu.Lock()
+		previous := n.openingTail[key]
+		done := make(chan struct{})
+		n.openingTail[key] = done
+		n.openingMu.Unlock()
+		openItem := queueItem{
+			kind: item.kind, event: item.event,
+			reservation: n.queue.reserveProtected(item.event),
+		}
+		n.startupWG.Add(1)
+		go func() {
+			defer n.startupWG.Done()
+			defer func() {
+				n.openingMu.Lock()
+				if n.openingTail[key] == done {
+					delete(n.openingTail, key)
+				}
+				close(done)
+				n.openingMu.Unlock()
+			}()
+			if previous != nil {
+				select {
+				case <-previous:
+				case <-n.stopCh:
+					n.queue.complete(openItem)
+					return
+				}
+			}
+			select {
+			case <-n.stopCh:
+				n.queue.complete(openItem)
+				return
+			default:
+			}
+			n.processItemFor(destination, owner, eventFeature, record, openItem)
+		}()
+	}
+	n.processItemFor(ready, owner, eventFeature, record, item)
+}
+
+func (n *Notifier) processItemFor(
+	settings ports.SlackRuntimeSettings, owner, eventFeature *feature.Feature,
+	record *featureRecord, item queueItem,
+) {
+	if len(settings.Recipients) == 0 {
+		n.queue.complete(item)
+		return
+	}
 	resolutionKind := resolutionAgentico
 	if item.event.Type == ports.FeatureInterrupted || item.event.Type == ports.FeatureRewound {
 		resolutionKind = resolutionCleared

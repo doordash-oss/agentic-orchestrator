@@ -112,7 +112,14 @@ func (n *Notifier) runResponder() {
 		if !n.startupDone.Load() {
 			continue
 		}
-		n.sweepDestinations()
+		if n.sweepRunning.CompareAndSwap(false, true) {
+			n.responderWG.Add(1)
+			go func() {
+				defer n.responderWG.Done()
+				defer n.sweepRunning.Store(false)
+				n.sweepDestinations()
+			}()
+		}
 		n.responderTick()
 	}
 }
@@ -143,8 +150,18 @@ func (n *Notifier) responderTick() {
 		if err != nil {
 			continue
 		}
+		ready := settings
+		ready.Recipients = nil
+		n.recordMu.Lock()
+		for _, recipient := range settings.Recipients {
+			key := destinationKey(string(recipient.Kind), recipient.ID)
+			if recipient.Kind != ports.SlackRecipientUser || record.Destinations[key].ChannelID != "" {
+				ready.Recipients = append(ready.Recipients, recipient)
+			}
+		}
+		n.recordMu.Unlock()
 		work, readable, unreadable := n.reconcilePendingWithPolicy(
-			settings,
+			ready,
 			owner,
 			owner,
 			record,

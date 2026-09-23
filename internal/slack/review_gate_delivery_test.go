@@ -440,7 +440,7 @@ func assertReviewUploadBeforeMessage(
 			rawUpload = i
 		}
 		if strings.HasSuffix(requests[i].Path, "files.getUploadURLExternal") &&
-			fieldString(requests[i], "filename") == "phase-plan.md" {
+			requests[i].ReturnedFileID == completedFiles[0].ID {
 			uploadURL = i
 		}
 	}

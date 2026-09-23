@@ -16,6 +16,7 @@ package slack
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -152,5 +153,57 @@ func TestSlackRestartBootstrapsDestinationWithoutFeatureEvent(t *testing.T) {
 	n.sweepDestinations()
 	if got := h.server.CallCount("chat.postMessage"); got != 2 {
 		t.Fatalf("duplicate root cards after unchanged tick: %d", got)
+	}
+}
+
+func TestSlackRestartTerminalClosureNeverBootstrapsNewRecipient(t *testing.T) {
+	for _, status := range []feature.Status{feature.StatusDone, feature.StatusPublished, feature.StatusFailed} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			h := newNotifierHarness(t, defaultTestSettings("xoxb-restart", testRecipients()...))
+			owner := h.seedFeature("feature-1", func(f *feature.Feature) { f.Status = status })
+			const key = "user:U-ADA"
+			record := &featureRecord{Version: recordVersion,
+				Destinations: map[string]destinationRecord{key: {
+					Kind: "user", SlackID: "U-ADA", ChannelID: "D-U-ADA", RootTS: "100.000001",
+					Ledger: []string{"100.000001", "100.000002"},
+				}},
+				Pending: []pendingInputRecord{{
+					Identity: "permission:stale", SourceFeatureID: owner.ID,
+					Kind: string(ports.SlackPendingPermission), RequestID: "stale",
+					Tag: "#1", MessageTS: map[string]string{key: "100.000002"},
+				}},
+			}
+			if err := persistFeatureRecord(h.stateDir, owner.ID, record); err != nil {
+				t.Fatal(err)
+			}
+			n := h.newNotifier(0)
+			n.Start()
+			t.Cleanup(func() { n.Stop(context.Background()) })
+			n.SignalReady()
+			waitFor(t, time.Second, func() bool { return n.startupDone.Load() })
+			waitFor(t, time.Second, func() bool {
+				return h.server.CallCount("chat.postMessage") >= 1 &&
+					h.server.CallCount("chat.update") >= 1
+			})
+			if got := h.server.Requests("chat.postMessage"); len(got) != 1 ||
+				fieldString(got[0], "channel") != "D-U-ADA" ||
+				fieldString(got[0], "text") != "#1 is no longer pending." {
+				t.Fatalf("terminal closure posts = %#v", got)
+			}
+			if got := h.server.Requests("chat.update"); len(got) != 1 ||
+				fieldString(got[0], "channel") != "D-U-ADA" {
+				t.Fatalf("terminal card edits = %#v", got)
+			}
+			if got := h.server.Requests("conversations.open"); len(got) != 0 {
+				t.Fatalf("new recipient was resolved: %#v", got)
+			}
+			current, err := loadFeatureRecord(h.stateDir, owner.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := current.Destinations["channel:C-ENG"]; exists {
+				t.Fatalf("terminal feature bootstrapped new recipient: %#v", current.Destinations)
+			}
+		})
 	}
 }

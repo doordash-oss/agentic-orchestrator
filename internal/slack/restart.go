@@ -16,6 +16,7 @@ package slack
 
 import (
 	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -160,34 +161,34 @@ func (n *Notifier) runRestartPass() bool {
 			continue
 		}
 		scanned++
-		work, readable := n.reconcilePendingWithPolicy(
+		work, readable, unreadable := n.reconcilePendingWithPolicy(
 			settings, owner, owner, record, resolutionRestart, true,
 		)
 		if !readable {
 			allReadable = false
 			continue
 		}
+		if len(unreadable) > 0 {
+			allReadable = false
+		}
 		n.recordMu.Lock()
 		changed := len(record.Pending) != oldCount
 		n.recordMu.Unlock()
+		if terminalFeature(owner.Status) {
+			work = slices.DeleteFunc(work, func(item workItem) bool {
+				n.recordMu.Lock()
+				entry := record.Destinations[item.destinationKey]
+				n.recordMu.Unlock()
+				return entry.RootTS == ""
+			})
+		}
 		if !terminalFeature(owner.Status) || changed {
 			for _, recipient := range settings.Recipients {
 				key := destinationKey(string(recipient.Kind), recipient.ID)
 				n.recordMu.Lock()
 				entry := record.Destinations[key]
 				n.recordMu.Unlock()
-				if entry.RootTS == "" {
-					channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
-					if err != nil {
-						log.Printf("slack-notifier: destination unavailable during reconciliation: %v", err)
-						continue
-					}
-					work = append(work, workItem{
-						featureID: owner.ID, sourceFeatureID: owner.ID,
-						destinationKey: key, channelID: channelID,
-						kind: string(recipient.Kind), needsCard: true,
-					})
-				} else if !hasRefreshWork(work, key) {
+				if entry.RootTS != "" && !hasRefreshWork(work, key) {
 					work = append(work, workItem{
 						featureID: owner.ID, sourceFeatureID: owner.ID,
 						destinationKey: key, channelID: entry.ChannelID,
@@ -195,6 +196,9 @@ func (n *Notifier) runRestartPass() bool {
 					})
 				}
 			}
+		}
+		if !terminalFeature(owner.Status) {
+			work = n.appendMissingCardWork(settings, owner.ID, record, work)
 		}
 		if len(work) == 0 {
 			continue
@@ -210,7 +214,7 @@ func (n *Notifier) runRestartPass() bool {
 
 func (n *Notifier) closureWork(
 	settings ports.SlackRuntimeSettings, featureID string,
-	record *featureRecord, queued []workItem, onlyIdentities map[string]bool,
+	record *featureRecord, onlyIdentities map[string]bool,
 ) []workItem {
 	n.recordMu.Lock()
 	defer n.recordMu.Unlock()
@@ -225,16 +229,8 @@ func (n *Notifier) closureWork(
 				if !tracked.closureOwed(key) {
 					continue
 				}
-				alreadyQueued := false
-				for _, item := range queued {
-					if item.destinationKey == key && item.reply.closure &&
-						item.reply.identity == tracked.Identity {
-						alreadyQueued = true
-						break
-					}
-				}
 				entry := record.Destinations[key]
-				if alreadyQueued || entry.ChannelID == "" || entry.RootTS == "" ||
+				if entry.ChannelID == "" || entry.RootTS == "" ||
 					!n.reserveClosureDelivery(featureID, tracked.Identity, key) {
 					continue
 				}
@@ -310,42 +306,17 @@ func (n *Notifier) sweepDestinations() {
 			log.Printf("slack-notifier: skipping unreadable Slack record during bootstrap: %v", err)
 			continue
 		}
-		work, readable := n.reconcilePendingWithPolicy(
+		work, readable, unreadable := n.reconcilePendingWithPolicy(
 			settings, owner, owner, record, resolutionAgentico, true,
 		)
 		if !readable {
 			readableSweep = false
 			continue
 		}
-		for _, recipient := range settings.Recipients {
-			destination := destinationKey(string(recipient.Kind), recipient.ID)
-			n.recordMu.Lock()
-			entry := record.Destinations[destination]
-			n.recordMu.Unlock()
-			if entry.RootTS != "" {
-				continue
-			}
-			alreadyEnsuresCard := false
-			for _, item := range work {
-				if item.destinationKey == destination && item.needsCard {
-					alreadyEnsuresCard = true
-					break
-				}
-			}
-			if alreadyEnsuresCard {
-				continue
-			}
-			channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
-			if err != nil {
-				log.Printf("slack-notifier: destination unavailable during bootstrap: %v", err)
-				continue
-			}
-			work = append(work, workItem{
-				featureID: owner.ID, sourceFeatureID: owner.ID,
-				destinationKey: destination, channelID: channelID,
-				kind: string(recipient.Kind), needsCard: true,
-			})
+		if len(unreadable) > 0 {
+			readableSweep = false
 		}
+		work = n.appendMissingCardWork(settings, owner.ID, record, work)
 		if !n.dispatchRestartWork(owner.ID, work) {
 			return
 		}
@@ -353,6 +324,42 @@ func (n *Notifier) sweepDestinations() {
 	if readableSweep {
 		n.sweepKey = key
 	}
+}
+
+func (n *Notifier) appendMissingCardWork(
+	settings ports.SlackRuntimeSettings, featureID string,
+	record *featureRecord, work []workItem,
+) []workItem {
+	for _, recipient := range settings.Recipients {
+		key := destinationKey(string(recipient.Kind), recipient.ID)
+		n.recordMu.Lock()
+		entry := record.Destinations[key]
+		n.recordMu.Unlock()
+		if entry.RootTS != "" {
+			continue
+		}
+		ensured := false
+		for _, item := range work {
+			if item.destinationKey == key && item.needsCard {
+				ensured = true
+				break
+			}
+		}
+		if ensured {
+			continue
+		}
+		channelID, err := n.resolveDestination(settings, record, featureID, recipient)
+		if err != nil {
+			log.Printf("slack-notifier: destination unavailable during bootstrap: %v", err)
+			continue
+		}
+		work = append(work, workItem{
+			featureID: featureID, sourceFeatureID: featureID,
+			destinationKey: key, channelID: channelID,
+			kind: string(recipient.Kind), needsCard: true,
+		})
+	}
+	return work
 }
 
 func hasRefreshWork(work []workItem, destination string) bool {

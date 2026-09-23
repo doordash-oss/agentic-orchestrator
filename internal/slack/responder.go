@@ -133,6 +133,7 @@ func (n *Notifier) responderTick() {
 		featureIDs[thread.featureID] = struct{}{}
 	}
 	unavailable := make(map[string]bool)
+	unavailableItems := make(map[string]map[string]bool)
 	for featureID := range featureIDs {
 		owner, err := n.store.Load(featureID)
 		if err != nil || owner == nil {
@@ -142,13 +143,15 @@ func (n *Notifier) responderTick() {
 		if err != nil {
 			continue
 		}
-		work, readable := n.reconcilePendingWithAvailability(
+		work, readable, unreadable := n.reconcilePendingWithPolicy(
 			settings,
 			owner,
 			owner,
 			record,
 			resolutionAgentico,
+			false,
 		)
+		unavailableItems[featureID] = unreadable
 		if !readable {
 			unavailable[featureID] = true
 		}
@@ -256,6 +259,14 @@ func (n *Notifier) responderTick() {
 	})
 	unjudged := make(map[string]string)
 	for _, candidate := range replies {
+		if candidate.TargetFound && unavailableItems[candidate.Thread.featureID][candidate.Target.Identity] {
+			key := responderPollKey(candidate.Thread.featureID, candidate.Thread.destinationKey)
+			if unjudged[key] == "" ||
+				compareSlackTimestamps(candidate.Message.TS, unjudged[key]) < 0 {
+				unjudged[key] = candidate.Message.TS
+			}
+			continue
+		}
 		if !n.processResponderReply(client, settings.Token, candidate) {
 			key := responderPollKey(candidate.Thread.featureID, candidate.Thread.destinationKey)
 			if unjudged[key] == "" ||
@@ -265,6 +276,9 @@ func (n *Notifier) responderTick() {
 		}
 	}
 	for _, candidate := range reactions {
+		if unavailableItems[candidate.Thread.featureID][candidate.Target.Identity] {
+			continue
+		}
 		n.processResponderReaction(client, settings.Token, candidate)
 	}
 	for _, thread := range threads {

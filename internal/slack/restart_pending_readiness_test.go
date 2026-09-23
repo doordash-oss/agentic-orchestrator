@@ -20,6 +20,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -204,5 +205,109 @@ func TestSlackRestartPendingReadFailureIsPerFeature(t *testing.T) {
 	}
 	if len(current.Pending) != 0 {
 		t.Fatalf("readable feature still pending = %#v", current.Pending)
+	}
+}
+
+func TestSlackRestartUnreadableChildDoesNotBlockParentThread(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		name := "pending error"
+		if missing {
+			name = "missing child"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newNotifierHarness(t, defaultTestSettings("xoxb-test", testRecipients()[1]))
+			const parent, child, key, root = "parent", "child", "channel:C-ENG", "100.000001"
+			h.seedFeature(parent, nil)
+			source := &restartPendingSource{
+				items: map[string][]ports.SlackPendingInput{parent: {{
+					Kind: ports.SlackPendingReview, ReviewID: "review-1", SourceRevision: "revision-1",
+				}}},
+			}
+			if !missing {
+				h.seedFeature(child, nil)
+				source.errs = map[string]error{child: errors.New("unavailable")}
+			}
+			record := &featureRecord{Version: recordVersion, Destinations: map[string]destinationRecord{
+				key: {
+					Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: root,
+					Ledger: []string{root, "100.000002", "100.000003", "100.000004"},
+					PostingIndex: []postingIndexEntry{
+						{Identity: "permission:child", MessageTS: "100.000002", Tag: "#1"},
+						{Identity: "permission:retired", MessageTS: "100.000003", Tag: "#2"},
+						{Identity: "review:review-1:revision-1", MessageTS: "100.000004", Tag: "#3"},
+					},
+				},
+			}, Pending: []pendingInputRecord{
+				{Identity: "permission:child", SourceFeatureID: child,
+					Kind: string(ports.SlackPendingPermission), RequestID: "child", Tag: "#1",
+					MessageTS: map[string]string{key: "100.000002"}},
+				{Identity: "permission:retired", SourceFeatureID: parent,
+					Kind: string(ports.SlackPendingPermission), RequestID: "retired", Tag: "#2",
+					MessageTS: map[string]string{key: "100.000003"}},
+				{Identity: "review:review-1:revision-1", SourceFeatureID: parent,
+					Kind: string(ports.SlackPendingReview), ReviewID: "review-1",
+					SourceRevision: "revision-1", Tag: "#3",
+					MessageTS: map[string]string{key: "100.000004"}},
+			}}
+			if err := persistFeatureRecord(h.stateDir, parent, record); err != nil {
+				t.Fatal(err)
+			}
+			originalChild := record.Pending[0]
+			h.server.SeedThread("C-ENG", root, []testsupport.Message{
+				{TS: root},
+				{TS: "100.000002", ThreadTS: root, Reactions: []testsupport.Reaction{
+					{Name: "white_check_mark", Users: []string{"U-ADA"}},
+				}},
+				{TS: "100.000003", ThreadTS: root},
+				{TS: "100.000004", ThreadTS: root},
+				{TS: "100.000005", ThreadTS: root, User: "U-ADA", Text: "approve"},
+			})
+			answer := &fakeSlackAnswerPort{reviewResults: []ports.SlackAnswerResult{
+				{Outcome: ports.SlackAnswerAccepted},
+			}}
+			n := NewNotifier(NotifierOptions{
+				Settings: h.settings, Store: h.store, StateDir: h.stateDir,
+				Observer: h.observer, Pending: source, Answer: answer, Clock: h.clock,
+				NewClient: func(token string) (slackClient, error) {
+					return NewClient(token, WithBaseURL(h.server.URL()))
+				},
+			})
+			n.records[parent] = record
+			t.Cleanup(func() { n.Stop(context.Background()) })
+			n.responderTick()
+			waitFor(t, 5*time.Second, func() bool {
+				return h.server.CallCount("chat.postMessage") >= 2 &&
+					h.server.CallCount("reactions.add") == 1
+			})
+			if got := answer.permissionSubmissions(); len(got) != 0 {
+				t.Fatalf("unreadable child was answered: %#v", got)
+			}
+			reviews := answer.reviewSubmissions()
+			if len(reviews) != 1 || reviews[0].SourceFeatureID != parent {
+				t.Fatalf("parent review submissions = %#v", reviews)
+			}
+			foundClosure := false
+			for _, post := range h.server.Requests("chat.postMessage") {
+				if fieldString(post, "text") == "#2 was resolved in Agentico." {
+					foundClosure = true
+				}
+			}
+			if !foundClosure {
+				t.Fatalf("parent closure missing: %#v", h.server.Requests("chat.postMessage"))
+			}
+			current, err := loadFeatureRecord(h.stateDir, parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			foundChild := false
+			for _, pending := range current.Pending {
+				if pending.Identity == "permission:child" {
+					foundChild = reflect.DeepEqual(pending, originalChild)
+				}
+			}
+			if !foundChild {
+				t.Fatalf("child tracking changed: %#v", current.Pending)
+			}
+		})
 	}
 }

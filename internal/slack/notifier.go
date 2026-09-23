@@ -721,7 +721,7 @@ func (n *Notifier) reconcilePending(
 	record *featureRecord,
 	retiredResolutionKind string,
 ) []workItem {
-	work, _ := n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, true)
+	work, _, _ := n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, true)
 	return work
 }
 
@@ -731,7 +731,8 @@ func (n *Notifier) reconcilePendingWithAvailability(
 	record *featureRecord,
 	retiredResolutionKind string,
 ) ([]workItem, bool) {
-	return n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, false)
+	work, readable, _ := n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, false)
+	return work, readable
 }
 
 func (n *Notifier) reconcilePendingWithPolicy(
@@ -740,12 +741,12 @@ func (n *Notifier) reconcilePendingWithPolicy(
 	record *featureRecord,
 	retiredResolutionKind string,
 	retryOwed bool,
-) ([]workItem, bool) {
+) ([]workItem, bool, map[string]bool) {
 	if n.pending == nil {
 		log.Printf("slack-notifier: pending input source unavailable for feature %s", trigger.ID)
-		return nil, false
+		return nil, false, nil
 	}
-	sourceIDs := map[string]bool{trigger.ID: true}
+	sourceIDs := map[string]bool{owner.ID: true, trigger.ID: true}
 	n.recordMu.Lock()
 	for _, tracked := range record.Pending {
 		sourceIDs[tracked.SourceFeatureID] = true
@@ -760,17 +761,15 @@ func (n *Notifier) reconcilePendingWithPolicy(
 	liveByIdentity := map[string]ports.SlackPendingInput{}
 	var liveOrder []string
 	sourceFeatures := map[string]*feature.Feature{}
-	allSourcesReadable := true
 	for _, sourceID := range orderedSources {
 		sourceFeature, err := n.store.Load(sourceID)
 		if err != nil || sourceFeature == nil {
-			allSourcesReadable = false
+			log.Printf("slack-notifier: pending input source unavailable for feature %s", sourceID)
 			continue
 		}
 		live, err := n.pending.PendingSlackInputs(sourceID)
 		if err != nil {
 			log.Printf("slack-notifier: reading pending inputs for feature %s failed: source unavailable", sourceID)
-			allSourcesReadable = false
 			continue
 		}
 		sourceFeatures[sourceID] = sourceFeature
@@ -784,8 +783,16 @@ func (n *Notifier) reconcilePendingWithPolicy(
 			}
 		}
 	}
-	if !allSourcesReadable {
-		return nil, false
+	unavailableIdentities := make(map[string]bool)
+	n.recordMu.Lock()
+	for _, tracked := range record.Pending {
+		if sourceFeatures[tracked.SourceFeatureID] == nil {
+			unavailableIdentities[tracked.Identity] = true
+		}
+	}
+	n.recordMu.Unlock()
+	if sourceFeatures[owner.ID] == nil {
+		return nil, false, unavailableIdentities
 	}
 
 	changed := false
@@ -920,14 +927,22 @@ func (n *Notifier) reconcilePendingWithPolicy(
 	if !retryOwed {
 		onlyIdentities = retiredIdentities
 	}
-	work := n.closureWork(settings, owner.ID, record, nil, onlyIdentities)
+	work := n.closureWork(settings, owner.ID, record, onlyIdentities)
 	for _, recipient := range settings.Recipients {
+		key := destinationKey(string(recipient.Kind), recipient.ID)
+		if terminalFeature(owner.Status) {
+			n.recordMu.Lock()
+			entry := record.Destinations[key]
+			n.recordMu.Unlock()
+			if entry.RootTS == "" {
+				continue
+			}
+		}
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
 		if err != nil {
 			log.Printf("slack-notifier: skipping %s destination for needs input: %v", recipient.Kind, err)
 			continue
 		}
-		key := destinationKey(string(recipient.Kind), recipient.ID)
 		postedAny := false
 		if settings.Categories.NeedsInput {
 			n.recordMu.Lock()
@@ -998,7 +1013,7 @@ func (n *Notifier) reconcilePendingWithPolicy(
 			})
 		}
 	}
-	return work, allSourcesReadable
+	return work, true, unavailableIdentities
 }
 
 func pendingHasPostedMessage(input pendingInputRecord) bool {

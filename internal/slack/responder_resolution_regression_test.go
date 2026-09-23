@@ -324,7 +324,8 @@ func TestSlackResponderNoLongerPendingClosesEveryDestinationImmediately(t *testi
 	if len(persisted.Pending) != 1 ||
 		persisted.Pending[0].Resolution == nil ||
 		persisted.Pending[0].Resolution.Kind != resolutionAgentico ||
-		!persisted.Pending[0].Resolution.ClosureSent {
+		!persisted.Pending[0].Resolution.ClosureAcknowledged[resolutionChannelKey] ||
+		!persisted.Pending[0].Resolution.ClosureAcknowledged[resolutionUserKey] {
 		t.Fatalf("pending = %#v; want immediate durable Agentico resolution", persisted.Pending)
 	}
 	beforePosts := harness.server.CallCount("chat.postMessage")
@@ -497,13 +498,13 @@ func TestSlackResponderRetentionCapBoundsFullRecordsAndPollRange(t *testing.T) {
 	if len(persisted.Pending) != 1 || persisted.Pending[0].Identity != live.Identity {
 		t.Fatalf("pending = %#v; want only newest live item", persisted.Pending)
 	}
-	if len(persisted.Resolved) != responderResolvedRetentionLimit {
+	if len(persisted.Resolved) != len(inputs)-1 {
 		t.Fatalf(
-			"resolved count = %d; want retention cap %d",
-			len(persisted.Resolved), responderResolvedRetentionLimit,
+			"resolved count = %d; want %d closures retained until acknowledged",
+			len(persisted.Resolved), len(inputs)-1,
 		)
 	}
-	if got, want := persisted.Resolved[0].Identity, inputs[1].Identity; got != want {
+	if got, want := persisted.Resolved[0].Identity, inputs[0].Identity; got != want {
 		t.Fatalf("oldest retained identity = %q; want %q", got, want)
 	}
 	if got, want := persisted.Resolved[len(persisted.Resolved)-1].Identity,
@@ -531,9 +532,9 @@ func TestSlackResponderRetentionCapBoundsFullRecordsAndPollRange(t *testing.T) {
 	}
 	for _, poll := range polls {
 		channelID := fieldString(poll, "channel")
-		wantOldest := inputs[1].MessageTS[resolutionChannelKey]
+		wantOldest := inputs[0].MessageTS[resolutionChannelKey]
 		if channelID == resolutionUserChannel {
-			wantOldest = inputs[1].MessageTS[resolutionUserKey]
+			wantOldest = inputs[0].MessageTS[resolutionUserKey]
 		}
 		if got := fieldString(poll, "oldest"); got != wantOldest {
 			t.Errorf("oldest for %s = %q; want %q", channelID, got, wantOldest)
@@ -542,6 +543,10 @@ func TestSlackResponderRetentionCapBoundsFullRecordsAndPollRange(t *testing.T) {
 	waitFor(t, time.Second, func() bool {
 		return harness.server.CallCount("chat.postMessage") ==
 			2*(len(inputs)-1)
+	})
+	waitFor(t, time.Second, func() bool {
+		updated, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
+		return err == nil && len(updated.Resolved) == responderResolvedRetentionLimit
 	})
 	for _, request := range harness.server.Requests("chat.postMessage") {
 		if strings.Contains(fieldString(request, "text"), "already answered") {
@@ -616,6 +621,13 @@ func TestSlackResponderRetentionCapKeepsReducedReplyTargeting(t *testing.T) {
 		Target:      target,
 		TargetFound: true,
 	}
+	// Exercise historical targeting as with a legacy record that predates the
+	// reply watermark; normal polling skips already-seen earlier replies.
+	notifier.recordMu.Lock()
+	destination := notifier.records[resolutionFeatureID].Destinations[resolutionChannelKey]
+	destination.LastSeenReplyTS = ""
+	notifier.records[resolutionFeatureID].Destinations[resolutionChannelKey] = destination
+	notifier.recordMu.Unlock()
 
 	waitFor(t, time.Second, func() bool {
 		notifier.processResponderReply(client, "xoxb-resolution", candidate)
@@ -652,7 +664,9 @@ func TestSlackResponderIdlePrunesTwentyResolvedItemsAndPostingIndex(t *testing.T
 		record.Resolved[index].Resolution = &postingResolution{
 			Kind: resolutionAgentico, ResolvedAt: time.Date(
 				2026, 9, 22, 12, 0, index, 0, time.UTC,
-			), ClosureSent: true,
+			), ClosureAcknowledged: map[string]bool{
+				resolutionChannelKey: true, resolutionUserKey: true,
+			},
 		}
 	}
 	for key, destination := range record.Destinations {
@@ -678,13 +692,17 @@ func TestSlackResponderIdlePrunesTwentyResolvedItemsAndPostingIndex(t *testing.T
 	waitFor(t, time.Second, func() bool {
 		return harness.server.CallCount("chat.postMessage") == 2
 	})
+	waitFor(t, time.Second, func() bool {
+		current, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
+		return err == nil && len(current.Resolved) == 0
+	})
 	persisted, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(persisted.Pending) != 0 || len(persisted.Resolved) != 0 {
 		t.Fatalf(
-			"pending=%#v resolved=%#v; want all idle input state pruned",
+			"pending=%#v resolved=%#v; want idle input state pruned after both acknowledgements",
 			persisted.Pending, persisted.Resolved,
 		)
 	}

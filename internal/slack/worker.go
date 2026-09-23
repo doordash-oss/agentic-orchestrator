@@ -85,6 +85,7 @@ type replyPayload struct {
 	errorCode string
 	inputKind string
 	identity  string
+	closure   bool
 	tag       string
 	review    *reviewDelivery
 }
@@ -500,11 +501,68 @@ func (w *destinationWorker) postReply(item workItem) error {
 	notifier.recordMu.Lock()
 	entry := record.Destinations[item.destinationKey]
 	entry.ledgerAppend(result.TS)
-	if item.reply.identity != "" {
+	if item.reply.closure {
+		for i := range record.Pending {
+			pending := &record.Pending[i]
+			if pending.Identity == item.reply.identity && pending.Resolution != nil {
+				if pending.Resolution.ClosureAcknowledged == nil {
+					pending.Resolution.ClosureAcknowledged = map[string]bool{}
+				}
+				pending.Resolution.ClosureAcknowledged[item.destinationKey] = true
+			}
+		}
+		for i := range record.Resolved {
+			pending := &record.Resolved[i]
+			if pending.Identity == item.reply.identity && pending.Resolution != nil {
+				if pending.Resolution.ClosureAcknowledged == nil {
+					pending.Resolution.ClosureAcknowledged = map[string]bool{}
+				}
+				pending.Resolution.ClosureAcknowledged[item.destinationKey] = true
+			}
+		}
+		for i := range entry.PostingIndex {
+			posting := &entry.PostingIndex[i]
+			if posting.Identity == item.reply.identity && posting.Resolution != nil {
+				if posting.Resolution.ClosureAcknowledged == nil {
+					posting.Resolution.ClosureAcknowledged = map[string]bool{}
+				}
+				posting.Resolution.ClosureAcknowledged[item.destinationKey] = true
+			}
+		}
+		if len(record.Pending) > 0 && len(record.Resolved) > responderResolvedRetentionLimit {
+			kept := make([]pendingInputRecord, 0, len(record.Resolved))
+			for i, pending := range record.Resolved {
+				if i >= len(record.Resolved)-responderResolvedRetentionLimit ||
+					pending.hasOwedClosure() {
+					kept = append(kept, pending)
+				}
+			}
+			record.Resolved = kept
+		}
+		if len(record.Pending) == 0 {
+			owed := false
+			for _, pending := range record.Resolved {
+				if pending.hasOwedClosure() {
+					owed = true
+					break
+				}
+			}
+			if !owed {
+				record.Resolved = nil
+				entry.PostingIndex = nil
+				entry.SubmittedReplies = nil
+				for key, destination := range record.Destinations {
+					destination.PostingIndex = nil
+					destination.SubmittedReplies = nil
+					record.Destinations[key] = destination
+				}
+			}
+		}
+	} else if item.reply.identity != "" {
 		entry.postingAppend(item.reply.identity, result.TS, item.reply.tag)
 	}
 	record.Destinations[item.destinationKey] = entry
-	if item.reply.identity != "" {
+	if item.reply.identity != "" && !item.reply.closure {
 		for i := range record.Pending {
 			if record.Pending[i].Identity != item.reply.identity {
 				continue

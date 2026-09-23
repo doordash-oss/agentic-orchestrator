@@ -18,6 +18,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -107,6 +108,10 @@ func normalizeResponderReply(text string) string {
 func (n *Notifier) runResponder() {
 	defer n.responderWG.Done()
 	for n.responderClock.Sleep(n.responderBase, responderPollInterval) {
+		if n.startupRun.Load() && !n.startupDone.Load() {
+			continue
+		}
+		n.sweepDestinations()
 		n.responderTick()
 	}
 }
@@ -126,6 +131,7 @@ func (n *Notifier) responderTick() {
 	for _, thread := range threads {
 		featureIDs[thread.featureID] = struct{}{}
 	}
+	unavailable := make(map[string]bool)
 	for featureID := range featureIDs {
 		owner, err := n.store.Load(featureID)
 		if err != nil || owner == nil {
@@ -135,13 +141,16 @@ func (n *Notifier) responderTick() {
 		if err != nil {
 			continue
 		}
-		work := n.reconcilePending(
+		work, readable := n.reconcilePendingWithAvailability(
 			settings,
 			owner,
 			owner,
 			record,
 			resolutionAgentico,
 		)
+		if !readable {
+			unavailable[featureID] = true
+		}
 		if len(work) > 0 {
 			item := queueItem{
 				kind: kindNeedsInput,
@@ -154,6 +163,9 @@ func (n *Notifier) responderTick() {
 		}
 	}
 	threads = n.responderThreads(settings)
+	threads = slices.DeleteFunc(threads, func(thread responderThread) bool {
+		return unavailable[thread.featureID]
+	})
 	if len(threads) == 0 {
 		return
 	}
@@ -164,6 +176,7 @@ func (n *Notifier) responderTick() {
 	active := make(map[string]bool, len(threads))
 	var replies []responderReplyCandidate
 	var reactions []responderReactionCandidate
+	returned := make(map[string][]string, len(threads))
 	for _, thread := range threads {
 		key := responderPollKey(thread.featureID, thread.destinationKey)
 		active[key] = true
@@ -199,6 +212,11 @@ func (n *Notifier) responderTick() {
 				break
 			}
 			n.handleResponderPollSuccess(settings, thread, &state)
+			for _, message := range page.Messages {
+				if message.TS != "" && message.TS != thread.rootTS {
+					returned[key] = append(returned[key], message.TS)
+				}
+			}
 			pageReplies, pageReactions := n.extractResponderCandidates(thread, page.Messages)
 			replies = append(replies, pageReplies...)
 			reactions = append(reactions, pageReactions...)
@@ -232,11 +250,22 @@ func (n *Notifier) responderTick() {
 		}
 		return reactions[i].userOrder < reactions[j].userOrder
 	})
+	unjudged := make(map[string]string)
 	for _, candidate := range replies {
-		n.processResponderReply(client, settings.Token, candidate)
+		if !n.processResponderReply(client, settings.Token, candidate) {
+			key := responderPollKey(candidate.Thread.featureID, candidate.Thread.destinationKey)
+			if unjudged[key] == "" ||
+				compareSlackTimestamps(candidate.Message.TS, unjudged[key]) < 0 {
+				unjudged[key] = candidate.Message.TS
+			}
+		}
 	}
 	for _, candidate := range reactions {
 		n.processResponderReaction(client, settings.Token, candidate)
+	}
+	for _, thread := range threads {
+		key := responderPollKey(thread.featureID, thread.destinationKey)
+		n.advanceResponderReplyMark(thread, returned[key], unjudged[key])
 	}
 	n.responderPollMu.Lock()
 	for key := range n.responderPolls {
@@ -474,6 +503,8 @@ func (n *Notifier) extractResponderCandidates(
 			continue
 		}
 		if message.TS == "" ||
+			(destination.LastSeenReplyTS != "" &&
+				compareSlackTimestamps(message.TS, destination.LastSeenReplyTS) <= 0) ||
 			destination.ledgerContains(message.TS) ||
 			destination.hasReactionForMessage(message.TS) ||
 			destination.submittedReplyContains(message.TS) {
@@ -520,6 +551,8 @@ func (n *Notifier) refreshResponderReplyCandidate(
 	}
 	destination, ok := record.Destinations[candidate.Thread.destinationKey]
 	if !ok ||
+		(destination.LastSeenReplyTS != "" &&
+			compareSlackTimestamps(candidate.Message.TS, destination.LastSeenReplyTS) <= 0) ||
 		destination.ledgerContains(candidate.Message.TS) ||
 		destination.hasReactionForMessage(candidate.Message.TS) ||
 		destination.submittedReplyContains(candidate.Message.TS) {
@@ -558,26 +591,26 @@ func (n *Notifier) processResponderReply(
 	client slackClient,
 	token string,
 	candidate responderReplyCandidate,
-) {
+) bool {
 	claimKey := responderReplyClaimKey(candidate)
 	threadLock := n.responderThreadLock(
 		candidate.Thread.featureID,
 		candidate.Thread.destinationKey,
 	)
 	if !threadLock.TryRLock() {
-		return
+		return false
 	}
 	defer threadLock.RUnlock()
 	var current bool
 	candidate, current = n.refreshResponderReplyCandidate(candidate)
 	if !current {
-		return
+		return true
 	}
 	if !n.claimResponderCandidate(claimKey) {
-		return
+		return false
 	}
 	if !candidate.TargetFound {
-		if !n.rejectResponderReply(
+		judged := n.rejectResponderReply(
 			token,
 			candidate,
 			pendingInputRecord{},
@@ -585,16 +618,17 @@ func (n *Notifier) processResponderReply(
 			"question",
 			"This reply does not target an answerable item. Answer in Agentico.",
 			claimKey,
-		) {
+		)
+		if !judged {
 			n.releaseResponderClaim(claimKey)
 		}
-		return
+		return judged
 	}
 	pending, ok := n.pendingResponderTarget(candidate.Thread.featureID, candidate.Target.Identity)
 	if !ok {
 		if candidate.Target.Resolution == nil {
 			n.releaseResponderClaim(claimKey)
-			return
+			return false
 		}
 		pending = pendingInputRecord{
 			Identity:        candidate.Target.Identity,
@@ -604,14 +638,15 @@ func (n *Notifier) processResponderReply(
 		}
 	}
 	if pending.Resolution != nil {
-		if !n.rejectResolvedReply(token, candidate, pending, pending.Resolution, claimKey) {
+		judged := n.rejectResolvedReply(token, candidate, pending, pending.Resolution, claimKey)
+		if !judged {
 			n.releaseResponderClaim(claimKey)
 		}
-		return
+		return judged
 	}
 	decision, parsed := responderReplyDecision(pending.Kind, candidate.Message.Text)
 	if !parsed {
-		if !n.rejectResponderReply(
+		judged := n.rejectResponderReply(
 			token,
 			candidate,
 			pending,
@@ -619,10 +654,11 @@ func (n *Notifier) processResponderReply(
 			"question",
 			responderHint(pending),
 			claimKey,
-		) {
+		)
+		if !judged {
 			n.releaseResponderClaim(claimKey)
 		}
-		return
+		return judged
 	}
 	n.beginResponderSubmission(candidate.Thread.featureID, candidate.Target.Identity)
 	defer n.endResponderSubmission(candidate.Thread.featureID, candidate.Target.Identity)
@@ -640,7 +676,7 @@ func (n *Notifier) processResponderReply(
 		) {
 			n.releaseResponderClaim(claimKey)
 		}
-		return
+		return true
 	}
 	if n.resolveResponderTarget(
 		candidate.Thread.featureID,
@@ -658,9 +694,44 @@ func (n *Notifier) processResponderReply(
 			claimKey,
 		)
 		n.emitResponderAccepted(candidate.Thread, pending, decision, "reply")
-		return
+		return true
 	}
 	n.releaseResponderClaim(claimKey)
+	return true
+}
+
+func (n *Notifier) advanceResponderReplyMark(
+	thread responderThread, returned []string, oldestUnjudged string,
+) {
+	if len(returned) == 0 {
+		return
+	}
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[thread.featureID]
+	if record == nil {
+		return
+	}
+	destination, ok := record.Destinations[thread.destinationKey]
+	if !ok {
+		return
+	}
+	newest := destination.LastSeenReplyTS
+	for _, ts := range returned {
+		if oldestUnjudged != "" && compareSlackTimestamps(ts, oldestUnjudged) >= 0 {
+			continue
+		}
+		if newest == "" || compareSlackTimestamps(ts, newest) > 0 {
+			newest = ts
+		}
+	}
+	if newest == destination.LastSeenReplyTS {
+		return
+	}
+	destination.LastSeenReplyTS = newest
+	record.Destinations[thread.destinationKey] = destination
+	err := n.persistRecordLocked(thread.featureID, record, "")
+	n.logPersistError(err, "")
 }
 
 func (n *Notifier) processResponderReaction(
@@ -1400,9 +1471,8 @@ func (n *Notifier) resolveResponderTargetByAgentico(
 			return pendingInputRecord{}, false
 		}
 		record.Pending[i].Resolution = &postingResolution{
-			Kind:        resolutionAgentico,
-			ResolvedAt:  n.responderClock.Now().UTC(),
-			ClosureSent: true,
+			Kind:       resolutionAgentico,
+			ResolvedAt: n.responderClock.Now().UTC(),
 		}
 		resolved = record.Pending[i]
 		break
@@ -1448,6 +1518,8 @@ func (n *Notifier) enqueueResponderClosure(
 					token,
 					pending.Tag+" was resolved in Agentico.",
 				),
+				identity: pending.Identity,
+				closure:  true,
 			},
 		})
 	}

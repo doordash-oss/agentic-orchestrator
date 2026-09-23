@@ -44,6 +44,10 @@ type FeatureLoader interface {
 	Load(id string) (*feature.Feature, error)
 }
 
+type featureLister interface {
+	List() ([]*feature.Feature, error)
+}
+
 // EventObserver receives the notifier's observability events.
 type EventObserver interface {
 	Emit(observe.Event) error
@@ -122,6 +126,12 @@ type Notifier struct {
 
 	serverNameMu sync.RWMutex
 	serverName   string
+	readyOnce    sync.Once
+	startupDone  atomic.Bool
+	startupRun   atomic.Bool
+	startupWG    sync.WaitGroup
+	sweepMu      sync.Mutex
+	sweepKey     string
 
 	stopped  atomic.Bool
 	stopOnce sync.Once
@@ -264,6 +274,26 @@ func (n *Notifier) resolvedServerName() string {
 	return n.serverName
 }
 
+// SignalReady starts reconciliation after the server has bound its Slack
+// ports and the resolved server name is available.
+func (n *Notifier) SignalReady() {
+	n.readyOnce.Do(func() {
+		if n.stopped.Load() {
+			return
+		}
+		n.sweepMu.Lock()
+		n.sweepKey = destinationFingerprint(n.settings.SlackSettings())
+		n.sweepMu.Unlock()
+		n.startupRun.Store(true)
+		n.startupWG.Add(1)
+		go func() {
+			defer n.startupWG.Done()
+			n.runRestartPass()
+			n.startupDone.Store(true)
+		}()
+	})
+}
+
 // Start launches the dispatcher goroutine and opens intake.
 func (n *Notifier) Start() {
 	if n.stopped.Load() {
@@ -293,6 +323,7 @@ func (n *Notifier) Stop(ctx context.Context) {
 		done := make(chan struct{})
 		go func() {
 			n.dispatcherWG.Wait()
+			n.startupWG.Wait()
 			n.responderWG.Wait()
 			n.workerWG.Wait()
 			n.observerWG.Wait()
@@ -681,8 +712,19 @@ func (n *Notifier) reconcilePending(
 	record *featureRecord,
 	retiredResolutionKind string,
 ) []workItem {
+	work, _ := n.reconcilePendingWithAvailability(settings, owner, trigger, record, retiredResolutionKind)
+	return work
+}
+
+func (n *Notifier) reconcilePendingWithAvailability(
+	settings ports.SlackRuntimeSettings,
+	owner, trigger *feature.Feature,
+	record *featureRecord,
+	retiredResolutionKind string,
+) ([]workItem, bool) {
 	if n.pending == nil {
-		return nil
+		log.Printf("slack-notifier: pending input source unavailable for feature %s", trigger.ID)
+		return nil, false
 	}
 	sourceIDs := map[string]bool{trigger.ID: true}
 	n.recordMu.Lock()
@@ -699,14 +741,17 @@ func (n *Notifier) reconcilePending(
 	liveByIdentity := map[string]ports.SlackPendingInput{}
 	var liveOrder []string
 	sourceFeatures := map[string]*feature.Feature{}
+	allSourcesReadable := true
 	for _, sourceID := range orderedSources {
 		sourceFeature, err := n.store.Load(sourceID)
 		if err != nil || sourceFeature == nil {
+			allSourcesReadable = false
 			continue
 		}
 		live, err := n.pending.PendingSlackInputs(sourceID)
 		if err != nil {
-			log.Printf("slack-notifier: reading pending inputs for feature %s failed: %v", sourceID, err)
+			log.Printf("slack-notifier: reading pending inputs for feature %s failed: source unavailable", sourceID)
+			allSourcesReadable = false
 			continue
 		}
 		sourceFeatures[sourceID] = sourceFeature
@@ -737,14 +782,20 @@ func (n *Notifier) reconcilePending(
 			kept = append(kept, tracked)
 		} else {
 			if tracked.Resolution == nil {
+				resolvedKind := retiredResolutionKind
+				if resolvedKind == resolutionRestart {
+					resolvedKind = resolutionAgentico
+					if tracked.Kind == string(ports.SlackPendingPermission) ||
+						tracked.Kind == string(ports.SlackPendingQuestion) {
+						resolvedKind = resolutionCleared
+					}
+				}
 				tracked.Resolution = &postingResolution{
-					Kind:       retiredResolutionKind,
+					Kind:       resolvedKind,
 					ResolvedAt: n.clock.Now().UTC(),
 				}
 			}
-			if tracked.Resolution.Kind != resolutionSlack &&
-				!tracked.Resolution.ClosureSent {
-				tracked.Resolution.ClosureSent = true
+			if tracked.Resolution.Kind != resolutionSlack {
 				closures = append(closures, tracked)
 			}
 			record.propagatePostingResolution(tracked.Identity, tracked.Resolution)
@@ -808,13 +859,24 @@ func (n *Notifier) reconcilePending(
 			}
 		}
 		if len(record.Resolved) > responderResolvedRetentionLimit {
-			record.Resolved = append(
-				[]pendingInputRecord(nil),
-				record.Resolved[len(record.Resolved)-responderResolvedRetentionLimit:]...,
-			)
+			kept := make([]pendingInputRecord, 0, len(record.Resolved))
+			for i, tracked := range record.Resolved {
+				if i >= len(record.Resolved)-responderResolvedRetentionLimit ||
+					tracked.hasOwedClosure() {
+					kept = append(kept, tracked)
+				}
+			}
+			record.Resolved = kept
 		}
 	} else if len(record.Resolved) > 0 || len(retired) > 0 {
-		record.Resolved = nil
+		record.Resolved = append(record.Resolved, retired...)
+		kept := record.Resolved[:0]
+		for _, tracked := range record.Resolved {
+			if tracked.hasOwedClosure() {
+				kept = append(kept, tracked)
+			}
+		}
+		record.Resolved = kept
 		for key, destination := range record.Destinations {
 			destination.PostingIndex = nil
 			destination.SubmittedReplies = nil
@@ -858,6 +920,7 @@ func (n *Notifier) reconcilePending(
 				responder:       true,
 				reply: replyPayload{
 					kind: kindNeedsInput, fallback: scrub(settings.Token, line),
+					identity: tracked.Identity, closure: true,
 				},
 			})
 		}
@@ -939,7 +1002,7 @@ func (n *Notifier) reconcilePending(
 			})
 		}
 	}
-	return work
+	return work, allSourcesReadable
 }
 
 func pendingHasPostedMessage(input pendingInputRecord) bool {
@@ -985,6 +1048,7 @@ func (n *Notifier) warmPendingRecords() {
 		}
 		record, err := loadFeatureRecord(n.stateDir, featureID)
 		if err == nil {
+			scrubReloadedRecord(n.settings.SlackSettings().Token, record)
 			n.records[featureID] = record
 		}
 	}
@@ -1093,6 +1157,7 @@ func (n *Notifier) recordFor(featureID string) (*featureRecord, error) {
 	if err != nil {
 		return nil, err
 	}
+	scrubReloadedRecord(n.settings.SlackSettings().Token, record)
 	n.records[featureID] = record
 	n.refreshTrackedInputsLocked()
 	return record, nil

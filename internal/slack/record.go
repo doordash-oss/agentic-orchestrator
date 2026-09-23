@@ -82,6 +82,21 @@ type pendingInputRecord struct {
 	JudgedReactions []judgedReaction   `yaml:"judged_reactions,omitempty"`
 }
 
+// closureOwed checks only threads where this item was actually posted.
+func (p pendingInputRecord) closureOwed(key string) bool {
+	return p.MessageTS[key] != "" && p.Resolution != nil &&
+		p.Resolution.Kind != resolutionSlack && !p.Resolution.ClosureAcknowledged[key]
+}
+
+func (p pendingInputRecord) hasOwedClosure() bool {
+	for key := range p.MessageTS {
+		if p.closureOwed(key) {
+			return true
+		}
+	}
+	return false
+}
+
 // destinationRecord is one resolved destination the integration reached at
 // least once. Entries survive recipient removal so re-adding a recipient
 // continues the same thread.
@@ -91,6 +106,7 @@ type destinationRecord struct {
 	DisplayName          string                `yaml:"display_name"`
 	ChannelID            string                `yaml:"channel_id,omitempty"`
 	RootTS               string                `yaml:"root_ts,omitempty"`
+	LastSeenReplyTS      string                `yaml:"last_seen_reply_ts,omitempty"`
 	Ledger               []string              `yaml:"ledger,omitempty"`
 	IntegrationReactions []reactionLedgerEntry `yaml:"integration_reactions,omitempty"`
 	SubmittedReplies     []string              `yaml:"submitted_replies,omitempty"`
@@ -111,11 +127,12 @@ type postingIndexEntry struct {
 }
 
 type postingResolution struct {
-	Kind          string    `yaml:"kind"`
-	ResponderID   string    `yaml:"responder_id,omitempty"`
-	ResponderName string    `yaml:"responder_name,omitempty"`
-	ResolvedAt    time.Time `yaml:"resolved_at"`
-	ClosureSent   bool      `yaml:"closure_sent,omitempty"`
+	Kind                string          `yaml:"kind"`
+	ResponderID         string          `yaml:"responder_id,omitempty"`
+	ResponderName       string          `yaml:"responder_name,omitempty"`
+	ResolvedAt          time.Time       `yaml:"resolved_at"`
+	ClosureSent         bool            `yaml:"closure_sent,omitempty"`
+	ClosureAcknowledged map[string]bool `yaml:"closure_acknowledged,omitempty"`
 }
 
 const (

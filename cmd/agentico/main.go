@@ -1166,7 +1166,7 @@ func (r *slackPendingInputRelay) PendingSlackInputs(featureID string) ([]ports.S
 	target := r.target
 	r.mu.Unlock()
 	if target == nil {
-		return nil, nil
+		return nil, errors.New("Slack pending input source is not ready")
 	}
 	return target.PendingSlackInputs(featureID)
 }
@@ -3634,6 +3634,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}, err)
 	}
 	rt.server = runtimeServer
+	boot.slackNotifier.SignalReady()
 	rt.authToken = authToken
 	// Complete the install lifecycle's server handle now that the server is
 	// running: install requests arriving through HTTP find it ready.

@@ -468,14 +468,11 @@ func (n *Notifier) sweepDestinations() {
 			continue
 		}
 		previous, existed := n.sweepStates[owner.ID]
-		if !existed && state.Muted {
-			continue
-		}
 		if existed && reflect.DeepEqual(previous, state) {
 			continue
 		}
 		if state.Muted {
-			if existed && !previous.Muted && !n.refreshTransitionCards(settings, owner, true) {
+			if (!existed || !previous.Muted) && !n.refreshTransitionCards(settings, owner, true) {
 				readableSweep = false
 			}
 			continue

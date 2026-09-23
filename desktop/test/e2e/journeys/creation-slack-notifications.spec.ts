@@ -139,6 +139,9 @@ test('creation Notifications resolves additions, retains overrides, and persists
     await sheet.getByRole('checkbox', { name: 'Start immediately' }).uncheck();
     await sheet.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(sheet).not.toBeVisible();
+    await expect(
+      app.page.getByLabel('Feature Notifications journey').getByText('Ready to start'),
+    ).toBeVisible({ timeout: 60_000 });
     const featureFiles = fs
       .readdirSync(world.stateDir, { withFileTypes: true })
       .filter(
@@ -184,6 +187,9 @@ test('creation Notifications stays empty without configured Slack', async ({}, t
     await sheet.getByRole('checkbox', { name: 'Start immediately' }).uncheck();
     await sheet.getByRole('button', { name: 'Create', exact: true }).click();
     await expect(sheet).not.toBeVisible();
+    await expect(
+      app.page.getByLabel('Feature Notifications journey').getByText('Ready to start'),
+    ).toBeVisible({ timeout: 60_000 });
     const featureFiles = fs
       .readdirSync(world.stateDir, { withFileTypes: true })
       .filter(

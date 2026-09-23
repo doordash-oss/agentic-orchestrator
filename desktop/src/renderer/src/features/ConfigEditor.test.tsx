@@ -357,8 +357,6 @@ describe('FeatureConfigPanel', () => {
       config: expect.objectContaining({
         slackNotifications: {
           mode: 'muted',
-          progress: 'off',
-          needsInput: '',
           problems: 'off',
           recipients: [{ typedText: '@alex', kind: 'user', id: 'U456', displayName: 'Alex' }],
         },
@@ -409,12 +407,64 @@ describe('FeatureConfigPanel', () => {
     await waitFor(() => expect(mock.api.updateFeatureConfig).toHaveBeenCalledTimes(2));
     expect(mock.api.updateFeatureConfig.mock.calls[1]?.[0].config).toMatchObject({
       slackNotifications: {
-        mode: '',
         progress: '',
-        needsInput: '',
-        problems: '',
         recipients: [],
       },
+    });
+    expect(
+      Object.keys(
+        mock.api.updateFeatureConfig.mock.calls[1]?.[0].config.slackNotifications ?? {},
+      ).sort(),
+    ).toEqual(['progress', 'recipients']);
+  });
+
+  it('edits a child without clearing untouched notification-owner settings', async () => {
+    const mock = installAgenticoMock();
+    const owner = {
+      mode: 'muted' as const,
+      progress: '' as const,
+      needsInput: 'off' as const,
+      problems: 'on' as const,
+      recipients: [
+        { typedText: '#owner', kind: 'channel' as const, id: 'COWNER', displayName: 'Owner' },
+      ],
+    };
+    mock.api.getFeatureConfig.mockResolvedValue({
+      ...SNAPSHOT,
+      featureId: 'child',
+      current: {
+        ...SNAPSHOT.current,
+        slackConfigured: true,
+        slackDefaults: {
+          categories: { progress: true, needsInput: true, problems: true },
+          recipientNames: [],
+        },
+        // The child projection is its raw section; the paired owner has settings.
+      },
+    });
+    mock.api.updateFeatureConfig.mockImplementation(async ({ config }) => {
+      Object.assign(owner, config.slackNotifications);
+      return {
+        ...SNAPSHOT,
+        featureId: 'child',
+        current: { ...SNAPSHOT.current, ...config },
+      };
+    });
+    render(<FeatureConfigPanel featureId="child" />);
+    const user = userEvent.setup();
+    const group = within(await screen.findByRole('group', { name: 'Notifications' }));
+    await user.selectOptions(group.getByRole('combobox', { name: 'Progress' }), 'off');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mock.api.updateFeatureConfig).toHaveBeenCalledTimes(1));
+    expect(mock.api.updateFeatureConfig.mock.calls[0]?.[0].config.slackNotifications).toEqual({
+      progress: 'off',
+    });
+    expect(owner).toEqual({
+      mode: 'muted',
+      progress: 'off',
+      needsInput: 'off',
+      problems: 'on',
+      recipients: [{ typedText: '#owner', kind: 'channel', id: 'COWNER', displayName: 'Owner' }],
     });
   });
 

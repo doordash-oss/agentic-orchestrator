@@ -990,19 +990,21 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
       slackDefaults: _defaults,
       ...other
     } = state.data.draft as ConfigWithSlack;
+    const slackPatch: FeatureSlack = {};
+    for (const { key } of CATEGORY_FIELDS) {
+      if ((baselineSlack?.[key] ?? '') !== (draftSlack?.[key] ?? '')) {
+        slackPatch[key] = draftSlack?.[key] ?? '';
+      }
+    }
+    if ((baselineSlack?.mode ?? '') !== (draftSlack?.mode ?? '')) {
+      slackPatch.mode = draftSlack?.mode ?? '';
+    }
+    if (JSON.stringify(baselineSlack?.recipients ?? []) !== JSON.stringify(resolvedRecipients)) {
+      slackPatch.recipients = resolvedRecipients;
+    }
     const config: ConfigWithSlack = {
       ...other,
-      ...(sectionDirty
-        ? {
-            slackNotifications: {
-              mode: draftSlack?.mode ?? '',
-              progress: draftSlack?.progress ?? '',
-              needsInput: draftSlack?.needsInput ?? '',
-              problems: draftSlack?.problems ?? '',
-              recipients: resolvedRecipients,
-            },
-          }
-        : {}),
+      ...(sectionDirty ? { slackNotifications: slackPatch } : {}),
     };
     void window.agentico
       .updateFeatureConfig({ featureId, config })
@@ -1020,6 +1022,7 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
       .catch((e: unknown) => setSaveError(parseIpcError(e)))
       .finally(() => setSaving(false));
   }, [
+    baselineSlack,
     draftSlack,
     featureId,
     invalidRecipients,

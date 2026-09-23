@@ -1,3 +1,17 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package slack
 
 import (
@@ -127,7 +141,8 @@ func newPerFeatureJourney(t *testing.T) *perFeatureJourney {
 		Config:  cfg, Features: h.store, FeatureStore: h.store,
 		Mutations: target, DisableHostValidation: true,
 	})
-	return &perFeatureJourney{t: t, h: h, handler: handler, other: "F-other"}
+	// Generated feature IDs are lowercase hex; keep responder thread order stable.
+	return &perFeatureJourney{t: t, h: h, handler: handler, other: "z-other"}
 }
 
 func (j *perFeatureJourney) request(method, path string, body any) map[string]any {
@@ -282,14 +297,6 @@ func (j *perFeatureJourney) snapshot(name string) {
 		}
 	}
 	batch := responderEvidenceRequests(j.h.server.AllRequests()[j.requestOffset:])
-	for i := range batch {
-		batch[i].Index = 0
-	}
-	sort.SliceStable(batch, func(i, k int) bool {
-		left, _ := json.Marshal(batch[i])
-		right, _ := json.Marshal(batch[k])
-		return bytes.Compare(left, right) < 0
-	})
 	for i := range batch {
 		batch[i].Index = len(j.requests) + i
 	}
@@ -450,14 +457,27 @@ func runPerFeatureJourney(t *testing.T) []byte {
 	j.editAndSweep(map[string]any{"progress": "off"})
 	j.drain()
 	phasePosts := len(postsTo(j.h.server, "C-ENG"))
+	j.h.server.SetRequestOrder([]testsupport.OrderedRequest{
+		{Method: "chat.update", Channel: "D-U-ADA", TextPrefix: "Per feature evidence"},
+		{Method: "chat.update", Channel: "C-ENG", TextPrefix: "Per feature evidence"},
+	})
 	j.feed(startedEvent(j.id, feature.PhaseResearch))
 	j.drain()
+	if remaining := j.h.server.OrderedRequestsRemaining(); remaining != 0 {
+		t.Fatalf("progress-off refresh schedule left %d requests", remaining)
+	}
 	if got := len(postsTo(j.h.server, "C-ENG")); got != phasePosts {
 		t.Fatalf("progress-off phase posted %d channel messages; want %d", got, phasePosts)
 	}
 	j.snapshot("progress_phase_suppressed")
 	channelUpdates := perFeatureRequestCount(j.h.server, "chat.update", "C-ENG", "Per feature evidence")
 	userUpdates := perFeatureRequestCount(j.h.server, "chat.update", "D-U-ADA", "Per feature evidence")
+	j.h.server.SetRequestOrder([]testsupport.OrderedRequest{
+		{Method: "chat.postMessage", Channel: "D-U-ADA"},
+		{Method: "chat.postMessage", Channel: "C-ENG"},
+		{Method: "chat.update", Channel: "D-U-ADA", TextPrefix: "Per feature evidence"},
+		{Method: "chat.update", Channel: "C-ENG", TextPrefix: "Per feature evidence"},
+	})
 	failure := errcat.New(errcat.InternalError)
 	j.feed(ports.Event{Type: ports.FeatureFailed, FeatureID: j.id, CanonicalError: &failure})
 	waitFor(t, 5*time.Second, func() bool {
@@ -466,6 +486,9 @@ func runPerFeatureJourney(t *testing.T) []byte {
 			perFeatureRequestCount(j.h.server, "chat.update", "D-U-ADA", "Per feature evidence") > userUpdates
 	})
 	j.drain()
+	if remaining := j.h.server.OrderedRequestsRemaining(); remaining != 0 {
+		t.Fatalf("failure write schedule left %d requests", remaining)
+	}
 	j.snapshot("progress_off_failure_delivered")
 
 	j.h.server.SetRequestOrder([]testsupport.OrderedRequest{
@@ -670,10 +693,12 @@ func runPerFeatureJourney(t *testing.T) []byte {
 		Requests: j.requests,
 		Steps:    j.steps, Submissions: j.answer.all(), FinalRecord: final,
 		FeatureSlack: section, OtherRecord: other, StateStable: true, DomainEvents: j.events,
-		Order: "stages in transition order; independent requests within a stage sorted by fields",
+		Order: "fake server receive order; indices are zero-based arrival positions",
 	}
+	assertPerFeatureRequestOrder(t, j.h.server, transcript)
 	encoded := perFeatureJSON(t, transcript)
 	encoded = bytes.ReplaceAll(encoded, []byte(j.id), []byte("F-first"))
+	encoded = bytes.ReplaceAll(encoded, []byte(j.other), []byte("F-other"))
 	featureYAML, err := os.ReadFile(filepath.Join(j.h.stateDir, j.id, "feature.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -708,6 +733,78 @@ func runPerFeatureJourney(t *testing.T) []byte {
 	return encoded
 }
 
+func assertPerFeatureRequestOrder(t *testing.T, server *testsupport.Server, transcript perFeatureTranscript) {
+	t.Helper()
+	received, err := json.Marshal(responderEvidenceRequests(server.AllRequests()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured, err := json.Marshal(transcript.Requests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(received, captured) {
+		t.Fatal("transcript requests differ from fake server receive order")
+	}
+	ends := make(map[string]int, len(transcript.Steps))
+	for _, step := range transcript.Steps {
+		ends[step.Name] = step.Requests
+	}
+	if ends["unmuted_catch_up"] != len(transcript.Requests) {
+		t.Fatal("final request count does not match fake server capture")
+	}
+	for i, request := range transcript.Requests {
+		if request.Index != i {
+			t.Fatalf("request %d has arrival index %d", i, request.Index)
+		}
+	}
+	within := func(stage, method, channel, text string) int {
+		t.Helper()
+		start := 0
+		for _, step := range transcript.Steps {
+			if step.Name == stage {
+				break
+			}
+			start = step.Requests
+		}
+		for i := start; i < ends[stage]; i++ {
+			r := transcript.Requests[i]
+			if r.Method == method && r.Channel == channel &&
+				strings.Contains(r.FallbackText, text) {
+				return i
+			}
+		}
+		t.Fatalf("%s: missing %s to %s containing %q", stage, method, channel, text)
+		return -1
+	}
+	before := func(label string, earlier, later int) {
+		t.Helper()
+		if earlier >= later {
+			t.Fatalf("%s: request %d must precede request %d", label, earlier, later)
+		}
+	}
+	before("default card before review",
+		within("seeded", "chat.postMessage", "D-U-ADA", "Per feature evidence"),
+		within("seeded", "chat.postMessage", "D-U-ADA", "#1 Review:"))
+	before("added card before review",
+		within("added_channel", "chat.postMessage", "C-ENG", "Per feature evidence"),
+		within("added_channel", "chat.postMessage", "C-ENG", "#1 Review:"))
+	for _, channel := range []string{"D-U-ADA", "C-ENG"} {
+		before("failure before pause on "+channel,
+			within("progress_off_failure_delivered", "chat.postMessage", channel, "Internal error"),
+			within("muted", "chat.update", channel, "Updates are paused"))
+		before("pause before approval poll on "+channel,
+			within("muted", "chat.update", channel, "Updates are paused"),
+			within("muted_approval", "conversations.replies", channel, ""))
+		before("poll before approval confirmation on "+channel,
+			within("muted_approval", "conversations.replies", channel, ""),
+			within("muted_approval", "chat.postMessage", channel, "#1 was approved"))
+	}
+	before("quiet pending item before unmuted card refresh",
+		within("unmuted_catch_up", "chat.postMessage", "D-U-ADA", "#2 Permission:"),
+		within("unmuted_catch_up", "chat.update", "D-U-ADA", "Waiting on you: #2"))
+}
+
 func perFeatureJSON(t *testing.T, transcript perFeatureTranscript) []byte {
 	t.Helper()
 	raw, err := json.Marshal(transcript)
@@ -737,6 +834,21 @@ func TestSlackPerFeatureEvidence(t *testing.T) {
 		})
 	}
 	if !bytes.Equal(captures[0], captures[1]) {
+		var left, right perFeatureTranscript
+		if err := json.Unmarshal(captures[0], &left); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(captures[1], &right); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < len(left.Requests) && i < len(right.Requests); i++ {
+			a, _ := json.Marshal(left.Requests[i])
+			b, _ := json.Marshal(right.Requests[i])
+			if !bytes.Equal(a, b) {
+				t.Logf("first differing requests at %d: %s / %s", i, a, b)
+				break
+			}
+		}
 		index := 0
 		for index < len(captures[0]) && index < len(captures[1]) &&
 			captures[0][index] == captures[1][index] {

@@ -2842,6 +2842,10 @@ body {
   font: 12px var(--bench-font-text);
 }
 
+.creation-sheet__notification-guidance {
+  color: var(--text);
+}
+
 .creation-sheet__rows {
   list-style: none;
   margin: 0;
@@ -3054,6 +3058,10 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-3);
+}
+
+.creation-sheet__notification-knobs {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
 }
 
 .creation-sheet__summary {

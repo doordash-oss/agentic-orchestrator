@@ -2787,7 +2787,9 @@ export function CreateFeatureForm({
                     <fieldset className="creation-sheet__group">
                       <legend className="creation-sheet__group-label">Notifications</legend>
                       {!slackConfigured ? (
-                        <p className="creation-sheet__group-desc">Set up Slack in Settings</p>
+                        <p className="creation-sheet__group-desc creation-sheet__notification-guidance">
+                          Set up Slack in Settings
+                        </p>
                       ) : (
                         <>
                           <div className="creation-sheet__rows">
@@ -2807,11 +2809,11 @@ export function CreateFeatureForm({
                             </label>
                           </div>
                           {slackMuted ? (
-                            <p className="creation-sheet__group-desc">
+                            <p className="creation-sheet__group-desc creation-sheet__notification-guidance">
                               Category choices have no effect while muted.
                             </p>
                           ) : null}
-                          <div className="creation-sheet__knob-pair">
+                          <div className="creation-sheet__knob-pair creation-sheet__notification-knobs">
                             {(
                               [
                                 ['progress', 'Progress'],
@@ -2841,7 +2843,7 @@ export function CreateFeatureForm({
                               </label>
                             ))}
                           </div>
-                          <p className="creation-sheet__group-desc">
+                          <p className="creation-sheet__group-desc creation-sheet__notification-guidance">
                             Workspace defaults:{' '}
                             {slackDefaults.slackDefaults?.recipientNames.join(', ') || 'none'}. Also
                             notify these people or channels:

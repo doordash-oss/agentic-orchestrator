@@ -2831,16 +2831,7 @@ export const CreateFeatureInputSchema = z.strictObject({
       progress: z.enum(['', 'on', 'off']).optional(),
       needsInput: z.enum(['', 'on', 'off']).optional(),
       problems: z.enum(['', 'on', 'off']).optional(),
-      recipients: z
-        .array(
-          z.strictObject({
-            typedText: z.string().min(1),
-            kind: z.enum(['user', 'channel']),
-            id: z.string().min(1),
-            displayName: z.string().min(1),
-          }),
-        )
-        .optional(),
+      recipients: z.array(z.lazy(() => SlackRecipientSchema)).optional(),
     })
     .optional(),
   exitCriteria: z.string().max(4000).default(''),

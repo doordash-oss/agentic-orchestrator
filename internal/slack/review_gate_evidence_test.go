@@ -394,10 +394,16 @@ func TestSlackReviewGateEvidence(t *testing.T) {
 	})
 
 	requestsBeforeRestart := len(harness.server.AllRequests())
+	updatesBeforeRestart := len(harness.server.Requests("chat.update"))
 	harness.restart()
-	time.Sleep(20 * time.Millisecond)
-	if got := len(harness.server.AllRequests()); got != requestsBeforeRestart {
-		t.Fatalf("restart emitted %d requests; want none", got-requestsBeforeRestart)
+	harness.notifier.SignalReady()
+	waitFor(t, 5*time.Second, func() bool { return harness.notifier.startupDone.Load() })
+	waitFor(t, 5*time.Second, func() bool {
+		return len(harness.server.Requests("chat.update")) == updatesBeforeRestart+2
+	})
+	if got := harness.server.AllRequests()[requestsBeforeRestart:]; len(got) != 2 ||
+		got[0].Path != "/api/chat.update" || got[1].Path != "/api/chat.update" {
+		t.Fatalf("restart writes = %#v; want only two in-place card refreshes", got)
 	}
 	harness.notifier.DomainEventTap(ports.Event{
 		Type: ports.ReviewRequired, FeatureID: "F-review-child",

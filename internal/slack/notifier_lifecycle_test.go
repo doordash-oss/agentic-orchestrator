@@ -178,10 +178,15 @@ func TestNotifierRestartEditsSameCard(t *testing.T) {
 	second.Start()
 	t.Cleanup(func() { second.Stop(context.Background()) })
 	harness.notifier = second
+	second.SignalReady()
+	waitFor(t, time.Second, func() bool { return second.startupDone.Load() })
+	waitFor(t, time.Second, func() bool {
+		return len(harness.server.Requests("chat.update")) == 4
+	})
 	harness.feed(startedEvent("F-1", feature.PhaseResearch))
 
 	waitFor(t, 10*time.Second, func() bool {
-		return len(harness.server.Requests("chat.update")) == 4
+		return len(harness.server.Requests("chat.update")) == 6
 	})
 
 	if got := len(harness.server.Requests("conversations.open")); got != 1 {

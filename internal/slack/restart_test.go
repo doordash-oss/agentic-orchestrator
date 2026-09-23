@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -247,6 +248,113 @@ func TestSlackRestartResponderWaitsForReadyBeforePolling(t *testing.T) {
 	waitFor(t, time.Second, func() bool { return len(answer.reviewSubmissions()) == 1 })
 	if got := h.server.Requests("conversations.replies"); len(got) == 0 {
 		t.Fatal("responder did not resume polling")
+	}
+}
+
+func TestSlackRestartEventWaitsForUnreconciledFeature(t *testing.T) {
+	h := newNotifierHarness(t, defaultTestSettings("xoxb-restart", testRecipients()...))
+	h.seedFeature("feature-a", nil)
+	h.seedFeature("feature-b", nil)
+	roots := map[string]string{"user:U-ADA": "100.000001", "channel:C-ENG": "200.000001"}
+	for _, id := range []string{"feature-a", "feature-b"} {
+		if id == "feature-b" {
+			roots = map[string]string{"user:U-ADA": "300.000001", "channel:C-ENG": "400.000001"}
+		}
+		record := &featureRecord{
+			Version: recordVersion,
+			Destinations: map[string]destinationRecord{
+				"user:U-ADA":    {Kind: "user", SlackID: "U-ADA", ChannelID: "D-U-ADA", RootTS: roots["user:U-ADA"]},
+				"channel:C-ENG": {Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: roots["channel:C-ENG"]},
+			},
+		}
+		if id == "feature-a" {
+			record.Pending = []pendingInputRecord{{
+				Identity: "permission:old-a", SourceFeatureID: id,
+				Kind: string(ports.SlackPendingPermission), RequestID: "old-a", Tag: "#7",
+				MessageTS: map[string]string{"user:U-ADA": "100.000002", "channel:C-ENG": "200.000002"},
+			}}
+		} else {
+			record.Pending = []pendingInputRecord{
+				{Identity: "permission:expired", SourceFeatureID: id,
+					Kind: string(ports.SlackPendingPermission), RequestID: "expired", Tag: "#1",
+					MessageTS: map[string]string{"user:U-ADA": "100.000002", "channel:C-ENG": "200.000002"}},
+				{Identity: "review:live:", SourceFeatureID: id,
+					Kind: string(ports.SlackPendingReview), ReviewID: "live", Tag: "#2",
+					MessageTS: map[string]string{"user:U-ADA": "100.000003", "channel:C-ENG": "200.000003"}},
+			}
+			record.TagCounter = 2
+		}
+		if err := persistFeatureRecord(h.stateDir, id, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.pending.set("feature-b", ports.SlackPendingInput{
+		Kind: ports.SlackPendingReview, ReviewID: "live",
+	})
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	h.server.Script("chat.postMessage", testsupport.Response{
+		Body:    map[string]any{"ok": true, "ts": "1758499200.000101"},
+		Started: started, Release: release,
+	})
+	n := h.newNotifier(0)
+	n.Start()
+	t.Cleanup(func() { n.Stop(context.Background()) })
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	if !n.loadedRecords["feature-b"] {
+		t.Fatal("feature B was not loaded as a startup record")
+	}
+	n.SignalReady()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("startup did not reach feature A")
+	}
+	n.DomainEventTap(ports.Event{Type: ports.ReviewRequired, FeatureID: "feature-b"})
+	// Give the dispatcher time to consume the event while feature A's
+	// delivery holds startup short of feature B.
+	time.Sleep(30 * time.Millisecond)
+	for _, post := range h.server.Requests("chat.postMessage") {
+		if strings.Contains(fieldString(post, "text"), "#1") {
+			t.Fatalf("feature B retired before startup reached it: %#v", post)
+		}
+	}
+	releaseOnce.Do(func() { close(release) })
+	waitFor(t, time.Second, func() bool {
+		return n.startupDone.Load() && h.server.CallCount("chat.postMessage") == 4
+	})
+	var bClosures int
+	for _, post := range h.server.Requests("chat.postMessage") {
+		if got := fieldString(post, "text"); strings.Contains(got, "#1") {
+			bClosures++
+			if got != "#1 is no longer pending." {
+				t.Fatalf("session closure text = %q", got)
+			}
+		}
+	}
+	if bClosures != 2 {
+		t.Fatalf("feature B closures = %d; want one per destination", bClosures)
+	}
+	for _, post := range h.server.Requests("chat.postMessage") {
+		if got := fieldString(post, "text"); got != "#7 is no longer pending." &&
+			got != "#1 is no longer pending." {
+			t.Fatalf("unexpected startup post: %q", got)
+		}
+	}
+	waitFor(t, time.Second, func() bool { return h.server.CallCount("chat.update") == 4 })
+	if got := h.server.CallCount("chat.update"); got != 4 {
+		t.Fatalf("card edits = %d; want one per existing destination", got)
+	}
+	record, err := loadFeatureRecord(h.stateDir, "feature-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Pending) != 1 || record.Pending[0].Identity != "review:live:" {
+		t.Fatalf("live review changed: %#v", record.Pending)
+	}
+	if got := h.server.CallCount("chat.postMessage"); got != 4 {
+		t.Fatalf("duplicate closure or root: %d posts", got)
 	}
 }
 

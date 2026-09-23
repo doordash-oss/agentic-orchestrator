@@ -500,6 +500,10 @@ func TestSlackResponderInterruptionAndRewindCloseAllPendingItemsThenIdle(t *test
 			})
 			notifier.Start()
 			t.Cleanup(func() { notifier.Stop(context.Background()) })
+			// This fixture exercises the lifecycle event in isolation, not
+			// startup reconciliation over its preloaded record.
+			notifier.startupDone.Store(true)
+			close(notifier.startupReady)
 
 			notifier.DomainEventTap(testCase.event)
 

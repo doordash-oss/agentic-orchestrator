@@ -631,6 +631,8 @@ func TestNotifierInterruptedAndRewoundUseProgressThread(t *testing.T) {
 	second.Start()
 	t.Cleanup(func() { second.Stop(context.Background()) })
 	harness.notifier = second
+	second.SignalReady()
+	waitFor(t, time.Second, func() bool { return second.startupDone.Load() })
 	for i, ev := range postRewind[5:] {
 		harness.feed(ev)
 		want := 9 + i

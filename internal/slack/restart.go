@@ -134,6 +134,7 @@ func (n *Notifier) runRestartPass() bool {
 	}
 	var scanned, dispatched int
 	allReadable := true
+	failedResolutions := make(map[string]bool)
 	for _, owner := range n.restartFeatures() {
 		select {
 		case <-n.stopCh:
@@ -162,7 +163,7 @@ func (n *Notifier) runRestartPass() bool {
 		}
 		scanned++
 		work, readable, unreadable := n.reconcilePendingWithPolicy(
-			settings, owner, owner, record, resolutionRestart, true,
+			settings, owner, owner, record, resolutionRestart, true, failedResolutions,
 		)
 		if !readable {
 			allReadable = false
@@ -198,7 +199,7 @@ func (n *Notifier) runRestartPass() bool {
 			}
 		}
 		if !terminalFeature(owner.Status) {
-			work = n.appendMissingCardWork(settings, owner.ID, record, work)
+			work = n.appendMissingCardWork(settings, owner.ID, record, work, failedResolutions)
 		}
 		if len(work) == 0 {
 			continue
@@ -294,6 +295,7 @@ func (n *Notifier) sweepDestinations() {
 		return
 	}
 	readableSweep := true
+	failedResolutions := make(map[string]bool)
 	for _, owner := range n.restartFeatures() {
 		if n.stopped.Load() {
 			return
@@ -307,7 +309,7 @@ func (n *Notifier) sweepDestinations() {
 			continue
 		}
 		work, readable, unreadable := n.reconcilePendingWithPolicy(
-			settings, owner, owner, record, resolutionAgentico, true,
+			settings, owner, owner, record, resolutionAgentico, true, failedResolutions,
 		)
 		if !readable {
 			readableSweep = false
@@ -316,7 +318,7 @@ func (n *Notifier) sweepDestinations() {
 		if len(unreadable) > 0 {
 			readableSweep = false
 		}
-		work = n.appendMissingCardWork(settings, owner.ID, record, work)
+		work = n.appendMissingCardWork(settings, owner.ID, record, work, failedResolutions)
 		if !n.dispatchRestartWork(owner.ID, work) {
 			return
 		}
@@ -328,10 +330,13 @@ func (n *Notifier) sweepDestinations() {
 
 func (n *Notifier) appendMissingCardWork(
 	settings ports.SlackRuntimeSettings, featureID string,
-	record *featureRecord, work []workItem,
+	record *featureRecord, work []workItem, failedResolutions map[string]bool,
 ) []workItem {
 	for _, recipient := range settings.Recipients {
 		key := destinationKey(string(recipient.Kind), recipient.ID)
+		if failedResolutions[key] {
+			continue
+		}
 		n.recordMu.Lock()
 		entry := record.Destinations[key]
 		n.recordMu.Unlock()
@@ -350,6 +355,7 @@ func (n *Notifier) appendMissingCardWork(
 		}
 		channelID, err := n.resolveDestination(settings, record, featureID, recipient)
 		if err != nil {
+			failedResolutions[key] = true
 			log.Printf("slack-notifier: destination unavailable during bootstrap: %v", err)
 			continue
 		}

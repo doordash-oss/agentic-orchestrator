@@ -182,6 +182,8 @@ func TestSlackProblemsEvidence(t *testing.T) {
 	notifier.Start()
 	t.Cleanup(func() { notifier.Stop(context.Background()) })
 	harness.notifier = notifier
+	notifier.SignalReady()
+	waitFor(t, time.Second, func() bool { return notifier.startupDone.Load() })
 	for i, event := range postRewind[5:] {
 		harness.feed(event)
 		waitForProblemsEvidencePosts(t, harness, 12+i)

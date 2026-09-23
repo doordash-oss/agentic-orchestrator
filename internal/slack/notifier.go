@@ -128,6 +128,7 @@ type Notifier struct {
 	serverName   string
 	readyOnce    sync.Once
 	startupDone  atomic.Bool
+	startupReady chan struct{}
 	startupWG    sync.WaitGroup
 	sweepMu      sync.Mutex
 	sweepKey     string
@@ -151,6 +152,9 @@ type Notifier struct {
 
 	recordMu sync.Mutex
 	records  map[string]*featureRecord
+	// loadedRecords identifies records whose first reconciliation belongs to
+	// startup, even when a lifecycle event arrives before SignalReady.
+	loadedRecords map[string]bool
 	// pendingPersistence retains failed durable writes so the next eligible
 	// lifecycle event can retry even when it only refreshes the root card.
 	pendingPersistence map[string]ports.SlackRecipientKind
@@ -218,7 +222,9 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		responderClock:       responderClock,
 		jitter:               jitter,
 		stopCh:               make(chan struct{}),
+		startupReady:         make(chan struct{}),
 		records:              map[string]*featureRecord{},
+		loadedRecords:        map[string]bool{},
 		pendingPersistence:   map[string]ports.SlackRecipientKind{},
 		workers:              map[string]*destinationWorker{},
 		recheckQueued:        map[string]bool{},
@@ -297,6 +303,7 @@ func (n *Notifier) SignalReady() {
 				n.sweepMu.Unlock()
 			}
 			n.startupDone.Store(true)
+			close(n.startupReady)
 		}()
 	})
 }
@@ -604,6 +611,17 @@ func (n *Notifier) processItem(item queueItem) {
 		}
 		owner = parent
 	}
+	n.recordMu.Lock()
+	loaded := n.loadedRecords[owner.ID]
+	n.recordMu.Unlock()
+	if loaded {
+		select {
+		case <-n.startupReady:
+		case <-n.stopCh:
+			n.queue.complete(item)
+			return
+		}
+	}
 
 	record, err := n.recordFor(owner.ID)
 	if err != nil {
@@ -729,6 +747,7 @@ func (n *Notifier) reconcilePendingWithPolicy(
 	record *featureRecord,
 	retiredResolutionKind string,
 	retryOwed bool,
+	failedResolutions ...map[string]bool,
 ) ([]workItem, bool, map[string]bool) {
 	if n.pending == nil {
 		log.Printf("slack-notifier: pending input source unavailable for feature %s", trigger.ID)
@@ -918,6 +937,9 @@ func (n *Notifier) reconcilePendingWithPolicy(
 	work := n.closureWork(settings, owner.ID, record, onlyIdentities)
 	for _, recipient := range settings.Recipients {
 		key := destinationKey(string(recipient.Kind), recipient.ID)
+		if len(failedResolutions) > 0 && failedResolutions[0][key] {
+			continue
+		}
 		if terminalFeature(owner.Status) {
 			n.recordMu.Lock()
 			entry := record.Destinations[key]
@@ -928,6 +950,9 @@ func (n *Notifier) reconcilePendingWithPolicy(
 		}
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
 		if err != nil {
+			if len(failedResolutions) > 0 {
+				failedResolutions[0][key] = true
+			}
 			log.Printf("slack-notifier: skipping %s destination for needs input: %v", recipient.Kind, err)
 			continue
 		}
@@ -1049,6 +1074,7 @@ func (n *Notifier) warmPendingRecords() {
 		if err == nil {
 			scrubReloadedRecord(n.settings.SlackSettings().Token, record)
 			n.records[featureID] = record
+			n.loadedRecords[featureID] = true
 		}
 	}
 	n.refreshTrackedInputsLocked()
@@ -1210,11 +1236,28 @@ func (n *Notifier) resolveDestination(
 	n.recordMu.Unlock()
 
 	if recipient.Kind == ports.SlackRecipientUser {
-		client, err := n.newClient(settings.Token)
-		if err != nil {
-			return "", err
+		// Until the DM channel is known, the user ID is the stable pacing key.
+		worker := n.workerFor(key)
+		if !worker.pace() {
+			return "", errWorkerStopped
 		}
-		channelID, err := client.OpenConversation(n.requestBase, recipient.ID)
+		defer worker.recordWrite()
+		item := workItem{
+			featureID: featureID, sourceFeatureID: featureID,
+			destinationKey: key, kind: string(recipient.Kind),
+		}
+		channelID, err := sendWithRetry(worker, "conversation open", item, "conversation_open",
+			func() (string, deliveryCredential, error) {
+				credential := deliveryCredential{
+					token: settings.Token, generation: settings.CredentialGeneration,
+				}
+				client, err := n.newClient(settings.Token)
+				if err != nil {
+					return "", credential, err
+				}
+				channelID, err := client.OpenConversation(n.requestBase, recipient.ID)
+				return channelID, credential, err
+			})
 		if err != nil {
 			return "", err
 		}

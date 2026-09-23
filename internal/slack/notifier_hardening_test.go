@@ -340,6 +340,8 @@ func TestNotifierPersistFailureRetainsAndRetries(t *testing.T) {
 	second.Start()
 	t.Cleanup(func() { second.Stop(context.Background()) })
 	harness.notifier = second
+	second.SignalReady()
+	waitFor(t, time.Second, func() bool { return second.startupDone.Load() })
 	updatesBefore = len(harness.server.Requests("chat.update"))
 	harness.feed(ports.Event{Type: ports.FeatureCompleted, FeatureID: "F-1"})
 	waitFor(t, 10*time.Second, func() bool {

@@ -285,6 +285,8 @@ func TestSlackNeedsInputRestartKeepsTagsAndDoesNotRepost(t *testing.T) {
 	restarted := harness.newNotifier(16)
 	restarted.Start()
 	t.Cleanup(func() { restarted.Stop(context.Background()) })
+	restarted.SignalReady()
+	waitFor(t, time.Second, func() bool { return restarted.startupDone.Load() })
 	restarted.RuntimeMessageTap(controlRuntimeMessage("F-1", "session-2", "perm-2"))
 	waitFor(t, 10*time.Second, func() bool {
 		record, ok := readFeatureRecord(harness.stateDir, "F-1")

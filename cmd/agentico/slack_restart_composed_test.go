@@ -144,7 +144,8 @@ func TestSlackRestartComposedRealSessionAndReviewDecision(t *testing.T) {
 		}
 		pendingRecord, reviewRecord := restartComposedRecord(t, stateDir, permissionID), restartComposedRecord(t, stateDir, reviewID)
 		return len(pendingRecord.Pending) == 1 && len(reviewRecord.Pending) == 1 &&
-			len(pendingRecord.Pending[0].MessageTS) == 2 && len(reviewRecord.Pending[0].MessageTS) == 2
+			len(pendingRecord.Pending[0].MessageTS) == 2 && len(reviewRecord.Pending[0].MessageTS) == 2 &&
+			fake.CallCount("chat.update") >= 4
 	})
 	if err := firstStop(first); err != nil {
 		t.Fatal(err)
@@ -179,10 +180,20 @@ func TestSlackRestartComposedRealSessionAndReviewDecision(t *testing.T) {
 		t.Fatalf("restart ran before ports were bound: %d edits, want %d", got, initialEdits)
 	}
 	bindPorts(second, pending, answer)
-	waitForComposedNeedsInput(t, 10*time.Second, func() bool {
-		return composedSlackPostTextCount(fake, "#1 is no longer pending.") == 2 &&
-			fake.CallCount("chat.update") >= initialEdits+4
-	})
+	restartDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(restartDeadline) {
+		if composedSlackPostTextCount(fake, "#1 is no longer pending.") == 2 &&
+			fake.CallCount("chat.update") >= initialEdits+4 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if closures, edits := composedSlackPostTextCount(fake, "#1 is no longer pending."), fake.CallCount("chat.update")-initialEdits; closures != 2 || edits < 4 {
+		t.Fatalf("restart did not finish: permission closures=%d, card edits=%d; permission pending=%+v; review pending=%+v; posts=%+v; updates=%+v",
+			closures, edits, restartComposedRecord(t, stateDir, permissionID).Pending,
+			restartComposedRecord(t, stateDir, reviewID).Pending,
+			fake.Requests("chat.postMessage"), fake.Requests("chat.update"))
+	}
 	if got := rootSlackPosts(fake); got != initialRoots {
 		t.Fatalf("restart posted duplicate root cards: %d, want %d", got, initialRoots)
 	}

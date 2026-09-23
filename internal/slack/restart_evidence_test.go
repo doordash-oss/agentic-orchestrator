@@ -270,7 +270,8 @@ func runSlackRestartEvidence(t *testing.T) []byte {
 		current, err := loadFeatureRecord(h.stateDir, id)
 		return err == nil && current.Destinations["channel:C-OPS"].RootTS != "" &&
 			len(current.Pending) == 1 &&
-			current.Pending[0].MessageTS["channel:C-OPS"] != ""
+			current.Pending[0].MessageTS["channel:C-OPS"] != "" &&
+			h.server.OrderedRequestsRemaining() == 7
 	})
 	current, err := loadFeatureRecord(h.stateDir, id)
 	if err != nil {

@@ -165,11 +165,12 @@ type Notifier struct {
 	responderThreadMu    sync.Mutex
 	responderThreadLocks map[string]*sync.RWMutex
 
-	responderFeedbackMu  sync.Mutex
-	responderFeedback    map[string]int
-	responderClaims      map[string]struct{}
-	responderDeferred    map[string]responderDeferredFeedback
-	responderSubmissions map[string]int
+	responderFeedbackMu    sync.Mutex
+	responderFeedback      map[string]int
+	responderClaims        map[string]struct{}
+	responderDeferred      map[string]responderDeferredFeedback
+	responderDeferredOrder []string
+	responderSubmissions   map[string]int
 }
 
 // NewNotifier constructs the notifier and its intake queue. Call Start

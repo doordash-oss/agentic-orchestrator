@@ -154,9 +154,8 @@ func TestSlackResponderFeedbackAdmissionDefersAtPerDestinationCap(t *testing.T) 
 	})
 }
 
-func TestSlackResponderParsedAnswerIsSubmittedAtFeedbackCap(t *testing.T) {
-	const parsedReplies = 6
-	messages := make([]testsupport.Message, 0, responderFeedbackLimit/2+parsedReplies)
+func TestSlackResponderAcceptedAnswerProceedsAtFeedbackCap(t *testing.T) {
+	messages := make([]testsupport.Message, 0, responderFeedbackLimit/2+3)
 	for index := 0; index < responderFeedbackLimit/2; index++ {
 		messages = append(messages, testsupport.Message{
 			TS:       fmt.Sprintf("100.%06d", index+3),
@@ -165,35 +164,53 @@ func TestSlackResponderParsedAnswerIsSubmittedAtFeedbackCap(t *testing.T) {
 			Text:     "not an answer",
 		})
 	}
-	results := make([]ports.SlackAnswerResult, 0, parsedReplies)
-	for index := 0; index < parsedReplies; index++ {
-		messages = append(messages, testsupport.Message{
-			TS:       fmt.Sprintf("100.%06d", index+20),
-			ThreadTS: "100.000001",
-			User:     fmt.Sprintf("U-PARSED-%02d", index),
-			Text:     "allow",
-		})
-		outcome := ports.SlackAnswerFailed
-		if index%2 == 1 {
-			outcome = ports.SlackAnswerRevisionMoved
-		}
-		results = append(results, ports.SlackAnswerResult{
-			Outcome: outcome,
-			Cause:   errors.New("temporary mutation failure"),
-		})
-	}
+	messages = append(messages,
+		testsupport.Message{
+			TS: "100.000020", ThreadTS: "100.000001",
+			User: "U-FAILED", Text: "allow",
+		},
+		testsupport.Message{
+			TS: "100.000021", ThreadTS: "100.000001",
+			User: "U-INTEGRATION", Text: "permission two",
+		},
+		testsupport.Message{
+			TS: "100.000022", ThreadTS: "100.000001",
+			User: "U-ACCEPTED", Text: "deny",
+		},
+	)
 	harness, notifier, answerPort := newPermissionResponderAdmissionFixture(
 		t,
 		messages,
-		results,
+		[]ports.SlackAnswerResult{
+			{
+				Outcome: ports.SlackAnswerFailed,
+				Cause:   errors.New("temporary mutation failure"),
+			},
+			{Outcome: ports.SlackAnswerAccepted},
+		},
 	)
 	clock := notifier.clock.(*gatedDeliveryClock)
 	t.Cleanup(func() { notifier.Stop(context.Background()) })
+	addAdmissionPendingItem(
+		t,
+		harness,
+		notifier,
+		"permission:request-2",
+		"request-2",
+		"#2",
+		"100.000021",
+	)
 
 	notifier.responderTick()
 
-	if got := len(answerPort.permissionSubmissions()); got != 1 {
-		t.Fatalf("permission submissions at feedback cap = %d; want 1", got)
+	submissions := answerPort.permissionSubmissions()
+	if len(submissions) != 2 {
+		t.Fatalf("permission submissions at feedback cap = %d; want 2", len(submissions))
+	}
+	if submissions[0].RequestID != "request-1" ||
+		submissions[1].RequestID != "request-2" ||
+		submissions[1].Decision != ports.SlackPermissionDeny {
+		t.Fatalf("permission submissions = %#v; want failed #1 then accepted deny for #2", submissions)
 	}
 	notifier.responderFeedbackMu.Lock()
 	outstanding := notifier.responderFeedback["C-ENG"]
@@ -207,27 +224,167 @@ func TestSlackResponderParsedAnswerIsSubmittedAtFeedbackCap(t *testing.T) {
 			responderFeedbackLimit,
 		)
 	}
-	notifier.responderTick()
-	if got := len(answerPort.permissionSubmissions()); got != 1 {
-		t.Fatalf("permission submissions while failed feedback is in flight = %d; want 1", got)
+	record, err := notifier.recordFor("feature-1")
+	if err != nil {
+		t.Fatal(err)
 	}
+	if resolution := pendingResolution(record, "permission:request-2"); resolution == nil ||
+		resolution.Kind != resolutionSlack {
+		t.Fatalf("accepted answer resolution = %#v; want Slack resolution", resolution)
+	}
+
 	clock.open()
 	waitFor(t, 2*time.Second, func() bool {
 		return notifier.responderFeedbackOutstanding("C-ENG") == 0
 	})
 	waitFor(t, 2*time.Second, func() bool {
 		notifier.responderTick()
-		return len(answerPort.permissionSubmissions()) == parsedReplies &&
-			len(harness.observer.ofKind("slack.answer_rejected")) ==
-				responderFeedbackLimit/2+parsedReplies
+		return hasAdmissionPost(
+			harness.server.Requests("chat.postMessage"),
+			"#2 was denied by <@U-ACCEPTED> via Slack.",
+		)
 	})
-	if got := len(answerPort.permissionSubmissions()); got != parsedReplies {
+	if got := len(answerPort.permissionSubmissions()); got != 2 {
+		t.Fatalf("permission submissions after feedback recovery = %d; want 2", got)
+	}
+}
+
+func TestSlackResponderDeferredFailureDrainsAfterIdleBeforeNewAnswer(t *testing.T) {
+	messages := make([]testsupport.Message, 0, responderFeedbackLimit/2+1)
+	for index := 0; index < responderFeedbackLimit/2; index++ {
+		messages = append(messages, testsupport.Message{
+			TS:       fmt.Sprintf("100.%06d", index+3),
+			ThreadTS: "100.000001",
+			User:     fmt.Sprintf("U-%02d", index),
+			Text:     "not an answer",
+		})
+	}
+	messages = append(messages, testsupport.Message{
+		TS: "100.000020", ThreadTS: "100.000001",
+		User: "U-FAILED", Text: "allow",
+	})
+	harness, notifier, answerPort := newPermissionResponderAdmissionFixture(
+		t,
+		messages,
+		[]ports.SlackAnswerResult{
+			{
+				Outcome: ports.SlackAnswerFailed,
+				Cause:   errors.New("temporary mutation failure"),
+			},
+			{Outcome: ports.SlackAnswerAccepted},
+		},
+	)
+	clock := notifier.clock.(*gatedDeliveryClock)
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+
+	notifier.responderTick()
+	if got := len(answerPort.permissionSubmissions()); got != 1 {
+		t.Fatalf("initial permission submissions = %d; want 1", got)
+	}
+
+	harness.pending.set("feature-1")
+	notifier.responderTick()
+	record, err := notifier.recordFor("feature-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(record.Pending) != 0 || len(record.Destinations["channel:C-ENG"].PostingIndex) != 0 {
 		t.Fatalf(
-			"permission submissions after deferred feedback = %d; want %d unique replies",
-			got,
-			parsedReplies,
+			"idle record pending/index = (%d, %d); want both pruned",
+			len(record.Pending),
+			len(record.Destinations["channel:C-ENG"].PostingIndex),
 		)
 	}
+
+	clock.open()
+	waitFor(t, 2*time.Second, func() bool {
+		return notifier.responderFeedbackOutstanding("C-ENG") == 0
+	})
+	notifier.responderTick()
+	waitFor(t, 2*time.Second, func() bool {
+		return hasAdmissionPost(
+			harness.server.Requests("chat.postMessage"),
+			"#1 could not be submitted. Answer again or in Agentico.",
+		)
+	})
+	waitFor(t, 2*time.Second, func() bool {
+		notifier.responderFeedbackMu.Lock()
+		defer notifier.responderFeedbackMu.Unlock()
+		return notifier.responderFeedback["C-ENG"] == 0 &&
+			len(notifier.responderClaims) == 0
+	})
+
+	addAdmissionPendingItem(
+		t,
+		harness,
+		notifier,
+		"permission:request-2",
+		"request-2",
+		"#2",
+		"100.000030",
+	)
+	harness.server.SeedThread("C-ENG", "100.000001", append(messages,
+		testsupport.Message{
+			TS: "100.000030", ThreadTS: "100.000001",
+			User: "U-INTEGRATION", Text: "permission two",
+		},
+		testsupport.Message{
+			TS: "100.000031", ThreadTS: "100.000001",
+			User: "U-NEW", Text: "deny",
+		},
+	))
+	notifier.responderTick()
+
+	submissions := answerPort.permissionSubmissions()
+	if len(submissions) != 2 || submissions[1].RequestID != "request-2" {
+		t.Fatalf("permission submissions after idle recovery = %#v; want new request accepted", submissions)
+	}
+}
+
+func addAdmissionPendingItem(
+	t *testing.T,
+	harness *notifierHarness,
+	notifier *Notifier,
+	identity, requestID, tag, messageTS string,
+) {
+	t.Helper()
+	notifier.recordMu.Lock()
+	record := notifier.records["feature-1"]
+	record.Pending = append(record.Pending, pendingInputRecord{
+		Identity: identity, SourceFeatureID: "feature-1",
+		Kind: string(ports.SlackPendingPermission), RequestID: requestID, Tag: tag,
+		MessageTS: map[string]string{"channel:C-ENG": messageTS},
+	})
+	destination := record.Destinations["channel:C-ENG"]
+	destination.Ledger = append(destination.Ledger, messageTS)
+	destination.PostingIndex = append(destination.PostingIndex, postingIndexEntry{
+		Identity: identity, MessageTS: messageTS, Tag: tag,
+	})
+	record.Destinations["channel:C-ENG"] = destination
+	if err := persistFeatureRecord(harness.stateDir, "feature-1", record); err != nil {
+		notifier.recordMu.Unlock()
+		t.Fatal(err)
+	}
+	notifier.recordMu.Unlock()
+	harness.pending.setFromRecord("feature-1", record)
+}
+
+func pendingResolution(record *featureRecord, identity string) *postingResolution {
+	for _, pending := range record.Pending {
+		if pending.Identity == identity {
+			return pending.Resolution
+		}
+	}
+	return nil
+}
+
+func hasAdmissionPost(requests []testsupport.Request, text string) bool {
+	for _, request := range requests {
+		if request.Fields["text"] == text {
+			return true
+		}
+	}
+	return false
 }
 
 func newPermissionResponderAdmissionFixture(

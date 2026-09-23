@@ -116,6 +116,7 @@ func (n *Notifier) responderTick() {
 	if !settings.Enabled || settings.Token == "" || !settings.Categories.NeedsInput {
 		return
 	}
+	n.drainDeferredResponderFeedback(settings.Token)
 
 	threads := n.responderThreads(settings)
 	if len(threads) == 0 {
@@ -557,12 +558,6 @@ func (n *Notifier) processResponderReply(
 	candidate responderReplyCandidate,
 ) {
 	claimKey := responderReplyClaimKey(candidate)
-	if n.responderThreadHasDeferred(candidate.Thread, claimKey) {
-		return
-	}
-	if n.retryDeferredResponderFeedback(token, claimKey) {
-		return
-	}
 	threadLock := n.responderThreadLock(
 		candidate.Thread.featureID,
 		candidate.Thread.destinationKey,
@@ -671,12 +666,6 @@ func (n *Notifier) processResponderReaction(
 	candidate responderReactionCandidate,
 ) {
 	claimKey := responderReactionClaimKey(candidate)
-	if n.responderThreadHasDeferred(candidate.Thread, claimKey) {
-		return
-	}
-	if n.retryDeferredResponderFeedback(token, claimKey) {
-		return
-	}
 	threadLock := n.responderThreadLock(
 		candidate.Thread.featureID,
 		candidate.Thread.destinationKey,
@@ -819,78 +808,47 @@ func (n *Notifier) handleRejectedResponderReply(
 	result ports.SlackAnswerResult,
 	claimKey string,
 ) bool {
+	line := ""
+	reason := ""
 	switch result.Outcome {
 	case ports.SlackAnswerRevisionMoved:
-		if n.rejectResponderReply(
-			token,
-			candidate,
-			pending,
-			"stale_revision",
-			"warning",
-			pending.Tag+" changed in Agentico. Approve the current review there.",
-			claimKey,
-		) {
-			return true
-		}
-		n.deferResponderFeedback(claimKey, responderDeferredFeedback{
-			thread: candidate.Thread, pending: pending,
-			sourceFeatureID: pending.SourceFeatureID,
-			messageTS:       candidate.Message.TS, reaction: "warning",
-			line:     pending.Tag + " changed in Agentico. Approve the current review there.",
-			decision: decision, medium: "reply", reason: "stale_revision",
-		})
-		return true
+		reason = "stale_revision"
+		line = pending.Tag + " changed in Agentico. Approve the current review there."
 	case ports.SlackAnswerNoLongerPending:
+		reason = "already_resolved"
+		line = pending.Tag + " was already answered by Agentico."
 		if resolved, ok := n.resolveResponderTargetByAgentico(
 			candidate.Thread.featureID,
 			candidate.Target.Identity,
 		); ok {
 			n.enqueueResponderClosure(token, candidate.Thread.featureID, resolved)
 		}
-		if n.rejectResponderReply(
-			token,
-			candidate,
-			pending,
-			"already_resolved",
-			"warning",
-			pending.Tag+" was already answered by Agentico.",
-			claimKey,
-		) {
-			return true
-		}
-		n.deferResponderFeedback(claimKey, responderDeferredFeedback{
-			thread: candidate.Thread, pending: pending,
-			sourceFeatureID: pending.SourceFeatureID,
-			messageTS:       candidate.Message.TS, reaction: "warning",
-			line:     pending.Tag + " was already answered by Agentico.",
-			decision: decision, medium: "reply", reason: "already_resolved",
-		})
-		return true
 	case ports.SlackAnswerFailed:
+		reason = "submit_failed"
+		line = pending.Tag + " could not be submitted. Answer again or in Agentico."
 		n.logResponderFailure(token, result.Cause)
-		if n.rejectResponderReply(
-			token,
-			candidate,
-			pending,
-			"submit_failed",
-			"warning",
-			pending.Tag+" could not be submitted. Answer again or in Agentico.",
-			claimKey,
-		) {
-			return true
-		}
-		n.deferResponderFeedback(claimKey, responderDeferredFeedback{
-			thread: candidate.Thread, pending: pending,
-			sourceFeatureID: pending.SourceFeatureID,
-			messageTS:       candidate.Message.TS, reaction: "warning",
-			line:     pending.Tag + " could not be submitted. Answer again or in Agentico.",
-			decision: decision, medium: "reply", reason: "submit_failed",
-		})
-		return true
 	default:
 		n.emitResponderRejected(candidate.Thread, pending, decision, "reply", "submit_failed")
 		return false
 	}
+	if n.rejectResponderReply(
+		token,
+		candidate,
+		pending,
+		reason,
+		"warning",
+		line,
+		claimKey,
+	) {
+		return true
+	}
+	n.deferResponderFeedback(claimKey, responderDeferredFeedback{
+		thread: candidate.Thread, pending: pending,
+		sourceFeatureID: pending.SourceFeatureID,
+		messageTS:       candidate.Message.TS, reaction: "warning",
+		line: line, decision: decision, medium: "reply", reason: reason,
+	})
+	return true
 }
 
 func (n *Notifier) handleRejectedResponderReaction(
@@ -1238,55 +1196,52 @@ func (n *Notifier) deferResponderFeedback(
 	feedback responderDeferredFeedback,
 ) {
 	n.responderFeedbackMu.Lock()
+	if _, exists := n.responderDeferred[claimKey]; !exists {
+		n.responderDeferredOrder = append(n.responderDeferredOrder, claimKey)
+	}
 	n.responderDeferred[claimKey] = feedback
 	n.responderFeedbackMu.Unlock()
 }
 
-func (n *Notifier) responderThreadHasDeferred(
-	thread responderThread,
-	claimKey string,
-) bool {
-	n.responderFeedbackMu.Lock()
-	defer n.responderFeedbackMu.Unlock()
-	for key, feedback := range n.responderDeferred {
-		if key != claimKey &&
-			feedback.thread.featureID == thread.featureID &&
-			feedback.thread.destinationKey == thread.destinationKey {
-			return true
+func (n *Notifier) drainDeferredResponderFeedback(token string) {
+	for {
+		n.responderFeedbackMu.Lock()
+		if len(n.responderDeferredOrder) == 0 {
+			n.responderFeedbackMu.Unlock()
+			return
 		}
-	}
-	return false
-}
+		claimKey := n.responderDeferredOrder[0]
+		feedback, ok := n.responderDeferred[claimKey]
+		if !ok {
+			n.responderDeferredOrder = n.responderDeferredOrder[1:]
+			n.responderFeedbackMu.Unlock()
+			continue
+		}
+		n.responderFeedbackMu.Unlock()
 
-func (n *Notifier) retryDeferredResponderFeedback(token, claimKey string) bool {
-	n.responderFeedbackMu.Lock()
-	feedback, ok := n.responderDeferred[claimKey]
-	n.responderFeedbackMu.Unlock()
-	if !ok {
-		return false
+		if !n.enqueueResponderFeedback(
+			token,
+			feedback.thread,
+			feedback.sourceFeatureID,
+			feedback.messageTS,
+			feedback.reaction,
+			feedback.line,
+			claimKey,
+		) {
+			return
+		}
+		n.responderFeedbackMu.Lock()
+		delete(n.responderDeferred, claimKey)
+		n.responderDeferredOrder = n.responderDeferredOrder[1:]
+		n.responderFeedbackMu.Unlock()
+		n.emitResponderRejected(
+			feedback.thread,
+			feedback.pending,
+			feedback.decision,
+			feedback.medium,
+			feedback.reason,
+		)
 	}
-	if !n.enqueueResponderFeedback(
-		token,
-		feedback.thread,
-		feedback.sourceFeatureID,
-		feedback.messageTS,
-		feedback.reaction,
-		feedback.line,
-		claimKey,
-	) {
-		return true
-	}
-	n.responderFeedbackMu.Lock()
-	delete(n.responderDeferred, claimKey)
-	n.responderFeedbackMu.Unlock()
-	n.emitResponderRejected(
-		feedback.thread,
-		feedback.pending,
-		feedback.decision,
-		feedback.medium,
-		feedback.reason,
-	)
-	return true
 }
 
 func responderSubmissionKey(featureID, identity string) string {

@@ -27,16 +27,16 @@ import (
 )
 
 const (
-	task6FeatureID   = "feature-task-6"
-	task6UserKey     = "user:U-ADA"
-	task6ChannelKey  = "channel:C-ENG"
-	task6UserChannel = "D-ADA"
-	task6Channel     = "C-ENG"
-	task6UserRoot    = "100.000001"
-	task6ChannelRoot = "200.000001"
+	resolutionFeatureID   = "feature-resolution"
+	resolutionUserKey     = "user:U-ADA"
+	resolutionChannelKey  = "channel:C-ENG"
+	resolutionUserChannel = "D-ADA"
+	resolutionChannel     = "C-ENG"
+	resolutionUserRoot    = "100.000001"
+	resolutionChannelRoot = "200.000001"
 )
 
-func task6Recipients() []ports.SlackRecipient {
+func resolutionRecipients() []ports.SlackRecipient {
 	return []ports.SlackRecipient{
 		{
 			TypedText: "@ada", Kind: ports.SlackRecipientUser,
@@ -49,31 +49,31 @@ func task6Recipients() []ports.SlackRecipient {
 	}
 }
 
-func task6PendingInput(index int) pendingInputRecord {
+func resolutionPendingInput(index int) pendingInputRecord {
 	return pendingInputRecord{
 		Identity:        fmt.Sprintf("permission:request-%d", index),
-		SourceFeatureID: task6FeatureID,
+		SourceFeatureID: resolutionFeatureID,
 		Kind:            string(ports.SlackPendingPermission),
 		RequestID:       fmt.Sprintf("request-%d", index),
 		Tag:             fmt.Sprintf("#%d", index),
 		MessageTS: map[string]string{
-			task6UserKey:    fmt.Sprintf("100.%06d", index+1),
-			task6ChannelKey: fmt.Sprintf("200.%06d", index+1),
+			resolutionUserKey:    fmt.Sprintf("100.%06d", index+1),
+			resolutionChannelKey: fmt.Sprintf("200.%06d", index+1),
 		},
 	}
 }
 
-func task6Record(inputs ...pendingInputRecord) *featureRecord {
+func resolutionRecord(inputs ...pendingInputRecord) *featureRecord {
 	record := &featureRecord{
 		Version: recordVersion,
 		Destinations: map[string]destinationRecord{
-			task6UserKey: {
-				Kind: "user", SlackID: "U-ADA", ChannelID: task6UserChannel,
-				RootTS: task6UserRoot, Ledger: []string{task6UserRoot},
+			resolutionUserKey: {
+				Kind: "user", SlackID: "U-ADA", ChannelID: resolutionUserChannel,
+				RootTS: resolutionUserRoot, Ledger: []string{resolutionUserRoot},
 			},
-			task6ChannelKey: {
-				Kind: "channel", SlackID: "C-ENG", ChannelID: task6Channel,
-				RootTS: task6ChannelRoot, Ledger: []string{task6ChannelRoot},
+			resolutionChannelKey: {
+				Kind: "channel", SlackID: "C-ENG", ChannelID: resolutionChannel,
+				RootTS: resolutionChannelRoot, Ledger: []string{resolutionChannelRoot},
 			},
 		},
 		Pending: append([]pendingInputRecord(nil), inputs...),
@@ -89,15 +89,15 @@ func task6Record(inputs ...pendingInputRecord) *featureRecord {
 	return record
 }
 
-func newTask6Responder(
+func newResolutionResponder(
 	t *testing.T,
 	record *featureRecord,
 	answerPort *fakeSlackAnswerPort,
 ) (*notifierHarness, *Notifier) {
 	t.Helper()
-	harness := newNotifierHarness(t, defaultTestSettings("xoxb-task-6", task6Recipients()...))
-	harness.seedFeature(task6FeatureID, nil)
-	if err := persistFeatureRecord(harness.stateDir, task6FeatureID, record); err != nil {
+	harness := newNotifierHarness(t, defaultTestSettings("xoxb-resolution", resolutionRecipients()...))
+	harness.seedFeature(resolutionFeatureID, nil)
+	if err := persistFeatureRecord(harness.stateDir, resolutionFeatureID, record); err != nil {
 		t.Fatal(err)
 	}
 	notifier := NewNotifier(NotifierOptions{
@@ -108,12 +108,12 @@ func newTask6Responder(
 			return NewClient(token, WithBaseURL(harness.server.URL()))
 		},
 	})
-	notifier.records[task6FeatureID] = record
+	notifier.records[resolutionFeatureID] = record
 	t.Cleanup(func() { notifier.Stop(context.Background()) })
 	return harness, notifier
 }
 
-func seedTask6Thread(
+func seedResolutionThread(
 	harness *notifierHarness,
 	channelID, rootTS, messageTS string,
 	extras ...testsupport.Message,
@@ -147,7 +147,7 @@ func TestSlackResponderFirstValidReplyWinsAcrossDestinationTimestampOrder(t *tes
 			userReplyTS: "300.000020", userReply: "deny", userID: "U-LATE",
 			channelReplyTS: "300.000010", channelReply: "allow", channelUserID: "U-EARLY",
 			wantDecision: ports.SlackPermissionAllowOnce, wantWinnerID: "U-EARLY",
-			wantWinnerName: "Early User", wantLoserChannel: task6UserChannel,
+			wantWinnerName: "Early User", wantLoserChannel: resolutionUserChannel,
 			wantLoserTS: "300.000020",
 		},
 		{
@@ -155,17 +155,17 @@ func TestSlackResponderFirstValidReplyWinsAcrossDestinationTimestampOrder(t *tes
 			userReplyTS: "300.000010", userReply: "deny", userID: "U-EARLY",
 			channelReplyTS: "300.000020", channelReply: "allow", channelUserID: "U-LATE",
 			wantDecision: ports.SlackPermissionDeny, wantWinnerID: "U-EARLY",
-			wantWinnerName: "Early User", wantLoserChannel: task6Channel,
+			wantWinnerName: "Early User", wantLoserChannel: resolutionChannel,
 			wantLoserTS: "300.000020",
 		},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			input := task6PendingInput(1)
-			record := task6Record(input)
+			input := resolutionPendingInput(1)
+			record := resolutionRecord(input)
 			answerPort := &fakeSlackAnswerPort{}
-			harness, notifier := newTask6Responder(t, record, answerPort)
-			harness.pending.setFromRecord(task6FeatureID, record)
+			harness, notifier := newResolutionResponder(t, record, answerPort)
+			harness.pending.setFromRecord(resolutionFeatureID, record)
 			harness.server.Script("users.info", testsupport.Response{Body: map[string]any{
 				"ok": true,
 				"user": map[string]any{
@@ -173,17 +173,17 @@ func TestSlackResponderFirstValidReplyWinsAcrossDestinationTimestampOrder(t *tes
 					"profile": map[string]any{"display_name": testCase.wantWinnerName},
 				},
 			}})
-			seedTask6Thread(
-				harness, task6UserChannel, task6UserRoot, input.MessageTS[task6UserKey],
+			seedResolutionThread(
+				harness, resolutionUserChannel, resolutionUserRoot, input.MessageTS[resolutionUserKey],
 				testsupport.Message{
-					TS: testCase.userReplyTS, ThreadTS: task6UserRoot,
+					TS: testCase.userReplyTS, ThreadTS: resolutionUserRoot,
 					User: testCase.userID, Text: testCase.userReply,
 				},
 			)
-			seedTask6Thread(
-				harness, task6Channel, task6ChannelRoot, input.MessageTS[task6ChannelKey],
+			seedResolutionThread(
+				harness, resolutionChannel, resolutionChannelRoot, input.MessageTS[resolutionChannelKey],
 				testsupport.Message{
-					TS: testCase.channelReplyTS, ThreadTS: task6ChannelRoot,
+					TS: testCase.channelReplyTS, ThreadTS: resolutionChannelRoot,
 					User: testCase.channelUserID, Text: testCase.channelReply,
 				},
 			)
@@ -255,15 +255,15 @@ func TestSlackResponderFirstValidReplyWinsAcrossDestinationTimestampOrder(t *tes
 }
 
 func TestSlackResponderNoLongerPendingClosesEveryDestinationImmediately(t *testing.T) {
-	input := task6PendingInput(1)
-	record := task6Record(input)
+	input := resolutionPendingInput(1)
+	record := resolutionRecord(input)
 	answerPort := &fakeSlackAnswerPort{
 		permissionResults: []ports.SlackAnswerResult{{
 			Outcome: ports.SlackAnswerNoLongerPending,
 		}},
 	}
-	harness, notifier := newTask6Responder(t, record, answerPort)
-	harness.pending.setFromRecord(task6FeatureID, record)
+	harness, notifier := newResolutionResponder(t, record, answerPort)
+	harness.pending.setFromRecord(resolutionFeatureID, record)
 	harness.server.Script("users.info", testsupport.Response{Body: map[string]any{
 		"ok": true,
 		"user": map[string]any{
@@ -271,11 +271,11 @@ func TestSlackResponderNoLongerPendingClosesEveryDestinationImmediately(t *testi
 			"profile": map[string]any{"display_name": "Reply User"},
 		},
 	}})
-	seedTask6Thread(harness, task6UserChannel, task6UserRoot, input.MessageTS[task6UserKey])
-	seedTask6Thread(
-		harness, task6Channel, task6ChannelRoot, input.MessageTS[task6ChannelKey],
+	seedResolutionThread(harness, resolutionUserChannel, resolutionUserRoot, input.MessageTS[resolutionUserKey])
+	seedResolutionThread(
+		harness, resolutionChannel, resolutionChannelRoot, input.MessageTS[resolutionChannelKey],
 		testsupport.Message{
-			TS: "300.000010", ThreadTS: task6ChannelRoot,
+			TS: "300.000010", ThreadTS: resolutionChannelRoot,
 			User: "U-REPLIER", Text: "allow",
 		},
 	)
@@ -298,14 +298,14 @@ func TestSlackResponderNoLongerPendingClosesEveryDestinationImmediately(t *testi
 			closures[fieldString(request, "channel")]++
 		case "#1 was already answered by Agentico.":
 			lateAttempt++
-			if got := fieldString(request, "channel"); got != task6Channel {
-				t.Errorf("late-attempt channel = %q; want %q", got, task6Channel)
+			if got := fieldString(request, "channel"); got != resolutionChannel {
+				t.Errorf("late-attempt channel = %q; want %q", got, resolutionChannel)
 			}
 		default:
 			t.Errorf("unexpected responder line %q", text)
 		}
 	}
-	if closures[task6UserChannel] != 1 || closures[task6Channel] != 1 ||
+	if closures[resolutionUserChannel] != 1 || closures[resolutionChannel] != 1 ||
 		lateAttempt != 1 {
 		t.Fatalf(
 			"closures=%v lateAttempt=%d; want one closure per destination and one rejection",
@@ -317,7 +317,7 @@ func TestSlackResponderNoLongerPendingClosesEveryDestinationImmediately(t *testi
 		fieldString(reaction, "name") != "warning" {
 		t.Fatalf("reaction = %#v; want warning on submitted reply", reaction)
 	}
-	persisted, err := loadFeatureRecord(harness.stateDir, task6FeatureID)
+	persisted, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +348,7 @@ func TestSlackResponderInterruptionAndRewindCloseAllPendingItemsThenIdle(t *test
 		{
 			name: "interrupted",
 			event: ports.Event{
-				Type: ports.FeatureInterrupted, FeatureID: task6FeatureID,
+				Type: ports.FeatureInterrupted, FeatureID: resolutionFeatureID,
 				Phase: feature.PhaseImplement,
 			},
 			mutateFeature: func(value *feature.Feature) {
@@ -359,7 +359,7 @@ func TestSlackResponderInterruptionAndRewindCloseAllPendingItemsThenIdle(t *test
 		{
 			name: "rewound",
 			event: ports.Event{
-				Type: ports.FeatureRewound, FeatureID: task6FeatureID,
+				Type: ports.FeatureRewound, FeatureID: resolutionFeatureID,
 				Phase: feature.PhasePlan,
 			},
 			lifecycleText: "Rewound to Plan",
@@ -367,15 +367,15 @@ func TestSlackResponderInterruptionAndRewindCloseAllPendingItemsThenIdle(t *test
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			first := task6PendingInput(1)
-			second := task6PendingInput(2)
-			record := task6Record(first, second)
+			first := resolutionPendingInput(1)
+			second := resolutionPendingInput(2)
+			record := resolutionRecord(first, second)
 			harness := newNotifierHarness(
 				t,
-				defaultTestSettings("xoxb-task-6", task6Recipients()...),
+				defaultTestSettings("xoxb-resolution", resolutionRecipients()...),
 			)
-			harness.seedFeature(task6FeatureID, testCase.mutateFeature)
-			if err := persistFeatureRecord(harness.stateDir, task6FeatureID, record); err != nil {
+			harness.seedFeature(resolutionFeatureID, testCase.mutateFeature)
+			if err := persistFeatureRecord(harness.stateDir, resolutionFeatureID, record); err != nil {
 				t.Fatal(err)
 			}
 			responderClock := newManualResponderClock()
@@ -397,14 +397,14 @@ func TestSlackResponderInterruptionAndRewindCloseAllPendingItemsThenIdle(t *test
 				if harness.server.CallCount("chat.postMessage") != 6 {
 					return false
 				}
-				current, err := loadFeatureRecord(harness.stateDir, task6FeatureID)
+				current, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
 				if err != nil {
 					return false
 				}
-				return len(current.Destinations[task6UserKey].Ledger) == 6 &&
-					len(current.Destinations[task6ChannelKey].Ledger) == 6
+				return len(current.Destinations[resolutionUserKey].Ledger) == 6 &&
+					len(current.Destinations[resolutionChannelKey].Ledger) == 6
 			})
-			for _, channelID := range []string{task6UserChannel, task6Channel} {
+			for _, channelID := range []string{resolutionUserChannel, resolutionChannel} {
 				posts := postsTo(harness.server, channelID)
 				if len(posts) != 3 {
 					t.Fatalf("posts to %s = %#v; want lifecycle plus two closures", channelID, posts)
@@ -424,7 +424,7 @@ func TestSlackResponderInterruptionAndRewindCloseAllPendingItemsThenIdle(t *test
 					}
 				}
 			}
-			persisted, err := loadFeatureRecord(harness.stateDir, task6FeatureID)
+			persisted, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -453,25 +453,25 @@ func TestSlackResponderInterruptionAndRewindCloseAllPendingItemsThenIdle(t *test
 func TestSlackResponderRetentionCapBoundsFullRecordsAndPollRange(t *testing.T) {
 	inputs := make([]pendingInputRecord, 0, responderResolvedRetentionLimit+2)
 	for index := 1; index <= responderResolvedRetentionLimit+2; index++ {
-		inputs = append(inputs, task6PendingInput(index))
+		inputs = append(inputs, resolutionPendingInput(index))
 	}
-	record := task6Record(inputs...)
+	record := resolutionRecord(inputs...)
 	answerPort := &fakeSlackAnswerPort{}
-	harness, notifier := newTask6Responder(t, record, answerPort)
+	harness, notifier := newResolutionResponder(t, record, answerPort)
 	live := inputs[len(inputs)-1]
-	harness.pending.set(task6FeatureID, ports.SlackPendingInput{
-		FeatureID: task6FeatureID, Kind: ports.SlackPendingPermission,
+	harness.pending.set(resolutionFeatureID, ports.SlackPendingInput{
+		FeatureID: resolutionFeatureID, Kind: ports.SlackPendingPermission,
 		RequestID: live.RequestID,
 	})
-	userMessages := []testsupport.Message{{TS: task6UserRoot}}
-	channelMessages := []testsupport.Message{{TS: task6ChannelRoot}}
+	userMessages := []testsupport.Message{{TS: resolutionUserRoot}}
+	channelMessages := []testsupport.Message{{TS: resolutionChannelRoot}}
 	for index, input := range inputs {
 		userMessage := testsupport.Message{
-			TS: input.MessageTS[task6UserKey], ThreadTS: task6UserRoot,
+			TS: input.MessageTS[resolutionUserKey], ThreadTS: resolutionUserRoot,
 			Text: input.Tag,
 		}
 		channelMessage := testsupport.Message{
-			TS: input.MessageTS[task6ChannelKey], ThreadTS: task6ChannelRoot,
+			TS: input.MessageTS[resolutionChannelKey], ThreadTS: resolutionChannelRoot,
 			Text: input.Tag,
 		}
 		if index == 0 {
@@ -482,15 +482,15 @@ func TestSlackResponderRetentionCapBoundsFullRecordsAndPollRange(t *testing.T) {
 		userMessages = append(userMessages, userMessage)
 		channelMessages = append(channelMessages, channelMessage)
 	}
-	harness.server.SeedThread(task6UserChannel, task6UserRoot, userMessages)
-	harness.server.SeedThread(task6Channel, task6ChannelRoot, channelMessages)
+	harness.server.SeedThread(resolutionUserChannel, resolutionUserRoot, userMessages)
+	harness.server.SeedThread(resolutionChannel, resolutionChannelRoot, channelMessages)
 
 	notifier.responderTick()
 
 	if got := len(answerPort.permissionSubmissions()); got != 0 {
 		t.Fatalf("permission submissions = %d; want no mutation from reduced reaction", got)
 	}
-	persisted, err := loadFeatureRecord(harness.stateDir, task6FeatureID)
+	persisted, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,9 +531,9 @@ func TestSlackResponderRetentionCapBoundsFullRecordsAndPollRange(t *testing.T) {
 	}
 	for _, poll := range polls {
 		channelID := fieldString(poll, "channel")
-		wantOldest := inputs[1].MessageTS[task6ChannelKey]
-		if channelID == task6UserChannel {
-			wantOldest = inputs[1].MessageTS[task6UserKey]
+		wantOldest := inputs[1].MessageTS[resolutionChannelKey]
+		if channelID == resolutionUserChannel {
+			wantOldest = inputs[1].MessageTS[resolutionUserKey]
 		}
 		if got := fieldString(poll, "oldest"); got != wantOldest {
 			t.Errorf("oldest for %s = %q; want %q", channelID, got, wantOldest)
@@ -553,42 +553,42 @@ func TestSlackResponderRetentionCapBoundsFullRecordsAndPollRange(t *testing.T) {
 func TestSlackResponderRetentionCapKeepsReducedReplyTargeting(t *testing.T) {
 	inputs := make([]pendingInputRecord, 0, responderResolvedRetentionLimit+2)
 	for index := 1; index <= responderResolvedRetentionLimit+2; index++ {
-		inputs = append(inputs, task6PendingInput(index))
+		inputs = append(inputs, resolutionPendingInput(index))
 	}
-	record := task6Record(inputs...)
-	harness, notifier := newTask6Responder(t, record, &fakeSlackAnswerPort{})
+	record := resolutionRecord(inputs...)
+	harness, notifier := newResolutionResponder(t, record, &fakeSlackAnswerPort{})
 	live := inputs[len(inputs)-1]
-	harness.pending.set(task6FeatureID, ports.SlackPendingInput{
-		FeatureID: task6FeatureID, Kind: ports.SlackPendingPermission,
+	harness.pending.set(resolutionFeatureID, ports.SlackPendingInput{
+		FeatureID: resolutionFeatureID, Kind: ports.SlackPendingPermission,
 		RequestID: live.RequestID,
 	})
-	userMessages := []testsupport.Message{{TS: task6UserRoot}}
-	channelMessages := []testsupport.Message{{TS: task6ChannelRoot}}
+	userMessages := []testsupport.Message{{TS: resolutionUserRoot}}
+	channelMessages := []testsupport.Message{{TS: resolutionChannelRoot}}
 	for _, input := range inputs {
 		userMessages = append(userMessages, testsupport.Message{
-			TS: input.MessageTS[task6UserKey], ThreadTS: task6UserRoot,
+			TS: input.MessageTS[resolutionUserKey], ThreadTS: resolutionUserRoot,
 		})
 		channelMessages = append(channelMessages, testsupport.Message{
-			TS: input.MessageTS[task6ChannelKey], ThreadTS: task6ChannelRoot,
+			TS: input.MessageTS[resolutionChannelKey], ThreadTS: resolutionChannelRoot,
 		})
 	}
-	harness.server.SeedThread(task6UserChannel, task6UserRoot, userMessages)
-	harness.server.SeedThread(task6Channel, task6ChannelRoot, channelMessages)
+	harness.server.SeedThread(resolutionUserChannel, resolutionUserRoot, userMessages)
+	harness.server.SeedThread(resolutionChannel, resolutionChannelRoot, channelMessages)
 	notifier.responderTick()
 	waitFor(t, time.Second, func() bool {
 		return harness.server.CallCount("chat.postMessage") ==
 			2*(len(inputs)-1)
 	})
-	persisted, err := loadFeatureRecord(harness.stateDir, task6FeatureID)
+	persisted, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	reduced := persisted.Destinations[task6ChannelKey].PostingIndex[0]
+	reduced := persisted.Destinations[resolutionChannelKey].PostingIndex[0]
 	if reduced.Resolution == nil {
 		t.Fatal("reduced posting resolution = nil; want historical resolver")
 	}
 	target, found := newestPostingBefore(
-		persisted.Destinations[task6ChannelKey].PostingIndex,
+		persisted.Destinations[resolutionChannelKey].PostingIndex,
 		"200.0000025",
 	)
 	if !found || target.Identity != reduced.Identity {
@@ -598,7 +598,7 @@ func TestSlackResponderRetentionCapKeepsReducedReplyTargeting(t *testing.T) {
 		)
 	}
 	client, err := NewClient(
-		"xoxb-task-6",
+		"xoxb-resolution",
 		WithBaseURL(harness.server.URL()),
 	)
 	if err != nil {
@@ -606,11 +606,11 @@ func TestSlackResponderRetentionCapKeepsReducedReplyTargeting(t *testing.T) {
 	}
 	candidate := responderReplyCandidate{
 		Thread: responderThread{
-			featureID: task6FeatureID, destinationKey: task6ChannelKey,
-			destinationOrder: 1, channelID: task6Channel, rootTS: task6ChannelRoot,
+			featureID: resolutionFeatureID, destinationKey: resolutionChannelKey,
+			destinationOrder: 1, channelID: resolutionChannel, rootTS: resolutionChannelRoot,
 		},
 		Message: Message{
-			TS: "200.0000025", ThreadTS: task6ChannelRoot,
+			TS: "200.0000025", ThreadTS: resolutionChannelRoot,
 			User: "U-LATE", Text: "allow",
 		},
 		Target:      target,
@@ -618,7 +618,7 @@ func TestSlackResponderRetentionCapKeepsReducedReplyTargeting(t *testing.T) {
 	}
 
 	waitFor(t, time.Second, func() bool {
-		notifier.processResponderReply(client, "xoxb-task-6", candidate)
+		notifier.processResponderReply(client, "xoxb-resolution", candidate)
 		return len(harness.observer.ofKind("slack.answer_rejected")) == 1
 	})
 	rejected := harness.observer.ofKind("slack.answer_rejected")
@@ -643,9 +643,9 @@ func TestSlackResponderRetentionCapKeepsReducedReplyTargeting(t *testing.T) {
 func TestSlackResponderIdlePrunesTwentyResolvedItemsAndPostingIndex(t *testing.T) {
 	inputs := make([]pendingInputRecord, 0, 21)
 	for index := 1; index <= 21; index++ {
-		inputs = append(inputs, task6PendingInput(index))
+		inputs = append(inputs, resolutionPendingInput(index))
 	}
-	record := task6Record(inputs...)
+	record := resolutionRecord(inputs...)
 	record.Pending = append([]pendingInputRecord(nil), inputs[20])
 	record.Resolved = append([]pendingInputRecord(nil), inputs[:20]...)
 	for index := range record.Resolved {
@@ -662,15 +662,15 @@ func TestSlackResponderIdlePrunesTwentyResolvedItemsAndPostingIndex(t *testing.T
 		}
 		record.Destinations[key] = destination
 	}
-	harness, notifier := newTask6Responder(t, record, &fakeSlackAnswerPort{})
-	harness.pending.set(task6FeatureID)
-	seedTask6Thread(
-		harness, task6UserChannel, task6UserRoot,
-		record.Pending[0].MessageTS[task6UserKey],
+	harness, notifier := newResolutionResponder(t, record, &fakeSlackAnswerPort{})
+	harness.pending.set(resolutionFeatureID)
+	seedResolutionThread(
+		harness, resolutionUserChannel, resolutionUserRoot,
+		record.Pending[0].MessageTS[resolutionUserKey],
 	)
-	seedTask6Thread(
-		harness, task6Channel, task6ChannelRoot,
-		record.Pending[0].MessageTS[task6ChannelKey],
+	seedResolutionThread(
+		harness, resolutionChannel, resolutionChannelRoot,
+		record.Pending[0].MessageTS[resolutionChannelKey],
 	)
 
 	notifier.responderTick()
@@ -678,7 +678,7 @@ func TestSlackResponderIdlePrunesTwentyResolvedItemsAndPostingIndex(t *testing.T
 	waitFor(t, time.Second, func() bool {
 		return harness.server.CallCount("chat.postMessage") == 2
 	})
-	persisted, err := loadFeatureRecord(harness.stateDir, task6FeatureID)
+	persisted, err := loadFeatureRecord(harness.stateDir, resolutionFeatureID)
 	if err != nil {
 		t.Fatal(err)
 	}

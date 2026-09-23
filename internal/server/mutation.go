@@ -519,15 +519,7 @@ func writeMutationError(w http.ResponseWriter, err error) {
 }
 
 func validAnswerSource(source *ports.AnswerSource) bool {
-	if source == nil {
-		return true
-	}
-	switch source.Kind {
-	case ports.AnswerSourceSlack, ports.AnswerSourceDesktop:
-		return true
-	default:
-		return false
-	}
+	return source == nil || source.Kind.Valid()
 }
 
 func validateAnswerSource(w http.ResponseWriter, source *ports.AnswerSource) bool {

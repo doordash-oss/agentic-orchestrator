@@ -216,10 +216,6 @@ func slackReviewFailure(err error) ports.SlackAnswerResult {
 	return slackAnswerFailed(err)
 }
 
-func slackAnswerFailure(err error) ports.SlackAnswerResult {
-	return slackPermissionFailure(err)
-}
-
 func slackAnswerFailed(err error) ports.SlackAnswerResult {
 	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerFailed, Cause: err}
 }

@@ -230,6 +230,7 @@ func TestSlackResponderEvidence(t *testing.T) {
 	answerPort := &responderEvidenceAnswerPort{
 		permissionResults: []ports.SlackAnswerResult{
 			{Outcome: ports.SlackAnswerAccepted},
+			{Outcome: ports.SlackAnswerAccepted},
 			{Outcome: ports.SlackAnswerFailed, Cause: errors.New("permission relay unavailable")},
 		},
 		reviewResults: []ports.SlackAnswerResult{
@@ -309,6 +310,34 @@ func TestSlackResponderEvidence(t *testing.T) {
 	assertResponderEvidenceLine(t, harness, "#1 was already answered by <@U-GRACE>.", 1)
 	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "reply_wins_reaction"))
 
+	permissionDeny := responderEvidencePermission("permission-deny", "git clean -fd")
+	harness.pending.set(responderEvidenceFeatureID, permissionDeny)
+	notifier.RuntimeMessageTap(controlRuntimeMessage(
+		responderEvidenceFeatureID, "session-evidence", permissionDeny.RequestID,
+	))
+	permissionDenyRecord := waitForResponderEvidenceInput(
+		t, harness, "permission:"+permissionDeny.RequestID, false,
+	)
+	denyAcceptedReplyTS := responderEvidenceTimestamp(sequence.Add(1))
+	humans.addReply(
+		responderEvidenceChannel, channelRoot, denyAcceptedReplyTS,
+		responderEvidencePeerID, "deny",
+	)
+	responderEvidenceSeedThreads(t, harness, humans)
+	beforePolls = harness.server.CallCount("conversations.replies")
+	beforePosts = harness.server.CallCount("chat.postMessage")
+	beforeReactions = harness.server.CallCount("reactions.add")
+	responderEvidenceTickClock(t, responderClock)
+	waitFor(t, 10*time.Second, func() bool {
+		return len(answerPort.all()) == 2 &&
+			harness.server.CallCount("chat.postMessage") == beforePosts+2 &&
+			harness.server.CallCount("reactions.add") == beforeReactions+1
+	})
+	assertResponderEvidencePolls(t, harness, beforePolls, permissionDenyRecord.MessageTS)
+	assertResponderEvidenceReaction(t, harness, denyAcceptedReplyTS, "white_check_mark")
+	assertResponderEvidenceLine(t, harness, "#2 was denied by <@U-GRACE> via Slack.", 2)
+	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "permission_denied"))
+
 	permissionTwo := responderEvidencePermission("permission-2", "go test ./...")
 	harness.pending.set(responderEvidenceFeatureID, permissionTwo)
 	notifier.RuntimeMessageTap(controlRuntimeMessage(
@@ -341,7 +370,7 @@ func TestSlackResponderEvidence(t *testing.T) {
 	assertResponderEvidencePolls(t, harness, beforePolls, permissionTwoRecord.MessageTS)
 	assertResponderEvidenceReaction(t, harness, unparseableReplyTS, "question")
 	assertResponderEvidenceLine(
-		t, harness, "#2 accepts ✅ or ❌, or a reply of allow or deny.", 1,
+		t, harness, "#3 accepts ✅ or ❌, or a reply of allow or deny.", 1,
 	)
 	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "unparseable_and_eyes"))
 
@@ -356,6 +385,27 @@ func TestSlackResponderEvidence(t *testing.T) {
 	reviewOneRecord := waitForResponderEvidenceInput(
 		t, harness, responderEvidenceReviewIdentity(reviewOne), true,
 	)
+	unparseableReviewReplyTS := responderEvidenceTimestamp(sequence.Add(1))
+	humans.addReply(
+		responderEvidenceChannel, channelRoot, unparseableReviewReplyTS,
+		responderEvidenceOwnerID, "lgtm",
+	)
+	responderEvidenceSeedThreads(t, harness, humans)
+	beforePolls = harness.server.CallCount("conversations.replies")
+	beforePosts = harness.server.CallCount("chat.postMessage")
+	beforeReactions = harness.server.CallCount("reactions.add")
+	responderEvidenceTickClock(t, responderClock)
+	waitFor(t, 10*time.Second, func() bool {
+		return harness.server.CallCount("chat.postMessage") == beforePosts+1 &&
+			harness.server.CallCount("reactions.add") == beforeReactions+1
+	})
+	assertResponderEvidencePolls(t, harness, beforePolls, permissionTwoRecord.MessageTS)
+	assertResponderEvidenceReaction(t, harness, unparseableReviewReplyTS, "question")
+	assertResponderEvidenceLine(
+		t, harness, "#4 accepts ✅ or approve. Request changes in Agentico.", 1,
+	)
+	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "review_unparseable"))
+
 	approveReplyTS := responderEvidenceTimestamp(sequence.Add(1))
 	humans.addReply(
 		responderEvidenceChannel, channelRoot, approveReplyTS,
@@ -367,13 +417,13 @@ func TestSlackResponderEvidence(t *testing.T) {
 	beforeReactions = harness.server.CallCount("reactions.add")
 	responderEvidenceTickClock(t, responderClock)
 	waitFor(t, 10*time.Second, func() bool {
-		return len(answerPort.all()) == 2 &&
+		return len(answerPort.all()) == 3 &&
 			harness.server.CallCount("chat.postMessage") == beforePosts+2 &&
 			harness.server.CallCount("reactions.add") == beforeReactions+1
 	})
 	assertResponderEvidencePolls(t, harness, beforePolls, permissionTwoRecord.MessageTS)
 	assertResponderEvidenceReaction(t, harness, approveReplyTS, "white_check_mark")
-	assertResponderEvidenceLine(t, harness, "#3 was approved by <@U-ADA> via Slack.", 2)
+	assertResponderEvidenceLine(t, harness, "#4 was approved by <@U-ADA> via Slack.", 2)
 	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "review_approved"))
 
 	reviewTwo := responderEvidenceReview(
@@ -400,7 +450,7 @@ func TestSlackResponderEvidence(t *testing.T) {
 	beforeReactions = harness.server.CallCount("reactions.add")
 	responderEvidenceTickClock(t, responderClock)
 	waitFor(t, 10*time.Second, func() bool {
-		return len(answerPort.all()) == 3 &&
+		return len(answerPort.all()) == 4 &&
 			harness.server.CallCount("chat.postMessage") == beforePosts+1
 	})
 	assertResponderEvidencePolls(t, harness, beforePolls, permissionTwoRecord.MessageTS)
@@ -408,7 +458,7 @@ func TestSlackResponderEvidence(t *testing.T) {
 		t.Fatalf("moved review reactions.add calls = %d; want %d", got, beforeReactions)
 	}
 	assertResponderEvidenceLine(
-		t, harness, "#4 changed in Agentico. Approve the current review there.", 1,
+		t, harness, "#5 changed in Agentico. Approve the current review there.", 1,
 	)
 	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "review_moved"))
 
@@ -431,14 +481,14 @@ func TestSlackResponderEvidence(t *testing.T) {
 	beforeReactions = harness.server.CallCount("reactions.add")
 	responderEvidenceTickClock(t, responderClock)
 	waitFor(t, 10*time.Second, func() bool {
-		return len(answerPort.all()) == 4 &&
+		return len(answerPort.all()) == 5 &&
 			harness.server.CallCount("chat.postMessage") == beforePosts+1 &&
 			harness.server.CallCount("reactions.add") == beforeReactions+1
 	})
 	assertResponderEvidencePolls(t, harness, beforePolls, permissionTwoRecord.MessageTS)
 	assertResponderEvidenceReaction(t, harness, denyReplyTS, "warning")
 	assertResponderEvidenceLine(
-		t, harness, "#5 could not be submitted. Answer again or in Agentico.", 1,
+		t, harness, "#6 could not be submitted. Answer again or in Agentico.", 1,
 	)
 	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "permission_failed"))
 
@@ -456,14 +506,20 @@ func TestSlackResponderEvidence(t *testing.T) {
 	beforeReactions = harness.server.CallCount("reactions.add")
 	responderEvidenceTickClock(t, responderClock)
 	waitFor(t, 10*time.Second, func() bool {
+		return harness.server.CallCount("chat.postMessage") == beforePosts+2
+	})
+	assertResponderEvidencePolls(t, harness, beforePolls, permissionTwoRecord.MessageTS)
+	beforePolls = harness.server.CallCount("conversations.replies")
+	responderEvidenceTickClock(t, responderClock)
+	waitFor(t, 10*time.Second, func() bool {
 		return harness.server.CallCount("chat.postMessage") == beforePosts+3
 	})
 	assertResponderEvidencePolls(t, harness, beforePolls, permissionTwoRecord.MessageTS)
 	if got := harness.server.CallCount("reactions.add"); got != beforeReactions {
 		t.Fatalf("late reaction reactions.add calls = %d; want %d", got, beforeReactions)
 	}
-	assertResponderEvidenceLine(t, harness, "#2 was resolved in Agentico.", 2)
-	assertResponderEvidenceLine(t, harness, "#2 was already answered by Agentico.", 1)
+	assertResponderEvidenceLine(t, harness, "#3 was resolved in Agentico.", 2)
+	assertResponderEvidenceLine(t, harness, "#3 was already answered by Agentico.", 1)
 	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "agentico_resolution_and_late_reaction"))
 
 	harness.pending.set(responderEvidenceFeatureID)
@@ -483,8 +539,8 @@ func TestSlackResponderEvidence(t *testing.T) {
 		return harness.server.CallCount("chat.postMessage") == beforePosts+6 &&
 			len(record.Pending) == 0 && len(record.Resolved) == 0
 	})
-	assertResponderEvidenceLine(t, harness, "#4 is no longer pending.", 2)
 	assertResponderEvidenceLine(t, harness, "#5 is no longer pending.", 2)
+	assertResponderEvidenceLine(t, harness, "#6 is no longer pending.", 2)
 	pollsBeforeIdle := harness.server.CallCount("conversations.replies")
 	responderEvidenceTickClock(t, responderClock)
 	if got := harness.server.CallCount("conversations.replies"); got != pollsBeforeIdle {
@@ -893,8 +949,8 @@ func assertResponderEvidenceOutcome(
 ) {
 	t.Helper()
 	submissions := answerPort.all()
-	if len(submissions) != 4 {
-		t.Fatalf("answer-port submissions = %#v; want four", submissions)
+	if len(submissions) != 5 {
+		t.Fatalf("answer-port submissions = %#v; want five", submissions)
 	}
 	wantSubmissions := []struct {
 		kind     string
@@ -906,6 +962,11 @@ func assertResponderEvidenceOutcome(
 		{
 			kind: "permission", id: "permission-1",
 			decision: ports.SlackPermissionAllowOnce,
+			outcome:  ports.SlackAnswerAccepted,
+		},
+		{
+			kind: "permission", id: "permission-deny",
+			decision: ports.SlackPermissionDeny,
 			outcome:  ports.SlackAnswerAccepted,
 		},
 		{
@@ -942,11 +1003,11 @@ func assertResponderEvidenceOutcome(
 
 	received := harness.observer.ofKind("slack.answer_received")
 	rejected := harness.observer.ofKind("slack.answer_rejected")
-	if len(received) != 2 {
-		t.Errorf("slack.answer_received events = %#v; want two", received)
+	if len(received) != 3 {
+		t.Errorf("slack.answer_received events = %#v; want three", received)
 	}
-	if len(rejected) != 5 {
-		t.Errorf("slack.answer_rejected events = %#v; want five", rejected)
+	if len(rejected) != 6 {
+		t.Errorf("slack.answer_rejected events = %#v; want six", rejected)
 	}
 	reasons := map[string]int{}
 	for _, event := range rejected {
@@ -954,7 +1015,7 @@ func assertResponderEvidenceOutcome(
 	}
 	for reason, want := range map[string]int{
 		"already_resolved": 2,
-		"unparseable":      1,
+		"unparseable":      2,
 		"stale_revision":   1,
 		"submit_failed":    1,
 	} {
@@ -1010,6 +1071,7 @@ func writeResponderEvidence(
 	}
 	for _, replyText := range []string{
 		"hmm, let me check",
+		"lgtm",
 		`"fallback_text": "allow"`,
 		`"fallback_text": "approve"`,
 		`"fallback_text": "deny"`,
@@ -1021,14 +1083,16 @@ func writeResponderEvidence(
 	for _, want := range []string{
 		"#1 was allowed once by <@U-GRACE> via Slack.",
 		"#1 was already answered by <@U-GRACE>.",
-		"#2 accepts ✅ or ❌, or a reply of allow or deny.",
-		"#3 was approved by <@U-ADA> via Slack.",
-		"#4 changed in Agentico. Approve the current review there.",
-		"#5 could not be submitted. Answer again or in Agentico.",
-		"#2 was resolved in Agentico.",
-		"#2 was already answered by Agentico.",
-		"#4 is no longer pending.",
+		"#2 was denied by <@U-GRACE> via Slack.",
+		"#3 accepts ✅ or ❌, or a reply of allow or deny.",
+		"#4 accepts ✅ or approve. Request changes in Agentico.",
+		"#4 was approved by <@U-ADA> via Slack.",
+		"#5 changed in Agentico. Approve the current review there.",
+		"#6 could not be submitted. Answer again or in Agentico.",
+		"#3 was resolved in Agentico.",
+		"#3 was already answered by Agentico.",
 		"#5 is no longer pending.",
+		"#6 is no longer pending.",
 	} {
 		if !bytes.Contains(encoded, []byte(want)) {
 			t.Errorf("responder evidence missing %q", want)

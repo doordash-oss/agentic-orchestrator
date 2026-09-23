@@ -155,7 +155,8 @@ func TestSlackResponderFeedbackAdmissionDefersAtPerDestinationCap(t *testing.T) 
 }
 
 func TestSlackResponderParsedAnswerIsSubmittedAtFeedbackCap(t *testing.T) {
-	messages := make([]testsupport.Message, 0, responderFeedbackLimit/2+1)
+	const parsedReplies = 6
+	messages := make([]testsupport.Message, 0, responderFeedbackLimit/2+parsedReplies)
 	for index := 0; index < responderFeedbackLimit/2; index++ {
 		messages = append(messages, testsupport.Message{
 			TS:       fmt.Sprintf("100.%06d", index+3),
@@ -164,16 +165,27 @@ func TestSlackResponderParsedAnswerIsSubmittedAtFeedbackCap(t *testing.T) {
 			Text:     "not an answer",
 		})
 	}
-	messages = append(messages, testsupport.Message{
-		TS: "100.000020", ThreadTS: "100.000001", User: "U-ADA", Text: "allow",
-	})
-	_, notifier, answerPort := newPermissionResponderAdmissionFixture(
+	results := make([]ports.SlackAnswerResult, 0, parsedReplies)
+	for index := 0; index < parsedReplies; index++ {
+		messages = append(messages, testsupport.Message{
+			TS:       fmt.Sprintf("100.%06d", index+20),
+			ThreadTS: "100.000001",
+			User:     fmt.Sprintf("U-PARSED-%02d", index),
+			Text:     "allow",
+		})
+		outcome := ports.SlackAnswerFailed
+		if index%2 == 1 {
+			outcome = ports.SlackAnswerRevisionMoved
+		}
+		results = append(results, ports.SlackAnswerResult{
+			Outcome: outcome,
+			Cause:   errors.New("temporary mutation failure"),
+		})
+	}
+	harness, notifier, answerPort := newPermissionResponderAdmissionFixture(
 		t,
 		messages,
-		[]ports.SlackAnswerResult{{
-			Outcome: ports.SlackAnswerFailed,
-			Cause:   errors.New("temporary mutation failure"),
-		}},
+		results,
 	)
 	clock := notifier.clock.(*gatedDeliveryClock)
 	t.Cleanup(func() { notifier.Stop(context.Background()) })
@@ -185,12 +197,14 @@ func TestSlackResponderParsedAnswerIsSubmittedAtFeedbackCap(t *testing.T) {
 	}
 	notifier.responderFeedbackMu.Lock()
 	outstanding := notifier.responderFeedback["C-ENG"]
+	deferred := len(notifier.responderDeferred)
 	notifier.responderFeedbackMu.Unlock()
-	if outstanding != responderFeedbackLimit+2 {
+	if outstanding != responderFeedbackLimit || deferred != 1 {
 		t.Fatalf(
-			"outstanding feedback after parsed failure = %d; want %d",
+			"feedback after parsed failure = (%d outstanding, %d deferred); want (%d, 1)",
 			outstanding,
-			responderFeedbackLimit+2,
+			deferred,
+			responderFeedbackLimit,
 		)
 	}
 	notifier.responderTick()
@@ -198,6 +212,22 @@ func TestSlackResponderParsedAnswerIsSubmittedAtFeedbackCap(t *testing.T) {
 		t.Fatalf("permission submissions while failed feedback is in flight = %d; want 1", got)
 	}
 	clock.open()
+	waitFor(t, 2*time.Second, func() bool {
+		return notifier.responderFeedbackOutstanding("C-ENG") == 0
+	})
+	waitFor(t, 2*time.Second, func() bool {
+		notifier.responderTick()
+		return len(answerPort.permissionSubmissions()) == parsedReplies &&
+			len(harness.observer.ofKind("slack.answer_rejected")) ==
+				responderFeedbackLimit/2+parsedReplies
+	})
+	if got := len(answerPort.permissionSubmissions()); got != parsedReplies {
+		t.Fatalf(
+			"permission submissions after deferred feedback = %d; want %d unique replies",
+			got,
+			parsedReplies,
+		)
+	}
 }
 
 func newPermissionResponderAdmissionFixture(

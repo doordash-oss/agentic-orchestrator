@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -68,6 +69,18 @@ type responderReactionCandidate struct {
 	Target        postingIndexEntry
 	reactionOrder int
 	userOrder     int
+}
+
+type responderDeferredFeedback struct {
+	thread          responderThread
+	pending         pendingInputRecord
+	sourceFeatureID string
+	messageTS       string
+	reaction        string
+	line            string
+	decision        string
+	medium          string
+	reason          string
 }
 
 func parsePermissionReply(text string) (ports.SlackPermissionDecision, bool) {
@@ -157,7 +170,8 @@ func (n *Notifier) responderTick() {
 		state := n.responderPolls[key]
 		n.responderPollMu.Unlock()
 		if state.oldest != thread.oldest {
-			state = responderPollState{oldest: thread.oldest}
+			state.oldest = thread.oldest
+			state.cursor = ""
 		}
 		if state.suspended ||
 			n.responderClock.Now().Before(state.pauseUntil) ||
@@ -481,12 +495,87 @@ func responderReactionOrder(name string) int {
 	return 1
 }
 
+func (n *Notifier) responderThreadLock(featureID, destinationKey string) *sync.RWMutex {
+	key := responderPollKey(featureID, destinationKey)
+	n.responderThreadMu.Lock()
+	defer n.responderThreadMu.Unlock()
+	lock := n.responderThreadLocks[key]
+	if lock == nil {
+		lock = &sync.RWMutex{}
+		n.responderThreadLocks[key] = lock
+	}
+	return lock
+}
+
+func (n *Notifier) refreshResponderReplyCandidate(
+	candidate responderReplyCandidate,
+) (responderReplyCandidate, bool) {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[candidate.Thread.featureID]
+	if record == nil {
+		return responderReplyCandidate{}, false
+	}
+	destination, ok := record.Destinations[candidate.Thread.destinationKey]
+	if !ok ||
+		destination.ledgerContains(candidate.Message.TS) ||
+		destination.hasReactionForMessage(candidate.Message.TS) {
+		return responderReplyCandidate{}, false
+	}
+	candidate.Target, candidate.TargetFound = newestPostingBefore(
+		destination.PostingIndex,
+		candidate.Message.TS,
+	)
+	return candidate, true
+}
+
+func (n *Notifier) refreshResponderReactionCandidate(
+	candidate responderReactionCandidate,
+) (responderReactionCandidate, bool) {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[candidate.Thread.featureID]
+	if record == nil {
+		return responderReactionCandidate{}, false
+	}
+	destination, ok := record.Destinations[candidate.Thread.destinationKey]
+	if !ok || destination.reactionContains(candidate.MessageTS, candidate.Name) {
+		return responderReactionCandidate{}, false
+	}
+	for _, posting := range destination.PostingIndex {
+		if posting.MessageTS == candidate.MessageTS {
+			candidate.Target = posting
+			return candidate, true
+		}
+	}
+	return responderReactionCandidate{}, false
+}
+
 func (n *Notifier) processResponderReply(
 	client slackClient,
 	token string,
 	candidate responderReplyCandidate,
 ) {
 	claimKey := responderReplyClaimKey(candidate)
+	if n.responderThreadHasDeferred(candidate.Thread, claimKey) {
+		return
+	}
+	if n.retryDeferredResponderFeedback(token, claimKey) {
+		return
+	}
+	threadLock := n.responderThreadLock(
+		candidate.Thread.featureID,
+		candidate.Thread.destinationKey,
+	)
+	if !threadLock.TryRLock() {
+		return
+	}
+	defer threadLock.RUnlock()
+	var current bool
+	candidate, current = n.refreshResponderReplyCandidate(candidate)
+	if !current {
+		return
+	}
 	if !n.claimResponderCandidate(claimKey) {
 		return
 	}
@@ -499,7 +588,6 @@ func (n *Notifier) processResponderReply(
 			"question",
 			"This reply does not target an answerable item. Answer in Agentico.",
 			claimKey,
-			false,
 		) {
 			n.releaseResponderClaim(claimKey)
 		}
@@ -534,12 +622,13 @@ func (n *Notifier) processResponderReply(
 			"question",
 			responderHint(pending),
 			claimKey,
-			false,
 		) {
 			n.releaseResponderClaim(claimKey)
 		}
 		return
 	}
+	n.beginResponderSubmission(candidate.Thread.featureID, candidate.Target.Identity)
+	defer n.endResponderSubmission(candidate.Thread.featureID, candidate.Target.Identity)
 	responderName := n.responderName(client, token, candidate.Message.User)
 	result := n.submitResponderAnswer(pending, decision, responderName)
 	if result.Outcome != ports.SlackAnswerAccepted {
@@ -582,6 +671,25 @@ func (n *Notifier) processResponderReaction(
 	candidate responderReactionCandidate,
 ) {
 	claimKey := responderReactionClaimKey(candidate)
+	if n.responderThreadHasDeferred(candidate.Thread, claimKey) {
+		return
+	}
+	if n.retryDeferredResponderFeedback(token, claimKey) {
+		return
+	}
+	threadLock := n.responderThreadLock(
+		candidate.Thread.featureID,
+		candidate.Thread.destinationKey,
+	)
+	if !threadLock.TryRLock() {
+		return
+	}
+	defer threadLock.RUnlock()
+	var current bool
+	candidate, current = n.refreshResponderReactionCandidate(candidate)
+	if !current {
+		return
+	}
 	if !n.claimResponderCandidate(claimKey) {
 		return
 	}
@@ -614,6 +722,8 @@ func (n *Notifier) processResponderReaction(
 		n.releaseResponderClaim(claimKey)
 		return
 	}
+	n.beginResponderSubmission(candidate.Thread.featureID, candidate.Target.Identity)
+	defer n.endResponderSubmission(candidate.Thread.featureID, candidate.Target.Identity)
 	responderName := n.responderName(client, token, candidate.UserID)
 	result := n.submitResponderAnswer(pending, decision, responderName)
 	n.judgeResponderReaction(candidate)
@@ -711,7 +821,7 @@ func (n *Notifier) handleRejectedResponderReply(
 ) bool {
 	switch result.Outcome {
 	case ports.SlackAnswerRevisionMoved:
-		return n.rejectResponderReply(
+		if n.rejectResponderReply(
 			token,
 			candidate,
 			pending,
@@ -719,8 +829,17 @@ func (n *Notifier) handleRejectedResponderReply(
 			"warning",
 			pending.Tag+" changed in Agentico. Approve the current review there.",
 			claimKey,
-			true,
-		)
+		) {
+			return true
+		}
+		n.deferResponderFeedback(claimKey, responderDeferredFeedback{
+			thread: candidate.Thread, pending: pending,
+			sourceFeatureID: pending.SourceFeatureID,
+			messageTS:       candidate.Message.TS, reaction: "warning",
+			line:     pending.Tag + " changed in Agentico. Approve the current review there.",
+			decision: decision, medium: "reply", reason: "stale_revision",
+		})
+		return true
 	case ports.SlackAnswerNoLongerPending:
 		if resolved, ok := n.resolveResponderTargetByAgentico(
 			candidate.Thread.featureID,
@@ -728,7 +847,7 @@ func (n *Notifier) handleRejectedResponderReply(
 		); ok {
 			n.enqueueResponderClosure(token, candidate.Thread.featureID, resolved)
 		}
-		return n.rejectResponderReply(
+		if n.rejectResponderReply(
 			token,
 			candidate,
 			pending,
@@ -736,11 +855,20 @@ func (n *Notifier) handleRejectedResponderReply(
 			"warning",
 			pending.Tag+" was already answered by Agentico.",
 			claimKey,
-			true,
-		)
+		) {
+			return true
+		}
+		n.deferResponderFeedback(claimKey, responderDeferredFeedback{
+			thread: candidate.Thread, pending: pending,
+			sourceFeatureID: pending.SourceFeatureID,
+			messageTS:       candidate.Message.TS, reaction: "warning",
+			line:     pending.Tag + " was already answered by Agentico.",
+			decision: decision, medium: "reply", reason: "already_resolved",
+		})
+		return true
 	case ports.SlackAnswerFailed:
 		n.logResponderFailure(token, result.Cause)
-		return n.rejectResponderReply(
+		if n.rejectResponderReply(
 			token,
 			candidate,
 			pending,
@@ -748,8 +876,17 @@ func (n *Notifier) handleRejectedResponderReply(
 			"warning",
 			pending.Tag+" could not be submitted. Answer again or in Agentico.",
 			claimKey,
-			true,
-		)
+		) {
+			return true
+		}
+		n.deferResponderFeedback(claimKey, responderDeferredFeedback{
+			thread: candidate.Thread, pending: pending,
+			sourceFeatureID: pending.SourceFeatureID,
+			messageTS:       candidate.Message.TS, reaction: "warning",
+			line:     pending.Tag + " could not be submitted. Answer again or in Agentico.",
+			decision: decision, medium: "reply", reason: "submit_failed",
+		})
+		return true
 	default:
 		n.emitResponderRejected(candidate.Thread, pending, decision, "reply", "submit_failed")
 		return false
@@ -794,9 +931,13 @@ func (n *Notifier) handleRejectedResponderReaction(
 		"",
 		line,
 		claimKey,
-		true,
 	) {
-		return false
+		n.deferResponderFeedback(claimKey, responderDeferredFeedback{
+			thread: candidate.Thread, pending: pending,
+			sourceFeatureID: pending.SourceFeatureID,
+			line:            line, decision: decision, medium: "reaction", reason: reason,
+		})
+		return true
 	}
 	n.emitResponderRejected(candidate.Thread, pending, decision, "reaction", reason)
 	return true
@@ -817,7 +958,6 @@ func (n *Notifier) rejectResolvedReply(
 		"warning",
 		alreadyAnsweredLine(pending.Tag, resolution),
 		claimKey,
-		false,
 	)
 }
 
@@ -836,7 +976,6 @@ func (n *Notifier) rejectResolvedReaction(
 		"",
 		alreadyAnsweredLine(pending.Tag, resolution),
 		claimKey,
-		false,
 	) {
 		return false
 	}
@@ -876,7 +1015,6 @@ func (n *Notifier) rejectResponderReply(
 	pending pendingInputRecord,
 	reason, reaction, line string,
 	claimKey string,
-	force bool,
 ) bool {
 	if !n.enqueueResponderFeedback(
 		token,
@@ -886,7 +1024,6 @@ func (n *Notifier) rejectResponderReply(
 		reaction,
 		line,
 		claimKey,
-		force,
 	) {
 		return false
 	}
@@ -901,7 +1038,6 @@ func (n *Notifier) enqueueResponderFeedback(
 	sourceFeatureID string,
 	messageTS, reaction, line string,
 	claimKey string,
-	force bool,
 ) bool {
 	work := make([]workItem, 0, 2)
 	if messageTS != "" && reaction != "" {
@@ -926,7 +1062,7 @@ func (n *Notifier) enqueueResponderFeedback(
 	if len(work) == 0 {
 		return false
 	}
-	if !n.reserveResponderFeedback(source.channelID, len(work), force) {
+	if !n.reserveResponderFeedback(source.channelID, len(work)) {
 		return false
 	}
 	item := queueItem{
@@ -1080,16 +1216,106 @@ func (n *Notifier) releaseResponderClaim(key string) {
 	n.responderFeedbackMu.Unlock()
 }
 
-func (n *Notifier) reserveResponderFeedback(channelID string, count int, force bool) bool {
+func (n *Notifier) reserveResponderFeedback(channelID string, count int) bool {
 	n.responderFeedbackMu.Lock()
 	defer n.responderFeedbackMu.Unlock()
 	outstanding := n.responderFeedback[channelID]
-	// A parsed mutation cannot be retried safely after the port has observed it.
-	if !force && outstanding+count > responderFeedbackLimit {
+	if outstanding+count > responderFeedbackLimit {
 		return false
 	}
 	n.responderFeedback[channelID] = outstanding + count
 	return true
+}
+
+func (n *Notifier) responderFeedbackOutstanding(channelID string) int {
+	n.responderFeedbackMu.Lock()
+	defer n.responderFeedbackMu.Unlock()
+	return n.responderFeedback[channelID]
+}
+
+func (n *Notifier) deferResponderFeedback(
+	claimKey string,
+	feedback responderDeferredFeedback,
+) {
+	n.responderFeedbackMu.Lock()
+	n.responderDeferred[claimKey] = feedback
+	n.responderFeedbackMu.Unlock()
+}
+
+func (n *Notifier) responderThreadHasDeferred(
+	thread responderThread,
+	claimKey string,
+) bool {
+	n.responderFeedbackMu.Lock()
+	defer n.responderFeedbackMu.Unlock()
+	for key, feedback := range n.responderDeferred {
+		if key != claimKey &&
+			feedback.thread.featureID == thread.featureID &&
+			feedback.thread.destinationKey == thread.destinationKey {
+			return true
+		}
+	}
+	return false
+}
+
+func (n *Notifier) retryDeferredResponderFeedback(token, claimKey string) bool {
+	n.responderFeedbackMu.Lock()
+	feedback, ok := n.responderDeferred[claimKey]
+	n.responderFeedbackMu.Unlock()
+	if !ok {
+		return false
+	}
+	if !n.enqueueResponderFeedback(
+		token,
+		feedback.thread,
+		feedback.sourceFeatureID,
+		feedback.messageTS,
+		feedback.reaction,
+		feedback.line,
+		claimKey,
+	) {
+		return true
+	}
+	n.responderFeedbackMu.Lock()
+	delete(n.responderDeferred, claimKey)
+	n.responderFeedbackMu.Unlock()
+	n.emitResponderRejected(
+		feedback.thread,
+		feedback.pending,
+		feedback.decision,
+		feedback.medium,
+		feedback.reason,
+	)
+	return true
+}
+
+func responderSubmissionKey(featureID, identity string) string {
+	return featureID + "\x00" + identity
+}
+
+func (n *Notifier) beginResponderSubmission(featureID, identity string) {
+	key := responderSubmissionKey(featureID, identity)
+	n.responderFeedbackMu.Lock()
+	n.responderSubmissions[key]++
+	n.responderFeedbackMu.Unlock()
+}
+
+func (n *Notifier) endResponderSubmission(featureID, identity string) {
+	key := responderSubmissionKey(featureID, identity)
+	n.responderFeedbackMu.Lock()
+	if n.responderSubmissions[key] <= 1 {
+		delete(n.responderSubmissions, key)
+	} else {
+		n.responderSubmissions[key]--
+	}
+	n.responderFeedbackMu.Unlock()
+}
+
+func (n *Notifier) responderSubmissionInFlight(featureID, identity string) bool {
+	key := responderSubmissionKey(featureID, identity)
+	n.responderFeedbackMu.Lock()
+	defer n.responderFeedbackMu.Unlock()
+	return n.responderSubmissions[key] > 0
 }
 
 func (n *Notifier) releaseResponderFeedback(channelID string) {
@@ -1169,15 +1395,7 @@ func (n *Notifier) resolveResponderTarget(
 	if resolution == nil {
 		return false
 	}
-	for key, destination := range record.Destinations {
-		for i := range destination.PostingIndex {
-			if destination.PostingIndex[i].Identity == identity {
-				copy := *resolution
-				destination.PostingIndex[i].Resolution = &copy
-			}
-		}
-		record.Destinations[key] = destination
-	}
+	record.propagatePostingResolution(identity, resolution)
 	err := n.persistRecordLocked(featureID, record, "")
 	n.logPersistError(err, "")
 	return true
@@ -1211,15 +1429,7 @@ func (n *Notifier) resolveResponderTargetByAgentico(
 	if resolved.Resolution == nil {
 		return pendingInputRecord{}, false
 	}
-	for key, destination := range record.Destinations {
-		for i := range destination.PostingIndex {
-			if destination.PostingIndex[i].Identity == identity {
-				resolution := *resolved.Resolution
-				destination.PostingIndex[i].Resolution = &resolution
-			}
-		}
-		record.Destinations[key] = destination
-	}
+	record.propagatePostingResolution(identity, resolved.Resolution)
 	err := n.persistRecordLocked(featureID, record, "")
 	n.logPersistError(err, "")
 	return resolved, true

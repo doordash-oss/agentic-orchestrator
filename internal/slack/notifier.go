@@ -162,9 +162,14 @@ type Notifier struct {
 	responderNameMu sync.Mutex
 	responderNames  map[string]string
 
-	responderFeedbackMu sync.Mutex
-	responderFeedback   map[string]int
-	responderClaims     map[string]struct{}
+	responderThreadMu    sync.Mutex
+	responderThreadLocks map[string]*sync.RWMutex
+
+	responderFeedbackMu  sync.Mutex
+	responderFeedback    map[string]int
+	responderClaims      map[string]struct{}
+	responderDeferred    map[string]responderDeferredFeedback
+	responderSubmissions map[string]int
 }
 
 // NewNotifier constructs the notifier and its intake queue. Call Start
@@ -190,28 +195,31 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		}
 	}
 	notifier := &Notifier{
-		settings:           opts.Settings,
-		store:              opts.Store,
-		stateDir:           opts.StateDir,
-		observer:           opts.Observer,
-		reporter:           opts.Reporter,
-		pending:            opts.Pending,
-		answer:             opts.Answer,
-		newClient:          newClient,
-		clock:              clock,
-		responderClock:     responderClock,
-		jitter:             jitter,
-		stopCh:             make(chan struct{}),
-		records:            map[string]*featureRecord{},
-		pendingPersistence: map[string]ports.SlackRecipientKind{},
-		workers:            map[string]*destinationWorker{},
-		recheckQueued:      map[string]bool{},
-		trackedInputs:      map[string]bool{},
-		pendingDeliveries:  map[string]struct{}{},
-		responderPolls:     map[string]responderPollState{},
-		responderNames:     map[string]string{},
-		responderFeedback:  map[string]int{},
-		responderClaims:    map[string]struct{}{},
+		settings:             opts.Settings,
+		store:                opts.Store,
+		stateDir:             opts.StateDir,
+		observer:             opts.Observer,
+		reporter:             opts.Reporter,
+		pending:              opts.Pending,
+		answer:               opts.Answer,
+		newClient:            newClient,
+		clock:                clock,
+		responderClock:       responderClock,
+		jitter:               jitter,
+		stopCh:               make(chan struct{}),
+		records:              map[string]*featureRecord{},
+		pendingPersistence:   map[string]ports.SlackRecipientKind{},
+		workers:              map[string]*destinationWorker{},
+		recheckQueued:        map[string]bool{},
+		trackedInputs:        map[string]bool{},
+		pendingDeliveries:    map[string]struct{}{},
+		responderPolls:       map[string]responderPollState{},
+		responderNames:       map[string]string{},
+		responderThreadLocks: map[string]*sync.RWMutex{},
+		responderFeedback:    map[string]int{},
+		responderClaims:      map[string]struct{}{},
+		responderDeferred:    map[string]responderDeferredFeedback{},
+		responderSubmissions: map[string]int{},
 	}
 	notifier.requestBase, notifier.cancelBase = context.WithCancel(context.Background())
 	notifier.responderBase, notifier.cancelResponder = context.WithCancel(context.Background())
@@ -724,6 +732,8 @@ func (n *Notifier) reconcilePending(
 		}
 		if _, live := liveByIdentity[tracked.Identity]; live {
 			kept = append(kept, tracked)
+		} else if n.responderSubmissionInFlight(owner.ID, tracked.Identity) {
+			kept = append(kept, tracked)
 		} else {
 			if tracked.Resolution == nil {
 				tracked.Resolution = &postingResolution{
@@ -736,15 +746,7 @@ func (n *Notifier) reconcilePending(
 				tracked.Resolution.ClosureSent = true
 				closures = append(closures, tracked)
 			}
-			for key, destination := range record.Destinations {
-				for i := range destination.PostingIndex {
-					if destination.PostingIndex[i].Identity == tracked.Identity {
-						resolution := *tracked.Resolution
-						destination.PostingIndex[i].Resolution = &resolution
-					}
-				}
-				record.Destinations[key] = destination
-			}
+			record.propagatePostingResolution(tracked.Identity, tracked.Resolution)
 			retired = append(retired, tracked)
 			changed = true
 		}
@@ -819,9 +821,13 @@ func (n *Notifier) reconcilePending(
 	}
 	n.refreshTrackedInputsLocked()
 	if changed {
-		err := n.persistRecordLocked(owner.ID, record, settings.Recipients[0].Kind)
+		var kind ports.SlackRecipientKind
+		if len(settings.Recipients) > 0 {
+			kind = settings.Recipients[0].Kind
+		}
+		err := n.persistRecordLocked(owner.ID, record, kind)
 		n.recordMu.Unlock()
-		n.logPersistError(err, settings.Recipients[0].Kind)
+		n.logPersistError(err, kind)
 	} else {
 		n.recordMu.Unlock()
 	}

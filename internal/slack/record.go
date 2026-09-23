@@ -41,6 +41,24 @@ type featureRecord struct {
 	Resolved     []pendingInputRecord         `yaml:"resolved_inputs,omitempty"`
 }
 
+func (r *featureRecord) propagatePostingResolution(
+	identity string,
+	resolution *postingResolution,
+) {
+	if r == nil || resolution == nil {
+		return
+	}
+	for key, destination := range r.Destinations {
+		for i := range destination.PostingIndex {
+			if destination.PostingIndex[i].Identity == identity {
+				copy := *resolution
+				destination.PostingIndex[i].Resolution = &copy
+			}
+		}
+		r.Destinations[key] = destination
+	}
+}
+
 type pendingInputRecord struct {
 	Identity        string             `yaml:"identity"`
 	SourceFeatureID string             `yaml:"source_feature_id"`

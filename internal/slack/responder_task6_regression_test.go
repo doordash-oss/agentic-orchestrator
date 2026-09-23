@@ -604,7 +604,7 @@ func TestSlackResponderRetentionCapKeepsReducedReplyTargeting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	notifier.processResponderReply(client, "xoxb-task-6", responderReplyCandidate{
+	candidate := responderReplyCandidate{
 		Thread: responderThread{
 			featureID: task6FeatureID, destinationKey: task6ChannelKey,
 			destinationOrder: 1, channelID: task6Channel, rootTS: task6ChannelRoot,
@@ -615,8 +615,12 @@ func TestSlackResponderRetentionCapKeepsReducedReplyTargeting(t *testing.T) {
 		},
 		Target:      target,
 		TargetFound: true,
-	})
+	}
 
+	waitFor(t, time.Second, func() bool {
+		notifier.processResponderReply(client, "xoxb-task-6", candidate)
+		return len(harness.observer.ofKind("slack.answer_rejected")) == 1
+	})
 	rejected := harness.observer.ofKind("slack.answer_rejected")
 	if len(rejected) != 1 || rejected[0].Data["reason"] != "already_resolved" {
 		t.Fatalf(

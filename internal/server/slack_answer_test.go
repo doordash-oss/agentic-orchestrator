@@ -248,11 +248,11 @@ func TestHandlerBindsSlackAnswerPort(t *testing.T) {
 }
 
 func TestSlackAnswerResultClassifiesWrappedNoLongerPending(t *testing.T) {
-	result := slackAnswerFailure(errors.New("outer: " + ErrNoLongerPending.Error()))
+	result := slackPermissionFailure(errors.New("outer: " + ErrNoLongerPending.Error()))
 	if result.Outcome != ports.SlackAnswerFailed {
 		t.Fatalf("plain text error = %+v; want failed", result)
 	}
-	result = slackAnswerFailure(errors.Join(errors.New("outer"), ErrNoLongerPending))
+	result = slackPermissionFailure(errors.Join(errors.New("outer"), ErrNoLongerPending))
 	if result.Outcome != ports.SlackAnswerNoLongerPending {
 		t.Fatalf("wrapped sentinel = %+v; want no longer pending", result)
 	}

@@ -304,6 +304,9 @@ func (w *destinationWorker) postReaction(item workItem) error {
 	if !w.pace() {
 		return errWorkerStopped
 	}
+	threadLock := notifier.responderThreadLock(item.featureID, item.destinationKey)
+	threadLock.Lock()
+	defer threadLock.Unlock()
 	defer w.recordWrite()
 	send := func() (AddReactionResult, deliveryCredential, error) {
 		settings, _, ok := w.currentDelivery(item, kindNeedsInput)
@@ -432,7 +435,6 @@ func (w *destinationWorker) postReply(item workItem) error {
 	) {
 		return errDeliveryIneligible
 	}
-
 	settings, _, ok := w.currentDelivery(item, item.reply.kind)
 	if !ok {
 		return errDeliveryIneligible
@@ -459,6 +461,9 @@ func (w *destinationWorker) postReply(item workItem) error {
 	if !w.pace() {
 		return errWorkerStopped
 	}
+	threadLock := notifier.responderThreadLock(item.featureID, item.destinationKey)
+	threadLock.Lock()
+	defer threadLock.Unlock()
 	defer w.recordWrite()
 	send := func() (PostMessageResult, deliveryCredential, error) {
 		if !item.responder && !notifier.pendingDeliveryEligible(
@@ -689,6 +694,9 @@ func (w *destinationWorker) uploadReviewArtifact(item workItem, rootTS string) s
 	if !w.pace() {
 		return "The artifact could not be attached. Read it in Agentico."
 	}
+	threadLock := w.notifier.responderThreadLock(item.featureID, item.destinationKey)
+	threadLock.Lock()
+	defer threadLock.Unlock()
 	result, err := sendWithRetry(
 		w,
 		"review artifact completion",

@@ -269,6 +269,28 @@ func (f *pollFailureFixture) successfulWriteToBad(t *testing.T) {
 	}
 }
 
+func (f *pollFailureFixture) advanceOldestRetainedTimestamp(t *testing.T) {
+	t.Helper()
+	const nextTS = "100.000003"
+	key := destinationKey(string(ports.SlackRecipientChannel), pollFailureBadChannel)
+	f.notifier.recordMu.Lock()
+	record := f.notifier.records[pollFailureFeatureID]
+	record.Pending[0].MessageTS[key] = nextTS
+	destination := record.Destinations[key]
+	destination.PostingIndex[0].MessageTS = nextTS
+	destination.Ledger = append(destination.Ledger, nextTS)
+	record.Destinations[key] = destination
+	err := f.notifier.persistRecordLocked(
+		pollFailureFeatureID,
+		record,
+		ports.SlackRecipientChannel,
+	)
+	f.notifier.recordMu.Unlock()
+	if err != nil {
+		t.Fatalf("persist advanced retention bound: %v", err)
+	}
+}
+
 func (f *pollFailureFixture) assertDomainUnchanged(t *testing.T) {
 	t.Helper()
 	current, err := f.harness.store.Load(pollFailureFeatureID)
@@ -340,6 +362,9 @@ func TestSlackResponderPollFailurePermanentSuspendsOnlyFailedDestinationUntilWri
 	if got := fixture.pollCount(pollFailureGoodChannel); got != 6 {
 		t.Errorf("healthy destination polls = %d; want one per tick", got)
 	}
+	waitFor(t, time.Second, func() bool {
+		return len(fixture.harness.observer.ofKind("slack.delivery_failed")) == 1
+	})
 	events := fixture.harness.observer.ofKind("slack.delivery_failed")
 	if len(events) != 1 {
 		t.Fatalf("slack.delivery_failed events = %d; want one", len(events))
@@ -428,6 +453,60 @@ func TestSlackResponderPollFailureTransientBudgetSuspendsAndReportsEachEpisodeOn
 		t.Fatalf("second episode failure = %#v; want one report for the fresh episode", failure)
 	}
 	fixture.assertDomainUnchanged(t)
+}
+
+func TestSlackResponderPollFailureRetentionBoundChangeDoesNotRearmSuspendedPoll(t *testing.T) {
+	tests := []struct {
+		name     string
+		failures []testsupport.Response
+		ticks    int
+	}{
+		{
+			name: "permanent",
+			failures: []testsupport.Response{{
+				Body: map[string]any{"ok": false, "error": "channel_not_found"},
+			}},
+			ticks: 1,
+		},
+		{
+			name: "retries exhausted",
+			failures: []testsupport.Response{
+				{Status: http.StatusServiceUnavailable},
+				{Status: http.StatusServiceUnavailable},
+				{Status: http.StatusServiceUnavailable},
+				{Status: http.StatusServiceUnavailable},
+			},
+			ticks: retryLimit + 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newPollFailureFixture(t)
+			fixture.scriptBad(test.failures...)
+			for range test.ticks {
+				fixture.tick()
+				fixture.advance(responderPollInterval)
+			}
+			before := fixture.pollCount(pollFailureBadChannel)
+
+			fixture.advanceOldestRetainedTimestamp(t)
+			fixture.tick()
+			if got := fixture.pollCount(pollFailureBadChannel); got != before {
+				t.Fatalf(
+					"polls after retention-bound change = %d; want suspended count %d",
+					got,
+					before,
+				)
+			}
+
+			fixture.successfulWriteToBad(t)
+			fixture.advance(responderPollInterval)
+			fixture.tick()
+			if got := fixture.pollCount(pollFailureBadChannel); got != before+1 {
+				t.Fatalf("polls after successful write = %d; want %d", got, before+1)
+			}
+		})
+	}
 }
 
 func TestSlackResponderPollFailureRateLimitPausesOnlyOneDestination(t *testing.T) {

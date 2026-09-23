@@ -129,6 +129,25 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 		if err := os.WriteFile(feedbackPath, []byte(testutil.StructuredReviewFeedback("", "", "APPROVED")), 0o644); err != nil {
 			t.Errorf("write feedback: %v", err)
 		}
+		for _, dir := range []string{evidenceRoot, buildCacheRoot, tempRoot} {
+			if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+				t.Errorf("scratch root %s stat = %v, info=%v; want directory while the review runs", dir, err, info)
+			}
+		}
+		// Module caches are read-only; release must still remove them.
+		modDir := filepath.Join(buildCacheRoot, "go-mod", "example.com", "m@v1.0.0")
+		if err := os.MkdirAll(modDir, 0o755); err != nil {
+			t.Errorf("mkdir module cache: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(modDir, "go.mod"), []byte("module m\n"), 0o444); err != nil {
+			t.Errorf("write module cache file: %v", err)
+		}
+		if err := os.Chmod(modDir, 0o555); err != nil {
+			t.Errorf("chmod module cache: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(evidenceRoot, "run.log"), []byte("ok"), 0o644); err != nil {
+			t.Errorf("write evidence: %v", err)
+		}
 		sess.setRootIntent(validSuccessCompletionIntent())
 		sess.statusCh <- "SUCCESS"
 		return sess, nil
@@ -173,10 +192,12 @@ func TestRunLiveRunReviewHelper_ConfiguresScratchRootsEnvAndPermissions(t *testi
 		t.Fatalf("result.Status = %s, want APPROVED", result.Status)
 	}
 
-	for _, dir := range []string{evidenceRoot, buildCacheRoot, tempRoot} {
-		info, err := os.Stat(dir)
-		if err != nil || !info.IsDir() {
-			t.Fatalf("scratch root %s stat = %v, info=%v; want directory", dir, err, info)
+	if _, err := os.Stat(filepath.Join(evidenceRoot, "run.log")); err != nil {
+		t.Fatalf("evidence was not kept after the review: %v", err)
+	}
+	for _, dir := range []string{buildCacheRoot, tempRoot} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("scratch root %s stat = %v; want removed after the review", dir, err)
 		}
 	}
 	for _, want := range []string{feedbackPath, evidenceRoot, buildCacheRoot, tempRoot} {

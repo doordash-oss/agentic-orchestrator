@@ -3181,6 +3181,15 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	showProviderStartupNotices(stderr, startupNotices, providerReadinessNoticeDelay)
 
 	recoveryItems, recoveryScanOK := scanStartupRecovery(ctx, orch, stderr)
+	if recoveryScanOK && fm != nil {
+		var busyIDs []string
+		for _, item := range recoveryItems {
+			if item.Feature != nil {
+				busyIDs = append(busyIDs, item.Feature.ID)
+			}
+		}
+		go agent.PruneStaleReviewScratch(fm, busyIDs)
+	}
 	boot.featureManager = fm
 	boot.sessionManager = sm
 	boot.orchestrator = orch

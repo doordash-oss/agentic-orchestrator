@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -3445,4 +3446,143 @@ func TestPhasePlanningLoopValidatorInfrastructureFailureRetriesThenResumes(t *te
 			t.Fatalf("restart opened attempt-02: %v", err)
 		}
 	})
+}
+
+// TestValidatorInfrastructureRetryPreservesRejection proves a sibling
+// validator's capacity failure never re-runs a validator that already
+// rejected: the rejection survives the retry round and the plan is not
+// approved.
+func TestValidatorInfrastructureRetryPreservesRejection(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	tmpDir := t.TempDir()
+	workDir := filepath.Join(tmpDir, "work")
+	scriptsDir := filepath.Join(tmpDir, "scripts")
+	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
+	attemptDir := filepath.Join(phasePlanDir, "attempt-01")
+	for _, d := range []string{workDir, phasePlanDir, scriptsDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	capacityMarker := filepath.Join(tmpDir, "model-at-capacity")
+	if err := os.WriteFile(capacityMarker, []byte("busy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const receivePrompt = "read -r _initialize\nread -r _prompt\n"
+	planScript := testutil.WriteScript(t, scriptsDir, "plan.sh",
+		testutil.JSONLInit+"\n"+receivePrompt+
+			testutil.WritePhasePlanSuccessArtifacts(phasePlanDir, planTextWithVisualEvidenceRow())+"\n"+
+			testutil.JSONLSuccess+"\n")
+	structuralScript := testutil.WriteScript(t, scriptsDir, "structural.sh",
+		testutil.JSONLInit+"\n"+receivePrompt+
+			testutil.WriteValidatorChangesRequested(filepath.Join(attemptDir, "validate-structural"), "structural", "- **High**: the plan has no rollback step")+"\n"+
+			testutil.JSONLSuccess+"\n")
+	scopeScript := testutil.WriteScript(t, scriptsDir, "scope.sh",
+		testutil.JSONLInit+"\n"+receivePrompt+
+			"if [ -f "+capacityMarker+" ]; then\n"+testutil.JSONLError("Selected model is at capacity. Please try a different model.")+"\nexit 0\nfi\n"+
+			testutil.WriteValidatorApproved(filepath.Join(attemptDir, "validate-scope"), "scope")+"\n"+testutil.JSONLSuccess+"\n")
+	build := mockBuildSessionPerDomain(planScript, map[string]string{"structural": structuralScript, "scope": scopeScript})
+	var callsMu sync.Mutex
+	structuralCalls, scopeCalls := 0, 0
+	counting := func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		callsMu.Lock()
+		switch {
+		case strings.Contains(opts.LogPath, "structural"):
+			structuralCalls++
+		case strings.Contains(opts.LogPath, "scope"):
+			scopeCalls++
+		}
+		callsMu.Unlock()
+		return build(opts)
+	}
+	previous := validationInfrastructureBackoff
+	defer func() { validationInfrastructureBackoff = previous }()
+	validationInfrastructureBackoff = func(int) time.Duration {
+		_ = os.Remove(capacityMarker)
+		return 0
+	}
+	store := feature.NewStore(tmpDir)
+	f := newTestPlanFeature(t, workDir)
+	f.Pipeline = feature.PipelineMoonshot
+	f.RiskLevel = feature.RiskLow
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	sm := session.NewManager(make(chan interface{}, 100))
+	defer sm.Shutdown()
+	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
+		PlanLoopConfig: PlanLoopConfig{
+			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir,
+			MaxAttempts: 1, DangerouslySkipPermissions: true, BuildSession: counting,
+		},
+		Phase: RoadmapPhase{Number: 1, Name: "Test Phase", Type: "tdd-fill-in", Goal: "Keep the rejection"},
+	}, sm)
+	if err != nil {
+		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+	}
+	if result.FinalStatus == "approved" {
+		t.Fatalf("result = %+v; a retried sibling must not erase Structural's rejection", result)
+	}
+	feedback, readErr := os.ReadFile(filepath.Join(attemptDir, "validation-feedback.md"))
+	if readErr != nil || !strings.Contains(string(feedback), "no rollback step") {
+		t.Fatalf("validation feedback = %q (%v), want the preserved Structural finding", feedback, readErr)
+	}
+	if structuralCalls != 1 {
+		t.Fatalf("structural critic calls = %d, want 1; a verdict must not be re-run", structuralCalls)
+	}
+	if scopeCalls < 2 {
+		t.Fatalf("scope critic calls = %d, want at least one retry", scopeCalls)
+	}
+}
+
+func TestPlanLoopGuardDetectsRestartDuringBackoff(t *testing.T) {
+	stateRoot := t.TempDir()
+	store := feature.NewStore(stateRoot)
+	f := newTestPlanFeature(t, filepath.Join(stateRoot, "work"))
+	start := time.Date(2026, 9, 22, 22, 0, 0, 0, time.UTC)
+	f.ActivePhaseStart = &start
+	if err := store.Save(f); err != nil {
+		t.Fatal(err)
+	}
+	cfg := PlanLoopConfig{Feature: f, FeatureStore: store}
+	guard := newPlanLoopGuard(cfg)
+	if guard.superseded() {
+		t.Fatal("fresh guard reports superseded")
+	}
+	if err := waitForValidationBackoff(guard, 0); err != nil {
+		t.Fatalf("zero wait error = %v", err)
+	}
+
+	// Stop then Restart: status returns to Planning but the phase start moves.
+	restarted := start.Add(2 * time.Minute)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.ActivePhaseStart = &restarted
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !guard.superseded() {
+		t.Fatal("guard missed the restarted phase")
+	}
+	began := time.Now()
+	if err := waitForValidationBackoff(guard, time.Minute); !errors.Is(err, errPlanLoopSuperseded) {
+		t.Fatalf("wait error = %v, want superseded", err)
+	}
+	if time.Since(began) > 5*time.Second {
+		t.Fatal("superseded wait did not return promptly")
+	}
+
+	// A plain stop supersedes too.
+	fresh := newPlanLoopGuard(cfg)
+	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
+		ff.Status = feature.StatusInterrupted
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !fresh.superseded() {
+		t.Fatal("guard missed the interrupted feature")
+	}
 }

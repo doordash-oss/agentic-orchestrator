@@ -645,15 +645,18 @@ func (n *Notifier) processItem(item queueItem) {
 		destination := opening
 		destination.Recipients = []ports.SlackRecipient{recipient}
 		key := destinationKey(string(recipient.Kind), recipient.ID)
+		openItem := queueItem{
+			kind: item.kind, event: item.event,
+			reservation: n.queue.reserveSplit(item.kind, item.event),
+		}
+		if openItem.reservation == nil {
+			continue
+		}
 		n.openingMu.Lock()
 		previous := n.openingTail[key]
 		done := make(chan struct{})
 		n.openingTail[key] = done
 		n.openingMu.Unlock()
-		openItem := queueItem{
-			kind: item.kind, event: item.event,
-			reservation: n.queue.reserveProtected(item.event),
-		}
 		n.startupWG.Add(1)
 		go func() {
 			defer n.startupWG.Done()
@@ -1070,7 +1073,7 @@ func (n *Notifier) reconcilePendingWithPolicy(
 				postedAny = true
 			}
 		}
-		if changed && !postedAny {
+		if (changed || hasClosureWork(work, key)) && !postedAny {
 			work = append(work, workItem{
 				featureID:       owner.ID,
 				sourceFeatureID: trigger.ID,

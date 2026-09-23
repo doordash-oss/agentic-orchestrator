@@ -134,12 +134,23 @@ func (q *itemQueue) enqueue(item queueItem) bool {
 // its own queue-budget reservation. It applies the same eviction policy as a
 // newly enqueued protected item without adding another dispatcher item.
 func (q *itemQueue) reserveProtected(event ports.Event) *queueReservation {
+	return q.reserveSplit(kindNeedsInput, event)
+}
+
+// reserveSplit keeps a recipient's split copy in the original overflow category.
+// Only discovered Needs-input work earns a protected reservation.
+func (q *itemQueue) reserveSplit(kind itemKind, event ports.Event) *queueReservation {
 	q.mu.Lock()
-	reservation := &queueReservation{kind: kindNeedsInput, event: event}
+	reservation := &queueReservation{kind: kind, event: event}
 	if len(q.pending) < q.capacity {
 		q.pending = append(q.pending, reservation)
 		q.mu.Unlock()
 		return reservation
+	}
+	if !kind.protected() {
+		q.mu.Unlock()
+		q.notifyDropped(queueItem{kind: kind, event: event})
+		return nil
 	}
 	for i, pending := range q.pending {
 		if pending.kind.protected() {

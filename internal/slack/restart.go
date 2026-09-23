@@ -183,7 +183,13 @@ func (n *Notifier) partitionOpeningRecipients(
 		unresolved := false
 		if recipient.Kind == ports.SlackRecipientUser {
 			key := destinationKey(string(recipient.Kind), recipient.ID)
+			n.openingMu.Lock()
+			unresolved = n.openingTail[key] != nil
+			n.openingMu.Unlock()
 			for _, owner := range owners {
+				if unresolved {
+					break
+				}
 				if terminalFeature(owner.Status) {
 					continue
 				}
@@ -261,7 +267,7 @@ func (n *Notifier) runRestartPassFor(settings ports.SlackRuntimeSettings, owners
 				return entry.RootTS == ""
 			})
 		}
-		if !terminalFeature(owner.Status) || changed || hadOwed {
+		if !terminalFeature(owner.Status) || changed || hadOwed || hasClosureWorkForAny(work) {
 			for _, recipient := range settings.Recipients {
 				key := destinationKey(string(recipient.Kind), recipient.ID)
 				n.recordMu.Lock()
@@ -477,6 +483,24 @@ func (n *Notifier) appendMissingCardWork(
 func hasRefreshWork(work []workItem, destination string) bool {
 	for _, item := range work {
 		if item.destinationKey == destination && item.refresh {
+			return true
+		}
+	}
+	return false
+}
+
+func hasClosureWork(work []workItem, destination string) bool {
+	for _, item := range work {
+		if item.destinationKey == destination && item.reply.closure {
+			return true
+		}
+	}
+	return false
+}
+
+func hasClosureWorkForAny(work []workItem) bool {
+	for _, item := range work {
+		if item.reply.closure {
 			return true
 		}
 	}

@@ -17,6 +17,7 @@ package slack
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -124,6 +125,199 @@ func TestSlackRestartEventOpeningWaitDoesNotBlockChannel(t *testing.T) {
 	if got := h.server.CallCount("chat.postMessage"); got != baselinePosts+6 {
 		t.Fatalf("posts after sweep = %d; want channel closure/two events and DM root/two events", got)
 	}
+}
+
+func TestSlackRestartRecipientReconciliationRefreshesExistingCard(t *testing.T) {
+	h := newNotifierHarness(t, defaultTestSettings("xoxb-test", testRecipients()...))
+	owner := h.seedFeature("feature-1", nil)
+	const key = "channel:C-ENG"
+	record := &featureRecord{Version: recordVersion, Destinations: map[string]destinationRecord{
+		key: {Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: "100.000001"},
+	}, Pending: []pendingInputRecord{{
+		Identity: "permission:one", SourceFeatureID: owner.ID,
+		Kind: string(ports.SlackPendingPermission), RequestID: "one", Tag: "#1",
+		MessageTS: map[string]string{key: "100.000002"},
+	}}}
+	if err := persistFeatureRecord(h.stateDir, owner.ID, record); err != nil {
+		t.Fatal(err)
+	}
+	n := h.newNotifier(0)
+	t.Cleanup(func() { n.Stop(context.Background()) })
+	record, err := n.recordFor(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := h.settings.SlackSettings()
+	user := settings
+	user.Recipients = settings.Recipients[:1]
+	channel := settings
+	channel.Recipients = settings.Recipients[1:]
+	if !n.sweepDestinationsFor(user, []*feature.Feature{owner}) {
+		t.Fatal("user pass failed")
+	}
+	if !n.sweepDestinationsFor(channel, []*feature.Feature{owner}) {
+		t.Fatal("channel pass failed")
+	}
+	waitFor(t, 5*time.Second, func() bool {
+		for _, update := range h.server.Requests("chat.update") {
+			if fieldString(update, "channel") == "C-ENG" {
+				return true
+			}
+		}
+		return false
+	})
+	channelPosts := postsTo(h.server, "C-ENG")
+	if len(channelPosts) != 1 || fieldString(channelPosts[0], "text") != "#1 was resolved in Agentico." {
+		t.Fatalf("channel closures = %#v; want one", channelPosts)
+	}
+	updates := h.server.Requests("chat.update")
+	channelUpdates := 0
+	for _, update := range updates {
+		if fieldString(update, "channel") == "C-ENG" {
+			channelUpdates++
+		}
+	}
+	if channelUpdates != 1 {
+		t.Fatalf("existing-channel card refreshes = %d; updates = %#v", channelUpdates, updates)
+	}
+	n.recordMu.Lock()
+	pending := len(record.Pending)
+	n.recordMu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending = %d; want none", pending)
+	}
+}
+
+func TestSlackRestartTapThenSweepCorrectsExistingRoot(t *testing.T) {
+	settings := defaultTestSettings("xoxb-test", testRecipients()[0])
+	settings.Enabled = false
+	h := newNotifierHarness(t, settings)
+	owner := h.seedFeature("feature-1", nil)
+	const key = "channel:C-ENG"
+	record := &featureRecord{Version: recordVersion, Destinations: map[string]destinationRecord{
+		key: {Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: "100.000001"},
+	}, Pending: []pendingInputRecord{{
+		Identity: "permission:one", SourceFeatureID: owner.ID,
+		Kind: string(ports.SlackPendingPermission), RequestID: "one", Tag: "#1",
+		MessageTS: map[string]string{key: "100.000002"},
+	}}}
+	if err := persistFeatureRecord(h.stateDir, owner.ID, record); err != nil {
+		t.Fatal(err)
+	}
+	n := h.newNotifier(0)
+	n.Start()
+	t.Cleanup(func() { n.Stop(context.Background()) })
+	n.SignalReady()
+	waitFor(t, time.Second, func() bool { return n.startupDone.Load() })
+	h.settings.mutate(func(s *ports.SlackRuntimeSettings) { s.Enabled = true })
+	n.DomainEventTap(ports.Event{Type: ports.PhaseStarted, FeatureID: owner.ID, Phase: feature.PhasePlan})
+	waitFor(t, 5*time.Second, func() bool {
+		current, err := n.recordFor(owner.ID)
+		if err != nil {
+			return false
+		}
+		n.recordMu.Lock()
+		defer n.recordMu.Unlock()
+		return len(current.Pending) == 0 && current.Destinations["user:U-ADA"].RootTS != ""
+	})
+	h.settings.mutate(func(s *ports.SlackRuntimeSettings) {
+		s.Recipients = append(s.Recipients, testRecipients()[1])
+	})
+	n.sweepDestinations()
+	waitFor(t, 5*time.Second, func() bool {
+		for _, update := range h.server.Requests("chat.update") {
+			if fieldString(update, "channel") == "C-ENG" {
+				return true
+			}
+		}
+		return false
+	})
+	posts := postsTo(h.server, "C-ENG")
+	if len(posts) != 1 || fieldString(posts[0], "text") != "#1 was resolved in Agentico." {
+		t.Fatalf("existing channel closures = %#v; want one owed closure", posts)
+	}
+	edits := 0
+	for _, update := range h.server.Requests("chat.update") {
+		if fieldString(update, "channel") != "C-ENG" {
+			continue
+		}
+		edits++
+		if strings.Contains(fieldString(update, "blocks"), "Waiting on you") {
+			t.Fatalf("refreshed root still claims pending input: %#v", update)
+		}
+	}
+	if edits != 1 {
+		t.Fatalf("existing root edits = %d; want one", edits)
+	}
+	n.sweepDestinations()
+	if got := len(postsTo(h.server, "C-ENG")); got != 1 {
+		t.Fatalf("unchanged sweep posted %d closures; want one", got)
+	}
+}
+
+func TestSlackRestartResolvedDMKeepsQueuedEventOrder(t *testing.T) {
+	h := newNotifierHarness(t, defaultTestSettings("xoxb-test", testRecipients()[0]))
+	owner := h.seedFeature("feature-1", nil)
+	const key = "user:U-ADA"
+	record := &featureRecord{Version: recordVersion, Destinations: map[string]destinationRecord{
+		key: {Kind: "user", SlackID: "U-ADA", ChannelID: "D-ADA", RootTS: "100.000001"},
+	}}
+	if err := persistFeatureRecord(h.stateDir, owner.ID, record); err != nil {
+		t.Fatal(err)
+	}
+	n := h.newNotifier(0)
+	n.Start()
+	t.Cleanup(func() { n.Stop(context.Background()) })
+	n.SignalReady()
+	waitFor(t, time.Second, func() bool { return n.startupDone.Load() })
+	earlier := make(chan struct{})
+	n.openingMu.Lock()
+	n.openingTail[key] = earlier
+	n.openingMu.Unlock()
+	n.DomainEventTap(ports.Event{Type: ports.PhaseStarted, FeatureID: owner.ID, Phase: feature.PhasePlan})
+	n.DomainEventTap(ports.Event{Type: ports.PhaseStarted, FeatureID: owner.ID, Phase: feature.PhaseImplement})
+	waitFor(t, time.Second, func() bool {
+		n.openingMu.Lock()
+		defer n.openingMu.Unlock()
+		return n.openingTail[key] != earlier
+	})
+	if posts := postsTo(h.server, "D-ADA"); len(posts) != 0 {
+		t.Fatalf("later events bypassed the unresolved-to-resolved ordering barrier: %#v", posts)
+	}
+	close(earlier)
+	waitFor(t, 5*time.Second, func() bool { return len(postsTo(h.server, "D-ADA")) == 2 })
+	posts := postsTo(h.server, "D-ADA")
+	if first, second := fieldString(posts[0], "text"), fieldString(posts[1], "text"); !strings.Contains(first, "Plan started") || !strings.Contains(second, "Implementation started") {
+		t.Fatalf("DM event replies = %q, %q; want plan before implementation", first, second)
+	}
+}
+
+func TestSlackRestartOpeningProgressOverflowPreservesReadyDelivery(t *testing.T) {
+	h := newNotifierHarness(t, defaultTestSettings("xoxb-test", testRecipients()...))
+	owner := h.seedFeature("feature-1", nil)
+	record := &featureRecord{Version: recordVersion, Destinations: map[string]destinationRecord{
+		"channel:C-ENG": {Kind: "channel", SlackID: "C-ENG", ChannelID: "C-ENG", RootTS: "100.000001"},
+	}}
+	if err := persistFeatureRecord(h.stateDir, owner.ID, record); err != nil {
+		t.Fatal(err)
+	}
+	n := h.newNotifier(1)
+	t.Cleanup(func() { n.Stop(context.Background()) })
+	event := ports.Event{Type: ports.PhaseStarted, FeatureID: owner.ID, Phase: feature.PhasePlan}
+	n.queue.enqueue(queueItem{kind: kindProgress, event: event})
+	item, ok := n.queue.next()
+	if !ok {
+		t.Fatal("event was not queued")
+	}
+	n.processItem(item)
+	waitFor(t, 5*time.Second, func() bool { return len(postsTo(h.server, "C-ENG")) == 1 })
+	if got := h.server.CallCount("conversations.open"); got != 0 {
+		t.Fatalf("opening attempts = %d; want delayed Progress copy dropped at capacity", got)
+	}
+	if got := fieldString(postsTo(h.server, "C-ENG")[0], "text"); got == "" {
+		t.Fatal("healthy channel lost its Progress reply")
+	}
+	waitFor(t, time.Second, func() bool { return len(h.observer.ofKind("slack.event_dropped")) == 1 })
 }
 
 func TestSlackRestartResponderPollsWhileNewDMOpeningWaits(t *testing.T) {

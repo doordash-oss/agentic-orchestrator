@@ -196,11 +196,19 @@ func (s *Service) RecordValidationFailure(checkedAt time.Time, canonical errcat.
 }
 
 // RecordDeliveryFailure stores a delivery-time credential error and reports
-// whether it started a new credential-error episode.
+// whether it started a new credential-error episode. Repeated identical
+// failures inside one episode refresh the check time without another
+// status invalidation.
 func (s *Service) RecordDeliveryFailure(failedAt time.Time, canonical errcat.Error) bool {
-	s.mu.RLock()
+	failedAt = failedAt.UTC()
+	s.mu.Lock()
 	startedEpisode := !isCredentialError(s.lastError)
-	s.mu.RUnlock()
+	if !startedEpisode && sameCanonicalError(s.lastError, &canonical) {
+		s.lastChecked = &failedAt
+		s.mu.Unlock()
+		return false
+	}
+	s.mu.Unlock()
 	s.setSnapshot(failedAt, &canonical)
 	return startedEpisode
 }

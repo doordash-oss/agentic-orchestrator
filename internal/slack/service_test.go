@@ -179,6 +179,10 @@ func TestServiceStatusDerivationAndPublication(t *testing.T) {
 	if started := service.RecordDeliveryFailure(checkedAt.Add(45*time.Second), credential); started {
 		t.Fatal("RecordDeliveryFailure() started episode = true for existing episode")
 	}
+	got = service.Status(ports.SlackStatusInput{Token: "xoxb-secret", HasIdentity: true})
+	if got.LastChecked == nil || !got.LastChecked.Equal(checkedAt.Add(45*time.Second)) {
+		t.Fatalf("Status(repeat failure) last checked = %v; want refreshed", got.LastChecked)
+	}
 
 	service.RecordValidationSuccess(checkedAt.Add(time.Minute))
 	got = service.Status(ports.SlackStatusInput{Token: "xoxb-secret", HasIdentity: true})
@@ -186,8 +190,8 @@ func TestServiceStatusDerivationAndPublication(t *testing.T) {
 		t.Fatalf("Status(success) = %#v; want connected", got)
 	}
 	service.ClearStatus()
-	if got := publishes.Load(); got != 5 {
-		t.Fatalf("publish hook calls = %d; want 5 snapshot changes", got)
+	if got := publishes.Load(); got != 4 {
+		t.Fatalf("publish hook calls = %d; want 4: a repeat failure inside one episode does not republish", got)
 	}
 }
 

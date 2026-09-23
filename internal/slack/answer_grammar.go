@@ -16,6 +16,7 @@ package slack
 
 import (
 	"fmt"
+	"html"
 	"sort"
 	"strconv"
 	"strings"
@@ -129,6 +130,50 @@ func keycapOption(name string) int {
 		return 9
 	default:
 		return 0
+	}
+}
+
+// decodeSlackText restores the text a responder typed from the markup
+// Slack returns: entities are unescaped and link markup keeps its label.
+func decodeSlackText(text string) string {
+	if !strings.ContainsAny(text, "<&") {
+		return text
+	}
+	var b strings.Builder
+	for {
+		start := strings.IndexByte(text, '<')
+		if start < 0 {
+			break
+		}
+		end := strings.IndexByte(text[start:], '>')
+		if end < 0 {
+			break
+		}
+		b.WriteString(text[:start])
+		b.WriteString(slackLinkText(text[start+1 : start+end]))
+		text = text[start+end+1:]
+	}
+	b.WriteString(text)
+	return html.UnescapeString(b.String())
+}
+
+func slackLinkText(body string) string {
+	target, label, labeled := strings.Cut(body, "|")
+	switch {
+	case strings.HasPrefix(target, "!"):
+		if labeled {
+			return label
+		}
+		return "@" + target[1:]
+	case strings.HasPrefix(target, "@"), strings.HasPrefix(target, "#"):
+		if labeled {
+			return target[:1] + label
+		}
+		return target
+	case labeled:
+		return label
+	default:
+		return target
 	}
 }
 

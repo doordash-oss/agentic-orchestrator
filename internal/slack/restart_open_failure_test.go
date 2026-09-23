@@ -68,35 +68,32 @@ func TestSlackRestartEventOpeningWaitDoesNotBlockChannel(t *testing.T) {
 	}
 	h.pending.setFromRecord(owner.ID, record)
 	n := h.newNotifier(0)
-	clock := &heldRetryClock{fakeClock: h.clock, entered: make(chan struct{}, 1), release: make(chan struct{})}
-	n.clock = clock
 	n.Start()
-	t.Cleanup(func() {
-		select {
-		case <-clock.release:
-		default:
-			close(clock.release)
-		}
-		n.Stop(context.Background())
-	})
+	t.Cleanup(func() { n.Stop(context.Background()) })
 	n.SignalReady()
 	waitFor(t, time.Second, func() bool { return n.startupDone.Load() })
-	clock.armed.Store(true)
 	baselinePosts := h.server.CallCount("chat.postMessage")
 	h.pending.set(owner.ID)
 	h.settings.mutate(func(s *ports.SlackRuntimeSettings) {
 		s.Recipients = append(s.Recipients, testRecipients()[0])
 	})
+	// Only the DM destination opens a conversation, so holding its
+	// rate-limited response stalls that destination alone; the channel
+	// worker's pacing waits are never caught by the gate.
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
 	h.server.Script("conversations.open", testsupport.Response{
 		Status:  http.StatusTooManyRequests,
 		Headers: http.Header{"Retry-After": []string{"60"}},
 		Body:    map[string]any{"ok": false, "error": "ratelimited"},
+		Started: entered,
+		Release: release,
 	})
 	n.DomainEventTap(ports.Event{Type: ports.PhaseStarted, FeatureID: owner.ID, Phase: feature.PhasePlan})
 	select {
-	case <-clock.entered:
+	case <-entered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("event DM did not enter retry wait")
+		t.Fatal("event DM did not open its conversation")
 	}
 	n.DomainEventTap(ports.Event{Type: ports.PhaseStarted, FeatureID: owner.ID, Phase: feature.PhaseImplement})
 	deadline := time.After(5 * time.Second)
@@ -117,7 +114,7 @@ func TestSlackRestartEventOpeningWaitDoesNotBlockChannel(t *testing.T) {
 	if closures != 1 {
 		t.Fatalf("channel closure count = %d; want one", closures)
 	}
-	close(clock.release)
+	close(release)
 	n.sweepDestinations()
 	waitFor(t, 5*time.Second, func() bool { return h.server.CallCount("conversations.open") >= 2 })
 	waitFor(t, 5*time.Second, func() bool { return h.server.CallCount("chat.postMessage") >= baselinePosts+6 })

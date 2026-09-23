@@ -101,7 +101,7 @@ func TestSlackAnswerGrammarAuthorFilterDoesNotMatchOutputText(t *testing.T) {
 				responderThread{featureID: featureID, destinationKey: key},
 				[]Message{{TS: "100.000003", User: "U-OWNER", Text: text}},
 			)
-			if len(replies) != 1 || replies[0].Message.Text != text {
+			if len(replies) != 1 || replies[0].Message.Text != decodeSlackText(text) {
 				t.Errorf("extractResponderCandidates(%q) = %#v; want authored text eligible", text, replies)
 			}
 		})

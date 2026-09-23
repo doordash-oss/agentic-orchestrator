@@ -961,7 +961,10 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
         (event.kind !== 'resync' &&
           !event.kind.startsWith('config') &&
           !event.kind.startsWith('feature.config')) ||
-        (event.kind !== 'resync' && event.featureId !== featureId && event.resourceId !== featureId)
+        (event.kind !== 'resync' &&
+          event.resourceType !== 'runtime' &&
+          event.featureId !== featureId &&
+          event.resourceId !== featureId)
       )
         return;
       const revision = draftRevision.current;

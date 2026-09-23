@@ -72,6 +72,28 @@ func TestSlackAnswerGrammarQuestionParsing(t *testing.T) {
 	}
 }
 
+func TestSlackAnswerGrammarDecodesSlackText(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"plain", "plain"},
+		{"A &amp; B", "A & B"},
+		{"&lt;3&gt;", "<3>"},
+		{"see <https://example.com|the docs>", "see the docs"},
+		{"see <https://example.com>", "see https://example.com"},
+		{"<@U123|ada> and <#C123|eng>", "@ada and #eng"},
+		{"<@U123>", "@U123"},
+		{"<!here> <!subteam^S1|@team>", "@here @team"},
+		{"a < b", "a < b"},
+	} {
+		if got := decodeSlackText(tc.in); got != tc.want {
+			t.Errorf("decodeSlackText(%q) = %q; want %q", tc.in, got, tc.want)
+		}
+	}
+	options := ports.SlackPendingInput{Options: []ports.SlackPendingInputOption{{Label: "A & B"}, {Label: "C"}}}
+	if got := parseQuestionAnswer(options, decodeSlackText("A &amp; B")); got.answer != "A & B" || got.decision != "option_selected" {
+		t.Errorf("decoded label reply = %+v; want option_selected A & B", got)
+	}
+}
+
 func TestSlackAnswerGrammarRedactionHeldAndSubmitted(t *testing.T) {
 	const (
 		token  = "xoxb-admission"

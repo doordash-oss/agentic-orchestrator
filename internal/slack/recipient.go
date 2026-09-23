@@ -111,18 +111,17 @@ func resolveHandle(
 	typedText string,
 	handle string,
 ) (ports.SlackRecipient, error) {
+	// Display names are not unique, so a match is only accepted once the
+	// whole directory has been scanned for a second one.
+	var matches []User
 	cursor := ""
 	for pageNumber := 0; pageNumber < maxDirectoryPages; pageNumber++ {
 		page, err := client.UsersList(ctx, cursor, directoryPageSize)
 		if err != nil {
 			return ports.SlackRecipient{}, classifyResolveError(token, err, errcat.SlackUserNotFound)
 		}
-		matches := matchingUsers(page.Users, handle)
-		switch len(matches) {
-		case 0:
-		case 1:
-			return resolvedUser(typedText, matches[0])
-		default:
+		matches = append(matches, matchingUsers(page.Users, handle)...)
+		if len(matches) > 1 {
 			return ports.SlackRecipient{}, canonicalError(errcat.New(
 				errcat.SlackAmbiguousHandle,
 				errcat.WithParams(errcat.SlackAmbiguousHandleParams{
@@ -132,9 +131,15 @@ func resolveHandle(
 			))
 		}
 		if page.NextCursor == "" {
+			if len(matches) == 1 {
+				return resolvedUser(typedText, matches[0])
+			}
 			return ports.SlackRecipient{}, canonicalError(errcat.New(errcat.SlackUserNotFound))
 		}
 		cursor = page.NextCursor
+	}
+	if len(matches) == 1 {
+		return resolvedUser(typedText, matches[0])
 	}
 	return ports.SlackRecipient{}, canonicalError(errcat.New(
 		errcat.SlackScanCapReached,

@@ -508,7 +508,7 @@ func TestNotifierProblemsGateAndDirectMessageBroadcast(t *testing.T) {
 	settings.Categories.Progress = false
 	harness := newNotifierHarness(t, settings)
 	harness.seedFeature("F-1", nil)
-	harness.start(0)
+	notifier := harness.start(0)
 	harness.feed(ports.Event{Type: ports.FeatureStarted, FeatureID: "F-1"})
 	waitFor(t, 10*time.Second, func() bool {
 		return len(postsTo(harness.server, "C-ENG")) == 1 &&
@@ -536,9 +536,9 @@ func TestNotifierProblemsGateAndDirectMessageBroadcast(t *testing.T) {
 	harness.settings.mutate(func(s *ports.SlackRuntimeSettings) { s.Categories.Problems = false })
 	before := len(harness.server.Requests("chat.postMessage"))
 	harness.feed(ports.Event{Type: ports.FeatureFailed, FeatureID: "F-1", CanonicalError: &problem})
-	waitFor(t, 10*time.Second, func() bool {
-		return len(harness.server.Requests("chat.update")) >= 4
-	})
+	// The event's queue reservation clears once every destination has
+	// handled its delivery, so the suppressed reply would be posted by now.
+	waitFor(t, 10*time.Second, func() bool { return notifier.queue.len() == 0 })
 	if got := len(harness.server.Requests("chat.postMessage")); got != before {
 		t.Errorf("Problems-off posts = %d; want %d", got, before)
 	}

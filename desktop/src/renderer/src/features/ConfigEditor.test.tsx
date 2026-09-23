@@ -211,6 +211,35 @@ describe('FeatureConfigPanel', () => {
     expect(screen.getByLabelText('Auto mode')).toHaveValue('disabled');
   });
 
+  it('refreshes on runtime-wide configuration invalidation while the draft is clean', async () => {
+    const mock = installAgenticoMock();
+    const configured = {
+      ...SNAPSHOT,
+      current: {
+        ...SNAPSHOT.current,
+        slackConfigured: true,
+        slackDefaults: {
+          categories: { progress: true, needsInput: true, problems: true },
+          recipientNames: ['Workspace alerts'],
+        },
+      },
+    };
+    mock.api.getFeatureConfig.mockResolvedValueOnce(SNAPSHOT).mockResolvedValue(configured);
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+
+    const group = within(await screen.findByRole('group', { name: 'Notifications' }));
+    expect(group.getByText('Set up Slack in Settings')).toBeInTheDocument();
+    // Slack setup in the Settings window publishes a runtime resource
+    // without a feature ID.
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated', resourceType: 'runtime' });
+    expect(await group.findByRole('checkbox', { name: /Mute/ })).not.toBeChecked();
+
+    await user.selectOptions(screen.getByLabelText('Auto mode'), 'disabled');
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated', resourceType: 'runtime' });
+    expect(mock.api.getFeatureConfig).toHaveBeenCalledTimes(2);
+  });
+
   it('does not install a late configuration refresh over a recipient edit', async () => {
     const mock = installAgenticoMock();
     let finishRefresh!: (snapshot: FeatureConfigSnapshot) => void;

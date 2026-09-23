@@ -637,6 +637,7 @@ func (n *Notifier) extractResponderCandidates(
 			destination.submittedReplyContains(message.TS) {
 			continue
 		}
+		message.Text = decodeSlackText(message.Text)
 		target, found := newestPostingBefore(destination.PostingIndex, message.TS)
 		if tag, _, tagged := splitResponderTag(message.Text); tagged {
 			target, found = taggedPostingBefore(destination.PostingIndex, tag, message.TS)

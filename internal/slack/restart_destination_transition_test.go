@@ -87,3 +87,32 @@ func TestSlackRestartSweepReenabledSameRecipientsBootstrapsNewFeature(t *testing
 		t.Fatalf("unchanged next tick made %d more Slack requests", got-before)
 	}
 }
+
+func TestSlackRestartSweepEnablingNeedsInputPostsWaitingItem(t *testing.T) {
+	settings := defaultTestSettings("xoxb-restart", testRecipients()[1])
+	settings.Categories.NeedsInput = false
+	h := newNotifierHarness(t, settings)
+	h.seedFeature("F-1", nil)
+	h.pending.set("F-1", testPendingPermission("perm-1"))
+	n := h.start(0)
+	n.SignalReady()
+	waitFor(t, time.Second, func() bool { return n.startupDone.Load() })
+	h.feed(ports.Event{Type: ports.FeatureStarted, FeatureID: "F-1"})
+	waitFor(t, 5*time.Second, func() bool {
+		record, ok := readFeatureRecord(h.stateDir, "F-1")
+		return ok && len(record.Pending) == 1 && record.Pending[0].Tag == "" && n.queue.len() == 0
+	})
+	if got := len(postsTo(h.server, "C-ENG")); got != 1 {
+		t.Fatalf("posts while Needs input was off = %d; want the root card only", got)
+	}
+
+	// No further feature event arrives: the tick sweep alone must notice
+	// the workspace default changed and post the waiting item.
+	h.settings.mutate(func(s *ports.SlackRuntimeSettings) { s.Categories.NeedsInput = true })
+	n.sweepDestinations()
+	waitFor(t, 5*time.Second, func() bool {
+		record, ok := readFeatureRecord(h.stateDir, "F-1")
+		return ok && len(record.Pending) == 1 && record.Pending[0].Tag == "#1" &&
+			record.Pending[0].MessageTS["channel:C-ENG"] != ""
+	})
+}

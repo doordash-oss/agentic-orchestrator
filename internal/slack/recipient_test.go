@@ -119,7 +119,7 @@ func TestServiceResolveRecipientUserForms(t *testing.T) {
 }
 
 func TestServiceResolveRecipientHandlePaginationAmbiguityAndCap(t *testing.T) {
-	t.Run("walks cursor then stops on one match", func(t *testing.T) {
+	t.Run("walks every page then accepts one match", func(t *testing.T) {
 		server := testsupport.New(t)
 		server.Script("users.list",
 			testsupport.Response{Body: map[string]any{
@@ -134,7 +134,7 @@ func TestServiceResolveRecipientHandlePaginationAmbiguityAndCap(t *testing.T) {
 				"members": []any{
 					slackUser("U22222222", "alex", "Alex Example", "", false, false),
 				},
-				"response_metadata": map[string]any{"next_cursor": "unused"},
+				"response_metadata": map[string]any{"next_cursor": ""},
 			}},
 		)
 		got, err := serviceForServer(server).ResolveRecipient(t.Context(), "xoxb-secret", "@alex")
@@ -163,6 +163,31 @@ func TestServiceResolveRecipientHandlePaginationAmbiguityAndCap(t *testing.T) {
 		canonical := assertSlackCode(t, err, errcat.SlackAmbiguousHandle)
 		if !strings.Contains(canonical.Summary, "2") {
 			t.Fatalf("ambiguous summary = %q; want match count", canonical.Summary)
+		}
+	})
+
+	t.Run("matches on different pages are ambiguous", func(t *testing.T) {
+		server := testsupport.New(t)
+		server.Script("users.list",
+			testsupport.Response{Body: map[string]any{
+				"ok": true,
+				"members": []any{
+					slackUser("U11111111", "alex", "", "", false, false),
+				},
+				"response_metadata": map[string]any{"next_cursor": "page-two"},
+			}},
+			testsupport.Response{Body: map[string]any{
+				"ok": true,
+				"members": []any{
+					slackUser("U22222222", "other", "", "Alex", false, false),
+				},
+			}},
+		)
+		_, err := serviceForServer(server).ResolveRecipient(t.Context(), "xoxb-secret", "@alex")
+		canonical := assertSlackCode(t, err, errcat.SlackAmbiguousHandle)
+		if !strings.Contains(canonical.Summary, "2") || server.CallCount("users.list") != 2 {
+			t.Fatalf("ambiguous summary = %q, calls = %d; want match count after both pages",
+				canonical.Summary, server.CallCount("users.list"))
 		}
 	})
 

@@ -64,6 +64,10 @@ func destinationFingerprint(settings ports.SlackRuntimeSettings) string {
 	b.WriteString(strconv.FormatBool(settings.Token != ""))
 	b.WriteByte(':')
 	b.WriteString(strconv.FormatUint(settings.CredentialGeneration, 10))
+	b.WriteByte(':')
+	b.WriteString(strconv.FormatBool(settings.Categories.Progress))
+	b.WriteString(strconv.FormatBool(settings.Categories.NeedsInput))
+	b.WriteString(strconv.FormatBool(settings.Categories.Problems))
 	for _, recipient := range settings.Recipients {
 		b.WriteByte('\x00')
 		b.WriteString(string(recipient.Kind))

@@ -126,6 +126,7 @@ type MockWorktreeOps struct {
 	CurrentBranchFn        func(worktreePath string) string
 	RefSHAFn               func(repoPath, ref string) (string, error)
 	UpdateRefFn            func(repoPath, ref, oldSHA, newSHA string) error
+	IsAncestorFn           func(repoPath, ancestor, descendant string) (bool, error)
 	CreateMergeCandidateFn func(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error)
 	InspectCleanlinessFn   func(worktreePath string, maxPerCategory int) (*git.CleanlinessReport, error)
 
@@ -222,6 +223,14 @@ func (m *MockWorktreeOps) UpdateRef(repoPath, ref, oldSHA, newSHA string) error 
 		return m.UpdateRefFn(repoPath, ref, oldSHA, newSHA)
 	}
 	return m.DefaultError
+}
+
+func (m *MockWorktreeOps) IsAncestor(repoPath, ancestor, descendant string) (bool, error) {
+	m.Calls = append(m.Calls, MockCall{Method: "IsAncestor", Args: []any{repoPath, ancestor, descendant}})
+	if m.IsAncestorFn != nil {
+		return m.IsAncestorFn(repoPath, ancestor, descendant)
+	}
+	return false, m.DefaultError
 }
 
 func (m *MockWorktreeOps) CreateMergeCandidate(mainRepo, parentTip, childHead, message string) (*git.MergeCandidateResult, error) {

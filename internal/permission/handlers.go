@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -112,8 +113,14 @@ func requestsHarnessFileMutation(req ports.ToolPermissionRequest, filename strin
 	case toolNameBash:
 		// Bash is write-capable and shell syntax is intentionally not parsed
 		// here. Deny any reference through Bash; read-only inspection
-		// remains available through the Read tool.
-		return strings.Contains(extractBashCommand(req.Input), filename)
+		// remains available through the Read tool. The only exception is a
+		// bare harness CLI invocation, which reads the contract and writes
+		// nothing but its own gate artifact.
+		command := extractBashCommand(req.Input)
+		if filename == testingContractFilename && isHarnessCLIInvocation(command) {
+			return false
+		}
+		return strings.Contains(command, filename)
 	default:
 		return false
 	}
@@ -707,4 +714,41 @@ type DenyAllHandler struct{}
 // CanUseTool always returns deny.
 func (h *DenyAllHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "all tools denied"}, nil
+}
+
+// harnessCLISubcommands are the agentico subcommands an implementer session
+// may run against the harness-owned contract path.
+var harnessCLISubcommands = map[string]bool{
+	"verify-evidence":    true,
+	"validate-artifacts": true,
+	"report-blocker":     true,
+	"capability-probe":   true,
+}
+
+// harnessCLIBinaryRE matches the sanctioned binary spellings: the
+// $AGENTICO_BIN expansion (optionally quoted) or an agentico executable path.
+var harnessCLIBinaryRE = regexp.MustCompile(`^(?:"\$AGENTICO_BIN"|\$AGENTICO_BIN|(?:\S*/)?agentico)$`)
+
+// isHarnessCLIInvocation reports whether command is exactly one agentico
+// subcommand call with plain arguments: no chaining, redirection, or
+// substitution that could turn the sanctioned call into a write path.
+func isHarnessCLIInvocation(command string) bool {
+	command = strings.TrimSpace(command)
+	if command == "" || strings.ContainsAny(command, ";|&<>`\n") {
+		return false
+	}
+	if strings.Contains(command, "$(") {
+		return false
+	}
+	fields := strings.Fields(command)
+	if len(fields) < 2 || !harnessCLIBinaryRE.MatchString(fields[0]) || !harnessCLISubcommands[fields[1]] {
+		return false
+	}
+	for _, field := range fields[2:] {
+		// Arguments are literal paths and ids; any expansion is refused.
+		if strings.Contains(field, "$") {
+			return false
+		}
+	}
+	return true
 }

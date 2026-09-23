@@ -398,6 +398,11 @@ export class RuntimeGateway {
     return this.supervision.hasLiveChild();
   }
 
+  /** PID of the live app-owned child, or null when none is running. */
+  ownedChildPid(): number | null {
+    return this.supervision.liveChildPid();
+  }
+
   /** Runtime path changes remain pending until the owned runtime is restarted. */
   getBundledRuntime(): SelectedRuntime {
     return this.supervision.getOwnedSelected() ?? this.deps.selectRuntime();

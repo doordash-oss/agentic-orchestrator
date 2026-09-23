@@ -69,9 +69,34 @@ export interface QuitCoordinatorDeps<TParent> {
   runtimeOwnership(): ServerOwnership;
   shutdown(options: { quitAnyway: boolean }): Promise<void>;
   quitApplication(): void;
+  /**
+   * Last resort after quitApplication() failed to end the process within the
+   * watchdog window (e.g. a close handler or native teardown that never
+   * completes). Optional so hosts without a hard-exit primitive keep working.
+   */
+  exitApplication?(): void;
+  /**
+   * Arms a guard that ends the process at deadlineMs without depending on
+   * this thread's event loop. The shutdown bound and exit watchdog are
+   * main-thread timers: once the main thread stops running callbacks, they
+   * never fire, and neither does exitApplication. Optional so hosts without
+   * worker threads keep the in-thread bounds only.
+   */
+  armHardExit?(deadlineMs: number): void;
+  log?(line: string): void;
 }
 
+export const DEFAULT_SHUTDOWN_TIMEOUT_MS = 30_000;
+export const DEFAULT_EXIT_WATCHDOG_MS = 10_000;
+export const DEFAULT_HARD_EXIT_MARGIN_MS = 5_000;
+
 export interface QuitCoordinatorOptions {
+  /** Upper bound on deps.shutdown before quitting regardless. */
+  shutdownTimeoutMs?: number;
+  /** Delay after quitApplication() before exitApplication() is forced. */
+  exitWatchdogMs?: number;
+  /** Slack past both in-thread bounds before the off-thread guard fires. */
+  hardExitMarginMs?: number;
   /**
    * Hermetic test launches (AGENTICO_E2E_USER_DATA) must never block quit on
    * a native dialog: automation cannot answer it, so every launch would leak
@@ -185,14 +210,78 @@ export class QuitCoordinator<TParent = unknown> {
     }
   }
 
+  /**
+   * Shutdown is bounded end to end: a wedged shutdown step or a quit that
+   * never reaches exit must not leave a process the user cannot close. Each
+   * stage logs so a hung quit is diagnosable from the app log alone.
+   */
   private async shutdown(options: { quitAnyway: boolean }): Promise<void> {
     this.forceQuit = true;
+    const shutdownTimeoutMs = this.options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    this.log(`shutdown started (quitAnyway=${String(options.quitAnyway)})`);
+    // Before any step runs, while this thread is provably still responsive.
+    this.armHardExit(shutdownTimeoutMs);
     try {
-      await this.deps.shutdown(options);
+      const outcome = await Promise.race([
+        this.deps.shutdown(options).then(
+          () => 'completed' as const,
+          (error: unknown) => {
+            this.log(`shutdown step failed: ${describeError(error)}`);
+            return 'failed' as const;
+          },
+        ),
+        new Promise<'timed-out'>((resolve) => {
+          setTimeout(() => resolve('timed-out'), shutdownTimeoutMs).unref?.();
+        }),
+      ]);
+      if (outcome === 'timed-out') {
+        this.log(`shutdown exceeded ${String(shutdownTimeoutMs)}ms; quitting anyway`);
+      } else {
+        this.log(`shutdown ${outcome}`);
+      }
     } finally {
+      this.armExitWatchdog();
+      this.log('requesting application quit');
       this.deps.quitApplication();
     }
   }
+
+  private armHardExit(shutdownTimeoutMs: number): void {
+    const arm = this.deps.armHardExit;
+    if (arm === undefined) {
+      return;
+    }
+    const deadlineMs =
+      shutdownTimeoutMs +
+      (this.options.exitWatchdogMs ?? DEFAULT_EXIT_WATCHDOG_MS) +
+      (this.options.hardExitMarginMs ?? DEFAULT_HARD_EXIT_MARGIN_MS);
+    try {
+      arm(deadlineMs);
+      this.log(`hard exit guard armed (${String(deadlineMs)}ms)`);
+    } catch (error) {
+      this.log(`hard exit guard failed to arm: ${describeError(error)}`);
+    }
+  }
+
+  private armExitWatchdog(): void {
+    const exit = this.deps.exitApplication;
+    if (exit === undefined) {
+      return;
+    }
+    const exitWatchdogMs = this.options.exitWatchdogMs ?? DEFAULT_EXIT_WATCHDOG_MS;
+    setTimeout(() => {
+      this.log(`process still alive ${String(exitWatchdogMs)}ms after quit; forcing exit`);
+      exit();
+    }, exitWatchdogMs).unref?.();
+  }
+
+  private log(line: string): void {
+    this.deps.log?.(line);
+  }
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function hasActiveWork(active: ActiveWorkCheck): boolean {

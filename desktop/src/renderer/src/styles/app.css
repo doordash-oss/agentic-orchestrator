@@ -7501,6 +7501,188 @@ body {
   text-decoration: none;
 }
 
+/* Neutral variant of the impact dialog: a contract amendment, not a removal.
+ * Bounded to the window; the header and the reason/actions footer stay put
+ * and only the checklist scrolls. The checklist keeps at least two rows, so
+ * a window too short for that scrolls the whole card instead. */
+.contract-waive-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: calc(100vh - 2 * var(--space-4));
+  overflow-y: auto;
+}
+
+.contract-waive-dialog__eyebrow {
+  color: var(--muted);
+}
+
+.contract-waive-dialog__header,
+.contract-waive-dialog__footer {
+  flex: 0 0 auto;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.contract-waive-dialog__header {
+  gap: 0;
+}
+
+.contract-waive-dialog h3 {
+  margin: var(--space-2) 0 var(--space-3);
+}
+
+.contract-waive-dialog__body {
+  flex: 1 1 auto;
+  min-height: 7rem;
+  overflow-y: auto;
+}
+
+.contract-waive-dialog__items {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+.contract-waive-dialog__items legend {
+  padding: 0 var(--space-1);
+  color: var(--muted);
+  font: 500 12px var(--bench-font-text);
+}
+
+.contract-waive-dialog__notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.contract-waive-dialog__item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.contract-waive-dialog__item > input {
+  margin-top: 2px;
+}
+
+.contract-waive-dialog__item > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.contract-waive-dialog__repo {
+  color: var(--muted);
+}
+
+.contract-waive-dialog__item code {
+  color: var(--muted);
+  font-size: 11px;
+  word-break: break-all;
+}
+
+.contract-waive-dialog__item small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.contract-waive-dialog__meta {
+  font-size: 11px;
+}
+
+.contract-waive-dialog__item[data-lock] {
+  color: var(--muted);
+}
+
+.contract-waive-dialog__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.contract-waive-dialog__tags:empty {
+  display: none;
+}
+
+.contract-waive-dialog__tag {
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 500 11px var(--bench-font-text);
+}
+
+/* A recorded state, not a policy hint: full text color on a filled chip. */
+.contract-waive-dialog__tag--state {
+  color: var(--text);
+  background: color-mix(in srgb, var(--content) 6%, transparent);
+  border-color: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.contract-waive-dialog .impact-dialog__actions {
+  margin-top: 0;
+}
+
+/* A short window keeps more of the checklist in view. */
+.contract-waive-dialog .need-input-sheet__question textarea {
+  min-height: 56px;
+}
+
+/* A long failure scrolls inside its own box instead of pushing the
+ * checklist out of the card. */
+.contract-waive-dialog__result {
+  max-height: 6rem;
+  overflow-y: auto;
+}
+
+/* A short window: the title names the dialog on its own, and the card
+ * tightens so the two checklist rows, the reason, the verbs, and a failure
+ * all fit without scrolling the card. */
+@media (max-height: 600px) {
+  .contract-waive-dialog {
+    padding: var(--space-4);
+    gap: var(--space-2);
+  }
+
+  .contract-waive-dialog .impact-dialog__lede {
+    display: none;
+  }
+
+  .contract-waive-dialog h3 {
+    margin-bottom: 0;
+  }
+
+  .contract-waive-dialog__footer {
+    gap: var(--space-2);
+  }
+
+  .contract-waive-dialog .need-input-sheet__question textarea {
+    min-height: 40px;
+  }
+
+  .contract-waive-dialog__result {
+    max-height: 4rem;
+  }
+}
+
+/* The Files heading's contract action: a real button, set apart from the
+ * count chip beside it. */
+.current-inspection__files-action {
+  margin-left: auto;
+  font-weight: 500;
+  font-size: 12px;
+  padding: var(--space-1) var(--space-3);
+}
+
 /* --- Completion workspace -------------------------------------------------- */
 
 .completion-workspace {

@@ -36,9 +36,12 @@ import (
 
 // PhaseRunner handles launching agent sessions for each feature phase.
 type PhaseRunner struct {
-	SessionManager             ports.SessionManager
-	FeatureStore               ports.FeatureStore
-	CommandRunner              ports.CommandRunner
+	SessionManager ports.SessionManager
+	FeatureStore   ports.FeatureStore
+	CommandRunner  ports.CommandRunner
+	// CapabilityPolicy configures built-in capability probes for this
+	// server; nil uses the local default.
+	CapabilityPolicy           *CapabilityPolicy
 	Config                     *config.Config
 	StateDir                   string
 	SkillsDir                  string // path to reconciled skills dir; empty = no skills
@@ -373,7 +376,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 	sessionStart := time.Now()
 	sess.AddCleanupFunc(func() {
 		cost := ExtractSessionCost(sess)
-		usage := toSessionUsage(cost)
+		usage := toSessionUsage(cost, sess)
 		duration := time.Since(sessionStart)
 		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, cfg.Phase.DirName(), cost, SessionCostMetadata{
 			SessionID:     sessionID,
@@ -710,7 +713,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 			ObserverPhase: feature.PhaseKnowledgeBase.String(),
 			RepoName:      repo.Name,
 		})
-		pr.Observer.SessionEnded(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, repo.Name, toSessionUsage(cost), time.Since(sessionStart), sessionErrFromStatus(sess))
+		pr.Observer.SessionEnded(sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID, repo.Name, toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
 	})
 
 	// Register cleanup to release lock when session ends.
@@ -973,6 +976,7 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
+		CapabilityPolicy:           pr.CapabilityPolicy,
 		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
 		CompletionTool:             pr.completionToolForModel(implementationModel),
@@ -1039,6 +1043,7 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
+		CapabilityPolicy:           pr.CapabilityPolicy,
 		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		CompletionTool:             pr.completionToolForModel(model),
@@ -1104,6 +1109,7 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,
+		CapabilityPolicy:           pr.CapabilityPolicy,
 		BuildSession:               pr.buildSessionForFeature(f),
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		CompletionTool:             pr.completionToolForModel(model),

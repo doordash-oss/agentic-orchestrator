@@ -14,6 +14,12 @@
 
 package git
 
+import (
+	"errors"
+	"fmt"
+	"os/exec"
+)
+
 // IsAncestor reports whether ancestor is an ancestor of descendant in the
 // repository at repoPath. It shells out to
 // `git merge-base --is-ancestor <ancestor> <descendant>`, which exits 0 when
@@ -33,4 +39,29 @@ func IsAncestor(repoPath, ancestor, descendant string) bool {
 		return false
 	}
 	return true
+}
+
+// CheckAncestor is IsAncestor for callers that must distinguish "not an
+// ancestor" (exit status 1) from git being unable to answer, such as an
+// unknown commit or an unreadable repository.
+func CheckAncestor(repoPath, ancestor, descendant string) (bool, error) {
+	if ancestor == "" || descendant == "" {
+		return false, errors.New("merge-base --is-ancestor: empty commit")
+	}
+	cmd := readGitCmd(repoPath, "merge-base", "--is-ancestor", ancestor, descendant)
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git merge-base --is-ancestor: %w", err)
+}
+
+// IsAncestor reports whether ancestor reaches descendant in the given repo,
+// failing rather than guessing when git cannot answer.
+func (m *WorktreeManager) IsAncestor(repoPath, ancestor, descendant string) (bool, error) {
+	return CheckAncestor(repoPath, ancestor, descendant)
 }

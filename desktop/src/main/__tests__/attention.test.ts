@@ -57,6 +57,217 @@ describe('AttentionService mutations', () => {
     },
   );
 
+  it('posts testing-contract waivers and reads the revised contract envelope', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          feature_id: 'abcd1234ef567890',
+          result: 'waived',
+          contract_revision: 3,
+          waived_items: ['deploy-smoke', 'ui-capture'],
+        },
+      }),
+    );
+    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
+
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['deploy-smoke', 'ui-capture'],
+        reason: 'Vendor UI is unreachable from CI.',
+        activeRun: 1,
+        roadmapPhase: 2,
+        contractRevision: 2,
+      }),
+    ).resolves.toEqual({
+      result: 'waived',
+      contractRevision: 3,
+      waivedItems: ['deploy-smoke', 'ui-capture'],
+    });
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/api/v1/features/abcd1234ef567890/actions/testing-contract-waive',
+      expect.objectContaining({
+        method: 'POST',
+        body: {
+          item_ids: ['deploy-smoke', 'ui-capture'],
+          reason: 'Vendor UI is unreachable from CI.',
+          active_run: 1,
+          roadmap_phase: 2,
+          contract_revision: 2,
+        },
+      }),
+    );
+  });
+
+  it('reads the testing contract and maps rows to the renderer shape', async () => {
+    const apiRequest = vi.fn(() =>
+      Promise.resolve({
+        status: 200,
+        body: {
+          api_version: 'v1',
+          feature_id: 'abcd1234ef567890',
+          active_run: 1,
+          roadmap_phase: 2,
+          revision: 3,
+          items: [
+            {
+              item_id: 'deploy-smoke',
+              source: 'plan',
+              owner: 'harness',
+              repo: 'svc',
+              name: 'Deployment smoke test',
+              command: 'make smoke',
+              required: true,
+              allow_substitution: true,
+              allow_blocked: false,
+              allow_waiver: true,
+              disposition: { status: 'waived', reason: 'Offline.', changed_by: 'user' },
+              capabilities: ['network'],
+            },
+            {
+              item_id: 'unit',
+              source: 'plan',
+              owner: 'agent',
+              name: 'Unit tests',
+              command: 'make test',
+              required: true,
+              allow_substitution: false,
+              allow_blocked: false,
+              allow_waiver: false,
+              capabilities: [],
+            },
+          ],
+        },
+      }),
+    );
+    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
+
+    await expect(service.getTestingContract({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
+      available: true,
+      featureId: 'abcd1234ef567890',
+      activeRun: 1,
+      roadmapPhase: 2,
+      revision: 3,
+      items: [
+        {
+          itemId: 'deploy-smoke',
+          source: 'plan',
+          owner: 'harness',
+          repo: 'svc',
+          name: 'Deployment smoke test',
+          command: 'make smoke',
+          required: true,
+          allowSubstitution: true,
+          allowBlocked: false,
+          allowWaiver: true,
+          disposition: { status: 'waived', reason: 'Offline.', changedBy: 'user' },
+          capabilities: ['network'],
+        },
+        {
+          itemId: 'unit',
+          source: 'plan',
+          owner: 'agent',
+          name: 'Unit tests',
+          command: 'make test',
+          required: true,
+          allowSubstitution: false,
+          allowBlocked: false,
+          allowWaiver: false,
+          capabilities: [],
+        },
+      ],
+    });
+    expect(apiRequest).toHaveBeenCalledWith(
+      '/api/v1/features/abcd1234ef567890/testing-contract',
+      undefined,
+    );
+  });
+
+  it('reports a missing testing contract as unavailable instead of throwing', async () => {
+    const service = new AttentionService({
+      apiRequest: () => Promise.resolve({ status: 404, body: canonicalBody('not_found') }),
+    } satisfies ServerTransport);
+
+    await expect(service.getTestingContract({ featureId: 'abcd1234ef567890' })).resolves.toEqual({
+      available: false,
+    });
+  });
+
+  it('propagates other testing-contract read failures and rejects malformed rows', async () => {
+    const conflict = new AttentionService({
+      apiRequest: () => Promise.resolve({ status: 409, body: canonicalBody('conflict') }),
+    } satisfies ServerTransport);
+    const err = await conflict
+      .getTestingContract({ featureId: 'abcd1234ef567890' })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CanonicalErrorException);
+    expect((err as CanonicalErrorException).canonical.code).toBe('conflict');
+
+    const malformed = new AttentionService({
+      apiRequest: () =>
+        Promise.resolve({
+          status: 200,
+          body: {
+            api_version: 'v1',
+            feature_id: 'abcd1234ef567890',
+            active_run: 1,
+            roadmap_phase: 0,
+            items: [],
+          },
+        }),
+    } satisfies ServerTransport);
+    await expect(malformed.getTestingContract({ featureId: 'abcd1234ef567890' })).rejects.toThrow();
+  });
+
+  it('rejects testing-contract waivers without items, a reason, or a contract binding before any request', async () => {
+    const apiRequest = vi.fn(() => Promise.resolve({ status: 200, body: {} }));
+    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
+
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: [],
+        reason: 'x',
+        activeRun: 1,
+        roadmapPhase: 1,
+        contractRevision: 1,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['deploy-smoke'],
+        reason: '   ',
+        activeRun: 1,
+        roadmapPhase: 1,
+        contractRevision: 1,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['deploy-smoke'],
+        reason: 'x',
+        activeRun: 1,
+        roadmapPhase: 0,
+        contractRevision: 1,
+      }),
+    ).rejects.toThrow();
+    await expect(
+      service.waiveTestingContract({
+        featureId: 'abcd1234ef567890',
+        itemIds: ['deploy-smoke'],
+        reason: 'x',
+        activeRun: 0,
+        roadmapPhase: 1,
+        contractRevision: 1,
+      }),
+    ).rejects.toThrow();
+    expect(apiRequest).not.toHaveBeenCalled();
+  });
+
   it('does not classify a plain error message as an already-resolved item', async () => {
     const service = new AttentionService({
       apiRequest: () => Promise.reject(new Error('conflict while submitting attention response')),

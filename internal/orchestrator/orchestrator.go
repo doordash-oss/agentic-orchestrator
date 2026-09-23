@@ -223,10 +223,12 @@ type Orchestrator struct {
 	stopOnce sync.Once
 
 	// cycleWG tracks background goroutines launched by asynchronous phase
-	// continuations. Tests that drive these methods against a
-	// t.TempDir() state directory must call WaitForCycles before the
-	// test returns so the goroutine's writes don't race with TempDir
-	// cleanup.
+	// continuations, including the phase supervisor's completion
+	// goroutines (plan/implementation loop results and single-shot session
+	// outcomes), which keep writing feature state after the API surface
+	// already reports the phase as done. Tests that drive these methods
+	// against a t.TempDir() state directory must call WaitForCycles before
+	// the test returns so those writes don't race with TempDir cleanup.
 	cycleWG sync.WaitGroup
 
 	// featureStartControls serialize phase admission per feature. This makes
@@ -316,6 +318,7 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 		Sessions:          o.deps.Sessions,
 		CommitOutcome:     o.commitSingleShotOutcome,
 		OnCompletionError: o.surfaceDispatchCompletionError,
+		Spawn:             o.cycleWG.Go,
 	})
 	if o.deps.PhaseRunner != nil {
 		existingProgressHook := o.deps.PhaseRunner.OnVerificationProgress

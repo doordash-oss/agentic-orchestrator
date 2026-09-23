@@ -62,8 +62,8 @@ func (s SessionStatus) String() string {
 }
 
 // SessionKind classifies a session by its role so the desktop app and observer layer
-// can label, group, and filter sessions uniformly. It is purely informational —
-// lifecycle behavior is unchanged.
+// can label, group, and filter sessions uniformly. Chat also remains available
+// for follow-up messages after a failed turn, unlike autonomous phase work.
 type SessionKind int
 
 const (

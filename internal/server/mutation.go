@@ -116,6 +116,9 @@ type MutationTarget interface {
 	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error)
 	ResumeNeedUserInput(featureID string, req NeedUserInputResumeRequest) (NeedUserInputResumeResponse, error)
 	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error)
+	// WaiveTestingContractItems records user-authorized waivers on the
+	// current phase's testing contract outside the verification gate.
+	WaiveTestingContractItems(featureID string, req TestingContractWaiveRequest) (TestingContractWaiveResponse, error)
 	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
@@ -226,6 +229,19 @@ type FeatureConfigMutationRequest struct {
 }
 
 type NeedUserInputResumeRequest struct{}
+
+// TestingContractWaiveRequest names the contract items a user waives on the
+// current roadmap phase and why.
+type TestingContractWaiveRequest struct {
+	ItemIDs []string `json:"item_ids"`
+	Reason  string   `json:"reason"`
+	// ActiveRun, RoadmapPhase, and ContractRevision bind the waiver to the
+	// contract the client displayed; the server rejects a stale selection
+	// with 409.
+	ActiveRun        int `json:"active_run,omitempty"`
+	RoadmapPhase     int `json:"roadmap_phase,omitempty"`
+	ContractRevision int `json:"contract_revision,omitempty"`
+}
 
 type NeedUserInputDraftRequest struct {
 	Answers map[string]string `json:"answers"`
@@ -783,7 +799,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 			return nil, false
 		}
 		switch parts[2] {
-		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionRefactor, actionReviewFeedback, actionNeedUserInput, actionNeedInputDraft, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
+		case actionSetup, actionStart, actionPauseStop, actionResume, actionRestart, actionPublish, actionMerge, actionRewind, actionRebase, actionRefactor, actionReviewFeedback, actionNeedUserInput, actionNeedInputDraft, actionTestingContractWaive, actionRetry, actionMarkDone, actionCleanup, actionDelete, actionDiscard:
 			if len(parts) == 3 {
 				return []string{http.MethodPost}, true
 			}
@@ -1075,6 +1091,29 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 			return true
 		}
 		defaultActionFields(&resp, featureID, "resumed")
+		writeActionJSON(w, http.StatusOK, &resp)
+	case actionTestingContractWaive:
+		if subaction != "" {
+			return false
+		}
+		var req TestingContractWaiveRequest
+		if !decodeMutationJSON(w, r, &req) {
+			return true
+		}
+		if len(req.ItemIDs) == 0 {
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("item_ids are required"))
+			return true
+		}
+		if strings.TrimSpace(req.Reason) == "" {
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("reason is required"))
+			return true
+		}
+		resp, err := h.mutations.WaiveTestingContractItems(featureID, req)
+		if err != nil {
+			writeMutationError(w, err)
+			return true
+		}
+		defaultActionFields(&resp, featureID, "waived")
 		writeActionJSON(w, http.StatusOK, &resp)
 	case actionNeedInputDraft:
 		if subaction != "" {

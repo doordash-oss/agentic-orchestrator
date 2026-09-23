@@ -47,7 +47,9 @@ import { ToolbarPopover, ToolbarPopoverAnchor } from '../components/ToolbarPopov
 import { useDetailsDismiss } from '../components/useDetailsDismiss';
 import {
   hasStructuredVerificationDecision,
+  isVerificationGateAction,
   NeedUserInputVerificationDecision,
+  verificationResumeLabel,
 } from './NeedUserInputVerificationDecision';
 import { formatWaitingDuration } from './phaseRail';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
@@ -815,7 +817,7 @@ export function AttentionDetail({
         ? ''
         : ((gateDraft[verificationQuestion.index] ?? '') as VerificationGateAction | '');
     const complete = structuredVerification
-      ? selectedVerificationAction === 'RETRY_AFTER_AUTH' || selectedVerificationAction === 'WAIVE'
+      ? isVerificationGateAction(selectedVerificationAction)
       : item.questions.every((q) => (gateDraft[q.index] ?? '').trim() !== '');
     return (
       <div className="attention-detail">
@@ -905,9 +907,7 @@ export function AttentionDetail({
             }
           >
             {structuredVerification
-              ? selectedVerificationAction === 'WAIVE'
-                ? 'Waive and resume'
-                : 'Retry verification'
+              ? verificationResumeLabel(selectedVerificationAction)
               : 'Resume'}
           </button>
           <AttentionJumpAction item={item} onJump={onJump} />

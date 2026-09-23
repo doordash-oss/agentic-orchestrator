@@ -441,6 +441,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/features/{feature_id}/testing-contract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the current roadmap phase's testing contract.
+         * @description Returns the harness-compiled testing contract for the feature's current roadmap phase: every row with its id, ownership, policy flags, recorded disposition, and declared capabilities. Clients use it to show which rows are waivable and to pick item ids for the testing-contract-waive action. 404 `not_found` when the phase has no contract yet.
+         */
+        get: operations["getTestingContract"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/features/{feature_id}/runs/{run_number}/artifacts": {
         parameters: {
             query?: never;
@@ -1319,7 +1339,7 @@ export interface components {
          * @description Feature lifecycle action identifier.
          * @enum {string}
          */
-        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
+        FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
         /** @description Canonical catalog-rendered error. */
         Error: {
             /** @description Stable snake_case catalog code. */
@@ -2085,6 +2105,37 @@ export interface components {
         PermissionSnapshotResponse: components["schemas"]["JSONResponse"] & {
             requests: components["schemas"]["ControlRequest"][];
         };
+        TestingContractResponse: components["schemas"]["JSONResponse"] & {
+            feature_id: string;
+            /** @description Run the contract belongs to; phase and revision numbers restart after a rewind. */
+            active_run: number;
+            roadmap_phase: number;
+            revision: number;
+            items: components["schemas"]["TestingContractItem"][];
+        };
+        /** @description One compiled testing-contract row. */
+        TestingContractItem: {
+            item_id: string;
+            /** @description plan, cross-repo, manual, visual, or behavioral. */
+            source: string;
+            /** @description harness or agent. */
+            owner: string;
+            repo?: string;
+            name: string;
+            command: string;
+            required: boolean;
+            allow_substitution: boolean;
+            allow_blocked: boolean;
+            allow_waiver: boolean;
+            disposition?: components["schemas"]["TestingContractDisposition"];
+            capabilities: string[];
+        };
+        TestingContractDisposition: {
+            /** @description waived is the only recorded status today. */
+            status: string;
+            reason?: string;
+            changed_by?: string;
+        };
         ArtifactListResponse: components["schemas"]["JSONResponse"] & {
             artifacts: components["schemas"]["Artifact"][];
         };
@@ -2187,6 +2238,7 @@ export interface components {
             feature_config_update_response?: components["schemas"]["FeatureConfigUpdateResponse"];
             need_user_input_resume_response?: components["schemas"]["NeedUserInputResumeResponse"];
             need_user_input_draft_response?: components["schemas"]["NeedUserInputDraftResponse"];
+            testing_contract_waive_response?: components["schemas"]["TestingContractWaiveResponse"];
             permission_answer_response?: components["schemas"]["PermissionAnswerResponse"];
             ask_user_answer_response?: components["schemas"]["AskUserAnswerResponse"];
             help_send_response?: components["schemas"]["HelpSendResponse"];
@@ -2253,6 +2305,10 @@ export interface components {
         FeatureConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         NeedUserInputResumeResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
         NeedUserInputDraftResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
+        TestingContractWaiveResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"] & {
+            contract_revision: number;
+            waived_items: string[];
+        };
         PermissionAnswerResponse: components["schemas"]["ActionBaseResponse"] & {
             session_id: string;
             request_id: string;
@@ -2923,8 +2979,11 @@ export interface components {
             blockers: components["schemas"]["NeedUserInputVerificationBlocker"][];
             allowed_actions: components["schemas"]["NeedUserInputVerificationAction"][];
         };
-        /** @enum {string} */
-        NeedUserInputVerificationAction: "WAIVE" | "RETRY_AFTER_AUTH";
+        /**
+         * @description WAIVE records user-authorized waivers, RETRY_AFTER_AUTH re-probes after the user provides the missing capability, and ALLOW_SUBSTITUTE keeps the evidence requirement but authorizes a faithful substitute for blocked agent-owned evidence rows.
+         * @enum {string}
+         */
+        NeedUserInputVerificationAction: "WAIVE" | "RETRY_AFTER_AUTH" | "ALLOW_SUBSTITUTE";
         NeedUserInputVerificationBlocker: {
             item_id: string;
             name: string;
@@ -3497,6 +3556,16 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["ArtifactListResponse"];
+            };
+        };
+        /** @description Current phase testing contract. */
+        TestingContractResponse: {
+            headers: {
+                "X-Agentico-Seq": components["headers"]["Sequence"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["TestingContractResponse"];
             };
         };
         /** @description Bounded text content. */
@@ -4458,6 +4527,22 @@ export interface operations {
         responses: {
             200: components["responses"]["RunSessionListResponse"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    getTestingContract: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                feature_id: components["parameters"]["FeatureID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["TestingContractResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
         };
     };
     listArtifacts: {

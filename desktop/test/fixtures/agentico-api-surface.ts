@@ -73,6 +73,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'getSessionTranscript',
   'getSettings',
   'getSlackSettings',
+  'getTestingContract',
   'getThemePreference',
   'getUpdates',
   'getWorkspaceDefaults',
@@ -151,6 +152,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'uploadCreationFiles',
   'validateReview',
   'validateSlackSettings',
+  'waiveTestingContract',
   'windowPurpose',
   'writeClipboardText',
 ];

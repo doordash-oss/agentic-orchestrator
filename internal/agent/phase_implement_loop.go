@@ -156,6 +156,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		DangerouslySkipPermissions: cfg.DangerouslySkipPermissions,
 		PermissionCache:            cfg.PermissionCache,
 		CommandRunner:              cfg.CommandRunner,
+		CapabilityPolicy:           cfg.CapabilityPolicy,
 		BuildSession:               cfg.BuildSession,
 		AskingClause:               cfg.AskingClause,
 		CompletionTool:             cfg.CompletionTool,

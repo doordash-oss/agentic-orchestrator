@@ -68,6 +68,7 @@ import { RepositoryInstrument } from './RepositoryInstrument';
 import { InspectorDrawer } from './InspectorDrawer';
 import { ImpactPreviewList } from './ImpactPreviewList';
 import { NeedUserInputModal, type AttentionGate } from './NeedUserInputModal';
+import { TestingContractWaiveDialog } from './TestingContractWaiveDialog';
 import {
   resolvePostImplementationMode,
   type AftercareAction,
@@ -1005,6 +1006,7 @@ export function FeatureCockpit({
   const [runRecordOpen, setRunRecordOpen] = useState(false);
   const [changesOpen, setChangesOpen] = useState(false);
   const [dismissedGateId, setDismissedGateId] = useState<string | undefined>();
+  const [contractWaiveOpen, setContractWaiveOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [runMetrics, setRunMetrics] = useState<RunMetrics | null>(null);
   const [aftercareRun, setAftercareRun] = useState<RunDetailView | null>(null);
@@ -2400,7 +2402,6 @@ export function FeatureCockpit({
             }}
           />
         )}
-
         {runRecordOpen ? (
           <CockpitModal
             title={`Run ${snapshot.activeRun} record`}
@@ -2815,6 +2816,9 @@ export function FeatureCockpit({
                       // subscribes to cohort output.
                       shouldStream={false}
                       mode="files"
+                      {...((snapshot.currentRoadmapPhase ?? 0) > 0
+                        ? { onWaiveTestingContract: () => setContractWaiveOpen(true) }
+                        : {})}
                     />
                   </div>
                 ) : null}
@@ -2929,6 +2933,17 @@ export function FeatureCockpit({
               }}
             />
           )}
+
+          {contractWaiveOpen ? (
+            <TestingContractWaiveDialog
+              featureId={featureId}
+              onClose={() => setContractWaiveOpen(false)}
+              onWaived={async () => {
+                await refreshAttention();
+                await refreshFeature({ silent: true });
+              }}
+            />
+          ) : null}
 
           {stopDialog ? (
             <StopConfirmDialog

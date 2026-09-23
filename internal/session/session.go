@@ -946,7 +946,10 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		if s.process != nil {
 			_ = s.process.Wait()
 			if s.process.ProcessState != nil && s.process.ProcessState.Success() {
-				s.setStatusLocked(SessionDone)
+				// A clean transport shutdown does not undo a failed turn.
+				if s.status != SessionFailed {
+					s.setStatusLocked(SessionDone)
+				}
 			} else if s.status != SessionDone {
 				s.setStatusLocked(SessionFailed)
 			}

@@ -797,7 +797,7 @@ func (n *Notifier) reconcilePending(
 	record *featureRecord,
 	retiredResolutionKind string,
 ) []workItem {
-	work, _, _ := n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, true)
+	work, _, _, _ := n.reconcilePendingWithPolicy(settings, owner, trigger, record, retiredResolutionKind, true)
 	return work
 }
 
@@ -808,10 +808,10 @@ func (n *Notifier) reconcilePendingWithPolicy(
 	retiredResolutionKind string,
 	retryOwed bool,
 	failedResolutions ...map[string]bool,
-) ([]workItem, bool, map[string]bool) {
+) ([]workItem, bool, map[string]bool, map[string]ports.SlackPendingInput) {
 	if n.pending == nil {
 		log.Printf("slack-notifier: pending input source unavailable for feature %s", trigger.ID)
-		return nil, false, nil
+		return nil, false, nil, nil
 	}
 	sourceIDs := map[string]bool{owner.ID: true, trigger.ID: true}
 	n.recordMu.Lock()
@@ -859,7 +859,7 @@ func (n *Notifier) reconcilePendingWithPolicy(
 	}
 	n.recordMu.Unlock()
 	if sourceFeatures[owner.ID] == nil {
-		return nil, false, unavailableIdentities
+		return nil, false, unavailableIdentities, nil
 	}
 
 	changed := false
@@ -892,6 +892,7 @@ func (n *Notifier) reconcilePendingWithPolicy(
 				}
 			}
 			record.propagatePostingResolution(tracked.Identity, tracked.Resolution)
+			tracked.HeldAnswer = nil
 			retired = append(retired, tracked)
 			retiredIdentities[tracked.Identity] = true
 			changed = true
@@ -1086,7 +1087,7 @@ func (n *Notifier) reconcilePendingWithPolicy(
 			})
 		}
 	}
-	return work, true, unavailableIdentities
+	return work, true, unavailableIdentities, liveByIdentity
 }
 
 func pendingHasPostedMessage(input pendingInputRecord) bool {

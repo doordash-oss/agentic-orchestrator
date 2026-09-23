@@ -142,6 +142,98 @@ func (h *apiHandler) slackPermissionSession(featureID, requestID string) (string
 	}
 }
 
+// AnswerSlackQuestion resolves indices against the live request, never against
+// the Slack display projection, before submitting one complete bundle.
+func (h *apiHandler) AnswerSlackQuestion(answer ports.SlackQuestionAnswer) ports.SlackAnswerResult {
+	if h == nil || h.mutations == nil || h.sessions == nil {
+		return slackAnswerFailed(errors.New("question mutation target is unavailable"))
+	}
+	featureID := strings.TrimSpace(answer.SourceFeatureID)
+	requestID := strings.TrimSpace(answer.RequestID)
+	if featureID == "" || requestID == "" || answer.Source.Kind != ports.AnswerSourceSlack {
+		return slackAnswerFailed(errors.New("request_id, source feature, and Slack answer source are required"))
+	}
+	for _, sess := range h.sessions.ActiveSessions() {
+		if sess == nil || sess.FeatureID() != featureID {
+			continue
+		}
+		for _, pending := range sess.PendingControlRequests() {
+			if pending == nil || pending.RequestID != requestID {
+				continue
+			}
+			if pending.Request.ToolName != toolNameAskUserQuestion {
+				return slackAnswerFailed(fmt.Errorf("request %s has incompatible control type", requestID))
+			}
+			questions := slackAskUserQuestionsFromInput(pending.Request.Input)
+			if len(questions) == 0 || len(answer.Answers) != len(questions) {
+				return slackAnswerFailed(errors.New("question answer indices must cover the entire bundle"))
+			}
+			byIndex := make(map[int]string, len(answer.Answers))
+			for _, indexed := range answer.Answers {
+				if indexed.Index < 0 || indexed.Index >= len(questions) {
+					return slackAnswerFailed(fmt.Errorf("question index %d is out of range", indexed.Index))
+				}
+				if _, exists := byIndex[indexed.Index]; exists {
+					return slackAnswerFailed(fmt.Errorf("question index %d is duplicated", indexed.Index))
+				}
+				byIndex[indexed.Index] = clone.RedactDiagnostics(indexed.Value)
+			}
+			answers := make(map[string]string, len(questions))
+			for i, question := range questions {
+				key := question.Question
+				if strings.TrimSpace(key) == "" {
+					key = question.Header
+				}
+				if strings.TrimSpace(key) == "" {
+					return slackAnswerFailed(fmt.Errorf("question index %d has no answer key", i))
+				}
+				if _, duplicate := answers[key]; duplicate {
+					return slackAnswerFailed(fmt.Errorf("question index %d has a duplicate answer key", i))
+				}
+				answers[key] = byIndex[i]
+			}
+			source := scrubSlackAnswerSource(answer.Source)
+			_, err := h.mutations.AnswerAskUser(AskUserAnswerRequest{
+				SessionID: sess.ID(), RequestID: requestID, Answers: answers, Source: &source,
+			})
+			if err != nil {
+				return slackPermissionFailure(err)
+			}
+			return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
+		}
+	}
+	return ports.SlackAnswerResult{
+		Outcome: ports.SlackAnswerNoLongerPending,
+		Cause:   fmt.Errorf("%w: pending request %s not found", ErrNoLongerPending, requestID),
+	}
+}
+
+// slackHelpEntryMutation is an exact-entry mutation; SendHelp intentionally
+// cannot satisfy it because that route may choose a live session instead.
+type slackHelpEntryMutation interface {
+	AnswerSlackHelpEntry(ports.SlackHelpAnswer) error
+}
+
+func (h *apiHandler) AnswerSlackHelp(answer ports.SlackHelpAnswer) ports.SlackAnswerResult {
+	if h == nil || h.mutations == nil {
+		return slackAnswerFailed(errors.New("help mutation target is unavailable"))
+	}
+	target, ok := h.mutations.(slackHelpEntryMutation)
+	if !ok {
+		return slackAnswerFailed(errors.New("exact help entry mutation is unavailable"))
+	}
+	if strings.TrimSpace(answer.SourceFeatureID) == "" || strings.TrimSpace(answer.EntryIdentity) == "" ||
+		strings.TrimSpace(answer.Text) == "" || answer.Source.Kind != ports.AnswerSourceSlack {
+		return slackAnswerFailed(errors.New("feature, entry identity, message, and Slack answer source are required"))
+	}
+	answer.Source = scrubSlackAnswerSource(answer.Source)
+	answer.Text = clone.RedactDiagnostics(answer.Text)
+	if err := target.AnswerSlackHelpEntry(answer); err != nil {
+		return slackPermissionFailure(err)
+	}
+	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
+}
+
 // ApproveSlackReview opens or reopens the review session for the posted item,
 // then submits proceed against the exact source revision the reader saw.
 func (h *apiHandler) ApproveSlackReview(approval ports.SlackReviewApproval) ports.SlackAnswerResult {

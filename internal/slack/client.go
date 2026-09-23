@@ -128,6 +128,7 @@ type Message struct {
 	ThreadTS  string     `json:"thread_ts"`
 	User      string     `json:"user"`
 	BotID     string     `json:"bot_id"`
+	AppID     string     `json:"app_id"`
 	Subtype   string     `json:"subtype"`
 	Text      string     `json:"text"`
 	Reactions []Reaction `json:"reactions"`

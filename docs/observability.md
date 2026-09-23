@@ -75,7 +75,7 @@ failures, lifecycle events it had to drop, and responder decisions:
 - `slack.delivery_failed`: a Slack write reached a terminal failure.
 - `slack.event_dropped`: a lifecycle event was discarded before delivery.
 - `slack.answer_received`: a Slack reply or reaction produced an accepted
-  permission answer or review approval.
+  permission answer, review approval, question answer, or help reply.
 - `slack.answer_rejected`: a Slack reply or reaction was judged but did not
   produce an accepted answer.
 
@@ -91,9 +91,12 @@ failures, lifecycle events it had to drop, and responder decisions:
   terminal `conversations.replies` failure.
 - `input_kind`: pending input kind (`question`, `permission`, `help`, `review`, or
   `gate`) for tagged `slack.message_posted`, `slack.answer_received`, and
-  `slack.answer_rejected` events.
-- `decision`: accepted or parsed decision (`allow_once`, `deny`, or `approve`)
-  for responder events.
+  `slack.answer_rejected` events. Questions and help turns can be answered
+  through Slack; gates remain informational.
+- `decision`: accepted or parsed decision (`allow_once`, `deny`, `approve`,
+  `option_selected` for a single option, `options_selected` for a multi-select
+  list, `free_text` for an off-menu or text answer, or `help_sent` for a help
+  reply) for responder events.
 - `medium`: Slack input medium (`reply` or `reaction`) for responder events.
 - `reason`: responder rejection reason (`unparseable`, `already_resolved`,
   `stale_revision`, `not_answerable`, or `submit_failed`) for

@@ -141,6 +141,7 @@ func (n *Notifier) responderTick() {
 	}
 	unavailable := make(map[string]bool)
 	unavailableItems := make(map[string]map[string]bool)
+	liveInputs := make(map[string]ports.SlackPendingInput)
 	for featureID := range featureIDs {
 		owner, err := n.store.Load(featureID)
 		if err != nil || owner == nil {
@@ -160,7 +161,7 @@ func (n *Notifier) responderTick() {
 			}
 		}
 		n.recordMu.Unlock()
-		work, readable, unreadable := n.reconcilePendingWithPolicy(
+		work, readable, unreadable, live := n.reconcilePendingWithPolicy(
 			ready,
 			owner,
 			owner,
@@ -169,6 +170,9 @@ func (n *Notifier) responderTick() {
 			false,
 		)
 		unavailableItems[featureID] = unreadable
+		for identity, input := range live {
+			liveInputs[identity] = input
+		}
 		if !readable {
 			unavailable[featureID] = true
 		}
@@ -284,7 +288,7 @@ func (n *Notifier) responderTick() {
 			}
 			continue
 		}
-		if !n.processResponderReply(client, settings.Token, candidate) {
+		if !n.processResponderReply(client, settings.Token, candidate, liveInputs) {
 			key := responderPollKey(candidate.Thread.featureID, candidate.Thread.destinationKey)
 			if unjudged[key] == "" ||
 				compareSlackTimestamps(candidate.Message.TS, unjudged[key]) < 0 {
@@ -296,7 +300,7 @@ func (n *Notifier) responderTick() {
 		if unavailableItems[candidate.Thread.featureID][candidate.Target.Identity] {
 			continue
 		}
-		n.processResponderReaction(client, settings.Token, candidate)
+		n.processResponderReaction(client, settings.Token, candidate, liveInputs)
 	}
 	for _, thread := range threads {
 		key := responderPollKey(thread.featureID, thread.destinationKey)
@@ -531,8 +535,20 @@ func (n *Notifier) extractResponderCandidates(
 	for _, message := range messages {
 		if posting, posted := postingsByTimestamp[message.TS]; posted {
 			for reactionOrder, reaction := range message.Reactions {
-				if reaction.Name != "white_check_mark" && reaction.Name != "x" {
+				if reaction.Name != "white_check_mark" && reaction.Name != "x" &&
+					keycapOption(reaction.Name) == 0 {
 					continue
+				}
+				if keycapOption(reaction.Name) > 0 {
+					question := false
+					for _, item := range record.Pending {
+						if item.Identity == posting.Identity && item.Kind == string(ports.SlackPendingQuestion) {
+							question = true
+						}
+					}
+					if !question {
+						continue
+					}
 				}
 				if destination.reactionContains(message.TS, reaction.Name) {
 					continue
@@ -552,6 +568,8 @@ func (n *Notifier) extractResponderCandidates(
 			continue
 		}
 		if message.TS == "" ||
+			message.User == "" || message.BotID != "" || message.AppID != "" ||
+			(message.Subtype != "" && message.Subtype != "thread_broadcast" && message.Subtype != "reply_broadcast") ||
 			(destination.LastSeenReplyTS != "" &&
 				compareSlackTimestamps(message.TS, destination.LastSeenReplyTS) <= 0) ||
 			destination.ledgerContains(message.TS) ||
@@ -560,6 +578,9 @@ func (n *Notifier) extractResponderCandidates(
 			continue
 		}
 		target, found := newestPostingBefore(destination.PostingIndex, message.TS)
+		if tag, _, tagged := splitResponderTag(message.Text); tagged {
+			target, found = taggedPostingBefore(destination.PostingIndex, tag, message.TS)
+		}
 		replies = append(replies, responderReplyCandidate{
 			Thread:      thread,
 			Message:     message,
@@ -611,6 +632,11 @@ func (n *Notifier) refreshResponderReplyCandidate(
 		destination.PostingIndex,
 		candidate.Message.TS,
 	)
+	if tag, _, tagged := splitResponderTag(candidate.Message.Text); tagged {
+		candidate.Target, candidate.TargetFound = taggedPostingBefore(
+			destination.PostingIndex, tag, candidate.Message.TS,
+		)
+	}
 	return candidate, true
 }
 
@@ -640,6 +666,7 @@ func (n *Notifier) processResponderReply(
 	client slackClient,
 	token string,
 	candidate responderReplyCandidate,
+	live ...map[string]ports.SlackPendingInput,
 ) bool {
 	claimKey := responderReplyClaimKey(candidate)
 	threadLock := n.responderThreadLock(
@@ -658,6 +685,21 @@ func (n *Notifier) processResponderReply(
 	if !n.claimResponderCandidate(claimKey) {
 		return false
 	}
+	if tag, answer, tagged := splitResponderTag(candidate.Message.Text); tagged {
+		if !candidate.TargetFound || answer == "" {
+			hint := "This tag does not name a pending item in this thread."
+			if candidate.TargetFound && answer == "" {
+				hint = tag + " needs an answer after the tag."
+			}
+			judged := n.rejectResponderReply(token, candidate, pendingInputRecord{},
+				"not_answerable", "question", n.responderHintFor(candidate.Thread, hint), claimKey)
+			if !judged {
+				n.releaseResponderClaim(claimKey)
+			}
+			return judged
+		}
+		candidate.Message.Text = answer
+	}
 	if !candidate.TargetFound {
 		judged := n.rejectResponderReply(
 			token,
@@ -665,7 +707,7 @@ func (n *Notifier) processResponderReply(
 			pendingInputRecord{},
 			"not_answerable",
 			"question",
-			"This reply does not target an answerable item. Answer in Agentico.",
+			n.responderHintFor(candidate.Thread, "This reply does not target an answerable item. Answer in Agentico."),
 			claimKey,
 		)
 		if !judged {
@@ -693,6 +735,21 @@ func (n *Notifier) processResponderReply(
 		}
 		return judged
 	}
+	if pending.HeldAnswer != nil {
+		held := &postingResolution{Kind: resolutionSlack, ResponderID: pending.HeldAnswer.ResponderID}
+		judged := n.rejectResolvedReply(token, candidate, pending, held, claimKey)
+		if !judged {
+			n.releaseResponderClaim(claimKey)
+		}
+		return judged
+	}
+	if pending.Kind == string(ports.SlackPendingQuestion) || pending.Kind == string(ports.SlackPendingHelp) {
+		var inputs map[string]ports.SlackPendingInput
+		if len(live) > 0 {
+			inputs = live[0]
+		}
+		return n.processTextResponderReply(client, token, candidate, pending, inputs, claimKey)
+	}
 	decision, parsed := responderReplyDecision(pending.Kind, candidate.Message.Text)
 	if !parsed {
 		judged := n.rejectResponderReply(
@@ -701,7 +758,7 @@ func (n *Notifier) processResponderReply(
 			pending,
 			responderUnparseableReason(pending.Kind),
 			"question",
-			responderHint(pending),
+			n.responderHintFor(candidate.Thread, responderHint(pending)),
 			claimKey,
 		)
 		if !judged {
@@ -787,6 +844,7 @@ func (n *Notifier) processResponderReaction(
 	client slackClient,
 	token string,
 	candidate responderReactionCandidate,
+	live ...map[string]ports.SlackPendingInput,
 ) {
 	claimKey := responderReactionClaimKey(candidate)
 	threadLock := n.responderThreadLock(
@@ -827,6 +885,14 @@ func (n *Notifier) processResponderReaction(
 			return
 		}
 		n.judgeResponderReaction(candidate)
+		return
+	}
+	if pending.Kind == string(ports.SlackPendingQuestion) {
+		var inputs map[string]ports.SlackPendingInput
+		if len(live) > 0 {
+			inputs = live[0]
+		}
+		n.processQuestionReaction(client, token, candidate, pending, inputs, claimKey)
 		return
 	}
 	decision, parsed := responderReactionDecision(pending.Kind, candidate.Name)
@@ -1073,7 +1139,9 @@ func alreadyAnsweredLine(tag string, resolution *postingResolution) string {
 
 func responderUnparseableReason(inputKind string) string {
 	if inputKind == string(ports.SlackPendingPermission) ||
-		inputKind == string(ports.SlackPendingReview) {
+		inputKind == string(ports.SlackPendingReview) ||
+		inputKind == string(ports.SlackPendingQuestion) ||
+		inputKind == string(ports.SlackPendingHelp) {
 		return "unparseable"
 	}
 	return "not_answerable"
@@ -1085,9 +1153,33 @@ func responderHint(pending pendingInputRecord) string {
 		return pending.Tag + " accepts ✅ or ❌, or a reply of allow or deny."
 	case string(ports.SlackPendingReview):
 		return pending.Tag + " accepts ✅ or approve. Request changes in Agentico."
+	case string(ports.SlackPendingQuestion):
+		return pending.Tag + " accepts an option number, its label, or a reply with other text."
+	case string(ports.SlackPendingHelp):
+		return pending.Tag + " accepts a reply with any text."
 	default:
 		return pending.Tag + " is answered in Agentico."
 	}
+}
+
+func (n *Notifier) responderHintFor(thread responderThread, hint string) string {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	record := n.records[thread.featureID]
+	if record == nil {
+		return hint
+	}
+	var items []pendingInputRecord
+	for _, item := range record.Pending {
+		if item.MessageTS[thread.destinationKey] != "" {
+			items = append(items, item)
+		}
+	}
+	tags := pendingResponderTags(items)
+	if len(tags) <= 1 {
+		return hint
+	}
+	return hint + " Still waiting on " + strings.Join(tags, ", ") + "."
 }
 
 func (n *Notifier) rejectResponderReply(
@@ -1197,6 +1289,7 @@ func (n *Notifier) enqueueAcceptedResponderWrites(
 	source responderThread,
 	replyTS, responderID, decision string,
 	claimKey string,
+	confirmationOverride ...string,
 ) {
 	confirmation := responderConfirmation(
 		token,
@@ -1205,6 +1298,9 @@ func (n *Notifier) enqueueAcceptedResponderWrites(
 		decision,
 		responderID,
 	)
+	if len(confirmationOverride) > 0 {
+		confirmation = scrub(token, confirmationOverride[0])
+	}
 	n.recordMu.Lock()
 	record := n.records[source.featureID]
 	if record == nil {
@@ -1441,6 +1537,9 @@ func responderConfirmation(token, tag, inputKind, decision, responderID string) 
 		action = "denied"
 	case inputKind == string(ports.SlackPendingReview):
 		action = "approved"
+	case inputKind == string(ports.SlackPendingQuestion) ||
+		inputKind == string(ports.SlackPendingHelp):
+		action = "answered"
 	}
 	return scrub(token, tag+" was "+action+" by <@"+responderID+"> via Slack.")
 }
@@ -1526,6 +1625,7 @@ func (n *Notifier) resolveResponderTargetByAgentico(
 			Kind:       resolutionAgentico,
 			ResolvedAt: n.responderClock.Now().UTC(),
 		}
+		record.Pending[i].HeldAnswer = nil
 		resolved = record.Pending[i]
 		break
 	}

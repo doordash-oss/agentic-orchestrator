@@ -1041,6 +1041,20 @@ type signalingSlackAnswerPort struct {
 	attempted chan<- string
 }
 
+func (p signalingSlackAnswerPort) AnswerSlackQuestion(
+	answer ports.SlackQuestionAnswer,
+) ports.SlackAnswerResult {
+	p.attempted <- "question"
+	return p.target.AnswerSlackQuestion(answer)
+}
+
+func (p signalingSlackAnswerPort) AnswerSlackHelp(
+	answer ports.SlackHelpAnswer,
+) ports.SlackAnswerResult {
+	p.attempted <- "help"
+	return p.target.AnswerSlackHelp(answer)
+}
+
 func (p signalingSlackAnswerPort) AnswerSlackPermission(
 	answer ports.SlackPermissionAnswer,
 ) ports.SlackAnswerResult {

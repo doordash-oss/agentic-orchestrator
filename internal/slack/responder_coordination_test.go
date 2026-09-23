@@ -141,6 +141,7 @@ func TestSlackResponderWithholdsReplyWhilePendingPostIsInFlight(t *testing.T) {
 }
 
 type blockingSlackAnswerPort struct {
+	fakeSlackAnswerPort
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once

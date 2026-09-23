@@ -1155,6 +1155,26 @@ func (r *slackAnswerRelay) ApproveSlackReview(approval ports.SlackReviewApproval
 	return target.ApproveSlackReview(approval)
 }
 
+func (r *slackAnswerRelay) AnswerSlackQuestion(answer ports.SlackQuestionAnswer) ports.SlackAnswerResult {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackAnswerResult{Outcome: ports.SlackAnswerFailed, Cause: errors.New("Slack answer port is unavailable")}
+	}
+	return target.AnswerSlackQuestion(answer)
+}
+
+func (r *slackAnswerRelay) AnswerSlackHelp(answer ports.SlackHelpAnswer) ports.SlackAnswerResult {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackAnswerResult{Outcome: ports.SlackAnswerFailed, Cause: errors.New("Slack answer port is unavailable")}
+	}
+	return target.AnswerSlackHelp(answer)
+}
+
 func (r *slackPendingInputRelay) bind(target ports.SlackPendingInputSource) {
 	r.mu.Lock()
 	r.target = target
@@ -1222,6 +1242,7 @@ func (r *slackSettingsRelay) SlackSettings() ports.SlackRuntimeSettings {
 
 type serverMutationTarget struct {
 	mu                    sync.Mutex
+	askUserMu             sync.Mutex
 	orch                  *orchestrator.Orchestrator
 	childCreator          featureRefactorChildCreator
 	reviewFeedbackCreator featureReviewFeedbackChildCreator
@@ -1729,6 +1750,8 @@ func (t *serverMutationTarget) permissionAnswerService() *permission.AnswerServi
 }
 
 func (t *serverMutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequest) (serverruntime.AskUserAnswerResponse, error) {
+	t.askUserMu.Lock()
+	defer t.askUserMu.Unlock()
 	sess, pending, err := t.findPendingControlRequest(req.SessionID, req.RequestID, true)
 	if err != nil {
 		return serverruntime.AskUserAnswerResponse{}, err
@@ -2909,25 +2932,53 @@ func (t *serverMutationTarget) sendQueuedFeatureHelp(req serverruntime.HelpAnswe
 		return serverruntime.HelpSendResponse{}, false, nil
 	}
 	message := strings.TrimSpace(req.Message)
-	found := false
-	if err := t.store.Modify(featureID, func(f *feature.Feature) error {
-		for i := range f.HelpQueue {
-			if !f.HelpQueue[i].Pending {
-				continue
-			}
-			f.HelpQueue[i].Answer = message
-			f.HelpQueue[i].Pending = false
-			found = true
-			return nil
-		}
-		return nil
-	}); err != nil {
+	found, err := t.updateQueuedFeatureHelp(featureID, "", message)
+	if err != nil {
 		return serverruntime.HelpSendResponse{}, true, fmt.Errorf("answer feature help queue: %w", err)
 	}
 	if !found {
 		return serverruntime.HelpSendResponse{}, false, nil
 	}
 	return serverruntime.HelpSendResponse{FeatureID: featureID, Result: resultSent}, true, nil
+}
+
+// AnswerSlackHelpEntry updates only the named queued help item, even when a
+// session for the same feature is active.
+func (t *serverMutationTarget) AnswerSlackHelpEntry(answer ports.SlackHelpAnswer) error {
+	if t == nil || t.store == nil {
+		return errors.New("feature help store is unavailable")
+	}
+	featureID := strings.TrimSpace(answer.SourceFeatureID)
+	found, err := t.updateQueuedFeatureHelp(featureID, answer.EntryIdentity, answer.Text)
+	if err != nil {
+		return fmt.Errorf("answer feature help queue: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("%w: pending help entry not found", serverruntime.ErrNoLongerPending)
+	}
+	return nil
+}
+
+func (t *serverMutationTarget) updateQueuedFeatureHelp(featureID, identity, message string) (bool, error) {
+	found := false
+	err := t.store.Modify(featureID, func(f *feature.Feature) error {
+		for i := range f.HelpQueue {
+			entry := &f.HelpQueue[i]
+			if !entry.Pending || identity != "" &&
+				ports.SlackHelpEntryIdentity(featureID, entry.Time, entry.Question) != identity {
+				continue
+			}
+			entry.Answer = message
+			entry.Pending = false
+			found = true
+			return nil
+		}
+		if identity != "" {
+			return fmt.Errorf("%w: pending help entry not found", serverruntime.ErrNoLongerPending)
+		}
+		return nil
+	})
+	return found, err
 }
 
 func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) (ports.SessionView, error) {

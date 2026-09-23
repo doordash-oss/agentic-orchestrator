@@ -57,6 +57,7 @@ type responderEvidenceSubmission struct {
 }
 
 type responderEvidenceAnswerPort struct {
+	fakeSlackAnswerPort
 	mu                sync.Mutex
 	permissionResults []ports.SlackAnswerResult
 	reviewResults     []ports.SlackAnswerResult
@@ -403,7 +404,7 @@ func TestSlackResponderEvidence(t *testing.T) {
 	assertResponderEvidencePolls(t, harness, beforePolls, permissionTwoRecord.MessageTS)
 	assertResponderEvidenceReaction(t, harness, unparseableReviewReplyTS, "question")
 	assertResponderEvidenceLine(
-		t, harness, "#4 accepts ✅ or approve. Request changes in Agentico.", 1,
+		t, harness, "#4 accepts ✅ or approve. Request changes in Agentico. Still waiting on #3, #4.", 1,
 	)
 	ticks = append(ticks, captureResponderEvidenceTick(t, harness, "review_unparseable"))
 

@@ -15,6 +15,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -23,11 +24,45 @@ import (
 type fakeSlackAnswerPort struct {
 	permission ports.SlackPermissionAnswer
 	review     ports.SlackReviewApproval
+	question   ports.SlackQuestionAnswer
+	help       ports.SlackHelpAnswer
+}
+
+func (p *fakeSlackAnswerPort) AnswerSlackQuestion(answer ports.SlackQuestionAnswer) ports.SlackAnswerResult {
+	p.question = answer
+	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
+}
+
+func (p *fakeSlackAnswerPort) AnswerSlackHelp(answer ports.SlackHelpAnswer) ports.SlackAnswerResult {
+	p.help = answer
+	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
 }
 
 func (p *fakeSlackAnswerPort) AnswerSlackPermission(answer ports.SlackPermissionAnswer) ports.SlackAnswerResult {
 	p.permission = answer
 	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
+}
+
+func TestSlackAnswerGrammarRelayQuestionAndHelp(t *testing.T) {
+	relay := &slackAnswerRelay{}
+	question := ports.SlackQuestionAnswer{RequestID: "ask-1", Answers: []ports.SlackQuestionIndexedAnswer{{Index: 0, Value: "yes"}}}
+	help := ports.SlackHelpAnswer{SourceFeatureID: "feature-1", EntryIdentity: "help:entry", Text: "proceed"}
+	if result := relay.AnswerSlackQuestion(question); result.Outcome != ports.SlackAnswerFailed {
+		t.Fatalf("unbound question = %+v", result)
+	}
+	if result := relay.AnswerSlackHelp(help); result.Outcome != ports.SlackAnswerFailed {
+		t.Fatalf("unbound help = %+v", result)
+	}
+	target := &fakeSlackAnswerPort{}
+	relay.bind(target)
+	if result := relay.AnswerSlackQuestion(question); result.Outcome != ports.SlackAnswerAccepted ||
+		!reflect.DeepEqual(target.question, question) {
+		t.Fatalf("forwarded question = %+v, %+v", result, target.question)
+	}
+	if result := relay.AnswerSlackHelp(help); result.Outcome != ports.SlackAnswerAccepted ||
+		target.help != help {
+		t.Fatalf("forwarded help = %+v, %+v", result, target.help)
+	}
 }
 
 func (p *fakeSlackAnswerPort) ApproveSlackReview(approval ports.SlackReviewApproval) ports.SlackAnswerResult {

@@ -82,6 +82,34 @@ type fakeSlackAnswerPort struct {
 	permissionResults []ports.SlackAnswerResult
 	reviewApprovals   []ports.SlackReviewApproval
 	reviewResults     []ports.SlackAnswerResult
+	questionAnswers   []ports.SlackQuestionAnswer
+	questionResults   []ports.SlackAnswerResult
+	helpAnswers       []ports.SlackHelpAnswer
+	helpResults       []ports.SlackAnswerResult
+}
+
+func (p *fakeSlackAnswerPort) AnswerSlackQuestion(answer ports.SlackQuestionAnswer) ports.SlackAnswerResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.questionAnswers = append(p.questionAnswers, answer)
+	if len(p.questionResults) > 0 {
+		result := p.questionResults[0]
+		p.questionResults = p.questionResults[1:]
+		return result
+	}
+	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
+}
+
+func (p *fakeSlackAnswerPort) AnswerSlackHelp(answer ports.SlackHelpAnswer) ports.SlackAnswerResult {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.helpAnswers = append(p.helpAnswers, answer)
+	if len(p.helpResults) > 0 {
+		result := p.helpResults[0]
+		p.helpResults = p.helpResults[1:]
+		return result
+	}
+	return ports.SlackAnswerResult{Outcome: ports.SlackAnswerAccepted}
 }
 
 func (p *fakeSlackAnswerPort) AnswerSlackPermission(
@@ -420,10 +448,10 @@ func TestSlackResponderExtractsCandidatesByLedgerProvenance(t *testing.T) {
 		channelID: "C-ENG", rootTS: rootTS, oldest: "100.000002",
 	}, page.Messages)
 
-	if len(replies) != 2 {
-		t.Fatalf("reply candidates = %#v; want owner and bot-authored unclaimed replies", replies)
+	if len(replies) != 1 {
+		t.Fatalf("reply candidates = %#v; want only person-authored unclaimed reply", replies)
 	}
-	for index, wantTS := range []string{"100.000003", "100.000006"} {
+	for index, wantTS := range []string{"100.000003"} {
 		if replies[index].Message.TS != wantTS ||
 			!replies[index].TargetFound ||
 			replies[index].Target.Identity != "permission:1" {

@@ -246,7 +246,7 @@ func (n *Notifier) runRestartPassFor(settings ports.SlackRuntimeSettings, owners
 			continue
 		}
 		scanned++
-		work, readable, unreadable := n.reconcilePendingWithPolicy(
+		work, readable, unreadable, _ := n.reconcilePendingWithPolicy(
 			settings, owner, owner, record, resolutionRestart, true, failedResolutions,
 		)
 		if !readable {
@@ -422,7 +422,7 @@ func (n *Notifier) sweepDestinationsFor(settings ports.SlackRuntimeSettings, own
 			log.Printf("slack-notifier: skipping unreadable Slack record during bootstrap: %v", err)
 			continue
 		}
-		work, readable, unreadable := n.reconcilePendingWithPolicy(
+		work, readable, unreadable, _ := n.reconcilePendingWithPolicy(
 			settings, owner, owner, record, resolutionAgentico, true, failedResolutions,
 		)
 		if !readable {

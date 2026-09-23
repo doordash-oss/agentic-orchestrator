@@ -552,6 +552,29 @@ func TestClientThreadRepliesPaginatesSeededMessagesAndDecodesReactions(t *testin
 	}
 }
 
+func TestClientThreadRepliesDecodesAppIdentity(t *testing.T) {
+	server := testsupport.New(t)
+	server.Script("conversations.replies", testsupport.Response{Body: map[string]any{
+		"ok": true,
+		"messages": []any{map[string]any{
+			"ts": "100.000003", "thread_ts": "100.000001",
+			"user": "U-APP", "app_id": "A-DEPLOY", "text": "nightly summary",
+		}},
+	}})
+	client, err := NewClient("xoxb-secret-1234", WithBaseURL(server.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.ThreadReplies(t.Context(), "C-ENG", "100.000001", "100.000001", 100, "")
+	if err != nil {
+		t.Fatalf("ThreadReplies() error = %v", err)
+	}
+	if len(page.Messages) != 1 || page.Messages[0].AppID != "A-DEPLOY" ||
+		page.Messages[0].User != "U-APP" {
+		t.Fatalf("ThreadReplies() messages = %#v; want app and user identities", page.Messages)
+	}
+}
+
 func TestClientAddReactionMutatesSeededThreadAndAlreadyReactedIsBenign(t *testing.T) {
 	server := testsupport.New(t)
 	server.SetOwnUserID("UAGENTICO")

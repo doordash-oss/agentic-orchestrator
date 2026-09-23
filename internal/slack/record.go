@@ -60,26 +60,34 @@ func (r *featureRecord) propagatePostingResolution(
 }
 
 type pendingInputRecord struct {
-	Identity        string             `yaml:"identity"`
-	SourceFeatureID string             `yaml:"source_feature_id"`
-	Kind            string             `yaml:"kind"`
-	RequestID       string             `yaml:"request_id,omitempty"`
-	QuestionIndex   int                `yaml:"question_index,omitempty"`
-	GatePath        string             `yaml:"gate_path,omitempty"`
-	Iteration       int                `yaml:"iteration,omitempty"`
-	WaitingSince    time.Time          `yaml:"waiting_since,omitempty"`
-	ReviewID        string             `yaml:"review_id,omitempty"`
-	ReviewMode      string             `yaml:"review_mode,omitempty"`
-	TargetPhase     string             `yaml:"target_phase,omitempty"`
-	ArtifactID      string             `yaml:"artifact_id,omitempty"`
-	RunNumber       int                `yaml:"run_number,omitempty"`
-	SourceRevision  string             `yaml:"source_revision,omitempty"`
-	Tag             string             `yaml:"tag,omitempty"`
-	PostedAt        time.Time          `yaml:"posted_at,omitempty"`
-	MessageTS       map[string]string  `yaml:"message_timestamps,omitempty"`
-	FileIDs         map[string]string  `yaml:"file_ids,omitempty"`
-	Resolution      *postingResolution `yaml:"resolution,omitempty"`
-	JudgedReactions []judgedReaction   `yaml:"judged_reactions,omitempty"`
+	Identity        string              `yaml:"identity"`
+	SourceFeatureID string              `yaml:"source_feature_id"`
+	Kind            string              `yaml:"kind"`
+	RequestID       string              `yaml:"request_id,omitempty"`
+	QuestionIndex   int                 `yaml:"question_index,omitempty"`
+	GatePath        string              `yaml:"gate_path,omitempty"`
+	Iteration       int                 `yaml:"iteration,omitempty"`
+	WaitingSince    time.Time           `yaml:"waiting_since,omitempty"`
+	ReviewID        string              `yaml:"review_id,omitempty"`
+	ReviewMode      string              `yaml:"review_mode,omitempty"`
+	TargetPhase     string              `yaml:"target_phase,omitempty"`
+	ArtifactID      string              `yaml:"artifact_id,omitempty"`
+	RunNumber       int                 `yaml:"run_number,omitempty"`
+	SourceRevision  string              `yaml:"source_revision,omitempty"`
+	Tag             string              `yaml:"tag,omitempty"`
+	PostedAt        time.Time           `yaml:"posted_at,omitempty"`
+	MessageTS       map[string]string   `yaml:"message_timestamps,omitempty"`
+	FileIDs         map[string]string   `yaml:"file_ids,omitempty"`
+	Resolution      *postingResolution  `yaml:"resolution,omitempty"`
+	JudgedReactions []judgedReaction    `yaml:"judged_reactions,omitempty"`
+	HeldAnswer      *heldQuestionAnswer `yaml:"held_answer,omitempty"`
+}
+
+type heldQuestionAnswer struct {
+	Value         string `yaml:"value"`
+	Decision      string `yaml:"decision"`
+	ResponderID   string `yaml:"responder_id"`
+	ResponderName string `yaml:"responder_name"`
 }
 
 // closureOwed checks only threads where this item was actually posted.

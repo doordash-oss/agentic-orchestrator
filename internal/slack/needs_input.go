@@ -15,7 +15,6 @@
 package slack
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -52,11 +51,7 @@ func pendingInputIdentity(item ports.SlackPendingInput) string {
 	case ports.SlackPendingReview:
 		return "review:" + item.ReviewID + ":" + item.SourceRevision
 	case ports.SlackPendingHelp:
-		digest := sha256.Sum256([]byte(item.HelpQuestion))
-		return fmt.Sprintf(
-			"help:%s:%s:%x",
-			item.FeatureID, item.WaitingSince.UTC().Format(timeLayout), digest[:8],
-		)
+		return ports.SlackHelpEntryIdentity(item.FeatureID, item.WaitingSince, item.HelpQuestion)
 	default:
 		return ""
 	}

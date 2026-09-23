@@ -14,6 +14,12 @@
 
 package ports
 
+import (
+	"crypto/sha256"
+	"fmt"
+	"time"
+)
+
 // AnswerSourceKind identifies the client that supplied an answer.
 type AnswerSourceKind string
 
@@ -63,6 +69,33 @@ type SlackReviewApproval struct {
 	Source          AnswerSource
 }
 
+// SlackQuestionIndexedAnswer identifies a question by position, without copying its text.
+type SlackQuestionIndexedAnswer struct {
+	Index int
+	Value string
+}
+
+type SlackQuestionAnswer struct {
+	SourceFeatureID string
+	RequestID       string
+	Answers         []SlackQuestionIndexedAnswer
+	Source          AnswerSource
+}
+
+type SlackHelpAnswer struct {
+	SourceFeatureID string
+	EntryIdentity   string
+	Text            string
+	Source          AnswerSource
+}
+
+// SlackHelpEntryIdentity matches the identity of a posted pending help item.
+func SlackHelpEntryIdentity(featureID string, waitingSince time.Time, question string) string {
+	digest := sha256.Sum256([]byte(question))
+	return fmt.Sprintf("help:%s:%s:%x", featureID,
+		waitingSince.UTC().Format("2006-01-02T15:04:05.999999999Z07:00"), digest[:8])
+}
+
 // SlackAnswerOutcome classifies the result of an in-process Slack mutation.
 type SlackAnswerOutcome string
 
@@ -79,9 +112,10 @@ type SlackAnswerResult struct {
 	Cause   error
 }
 
-// SlackAnswerPort submits the two answer kinds supported by the Slack
-// responder in this phase.
+// SlackAnswerPort submits answerable Slack items to their in-process mutations.
 type SlackAnswerPort interface {
 	AnswerSlackPermission(SlackPermissionAnswer) SlackAnswerResult
 	ApproveSlackReview(SlackReviewApproval) SlackAnswerResult
+	AnswerSlackQuestion(SlackQuestionAnswer) SlackAnswerResult
+	AnswerSlackHelp(SlackHelpAnswer) SlackAnswerResult
 }

@@ -3188,7 +3188,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 				busyIDs = append(busyIDs, item.Feature.ID)
 			}
 		}
-		go agent.PruneIdleFeatureReviewScratch(fm, busyIDs)
+		go agent.PruneStaleReviewScratch(fm, busyIDs)
 	}
 	boot.featureManager = fm
 	boot.sessionManager = sm

@@ -462,6 +462,7 @@ type liveRunReviewScratch struct {
 	EvidenceRoot   string
 	BuildCacheRoot string
 	TempRoot       string
+	registryKey    string
 }
 
 func newLiveRunReviewScratch(helperDir string) liveRunReviewScratch {
@@ -472,10 +473,17 @@ func newLiveRunReviewScratch(helperDir string) liveRunReviewScratch {
 	}
 }
 
+// prepareLiveRunReviewScratch holds helperDir in the scratch registry until
+// release, so a concurrent prune cannot delete scratch a review is using.
 func prepareLiveRunReviewScratch(helperDir string) (liveRunReviewScratch, error) {
+	if err := os.MkdirAll(helperDir, 0o755); err != nil {
+		return liveRunReviewScratch{}, fmt.Errorf("preparing live-run review dir %s: %w", helperDir, err)
+	}
 	scratch := newLiveRunReviewScratch(helperDir)
+	scratch.registryKey = acquireLiveRunScratch(helperDir)
 	for _, dir := range append(scratch.roots(), scratch.cacheSubdirs()...) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
+			releaseLiveRunScratch(scratch.registryKey)
 			return liveRunReviewScratch{}, fmt.Errorf("preparing live-run review scratch root %s: %w", dir, err)
 		}
 	}
@@ -489,6 +497,11 @@ func (s liveRunReviewScratch) roots() []string {
 // release deletes the cache and temp roots, which can reach tens of GiB per
 // review. Evidence stays with the review artifacts.
 func (s liveRunReviewScratch) release() error {
+	defer releaseLiveRunScratch(s.registryKey)
+	return s.removeDisposableRoots()
+}
+
+func (s liveRunReviewScratch) removeDisposableRoots() error {
 	var errs []error
 	for _, dir := range []string{s.BuildCacheRoot, s.TempRoot} {
 		if err := feature.RemoveAllResilient(dir); err != nil {

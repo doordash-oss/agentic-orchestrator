@@ -18,11 +18,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-func TestPruneIdleFeatureReviewScratch_SkipsFeaturesThatMayOwnAReview(t *testing.T) {
+func TestPruneStaleReviewScratch_SkipsHeldReviewsAndBusyFeatures(t *testing.T) {
 	t.Parallel()
 	store := feature.NewStore(t.TempDir())
 	fm := feature.NewManager(store, nil)
@@ -30,14 +31,13 @@ func TestPruneIdleFeatureReviewScratch_SkipsFeaturesThatMayOwnAReview(t *testing
 	tests := []struct {
 		id        string
 		status    feature.Status
+		held      bool
 		busy      bool
 		wantPrune bool
 	}{
 		{id: "done", status: feature.StatusDone, wantPrune: true},
-		{id: "published", status: feature.StatusPublished, wantPrune: true},
-		{id: "final-reviewing", status: feature.StatusFinalReviewing},
-		{id: "implementing", status: feature.StatusImplementing},
-		{id: "reviewing", status: feature.StatusReviewing},
+		{id: "reviewing-old-iteration", status: feature.StatusFinalReviewing, wantPrune: true},
+		{id: "reviewing-live", status: feature.StatusFinalReviewing, held: true},
 		{id: "orphan", status: feature.StatusCodeReady, busy: true},
 	}
 	var busyIDs []string
@@ -46,21 +46,20 @@ func TestPruneIdleFeatureReviewScratch_SkipsFeaturesThatMayOwnAReview(t *testing
 		if err := store.Save(f); err != nil {
 			t.Fatalf("Save(%s) error = %v", tt.id, err)
 		}
-		helperDir := reviewScratchHelperDir(store, tt.id)
-		for _, dir := range []string{"evidence", "tmp", "build-cache"} {
-			if err := os.MkdirAll(filepath.Join(helperDir, dir), 0o755); err != nil {
-				t.Fatalf("mkdir: %v", err)
+		helperDir := writeLiveRunHelperLayout(t, reviewScratchHelperDir(store, tt.id))
+		if tt.held {
+			scratch, err := prepareLiveRunReviewScratch(helperDir)
+			if err != nil {
+				t.Fatalf("prepareLiveRunReviewScratch() error = %v", err)
 			}
-		}
-		if err := os.WriteFile(filepath.Join(helperDir, "review-prompt.md"), []byte("x"), 0o644); err != nil {
-			t.Fatalf("write prompt: %v", err)
+			t.Cleanup(func() { releaseLiveRunScratch(scratch.registryKey) })
 		}
 		if tt.busy {
 			busyIDs = append(busyIDs, tt.id)
 		}
 	}
 
-	PruneIdleFeatureReviewScratch(fm, busyIDs)
+	PruneStaleReviewScratch(fm, busyIDs)
 
 	for _, tt := range tests {
 		helperDir := reviewScratchHelperDir(store, tt.id)
@@ -72,6 +71,57 @@ func TestPruneIdleFeatureReviewScratch_SkipsFeaturesThatMayOwnAReview(t *testing
 			t.Errorf("%s: evidence stat = %v; want kept", tt.id, err)
 		}
 	}
+}
+
+func TestPrepareLiveRunReviewScratch_WaitsForInFlightPrune(t *testing.T) {
+	t.Parallel()
+	helperDir := writeLiveRunHelperLayout(t, filepath.Join(t.TempDir(), "iteration-03", "qa"))
+
+	finish, ok := claimScratchPrune(helperDir)
+	if !ok {
+		t.Fatal("claimScratchPrune() = false; want the prune to claim an unused dir")
+	}
+	prepared := make(chan liveRunReviewScratch)
+	go func() {
+		scratch, err := prepareLiveRunReviewScratch(helperDir)
+		if err != nil {
+			t.Errorf("prepareLiveRunReviewScratch() error = %v", err)
+		}
+		prepared <- scratch
+	}()
+	select {
+	case <-prepared:
+		t.Fatal("review scratch was prepared while a prune held the directory")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := newLiveRunReviewScratch(helperDir).removeDisposableRoots(); err != nil {
+		t.Fatalf("removeDisposableRoots() error = %v", err)
+	}
+	finish()
+
+	scratch := <-prepared
+	defer releaseLiveRunScratch(scratch.registryKey)
+	for _, dir := range scratch.roots() {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Errorf("scratch root %s stat = %v; want recreated after the prune", dir, err)
+		}
+	}
+	if _, ok := claimScratchPrune(helperDir); ok {
+		t.Fatal("claimScratchPrune() = true while a review holds the directory")
+	}
+}
+
+func writeLiveRunHelperLayout(t *testing.T, helperDir string) string {
+	t.Helper()
+	for _, dir := range []string{"evidence", "tmp", "build-cache"} {
+		if err := os.MkdirAll(filepath.Join(helperDir, dir), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(helperDir, "review-prompt.md"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	return helperDir
 }
 
 func reviewScratchHelperDir(store *feature.Store, id string) string {

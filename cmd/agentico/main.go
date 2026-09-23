@@ -1340,6 +1340,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		Attachments:             req.Attachments,
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
+		SlackNotifications:      serverruntime.SanitizeSlackNotifications(serverruntime.PatchSlackNotifications(nil, req.SlackNotifications), slackToken(cfg)),
 		Pipeline:                req.Pipeline,
 		SourceExpectations:      sourceExpectations,
 		// Every ordinary server creation is accepted against immutable local
@@ -1371,6 +1372,13 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 	return serverruntime.CreateFeatureResponse{
 		FeatureID: f.ID, Result: "created", Warnings: wireCreationWarnings(f.CreationWarnings),
 	}, nil
+}
+
+func slackToken(cfg *config.Config) string {
+	if cfg == nil || cfg.Slack == nil {
+		return ""
+	}
+	return cfg.Slack.Token
 }
 
 func wireCreationWarnings(warnings []git.BranchProbeWarning) []serverruntime.Error {
@@ -1579,6 +1587,10 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 				return fmt.Errorf("detecting paired config target: %w", dErr)
 			}
 			if paired {
+				owner, err := t.store.Load(parentID)
+				if err != nil {
+					return err
+				}
 				if err := t.orch.UpdatePairedFeatureConfig(parentID, feature.PairedConfigInput{
 					Models:              req.Models,
 					Effort:              req.Effort,
@@ -1586,6 +1598,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 					Checkpoints:         req.Checkpoints,
 					InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
 					AutomaticReviewMode: automaticReviewMode,
+					SlackNotifications:  serverruntime.SanitizeSlackNotifications(serverruntime.PatchSlackNotifications(owner.SlackNotifications, req.SlackNotifications), slackToken(t.cfg)),
 				}, feature.PipelineProfile(req.Pipeline), featureID); err != nil {
 					return err
 				}
@@ -1610,6 +1623,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 				Checkpoints:         req.Checkpoints,
 				InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
 				AutomaticReviewMode: automaticReviewMode,
+				SlackNotifications:  serverruntime.SanitizeSlackNotifications(serverruntime.PatchSlackNotifications(current.SlackNotifications, req.SlackNotifications), slackToken(t.cfg)),
 			}); err != nil {
 				return err
 			}

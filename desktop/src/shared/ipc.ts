@@ -1612,6 +1612,25 @@ export const FeatureSnapshotSchema = z.strictObject({
   reviewGate: ReviewGateViewSchema,
   /** Effective Automatic Bash review state and the scope that selected it. */
   automaticReview: AutomaticReviewStateSchema,
+  slackNotifications: z
+    .strictObject({
+      configured: z.boolean(),
+      muted: z.boolean(),
+      modeSource: z.enum(['global', 'feature']),
+      progress: z.strictObject({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      needsInput: z.strictObject({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      problems: z.strictObject({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      recipients: z.array(
+        z.strictObject({
+          typedText: z.string(),
+          kind: z.enum(['user', 'channel']),
+          id: z.string(),
+          displayName: z.string(),
+          source: z.enum(['global', 'feature']),
+        }),
+      ),
+    })
+    .optional(),
   /** Ordered per-command harness verification state during phaseStatus "verifying". */
   verificationItems: z.array(VerificationItemViewSchema).optional(),
   /** Aggregate run time across the feature's runs, for the queue readout. */
@@ -2806,6 +2825,24 @@ export const CreateFeatureInputSchema = z.strictObject({
   pipeline: z.enum(['medium', 'large', 'moonshot']).default('medium'),
   riskLevel: z.enum(['low', 'medium', 'high']).default('medium'),
   inquireness: z.enum(['none', 'medium', 'high']).default('medium'),
+  slackNotifications: z
+    .strictObject({
+      mode: z.enum(['', 'muted']).optional(),
+      progress: z.enum(['', 'on', 'off']).optional(),
+      needsInput: z.enum(['', 'on', 'off']).optional(),
+      problems: z.enum(['', 'on', 'off']).optional(),
+      recipients: z
+        .array(
+          z.strictObject({
+            typedText: z.string().min(1),
+            kind: z.enum(['user', 'channel']),
+            id: z.string().min(1),
+            displayName: z.string().min(1),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
   exitCriteria: z.string().max(4000).default(''),
   models: z.record(z.string().min(1).max(64), z.string().min(1).max(200)).default({}),
   effort: z.record(z.string().min(1).max(64), EffortLevelSchema).default({}),
@@ -2910,6 +2947,17 @@ export const CreationDefaultsSchema = z.strictObject({
     effort: z.array(z.strictObject({ phase: z.string(), effort: EffortLevelSchema })),
     /** Server default branch choice: false ⇒ new feature branch. */
     useCurrentBranch: z.boolean(),
+    slackConfigured: z.boolean().optional(),
+    slackDefaults: z
+      .strictObject({
+        categories: z.strictObject({
+          progress: z.boolean(),
+          needsInput: z.boolean(),
+          problems: z.boolean(),
+        }),
+        recipientNames: z.array(z.string()),
+      })
+      .optional(),
   }),
 });
 
@@ -3937,6 +3985,26 @@ export const FeatureConfigSchema = z.strictObject({
   pipeline: z.string().max(50),
   inputNotifications: InputNotificationsModeSchema,
   automaticReviewMode: AutomaticReviewModeSchema,
+  slackNotifications: z
+    .strictObject({
+      mode: z.enum(['', 'muted']).optional(),
+      progress: z.enum(['', 'on', 'off']).optional(),
+      needsInput: z.enum(['', 'on', 'off']).optional(),
+      problems: z.enum(['', 'on', 'off']).optional(),
+      recipients: z.array(z.lazy(() => SlackRecipientSchema)).optional(),
+    })
+    .optional(),
+  slackConfigured: z.boolean().optional(),
+  slackDefaults: z
+    .strictObject({
+      categories: z.strictObject({
+        progress: z.boolean(),
+        needsInput: z.boolean(),
+        problems: z.boolean(),
+      }),
+      recipientNames: z.array(z.string()),
+    })
+    .optional(),
 });
 export type FeatureConfig = z.output<typeof FeatureConfigSchema>;
 

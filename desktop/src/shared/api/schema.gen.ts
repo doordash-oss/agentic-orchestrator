@@ -1915,6 +1915,58 @@ export interface components {
             id: string;
             display_name: string;
         };
+        /** @description Stored per-feature values; empty strings inherit the workspace defaults. */
+        SlackNotifications: {
+            /** @enum {string} */
+            mode: "" | "inherit" | "muted";
+            recipients: components["schemas"]["SlackRecipient"][];
+            /** @enum {string} */
+            progress: "" | "inherit" | "on" | "off";
+            /** @enum {string} */
+            needs_input: "" | "inherit" | "on" | "off";
+            /** @enum {string} */
+            problems: "" | "inherit" | "on" | "off";
+        };
+        /** @description Omitted fields remain unchanged on update; an empty recipients list clears the additions. */
+        SlackNotificationsMutation: {
+            /** @enum {string} */
+            mode?: "" | "inherit" | "muted";
+            recipients?: components["schemas"]["SlackRecipient"][];
+            /** @enum {string} */
+            progress?: "" | "inherit" | "on" | "off";
+            /** @enum {string} */
+            needs_input?: "" | "inherit" | "on" | "off";
+            /** @enum {string} */
+            problems?: "" | "inherit" | "on" | "off";
+        };
+        SlackNotificationValue: {
+            enabled: boolean;
+            /** @enum {string} */
+            source: "global" | "feature";
+        };
+        SlackNotificationRecipient: {
+            typed_text: string;
+            /** @enum {string} */
+            kind: "user" | "channel";
+            id: string;
+            display_name: string;
+            /** @enum {string} */
+            source: "global" | "feature";
+        };
+        EffectiveSlackNotifications: {
+            configured: boolean;
+            muted: boolean;
+            /** @enum {string} */
+            mode_source: "global" | "feature";
+            recipients: components["schemas"]["SlackNotificationRecipient"][];
+            progress: components["schemas"]["SlackNotificationValue"];
+            needs_input: components["schemas"]["SlackNotificationValue"];
+            problems: components["schemas"]["SlackNotificationValue"];
+        };
+        SlackNotificationDefaults: {
+            categories: components["schemas"]["SlackCategories"];
+            recipient_names: string[];
+        };
         SlackStatus: {
             /** @enum {string} */
             state: "not_configured" | "connected" | "warning" | "credential_error";
@@ -2176,6 +2228,7 @@ export interface components {
             /** @enum {string} */
             pipeline?: "medium" | "large" | "moonshot";
             idempotency_key?: string;
+            slack_notifications?: components["schemas"]["SlackNotificationsMutation"];
         };
         StageUploadResponse: {
             api_version: string;
@@ -2548,6 +2601,8 @@ export interface components {
             pipeline?: string;
             checkpoints: unknown;
             automatic_review_enabled?: boolean;
+            slack_configured: boolean;
+            slack_defaults: components["schemas"]["SlackNotificationDefaults"];
         };
         NotificationConfig: {
             mute_feature_input: boolean;
@@ -2568,6 +2623,22 @@ export interface components {
             input_notifications?: "default" | "enabled" | "muted";
             /** @enum {string} */
             automatic_review_mode?: "default" | "enabled" | "disabled";
+            slack_notifications: components["schemas"]["SlackNotifications"];
+            slack_configured: boolean;
+            slack_defaults: components["schemas"]["SlackNotificationDefaults"];
+        };
+        FeatureConfigMutationBody: {
+            models?: components["schemas"]["ModelDefaults"];
+            effort?: components["schemas"]["EffortConfig"];
+            /** @enum {string} */
+            inquireness?: "none" | "medium" | "high";
+            checkpoints?: components["schemas"]["Checkpoints"];
+            pipeline?: string;
+            /** @enum {string} */
+            input_notifications?: "default" | "enabled" | "muted";
+            /** @enum {string} */
+            automatic_review_mode?: "default" | "enabled" | "disabled";
+            slack_notifications?: components["schemas"]["SlackNotificationsMutation"];
         };
         AutomaticReviewState: {
             /** @enum {string} */
@@ -2985,6 +3056,7 @@ export interface components {
             risk_level?: string;
             exit_criteria?: string;
             automatic_review: components["schemas"]["AutomaticReviewState"];
+            slack_notifications: components["schemas"]["EffectiveSlackNotifications"];
             active_run_detail?: components["schemas"]["RunSummary"];
             historical_runs: components["schemas"]["RunSummary"][];
             repo_status: components["schemas"]["RepoStatus"][];
@@ -3919,7 +3991,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeatureConfigMutationBody"];
+            };
+        };
         responses: {
             200: components["responses"]["ActionResponse"];
             401: components["responses"]["Unauthorized"];

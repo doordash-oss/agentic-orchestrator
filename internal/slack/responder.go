@@ -53,6 +53,7 @@ type responderPollState struct {
 	pauseUntil          time.Time
 	suspended           bool
 	credentialFailed    bool
+	removed             bool
 	generation          uint64
 }
 
@@ -126,12 +127,12 @@ func (n *Notifier) runResponder() {
 
 func (n *Notifier) responderTick() {
 	settings := n.settings.SlackSettings()
-	if !settings.Enabled || settings.Token == "" || !settings.Categories.NeedsInput {
+	if !settings.Enabled || settings.Token == "" {
 		return
 	}
 	n.drainDeferredResponderFeedback(settings.Token)
 
-	threads := n.responderThreads(settings)
+	threads := n.responderThreads(settings, false)
 	if len(threads) == 0 {
 		return
 	}
@@ -151,13 +152,19 @@ func (n *Notifier) responderTick() {
 		if err != nil {
 			continue
 		}
-		ready := settings
+		ready, effective := n.effectiveSettings(settings, owner)
+		if effective.Muted {
+			ready.Categories.NeedsInput = false
+		}
 		ready.Recipients = nil
 		n.recordMu.Lock()
-		for _, recipient := range settings.Recipients {
+		for _, recipient := range effective.Recipients {
 			key := destinationKey(string(recipient.Kind), recipient.ID)
-			if recipient.Kind != ports.SlackRecipientUser || record.Destinations[key].ChannelID != "" {
-				ready.Recipients = append(ready.Recipients, recipient)
+			if recipient.Kind != string(ports.SlackRecipientUser) || record.Destinations[key].ChannelID != "" {
+				ready.Recipients = append(ready.Recipients, ports.SlackRecipient{
+					TypedText: recipient.TypedText, Kind: ports.SlackRecipientKind(recipient.Kind),
+					ID: recipient.ID, DisplayName: recipient.DisplayName,
+				})
 			}
 		}
 		n.recordMu.Unlock()
@@ -185,7 +192,7 @@ func (n *Notifier) responderTick() {
 			n.dispatchDeliveryGroup(item, work)
 		}
 	}
-	threads = n.responderThreads(settings)
+	threads = n.responderThreads(settings, true)
 	threads = slices.DeleteFunc(threads, func(thread responderThread) bool {
 		return unavailable[thread.featureID]
 	})
@@ -201,12 +208,14 @@ func (n *Notifier) responderTick() {
 	var reactions []responderReactionCandidate
 	returned := make(map[string][]string, len(threads))
 	carriedUnjudged := make(map[string]string, len(threads))
+	resumed := make(map[string]bool)
 	for _, thread := range threads {
 		key := responderPollKey(thread.featureID, thread.destinationKey)
 		active[key] = true
 		n.responderPollMu.Lock()
 		state := n.responderPolls[key]
 		n.responderPollMu.Unlock()
+		resumed[key] = state.removed
 		if state.oldest != thread.oldest {
 			state.oldest = thread.oldest
 			state.cursor = ""
@@ -244,12 +253,21 @@ func (n *Notifier) responderTick() {
 				}
 			}
 			pageReplies, pageReactions := n.extractResponderCandidates(thread, page.Messages)
-			replies = append(replies, pageReplies...)
-			reactions = append(reactions, pageReactions...)
+			if state.removed {
+				for _, reaction := range pageReactions {
+					n.judgeResponderReaction(reaction)
+				}
+			} else {
+				replies = append(replies, pageReplies...)
+				reactions = append(reactions, pageReactions...)
+			}
 			state.cursor = page.NextCursor
 			if state.cursor == "" {
 				break
 			}
+		}
+		if state.removed && state.cursor == "" {
+			state.removed = false
 		}
 		n.storeResponderPollState(key, state)
 	}
@@ -303,6 +321,10 @@ func (n *Notifier) responderTick() {
 	for _, thread := range threads {
 		key := responderPollKey(thread.featureID, thread.destinationKey)
 		barrier := unjudged[key]
+		if resumed[key] {
+			n.advanceResponderReplyMark(thread, returned[key], "")
+			continue
+		}
 		if carried := carriedUnjudged[key]; carried != "" &&
 			(barrier == "" || compareSlackTimestamps(carried, barrier) < 0) {
 			barrier = carried
@@ -320,7 +342,7 @@ func (n *Notifier) responderTick() {
 	}
 	n.responderPollMu.Lock()
 	for key := range n.responderPolls {
-		if !active[key] {
+		if !active[key] && !n.responderPolls[key].removed {
 			delete(n.responderPolls, key)
 		}
 	}
@@ -440,14 +462,8 @@ func responderPollWorkItem(thread responderThread) workItem {
 	}
 }
 
-func (n *Notifier) responderThreads(settings ports.SlackRuntimeSettings) []responderThread {
+func (n *Notifier) responderThreads(settings ports.SlackRuntimeSettings, eligibleOnly bool) []responderThread {
 	n.recordMu.Lock()
-	defer n.recordMu.Unlock()
-
-	destinationOrders := make(map[string]int, len(settings.Recipients))
-	for index, recipient := range settings.Recipients {
-		destinationOrders[destinationKey(string(recipient.Kind), recipient.ID)] = index
-	}
 	var threads []responderThread
 	for featureID, record := range n.records {
 		active := false
@@ -485,15 +501,58 @@ func (n *Notifier) responderThreads(settings ports.SlackRuntimeSettings) []respo
 			}
 			if oldest != "" {
 				threads = append(threads, responderThread{
-					featureID:        featureID,
-					destinationKey:   key,
-					destinationOrder: destinationOrders[key],
-					channelID:        destination.ChannelID,
-					rootTS:           destination.RootTS,
-					oldest:           oldest,
+					featureID:      featureID,
+					destinationKey: key,
+					channelID:      destination.ChannelID,
+					rootTS:         destination.RootTS,
+					oldest:         oldest,
 				})
 			}
 		}
+	}
+	n.recordMu.Unlock()
+	if !eligibleOnly {
+		return threads
+	}
+
+	// A record retains removed destinations for later re-addition. Only the
+	// owner's live effective recipients may contribute readable threads.
+	orders := make(map[string]map[string]int)
+	effectiveKeys := make(map[string]map[string]bool)
+	threads = slices.DeleteFunc(threads, func(thread responderThread) bool {
+		byDestination, ok := orders[thread.featureID]
+		if !ok {
+			byDestination = make(map[string]int)
+			keys := make(map[string]bool)
+			owner, err := n.store.Load(thread.featureID)
+			if err != nil {
+				owner = nil
+			}
+			_, effective := n.effectiveSettings(settings, owner)
+			for index, recipient := range effective.Recipients {
+				key := destinationKey(recipient.Kind, recipient.ID)
+				keys[key] = true
+				if settings.Categories.NeedsInput || effective.NeedsInput.Enabled {
+					byDestination[key] = index + 1
+				}
+			}
+			orders[thread.featureID] = byDestination
+			effectiveKeys[thread.featureID] = keys
+		}
+		if !effectiveKeys[thread.featureID][thread.destinationKey] {
+			key := responderPollKey(thread.featureID, thread.destinationKey)
+			n.responderPollMu.Lock()
+			state := n.responderPolls[key]
+			state.removed = true
+			state.cursor = ""
+			state.oldestUnjudged = ""
+			n.responderPolls[key] = state
+			n.responderPollMu.Unlock()
+		}
+		return byDestination[thread.destinationKey] == 0
+	})
+	for i := range threads {
+		threads[i].destinationOrder = orders[threads[i].featureID][threads[i].destinationKey]
 	}
 	sort.Slice(threads, func(i, j int) bool {
 		if threads[i].featureID != threads[j].featureID {
@@ -1307,6 +1366,16 @@ func (n *Notifier) enqueueAcceptedResponderWrites(
 	if len(confirmationOverride) > 0 {
 		confirmation = scrub(token, confirmationOverride[0])
 	}
+	owner, err := n.store.Load(source.featureID)
+	if err != nil || owner == nil {
+		n.releaseResponderClaim(claimKey)
+		return
+	}
+	_, effective := n.effectiveSettings(n.settings.SlackSettings(), owner)
+	allowed := make(map[string]bool, len(effective.Recipients))
+	for _, recipient := range effective.Recipients {
+		allowed[destinationKey(recipient.Kind, recipient.ID)] = true
+	}
 	n.recordMu.Lock()
 	record := n.records[source.featureID]
 	if record == nil {
@@ -1314,7 +1383,7 @@ func (n *Notifier) enqueueAcceptedResponderWrites(
 		return
 	}
 	work := make([]workItem, 0, len(record.Destinations)+1)
-	if replyTS != "" {
+	if replyTS != "" && allowed[source.destinationKey] {
 		work = append(work, workItem{
 			featureID:       source.featureID,
 			sourceFeatureID: pending.SourceFeatureID,
@@ -1329,7 +1398,7 @@ func (n *Notifier) enqueueAcceptedResponderWrites(
 		})
 	}
 	for key, destination := range record.Destinations {
-		if destination.ChannelID == "" || destination.RootTS == "" {
+		if !allowed[key] || destination.ChannelID == "" || destination.RootTS == "" {
 			continue
 		}
 		work = append(work, workItem{

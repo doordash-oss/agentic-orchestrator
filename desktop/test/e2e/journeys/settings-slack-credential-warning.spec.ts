@@ -255,6 +255,11 @@ test('feature cockpit renders seeded Slack destination warnings without a Slack 
     await closeApp(handle);
     handle = null;
 
+    // Muting keeps durable failures visible without bootstrapping a new card.
+    fs.appendFileSync(
+      path.join(world.stateDir, featureId, 'feature.yaml'),
+      '\nslack_notifications:\n  mode: muted\n',
+    );
     fs.appendFileSync(
       world.configPath,
       [
@@ -321,6 +326,7 @@ test('feature cockpit renders seeded Slack destination warnings without a Slack 
 
     const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(cockpit).toBeVisible({ timeout: 60_000 });
+    expect(fakeSlack.requests()).toEqual([]);
     const archivedWarning = cockpit.locator('.error-surface', {
       hasText: 'slack_recipient_not_notified',
     });

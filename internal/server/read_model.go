@@ -208,6 +208,22 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		Enabled: autoReviewEnabled,
 		Source:  AutomaticReviewStateSource(autoReviewSource),
 	}
+	notificationOwner := f
+	if f.IsChild() {
+		notificationOwner = nil
+		if h.store != nil {
+			var err error
+			notificationOwner, err = h.store.Load(f.Parent.ParentID)
+			if err != nil {
+				return FeatureDetail{}, err
+			}
+		}
+	}
+	var slackSection *feature.SlackNotifications
+	if notificationOwner != nil {
+		slackSection = notificationOwner.SlackNotifications
+	}
+	detail.SlackNotifications = slackEffectiveDTO(feature.ResolveSlack(slackGlobalSettings(h.configOrDefault()), slackSection), slackConfigToken(h.configOrDefault()))
 	detail.ActiveRunDetail = &active
 	detail.HistoricalRuns = history
 	detail.RepoStatus = h.repoStatusDTOs(f)
@@ -1236,7 +1252,7 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 		APIVersion:      APIVersion,
 		Runtime:         h.runtime,
 		Defaults:        cfg.Defaults.Models,
-		FeatureDefaults: featureDefaultsDTO(cfg.Defaults),
+		FeatureDefaults: featureDefaultsDTO(cfg),
 		Repos:           repos,
 		WorkspaceRoots:  append([]string(nil), cfg.WorkspaceRoots...),
 		Notifications: NotificationConfig{
@@ -1356,7 +1372,10 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 		Pipeline:           cfg.Defaults.Pipeline,
 		InputNotifications: FeatureConfigInputNotifications(feature.InputNotificationsModeForMuted(cfg.Notifications.MuteFeatureInput)),
 	}
-	current := featureConfigDTO(f)
+	current := featureConfigDTO(f, cfg)
+	defaults.SlackConfigured = slackConfigured(cfg)
+	defaults.SlackDefaults = slackNotificationDefaults(cfg)
+	defaults.SlackNotifications = slackNotificationsDTO(nil, slackConfigToken(cfg))
 	resp := FeatureConfigResponse{
 		APIVersion: APIVersion,
 		FeatureID:  f.ID,
@@ -1594,7 +1613,8 @@ func copyConfigPipelineGates(in map[string]config.Checkpoints) map[string]config
 	return out
 }
 
-func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaults {
+func featureDefaultsDTO(cfg *config.Config) FeatureDefaults {
+	defaults := cfg.Defaults
 	var prefs map[string]config.PipelinePreference
 	if len(defaults.PipelinePreferences) > 0 {
 		prefs = make(map[string]config.PipelinePreference, len(defaults.PipelinePreferences))
@@ -1610,6 +1630,8 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaults {
 		Pipeline:               defaults.Pipeline,
 		Checkpoints:            defaults.Checkpoints,
 		AutomaticReviewEnabled: defaults.AutomaticReviewEnabled,
+		SlackConfigured:        slackConfigured(cfg),
+		SlackDefaults:          slackNotificationDefaults(cfg),
 	}
 }
 
@@ -2167,7 +2189,7 @@ func beforeByKnownTime(a, b time.Time) bool {
 	return a.Before(b)
 }
 
-func featureConfigDTO(f *feature.Feature) FeatureConfig {
+func featureConfigDTO(f *feature.Feature, cfg *config.Config) FeatureConfig {
 	pipeline := f.Pipeline
 	return FeatureConfig{
 		Models:              f.Models,
@@ -2177,6 +2199,9 @@ func featureConfigDTO(f *feature.Feature) FeatureConfig {
 		Pipeline:            string(pipeline),
 		InputNotifications:  FeatureConfigInputNotifications(feature.NormalizeInputNotificationsMode(f.InputNotifications)),
 		AutomaticReviewMode: FeatureConfigAutomaticReviewMode(feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)),
+		SlackNotifications:  slackNotificationsDTO(f.SlackNotifications, slackConfigToken(cfg)),
+		SlackConfigured:     slackConfigured(cfg),
+		SlackDefaults:       slackNotificationDefaults(cfg),
 	}
 }
 

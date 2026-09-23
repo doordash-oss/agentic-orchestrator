@@ -102,7 +102,11 @@ paths:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FeatureConfigMutationBody"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -3792,6 +3796,109 @@ components:
           type: string
         display_name:
           type: string
+    SlackNotifications:
+      type: object
+      additionalProperties: false
+      required: [mode, recipients, progress, needs_input, problems]
+      description: Stored per-feature values; empty strings inherit the workspace defaults.
+      properties:
+        mode:
+          type: string
+          enum: ["", inherit, muted]
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
+        progress:
+          type: string
+          enum: ["", inherit, "on", "off"]
+        needs_input:
+          type: string
+          enum: ["", inherit, "on", "off"]
+        problems:
+          type: string
+          enum: ["", inherit, "on", "off"]
+    SlackNotificationsMutation:
+      type: object
+      additionalProperties: false
+      description: Omitted fields remain unchanged on update; an empty recipients list clears the additions.
+      properties:
+        mode:
+          type: string
+          enum: ["", inherit, muted]
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
+        progress:
+          type: string
+          enum: ["", inherit, "on", "off"]
+        needs_input:
+          type: string
+          enum: ["", inherit, "on", "off"]
+        problems:
+          type: string
+          enum: ["", inherit, "on", "off"]
+    SlackNotificationValue:
+      type: object
+      additionalProperties: false
+      required: [enabled, source]
+      properties:
+        enabled:
+          type: boolean
+        source:
+          type: string
+          enum: [global, feature]
+    SlackNotificationRecipient:
+      type: object
+      additionalProperties: false
+      required: [typed_text, kind, id, display_name, source]
+      properties:
+        typed_text:
+          type: string
+        kind:
+          type: string
+          enum: [user, channel]
+        id:
+          type: string
+        display_name:
+          type: string
+        source:
+          type: string
+          enum: [global, feature]
+    EffectiveSlackNotifications:
+      type: object
+      additionalProperties: false
+      required: [configured, muted, mode_source, recipients, progress, needs_input, problems]
+      properties:
+        configured:
+          type: boolean
+        muted:
+          type: boolean
+        mode_source:
+          type: string
+          enum: [global, feature]
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackNotificationRecipient"
+        progress:
+          $ref: "#/components/schemas/SlackNotificationValue"
+        needs_input:
+          $ref: "#/components/schemas/SlackNotificationValue"
+        problems:
+          $ref: "#/components/schemas/SlackNotificationValue"
+    SlackNotificationDefaults:
+      type: object
+      additionalProperties: false
+      required: [categories, recipient_names]
+      properties:
+        categories:
+          $ref: "#/components/schemas/SlackCategories"
+        recipient_names:
+          type: array
+          items:
+            type: string
     SlackStatus:
       type: object
       additionalProperties: false
@@ -4470,6 +4577,8 @@ components:
           type: string
           enum: [medium, large, moonshot]
         idempotency_key: { type: string, maxLength: 128 }
+        slack_notifications:
+          $ref: "#/components/schemas/SlackNotificationsMutation"
     StageUploadResponse:
       type: object
       additionalProperties: false
@@ -5368,7 +5477,7 @@ components:
               name: config
     FeatureDefaults:
       type: object
-      required: [models, checkpoints]
+      required: [models, checkpoints, slack_configured, slack_defaults]
       properties:
         models:
           $ref: "#/components/schemas/ModelDefaults"
@@ -5392,6 +5501,10 @@ components:
             name: config
         automatic_review_enabled:
           type: boolean
+        slack_configured:
+          type: boolean
+        slack_defaults:
+          $ref: "#/components/schemas/SlackNotificationDefaults"
     NotificationConfig:
       type: object
       required: [mute_feature_input]
@@ -5412,7 +5525,7 @@ components:
           x-go-name: OTelServiceName
     FeatureConfig:
       type: object
-      required: [models, inquireness, checkpoints]
+      required: [models, inquireness, checkpoints, slack_notifications, slack_configured, slack_defaults]
       properties:
         models:
           $ref: "#/components/schemas/ModelDefaults"
@@ -5431,6 +5544,35 @@ components:
         automatic_review_mode:
           type: string
           enum: [default, enabled, disabled]
+        slack_notifications:
+          $ref: "#/components/schemas/SlackNotifications"
+        slack_configured:
+          type: boolean
+        slack_defaults:
+          $ref: "#/components/schemas/SlackNotificationDefaults"
+    FeatureConfigMutationBody:
+      type: object
+      additionalProperties: false
+      properties:
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        effort:
+          $ref: "#/components/schemas/EffortConfig"
+        inquireness:
+          type: string
+          enum: [none, medium, high]
+        checkpoints:
+          $ref: "#/components/schemas/Checkpoints"
+        pipeline:
+          type: string
+        input_notifications:
+          type: string
+          enum: [default, enabled, muted]
+        automatic_review_mode:
+          type: string
+          enum: [default, enabled, disabled]
+        slack_notifications:
+          $ref: "#/components/schemas/SlackNotificationsMutation"
     AutomaticReviewState:
       type: object
       required: [mode, enabled, source]
@@ -6375,6 +6517,7 @@ components:
           required:
             - models
             - automatic_review
+            - slack_notifications
             - historical_runs
             - repo_status
             - timing
@@ -6421,6 +6564,8 @@ components:
               type: string
             automatic_review:
               $ref: "#/components/schemas/AutomaticReviewState"
+            slack_notifications:
+              $ref: "#/components/schemas/EffectiveSlackNotifications"
             active_run_detail:
               $ref: "#/components/schemas/RunSummary"
               x-go-type-skip-optional-pointer: false

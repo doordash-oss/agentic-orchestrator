@@ -178,24 +178,25 @@ func (e *ActionConflictError) Unwrap() error {
 }
 
 type CreateFeatureRequest struct {
-	Name                    string                  `json:"name"`
-	Description             string                  `json:"description,omitempty"`
-	Repos                   []string                `json:"repos,omitempty"`
-	Models                  config.ModelConfig      `json:"models,omitempty"`
-	Effort                  config.EffortConfig     `json:"effort,omitempty"`
-	ExitCriteria            string                  `json:"exit_criteria,omitempty"`
-	Inquireness             string                  `json:"inquireness,omitempty"`
-	Images                  []string                `json:"images,omitempty"`
-	ImageUploads            []string                `json:"image_uploads,omitempty"`
-	UseCurrentBranch        bool                    `json:"use_current_branch,omitempty"`
-	UseCurrentBranchPerRepo map[string]bool         `json:"use_current_branch_per_repo,omitempty"`
-	RepositorySources       []RepositorySource      `json:"repository_sources,omitempty"`
-	Checkpoints             feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Attachments             []string                `json:"attachments,omitempty"`
-	AttachmentUploads       []string                `json:"attachment_uploads,omitempty"`
-	RiskLevel               feature.RiskLevel       `json:"risk_level,omitempty"`
-	Pipeline                feature.PipelineProfile `json:"pipeline,omitempty"`
-	IdempotencyKey          string                  `json:"idempotency_key,omitempty"`
+	Name                    string                   `json:"name"`
+	Description             string                   `json:"description,omitempty"`
+	Repos                   []string                 `json:"repos,omitempty"`
+	Models                  config.ModelConfig       `json:"models,omitempty"`
+	Effort                  config.EffortConfig      `json:"effort,omitempty"`
+	ExitCriteria            string                   `json:"exit_criteria,omitempty"`
+	Inquireness             string                   `json:"inquireness,omitempty"`
+	Images                  []string                 `json:"images,omitempty"`
+	ImageUploads            []string                 `json:"image_uploads,omitempty"`
+	UseCurrentBranch        bool                     `json:"use_current_branch,omitempty"`
+	UseCurrentBranchPerRepo map[string]bool          `json:"use_current_branch_per_repo,omitempty"`
+	RepositorySources       []RepositorySource       `json:"repository_sources,omitempty"`
+	Checkpoints             feature.Checkpoints      `json:"checkpoints,omitempty"`
+	Attachments             []string                 `json:"attachments,omitempty"`
+	AttachmentUploads       []string                 `json:"attachment_uploads,omitempty"`
+	RiskLevel               feature.RiskLevel        `json:"risk_level,omitempty"`
+	Pipeline                feature.PipelineProfile  `json:"pipeline,omitempty"`
+	IdempotencyKey          string                   `json:"idempotency_key,omitempty"`
+	SlackNotifications      *SlackNotificationsPatch `json:"slack_notifications,omitempty"`
 }
 
 type RestartFeatureRequest struct {
@@ -214,13 +215,14 @@ type ReviewDecisionRequest struct {
 }
 
 type FeatureConfigMutationRequest struct {
-	Models              config.ModelConfig      `json:"models,omitempty"`
-	Effort              config.EffortConfig     `json:"effort,omitempty"`
-	Inquireness         string                  `json:"inquireness,omitempty"`
-	Checkpoints         feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Pipeline            feature.PipelineProfile `json:"pipeline,omitempty"`
-	InputNotifications  string                  `json:"input_notifications,omitempty"`
-	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`
+	Models              config.ModelConfig       `json:"models,omitempty"`
+	Effort              config.EffortConfig      `json:"effort,omitempty"`
+	Inquireness         string                   `json:"inquireness,omitempty"`
+	Checkpoints         feature.Checkpoints      `json:"checkpoints,omitempty"`
+	Pipeline            feature.PipelineProfile  `json:"pipeline,omitempty"`
+	InputNotifications  string                   `json:"input_notifications,omitempty"`
+	AutomaticReviewMode *string                  `json:"automatic_review_mode,omitempty"`
+	SlackNotifications  *SlackNotificationsPatch `json:"slack_notifications,omitempty"`
 }
 
 type NeedUserInputResumeRequest struct{}
@@ -849,6 +851,9 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) {
 		return
 	}
+	if !validateSlackNotifications(w, req.SlackNotifications) {
+		return
+	}
 	if !h.validateRequestedModels(w, req.Models) {
 		return
 	}
@@ -986,6 +991,9 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		return true
 	}
 	if !validateAutomaticReviewMode(w, req.AutomaticReviewMode) {
+		return true
+	}
+	if !validateSlackNotifications(w, req.SlackNotifications) {
 		return true
 	}
 	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
@@ -1311,6 +1319,10 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 }
 
 func validateSlackRecipients(w http.ResponseWriter, recipients []SlackRecipient) bool {
+	return validateSlackRecipientsAtPath(w, recipients, "slack.default_recipients")
+}
+
+func validateSlackRecipientsAtPath(w http.ResponseWriter, recipients []SlackRecipient, path string) bool {
 	seen := make(map[string]int, len(recipients))
 	for index, recipient := range recipients {
 		field := ""
@@ -1327,7 +1339,7 @@ func validateSlackRecipients(w http.ResponseWriter, recipients []SlackRecipient)
 		if field != "" {
 			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
 				errcat.WithDiagnostics(fmt.Sprintf(
-					"slack.default_recipients[%d].%s is invalid", index, field,
+					"%s[%d].%s is invalid", path, index, field,
 				)))
 			return false
 		}
@@ -1335,7 +1347,7 @@ func validateSlackRecipients(w http.ResponseWriter, recipients []SlackRecipient)
 		if previous, ok := seen[key]; ok {
 			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
 				errcat.WithDiagnostics(fmt.Sprintf(
-					"slack.default_recipients[%d] duplicates entry %d", index, previous,
+					"%s[%d] duplicates entry %d", path, index, previous,
 				)))
 			return false
 		}
@@ -2017,6 +2029,10 @@ func classifyDecodeError(err error) (status int, code errcat.Code, diagnostics s
 	diagnostics = "invalid JSON request"
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		diagnostics = "truncated JSON request"
+	}
+	var slackErr *slackNotificationsDecodeError
+	if errors.As(err, &slackErr) {
+		diagnostics = slackErr.Error()
 	}
 	var typeErr *json.UnmarshalTypeError
 	if errors.As(err, &typeErr) && typeErr.Field == "source" {

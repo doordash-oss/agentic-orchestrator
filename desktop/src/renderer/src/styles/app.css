@@ -13338,7 +13338,7 @@ body {
 }
 
 /* --- Structured configuration editor --------------------------------------- */
-/* Three quiet groups (Models / Behavior / Gates). Each model phase is one
+/* Grouped configuration controls. Each model phase is one
  * compact instrument: model selection above a capability-aware effort trim. */
 
 .config-editor {
@@ -13590,6 +13590,54 @@ body {
 .config-editor__gate-text span {
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+.config-editor__recipients {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px solid var(--hairline);
+  padding: var(--space-3) var(--space-1) 0;
+}
+
+.config-editor__recipients-head,
+.config-editor__recipient {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.config-editor__recipients-head b {
+  font-size: 0.9rem;
+}
+
+.config-editor__recipient-field {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.config-editor__recipient-field input {
+  flex: 1 1 190px;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--content);
+  color: var(--text);
+  font: inherit;
+}
+
+.config-editor__recipient-field input:focus-visible {
+  outline: 2px solid var(--attention);
+  outline-offset: 1px;
 }
 
 .config-editor__footer {

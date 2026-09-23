@@ -1652,6 +1652,20 @@ function makeMockApi(
   listeners: Set<(event: AppEvent) => void>,
   sessionOutputListeners: Set<(event: SessionOutputEvent) => void>,
 ): AgenticoApi {
+  const creationSlackReadiness = scene.startsWith('creation-sheet-slack')
+    ? {
+        ...READY_SNAPSHOT,
+        repositories: READY_SNAPSHOT.repositories.map((repository) => ({
+          ...repository,
+          identity: {
+            path: repository.path,
+            commonDir: `${repository.path}/.git`,
+            device: '1',
+            inode: repository.name === 'signal-lab' ? '1' : '2',
+          },
+        })),
+      }
+    : READY_SNAPSHOT;
   const requestedTheme = requestedCaptureTheme();
   let theme: ThemeInfo = { preference: requestedTheme, resolved: requestedTheme };
   const appEventListeners = listeners;
@@ -1741,7 +1755,7 @@ function makeMockApi(
     },
     getRuntimeReadiness: () => Promise.resolve(READY_SNAPSHOT),
     refreshRuntimeReadiness: () => Promise.resolve(READY_SNAPSHOT),
-    getReadiness: () => Promise.resolve(READY_SNAPSHOT),
+    getReadiness: () => Promise.resolve(creationSlackReadiness),
     refreshReadiness: () => Promise.resolve(READY_SNAPSHOT),
     pickWorkspaceDirectory: () => Promise.resolve({ path: null } as PickedDirectory),
     addWorkspaceRoot: () => Promise.resolve(READY_SNAPSHOT),
@@ -2076,7 +2090,7 @@ function makeMockApi(
     },
     getCreationDefaults: () =>
       Promise.resolve({
-        repositories: READY_SNAPSHOT.repositories!.map((r) => ({ ...r, valid: true })),
+        repositories: creationSlackReadiness.repositories.map((r) => ({ ...r, valid: true })),
         workspaceRoots: READY_SNAPSHOT.workspaceRoots ?? [],
         defaults: {
           pipeline: 'large',
@@ -2084,6 +2098,15 @@ function makeMockApi(
           models: [],
           effort: [],
           useCurrentBranch: false,
+          ...(scene.startsWith('creation-sheet-slack')
+            ? {
+                slackConfigured: scene !== 'creation-sheet-slack-off',
+                slackDefaults: {
+                  categories: { progress: true, needsInput: false, problems: true },
+                  recipientNames: ['Ada Lovelace', '#workspace-updates'],
+                },
+              }
+            : {}),
         },
       } as CreationDefaults),
     inspectRepositorySources: (request) =>
@@ -2768,6 +2791,25 @@ index 5c32b6a..8a9b3c1 100644
         suggestedRecipient: null,
       }),
     resolveSlackRecipient: (request) => {
+      if (scene === 'creation-sheet-slack') {
+        if (request.input === '#eng') {
+          return Promise.resolve({
+            typedText: '#eng',
+            kind: 'channel' as const,
+            id: 'C-ENGINEERING',
+            displayName: '#eng',
+          });
+        }
+        return Promise.reject(
+          canonicalRejection({
+            code: 'slack_not_in_channel',
+            class: 'warning',
+            title: 'Agentico is not in this channel',
+            summary: 'Agentico cannot send to #private-ops.',
+            remediation: { hint: 'Invite Agentico to #private-ops in Slack, then try again.' },
+          }),
+        );
+      }
       if (scene === 'settings-slack-recipients' && request.input === '#private-ops') {
         return Promise.reject(
           canonicalRejection({

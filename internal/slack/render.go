@@ -52,6 +52,10 @@ func renderRootCard(
 	if len(waiting) > 0 && waiting[0] != "" {
 		fields = append(fields, labeledField("Waiting on you", waiting[0]))
 	}
+	paused := f.SlackNotifications != nil && f.SlackNotifications.Mode == feature.SlackMuted
+	if paused {
+		fields = append(fields, labeledField("Updates", "Paused because this feature was muted in Agentico."))
+	}
 	blocks := []Block{
 		headerBlockFor(name),
 		sectionBlockFor(fields),
@@ -65,6 +69,9 @@ func renderRootCard(
 	), fallbackTextLimit)
 	if len(waiting) > 0 && waiting[0] != "" {
 		fallback = safePlain(fallback+" — Waiting on you: "+waiting[0], fallbackTextLimit)
+	}
+	if paused {
+		fallback = safePlain(fallback+" — Updates are paused because this feature was muted in Agentico.", fallbackTextLimit)
 	}
 	return blocks, fallback
 }

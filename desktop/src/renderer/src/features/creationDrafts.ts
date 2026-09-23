@@ -34,6 +34,7 @@ import type {
   CreationDefaults,
   RepositoryFileRef,
   RepositoryIdentity,
+  SlackRecipient,
   WorkspaceRootState,
 } from '../../../shared/ipc';
 import type { ComposerUploadItem } from './stagedItems';
@@ -42,6 +43,16 @@ import type { RepoSelection } from './repoSelections';
 import type { SourceUpdateUncertainty } from './sourceUpdates';
 import type { EffortLevel } from '../../../shared/ipc';
 import type { PhaseKey } from './ConfigEditor';
+
+export type SlackOverride = '' | 'on' | 'off';
+
+export interface CreationSlackRecipientRow {
+  key: number;
+  input: string;
+  resolved: SlackRecipient | null;
+  status: 'idle' | 'resolving' | 'resolved' | 'error';
+  error: string | null;
+}
 
 /** A creation sheet's whole user-owned state, captureable and rehydratable. */
 export interface CreationDraftState {
@@ -69,6 +80,9 @@ export interface CreationDraftState {
   riskLevel: 'low' | 'medium' | 'high';
   inquireness: 'none' | 'medium' | 'high';
   exitCriteria: string;
+  slackMuted: boolean;
+  slackOverrides: { progress: SlackOverride; needsInput: SlackOverride; problems: SlackOverride };
+  slackRecipients: readonly CreationSlackRecipientRow[];
   images: readonly string[];
   attachments: readonly string[];
   imageUploads: readonly ComposerUploadItem[];
@@ -193,6 +207,9 @@ export function retainableDraft(state: CreationDraftState): CreationDraftState {
     restored: true,
     imageUploads: interrupt(state.imageUploads),
     attachmentUploads: interrupt(state.attachmentUploads),
+    slackRecipients: state.slackRecipients.map((row) =>
+      row.status === 'resolving' ? { ...row, status: 'idle', resolved: null } : row,
+    ),
     cloneAssociation:
       state.cloneAssociation === null ? null : { ...state.cloneAssociation, startInFlight: false },
     // An in-flight creation is dead once its sheet unmounts (the response
@@ -235,6 +252,9 @@ export function freshCreationDraft(): CreationDraftState {
     riskLevel: 'medium',
     inquireness: 'medium',
     exitCriteria: '',
+    slackMuted: false,
+    slackOverrides: { progress: '', needsInput: '', problems: '' },
+    slackRecipients: [{ key: 1, input: '', resolved: null, status: 'idle', error: null }],
     images: [],
     attachments: [],
     imageUploads: [],

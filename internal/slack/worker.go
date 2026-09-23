@@ -64,6 +64,7 @@ type workItem struct {
 	channelID                  string
 	needsCard                  bool
 	refresh                    bool
+	pauseCard                  bool
 	responder                  bool
 	closureReserved            bool
 	responderFeedback          bool
@@ -103,6 +104,7 @@ type dirtyEntry struct {
 	featureID string
 	markedAt  time.Time
 	firstAt   time.Time
+	pauseCard bool
 }
 
 // destinationWorker serializes every write to one Slack channel ID so
@@ -174,17 +176,18 @@ func (w *destinationWorker) peek() (workItem, bool) {
 	return w.inbox[0], true
 }
 
-func (w *destinationWorker) markDirty(featureID string) {
+func (w *destinationWorker) markDirty(featureID string, pauseCard bool) {
 	now := w.notifier.clock.Now()
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for i := range w.dirty {
 		if w.dirty[i].featureID == featureID {
 			w.dirty[i].markedAt = now
+			w.dirty[i].pauseCard = w.dirty[i].pauseCard || pauseCard
 			return
 		}
 	}
-	w.dirty = append(w.dirty, dirtyEntry{featureID: featureID, markedAt: now, firstAt: now})
+	w.dirty = append(w.dirty, dirtyEntry{featureID: featureID, markedAt: now, firstAt: now, pauseCard: pauseCard})
 }
 
 func (w *destinationWorker) run() {
@@ -200,11 +203,11 @@ func (w *destinationWorker) run() {
 			w.handle(item)
 			continue
 		}
-		if featureID, waitUntil, ok := w.takeDueRefresh(); ok {
+		if entry, waitUntil, ok := w.takeDueRefresh(); ok {
 			if !w.waitUntil(waitUntil) {
 				return
 			}
-			w.flushOne(featureID)
+			w.flushCard(entry.featureID, entry.pauseCard)
 			continue
 		}
 		item, ok := w.next()
@@ -301,7 +304,9 @@ func (w *destinationWorker) handle(item workItem) {
 		if _, _, ok := w.currentDelivery(item, itemKind(-1)); !ok {
 			return
 		}
-		w.markDirty(item.featureID)
+		if item.pauseCard || !w.notifier.featureMuted(item.featureID) {
+			w.markDirty(item.featureID, item.pauseCard)
+		}
 	}
 }
 
@@ -389,7 +394,7 @@ func (w *destinationWorker) ensureCard(item workItem) error {
 		credential := deliveryCredential{
 			token: settings.Token, generation: settings.CredentialGeneration,
 		}
-		if !ok {
+		if !ok || w.notifier.featureMuted(item.featureID) {
 			return PostMessageResult{}, credential, errDeliveryIneligible
 		}
 		client, err := notifier.newClient(settings.Token)
@@ -861,11 +866,11 @@ func (w *destinationWorker) recordReviewUpload(item workItem, result UploadFileR
 // takeDueRefresh reserves the next write slot for a dirty card once its
 // trailing edge or maximum staleness is due. Replies remain ordered, while a
 // sustained reply backlog cannot starve card edits.
-func (w *destinationWorker) takeDueRefresh() (string, time.Time, bool) {
+func (w *destinationWorker) takeDueRefresh() (dirtyEntry, time.Time, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if len(w.dirty) == 0 {
-		return "", time.Time{}, false
+		return dirtyEntry{}, time.Time{}, false
 	}
 	entry := w.dirty[0]
 	due := earliestTime(
@@ -874,23 +879,38 @@ func (w *destinationWorker) takeDueRefresh() (string, time.Time, bool) {
 	)
 	nextWrite := latestTime(w.notifier.clock.Now(), w.lastWrite.Add(writePaceInterval))
 	if len(w.inbox) > 0 && due.After(nextWrite) {
-		return "", time.Time{}, false
+		return dirtyEntry{}, time.Time{}, false
 	}
 	due = latestTime(due, latestTime(w.lastWrite, w.lastUpdate).Add(updatePaceInterval))
 	w.dirty = w.dirty[1:]
-	return entry.featureID, due, true
+	return entry, due, true
 }
 
 // flushOne renders one dirty feature's card from the freshest record state
 // and edits the card in place.
 func (w *destinationWorker) flushOne(featureID string) {
+	w.flushCard(featureID, false)
+}
+
+// flushMutedCard is the single transition edit when a feature becomes muted.
+// Ordinary dirty-card flushes remain ineligible until it is unmuted.
+func (w *destinationWorker) flushMutedCard(featureID string) {
+	w.flushCard(featureID, true)
+}
+
+func (w *destinationWorker) flushCard(featureID string, allowMuted bool) {
 	notifier := w.notifier
 	settings := notifier.settings.SlackSettings()
-	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 {
+	if !settings.Enabled || settings.Token == "" {
 		return
 	}
-	if current, err := notifier.store.Load(featureID); err != nil || current == nil {
+	current, err := notifier.store.Load(featureID)
+	if err != nil || current == nil {
 		log.Printf("slack-notifier: dropping card refresh for feature %s: feature cannot be loaded", featureID)
+		return
+	}
+	settings, effective := notifier.effectiveSettings(settings, current)
+	if len(settings.Recipients) == 0 || (effective.Muted && !allowMuted) {
 		return
 	}
 	record, err := notifier.recordFor(featureID)
@@ -919,13 +939,17 @@ func (w *destinationWorker) flushOne(featureID string) {
 		if err != nil {
 			return struct{}{}, credential, err
 		}
+		current, err := notifier.store.Load(featureID)
+		if err != nil || current == nil {
+			return struct{}{}, credential, errDeliveryIneligible
+		}
+		currentSettings, currentEffective := notifier.effectiveSettings(currentSettings, current)
+		if currentEffective.Muted && !allowMuted {
+			return struct{}{}, credential, errDeliveryIneligible
+		}
 		_, currentRootTS, currentKind, currentChannelID, ok :=
 			w.destinationFor(currentSettings, currentRecord)
 		if !ok || currentRootTS == "" {
-			return struct{}{}, credential, errDeliveryIneligible
-		}
-		current, err := notifier.store.Load(featureID)
-		if err != nil || current == nil {
 			return struct{}{}, credential, errDeliveryIneligible
 		}
 		client, err := notifier.newClient(currentSettings.Token)
@@ -989,13 +1013,22 @@ func (w *destinationWorker) currentDelivery(
 	if !settings.Enabled || settings.Token == "" {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
+	owner, err := w.notifier.store.Load(item.featureID)
+	if err != nil || owner == nil {
+		return ports.SlackRuntimeSettings{}, nil, false
+	}
+	settings, effective := w.notifier.effectiveSettings(settings, owner)
+	continuation := item.reply.closure || item.responder || item.responderFeedback || item.pauseCard
+	if effective.Muted && !continuation {
+		return ports.SlackRuntimeSettings{}, nil, false
+	}
 	if category == kindProgress && !settings.Categories.Progress {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	if category == kindProblems && !settings.Categories.Problems {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
-	if category == kindNeedsInput && !item.reply.closure && !settings.Categories.NeedsInput {
+	if category == kindNeedsInput && !continuation && !settings.Categories.NeedsInput {
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	found := false
@@ -1018,6 +1051,12 @@ func (w *destinationWorker) currentDelivery(
 		return ports.SlackRuntimeSettings{}, nil, false
 	}
 	return settings, current, true
+}
+
+func (n *Notifier) featureMuted(featureID string) bool {
+	owner, err := n.store.Load(featureID)
+	return err == nil && owner != nil && owner.SlackNotifications != nil &&
+		owner.SlackNotifications.Mode == feature.SlackMuted
 }
 
 type relationshipChildLoader interface {

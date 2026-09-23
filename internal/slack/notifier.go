@@ -124,17 +124,19 @@ type Notifier struct {
 	responderClock Clock
 	jitter         func() float64
 
-	serverNameMu sync.RWMutex
-	serverName   string
-	readyOnce    sync.Once
-	startupDone  atomic.Bool
-	startupReady chan struct{}
-	startupWG    sync.WaitGroup
-	sweepMu      sync.Mutex
-	sweepKey     string
-	sweepRunning atomic.Bool
-	openingMu    sync.Mutex
-	openingTail  map[string]chan struct{}
+	serverNameMu         sync.RWMutex
+	serverName           string
+	readyOnce            sync.Once
+	startupDone          atomic.Bool
+	startupReady         chan struct{}
+	startupWG            sync.WaitGroup
+	sweepMu              sync.Mutex
+	sweepKey             string
+	sweepFeatureRevision uint64
+	sweepStates          map[string]feature.EffectiveSlack
+	sweepRunning         atomic.Bool
+	openingMu            sync.Mutex
+	openingTail          map[string]chan struct{}
 
 	stopped  atomic.Bool
 	stopOnce sync.Once
@@ -235,6 +237,7 @@ func NewNotifier(opts NotifierOptions) *Notifier {
 		pendingDeliveries:    map[string]struct{}{},
 		closureDeliveries:    map[string]struct{}{},
 		openingTail:          map[string]chan struct{}{},
+		sweepStates:          map[string]feature.EffectiveSlack{},
 		responderPolls:       map[string]responderPollState{},
 		responderNames:       map[string]string{},
 		responderThreadLocks: map[string]*sync.RWMutex{},
@@ -304,6 +307,10 @@ func (n *Notifier) SignalReady() {
 				if n.sweepKey == startupKey {
 					n.sweepKey = ""
 				}
+				n.sweepMu.Unlock()
+			} else {
+				n.sweepMu.Lock()
+				n.captureSweepStates(n.settings.SlackSettings())
 				n.sweepMu.Unlock()
 			}
 			n.startupDone.Store(true)
@@ -425,10 +432,21 @@ func (n *Notifier) clearRecheck(featureID string) {
 // SlackWarnings returns the current destination failures for configured recipients.
 func (n *Notifier) SlackWarnings(featureID string) []errcat.Error {
 	settings := n.settings.SlackSettings()
+	owner, err := n.store.Load(featureID)
+	if err != nil || owner == nil {
+		return nil
+	}
+	if owner.IsChild() {
+		owner, err = n.store.Load(owner.Parent.ParentID)
+		if err != nil || owner == nil {
+			return nil
+		}
+	}
+	settings, _ = n.effectiveSettings(settings, owner)
 	if len(settings.Recipients) == 0 {
 		return nil
 	}
-	record, err := n.recordFor(featureID)
+	record, err := n.recordFor(owner.ID)
 	if err != nil {
 		return nil
 	}
@@ -467,6 +485,44 @@ func (n *Notifier) SlackWarnings(featureID string) []errcat.Error {
 		))
 	}
 	return warnings
+}
+
+// effectiveSettings merges live workspace defaults with the notification
+// owner's section. The returned effective answer never contains the token;
+// only the local runtime settings passed to delivery carry credentials.
+func (n *Notifier) effectiveSettings(
+	settings ports.SlackRuntimeSettings, owner *feature.Feature,
+) (ports.SlackRuntimeSettings, feature.EffectiveSlack) {
+	global := feature.SlackGlobalSettings{
+		Enabled: settings.Enabled, HasToken: settings.Token != "",
+		Progress:   settings.Categories.Progress,
+		NeedsInput: settings.Categories.NeedsInput,
+		Problems:   settings.Categories.Problems,
+	}
+	for _, recipient := range settings.Recipients {
+		global.Recipients = append(global.Recipients, feature.SlackRecipient{
+			TypedText: recipient.TypedText, Kind: string(recipient.Kind),
+			ID: recipient.ID, DisplayName: recipient.DisplayName,
+		})
+	}
+	var section *feature.SlackNotifications
+	if owner != nil {
+		section = owner.SlackNotifications
+	}
+	effective := feature.ResolveSlack(global, section)
+	settings.Recipients = make([]ports.SlackRecipient, 0, len(effective.Recipients))
+	for _, recipient := range effective.Recipients {
+		settings.Recipients = append(settings.Recipients, ports.SlackRecipient{
+			TypedText: recipient.TypedText, Kind: ports.SlackRecipientKind(recipient.Kind),
+			ID: recipient.ID, DisplayName: recipient.DisplayName,
+		})
+	}
+	settings.Categories = ports.SlackCategoryDefaults{
+		Progress:   effective.Progress.Enabled,
+		NeedsInput: effective.NeedsInput.Enabled,
+		Problems:   effective.Problems.Enabled,
+	}
+	return settings, effective
 }
 
 func handledEvent(ev ports.Event) bool {
@@ -576,7 +632,7 @@ func (n *Notifier) processItem(item queueItem) {
 		defer n.clearRecheck(item.event.FeatureID)
 	}
 	settings := n.settings.SlackSettings()
-	if !settings.Enabled || settings.Token == "" || len(settings.Recipients) == 0 {
+	if !settings.Enabled || settings.Token == "" {
 		n.queue.complete(item)
 		return
 	}
@@ -615,6 +671,11 @@ func (n *Notifier) processItem(item queueItem) {
 		}
 		owner = parent
 	}
+	settings, effective := n.effectiveSettings(settings, owner)
+	if len(settings.Recipients) == 0 {
+		n.queue.complete(item)
+		return
+	}
 	n.recordMu.Lock()
 	loaded := n.loadedRecords[owner.ID]
 	n.recordMu.Unlock()
@@ -640,6 +701,12 @@ func (n *Notifier) processItem(item queueItem) {
 	}
 	n.retryPendingRecord(owner.ID, record)
 
+	if effective.Muted {
+		// Existing posted inputs can still close, but mute must not open a
+		// destination or create a new pending post.
+		settings.Categories.NeedsInput = false
+		settings.Recipients = n.existingRecipients(settings.Recipients, record)
+	}
 	ready, opening := n.partitionOpeningRecipients(settings, []*feature.Feature{owner})
 	for _, recipient := range opening.Recipients {
 		destination := opening
@@ -688,6 +755,21 @@ func (n *Notifier) processItem(item queueItem) {
 	n.processItemFor(ready, owner, eventFeature, record, item)
 }
 
+func (n *Notifier) existingRecipients(
+	recipients []ports.SlackRecipient, record *featureRecord,
+) []ports.SlackRecipient {
+	n.recordMu.Lock()
+	defer n.recordMu.Unlock()
+	existing := make([]ports.SlackRecipient, 0, len(recipients))
+	for _, recipient := range recipients {
+		entry := record.Destinations[destinationKey(string(recipient.Kind), recipient.ID)]
+		if entry.RootTS != "" && entry.ChannelID != "" {
+			existing = append(existing, recipient)
+		}
+	}
+	return existing
+}
+
 func (n *Notifier) processItemFor(
 	settings ports.SlackRuntimeSettings, owner, eventFeature *feature.Feature,
 	record *featureRecord, item queueItem,
@@ -710,6 +792,10 @@ func (n *Notifier) processItemFor(
 	}
 
 	reply := replyForEvent(settings.Token, item.event, eventFeature)
+	if owner.SlackNotifications != nil && owner.SlackNotifications.Mode == feature.SlackMuted {
+		n.dispatchWork(item, work)
+		return
+	}
 	for _, recipient := range settings.Recipients {
 		channelID, err := n.resolveDestination(settings, record, owner.ID, recipient)
 		if err != nil {
@@ -1298,7 +1384,7 @@ func (n *Notifier) resolveDestination(
 
 	if recipient.Kind == ports.SlackRecipientUser {
 		current := n.settings.SlackSettings()
-		if !recipientEligible(current, key) {
+		if !n.recipientEligibleForFeature(current, featureID, key) {
 			return "", errDeliveryIneligible
 		}
 		// Until the DM channel is known, the user ID is the stable pacing key.
@@ -1317,7 +1403,7 @@ func (n *Notifier) resolveDestination(
 				credential := deliveryCredential{
 					token: current.Token, generation: current.CredentialGeneration,
 				}
-				if !recipientEligible(current, key) {
+				if !n.recipientEligibleForFeature(current, featureID, key) {
 					return "", credential, errDeliveryIneligible
 				}
 				client, err := n.newClient(current.Token)
@@ -1330,7 +1416,7 @@ func (n *Notifier) resolveDestination(
 		if err != nil {
 			return "", err
 		}
-		if !recipientEligible(n.settings.SlackSettings(), key) {
+		if !n.recipientEligibleForFeature(n.settings.SlackSettings(), featureID, key) {
 			return "", errDeliveryIneligible
 		}
 		n.recordMu.Lock()
@@ -1347,6 +1433,9 @@ func (n *Notifier) resolveDestination(
 	}
 	if recipient.Kind != ports.SlackRecipientChannel {
 		return "", errUnsupportedRecipientKind
+	}
+	if !n.recipientEligibleForFeature(n.settings.SlackSettings(), featureID, key) {
+		return "", errDeliveryIneligible
 	}
 	n.recordMu.Lock()
 	entry = record.Destinations[key]
@@ -1371,6 +1460,17 @@ func recipientEligible(settings ports.SlackRuntimeSettings, key string) bool {
 		}
 	}
 	return false
+}
+
+func (n *Notifier) recipientEligibleForFeature(
+	settings ports.SlackRuntimeSettings, featureID, key string,
+) bool {
+	owner, err := n.store.Load(featureID)
+	if err != nil || owner == nil {
+		return false
+	}
+	settings, effective := n.effectiveSettings(settings, owner)
+	return !effective.Muted && recipientEligible(settings, key)
 }
 
 // persistRecordLocked writes the authoritative in-memory record and tracks a

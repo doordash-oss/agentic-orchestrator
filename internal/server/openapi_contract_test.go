@@ -187,6 +187,28 @@ func TestOpenAPIDeclaresHardeningSchemas(t *testing.T) {
 	}
 }
 
+func TestSlackPerFeatureOpenAPIShapes(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	for name, properties := range map[string][]string{
+		"CreateFeatureMutationRequest": {"slack_notifications"},
+		"FeatureConfig":                {"slack_notifications", "slack_configured", "slack_defaults"},
+		"FeatureDetail":                {"slack_notifications"},
+		"FeatureDefaults":              {"slack_configured", "slack_defaults"},
+		"SlackNotifications":           {"mode", "recipients", "progress", "needs_input", "problems"},
+		"SlackNotificationsMutation":   {"mode", "recipients", "progress", "needs_input", "problems"},
+		"FeatureConfigMutationBody":    {"slack_notifications"},
+		"EffectiveSlackNotifications":  {"configured", "muted", "mode_source", "recipients", "progress", "needs_input", "problems"},
+	} {
+		assertSchemaProperties(t, spec, name, properties...)
+	}
+	for _, name := range []string{"SlackNotifications", "SlackNotificationsMutation", "EffectiveSlackNotifications", "SlackNotificationRecipient", "SlackNotificationValue", "SlackNotificationDefaults", "FeatureConfigMutationBody"} {
+		schema, ok := spec.Components.Schemas[name].(map[string]any)
+		if !ok || schema["additionalProperties"] != false {
+			t.Errorf("%s must forbid unknown properties", name)
+		}
+	}
+}
+
 // TestIntegrationAttentionSchemasCollapsedToCanonicalError pins the OpenAPI
 // shape of the integration-attention single owner: the transaction journal's
 // and the relationship child summaries' attention fields reference the

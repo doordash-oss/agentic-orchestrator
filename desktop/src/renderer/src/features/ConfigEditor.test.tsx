@@ -177,6 +177,305 @@ describe('FeatureConfigPanel', () => {
     });
   });
 
+  it('refreshes this feature on configuration invalidation only while the draft is clean', async () => {
+    const mock = installAgenticoMock();
+    const changed = {
+      ...SNAPSHOT,
+      current: { ...SNAPSHOT.current, automaticReviewMode: 'enabled' as const },
+    };
+    mock.api.getFeatureConfig.mockResolvedValueOnce(SNAPSHOT).mockResolvedValue(changed);
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+
+    expect(await screen.findByLabelText('Auto mode')).toHaveValue('default');
+    mock.emitAppEvent({
+      type: 'invalidated',
+      kind: 'config.updated',
+      featureId: 'other',
+    });
+    expect(mock.api.getFeatureConfig).toHaveBeenCalledTimes(1);
+    mock.emitAppEvent({
+      type: 'invalidated',
+      kind: 'config.updated',
+      featureId: 'feat-1',
+    });
+    await waitFor(() => expect(screen.getByLabelText('Auto mode')).toHaveValue('enabled'));
+
+    await user.selectOptions(screen.getByLabelText('Auto mode'), 'disabled');
+    mock.emitAppEvent({
+      type: 'invalidated',
+      kind: 'config.updated',
+      featureId: 'feat-1',
+    });
+    expect(mock.api.getFeatureConfig).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText('Auto mode')).toHaveValue('disabled');
+  });
+
+  it('does not install a late configuration refresh over a recipient edit', async () => {
+    const mock = installAgenticoMock();
+    let finishRefresh!: (snapshot: FeatureConfigSnapshot) => void;
+    mock.api.getFeatureConfig
+      .mockResolvedValueOnce({
+        ...SNAPSHOT,
+        current: {
+          ...SNAPSHOT.current,
+          slackConfigured: true,
+          slackDefaults: {
+            categories: { progress: true, needsInput: true, problems: true },
+            recipientNames: [],
+          },
+        },
+      })
+      .mockImplementationOnce(
+        () =>
+          new Promise<FeatureConfigSnapshot>((resolve) => {
+            finishRefresh = resolve;
+          }),
+      );
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+    const group = within(await screen.findByRole('group', { name: 'Notifications' }));
+    const recipient = await group.findByRole('textbox', { name: 'Recipient 1' });
+    mock.emitAppEvent({ type: 'invalidated', kind: 'config.updated', featureId: 'feat-1' });
+    await waitFor(() => expect(mock.api.getFeatureConfig).toHaveBeenCalledTimes(2));
+    await user.type(recipient, '#draft');
+    finishRefresh({
+      ...SNAPSHOT,
+      current: { ...SNAPSHOT.current, automaticReviewMode: 'enabled' },
+    });
+    await waitFor(() => expect(recipient).toHaveValue('#draft'));
+    expect(screen.getByLabelText('Auto mode')).toHaveValue('default');
+  });
+
+  it('loads notification controls for the newly selected feature', async () => {
+    const mock = installAgenticoMock();
+    const configured = {
+      ...SNAPSHOT,
+      current: {
+        ...SNAPSHOT.current,
+        slackConfigured: true,
+        slackDefaults: {
+          categories: { progress: true, needsInput: false, problems: true },
+          recipientNames: ['Workspace alerts'],
+        },
+      },
+    };
+    mock.api.getFeatureConfig.mockImplementation(async (id: string) => ({
+      ...configured,
+      featureId: id,
+      current: {
+        ...configured.current,
+        slackNotifications: {
+          mode: id === 'feat-2' ? ('muted' as const) : ('' as const),
+          progress: '' as const,
+          needsInput: '' as const,
+          problems: '' as const,
+          recipients:
+            id === 'feat-2'
+              ? [
+                  {
+                    typedText: '#second',
+                    kind: 'channel' as const,
+                    id: 'C2',
+                    displayName: 'Second',
+                  },
+                ]
+              : [],
+        },
+      },
+    }));
+    const { rerender } = render(<FeatureConfigPanel featureId="feat-1" />);
+    const group = within(await screen.findByRole('group', { name: 'Notifications' }));
+    expect(group.getByRole('checkbox', { name: /Mute/ })).not.toBeChecked();
+    rerender(<FeatureConfigPanel featureId="feat-2" />);
+    const nextGroup = within(await screen.findByRole('group', { name: 'Notifications' }));
+    await waitFor(() => expect(nextGroup.getByRole('checkbox', { name: /Mute/ })).toBeChecked());
+    expect(await nextGroup.findByText('Second')).toBeVisible();
+    expect(mock.api.getFeatureConfig).toHaveBeenCalledWith('feat-2');
+  });
+
+  it('loads and saves feature notifications with inherited labels and resolved recipients', async () => {
+    const mock = installAgenticoMock();
+    const recipient = {
+      typedText: '#alerts',
+      kind: 'channel' as const,
+      id: 'C123',
+      displayName: 'Alerts',
+    };
+    const configured = {
+      ...SNAPSHOT,
+      current: {
+        ...SNAPSHOT.current,
+        slackConfigured: true,
+        slackDefaults: {
+          categories: { progress: true, needsInput: false, problems: true },
+          recipientNames: ['Workspace alerts'],
+        },
+        slackNotifications: {
+          mode: '',
+          progress: 'off',
+          needsInput: '',
+          problems: '',
+          recipients: [recipient],
+        },
+      },
+    };
+    mock.api.getFeatureConfig.mockResolvedValue(configured);
+    mock.api.resolveSlackRecipient.mockResolvedValue({
+      typedText: '@alex',
+      kind: 'user',
+      id: 'U456',
+      displayName: 'Alex',
+    });
+    mock.api.updateFeatureConfig.mockImplementation(async ({ config }) => ({
+      ...configured,
+      current: config,
+    }));
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+    const group = within(await screen.findByRole('group', { name: 'Notifications' }));
+    expect(group.getByText(/Workspace alerts/)).toBeVisible();
+    expect(group.getByRole('combobox', { name: 'Progress' })).toHaveValue('off');
+    expect(
+      within(group.getByRole('combobox', { name: 'Needs input' })).getByRole('option', {
+        name: 'Inherit (off)',
+      }),
+    ).toBeVisible();
+    expect(await group.findByText('Alerts')).toBeVisible();
+
+    await user.click(group.getByRole('button', { name: 'Remove recipient 1' }));
+    await user.type(group.getByRole('textbox', { name: 'Recipient 1' }), '@alex');
+    await user.tab();
+    await waitFor(() => expect(group.getByText('Alex')).toBeVisible());
+    await user.click(group.getByRole('checkbox', { name: /Mute/ }));
+    await user.selectOptions(group.getByRole('combobox', { name: 'Problems' }), 'off');
+    expect(group.getByText(/no effect while muted/i)).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mock.api.updateFeatureConfig).toHaveBeenCalledTimes(1));
+    expect(mock.api.updateFeatureConfig).toHaveBeenCalledWith({
+      featureId: 'feat-1',
+      config: expect.objectContaining({
+        slackNotifications: {
+          mode: 'muted',
+          progress: 'off',
+          needsInput: '',
+          problems: 'off',
+          recipients: [{ typedText: '@alex', kind: 'user', id: 'U456', displayName: 'Alex' }],
+        },
+      }),
+    });
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+  });
+
+  it('omits untouched notifications but explicitly clears removed recipients and overrides', async () => {
+    const mock = installAgenticoMock();
+    const configured = {
+      ...SNAPSHOT,
+      current: {
+        ...SNAPSHOT.current,
+        slackConfigured: true,
+        slackDefaults: {
+          categories: { progress: true, needsInput: true, problems: true },
+          recipientNames: ['Workspace alerts'],
+        },
+        slackNotifications: {
+          mode: '' as const,
+          progress: 'off' as const,
+          needsInput: '' as const,
+          problems: '' as const,
+          recipients: [
+            { typedText: '#alerts', kind: 'channel' as const, id: 'C123', displayName: 'Alerts' },
+          ],
+        },
+      },
+    };
+    mock.api.getFeatureConfig.mockResolvedValue(configured);
+    mock.api.updateFeatureConfig.mockResolvedValue(configured);
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+    const group = within(await screen.findByRole('group', { name: 'Notifications' }));
+    await group.findByText('Alerts');
+
+    await user.selectOptions(screen.getByLabelText('Auto mode'), 'enabled');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mock.api.updateFeatureConfig).toHaveBeenCalledTimes(1));
+    expect(mock.api.updateFeatureConfig.mock.calls[0]?.[0].config).not.toHaveProperty(
+      'slackNotifications',
+    );
+
+    await user.click(group.getByRole('button', { name: 'Remove recipient 1' }));
+    await user.selectOptions(group.getByRole('combobox', { name: 'Progress' }), '');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mock.api.updateFeatureConfig).toHaveBeenCalledTimes(2));
+    expect(mock.api.updateFeatureConfig.mock.calls[1]?.[0].config).toMatchObject({
+      slackNotifications: {
+        mode: '',
+        progress: '',
+        needsInput: '',
+        problems: '',
+        recipients: [],
+      },
+    });
+  });
+
+  it('blocks unresolved recipients and keeps the draft on a rejected save', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue({
+      ...SNAPSHOT,
+      current: {
+        ...SNAPSHOT.current,
+        slackConfigured: true,
+        slackDefaults: {
+          categories: { progress: true, needsInput: true, problems: false },
+          recipientNames: [],
+        },
+      },
+    });
+    mock.api.resolveSlackRecipient.mockRejectedValue(
+      ipcError('slack_recipient_not_found', 'Recipient not found.'),
+    );
+    mock.api.updateFeatureConfig.mockRejectedValue(
+      ipcError('invalid_configuration', 'The configuration did not match the schema.'),
+    );
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+    const group = within(await screen.findByRole('group', { name: 'Notifications' }));
+    await user.type(await group.findByRole('textbox', { name: 'Recipient 1' }), '#missing');
+    await user.tab();
+    expect(await group.findByText('Recipient not found.')).toBeVisible();
+    expect(group.getByRole('textbox', { name: 'Recipient 1' })).toHaveAttribute(
+      'aria-invalid',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    await user.click(group.getByRole('button', { name: 'Remove recipient 1' }));
+    await user.click(group.getByRole('checkbox', { name: /Mute/ }));
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('invalid_configuration');
+    expect(group.getByRole('checkbox', { name: /Mute/ })).toBeChecked();
+  });
+
+  it('shows only setup guidance and omits Slack on save when not configured', async () => {
+    const mock = installAgenticoMock();
+    mock.api.getFeatureConfig.mockResolvedValue({
+      ...SNAPSHOT,
+      current: { ...SNAPSHOT.current, slackConfigured: false },
+    });
+    mock.api.updateFeatureConfig.mockResolvedValue(SNAPSHOT);
+    render(<FeatureConfigPanel featureId="feat-1" />);
+    const user = userEvent.setup();
+    const group = within(await screen.findByRole('group', { name: 'Notifications' }));
+    expect(group.getByText('Set up Slack in Settings')).toBeVisible();
+    expect(group.queryByRole('checkbox')).toBeNull();
+    expect(group.queryByRole('combobox')).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Auto mode'), 'enabled');
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mock.api.updateFeatureConfig).toHaveBeenCalledTimes(1));
+    expect(mock.api.updateFeatureConfig.mock.calls[0]?.[0].config).not.toHaveProperty(
+      'slackNotifications',
+    );
+  });
+
   it('pairs each model with capability-aware effort and resets incompatible choices', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);

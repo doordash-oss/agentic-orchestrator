@@ -102,7 +102,11 @@ paths:
         - $ref: "#/components/parameters/FeatureID"
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FeatureConfigMutationBody"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -714,7 +718,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        $ref: "#/components/requestBodies/RuntimeConfigMutation"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -733,7 +737,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
+        $ref: "#/components/requestBodies/RuntimeConfigMutation"
       responses:
         "200":
           $ref: "#/components/responses/ActionResponse"
@@ -741,6 +745,70 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/integrations/slack/validate:
+    post:
+      operationId: validateSlack
+      summary: Validate a Slack connection.
+      description: >-
+        Validates the provided write-only token without saving it, or validates
+        and refreshes the stored token when token is omitted.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/SlackValidateRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SlackValidateResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/integrations/slack/recipients/resolve:
+    post:
+      operationId: resolveSlackRecipient
+      summary: Resolve a Slack notification recipient.
+      description: >-
+        Resolves one person or channel using an optional write-only draft token,
+        or the stored token when token is omitted. The result is not persisted.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/SlackRecipientResolveRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SlackRecipientResolveResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/integrations/slack/test-message:
+    post:
+      operationId: sendSlackTestMessage
+      summary: Send a Slack test message.
+      description: >-
+        Sends a test message with the stored token to the supplied resolved
+        recipients, or to the stored defaults when recipients are omitted.
+        Destination failures are returned per recipient.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/SlackTestMessageRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SlackTestMessageResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/catalog/models:
     get:
@@ -1815,6 +1883,30 @@ components:
           schema:
             type: object
             additionalProperties: true
+    RuntimeConfigMutation:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RuntimeConfigMutation"
+    SlackValidateRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackValidateRequest"
+    SlackRecipientResolveRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackRecipientResolveRequest"
+    SlackTestMessageRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackTestMessageRequest"
     ProviderModelRefreshRequest:
       required: true
       content:
@@ -1866,6 +1958,24 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/RuntimeConfigResponse"
+    SlackValidateResponse:
+      description: Validated Slack identity and granted scopes.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackValidateResponse"
+    SlackRecipientResolveResponse:
+      description: Resolved Slack recipient.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackRecipientResolveResponse"
+    SlackTestMessageResponse:
+      description: Per-recipient Slack test-message results.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SlackTestMessageResponse"
     ModelCatalogResponse:
       description: Model catalog.
       content:
@@ -2364,6 +2474,21 @@ components:
           type: string
           description: Existing permission cache scope. Empty string means global.
           x-go-type-skip-optional-pointer: false
+        source:
+          $ref: "#/components/schemas/AnswerSource"
+          x-go-type-skip-optional-pointer: false
+    AnswerSource:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [slack, desktop]
+        responder:
+          type: string
+      x-go-type: ports.AnswerSource
+      x-go-type-import:
+        path: github.com/doordash-oss/agentic-orchestrator/internal/ports
     Resource:
       type: object
       required: [type]
@@ -3672,6 +3797,349 @@ components:
             publishability:
               $ref: "#/components/schemas/Publishability"
               x-go-name: Publish
+    SlackIdentity:
+      type: object
+      additionalProperties: false
+      required: [team_id, team_name, user_id, display_name]
+      properties:
+        team_id:
+          type: string
+        team_name:
+          type: string
+        user_id:
+          type: string
+        display_name:
+          type: string
+        bot_id:
+          type: string
+    SlackRecipient:
+      type: object
+      additionalProperties: false
+      required: [typed_text, kind, id, display_name]
+      properties:
+        typed_text:
+          type: string
+        kind:
+          type: string
+          enum: [user, channel]
+        id:
+          type: string
+        display_name:
+          type: string
+    SlackNotifications:
+      type: object
+      additionalProperties: false
+      required: [mode, recipients, progress, needs_input, problems]
+      description: Stored per-feature values; empty strings inherit the workspace defaults.
+      properties:
+        mode:
+          type: string
+          enum: ["", inherit, muted]
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
+        progress:
+          type: string
+          enum: ["", inherit, "on", "off"]
+        needs_input:
+          type: string
+          enum: ["", inherit, "on", "off"]
+        problems:
+          type: string
+          enum: ["", inherit, "on", "off"]
+    SlackNotificationsMutation:
+      type: object
+      additionalProperties: false
+      description: Omitted fields remain unchanged on update; an empty recipients list clears the additions.
+      properties:
+        mode:
+          type: string
+          enum: ["", inherit, muted]
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
+        progress:
+          type: string
+          enum: ["", inherit, "on", "off"]
+        needs_input:
+          type: string
+          enum: ["", inherit, "on", "off"]
+        problems:
+          type: string
+          enum: ["", inherit, "on", "off"]
+    SlackNotificationValue:
+      type: object
+      additionalProperties: false
+      required: [enabled, source]
+      properties:
+        enabled:
+          type: boolean
+        source:
+          type: string
+          enum: [global, feature]
+    SlackNotificationRecipient:
+      type: object
+      additionalProperties: false
+      required: [typed_text, kind, id, display_name, source]
+      properties:
+        typed_text:
+          type: string
+        kind:
+          type: string
+          enum: [user, channel]
+        id:
+          type: string
+        display_name:
+          type: string
+        source:
+          type: string
+          enum: [global, feature]
+    EffectiveSlackNotifications:
+      type: object
+      additionalProperties: false
+      required: [configured, muted, mode_source, recipients, progress, needs_input, problems]
+      properties:
+        configured:
+          type: boolean
+        muted:
+          type: boolean
+        mode_source:
+          type: string
+          enum: [global, feature]
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackNotificationRecipient"
+        progress:
+          $ref: "#/components/schemas/SlackNotificationValue"
+        needs_input:
+          $ref: "#/components/schemas/SlackNotificationValue"
+        problems:
+          $ref: "#/components/schemas/SlackNotificationValue"
+    SlackNotificationDefaults:
+      type: object
+      additionalProperties: false
+      required: [categories, recipient_names]
+      properties:
+        categories:
+          $ref: "#/components/schemas/SlackCategories"
+        recipient_names:
+          type: array
+          items:
+            type: string
+    SlackStatus:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [not_configured, connected, warning, credential_error]
+        last_error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+        last_checked_at:
+          type: string
+          format: date-time
+          x-go-type-skip-optional-pointer: false
+    SlackRuntimeConfig:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          enabled,
+          token_set,
+          token_hint,
+          granted_scopes,
+          missing_scopes,
+          default_recipients,
+          categories,
+          status,
+          manifest,
+        ]
+      properties:
+        enabled:
+          type: boolean
+        token_set:
+          type: boolean
+        token_hint:
+          type: string
+        token_type:
+          type: string
+          enum: [bot, user]
+          x-go-type-skip-optional-pointer: false
+        identity:
+          $ref: "#/components/schemas/SlackIdentity"
+          x-go-type-skip-optional-pointer: false
+        granted_scopes:
+          type: array
+          items:
+            type: string
+        missing_scopes:
+          type: array
+          items:
+            type: string
+        default_recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
+        categories:
+          $ref: "#/components/schemas/SlackCategories"
+        status:
+          $ref: "#/components/schemas/SlackStatus"
+        manifest:
+          type: string
+    SlackCategories:
+      type: object
+      additionalProperties: false
+      required: [progress, needs_input, problems]
+      description: >-
+        Effective per-category notification defaults. Absent stored settings
+        read as every category on.
+      properties:
+        progress:
+          type: boolean
+        needs_input:
+          type: boolean
+        problems:
+          type: boolean
+    SlackCategoriesMutation:
+      type: object
+      additionalProperties: false
+      description: >-
+        Patch representation of the per-category defaults. An absent field
+        means unchanged.
+      properties:
+        progress:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+        needs_input:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+        problems:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+    SlackConfigMutation:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+        token:
+          type: string
+          description: Write-only Slack OAuth token. Never returned by the API.
+          x-go-type-skip-optional-pointer: false
+        clear_token:
+          type: boolean
+          x-go-type-skip-optional-pointer: false
+        default_recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
+          x-go-type-skip-optional-pointer: false
+        categories:
+          $ref: "#/components/schemas/SlackCategoriesMutation"
+          x-go-type-skip-optional-pointer: false
+    RuntimeConfigMutation:
+      type: object
+      additionalProperties: false
+      properties:
+        defaults:
+          type: object
+          additionalProperties: true
+        workspace_roots:
+          type: array
+          items:
+            type: string
+        notifications:
+          $ref: "#/components/schemas/NotificationConfig"
+        slack:
+          $ref: "#/components/schemas/SlackConfigMutation"
+    SlackValidateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+          description: Optional write-only draft token; omitted to validate the stored token.
+          x-go-type-skip-optional-pointer: false
+    SlackRecipientResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [input]
+      properties:
+        input:
+          type: string
+        token:
+          type: string
+          description: Optional write-only draft token; omitted to use the stored token.
+          x-go-type-skip-optional-pointer: false
+    SlackTestMessageRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        recipients:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlackRecipient"
+          x-go-type-skip-optional-pointer: false
+    SlackValidateResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [token_type, identity, granted_scopes, missing_scopes, suggested_recipient]
+          properties:
+            token_type:
+              type: string
+              enum: [bot, user]
+            identity:
+              $ref: "#/components/schemas/SlackIdentity"
+            granted_scopes:
+              type: array
+              items:
+                type: string
+            missing_scopes:
+              type: array
+              items:
+                type: string
+            suggested_recipient:
+              allOf:
+                - $ref: "#/components/schemas/SlackRecipient"
+              nullable: true
+              x-go-type-skip-optional-pointer: false
+    SlackRecipientResolveResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [recipient]
+          properties:
+            recipient:
+              $ref: "#/components/schemas/SlackRecipient"
+    SlackDeliveryResult:
+      type: object
+      additionalProperties: false
+      required: [recipient, delivered]
+      properties:
+        recipient:
+          $ref: "#/components/schemas/SlackRecipient"
+        delivered:
+          type: boolean
+        error:
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+    SlackTestMessageResponse:
+      allOf:
+        - $ref: "#/components/schemas/JSONResponse"
+        - type: object
+          required: [results]
+          properties:
+            results:
+              type: array
+              items:
+                $ref: "#/components/schemas/SlackDeliveryResult"
     RuntimeConfigResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -3709,6 +4177,8 @@ components:
               type: array
               items:
                 type: string
+            slack:
+              $ref: "#/components/schemas/SlackRuntimeConfig"
     ModelCatalogResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"
@@ -3974,6 +4444,9 @@ components:
           type: string
         base_revision:
           type: string
+        source:
+          $ref: "#/components/schemas/AnswerSource"
+          x-go-type-skip-optional-pointer: false
     ReviewSessionDecisionResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -4213,6 +4686,8 @@ components:
           type: string
           enum: [medium, large, moonshot]
         idempotency_key: { type: string, maxLength: 128 }
+        slack_notifications:
+          $ref: "#/components/schemas/SlackNotificationsMutation"
     StageUploadResponse:
       type: object
       additionalProperties: false
@@ -5125,7 +5600,7 @@ components:
               name: config
     FeatureDefaults:
       type: object
-      required: [models, checkpoints]
+      required: [models, checkpoints, slack_configured, slack_defaults]
       properties:
         models:
           $ref: "#/components/schemas/ModelDefaults"
@@ -5149,6 +5624,10 @@ components:
             name: config
         automatic_review_enabled:
           type: boolean
+        slack_configured:
+          type: boolean
+        slack_defaults:
+          $ref: "#/components/schemas/SlackNotificationDefaults"
     NotificationConfig:
       type: object
       required: [mute_feature_input]
@@ -5169,7 +5648,7 @@ components:
           x-go-name: OTelServiceName
     FeatureConfig:
       type: object
-      required: [models, inquireness, checkpoints]
+      required: [models, inquireness, checkpoints, slack_notifications, slack_configured, slack_defaults]
       properties:
         models:
           $ref: "#/components/schemas/ModelDefaults"
@@ -5188,6 +5667,35 @@ components:
         automatic_review_mode:
           type: string
           enum: [default, enabled, disabled]
+        slack_notifications:
+          $ref: "#/components/schemas/SlackNotifications"
+        slack_configured:
+          type: boolean
+        slack_defaults:
+          $ref: "#/components/schemas/SlackNotificationDefaults"
+    FeatureConfigMutationBody:
+      type: object
+      additionalProperties: false
+      properties:
+        models:
+          $ref: "#/components/schemas/ModelDefaults"
+        effort:
+          $ref: "#/components/schemas/EffortConfig"
+        inquireness:
+          type: string
+          enum: [none, medium, high]
+        checkpoints:
+          $ref: "#/components/schemas/Checkpoints"
+        pipeline:
+          type: string
+        input_notifications:
+          type: string
+          enum: [default, enabled, muted]
+        automatic_review_mode:
+          type: string
+          enum: [default, enabled, disabled]
+        slack_notifications:
+          $ref: "#/components/schemas/SlackNotificationsMutation"
     AutomaticReviewState:
       type: object
       required: [mode, enabled, source]
@@ -6137,6 +6645,7 @@ components:
           required:
             - models
             - automatic_review
+            - slack_notifications
             - historical_runs
             - repo_status
             - timing
@@ -6183,6 +6692,8 @@ components:
               type: string
             automatic_review:
               $ref: "#/components/schemas/AutomaticReviewState"
+            slack_notifications:
+              $ref: "#/components/schemas/EffectiveSlackNotifications"
             active_run_detail:
               $ref: "#/components/schemas/RunSummary"
               x-go-type-skip-optional-pointer: false

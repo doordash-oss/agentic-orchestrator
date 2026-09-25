@@ -45,6 +45,8 @@ import type {
   SessionTranscript,
   ServerListSnapshot,
   Settings,
+  SlackSettingsSnapshot,
+  SlackValidationResult,
   ThemeInfo,
   UpdateState,
   ServerUpdateInstallRequest,
@@ -483,6 +485,11 @@ export interface AgenticoMock {
     checkServerUpdate: ReturnType<typeof vi.fn>;
     installServerUpdate: ReturnType<typeof vi.fn>;
     cancelServerUpdate: ReturnType<typeof vi.fn>;
+    getSlackSettings: ReturnType<typeof vi.fn>;
+    updateSlackSettings: ReturnType<typeof vi.fn>;
+    validateSlackSettings: ReturnType<typeof vi.fn>;
+    resolveSlackRecipient: ReturnType<typeof vi.fn>;
+    sendSlackTestMessage: ReturnType<typeof vi.fn>;
     getDiagnostics: ReturnType<typeof vi.fn>;
     revealDiagnostics: ReturnType<typeof vi.fn>;
     clearDiagnostics: ReturnType<typeof vi.fn>;
@@ -522,6 +529,8 @@ export function installAgenticoMock(
     initializeResult?: Partial<InitializeRepositoryResult>;
     updates?: UpdateState;
     serverUpdate?: ServerUpdateState;
+    slackSettings?: SlackSettingsSnapshot;
+    slackValidation?: SlackValidationResult;
     diagnostics?: DiagnosticsSnapshot;
     platform?: string;
     windowPurpose?: WindowPurpose;
@@ -546,6 +555,7 @@ export function installAgenticoMock(
   const sessions = overrides.sessions ?? [];
   const updates = overrides.updates ?? defaultUpdateState();
   const serverUpdate = overrides.serverUpdate ?? defaultServerUpdateState();
+  const slackSettings = overrides.slackSettings ?? { supported: false as const };
   const diagnostics = overrides.diagnostics ?? defaultDiagnostics();
   const serversChangedListeners = new Set<(snapshot: ServerListSnapshot) => void>();
 
@@ -853,6 +863,17 @@ export function installAgenticoMock(
       }),
     ),
     cancelServerUpdate: vi.fn(() => Promise.resolve({ ...serverUpdate, status: 'available' })),
+    getSlackSettings: vi.fn(() => Promise.resolve(slackSettings)),
+    updateSlackSettings: vi.fn(() => Promise.resolve(slackSettings)),
+    validateSlackSettings: vi.fn(() =>
+      overrides.slackValidation === undefined
+        ? Promise.reject(new Error('validateSlackSettings not mocked'))
+        : Promise.resolve(overrides.slackValidation),
+    ),
+    resolveSlackRecipient: vi.fn(() =>
+      Promise.reject(new Error('resolveSlackRecipient not mocked')),
+    ),
+    sendSlackTestMessage: vi.fn(() => Promise.reject(new Error('sendSlackTestMessage not mocked'))),
     restartToUpdate: vi.fn(() =>
       Promise.resolve({
         ...updates,

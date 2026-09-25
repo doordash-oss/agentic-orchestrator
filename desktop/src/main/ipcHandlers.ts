@@ -78,6 +78,14 @@ import {
   type SettingsOpenRequest,
   type SettingsOpenResult,
   type SettingsPatch,
+  type SlackRecipient,
+  type SlackRecipientResolveRequest,
+  type SlackSettingsDraft,
+  type SlackSettingsSnapshot,
+  type SlackTestMessageRequest,
+  type SlackTestMessageResult,
+  type SlackValidationRequest,
+  type SlackValidationResult,
   type SetupDispatchResult,
   type ThemeInfo,
   type ThemePreference,
@@ -187,6 +195,11 @@ export interface IpcServices {
   ): Promise<ServerTokenStatusResult> | ServerTokenStatusResult;
   getSettings(): Settings;
   updateSettings(patch: SettingsPatch): Settings;
+  getSlackSettings?(): Promise<SlackSettingsSnapshot>;
+  updateSlackSettings?(draft: SlackSettingsDraft): Promise<SlackSettingsSnapshot>;
+  validateSlackSettings?(request: SlackValidationRequest): Promise<SlackValidationResult>;
+  resolveSlackRecipient?(request: SlackRecipientResolveRequest): Promise<SlackRecipient>;
+  sendSlackTestMessage?(request: SlackTestMessageRequest): Promise<SlackTestMessageResult>;
   openSettingsWindow(request: SettingsOpenRequest): SettingsOpenResult;
   getTheme(): ThemeInfo;
   setTheme(preference: ThemePreference): ThemeInfo;
@@ -381,6 +394,15 @@ export function registerIpcHandlers(
       services.getServerTokenStatus(request),
     [IPC_CHANNELS.settingsGet]: () => services.getSettings(),
     [IPC_CHANNELS.settingsUpdate]: (_event, patch: SettingsPatch) => services.updateSettings(patch),
+    [IPC_CHANNELS.slackSettingsGet]: () => services.getSlackSettings?.(),
+    [IPC_CHANNELS.slackSettingsUpdate]: (_event, draft: SlackSettingsDraft) =>
+      services.updateSlackSettings?.(draft),
+    [IPC_CHANNELS.slackSettingsValidate]: (_event, request: SlackValidationRequest) =>
+      services.validateSlackSettings?.(request),
+    [IPC_CHANNELS.slackRecipientResolve]: (_event, request: SlackRecipientResolveRequest) =>
+      services.resolveSlackRecipient?.(request),
+    [IPC_CHANNELS.slackTestMessageSend]: (_event, request: SlackTestMessageRequest) =>
+      services.sendSlackTestMessage?.(request),
     [IPC_CHANNELS.windowOpenSettings]: (_event, request: SettingsOpenRequest) =>
       services.openSettingsWindow(request),
     [IPC_CHANNELS.themeGet]: () => services.getTheme(),

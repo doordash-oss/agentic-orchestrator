@@ -42,6 +42,11 @@ export const IPC_CHANNELS = {
   serverTokenStatus: 'agentico:servers:token-status',
   settingsGet: 'agentico:settings:get',
   settingsUpdate: 'agentico:settings:update',
+  slackSettingsGet: 'agentico:slack-settings:get',
+  slackSettingsUpdate: 'agentico:slack-settings:update',
+  slackSettingsValidate: 'agentico:slack-settings:validate',
+  slackRecipientResolve: 'agentico:slack-settings:recipient-resolve',
+  slackTestMessageSend: 'agentico:slack-settings:test-message-send',
   windowOpenSettings: 'agentico:window:open-settings',
   themeGet: 'agentico:theme:get',
   themeSet: 'agentico:theme:set',
@@ -851,7 +856,7 @@ export type AppEvent = z.output<typeof AppEventSchema>;
  * The deep-linkable Settings destinations. Every value is also a Settings
  * pane id (`SETTINGS_PANES`), so a section name selects a pane directly.
  */
-export const SettingsSectionSchema = z.enum(['updates', 'diagnostics', 'servers']);
+export const SettingsSectionSchema = z.enum(['updates', 'diagnostics', 'servers', 'slack']);
 export type SettingsSection = z.output<typeof SettingsSectionSchema>;
 
 /**
@@ -1609,6 +1614,25 @@ export const FeatureSnapshotSchema = z.strictObject({
   reviewGate: ReviewGateViewSchema,
   /** Effective Automatic Bash review state and the scope that selected it. */
   automaticReview: AutomaticReviewStateSchema,
+  slackNotifications: z
+    .strictObject({
+      configured: z.boolean(),
+      muted: z.boolean(),
+      modeSource: z.enum(['global', 'feature']),
+      progress: z.strictObject({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      needsInput: z.strictObject({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      problems: z.strictObject({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      recipients: z.array(
+        z.strictObject({
+          typedText: z.string(),
+          kind: z.enum(['user', 'channel']),
+          id: z.string(),
+          displayName: z.string(),
+          source: z.enum(['global', 'feature']),
+        }),
+      ),
+    })
+    .optional(),
   /** Ordered per-command harness verification state during phaseStatus "verifying". */
   verificationItems: z.array(VerificationItemViewSchema).optional(),
   /** Aggregate run time across the feature's runs, for the queue readout. */
@@ -2866,6 +2890,15 @@ export const CreateFeatureInputSchema = z.strictObject({
   pipeline: z.enum(['medium', 'large', 'moonshot']).default('medium'),
   riskLevel: z.enum(['low', 'medium', 'high']).default('medium'),
   inquireness: z.enum(['none', 'medium', 'high']).default('medium'),
+  slackNotifications: z
+    .strictObject({
+      mode: z.enum(['', 'muted']).optional(),
+      progress: z.enum(['', 'on', 'off']).optional(),
+      needsInput: z.enum(['', 'on', 'off']).optional(),
+      problems: z.enum(['', 'on', 'off']).optional(),
+      recipients: z.array(z.lazy(() => SlackRecipientSchema)).optional(),
+    })
+    .optional(),
   exitCriteria: z.string().max(4000).default(''),
   models: z.record(z.string().min(1).max(64), z.string().min(1).max(200)).default({}),
   effort: z.record(z.string().min(1).max(64), EffortLevelSchema).default({}),
@@ -2970,6 +3003,17 @@ export const CreationDefaultsSchema = z.strictObject({
     effort: z.array(z.strictObject({ phase: z.string(), effort: EffortLevelSchema })),
     /** Server default branch choice: false ⇒ new feature branch. */
     useCurrentBranch: z.boolean(),
+    slackConfigured: z.boolean().optional(),
+    slackDefaults: z
+      .strictObject({
+        categories: z.strictObject({
+          progress: z.boolean(),
+          needsInput: z.boolean(),
+          problems: z.boolean(),
+        }),
+        recipientNames: z.array(z.string()),
+      })
+      .optional(),
   }),
 });
 
@@ -3703,6 +3747,7 @@ export const SETTINGS_PANES = [
   'providers',
   'appearance',
   'updates',
+  'slack',
   'notifications',
   'diagnostics',
   'advanced',
@@ -3996,6 +4041,26 @@ export const FeatureConfigSchema = z.strictObject({
   pipeline: z.string().max(50),
   inputNotifications: InputNotificationsModeSchema,
   automaticReviewMode: AutomaticReviewModeSchema,
+  slackNotifications: z
+    .strictObject({
+      mode: z.enum(['', 'muted']).optional(),
+      progress: z.enum(['', 'on', 'off']).optional(),
+      needsInput: z.enum(['', 'on', 'off']).optional(),
+      problems: z.enum(['', 'on', 'off']).optional(),
+      recipients: z.array(z.lazy(() => SlackRecipientSchema)).optional(),
+    })
+    .optional(),
+  slackConfigured: z.boolean().optional(),
+  slackDefaults: z
+    .strictObject({
+      categories: z.strictObject({
+        progress: z.boolean(),
+        needsInput: z.boolean(),
+        problems: z.boolean(),
+      }),
+      recipientNames: z.array(z.string()),
+    })
+    .optional(),
 });
 export type FeatureConfig = z.output<typeof FeatureConfigSchema>;
 
@@ -4026,6 +4091,152 @@ export const WorkspaceDefaultsSchema = z.strictObject({
   automaticReviewEnabled: z.boolean(),
 });
 export type WorkspaceDefaults = z.output<typeof WorkspaceDefaultsSchema>;
+
+// --- Slack settings ----------------------------------------------------------
+
+export const SlackIdentitySchema = z.strictObject({
+  teamId: z.string().min(1).max(200),
+  teamName: z.string().min(1).max(500),
+  userId: z.string().min(1).max(200),
+  displayName: z.string().min(1).max(500),
+  botId: z.string().min(1).max(200).nullable(),
+});
+export type SlackIdentity = z.output<typeof SlackIdentitySchema>;
+
+export const SlackStatusSchema = z.strictObject({
+  state: z.enum(['not_configured', 'connected', 'warning', 'credential_error']),
+  lastError: CanonicalErrorSchema.nullable(),
+  lastCheckedAt: z.string().datetime().nullable(),
+});
+export type SlackStatus = z.output<typeof SlackStatusSchema>;
+
+export const SlackRecipientSchema = z.strictObject({
+  typedText: z.string().min(1).max(500),
+  kind: z.enum(['user', 'channel']),
+  id: z.string().min(1).max(200),
+  displayName: z.string().min(1).max(500),
+});
+export type SlackRecipient = z.output<typeof SlackRecipientSchema>;
+
+export const SlackRecipientListSchema = z
+  .array(SlackRecipientSchema)
+  .max(100)
+  .superRefine((recipients, context) => {
+    const seen = new Set<string>();
+    recipients.forEach((recipient, index) => {
+      const key = `${recipient.kind}:${recipient.id}`;
+      if (seen.has(key)) {
+        context.addIssue({
+          code: 'custom',
+          path: [index, 'id'],
+          message: 'Slack recipients must be unique by kind and id',
+        });
+      }
+      seen.add(key);
+    });
+  });
+
+export const SlackCategoriesSchema = z.strictObject({
+  progress: z.boolean(),
+  needsInput: z.boolean(),
+  problems: z.boolean(),
+});
+export type SlackCategories = z.output<typeof SlackCategoriesSchema>;
+
+/** Patch representation of the category defaults; an absent field means unchanged. */
+export const SlackCategoriesPatchSchema = z.strictObject({
+  progress: z.boolean().optional(),
+  needsInput: z.boolean().optional(),
+  problems: z.boolean().optional(),
+});
+export type SlackCategoriesPatch = z.output<typeof SlackCategoriesPatchSchema>;
+
+const SupportedSlackSettingsSchema = z.strictObject({
+  supported: z.literal(true),
+  enabled: z.boolean(),
+  tokenSet: z.boolean(),
+  tokenHint: z.string().max(64),
+  tokenType: z.enum(['bot', 'user']).nullable(),
+  identity: SlackIdentitySchema.nullable(),
+  grantedScopes: z.array(z.string().min(1).max(200)).max(100),
+  missingScopes: z.array(z.string().min(1).max(200)).max(100),
+  defaultRecipients: SlackRecipientListSchema,
+  categories: SlackCategoriesSchema,
+  status: SlackStatusSchema,
+  manifest: z.string().max(256 * 1024),
+});
+
+export const SlackSettingsSnapshotSchema = z.discriminatedUnion('supported', [
+  z.strictObject({ supported: z.literal(false) }),
+  SupportedSlackSettingsSchema,
+]);
+export const SlackSettingsSchema = SlackSettingsSnapshotSchema;
+export type SlackSettingsSnapshot = z.output<typeof SlackSettingsSnapshotSchema>;
+
+export const SlackSettingsDraftSchema = z
+  .strictObject({
+    enabled: z.boolean().optional(),
+    token: z
+      .string()
+      .min(1)
+      .max(16 * 1024)
+      .optional(),
+    clearToken: z.boolean().optional(),
+    defaultRecipients: SlackRecipientListSchema.optional(),
+    categories: SlackCategoriesPatchSchema.optional(),
+  })
+  .refine((draft) => !(draft.token !== undefined && draft.clearToken === true), {
+    message: 'token and clearToken are mutually exclusive',
+  });
+export const SlackSettingsUpdateRequestSchema = SlackSettingsDraftSchema;
+export type SlackSettingsDraft = z.output<typeof SlackSettingsDraftSchema>;
+
+export const SlackValidationRequestSchema = z.strictObject({
+  token: z
+    .string()
+    .min(1)
+    .max(16 * 1024)
+    .optional(),
+});
+export type SlackValidationRequest = z.output<typeof SlackValidationRequestSchema>;
+
+export const SlackValidationResultSchema = z.strictObject({
+  tokenType: z.enum(['bot', 'user']),
+  identity: SlackIdentitySchema,
+  grantedScopes: z.array(z.string().min(1).max(200)).max(100),
+  missingScopes: z.array(z.string().min(1).max(200)).max(100),
+  suggestedRecipient: SlackRecipientSchema.nullable(),
+});
+export type SlackValidationResult = z.output<typeof SlackValidationResultSchema>;
+
+export const SlackRecipientResolveRequestSchema = z.strictObject({
+  input: z.string().min(1).max(500),
+  token: z
+    .string()
+    .min(1)
+    .max(16 * 1024)
+    .optional(),
+});
+export type SlackRecipientResolveRequest = z.output<typeof SlackRecipientResolveRequestSchema>;
+
+export const SlackTestMessageRequestSchema = z.strictObject({
+  recipients: SlackRecipientListSchema.min(1),
+});
+export type SlackTestMessageRequest = z.output<typeof SlackTestMessageRequestSchema>;
+
+export const SlackTestMessageRecipientResultSchema = z.strictObject({
+  recipient: SlackRecipientSchema,
+  delivered: z.boolean(),
+  error: CanonicalErrorSchema.nullable(),
+});
+export type SlackTestMessageRecipientResult = z.output<
+  typeof SlackTestMessageRecipientResultSchema
+>;
+
+export const SlackTestMessageResultSchema = z.strictObject({
+  results: z.array(SlackTestMessageRecipientResultSchema).max(100),
+});
+export type SlackTestMessageResult = z.output<typeof SlackTestMessageResultSchema>;
 
 export const CatalogueModelSchema = z.strictObject({
   id: z.string().min(1).max(200),
@@ -4123,6 +4334,26 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.settingsUpdate]: {
     request: z.tuple([SettingsPatchSchema]),
     response: SettingsSchema,
+  },
+  [IPC_CHANNELS.slackSettingsGet]: {
+    request: z.tuple([]),
+    response: SlackSettingsSnapshotSchema,
+  },
+  [IPC_CHANNELS.slackSettingsUpdate]: {
+    request: z.tuple([SlackSettingsDraftSchema]),
+    response: SlackSettingsSnapshotSchema,
+  },
+  [IPC_CHANNELS.slackSettingsValidate]: {
+    request: z.tuple([SlackValidationRequestSchema]),
+    response: SlackValidationResultSchema,
+  },
+  [IPC_CHANNELS.slackRecipientResolve]: {
+    request: z.tuple([SlackRecipientResolveRequestSchema]),
+    response: SlackRecipientSchema,
+  },
+  [IPC_CHANNELS.slackTestMessageSend]: {
+    request: z.tuple([SlackTestMessageRequestSchema]),
+    response: SlackTestMessageResultSchema,
   },
   [IPC_CHANNELS.windowOpenSettings]: {
     request: z.tuple([SettingsOpenRequestSchema]),
@@ -4609,6 +4840,11 @@ export interface AgenticoApi {
   onRouteRequest(listener: (event: AppRouteEvent) => void): () => void;
   getSettings(): Promise<Settings>;
   updateSettings(patch: SettingsPatch): Promise<Settings>;
+  getSlackSettings(): Promise<SlackSettingsSnapshot>;
+  updateSlackSettings(draft: SlackSettingsDraft): Promise<SlackSettingsSnapshot>;
+  validateSlackSettings(request: SlackValidationRequest): Promise<SlackValidationResult>;
+  resolveSlackRecipient(request: SlackRecipientResolveRequest): Promise<SlackRecipient>;
+  sendSlackTestMessage(request: SlackTestMessageRequest): Promise<SlackTestMessageResult>;
   openSettingsWindow(request: SettingsOpenRequest): Promise<SettingsOpenResult>;
   getThemePreference(): Promise<ThemeInfo>;
   setThemePreference(preference: ThemePreference): Promise<ThemeInfo>;

@@ -25,7 +25,9 @@ limitations under the License.
  * Callers own the trigger and the open state, so the toolbar can enforce the
  * one-popover-at-a-time rule across the attention bell and the update button.
  */
-import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, type ReactNode, type RefObject } from 'react';
+
+const VIEWPORT_INSET = 16;
 
 export interface ToolbarPopoverProps {
   open: boolean;
@@ -58,6 +60,45 @@ export function ToolbarPopover({
 }: ToolbarPopoverProps) {
   const surface = useRef<HTMLElement>(null);
 
+  useLayoutEffect(() => {
+    if (!open) return;
+    const element = surface.current;
+    if (element === null) return;
+
+    const clampToViewport = () => {
+      element.style.removeProperty('--toolbar-popover-viewport-shift');
+      const bounds = element.getBoundingClientRect();
+      const minLeft = VIEWPORT_INSET;
+      const maxRight = window.innerWidth - VIEWPORT_INSET;
+      const shift =
+        bounds.left < minLeft
+          ? minLeft - bounds.left
+          : bounds.right > maxRight
+            ? maxRight - bounds.right
+            : 0;
+      element.style.setProperty('--toolbar-popover-viewport-shift', `${shift}px`);
+    };
+
+    let frame = 0;
+    const scheduleClamp = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(clampToViewport);
+    };
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(scheduleClamp);
+
+    clampToViewport();
+    scheduleClamp();
+    window.addEventListener('resize', scheduleClamp);
+    resizeObserver?.observe(document.documentElement);
+    return () => {
+      window.removeEventListener('resize', scheduleClamp);
+      resizeObserver?.disconnect();
+      window.cancelAnimationFrame(frame);
+      element.style.removeProperty('--toolbar-popover-viewport-shift');
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
@@ -68,6 +109,7 @@ export function ToolbarPopover({
       // the click reopen what the pointerdown just closed.
       if (anchorRef.current?.contains(target) === true) return;
       onDismiss();
+      window.requestAnimationFrame(() => anchorRef.current?.focus());
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;

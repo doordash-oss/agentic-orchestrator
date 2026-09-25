@@ -6,6 +6,7 @@ require gopkg.in/yaml.v3 v3.0.1
 
 require (
 	github.com/cli/go-gh/v2 v2.13.0
+	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/rogpeppe/go-internal v1.14.1
 	go.opentelemetry.io/otel v1.45.0

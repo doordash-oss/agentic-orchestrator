@@ -39,9 +39,11 @@ const LIST_MATERIAL = {
 const DEFAULT_WIDTH = 900;
 const DEFAULT_HEIGHT = 640;
 
-/** The eight panes, in the order the source list shows them. */
+/** The Settings panes, in the order the source list shows them. */
 const PANE_LABELS = [
   'Workspace roots',
+  'Servers',
+  'Slack',
   'Providers',
   'Appearance',
   'Updates',
@@ -68,7 +70,9 @@ async function openSettingsScene(
   await expect(page.locator('.settings-window__pane-row[data-selected="true"]')).toHaveText(
     paneLabel,
   );
-  await expect(page.getByRole('region', { name: paneRegion })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('region', { name: paneRegion, exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
   await expect(page.locator(`html[data-theme="${theme}"]`)).toBeAttached();
   await expect
     .poll(() =>
@@ -127,4 +131,66 @@ test('settings window visual evidence', async ({ page }) => {
     page,
     'settings-window-appearance-pane-with-the-theme-radio-in-its-new-home-dark-theme-900x640',
   );
+
+  await openSettingsScene(page, 'settings-slack-not-configured', 'light', 'Slack', 'Slack');
+  await expect(page.getByRole('button', { name: 'Copy manifest' })).toBeVisible();
+  await shoot(
+    page,
+    'settings-window-on-the-slack-pane-not-set-up-guide-expanded-light-theme-900x640',
+  );
+
+  await openSettingsScene(page, 'settings-slack-not-configured', 'dark', 'Slack', 'Slack');
+  await shoot(
+    page,
+    'settings-window-on-the-slack-pane-not-set-up-guide-expanded-dark-theme-900x640',
+  );
+
+  await openSettingsScene(page, 'settings-slack-connected', 'dark', 'Slack', 'Slack');
+  await expect(page.getByText(/Connected to Agentico Workspace/)).toBeVisible();
+  await shoot(
+    page,
+    'settings-window-on-the-slack-pane-connected-as-a-bot-with-the-masked-token-hint-900x640',
+  );
+
+  await openSettingsScene(page, 'settings-slack-warning', 'light', 'Slack', 'Slack');
+  await expect(page.getByRole('button', { name: 'Check connection' })).toBeVisible();
+  await shoot(
+    page,
+    'settings-window-on-the-slack-pane-warning-state-with-the-unreachable-error-and-c-900x640',
+  );
+
+  for (const theme of ['light', 'dark'] as const) {
+    await openSettingsScene(page, 'settings-slack-recipients', theme, 'Slack', 'Slack');
+    await page.getByRole('button', { name: 'Add recipient' }).click();
+    const recipient = page.getByRole('textbox', { name: 'Recipient 3' });
+    await recipient.fill('#private-ops');
+    await recipient.blur();
+    const recipientError = page.locator('#slack-recipient-3-error');
+    await expect(recipientError).toContainText('Agentico cannot send to #private-ops.');
+    await expect(recipientError).toContainText(
+      'Invite the Agentico app to #private-ops in Slack, then retry.',
+    );
+    await recipient.scrollIntoViewIfNeeded();
+    await shoot(
+      page,
+      theme === 'light'
+        ? 'settings-window-on-the-slack-pane-connected-as-a-user-notify-by-default-showing-900x640'
+        : 'settings-window-on-the-slack-pane-connected-as-a-user-notify-by-default-showing-900x640-5ae269d2',
+    );
+  }
+
+  for (const theme of ['light', 'dark'] as const) {
+    await openSettingsScene(page, 'settings-slack-test-message', theme, 'Slack', 'Slack');
+    await page.getByRole('button', { name: 'Send test message' }).click();
+    const results = page.getByRole('list', { name: 'Test message results' });
+    await expect(results.getByText('Sent')).toBeVisible();
+    await expect(results.getByText('Agentico cannot send to #private-ops.')).toBeVisible();
+    await results.scrollIntoViewIfNeeded();
+    await shoot(
+      page,
+      theme === 'light'
+        ? 'settings-window-on-the-slack-pane-after-send-test-message-results-showing-one-de-900x640'
+        : 'settings-window-on-the-slack-pane-after-send-test-message-results-showing-one-de-900x640-b207d051',
+    );
+  }
 });

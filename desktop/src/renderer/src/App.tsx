@@ -15,7 +15,13 @@ limitations under the License.
 */
 
 import { disabledMainWindowUiState } from '../../shared/ipc';
-import type { AppRouteEvent, AttentionItem, RoutedRequest, UpdateState } from '../../shared/ipc';
+import type {
+  AppRouteEvent,
+  AttentionItem,
+  RoutedRequest,
+  SlackSettingsSnapshot,
+  UpdateState,
+} from '../../shared/ipc';
 import { ConnectionShell } from './components/ConnectionShell';
 import { AmaPanel } from './components/AmaPanel';
 import { CommandPalette } from './components/CommandPalette';
@@ -81,6 +87,10 @@ export default function App() {
   } | null>(null);
   const [routeRequest, setRouteRequest] = useState<RoutedRequest | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
+  const [slackSettingsSnapshot, setSlackSettingsSnapshot] = useState<SlackSettingsSnapshot | null>(
+    null,
+  );
+  const [slackWarningDismissed, setSlackWarningDismissed] = useState(false);
   // A reply that landed while the panel was closed, echoed on the Ask chip.
   const [amaUnread, setAmaUnread] = useState(false);
   const [updateDismissedVersion, setUpdateDismissedVersion] = useState<string | null>(null);
@@ -153,6 +163,46 @@ export default function App() {
       }),
     [refreshUpdates],
   );
+
+  useEffect(() => {
+    let current = true;
+    let requestSequence = 0;
+    setSlackSettingsSnapshot(null);
+    setSlackWarningDismissed(false);
+    if (!runtimeReady) return;
+
+    const refreshSlackSettings = async () => {
+      const request = ++requestSequence;
+      try {
+        const snapshot = await window.agentico.getSlackSettings();
+        if (current && request === requestSequence) setSlackSettingsSnapshot(snapshot);
+      } catch {
+        if (current && request === requestSequence) setSlackSettingsSnapshot(null);
+      }
+    };
+    void refreshSlackSettings();
+    const unsubscribe = window.agentico.onAppEvent((event) => {
+      if (
+        event.type === 'invalidated' &&
+        (event.kind === 'config.updated' || event.kind === 'resync')
+      ) {
+        void refreshSlackSettings();
+      }
+    });
+    return () => {
+      current = false;
+      unsubscribe();
+    };
+  }, [runtimeReady, serverKey]);
+
+  useEffect(() => {
+    if (
+      slackSettingsSnapshot?.supported !== true ||
+      slackSettingsSnapshot.status.state !== 'credential_error'
+    ) {
+      setSlackWarningDismissed(false);
+    }
+  }, [slackSettingsSnapshot]);
 
   const refreshAttention = useCallback(async () => {
     if (!runtimeReady) {
@@ -243,6 +293,12 @@ export default function App() {
                 onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
                 onOpenUpdatesSettings={() =>
                   requestRoute({ target: 'settings', settingsSection: 'updates' })
+                }
+                slackSettingsSnapshot={slackSettingsSnapshot}
+                slackWarningDismissed={slackWarningDismissed}
+                onDismissSlackWarning={() => setSlackWarningDismissed(true)}
+                onOpenSlackSettings={() =>
+                  requestRoute({ target: 'settings', settingsSection: 'slack' })
                 }
                 onOpenAma={() => requestRoute({ target: 'ama' })}
                 onOpenPalette={() => requestRoute({ target: 'palette' })}

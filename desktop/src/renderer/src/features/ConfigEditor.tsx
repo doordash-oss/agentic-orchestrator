@@ -28,7 +28,7 @@ limitations under the License.
  * catalogue. Model options are grouped by provider and effort options stay
  * capability-aware, while untouched values name the effective defaults.
  */
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   AutomaticReviewMode,
   CanonicalError,
@@ -40,9 +40,11 @@ import type {
   ModelCatalogue,
   PhaseEffort,
   PhaseModels,
+  SlackRecipient,
   WorkspaceDefaults,
 } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
+import { FieldError, fieldAriaDescribedBy, fieldAriaInvalid } from '../components/FieldError';
 import { retryAction, useIpcLoad } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
 
@@ -457,6 +459,7 @@ interface ConfigFormProps {
     hint: string;
     options: ReadonlyArray<{ value: string; label: string }>;
   };
+  notifications?: ReactNode;
   onChange(next: ConfigFormValue): void;
   onInputAlertsChange(value: string): void;
   onAutomaticReviewChange(value: string): void;
@@ -471,6 +474,7 @@ function ConfigForm({
   manualPublishAvailable,
   inputAlerts,
   automaticReview,
+  notifications,
   onChange,
   onInputAlertsChange,
   onAutomaticReviewChange,
@@ -625,12 +629,14 @@ function ConfigForm({
           </label>
         ))}
       </fieldset>
+      {notifications}
     </div>
   );
 }
 
 interface SaveBarProps {
   dirty: boolean;
+  blocked?: boolean;
   saving: boolean;
   saved: boolean;
   error: CanonicalError | null;
@@ -639,7 +645,16 @@ interface SaveBarProps {
   onReset(): void;
 }
 
-function SaveBar({ dirty, saving, saved, error, effectNote, onSave, onReset }: SaveBarProps) {
+function SaveBar({
+  dirty,
+  blocked,
+  saving,
+  saved,
+  error,
+  effectNote,
+  onSave,
+  onReset,
+}: SaveBarProps) {
   return (
     <footer className="config-editor__footer">
       {/* The failure branch is the canonical card; the bar's own Save button
@@ -651,11 +666,13 @@ function SaveBar({ dirty, saving, saved, error, effectNote, onSave, onReset }: S
         <span className="config-editor__status" role="status">
           {saving
             ? 'Saving…'
-            : dirty
-              ? 'Unsaved changes'
-              : saved
-                ? `Saved. ${effectNote}`
-                : effectNote}
+            : blocked
+              ? 'Resolve or remove every recipient before saving.'
+              : dirty
+                ? 'Unsaved changes'
+                : saved
+                  ? `Saved. ${effectNote}`
+                  : effectNote}
         </span>
       )}
       <div className="config-editor__actions">
@@ -671,7 +688,7 @@ function SaveBar({ dirty, saving, saved, error, effectNote, onSave, onReset }: S
           type="button"
           className="config-editor__btn config-editor__btn--primary"
           onClick={onSave}
-          disabled={!dirty || saving}
+          disabled={!dirty || saving || blocked}
         >
           Save changes
         </button>
@@ -711,8 +728,187 @@ const FEATURE_AUTOMATIC_REVIEW_OPTIONS = [
   { value: 'disabled', label: 'Disabled' },
 ] as const;
 
+type SlackOverride = '' | 'on' | 'off';
+type FeatureSlack = {
+  mode?: '' | 'muted';
+  progress?: SlackOverride;
+  needsInput?: SlackOverride;
+  problems?: SlackOverride;
+  recipients?: SlackRecipient[];
+};
+type ConfigWithSlack = FeatureConfig & {
+  slackNotifications?: FeatureSlack;
+  slackConfigured?: boolean;
+  slackDefaults?: {
+    categories: { progress: boolean; needsInput: boolean; problems: boolean };
+    recipientNames: string[];
+  };
+};
+type RecipientRow = {
+  key: number;
+  input: string;
+  resolved: SlackRecipient | null;
+  resolving: boolean;
+  error: string | null;
+};
+const CATEGORY_FIELDS = [
+  { key: 'progress', label: 'Progress' },
+  { key: 'needsInput', label: 'Needs input' },
+  { key: 'problems', label: 'Problems' },
+] as const;
+
+function NotificationGroup({
+  configured,
+  defaults,
+  defaultRecipients,
+  slack,
+  rows,
+  onSlackChange,
+  onRowChange,
+  onRowResolve,
+  onRowRemove,
+  onRowAdd,
+}: {
+  configured: boolean;
+  defaults?: NonNullable<ConfigWithSlack['slackDefaults']>['categories'];
+  defaultRecipients?: string[];
+  slack?: FeatureSlack;
+  rows: RecipientRow[];
+  onSlackChange(next: FeatureSlack): void;
+  onRowChange(key: number, input: string): void;
+  onRowResolve(key: number): void;
+  onRowRemove(key: number): void;
+  onRowAdd(): void;
+}) {
+  return (
+    <fieldset className="config-editor__group">
+      <legend className="config-editor__group-title">Notifications</legend>
+      {!configured ? (
+        <p className="config-editor__group-desc">Set up Slack in Settings</p>
+      ) : (
+        <>
+          <label className="config-editor__gate">
+            <input
+              type="checkbox"
+              checked={slack?.mode === 'muted'}
+              onChange={(event) =>
+                onSlackChange({ ...slack, mode: event.currentTarget.checked ? 'muted' : '' })
+              }
+            />
+            <span className="config-editor__gate-text">
+              <b>Mute this feature</b>
+              <span>Stop new Slack updates. Items already posted can still be answered.</span>
+            </span>
+          </label>
+          {slack?.mode === 'muted' ? (
+            <p className="config-editor__group-desc">
+              Category choices have no effect while muted.
+            </p>
+          ) : null}
+          {CATEGORY_FIELDS.map(({ key, label }) => (
+            <label key={key} className="config-editor__row">
+              <span className="config-editor__row-label">{label}</span>
+              <span className="config-editor__row-hint">Slack updates for this feature</span>
+              <select
+                className="config-editor__select"
+                aria-label={label}
+                value={slack?.[key] ?? ''}
+                onChange={(event) =>
+                  onSlackChange({
+                    ...slack,
+                    [key]: event.currentTarget.value as SlackOverride,
+                  })
+                }
+              >
+                <option value="">Inherit ({defaults?.[key] === false ? 'off' : 'on'})</option>
+                <option value="on">On</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
+          ))}
+          <div className="config-editor__recipients">
+            <div className="config-editor__recipients-head">
+              <div>
+                <b>Also notify</b>
+                <p className="config-editor__group-desc">
+                  Workspace defaults:{' '}
+                  {defaultRecipients?.length ? defaultRecipients.join(', ') : 'None'}
+                </p>
+              </div>
+              <button type="button" className="config-editor__btn" onClick={onRowAdd}>
+                Add recipient
+              </button>
+            </div>
+            {rows.map((row, index) => {
+              const errorId = `config-slack-recipient-${row.key}-error`;
+              return (
+                <div className="config-editor__recipient" key={row.key}>
+                  <div className="config-editor__recipient-field">
+                    <label className="sr-only" htmlFor={`config-slack-recipient-${row.key}`}>
+                      Recipient {index + 1}
+                    </label>
+                    <input
+                      id={`config-slack-recipient-${row.key}`}
+                      value={row.input}
+                      placeholder="Email, @handle, #channel, or Slack ID"
+                      aria-invalid={fieldAriaInvalid(row.error !== null)}
+                      aria-describedby={fieldAriaDescribedBy(errorId, row.error !== null)}
+                      onChange={(event) => onRowChange(row.key, event.currentTarget.value)}
+                      onBlur={() => onRowResolve(row.key)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          onRowResolve(row.key);
+                        }
+                      }}
+                    />
+                    {row.resolving ? <span role="status">Resolving...</span> : null}
+                    {row.resolved !== null ? (
+                      <span role="status">{row.resolved.displayName}</span>
+                    ) : null}
+                    <FieldError id={errorId} message={row.error} />
+                  </div>
+                  <button
+                    type="button"
+                    className="config-editor__btn"
+                    aria-label={`Remove recipient ${index + 1}`}
+                    onClick={() => onRowRemove(row.key)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </fieldset>
+  );
+}
+
 export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   const catalogue = useModelCatalogue();
+  const draftRevision = useRef(0);
+  const nextRowKey = useRef(0);
+  const rowRevisions = useRef(new Map<number, number>());
+  const [rows, setRows] = useState<RecipientRow[]>([]);
+  const makeRow = useCallback(
+    (recipient?: SlackRecipient): RecipientRow => ({
+      key: ++nextRowKey.current,
+      input: recipient?.typedText ?? '',
+      resolved: recipient ?? null,
+      resolving: false,
+      error: null,
+    }),
+    [],
+  );
+  const resetRows = useCallback(
+    (slack?: FeatureSlack) => {
+      rowRevisions.current.clear();
+      setRows([...(slack?.recipients ?? []).map((recipient) => makeRow(recipient)), makeRow()]);
+    },
+    [makeRow],
+  );
   const loadConfig = useCallback(async () => {
     const snapshot = await window.agentico.getFeatureConfig(featureId);
     return {
@@ -725,14 +921,96 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   const { state, reload, replace } = useIpcLoad(loadConfig, [featureId]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [savedNotifications, setSavedNotifications] = useState(false);
   const [saveError, setSaveError] = useState<CanonicalError | null>(null);
+  const baselineSlack =
+    state.phase === 'loaded'
+      ? (state.data.baseline as ConfigWithSlack).slackNotifications
+      : undefined;
+  const draftSlack =
+    state.phase === 'loaded' ? (state.data.draft as ConfigWithSlack).slackNotifications : undefined;
+  const slackSettings =
+    state.phase === 'loaded' ? (state.data.draft as ConfigWithSlack) : undefined;
+  useEffect(() => {
+    if (state.phase === 'loaded') resetRows(baselineSlack);
+  }, [baselineSlack, resetRows, state.phase]);
+  const resolvedRecipients = rows.flatMap((row) =>
+    row.input.trim() !== '' && row.resolved !== null ? [row.resolved] : [],
+  );
+  const invalidRecipients = rows.some((row) => row.input.trim() !== '' && row.resolved === null);
+  const sectionDirty =
+    slackSettings?.slackConfigured === true &&
+    (JSON.stringify(baselineSlack?.mode ?? '') !== JSON.stringify(draftSlack?.mode ?? '') ||
+      CATEGORY_FIELDS.some(
+        ({ key }) => (baselineSlack?.[key] ?? '') !== (draftSlack?.[key] ?? ''),
+      ) ||
+      JSON.stringify(baselineSlack?.recipients ?? []) !== JSON.stringify(resolvedRecipients) ||
+      invalidRecipients);
+  const dirty =
+    state.phase === 'loaded' &&
+    (JSON.stringify(state.data.baseline) !== JSON.stringify(state.data.draft) || sectionDirty);
+
+  useEffect(() => {
+    let active = true;
+    const unsubscribe = window.agentico.onAppEvent((event) => {
+      if (
+        !active ||
+        dirty ||
+        saving ||
+        event.type !== 'invalidated' ||
+        (event.kind !== 'resync' &&
+          !event.kind.startsWith('config') &&
+          !event.kind.startsWith('feature.config')) ||
+        (event.kind !== 'resync' &&
+          event.resourceType !== 'runtime' &&
+          event.featureId !== featureId &&
+          event.resourceId !== featureId)
+      )
+        return;
+      const revision = draftRevision.current;
+      void loadConfig()
+        .then((next) => {
+          if (active && draftRevision.current === revision) replace(next);
+        })
+        .catch(() => {
+          // A background refresh is best-effort; the current draft remains editable.
+        });
+    });
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [dirty, featureId, loadConfig, replace, saving]);
 
   const save = useCallback(() => {
-    if (state.phase !== 'loaded') return;
+    if (state.phase !== 'loaded' || invalidRecipients) return;
+    draftRevision.current += 1;
     setSaving(true);
     setSaveError(null);
+    const {
+      slackNotifications: _storedSlack,
+      slackConfigured: _configured,
+      slackDefaults: _defaults,
+      ...other
+    } = state.data.draft as ConfigWithSlack;
+    const slackPatch: FeatureSlack = {};
+    for (const { key } of CATEGORY_FIELDS) {
+      if ((baselineSlack?.[key] ?? '') !== (draftSlack?.[key] ?? '')) {
+        slackPatch[key] = draftSlack?.[key] ?? '';
+      }
+    }
+    if ((baselineSlack?.mode ?? '') !== (draftSlack?.mode ?? '')) {
+      slackPatch.mode = draftSlack?.mode ?? '';
+    }
+    if (JSON.stringify(baselineSlack?.recipients ?? []) !== JSON.stringify(resolvedRecipients)) {
+      slackPatch.recipients = resolvedRecipients;
+    }
+    const config: ConfigWithSlack = {
+      ...other,
+      ...(sectionDirty ? { slackNotifications: slackPatch } : {}),
+    };
     void window.agentico
-      .updateFeatureConfig({ featureId, config: state.data.draft })
+      .updateFeatureConfig({ featureId, config })
       .then((snapshot) => {
         replace({
           baseline: snapshot.current,
@@ -740,11 +1018,23 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
           defaults: snapshot.defaults,
           manualPublishAvailable: snapshot.manualPublishAvailable,
         });
+        resetRows((snapshot.current as ConfigWithSlack).slackNotifications);
+        setSavedNotifications(sectionDirty);
         setSaved(true);
       })
       .catch((e: unknown) => setSaveError(parseIpcError(e)))
       .finally(() => setSaving(false));
-  }, [featureId, replace, state]);
+  }, [
+    baselineSlack,
+    draftSlack,
+    featureId,
+    invalidRecipients,
+    replace,
+    resetRows,
+    resolvedRecipients,
+    sectionDirty,
+    state,
+  ]);
 
   if (state.phase === 'loading') {
     return <p className="config-editor__notice">Loading configuration…</p>;
@@ -754,10 +1044,76 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
   }
 
   const { baseline, draft, defaults, manualPublishAvailable } = state.data;
-  const dirty = JSON.stringify(baseline) !== JSON.stringify(draft);
-  const setDraft = (next: FeatureConfig) => {
+  const setDraft = (next: ConfigWithSlack) => {
+    draftRevision.current += 1;
     setSaved(false);
+    setSavedNotifications(false);
     replace({ ...state.data, draft: next });
+  };
+  const setSlack = (slackNotifications: FeatureSlack) => setDraft({ ...draft, slackNotifications });
+  const updateRow = (key: number, input: string) => {
+    draftRevision.current += 1;
+    rowRevisions.current.set(key, (rowRevisions.current.get(key) ?? 0) + 1);
+    setSaved(false);
+    setSavedNotifications(false);
+    setRows((current) =>
+      current.map((row) =>
+        row.key === key ? { ...row, input, resolved: null, resolving: false, error: null } : row,
+      ),
+    );
+  };
+  const resolveRow = (key: number) => {
+    const row = rows.find((candidate) => candidate.key === key);
+    const input = row?.input.trim() ?? '';
+    if (!row || !input || row.resolving || row.resolved?.typedText === input) return;
+    const revision = (rowRevisions.current.get(key) ?? 0) + 1;
+    rowRevisions.current.set(key, revision);
+    setRows((current) =>
+      current.map((candidate) =>
+        candidate.key === key ? { ...candidate, resolving: true, error: null } : candidate,
+      ),
+    );
+    void window.agentico
+      .resolveSlackRecipient({ input })
+      .then((recipient) => {
+        if (rowRevisions.current.get(key) !== revision) return;
+        setRows((current) => {
+          const duplicate = current.some(
+            (candidate) =>
+              candidate.key !== key &&
+              candidate.resolved?.kind === recipient.kind &&
+              candidate.resolved.id === recipient.id,
+          );
+          return current.map((candidate) =>
+            candidate.key === key
+              ? {
+                  ...candidate,
+                  resolving: false,
+                  resolved: duplicate ? null : recipient,
+                  error: duplicate ? 'Already in the list' : null,
+                }
+              : candidate,
+          );
+        });
+      })
+      .catch((error: unknown) => {
+        if (rowRevisions.current.get(key) !== revision) return;
+        const canonical = parseIpcError(error);
+        setRows((current) =>
+          current.map((candidate) =>
+            candidate.key === key
+              ? {
+                  ...candidate,
+                  resolving: false,
+                  error:
+                    canonical.remediation?.hint === undefined
+                      ? canonical.summary
+                      : `${canonical.summary} ${canonical.remediation.hint}`,
+                }
+              : candidate,
+          ),
+        );
+      });
   };
 
   return (
@@ -787,15 +1143,46 @@ export function FeatureConfigPanel({ featureId }: { featureId: string }) {
         onAutomaticReviewChange={(mode) =>
           setDraft({ ...draft, automaticReviewMode: mode as AutomaticReviewMode })
         }
+        notifications={
+          <NotificationGroup
+            configured={slackSettings?.slackConfigured === true}
+            defaults={slackSettings?.slackDefaults?.categories}
+            defaultRecipients={slackSettings?.slackDefaults?.recipientNames}
+            slack={draftSlack}
+            rows={rows}
+            onSlackChange={setSlack}
+            onRowChange={updateRow}
+            onRowResolve={resolveRow}
+            onRowRemove={(key) => {
+              draftRevision.current += 1;
+              rowRevisions.current.delete(key);
+              setSaved(false);
+              setSavedNotifications(false);
+              setRows((current) => {
+                const remaining = current.filter((row) => row.key !== key);
+                return remaining.length ? remaining : [makeRow()];
+              });
+            }}
+            onRowAdd={() => setRows((current) => [...current, makeRow()])}
+          />
+        }
       />
       <SaveBar
         dirty={dirty}
+        blocked={invalidRecipients}
         saving={saving}
         saved={saved}
         error={saveError}
-        effectNote="Changes apply to the next dispatch."
+        effectNote={
+          sectionDirty || savedNotifications
+            ? 'Notification changes apply immediately.'
+            : 'Changes apply to the next dispatch.'
+        }
         onSave={save}
-        onReset={() => setDraft(baseline)}
+        onReset={() => {
+          setDraft(baseline);
+          resetRows((baseline as ConfigWithSlack).slackNotifications);
+        }}
       />
     </div>
   );

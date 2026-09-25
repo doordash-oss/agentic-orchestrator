@@ -17,6 +17,8 @@ package permission
 import (
 	"errors"
 	"fmt"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 const (
@@ -51,6 +53,7 @@ type AnswerRequest struct {
 	RememberPattern  string
 	RememberScope    string
 	RememberScopeSet bool
+	Source           *ports.AnswerSource
 }
 
 type AnswerResult struct {

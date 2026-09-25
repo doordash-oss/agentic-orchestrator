@@ -1654,6 +1654,20 @@ function makeMockApi(
   listeners: Set<(event: AppEvent) => void>,
   sessionOutputListeners: Set<(event: SessionOutputEvent) => void>,
 ): AgenticoApi {
+  const creationSlackReadiness = scene.startsWith('creation-sheet-slack')
+    ? {
+        ...READY_SNAPSHOT,
+        repositories: READY_SNAPSHOT.repositories.map((repository) => ({
+          ...repository,
+          identity: {
+            path: repository.path,
+            commonDir: `${repository.path}/.git`,
+            device: '1',
+            inode: repository.name === 'signal-lab' ? '1' : '2',
+          },
+        })),
+      }
+    : READY_SNAPSHOT;
   const requestedTheme = requestedCaptureTheme();
   let theme: ThemeInfo = { preference: requestedTheme, resolved: requestedTheme };
   const appEventListeners = listeners;
@@ -1743,7 +1757,7 @@ function makeMockApi(
     },
     getRuntimeReadiness: () => Promise.resolve(READY_SNAPSHOT),
     refreshRuntimeReadiness: () => Promise.resolve(READY_SNAPSHOT),
-    getReadiness: () => Promise.resolve(READY_SNAPSHOT),
+    getReadiness: () => Promise.resolve(creationSlackReadiness),
     refreshReadiness: () => Promise.resolve(READY_SNAPSHOT),
     pickWorkspaceDirectory: () => Promise.resolve({ path: null } as PickedDirectory),
     addWorkspaceRoot: () => Promise.resolve(READY_SNAPSHOT),
@@ -2079,7 +2093,7 @@ function makeMockApi(
     },
     getCreationDefaults: () =>
       Promise.resolve({
-        repositories: READY_SNAPSHOT.repositories!.map((r) => ({ ...r, valid: true })),
+        repositories: creationSlackReadiness.repositories.map((r) => ({ ...r, valid: true })),
         workspaceRoots: READY_SNAPSHOT.workspaceRoots ?? [],
         defaults: {
           pipeline: 'large',
@@ -2087,6 +2101,15 @@ function makeMockApi(
           models: [],
           effort: [],
           useCurrentBranch: false,
+          ...(scene.startsWith('creation-sheet-slack')
+            ? {
+                slackConfigured: scene !== 'creation-sheet-slack-off',
+                slackDefaults: {
+                  categories: { progress: true, needsInput: false, problems: true },
+                  recipientNames: ['Ada Lovelace', '#workspace-updates'],
+                },
+              }
+            : {}),
         },
       } as CreationDefaults),
     inspectRepositorySources: (request) =>
@@ -2754,6 +2777,79 @@ index 5c32b6a..8a9b3c1 100644
         title: 'Complete repository-aware Electron workflow',
         body: 'Adds the completion workspace, bounded diffs, explicit merge and mark-done controls, cleanup, and protected deletion.',
       }),
+    getSlackSettings: () => Promise.resolve(slackSettingsForScene(scene)),
+    updateSlackSettings: () => Promise.resolve(slackSettingsForScene(scene)),
+    validateSlackSettings: () =>
+      Promise.resolve({
+        tokenType: 'bot' as const,
+        identity: {
+          teamId: 'T123',
+          teamName: 'Agentico Workspace',
+          userId: 'U123',
+          displayName: 'Agentico',
+          botId: 'B123',
+        },
+        grantedScopes: Array.from({ length: 13 }, (_, index) => `scope:${index + 1}`),
+        missingScopes: [],
+        suggestedRecipient: null,
+      }),
+    resolveSlackRecipient: (request) => {
+      if (scene === 'creation-sheet-slack') {
+        if (request.input === '#eng') {
+          return Promise.resolve({
+            typedText: '#eng',
+            kind: 'channel' as const,
+            id: 'C-ENGINEERING',
+            displayName: '#eng',
+          });
+        }
+        return Promise.reject(
+          canonicalRejection({
+            code: 'slack_not_in_channel',
+            class: 'warning',
+            title: 'Agentico is not in this channel',
+            summary: 'Agentico cannot send to #private-ops.',
+            remediation: { hint: 'Invite Agentico to #private-ops in Slack, then try again.' },
+          }),
+        );
+      }
+      if (scene === 'settings-slack-recipients' && request.input === '#private-ops') {
+        return Promise.reject(
+          canonicalRejection({
+            code: 'slack_not_in_channel',
+            class: 'warning',
+            title: 'Agentico is not in this channel',
+            summary: 'Agentico cannot send to #private-ops.',
+            remediation: { hint: 'Invite the Agentico app to #private-ops in Slack, then retry.' },
+          }),
+        );
+      }
+      return Promise.reject(new Error('unused in screenshot capture'));
+    },
+    sendSlackTestMessage: () => {
+      if (scene === 'settings-slack-test-message') {
+        const recipients = slackSettingsForScene(scene).defaultRecipients;
+        return Promise.resolve({
+          results: [
+            { recipient: recipients[0]!, delivered: true, error: null },
+            {
+              recipient: recipients[1]!,
+              delivered: false,
+              error: {
+                code: 'slack_not_in_channel',
+                class: 'warning' as const,
+                title: 'Agentico is not in this channel',
+                summary: 'Agentico cannot send to #private-ops.',
+                remediation: {
+                  hint: 'Invite the Agentico app to #private-ops in Slack, then retry.',
+                },
+              },
+            },
+          ],
+        });
+      }
+      return Promise.reject(new Error('unused in screenshot capture'));
+    },
     openExternal: () => Promise.resolve({ ok: true }),
     revealPath: () => Promise.resolve({ ok: true }),
     writeClipboardText: () => Promise.resolve({ ok: true }),
@@ -2775,7 +2871,111 @@ function settingsScenePane(scene: string): SettingsPaneId {
   if (scene === 'settings-appearance') return 'appearance';
   if (scene === 'settings-workspace-roots') return 'workspace-roots';
   if (scene === 'settings-providers') return 'providers';
+  if (scene.startsWith('settings-slack-')) return 'slack';
   return 'updates';
+}
+
+function slackSettingsForScene(scene: string) {
+  const base = {
+    supported: true as const,
+    manifest: '{"display_information":{"name":"Agentico"}}',
+    grantedScopes: [] as string[],
+    missingScopes: [] as string[],
+    categories: { progress: true, needsInput: true, problems: true },
+    defaultRecipients: [] as Array<{
+      typedText: string;
+      kind: 'user' | 'channel';
+      id: string;
+      displayName: string;
+    }>,
+  };
+  if (scene === 'settings-slack-recipients' || scene === 'settings-slack-test-message') {
+    const owner = {
+      typedText: '@ada',
+      kind: 'user' as const,
+      id: 'U123',
+      displayName: 'Ada Lovelace',
+    };
+    const channel =
+      scene === 'settings-slack-recipients'
+        ? {
+            typedText: '#eng',
+            kind: 'channel' as const,
+            id: 'C12345678',
+            displayName: '#eng',
+          }
+        : {
+            typedText: '#private-ops',
+            kind: 'channel' as const,
+            id: 'C87654321',
+            displayName: '#private-ops',
+          };
+    return {
+      ...base,
+      enabled: true,
+      tokenSet: true,
+      tokenHint: '8F2Q',
+      tokenType: 'user' as const,
+      identity: {
+        teamId: 'T123',
+        teamName: 'Agentico Workspace',
+        userId: owner.id,
+        displayName: owner.displayName,
+        botId: null,
+      },
+      grantedScopes: Array.from({ length: 13 }, (_, index) => `scope:${index + 1}`),
+      defaultRecipients: [owner, channel],
+      status: { state: 'connected' as const, lastError: null, lastCheckedAt: null },
+    };
+  }
+  if (scene === 'settings-slack-connected') {
+    return {
+      ...base,
+      enabled: true,
+      tokenSet: true,
+      tokenHint: '8F2Q',
+      tokenType: 'bot' as const,
+      identity: {
+        teamId: 'T123',
+        teamName: 'Agentico Workspace',
+        userId: 'U123',
+        displayName: 'Agentico',
+        botId: 'B123',
+      },
+      grantedScopes: Array.from({ length: 13 }, (_, index) => `scope:${index + 1}`),
+      status: { state: 'connected' as const, lastError: null, lastCheckedAt: null },
+    };
+  }
+  if (scene === 'settings-slack-warning') {
+    return {
+      ...base,
+      enabled: true,
+      tokenSet: true,
+      tokenHint: '8F2Q',
+      tokenType: 'bot' as const,
+      identity: null,
+      status: {
+        state: 'warning' as const,
+        lastCheckedAt: '2026-09-19T12:00:00Z',
+        lastError: {
+          code: 'slack_unreachable',
+          class: 'warning' as const,
+          title: 'Slack could not be reached',
+          summary: 'The token was saved, but Slack did not answer.',
+          remediation: { hint: 'Check connectivity, then try Check connection again.' },
+        },
+      },
+    };
+  }
+  return {
+    ...base,
+    enabled: false,
+    tokenSet: false,
+    tokenHint: '',
+    tokenType: null,
+    identity: null,
+    status: { state: 'not_configured' as const, lastError: null, lastCheckedAt: null },
+  };
 }
 
 function updateStateForScene(scene: string): UpdateState {

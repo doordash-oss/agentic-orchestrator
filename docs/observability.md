@@ -201,6 +201,64 @@ Partial Implement rewinds add:
 
 Full phase rewinds omit `roadmap_phase` and the roadmap range labels.
 
+### Slack Integration Events
+
+The Slack notifier emits events for successful writes, terminal delivery
+failures, lifecycle events it had to drop, and responder decisions:
+
+- `slack.root_card_updated`: a destination's root card was posted or edited.
+- `slack.message_posted`: a message was posted into a card's thread.
+- `slack.delivery_failed`: a Slack write reached a terminal failure.
+- `slack.event_dropped`: a lifecycle event was discarded before delivery.
+- `slack.answer_received`: a Slack reply or reaction produced an accepted
+  permission answer, review approval, question answer, or help reply.
+- `slack.answer_rejected`: a Slack reply or reaction was judged but did not
+  produce an accepted answer.
+
+`data` keys:
+
+- `destination_kind`: recipient kind of the destination written to (`user` or
+  `channel`), for the two successful-write events and `slack.delivery_failed`.
+- `action`: `posted` when the root card was first created, `edited` when an
+  existing card was updated in place, for `slack.root_card_updated`.
+- `item_kind`: kind of the delivered or failed item (`progress`, `needs_input`,
+  `review_artifact`, `problems`, `root_card`, or `poll`), for
+  `slack.message_posted` and `slack.delivery_failed`. `poll` identifies a
+  terminal `conversations.replies` failure.
+- `input_kind`: pending input kind (`question`, `permission`, `help`, `review`, or
+  `gate`) for tagged `slack.message_posted`, `slack.answer_received`, and
+  `slack.answer_rejected` events. Questions and help turns can be answered
+  through Slack; gates remain informational.
+- `decision`: accepted or parsed decision (`allow_once`, `deny`, `approve`,
+  `option_selected` for a single option, `options_selected` for a multi-select
+  list, `free_text` for an off-menu or text answer, or `help_sent` for a help
+  reply) for responder events.
+- `medium`: Slack input medium (`reply` or `reaction`) for responder events.
+- `reason`: responder rejection reason (`unparseable`, `already_resolved`,
+  `stale_revision`, `not_answerable`, or `submit_failed`) for
+  `slack.answer_rejected`.
+- `failure_class`: `credential` or `destination`, for
+  `slack.delivery_failed`.
+- `slack_error`: Slack's scrubbed error string, or `rate_limited` or
+  `retries_exhausted` after retry exhaustion, for `slack.delivery_failed`.
+- `error_code`: canonical error code for `problems` items and failed
+  deliveries; message text is never included.
+- `attempts`: number of Slack write attempts before the terminal failure, for
+  `slack.delivery_failed`.
+- `tag`: per-feature tag (for example, `#3`) for tagged `needs_input`
+  `slack.message_posted` events. The key remains reserved on
+  `slack.delivery_failed` and `slack.root_card_updated` and is omitted when an
+  event has no tag.
+- `event_type`: name of the dropped lifecycle event (`feature.started`,
+  `phase.completed`, and so on), for `slack.event_dropped`.
+- `reason`: why an event was dropped: `queue_overflow` when the bounded intake
+  queue was full, `feature_load_failed` when the feature record could not be
+  loaded, or `record_load_failed` when the Slack-owned record could not be
+  loaded.
+
+No Slack event carries the Slack token, a channel name, reply text, responder
+name, responder user ID, or rendered message text.
+
 ## Feature Summary
 
 `observe-summary.yaml` is rebuilt from active-run events and durable feature

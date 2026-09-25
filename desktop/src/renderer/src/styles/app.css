@@ -267,6 +267,7 @@ body {
     var(--shadow);
   color: var(--text);
   font: 13px var(--bench-font-text);
+  transform: translateX(var(--toolbar-popover-viewport-shift, 0));
 }
 
 /* The popover hangs off the toolbar, which is a window drag region on macOS —
@@ -308,6 +309,84 @@ body {
   height: 6px;
   border-radius: 999px;
   background: var(--accent);
+}
+
+.slack-warning-trigger {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--attention);
+  cursor: pointer;
+}
+
+.slack-warning-trigger:hover,
+.slack-warning-trigger[aria-expanded='true'] {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.slack-warning-trigger__dot {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--attention);
+}
+
+.slack-warning-popover {
+  width: min(23rem, calc(100vw - var(--space-4) * 2));
+  gap: var(--space-2);
+}
+
+.slack-warning-popover__headline {
+  margin: 0;
+  color: var(--text);
+  font: 600 13px var(--bench-font-text);
+}
+
+.slack-warning-popover__summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.slack-warning-popover__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.slack-warning-popover__action {
+  padding: 4px var(--space-3);
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: var(--content);
+  box-shadow: 0 0 0 var(--bench-hairline-width) var(--hairline);
+  color: var(--text);
+  font: 500 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.slack-warning-popover__action:hover {
+  background: var(--raised);
+}
+
+.slack-warning-popover__action--primary {
+  background: var(--attention);
+  box-shadow: none;
+  color: var(--content);
+}
+
+.slack-warning-popover__action--primary:hover {
+  opacity: 0.9;
 }
 
 .update-popover {
@@ -2763,6 +2842,10 @@ body {
   font: 12px var(--bench-font-text);
 }
 
+.creation-sheet__notification-guidance {
+  color: var(--text);
+}
+
 .creation-sheet__rows {
   list-style: none;
   margin: 0;
@@ -2975,6 +3058,10 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-3);
+}
+
+.creation-sheet__notification-knobs {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
 }
 
 .creation-sheet__summary {
@@ -9525,6 +9612,289 @@ body {
   color: var(--muted);
 }
 
+/* Slack setup keeps the pane operational and compact. The numbered guide is
+ * the one branded moment; connection controls reuse the Settings vocabulary. */
+.slack-settings {
+  --slack-accent: #2eb67d;
+  --slack-success-text: var(--ok);
+}
+
+.slack-settings__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.slack-settings__status strong {
+  font: 700 0.875rem/1.35 var(--bench-font-text);
+}
+
+.slack-settings__status span {
+  color: var(--muted);
+  font: 0.6875rem/1.3 var(--bench-font-mono);
+}
+
+.slack-settings__guide {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.slack-settings__guide-toggle {
+  width: max-content;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: 700 0.8125rem/1.3 var(--bench-font-text);
+  cursor: pointer;
+}
+
+.slack-settings__guide-toggle::before {
+  content: '›';
+  display: inline-block;
+  margin-right: var(--space-2);
+  color: var(--slack-accent);
+  transform: rotate(0deg);
+}
+
+.slack-settings__guide-toggle[aria-expanded='true']::before {
+  transform: rotate(90deg);
+}
+
+.slack-settings__guide ol {
+  counter-reset: slack-step;
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.slack-settings__guide li {
+  counter-increment: slack-step;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 2px var(--space-2);
+  align-items: start;
+}
+
+.slack-settings__guide li::before {
+  content: counter(slack-step);
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid color-mix(in srgb, var(--slack-accent) 60%, var(--hairline));
+  border-radius: 50%;
+  color: var(--slack-accent);
+  font: 700 0.6875rem var(--bench-font-mono);
+}
+
+.slack-settings__guide li > strong,
+.slack-settings__guide li > span,
+.slack-settings__guide li > div {
+  grid-column: 2;
+}
+
+.slack-settings__guide li > strong {
+  font: 600 0.8125rem/1.35 var(--bench-font-text);
+}
+
+.slack-settings__guide li > span {
+  color: var(--muted);
+  font: 0.75rem/1.4 var(--bench-font-text);
+}
+
+.slack-settings__fields,
+.slack-settings__check,
+.slack-settings__recipients,
+.slack-settings__test {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.slack-settings__token-field,
+.slack-settings__token-display {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.slack-settings__token-field > span,
+.slack-settings__token-display > span {
+  font: 600 0.75rem/1.3 var(--bench-font-text);
+}
+
+.slack-settings__token-field input {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  background: var(--content);
+  color: var(--text);
+  font: 0.8125rem var(--bench-font-mono);
+}
+
+.slack-settings__token-field input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.slack-settings__token-display code {
+  width: max-content;
+  color: var(--muted);
+  font: 0.8125rem var(--bench-font-mono);
+}
+
+.slack-settings__remove-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--bad) 45%, var(--hairline));
+  border-radius: var(--radius);
+  color: var(--bad);
+  font: 0.75rem/1.4 var(--bench-font-text);
+}
+
+.slack-settings__check > p {
+  margin: 0;
+  color: var(--muted);
+  font: 0.75rem/1.4 var(--bench-font-text);
+}
+
+.slack-settings__subsection-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.slack-settings__subsection-head h3 {
+  margin: 0;
+  font: 700 0.8125rem/1.35 var(--bench-font-text);
+}
+
+.slack-settings__subsection-head p,
+.slack-settings__hint {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font: 0.75rem/1.4 var(--bench-font-text);
+}
+
+.slack-settings__recipient-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.slack-settings__recipient-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.slack-settings__recipient-field {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.slack-settings__recipient-field input {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  background: var(--content);
+  color: var(--text);
+  font: 0.8125rem var(--bench-font-mono);
+}
+
+.slack-settings__recipient-field input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.slack-settings__recipient-field input:disabled {
+  color: var(--muted);
+  background: var(--raised);
+  cursor: not-allowed;
+}
+
+.slack-settings__recipient-status {
+  display: inline-flex;
+  min-height: 18px;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font: 0.75rem/1.35 var(--bench-font-text);
+}
+
+.slack-settings__recipient-status--resolved,
+.slack-settings__test-sent {
+  color: var(--slack-success-text);
+  font-weight: 700;
+}
+
+.slack-settings__recipient-status--resolved > [aria-hidden='true'],
+.slack-settings__test-sent > [aria-hidden='true'] {
+  color: var(--slack-accent);
+}
+
+.slack-settings__you-pill {
+  border: 1px solid color-mix(in srgb, var(--slack-accent) 50%, var(--hairline));
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--slack-accent) 10%, transparent);
+  font: 700 0.625rem/1.5 var(--bench-font-text);
+}
+
+.slack-settings__test {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--hairline);
+}
+
+.slack-settings__test-results {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.slack-settings__test-results > li {
+  display: grid;
+  grid-template-columns: minmax(0, 140px) minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.slack-settings__test-results > li:first-child {
+  border-top: 0;
+}
+
+.slack-settings__test-results > li > strong {
+  overflow-wrap: anywhere;
+  font: 600 0.75rem/1.4 var(--bench-font-text);
+}
+
+.slack-settings__test-sent {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
 /* --- Restart-pending banner --- */
 
 .restart-pending__banner {
@@ -13129,7 +13499,7 @@ body {
 }
 
 /* --- Structured configuration editor --------------------------------------- */
-/* Three quiet groups (Models / Behavior / Gates). Each model phase is one
+/* Grouped configuration controls. Each model phase is one
  * compact instrument: model selection above a capability-aware effort trim. */
 
 .config-editor {
@@ -13381,6 +13751,54 @@ body {
 .config-editor__gate-text span {
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+.config-editor__recipients {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  border-top: 1px solid var(--hairline);
+  padding: var(--space-3) var(--space-1) 0;
+}
+
+.config-editor__recipients-head,
+.config-editor__recipient {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.config-editor__recipients-head b {
+  font-size: 0.9rem;
+}
+
+.config-editor__recipient-field {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.config-editor__recipient-field input {
+  flex: 1 1 190px;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--content);
+  color: var(--text);
+  font: inherit;
+}
+
+.config-editor__recipient-field input:focus-visible {
+  outline: 2px solid var(--attention);
+  outline-offset: 1px;
 }
 
 .config-editor__footer {

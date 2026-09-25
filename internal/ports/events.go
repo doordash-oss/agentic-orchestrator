@@ -90,10 +90,14 @@ type Event struct {
 	// must refresh as a single client bundle.
 	ParentID string
 	ChildID  string
-	Feature  *feature.Feature // non-nil for FeatureCreated
-	Phase    feature.Phase    // set for phase-related events
-	Error    error            // set for failure events
-	Message  string           // human-readable detail
+	// Feature carries an authoritative emission-time snapshot when one is
+	// available. FeatureCreated always sets it; lifecycle emitters also set it
+	// so asynchronous consumers do not reconstruct past progress from newer
+	// durable state.
+	Feature *feature.Feature
+	Phase   feature.Phase // set for phase-related events
+	Error   error         // set for failure events
+	Message string        // human-readable detail
 	// CanonicalError carries the rendered canonical error object for
 	// failure-carrying events (FeatureFailed). Consumers project it directly
 	// without re-rendering the stored record.

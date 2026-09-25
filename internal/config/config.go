@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 	"gopkg.in/yaml.v3"
@@ -37,10 +38,110 @@ type Config struct {
 	Notifications   NotificationConfig        `yaml:"notifications,omitempty"`
 	Observability   ObservabilityConfig       `yaml:"observability,omitempty"`
 	Providers       map[string]ProviderConfig `yaml:"providers,omitempty"`
+	Slack           *SlackConfig              `yaml:"slack,omitempty"`
 	// Server holds startup-only settings for the headless server. They are
 	// read at launch and intentionally not part of the runtime-config REST
 	// surface.
 	Server ServerConfig `yaml:"server,omitempty"`
+}
+
+// SlackConfig holds the durable Slack connection settings and the last
+// successfully validated identity. Token type and hint are derived at read
+// time so they cannot drift from the stored credential.
+type SlackConfig struct {
+	Enabled           bool             `yaml:"enabled"`
+	Token             string           `yaml:"token,omitempty"`
+	Identity          *SlackIdentity   `yaml:"identity,omitempty"`
+	GrantedScopes     []string         `yaml:"granted_scopes,omitempty"`
+	DefaultRecipients []SlackRecipient `yaml:"default_recipients,omitempty"`
+	// Categories holds the per-category notification defaults. A nil mapping
+	// (or one with no stored keys) reads as every category on; the mapping is
+	// only written once some category is off.
+	Categories      *SlackCategories `yaml:"categories,omitempty"`
+	LastValidatedAt time.Time        `yaml:"last_validated_at,omitempty"`
+}
+
+// SlackCategories controls which notification categories are posted by
+// default. Omitted keys default to true; an explicit false opts out.
+type SlackCategories struct {
+	Progress   bool `yaml:"progress" json:"progress"`
+	NeedsInput bool `yaml:"needs_input" json:"needs_input"`
+	Problems   bool `yaml:"problems" json:"problems"`
+
+	parsed bool // set by UnmarshalYAML; not serialized
+}
+
+// UnmarshalYAML defaults omitted category fields to true.
+func (c *SlackCategories) UnmarshalYAML(value *yaml.Node) error {
+	type categoryFields struct {
+		Progress   *bool `yaml:"progress"`
+		NeedsInput *bool `yaml:"needs_input"`
+		Problems   *bool `yaml:"problems"`
+	}
+
+	var fields categoryFields
+	if err := value.Decode(&fields); err != nil {
+		return err
+	}
+
+	c.Progress = boolValueOrDefault(fields.Progress, true)
+	c.NeedsInput = boolValueOrDefault(fields.NeedsInput, true)
+	c.Problems = boolValueOrDefault(fields.Problems, true)
+	c.parsed = true
+	return nil
+}
+
+// Effective resolves the stored mapping into the effective defaults. A nil
+// mapping, or one that never decoded keys, means every category posts.
+func (c *SlackCategories) Effective() SlackCategories {
+	if c == nil || !c.parsed {
+		return SlackCategories{Progress: true, NeedsInput: true, Problems: true}
+	}
+	return *c
+}
+
+// NormalizeCategories returns the mapping to persist for the given effective
+// defaults: nil when every category is on, so untouched sections never gain
+// the key, and the full mapping once any category is off.
+func NormalizeCategories(effective SlackCategories) *SlackCategories {
+	if effective.Progress && effective.NeedsInput && effective.Problems {
+		return nil
+	}
+	effective.parsed = true
+	return &effective
+}
+
+type SlackRecipient struct {
+	TypedText   string `yaml:"typed_text"`
+	Kind        string `yaml:"kind"`
+	ID          string `yaml:"id"`
+	DisplayName string `yaml:"display_name"`
+}
+
+type SlackIdentity struct {
+	TeamID      string `yaml:"team_id"`
+	TeamName    string `yaml:"team_name"`
+	UserID      string `yaml:"user_id"`
+	DisplayName string `yaml:"display_name"`
+	BotID       string `yaml:"bot_id,omitempty"`
+}
+
+func SlackTokenType(token string) string {
+	switch {
+	case strings.HasPrefix(token, "xoxb-"):
+		return "bot"
+	case strings.HasPrefix(token, "xoxp-"):
+		return "user"
+	default:
+		return "unsupported"
+	}
+}
+
+func SlackTokenHint(token string) string {
+	if len(token) <= 4 {
+		return token
+	}
+	return token[len(token)-4:]
 }
 
 // ServerConfig holds headless-server settings applied once at startup.
@@ -333,8 +434,36 @@ func Save(path string, cfg *Config) error {
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("writing config: %w", err)
+
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("stat config: %w", statErr)
+	}
+	if cfg != nil && cfg.Slack != nil && cfg.Slack.Token != "" {
+		mode = 0o600
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating temporary config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("setting temporary config permissions: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("writing temporary config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing temporary config: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("replacing config: %w", err)
 	}
 	return nil
 }

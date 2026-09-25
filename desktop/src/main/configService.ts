@@ -72,6 +72,30 @@ const ServerCheckpointsSchema = z.object({
   draft_publish: z.boolean().optional(),
 });
 
+const ServerSlackDefaultsSchema = z.object({
+  categories: z.object({
+    progress: z.boolean(),
+    needs_input: z.boolean(),
+    problems: z.boolean(),
+  }),
+  recipient_names: z.array(z.string()),
+});
+
+const ServerSlackNotificationsSchema = z.object({
+  mode: z.enum(['', 'muted']),
+  progress: z.enum(['', 'on', 'off']),
+  needs_input: z.enum(['', 'on', 'off']),
+  problems: z.enum(['', 'on', 'off']),
+  recipients: z.array(
+    z.object({
+      typed_text: z.string(),
+      kind: z.enum(['user', 'channel']),
+      id: z.string(),
+      display_name: z.string(),
+    }),
+  ),
+});
+
 const ServerFeatureConfigSchema = z.object({
   models: ServerModelsSchema,
   effort: ServerEffortSchema.optional(),
@@ -80,6 +104,9 @@ const ServerFeatureConfigSchema = z.object({
   pipeline: z.string().optional(),
   input_notifications: z.string().optional(),
   automatic_review_mode: z.string().optional(),
+  slack_notifications: ServerSlackNotificationsSchema.optional(),
+  slack_configured: z.boolean().optional(),
+  slack_defaults: ServerSlackDefaultsSchema.optional(),
 });
 
 const FeatureConfigResponseSchema = z.object({
@@ -255,6 +282,31 @@ function toFeatureConfig(cfg: z.output<typeof ServerFeatureConfigSchema>): Featu
     pipeline: cfg.pipeline ?? '',
     inputNotifications: normalizeInputNotifications(cfg.input_notifications),
     automaticReviewMode: normalizeAutomaticReviewMode(cfg.automatic_review_mode),
+    ...(cfg.slack_notifications === undefined
+      ? {}
+      : {
+          slackNotifications: {
+            mode: cfg.slack_notifications.mode,
+            progress: cfg.slack_notifications.progress,
+            needsInput: cfg.slack_notifications.needs_input,
+            problems: cfg.slack_notifications.problems,
+            recipients: cfg.slack_notifications.recipients.map((recipient) => ({
+              typedText: recipient.typed_text,
+              kind: recipient.kind,
+              id: recipient.id,
+              displayName: recipient.display_name,
+            })),
+          },
+        }),
+    slackConfigured: cfg.slack_configured ?? false,
+    slackDefaults: {
+      categories: {
+        progress: cfg.slack_defaults?.categories.progress ?? true,
+        needsInput: cfg.slack_defaults?.categories.needs_input ?? true,
+        problems: cfg.slack_defaults?.categories.problems ?? true,
+      },
+      recipientNames: cfg.slack_defaults?.recipient_names ?? [],
+    },
   };
 }
 
@@ -294,6 +346,34 @@ export class ConfigService {
           ...(req.config.pipeline === '' ? {} : { pipeline: req.config.pipeline }),
           input_notifications: req.config.inputNotifications,
           automatic_review_mode: req.config.automaticReviewMode,
+          ...(req.config.slackNotifications === undefined
+            ? {}
+            : {
+                slack_notifications: {
+                  ...(req.config.slackNotifications.mode === undefined
+                    ? {}
+                    : { mode: req.config.slackNotifications.mode }),
+                  ...(req.config.slackNotifications.progress === undefined
+                    ? {}
+                    : { progress: req.config.slackNotifications.progress }),
+                  ...(req.config.slackNotifications.needsInput === undefined
+                    ? {}
+                    : { needs_input: req.config.slackNotifications.needsInput }),
+                  ...(req.config.slackNotifications.problems === undefined
+                    ? {}
+                    : { problems: req.config.slackNotifications.problems }),
+                  ...(req.config.slackNotifications.recipients === undefined
+                    ? {}
+                    : {
+                        recipients: req.config.slackNotifications.recipients.map((recipient) => ({
+                          typed_text: recipient.typedText,
+                          kind: recipient.kind,
+                          id: recipient.id,
+                          display_name: recipient.displayName,
+                        })),
+                      }),
+                },
+              }),
         },
       },
     );

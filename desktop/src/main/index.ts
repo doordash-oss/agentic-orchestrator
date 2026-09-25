@@ -82,6 +82,7 @@ import { LocalDraftStore } from './localDraftStore';
 import { ReviewService } from './reviews';
 import { ConfigService } from './configService';
 import { RunHistoryService } from './runHistory';
+import { SlackSettingsService } from './slackSettingsService';
 import { SetupService } from './setup';
 import { CreationFilesService } from './creationFiles';
 import { ThemeController } from './theme';
@@ -651,6 +652,13 @@ if (!hasSingleInstanceLock) {
     const sessions = new SessionService(gateway, randomUUID, () => gateway.connectedLocality);
     const reviews = new ReviewService(gateway);
     const configService = new ConfigService(gateway);
+    const slackSettings = new SlackSettingsService({
+      transport: gateway,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
+    });
     const attention = new AttentionService(gateway);
     const runHistory = new RunHistoryService(gateway);
     let nativeCommands: NativeCommandController | null = null;
@@ -1481,6 +1489,11 @@ if (!hasSingleInstanceLock) {
         void refreshBackgroundState();
         return next;
       },
+      getSlackSettings: () => slackSettings.get(),
+      updateSlackSettings: (draft) => slackSettings.update(draft),
+      validateSlackSettings: (request) => slackSettings.validate(request),
+      resolveSlackRecipient: (request) => slackSettings.resolveRecipient(request),
+      sendSlackTestMessage: (request) => slackSettings.sendTestMessage(request),
       openSettingsWindow: (request) => ({
         opened: openSettingsWindow(request.section ?? null, request.focus ?? null),
       }),

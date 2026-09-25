@@ -554,6 +554,66 @@ export interface paths {
         patch: operations["patchRuntimeConfig"];
         trace?: never;
     };
+    "/api/v1/integrations/slack/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Validate a Slack connection.
+         * @description Validates the provided write-only token without saving it, or validates and refreshes the stored token when token is omitted.
+         */
+        post: operations["validateSlack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/slack/recipients/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve a Slack notification recipient.
+         * @description Resolves one person or channel using an optional write-only draft token, or the stored token when token is omitted. The result is not persisted.
+         */
+        post: operations["resolveSlackRecipient"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/integrations/slack/test-message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a Slack test message.
+         * @description Sends a test message with the stored token to the supplied resolved recipients, or to the stored defaults when recipients are omitted. Destination failures are returned per recipient.
+         */
+        post: operations["sendSlackTestMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalog/models": {
         parameters: {
             query?: never;
@@ -1357,6 +1417,12 @@ export interface components {
             auto_approve_scope?: "feature" | "workspace";
             /** @description Existing permission cache scope. Empty string means global. */
             remember_scope?: string;
+            source?: components["schemas"]["AnswerSource"];
+        };
+        AnswerSource: {
+            /** @enum {string} */
+            kind: "slack" | "desktop";
+            responder?: string;
         };
         Resource: {
             type: string;
@@ -1855,6 +1921,152 @@ export interface components {
             original: components["schemas"]["FeatureConfig"];
             publishability: components["schemas"]["Publishability"];
         };
+        SlackIdentity: {
+            team_id: string;
+            team_name: string;
+            user_id: string;
+            display_name: string;
+            bot_id?: string;
+        };
+        SlackRecipient: {
+            typed_text: string;
+            /** @enum {string} */
+            kind: "user" | "channel";
+            id: string;
+            display_name: string;
+        };
+        /** @description Stored per-feature values; empty strings inherit the workspace defaults. */
+        SlackNotifications: {
+            /** @enum {string} */
+            mode: "" | "inherit" | "muted";
+            recipients: components["schemas"]["SlackRecipient"][];
+            /** @enum {string} */
+            progress: "" | "inherit" | "on" | "off";
+            /** @enum {string} */
+            needs_input: "" | "inherit" | "on" | "off";
+            /** @enum {string} */
+            problems: "" | "inherit" | "on" | "off";
+        };
+        /** @description Omitted fields remain unchanged on update; an empty recipients list clears the additions. */
+        SlackNotificationsMutation: {
+            /** @enum {string} */
+            mode?: "" | "inherit" | "muted";
+            recipients?: components["schemas"]["SlackRecipient"][];
+            /** @enum {string} */
+            progress?: "" | "inherit" | "on" | "off";
+            /** @enum {string} */
+            needs_input?: "" | "inherit" | "on" | "off";
+            /** @enum {string} */
+            problems?: "" | "inherit" | "on" | "off";
+        };
+        SlackNotificationValue: {
+            enabled: boolean;
+            /** @enum {string} */
+            source: "global" | "feature";
+        };
+        SlackNotificationRecipient: {
+            typed_text: string;
+            /** @enum {string} */
+            kind: "user" | "channel";
+            id: string;
+            display_name: string;
+            /** @enum {string} */
+            source: "global" | "feature";
+        };
+        EffectiveSlackNotifications: {
+            configured: boolean;
+            muted: boolean;
+            /** @enum {string} */
+            mode_source: "global" | "feature";
+            recipients: components["schemas"]["SlackNotificationRecipient"][];
+            progress: components["schemas"]["SlackNotificationValue"];
+            needs_input: components["schemas"]["SlackNotificationValue"];
+            problems: components["schemas"]["SlackNotificationValue"];
+        };
+        SlackNotificationDefaults: {
+            categories: components["schemas"]["SlackCategories"];
+            recipient_names: string[];
+        };
+        SlackStatus: {
+            /** @enum {string} */
+            state: "not_configured" | "connected" | "warning" | "credential_error";
+            last_error?: components["schemas"]["Error"];
+            /** Format: date-time */
+            last_checked_at?: string;
+        };
+        SlackRuntimeConfig: {
+            enabled: boolean;
+            token_set: boolean;
+            token_hint: string;
+            /** @enum {string} */
+            token_type?: "bot" | "user";
+            identity?: components["schemas"]["SlackIdentity"];
+            granted_scopes: string[];
+            missing_scopes: string[];
+            default_recipients: components["schemas"]["SlackRecipient"][];
+            categories: components["schemas"]["SlackCategories"];
+            status: components["schemas"]["SlackStatus"];
+            manifest: string;
+        };
+        /** @description Effective per-category notification defaults. Absent stored settings read as every category on. */
+        SlackCategories: {
+            progress: boolean;
+            needs_input: boolean;
+            problems: boolean;
+        };
+        /** @description Patch representation of the per-category defaults. An absent field means unchanged. */
+        SlackCategoriesMutation: {
+            progress?: boolean;
+            needs_input?: boolean;
+            problems?: boolean;
+        };
+        SlackConfigMutation: {
+            enabled?: boolean;
+            /** @description Write-only Slack OAuth token. Never returned by the API. */
+            token?: string;
+            clear_token?: boolean;
+            default_recipients?: components["schemas"]["SlackRecipient"][];
+            categories?: components["schemas"]["SlackCategoriesMutation"];
+        };
+        RuntimeConfigMutation: {
+            defaults?: {
+                [key: string]: unknown;
+            };
+            workspace_roots?: string[];
+            notifications?: components["schemas"]["NotificationConfig"];
+            slack?: components["schemas"]["SlackConfigMutation"];
+        };
+        SlackValidateRequest: {
+            /** @description Optional write-only draft token; omitted to validate the stored token. */
+            token?: string;
+        };
+        SlackRecipientResolveRequest: {
+            input: string;
+            /** @description Optional write-only draft token; omitted to use the stored token. */
+            token?: string;
+        };
+        SlackTestMessageRequest: {
+            recipients?: components["schemas"]["SlackRecipient"][];
+        };
+        SlackValidateResponse: components["schemas"]["JSONResponse"] & {
+            /** @enum {string} */
+            token_type: "bot" | "user";
+            identity: components["schemas"]["SlackIdentity"];
+            granted_scopes: string[];
+            missing_scopes: string[];
+            suggested_recipient: components["schemas"]["SlackRecipient"] | null;
+        };
+        SlackRecipientResolveResponse: components["schemas"]["JSONResponse"] & {
+            recipient: components["schemas"]["SlackRecipient"];
+        };
+        SlackDeliveryResult: {
+            recipient: components["schemas"]["SlackRecipient"];
+            delivered: boolean;
+            error?: components["schemas"]["Error"];
+        };
+        SlackTestMessageResponse: components["schemas"]["JSONResponse"] & {
+            results: components["schemas"]["SlackDeliveryResult"][];
+        };
         RuntimeConfigResponse: components["schemas"]["JSONResponse"] & {
             runtime: components["schemas"]["RuntimeIdentity"];
             model_defaults: components["schemas"]["ModelDefaults"];
@@ -1864,6 +2076,7 @@ export interface components {
             notifications: components["schemas"]["NotificationConfig"];
             observability: components["schemas"]["Observability"];
             providers: string[];
+            slack?: components["schemas"]["SlackRuntimeConfig"];
         };
         ModelCatalogResponse: components["schemas"]["JSONResponse"] & {
             provider_order: string[];
@@ -1968,6 +2181,7 @@ export interface components {
         ReviewSessionDecisionRequest: {
             decision: string;
             base_revision: string;
+            source?: components["schemas"]["AnswerSource"];
         };
         ReviewSessionDecisionResponse: components["schemas"]["ActionBaseResponse"] & {
             feature_id: string;
@@ -2066,6 +2280,7 @@ export interface components {
             /** @enum {string} */
             pipeline?: "medium" | "large" | "moonshot";
             idempotency_key?: string;
+            slack_notifications?: components["schemas"]["SlackNotificationsMutation"];
         };
         StageUploadResponse: {
             api_version: string;
@@ -2442,6 +2657,8 @@ export interface components {
             pipeline?: string;
             checkpoints: unknown;
             automatic_review_enabled?: boolean;
+            slack_configured: boolean;
+            slack_defaults: components["schemas"]["SlackNotificationDefaults"];
         };
         NotificationConfig: {
             mute_feature_input: boolean;
@@ -2462,6 +2679,22 @@ export interface components {
             input_notifications?: "default" | "enabled" | "muted";
             /** @enum {string} */
             automatic_review_mode?: "default" | "enabled" | "disabled";
+            slack_notifications: components["schemas"]["SlackNotifications"];
+            slack_configured: boolean;
+            slack_defaults: components["schemas"]["SlackNotificationDefaults"];
+        };
+        FeatureConfigMutationBody: {
+            models?: components["schemas"]["ModelDefaults"];
+            effort?: components["schemas"]["EffortConfig"];
+            /** @enum {string} */
+            inquireness?: "none" | "medium" | "high";
+            checkpoints?: components["schemas"]["Checkpoints"];
+            pipeline?: string;
+            /** @enum {string} */
+            input_notifications?: "default" | "enabled" | "muted";
+            /** @enum {string} */
+            automatic_review_mode?: "default" | "enabled" | "disabled";
+            slack_notifications?: components["schemas"]["SlackNotificationsMutation"];
         };
         AutomaticReviewState: {
             /** @enum {string} */
@@ -2882,6 +3115,7 @@ export interface components {
             risk_level?: string;
             exit_criteria?: string;
             automatic_review: components["schemas"]["AutomaticReviewState"];
+            slack_notifications: components["schemas"]["EffectiveSlackNotifications"];
             active_run_detail?: components["schemas"]["RunSummary"];
             historical_runs: components["schemas"]["RunSummary"][];
             repo_status: components["schemas"]["RepoStatus"][];
@@ -3250,6 +3484,33 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["RuntimeConfigResponse"];
+            };
+        };
+        /** @description Validated Slack identity and granted scopes. */
+        SlackValidateResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SlackValidateResponse"];
+            };
+        };
+        /** @description Resolved Slack recipient. */
+        SlackRecipientResolveResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SlackRecipientResolveResponse"];
+            };
+        };
+        /** @description Per-recipient Slack test-message results. */
+        SlackTestMessageResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SlackTestMessageResponse"];
             };
         };
         /** @description Model catalog. */
@@ -3669,6 +3930,26 @@ export interface components {
                 };
             };
         };
+        RuntimeConfigMutation: {
+            content: {
+                "application/json": components["schemas"]["RuntimeConfigMutation"];
+            };
+        };
+        SlackValidateRequest: {
+            content: {
+                "application/json": components["schemas"]["SlackValidateRequest"];
+            };
+        };
+        SlackRecipientResolveRequest: {
+            content: {
+                "application/json": components["schemas"]["SlackRecipientResolveRequest"];
+            };
+        };
+        SlackTestMessageRequest: {
+            content: {
+                "application/json": components["schemas"]["SlackTestMessageRequest"];
+            };
+        };
         ProviderModelRefreshRequest: {
             content: {
                 "application/json": components["schemas"]["ProviderModelRefreshRequest"];
@@ -3779,7 +4060,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeatureConfigMutationBody"];
+            };
+        };
         responses: {
             200: components["responses"]["ActionResponse"];
             401: components["responses"]["Unauthorized"];
@@ -4355,7 +4640,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: components["requestBodies"]["RuntimeConfigMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
             400: components["responses"]["ErrorResponse"];
@@ -4372,11 +4657,65 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: components["requestBodies"]["JSONMutation"];
+        requestBody: components["requestBodies"]["RuntimeConfigMutation"];
         responses: {
             200: components["responses"]["ActionResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    validateSlack: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["SlackValidateRequest"];
+        responses: {
+            200: components["responses"]["SlackValidateResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            502: components["responses"]["ErrorResponse"];
+        };
+    };
+    resolveSlackRecipient: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["SlackRecipientResolveRequest"];
+        responses: {
+            200: components["responses"]["SlackRecipientResolveResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            502: components["responses"]["ErrorResponse"];
+        };
+    };
+    sendSlackTestMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["SlackTestMessageRequest"];
+        responses: {
+            200: components["responses"]["SlackTestMessageResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            502: components["responses"]["ErrorResponse"];
         };
     };
     listModels: {

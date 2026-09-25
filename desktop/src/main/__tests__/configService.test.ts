@@ -47,6 +47,85 @@ const checkpoints = {
 };
 
 describe('ConfigService effort routing', () => {
+  it('maps stored Slack feature settings and forwards an explicit recipient clear', async () => {
+    const config = {
+      api_version: 'v1',
+      feature_id: 'feat-1',
+      current: {
+        models: {},
+        checkpoints,
+        slack_notifications: {
+          mode: 'muted',
+          progress: 'off',
+          needs_input: '',
+          problems: '',
+          recipients: [{ typed_text: '#eng', kind: 'channel', id: 'C-ENG', display_name: '#eng' }],
+        },
+        slack_configured: true,
+        slack_defaults: {
+          categories: { progress: true, needs_input: false, problems: true },
+          recipient_names: ['Ada'],
+        },
+      },
+      defaults: {
+        models: {},
+        checkpoints,
+        slack_notifications: {
+          mode: '',
+          progress: '',
+          needs_input: '',
+          problems: '',
+          recipients: [],
+        },
+        slack_configured: true,
+        slack_defaults: {
+          categories: { progress: true, needs_input: false, problems: true },
+          recipient_names: ['Ada'],
+        },
+      },
+    };
+    const { service, calls } = makeService((_path, init) =>
+      init?.method === 'POST'
+        ? { status: 200, body: { api_version: 'v1' } }
+        : { status: 200, body: config },
+    );
+    const snapshot = await service.getFeatureConfig('feat-1');
+    expect(snapshot.current).toMatchObject({
+      slackConfigured: true,
+      slackDefaults: {
+        categories: { progress: true, needsInput: false, problems: true },
+        recipientNames: ['Ada'],
+      },
+      slackNotifications: {
+        mode: 'muted',
+        progress: 'off',
+        recipients: [{ typedText: '#eng', kind: 'channel', id: 'C-ENG', displayName: '#eng' }],
+      },
+    });
+    await service.updateFeatureConfig({
+      featureId: 'feat-1',
+      config: {
+        ...snapshot.current,
+        slackNotifications: {
+          mode: '',
+          progress: '',
+          needsInput: '',
+          problems: '',
+          recipients: [],
+        },
+      },
+    });
+    expect(calls[1]?.init?.body).toMatchObject({
+      slack_notifications: {
+        mode: '',
+        progress: '',
+        needs_input: '',
+        problems: '',
+        recipients: [],
+      },
+    });
+  });
+
   it('round-trips the feature automatic-review override and reviewer model', async () => {
     const featureConfig = {
       api_version: 'v1',

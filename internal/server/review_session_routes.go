@@ -137,6 +137,9 @@ func (h *apiHandler) handleSubmitReviewSessionDecision(w http.ResponseWriter, r 
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
+	if !validateAnswerSource(w, req.Source) {
+		return
+	}
 	resp, err := h.reviewSessionService().SubmitDecision(featureID, reviewID, req)
 	if err != nil {
 		writeReviewSessionError(w, err, featureID, reviewID)

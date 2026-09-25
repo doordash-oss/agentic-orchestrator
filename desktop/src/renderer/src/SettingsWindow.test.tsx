@@ -37,6 +37,7 @@ beforeEach(() => {
 const PANE_ORDER = [
   'Workspace roots',
   'Servers',
+  'Slack',
   'Providers',
   'Appearance',
   'Updates',
@@ -50,6 +51,7 @@ const PANE_ORDER = [
 const PANE_REGION_LABEL: Record<string, string> = {
   'workspace-roots': 'Workspace roots',
   servers: 'Servers',
+  slack: 'Slack',
   providers: 'Provider readiness',
   appearance: 'Appearance',
   updates: 'Updates',
@@ -333,6 +335,7 @@ describe('SettingsWindow deep links', () => {
       pane: 'diagnostics',
     },
     { section: 'servers' as const, row: 'Servers', region: 'Servers', pane: 'servers' },
+    { section: 'slack' as const, row: 'Slack', region: 'Slack', pane: 'slack' },
   ])(
     'switches to the $row pane for a settings route carrying $section',
     async ({ section, row, region, pane }) => {

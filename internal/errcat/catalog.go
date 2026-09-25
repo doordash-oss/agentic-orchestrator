@@ -35,6 +35,7 @@ const (
 // Mutation and action-conflict codes.
 const (
 	Conflict              Code = "conflict"
+	NoLongerPending       Code = "no_longer_pending"
 	LocalSourceStale      Code = "local_source_stale"
 	LocalBaseMissing      Code = "local_base_missing"
 	PublishRemoteDiverged Code = "publish_remote_diverged"
@@ -541,6 +542,12 @@ var catalog = map[Code]Entry{
 		Blocks:      []Block{BlockRepositories},
 		Summary:     "The request conflicts with the current state of the feature.",
 		Remediation: "Refresh the feature and retry.",
+	},
+	NoLongerPending: {
+		Class:       ClassBlocking,
+		Title:       "No longer pending",
+		Summary:     "The item is no longer waiting for an answer.",
+		Remediation: "Refresh the inbox and continue with the current item.",
 	},
 	LocalSourceStale: {
 		Class:       ClassNeedsAction,

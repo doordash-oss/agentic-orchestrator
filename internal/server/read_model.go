@@ -211,6 +211,22 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		Enabled: autoReviewEnabled,
 		Source:  AutomaticReviewStateSource(autoReviewSource),
 	}
+	notificationOwner := f
+	if f.IsChild() {
+		notificationOwner = nil
+		if h.store != nil {
+			var err error
+			notificationOwner, err = h.store.Load(f.Parent.ParentID)
+			if err != nil {
+				return FeatureDetail{}, err
+			}
+		}
+	}
+	var slackSection *feature.SlackNotifications
+	if notificationOwner != nil {
+		slackSection = notificationOwner.SlackNotifications
+	}
+	detail.SlackNotifications = slackEffectiveDTO(feature.ResolveSlack(slackGlobalSettings(h.configOrDefault()), slackSection), slackConfigToken(h.configOrDefault()))
 	detail.ActiveRunDetail = &active
 	detail.HistoricalRuns = history
 	detail.RepoStatus = h.repoStatusDTOs(f)
@@ -254,6 +270,13 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 		detail.NeedUserInput = &gate
 	}
 	detail.Warnings = append(detail.Warnings, effortDriftWarnings(f, h.registry)...)
+	if h.slackWarnings != nil {
+		for _, warning := range h.slackWarnings.SlackWarnings(f.ID) {
+			wire := wireError(warning)
+			wire.Diagnostics = SafeDisplayText(wire.Diagnostics, maxStoredDiagnosticsLen)
+			detail.Warnings = append(detail.Warnings, wire)
+		}
+	}
 	return detail, nil
 }
 
@@ -1232,7 +1255,7 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 		APIVersion:      APIVersion,
 		Runtime:         h.runtime,
 		Defaults:        cfg.Defaults.Models,
-		FeatureDefaults: featureDefaultsDTO(cfg.Defaults),
+		FeatureDefaults: featureDefaultsDTO(cfg),
 		Repos:           repos,
 		WorkspaceRoots:  append([]string(nil), cfg.WorkspaceRoots...),
 		Notifications: NotificationConfig{
@@ -1244,10 +1267,98 @@ func (h *apiHandler) handleRuntimeConfig(w http.ResponseWriter, r *http.Request)
 			OTelServiceName: cfg.Observability.OTelServiceName,
 		},
 		Providers: providers,
+		Slack:     h.slackRuntimeConfig(cfg),
 	}
 	revision := revisionForAny(resp)
 	resp.Meta = h.responseMeta(revision)
 	h.writeRevisionedJSON(w, r, revision, resp)
+}
+
+func (h *apiHandler) slackRuntimeConfig(cfg *config.Config) SlackRuntimeConfig {
+	service := h.slack
+	if service == nil {
+		return SlackRuntimeConfig{Categories: allCategoriesOn()}
+	}
+	slackConfig := cfg.Slack
+	token := ""
+	enabled := false
+	var identity *SlackIdentity
+	granted := []string{}
+	recipients := []SlackRecipient{}
+	categories := allCategoriesOn()
+	if slackConfig != nil {
+		token = slackConfig.Token
+		enabled = slackConfig.Enabled
+		granted = append(granted, slackConfig.GrantedScopes...)
+		for _, recipient := range slackConfig.DefaultRecipients {
+			recipients = append(recipients, SlackRecipient{
+				TypedText:   recipient.TypedText,
+				Kind:        SlackRecipientKind(recipient.Kind),
+				ID:          recipient.ID,
+				DisplayName: recipient.DisplayName,
+			})
+		}
+		if slackConfig.Identity != nil {
+			identity = &SlackIdentity{
+				TeamID:      slackConfig.Identity.TeamID,
+				TeamName:    slackConfig.Identity.TeamName,
+				UserID:      slackConfig.Identity.UserID,
+				DisplayName: slackConfig.Identity.DisplayName,
+				BotID:       slackConfig.Identity.BotID,
+			}
+		}
+		effective := slackConfig.Categories.Effective()
+		categories = SlackCategories{
+			Progress:   effective.Progress,
+			NeedsInput: effective.NeedsInput,
+			Problems:   effective.Problems,
+		}
+	}
+	status := service.Status(ports.SlackStatusInput{Token: token, HasIdentity: identity != nil})
+	wireStatus := SlackStatus{State: SlackStatusState(status.State), LastCheckedAt: status.LastChecked}
+	if status.LastError != nil {
+		lastError := wireError(*status.LastError)
+		wireStatus.LastError = &lastError
+	}
+	projection := SlackRuntimeConfig{
+		Enabled:           enabled,
+		TokenSet:          token != "",
+		TokenHint:         config.SlackTokenHint(token),
+		Identity:          identity,
+		GrantedScopes:     granted,
+		MissingScopes:     []string{},
+		DefaultRecipients: recipients,
+		Categories:        categories,
+		Status:            wireStatus,
+		Manifest:          service.Manifest(),
+	}
+	switch config.SlackTokenType(token) {
+	case "bot":
+		tokenType := SlackRuntimeConfigTokenTypeBot
+		projection.TokenType = &tokenType
+	case "user":
+		tokenType := SlackRuntimeConfigTokenTypeUser
+		projection.TokenType = &tokenType
+	}
+	if token != "" {
+		grantedSet := make(map[string]struct{}, len(granted))
+		for _, scope := range granted {
+			grantedSet[scope] = struct{}{}
+		}
+		for _, scope := range service.RequiredScopes() {
+			if _, ok := grantedSet[scope]; !ok {
+				projection.MissingScopes = append(projection.MissingScopes, scope)
+			}
+		}
+		sort.Strings(projection.MissingScopes)
+	}
+	return projection
+}
+
+// allCategoriesOn is the default Slack category projection: every category
+// posts until a stored mapping opts one out.
+func allCategoriesOn() SlackCategories {
+	return SlackCategories{Progress: true, NeedsInput: true, Problems: true}
 }
 
 func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request, featureID string) {
@@ -1264,7 +1375,10 @@ func (h *apiHandler) handleFeatureConfig(w http.ResponseWriter, r *http.Request,
 		Pipeline:           cfg.Defaults.Pipeline,
 		InputNotifications: FeatureConfigInputNotifications(feature.InputNotificationsModeForMuted(cfg.Notifications.MuteFeatureInput)),
 	}
-	current := featureConfigDTO(f)
+	current := featureConfigDTO(f, cfg)
+	defaults.SlackConfigured = slackConfigured(cfg)
+	defaults.SlackDefaults = slackNotificationDefaults(cfg)
+	defaults.SlackNotifications = slackNotificationsDTO(nil, slackConfigToken(cfg))
 	resp := FeatureConfigResponse{
 		APIVersion: APIVersion,
 		FeatureID:  f.ID,
@@ -1502,7 +1616,8 @@ func copyConfigPipelineGates(in map[string]config.Checkpoints) map[string]config
 	return out
 }
 
-func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaults {
+func featureDefaultsDTO(cfg *config.Config) FeatureDefaults {
+	defaults := cfg.Defaults
 	var prefs map[string]config.PipelinePreference
 	if len(defaults.PipelinePreferences) > 0 {
 		prefs = make(map[string]config.PipelinePreference, len(defaults.PipelinePreferences))
@@ -1518,6 +1633,8 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaults {
 		Pipeline:               defaults.Pipeline,
 		Checkpoints:            defaults.Checkpoints,
 		AutomaticReviewEnabled: defaults.AutomaticReviewEnabled,
+		SlackConfigured:        slackConfigured(cfg),
+		SlackDefaults:          slackNotificationDefaults(cfg),
 	}
 }
 
@@ -1674,6 +1791,13 @@ func sessionHasPendingAskUserControl(sess ports.SessionView) bool {
 }
 
 func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
+	dto := rawNeedUserInputGateDTO(featureID, scope, repoName, iteration, inputNotifications, gatePath)
+	boundNeedUserInputGateFields(&dto)
+	boundNeedUserInputGateDisplay(&dto)
+	return dto
+}
+
+func rawNeedUserInputGateDTO(featureID, scope, repoName string, iteration int, inputNotifications feature.InputNotificationsMode, gatePath string) NeedUserInputGate {
 	dto := NeedUserInputGate{
 		FeatureID:          featureID,
 		Open:               true,
@@ -1693,10 +1817,7 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 	if !rec.WaitingSince.IsZero() {
 		dto.WaitingSince = rec.WaitingSince
 	}
-	dto.Summary = agent.BoundNeedUserInputVerificationString(
-		strings.TrimSpace(rec.Summary),
-		agent.NeedUserInputVerificationContextTextMaxLength,
-	)
+	dto.Summary = strings.TrimSpace(rec.Summary)
 	dto.Questions = make(
 		[]NeedUserInputQuestion,
 		0,
@@ -1715,15 +1836,9 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 			questionIndex = len(dto.Questions) + 1
 		}
 		dto.Questions = append(dto.Questions, NeedUserInputQuestion{
-			Index: questionIndex,
-			Prompt: agent.BoundNeedUserInputVerificationString(
-				prompt,
-				agent.NeedUserInputVerificationContextTextMaxLength,
-			),
-			Answer: agent.BoundNeedUserInputVerificationString(
-				strings.TrimSpace(q.Answer),
-				agent.NeedUserInputVerificationContextTextMaxLength,
-			),
+			Index:  questionIndex,
+			Prompt: prompt,
+			Answer: strings.TrimSpace(q.Answer),
 		})
 	}
 	if rec.Verification != nil && rec.VerificationDecision != nil && len(rec.Verification.Blockers) > 0 {
@@ -1753,44 +1868,20 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 			)
 			for _, capability := range blocker.Capabilities {
 				if capability = strings.TrimSpace(capability); capability != "" {
-					capabilities = append(
-						capabilities,
-						agent.BoundNeedUserInputVerificationString(
-							capability,
-							agent.NeedUserInputVerificationContextTextMaxLength,
-						),
-					)
+					capabilities = append(capabilities, capability)
 					if len(capabilities) == agent.NeedUserInputVerificationMaxCapabilities {
 						break
 					}
 				}
 			}
 			verification.Blockers = append(verification.Blockers, NeedUserInputVerificationBlocker{
-				ItemID: agent.BoundNeedUserInputVerificationString(
-					itemID,
-					agent.NeedUserInputVerificationItemIDMaxLength,
-				),
-				Name: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Name),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
-				RepoName: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.RepoName),
-					agent.NeedUserInputVerificationRepoNameMaxLength,
-				),
-				Command: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Command),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
-				Reason: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Reason),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
+				ItemID:       itemID,
+				Name:         strings.TrimSpace(blocker.Name),
+				RepoName:     strings.TrimSpace(blocker.RepoName),
+				Command:      strings.TrimSpace(blocker.Command),
+				Reason:       strings.TrimSpace(blocker.Reason),
 				Capabilities: capabilities,
-				Remediation: agent.BoundNeedUserInputVerificationString(
-					strings.TrimSpace(blocker.Remediation),
-					agent.NeedUserInputVerificationContextTextMaxLength,
-				),
+				Remediation:  strings.TrimSpace(blocker.Remediation),
 			})
 		}
 		seenActions := make(map[NeedUserInputVerificationAction]struct{}, 3)
@@ -1807,8 +1898,60 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 		}
 		dto.Verification = &verification
 	}
-	boundNeedUserInputGateDisplay(&dto)
 	return dto
+}
+
+func boundNeedUserInputGateFields(dto *NeedUserInputGate) {
+	dto.Summary = agent.BoundNeedUserInputVerificationString(
+		dto.Summary,
+		agent.NeedUserInputVerificationContextTextMaxLength,
+	)
+	for i := range dto.Questions {
+		dto.Questions[i].Prompt = agent.BoundNeedUserInputVerificationString(
+			dto.Questions[i].Prompt,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+		dto.Questions[i].Answer = agent.BoundNeedUserInputVerificationString(
+			dto.Questions[i].Answer,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+	}
+	if dto.Verification == nil {
+		return
+	}
+	for i := range dto.Verification.Blockers {
+		blocker := &dto.Verification.Blockers[i]
+		blocker.ItemID = agent.BoundNeedUserInputVerificationString(
+			blocker.ItemID,
+			agent.NeedUserInputVerificationItemIDMaxLength,
+		)
+		blocker.Name = agent.BoundNeedUserInputVerificationString(
+			blocker.Name,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+		blocker.RepoName = agent.BoundNeedUserInputVerificationString(
+			blocker.RepoName,
+			agent.NeedUserInputVerificationRepoNameMaxLength,
+		)
+		blocker.Command = agent.BoundNeedUserInputVerificationString(
+			blocker.Command,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+		blocker.Reason = agent.BoundNeedUserInputVerificationString(
+			blocker.Reason,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+		for capability := range blocker.Capabilities {
+			blocker.Capabilities[capability] = agent.BoundNeedUserInputVerificationString(
+				blocker.Capabilities[capability],
+				agent.NeedUserInputVerificationContextTextMaxLength,
+			)
+		}
+		blocker.Remediation = agent.BoundNeedUserInputVerificationString(
+			blocker.Remediation,
+			agent.NeedUserInputVerificationContextTextMaxLength,
+		)
+	}
 }
 
 // A JSON string can expand to six bytes per UTF-16 code unit when control
@@ -2049,7 +2192,7 @@ func beforeByKnownTime(a, b time.Time) bool {
 	return a.Before(b)
 }
 
-func featureConfigDTO(f *feature.Feature) FeatureConfig {
+func featureConfigDTO(f *feature.Feature, cfg *config.Config) FeatureConfig {
 	pipeline := f.Pipeline
 	return FeatureConfig{
 		Models:              f.Models,
@@ -2059,6 +2202,9 @@ func featureConfigDTO(f *feature.Feature) FeatureConfig {
 		Pipeline:            string(pipeline),
 		InputNotifications:  FeatureConfigInputNotifications(feature.NormalizeInputNotificationsMode(f.InputNotifications)),
 		AutomaticReviewMode: FeatureConfigAutomaticReviewMode(feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)),
+		SlackNotifications:  slackNotificationsDTO(f.SlackNotifications, slackConfigToken(cfg)),
+		SlackConfigured:     slackConfigured(cfg),
+		SlackDefaults:       slackNotificationDefaults(cfg),
 	}
 }
 

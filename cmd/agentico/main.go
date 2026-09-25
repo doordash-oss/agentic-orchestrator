@@ -53,6 +53,7 @@ import (
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
+	slackintegration "github.com/doordash-oss/agentic-orchestrator/internal/slack"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"go.uber.org/fx"
@@ -1185,14 +1186,24 @@ type runtimeBootstrap struct {
 	phaseRunner     *agent.PhaseRunner
 	observer        *observe.Observer
 	permissionCache *permission.Cache
-	worktrees       feature.WorktreeOps
-	eventCh         chan interface{}
-	runtime         serverruntime.RuntimeIdentity
-	workspaceDir    string
-	recoveryItems   []ports.RecoveryItem
-	recoveryScanOK  bool
-	selfUpdateExec  selfupdate.Executable
-	updateLease     *selfupdate.Lease
+	slack           ports.SlackService
+	slackNotifier   *slackintegration.Notifier
+	// slackSettings relays the locked configuration accessor to the
+	// fx-provided notifier until the server run binds the mutation target.
+	slackSettings *slackSettingsRelay
+	// slackReporter relays delivery outcomes to the server-owned credential
+	// reporter once the HTTP handler has been constructed.
+	slackReporter  *slackDeliveryReporterRelay
+	slackPending   *slackPendingInputRelay
+	slackAnswer    *slackAnswerRelay
+	worktrees      feature.WorktreeOps
+	eventCh        chan interface{}
+	runtime        serverruntime.RuntimeIdentity
+	workspaceDir   string
+	recoveryItems  []ports.RecoveryItem
+	recoveryScanOK bool
+	selfUpdateExec selfupdate.Executable
+	updateLease    *selfupdate.Lease
 	// updateLeaseErr records why the binary lease was not acquired when it
 	// is nil, so eligibility can distinguish ownership contention from
 	// other failures.
@@ -1257,8 +1268,149 @@ func (b *runtimeBootstrap) Close(ctx context.Context) error {
 	return errors.Join(errStop, errLease, errLock)
 }
 
+// slackSettingsRelay lets the fx-provided Slack notifier read live Slack
+// settings from the mutation target, which the server run constructs only
+// after the graph has started.
+type slackSettingsRelay struct {
+	mu     sync.Mutex
+	target ports.SlackSettingsSource
+}
+
+type slackDeliveryReporterRelay struct {
+	mu     sync.Mutex
+	target ports.SlackDeliveryReporter
+}
+
+type slackPendingInputRelay struct {
+	mu     sync.Mutex
+	target ports.SlackPendingInputSource
+}
+
+type slackAnswerRelay struct {
+	mu     sync.Mutex
+	target ports.SlackAnswerPort
+}
+
+func (r *slackAnswerRelay) bind(target ports.SlackAnswerPort) {
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+func (r *slackAnswerRelay) AnswerSlackPermission(answer ports.SlackPermissionAnswer) ports.SlackAnswerResult {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackAnswerResult{
+			Outcome: ports.SlackAnswerFailed,
+			Cause:   errors.New("Slack answer port is unavailable"),
+		}
+	}
+	return target.AnswerSlackPermission(answer)
+}
+
+func (r *slackAnswerRelay) ApproveSlackReview(approval ports.SlackReviewApproval) ports.SlackAnswerResult {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackAnswerResult{
+			Outcome: ports.SlackAnswerFailed,
+			Cause:   errors.New("Slack answer port is unavailable"),
+		}
+	}
+	return target.ApproveSlackReview(approval)
+}
+
+func (r *slackAnswerRelay) AnswerSlackQuestion(answer ports.SlackQuestionAnswer) ports.SlackAnswerResult {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackAnswerResult{Outcome: ports.SlackAnswerFailed, Cause: errors.New("Slack answer port is unavailable")}
+	}
+	return target.AnswerSlackQuestion(answer)
+}
+
+func (r *slackAnswerRelay) AnswerSlackHelp(answer ports.SlackHelpAnswer) ports.SlackAnswerResult {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackAnswerResult{Outcome: ports.SlackAnswerFailed, Cause: errors.New("Slack answer port is unavailable")}
+	}
+	return target.AnswerSlackHelp(answer)
+}
+
+func (r *slackPendingInputRelay) bind(target ports.SlackPendingInputSource) {
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+func (r *slackPendingInputRelay) PendingSlackInputs(featureID string) ([]ports.SlackPendingInput, error) {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return nil, errors.New("Slack pending input source is not ready")
+	}
+	return target.PendingSlackInputs(featureID)
+}
+
+func (r *slackDeliveryReporterRelay) bind(target ports.SlackDeliveryReporter) {
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+func (r *slackDeliveryReporterRelay) ReportSlackDeliveryFailure(
+	at time.Time,
+	credentialGeneration uint64,
+	canonical errcat.Error,
+) {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target != nil {
+		target.ReportSlackDeliveryFailure(at, credentialGeneration, canonical)
+	}
+}
+
+func (r *slackDeliveryReporterRelay) ReportSlackDeliverySuccess(
+	at time.Time,
+	credentialGeneration uint64,
+) {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target != nil {
+		target.ReportSlackDeliverySuccess(at, credentialGeneration)
+	}
+}
+
+func (r *slackSettingsRelay) bind(target ports.SlackSettingsSource) {
+	r.mu.Lock()
+	r.target = target
+	r.mu.Unlock()
+}
+
+func (r *slackSettingsRelay) SlackSettings() ports.SlackRuntimeSettings {
+	r.mu.Lock()
+	target := r.target
+	r.mu.Unlock()
+	if target == nil {
+		return ports.SlackRuntimeSettings{
+			Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+		}
+	}
+	return target.SlackSettings()
+}
+
 type serverMutationTarget struct {
 	mu                    sync.Mutex
+	askUserMu             sync.Mutex
 	orch                  *orchestrator.Orchestrator
 	childCreator          featureRefactorChildCreator
 	reviewFeedbackCreator featureReviewFeedbackChildCreator
@@ -1276,6 +1428,9 @@ type serverMutationTarget struct {
 	// dispatchAsync runs server-owned background work (durable feature
 	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
 	dispatchAsync func(fn func())
+	// slackCredentialGeneration fences validation results across token
+	// replacement and clearing without holding mu during Slack network I/O.
+	slackCredentialGeneration uint64
 }
 
 // featureRefactorChildCreator is the narrow feature.Manager surface the
@@ -1353,6 +1508,7 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 		Attachments:             req.Attachments,
 		QueueSetup:              true,
 		RiskLevel:               req.RiskLevel,
+		SlackNotifications:      serverruntime.SanitizeSlackNotifications(serverruntime.PatchSlackNotifications(nil, req.SlackNotifications), slackToken(cfg)),
 		Pipeline:                req.Pipeline,
 		SourceExpectations:      sourceExpectations,
 		// Every ordinary server creation is accepted against immutable local
@@ -1384,6 +1540,13 @@ func (t *serverMutationTarget) CreateFeature(req serverruntime.CreateFeatureRequ
 	return serverruntime.CreateFeatureResponse{
 		FeatureID: f.ID, Result: "created", Warnings: wireCreationWarnings(f.CreationWarnings),
 	}, nil
+}
+
+func slackToken(cfg *config.Config) string {
+	if cfg == nil || cfg.Slack == nil {
+		return ""
+	}
+	return cfg.Slack.Token
 }
 
 func wireCreationWarnings(warnings []git.BranchProbeWarning) []serverruntime.Error {
@@ -1557,6 +1720,7 @@ func (t *serverMutationTarget) ReviewDecision(featureID string, req serverruntim
 		PhasePlan:   req.PhasePlan,
 		Roadmap:     req.Roadmap,
 		Comment:     req.Comment,
+		Source:      req.Source,
 	}
 	return t.orch.HandleReviewDecision(featureID, decision)
 }
@@ -1591,6 +1755,10 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 				return fmt.Errorf("detecting paired config target: %w", dErr)
 			}
 			if paired {
+				owner, err := t.store.Load(parentID)
+				if err != nil {
+					return err
+				}
 				if err := t.orch.UpdatePairedFeatureConfig(parentID, feature.PairedConfigInput{
 					Models:              req.Models,
 					Effort:              req.Effort,
@@ -1598,6 +1766,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 					Checkpoints:         req.Checkpoints,
 					InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
 					AutomaticReviewMode: automaticReviewMode,
+					SlackNotifications:  serverruntime.SanitizeSlackNotifications(serverruntime.PatchSlackNotifications(owner.SlackNotifications, req.SlackNotifications), slackToken(t.cfg)),
 				}, feature.PipelineProfile(req.Pipeline), featureID); err != nil {
 					return err
 				}
@@ -1622,6 +1791,7 @@ func (t *serverMutationTarget) UpdateFeatureConfig(featureID string, req serverr
 				Checkpoints:         req.Checkpoints,
 				InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
 				AutomaticReviewMode: automaticReviewMode,
+				SlackNotifications:  serverruntime.SanitizeSlackNotifications(serverruntime.PatchSlackNotifications(current.SlackNotifications, req.SlackNotifications), slackToken(t.cfg)),
 			}); err != nil {
 				return err
 			}
@@ -1718,6 +1888,7 @@ func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnsw
 		RememberPattern:  req.RememberPattern,
 		RememberScope:    rememberScope,
 		RememberScopeSet: req.RememberScope != nil,
+		Source:           req.Source,
 	}, func(requestID string, allow bool, reason string) error {
 		return sess.RespondToControl(requestID, allow, reason)
 	})
@@ -1781,13 +1952,23 @@ func (t *serverMutationTarget) permissionAnswerService() *permission.AnswerServi
 }
 
 func (t *serverMutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequest) (serverruntime.AskUserAnswerResponse, error) {
+	t.askUserMu.Lock()
+	defer t.askUserMu.Unlock()
 	sess, pending, err := t.findPendingControlRequest(req.SessionID, req.RequestID, true)
 	if err != nil {
 		return serverruntime.AskUserAnswerResponse{}, err
 	}
 	answers := normalizeAskUserAnswerKeys(pending.Request.Input, req.Answers)
-	if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, answers, nil); err != nil {
-		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("answer ask-user question: %w", err)
+	var answerErr error
+	if req.Source == nil {
+		answerErr = sess.RespondToAskUser(pending.RequestID, pending.Request.Input, answers, nil)
+	} else if responder, ok := sess.(ports.AskUserSourceResponder); ok {
+		answerErr = responder.RespondToAskUserWithSource(pending.RequestID, pending.Request.Input, answers, nil, req.Source)
+	} else {
+		answerErr = errors.New("session does not support answer provenance")
+	}
+	if answerErr != nil {
+		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("answer ask-user question: %w", answerErr)
 	}
 	return serverruntime.AskUserAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Result: resultAnswered}, nil
 }
@@ -2089,6 +2270,8 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	credentialMutation := req.Slack != nil &&
+		(req.Slack.Token != nil || (req.Slack.ClearToken != nil && *req.Slack.ClearToken))
 	cfg := t.cfg
 	if cfg == nil {
 		cfg = config.NewDefault()
@@ -2105,15 +2288,216 @@ func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMuta
 		cfg.Notifications.MuteFeatureInput = req.Notifications.MuteFeatureInput
 		changed = true
 	}
+	if req.Slack != nil {
+		if cfg.Slack == nil {
+			cfg.Slack = &config.SlackConfig{}
+			changed = true
+		}
+		slackConfig := cfg.Slack
+		if req.Slack.Enabled != nil && slackConfig.Enabled != *req.Slack.Enabled {
+			slackConfig.Enabled = *req.Slack.Enabled
+			changed = true
+		}
+		if req.Slack.DefaultRecipients != nil {
+			recipients := make([]config.SlackRecipient, 0, len(*req.Slack.DefaultRecipients))
+			for _, recipient := range *req.Slack.DefaultRecipients {
+				recipients = append(recipients, config.SlackRecipient{
+					TypedText:   recipient.TypedText,
+					Kind:        string(recipient.Kind),
+					ID:          recipient.ID,
+					DisplayName: recipient.DisplayName,
+				})
+			}
+			if !slices.Equal(slackConfig.DefaultRecipients, recipients) {
+				slackConfig.DefaultRecipients = recipients
+				changed = true
+			}
+		}
+		if req.Slack.Categories != nil {
+			effective := slackConfig.Categories.Effective()
+			patch := *req.Slack.Categories
+			if patch.Progress != nil {
+				effective.Progress = *patch.Progress
+			}
+			if patch.NeedsInput != nil {
+				effective.NeedsInput = *patch.NeedsInput
+			}
+			if patch.Problems != nil {
+				effective.Problems = *patch.Problems
+			}
+			if slackConfig.Categories.Effective() != effective {
+				slackConfig.Categories = config.NormalizeCategories(effective)
+				changed = true
+			}
+		}
+		if req.Slack.ClearToken != nil && *req.Slack.ClearToken {
+			if slackConfig.Token != "" || slackConfig.Identity != nil ||
+				len(slackConfig.GrantedScopes) > 0 || !slackConfig.LastValidatedAt.IsZero() {
+				changed = true
+			}
+			slackConfig.Token = ""
+			slackConfig.Identity = nil
+			slackConfig.GrantedScopes = nil
+			slackConfig.LastValidatedAt = time.Time{}
+		} else if req.Slack.Token != nil {
+			if slackConfig.Token != *req.Slack.Token {
+				changed = true
+			}
+			slackConfig.Token = *req.Slack.Token
+			switch {
+			case req.SlackValidation != nil:
+				slackConfig.Identity = &config.SlackIdentity{
+					TeamID:      req.SlackValidation.Identity.TeamID,
+					TeamName:    req.SlackValidation.Identity.TeamName,
+					UserID:      req.SlackValidation.Identity.UserID,
+					DisplayName: req.SlackValidation.Identity.DisplayName,
+					BotID:       req.SlackValidation.Identity.BotID,
+				}
+				slackConfig.GrantedScopes = append([]string(nil), req.SlackValidation.GrantedScopes...)
+				slackConfig.LastValidatedAt = req.SlackCheckedAt.UTC()
+				if req.Slack.DefaultRecipients == nil &&
+					len(slackConfig.DefaultRecipients) == 0 &&
+					req.SlackValidation.TokenType == ports.SlackTokenUser {
+					slackConfig.DefaultRecipients = []config.SlackRecipient{{
+						TypedText:   "@" + req.SlackValidation.Identity.UserName,
+						Kind:        string(ports.SlackRecipientUser),
+						ID:          req.SlackValidation.Identity.UserID,
+						DisplayName: req.SlackValidation.Identity.DisplayName,
+					}}
+				}
+				changed = true
+			case req.SlackWarning != nil:
+				slackConfig.Identity = nil
+				slackConfig.GrantedScopes = nil
+				slackConfig.LastValidatedAt = time.Time{}
+				changed = true
+			}
+		}
+	}
 	if err := config.Save(t.configPath, cfg); err != nil {
 		return serverruntime.RuntimeConfigUpdateResponse{}, err
 	}
 	t.cfg = cfg
+	if credentialMutation {
+		t.slackCredentialGeneration++
+	}
 	status := "unchanged"
 	if changed {
 		status = resultUpdated
 	}
 	return serverruntime.RuntimeConfigUpdateResponse{Result: status}, nil
+}
+
+func (t *serverMutationTarget) LoadSlackCredential() (string, uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cfg == nil || t.cfg.Slack == nil {
+		return "", t.slackCredentialGeneration
+	}
+	return t.cfg.Slack.Token, t.slackCredentialGeneration
+}
+
+func (t *serverMutationTarget) LoadSlackDeliveryConfig() (string, []ports.SlackRecipient) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cfg == nil || t.cfg.Slack == nil {
+		return "", nil
+	}
+	recipients := make([]ports.SlackRecipient, 0, len(t.cfg.Slack.DefaultRecipients))
+	for _, recipient := range t.cfg.Slack.DefaultRecipients {
+		recipients = append(recipients, ports.SlackRecipient{
+			TypedText:   recipient.TypedText,
+			Kind:        ports.SlackRecipientKind(recipient.Kind),
+			ID:          recipient.ID,
+			DisplayName: recipient.DisplayName,
+		})
+	}
+	return t.cfg.Slack.Token, recipients
+}
+
+// SlackSettings returns the live Slack configuration the notifier reads at
+// processing time, without caching the token across reads.
+func (t *serverMutationTarget) SlackSettings() ports.SlackRuntimeSettings {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cfg == nil || t.cfg.Slack == nil {
+		return ports.SlackRuntimeSettings{
+			Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+		}
+	}
+	recipients := make([]ports.SlackRecipient, 0, len(t.cfg.Slack.DefaultRecipients))
+	for _, recipient := range t.cfg.Slack.DefaultRecipients {
+		recipients = append(recipients, ports.SlackRecipient{
+			TypedText:   recipient.TypedText,
+			Kind:        ports.SlackRecipientKind(recipient.Kind),
+			ID:          recipient.ID,
+			DisplayName: recipient.DisplayName,
+		})
+	}
+	effective := t.cfg.Slack.Categories.Effective()
+	return ports.SlackRuntimeSettings{
+		Enabled:              t.cfg.Slack.Enabled,
+		Token:                t.cfg.Slack.Token,
+		CredentialGeneration: t.slackCredentialGeneration,
+		Recipients:           recipients,
+		Categories: ports.SlackCategoryDefaults{
+			Progress:   effective.Progress,
+			NeedsInput: effective.NeedsInput,
+			Problems:   effective.Problems,
+		},
+	}
+}
+
+func (t *serverMutationTarget) SlackCredentialCurrent(token string, generation uint64) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.slackCredentialCurrentLocked(token, generation)
+}
+
+func (t *serverMutationTarget) StoreSlackValidation(
+	token string,
+	generation uint64,
+	validation *ports.SlackValidation,
+	checkedAt time.Time,
+) (bool, error) {
+	if t.configPath == "" {
+		return false, errors.New("config path is not available")
+	}
+	if validation == nil {
+		return false, errors.New("Slack validation is required")
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	cfg := t.cfg
+	if cfg == nil {
+		cfg = config.NewDefault()
+	}
+	if !t.slackCredentialCurrentLocked(token, generation) {
+		return false, nil
+	}
+	cfg.Slack.Identity = &config.SlackIdentity{
+		TeamID:      validation.Identity.TeamID,
+		TeamName:    validation.Identity.TeamName,
+		UserID:      validation.Identity.UserID,
+		DisplayName: validation.Identity.DisplayName,
+		BotID:       validation.Identity.BotID,
+	}
+	cfg.Slack.GrantedScopes = append([]string(nil), validation.GrantedScopes...)
+	cfg.Slack.LastValidatedAt = checkedAt.UTC()
+	if err := config.Save(t.configPath, cfg); err != nil {
+		return false, err
+	}
+	t.cfg = cfg
+	return true, nil
+}
+
+func (t *serverMutationTarget) slackCredentialCurrentLocked(token string, generation uint64) bool {
+	return t.slackCredentialGeneration == generation &&
+		t.cfg != nil &&
+		t.cfg.Slack != nil &&
+		t.cfg.Slack.Token == token &&
+		token != ""
 }
 
 func (t *serverMutationTarget) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, error) {
@@ -2720,7 +3104,7 @@ func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID st
 	if strings.TrimSpace(sessionID) != "" {
 		sess := t.sessions.GetSession(strings.TrimSpace(sessionID))
 		if sess == nil {
-			return nil, nil, fmt.Errorf("session %s not found", sessionID)
+			return nil, nil, fmt.Errorf("%w: session %s not found", serverruntime.ErrNoLongerPending, sessionID)
 		}
 		candidates = []ports.SessionView{sess}
 	} else {
@@ -2741,7 +3125,7 @@ func (t *serverMutationTarget) findPendingControlRequest(sessionID, requestID st
 			return sess, pending, nil
 		}
 	}
-	return nil, nil, fmt.Errorf("pending request %s not found", requestID)
+	return nil, nil, fmt.Errorf("%w: pending request %s not found", serverruntime.ErrNoLongerPending, requestID)
 }
 
 func (t *serverMutationTarget) sendQueuedFeatureHelp(req serverruntime.HelpAnswerRequest) (serverruntime.HelpSendResponse, bool, error) {
@@ -2750,19 +3134,8 @@ func (t *serverMutationTarget) sendQueuedFeatureHelp(req serverruntime.HelpAnswe
 		return serverruntime.HelpSendResponse{}, false, nil
 	}
 	message := strings.TrimSpace(req.Message)
-	found := false
-	if err := t.store.Modify(featureID, func(f *feature.Feature) error {
-		for i := range f.HelpQueue {
-			if !f.HelpQueue[i].Pending {
-				continue
-			}
-			f.HelpQueue[i].Answer = message
-			f.HelpQueue[i].Pending = false
-			found = true
-			return nil
-		}
-		return nil
-	}); err != nil {
+	found, err := t.updateQueuedFeatureHelp(featureID, "", message)
+	if err != nil {
 		return serverruntime.HelpSendResponse{}, true, fmt.Errorf("answer feature help queue: %w", err)
 	}
 	if !found {
@@ -2771,14 +3144,53 @@ func (t *serverMutationTarget) sendQueuedFeatureHelp(req serverruntime.HelpAnswe
 	return serverruntime.HelpSendResponse{FeatureID: featureID, Result: resultSent}, true, nil
 }
 
+// AnswerSlackHelpEntry updates only the named queued help item, even when a
+// session for the same feature is active.
+func (t *serverMutationTarget) AnswerSlackHelpEntry(answer ports.SlackHelpAnswer) error {
+	if t == nil || t.store == nil {
+		return errors.New("feature help store is unavailable")
+	}
+	featureID := strings.TrimSpace(answer.SourceFeatureID)
+	found, err := t.updateQueuedFeatureHelp(featureID, answer.EntryIdentity, answer.Text)
+	if err != nil {
+		return fmt.Errorf("answer feature help queue: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("%w: pending help entry not found", serverruntime.ErrNoLongerPending)
+	}
+	return nil
+}
+
+func (t *serverMutationTarget) updateQueuedFeatureHelp(featureID, identity, message string) (bool, error) {
+	found := false
+	err := t.store.Modify(featureID, func(f *feature.Feature) error {
+		for i := range f.HelpQueue {
+			entry := &f.HelpQueue[i]
+			if !entry.Pending || identity != "" &&
+				ports.SlackHelpEntryIdentity(featureID, entry.Time, entry.Question) != identity {
+				continue
+			}
+			entry.Answer = message
+			entry.Pending = false
+			found = true
+			return nil
+		}
+		if identity != "" {
+			return fmt.Errorf("%w: pending help entry not found", serverruntime.ErrNoLongerPending)
+		}
+		return nil
+	})
+	return found, err
+}
+
 func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) (ports.SessionView, error) {
 	if t.sessions == nil {
 		return nil, errors.New("session manager is not available")
 	}
 	if id := strings.TrimSpace(req.SessionID); id != "" {
 		sess := t.sessions.GetSession(id)
-		if sess == nil {
-			return nil, fmt.Errorf("session %s not found", id)
+		if sess == nil || !sess.IsActive() {
+			return nil, fmt.Errorf("%w: no active session %s", serverruntime.ErrNoLongerPending, id)
 		}
 		return sess, nil
 	}
@@ -2794,7 +3206,7 @@ func (t *serverMutationTarget) helpSession(req serverruntime.HelpAnswerRequest) 
 	}
 	switch len(active) {
 	case 0:
-		return nil, fmt.Errorf("no active session for feature %s", featureID)
+		return nil, fmt.Errorf("%w: no active session for feature %s", serverruntime.ErrNoLongerPending, featureID)
 	case 1:
 		return active[0], nil
 	default:
@@ -3049,11 +3461,18 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	configIsNew := !fileExists(configPath)
 	workspaceDir, _ := os.Getwd()
 	eventCh := make(chan interface{}, 1000)
+	slackSettings := &slackSettingsRelay{}
+	slackReporter := &slackDeliveryReporterRelay{}
+	slackPending := &slackPendingInputRelay{}
+	slackAnswer := &slackAnswerRelay{}
 	// The runtime work-admission boundary is shared by orchestration,
 	// repository work, and the HTTP surface; one instance is supplied to
 	// the fx graph and reused for the server construction below.
 	admission := workadmission.New(workadmission.Options{})
 	boot.admission = admission
+	boot.slackReporter = slackReporter
+	boot.slackPending = slackPending
+	boot.slackAnswer = slackAnswer
 
 	var fm *feature.Manager
 	var sm *session.Manager
@@ -3063,6 +3482,8 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	var phaseRunner *agent.PhaseRunner
 	var observer *observe.Observer
 	var permissionCache *permission.Cache
+	var slackService ports.SlackService
+	var slackNotifier *slackintegration.Notifier
 	var worktrees feature.WorktreeOps
 	providerModules, err := providerFxModules(enabledProviders)
 	if err != nil {
@@ -3076,16 +3497,21 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 			fx.Annotate(workspaceDir, fx.ResultTags(`name:"workspaceDir"`)),
 			fx.Annotate(eventCh, fx.ResultTags(`name:"eventCh"`)),
 		),
+		fx.Supply(fx.Annotate(slackSettings, fx.As(new(ports.SlackSettingsSource)))),
+		fx.Supply(fx.Annotate(slackReporter, fx.As(new(slackintegration.DeliveryReporter)))),
+		fx.Supply(fx.Annotate(slackPending, fx.As(new(ports.SlackPendingInputSource)))),
+		fx.Supply(fx.Annotate(slackAnswer, fx.As(new(ports.SlackAnswerPort)))),
 		config.Module,
 		feature.Module,
 		session.Module,
 		observe.Module,
 		permission.Module,
+		slackintegration.Module,
 		llm.Module,
 		fx.Options(providerModules...),
 		agent.Module,
 		orchestrator.Module,
-		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &worktrees),
+		fx.Populate(&fm, &sm, &orch, &registry, &cfg, &phaseRunner, &observer, &permissionCache, &slackService, &slackNotifier, &worktrees),
 		fx.NopLogger,
 	)
 	boot.fxApp = fxApp
@@ -3198,6 +3624,9 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	boot.phaseRunner = phaseRunner
 	boot.observer = observer
 	boot.permissionCache = permissionCache
+	boot.slack = slackService
+	boot.slackNotifier = slackNotifier
+	boot.slackSettings = slackSettings
 	boot.worktrees = worktrees
 	boot.eventCh = eventCh
 	boot.workspaceDir = workspaceDir
@@ -3410,36 +3839,50 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}, err)
 	}
 
+	mutations := &serverMutationTarget{
+		orch:                  boot.orchestrator,
+		childCreator:          boot.featureManager,
+		reviewFeedbackCreator: boot.featureManager,
+		rebaseChildCreator:    boot.featureManager,
+		cfg:                   boot.cfg,
+		configPath:            boot.runtime.Config,
+		store:                 boot.featureManager.Store,
+		sessions:              boot.sessionManager,
+		phaseRunner:           boot.phaseRunner,
+		permissionCache:       boot.permissionCache,
+		workspaceDir:          boot.workspaceDir,
+		admission:             boot.admission,
+	}
+	// The notifier reads the live Slack configuration through the locked
+	// accessor and needs the resolved runtime name, which is only known
+	// now, before the server starts consuming events.
+	boot.slackSettings.bind(mutations)
+	boot.slackNotifier.SetServerName(resolvedName)
+
 	runtimeServer, err := serverruntime.Start(bootCtx, serverruntime.Options{
-		Runtime:      boot.runtime,
-		LaunchPolicy: policy,
-		StartMode:    cliSubcommandServer,
-		Owner:        boot.owner,
-		AuthToken:    authToken,
-		ListenAddr:   listenAddr,
-		Name:         resolvedName,
-		Features:     boot.featureManager,
-		FeatureStore: boot.featureManager.Store,
-		Freshness:    newGitFreshnessProvider(),
-		Config:       boot.cfg,
-		Registry:     boot.registry,
-		Sessions:     boot.sessionManager,
-		Events:       boot.eventCh,
-		DomainEvents: boot.orchestrator.Events(),
-		Mutations: &serverMutationTarget{
-			orch:                  boot.orchestrator,
-			childCreator:          boot.featureManager,
-			reviewFeedbackCreator: boot.featureManager,
-			rebaseChildCreator:    boot.featureManager,
-			cfg:                   boot.cfg,
-			configPath:            boot.runtime.Config,
-			store:                 boot.featureManager.Store,
-			sessions:              boot.sessionManager,
-			phaseRunner:           boot.phaseRunner,
-			permissionCache:       boot.permissionCache,
-			workspaceDir:          boot.workspaceDir,
-			admission:             boot.admission,
-		},
+		Runtime:                     boot.runtime,
+		LaunchPolicy:                policy,
+		StartMode:                   cliSubcommandServer,
+		Owner:                       boot.owner,
+		AuthToken:                   authToken,
+		ListenAddr:                  listenAddr,
+		Name:                        resolvedName,
+		Features:                    boot.featureManager,
+		FeatureStore:                boot.featureManager.Store,
+		Freshness:                   newGitFreshnessProvider(),
+		Config:                      boot.cfg,
+		Registry:                    boot.registry,
+		Sessions:                    boot.sessionManager,
+		Slack:                       boot.slack,
+		SlackWarnings:               boot.slackNotifier,
+		BindSlackDeliveryReporter:   boot.slackReporter.bind,
+		BindSlackPendingInputSource: boot.slackPending.bind,
+		BindSlackAnswerPort:         boot.slackAnswer.bind,
+		Events:                      boot.eventCh,
+		DomainEvents:                boot.orchestrator.Events(),
+		DomainEventTap:              boot.slackNotifier.DomainEventTap,
+		RuntimeEventTap:             boot.slackNotifier.RuntimeMessageTap,
+		Mutations:                   mutations,
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
 		},
@@ -3455,6 +3898,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}, err)
 	}
 	rt.server = runtimeServer
+	boot.slackNotifier.SignalReady()
 	rt.authToken = authToken
 	// Complete the install lifecycle's server handle now that the server is
 	// running: install requests arriving through HTTP find it ready.

@@ -1049,6 +1049,25 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     enabled: z.boolean(),
     source: z.enum(['global', 'feature']),
   }),
+  slack_notifications: z
+    .object({
+      configured: z.boolean(),
+      muted: z.boolean(),
+      mode_source: z.enum(['global', 'feature']),
+      progress: z.object({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      needs_input: z.object({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      problems: z.object({ enabled: z.boolean(), source: z.enum(['global', 'feature']) }),
+      recipients: z.array(
+        z.object({
+          typed_text: z.string(),
+          kind: z.enum(['user', 'channel']),
+          id: z.string(),
+          display_name: z.string(),
+          source: z.enum(['global', 'feature']),
+        }),
+      ),
+    })
+    .optional(),
   repo_status: z.array(ServerRepoStatusSchema).optional(),
   review_gate: z.object({
     reviewing_gate: z.boolean(),
@@ -1514,6 +1533,17 @@ export const RuntimeConfigCreationSchema = z.object({
     effort: ServerEffortDefaultsSchema.optional(),
     inquireness: z.string().optional(),
     pipeline: z.string().optional(),
+    slack_configured: z.boolean().optional(),
+    slack_defaults: z
+      .object({
+        categories: z.object({
+          progress: z.boolean(),
+          needs_input: z.boolean(),
+          problems: z.boolean(),
+        }),
+        recipient_names: z.array(z.string()),
+      })
+      .optional(),
   }),
 });
 

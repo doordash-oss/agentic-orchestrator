@@ -591,6 +591,33 @@ func TestRespondToAskUser_CapturesQALog(t *testing.T) {
 	}
 }
 
+func TestRespondToAskUserWithSource_CapturesAnswerSource(t *testing.T) {
+	s := &Session{
+		stdin:                 nopWriteCloser{Writer: &bytes.Buffer{}},
+		hasUnansweredQuestion: true,
+		pendingControlRequests: []*llm.ControlRequestMessage{{
+			RequestID: "req-source",
+			Request: llm.ControlRequest{
+				ToolName: "AskUserQuestion",
+			},
+		}},
+	}
+	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
+	source := &ports.AnswerSource{Kind: ports.AnswerSourceSlack, Responder: "Ada"}
+
+	if err := s.RespondToAskUserWithSource("req-source", questions, map[string]string{"Which DB?": "PostgreSQL"}, nil, source); err != nil {
+		t.Fatalf("RespondToAskUserWithSource: %v", err)
+	}
+
+	qa := s.QALog()
+	if len(qa) != 1 {
+		t.Fatalf("len(QALog()) = %d, want 1", len(qa))
+	}
+	if qa[0].Source == nil || qa[0].Source.Kind != ports.AnswerSourceSlack || qa[0].Source.Responder != "Ada" {
+		t.Fatalf("QALog()[0].Source = %+v, want Slack Ada", qa[0].Source)
+	}
+}
+
 func TestQALogReturnsSnapshot(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {

@@ -20,10 +20,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -72,6 +74,7 @@ type Store struct {
 	// behind one another and behind every mutation. Single-record reads rely
 	// on atomic file commits and take no lock at all.
 	mu sync.RWMutex
+	slackRevision atomic.Uint64
 
 	// testSaveInterceptor is a test-only hook consulted by saveUnlocked to
 	// inject failures. The concrete wiring lives in export_test.go.
@@ -125,6 +128,12 @@ func (s *Store) Save(f *Feature) error {
 		s.notifyMutation(Mutation{Kind: MutationSaved, Before: before, After: after, At: time.Now()})
 	}
 	return err
+}
+
+// SlackNotificationsRevision changes only when a saved feature's Slack
+// section changes. Notifiers compare it on each tick without listing features.
+func (s *Store) SlackNotificationsRevision() uint64 {
+	return s.slackRevision.Load()
 }
 
 func (s *Store) Load(id string) (*Feature, error) {
@@ -492,6 +501,14 @@ func (s *Store) saveUnlocked(f *Feature) error {
 	// fixed temp name like "feature.yaml.tmp" allows interleaved writes
 	// where the shorter one leaves trailing bytes from the longer one.
 	path := filepath.Join(dir, "feature.yaml")
+	var previous struct {
+		SlackNotifications *SlackNotifications `yaml:"slack_notifications"`
+	}
+	oldData, readErr := os.ReadFile(path)
+	if readErr == nil {
+		_ = yaml.Unmarshal(oldData, &previous)
+	}
+	slackChanged := !reflect.DeepEqual(previous.SlackNotifications, f.SlackNotifications)
 	tmp, err := os.CreateTemp(dir, "feature-*.yaml.tmp")
 	if err != nil {
 		return fmt.Errorf("creating feature temp file: %w", err)
@@ -509,6 +526,9 @@ func (s *Store) saveUnlocked(f *Feature) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		_ = os.Remove(tmpName)
 		return fmt.Errorf("renaming feature file: %w", err)
+	}
+	if slackChanged {
+		s.slackRevision.Add(1)
 	}
 
 	// Persist the active run alongside the feature, except when the active

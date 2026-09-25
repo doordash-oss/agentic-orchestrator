@@ -19,6 +19,13 @@ NOTE: When the source code of this project is updated to add, remove, or
 upgrade a bundled dependency, this NOTICE.txt MUST be updated to match (and
 any new dependency license MUST be reviewed by Legal for approval).
 
+Test-only Go dependency (not linked into the distributed `agentico` binary):
+
+  github.com/google/go-cmp v0.7.0
+      Copyright (c) 2017 The Go Authors. All rights reserved.
+      Licensed under the BSD 3-Clause License.
+      https://github.com/google/go-cmp
+
 --------------------------------------------------------------------------------
 Embedded Agent Skills and Research Agents
 --------------------------------------------------------------------------------

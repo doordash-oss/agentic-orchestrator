@@ -440,6 +440,7 @@ type ConfigSnapshot struct {
 	Checkpoints         Checkpoints
 	InputNotifications  InputNotificationsMode
 	AutomaticReviewMode AutomaticReviewMode
+	SlackNotifications  *SlackNotifications
 }
 
 type InputNotificationsMode string
@@ -608,6 +609,7 @@ type Feature struct {
 	// AutomaticReviewMode overrides the workspace Automatic Review setting for
 	// fresh sessions. Empty/default inherits the current workspace setting.
 	AutomaticReviewMode AutomaticReviewMode `yaml:"automatic_review_mode,omitempty"`
+	SlackNotifications *SlackNotifications `yaml:"slack_notifications,omitempty"`
 	// AutomaticReviewEnabled and AutomaticReviewSource are read-model fields
 	// populated for display. They are derived from AutomaticReviewMode plus the
 	// current workspace setting and are never persisted.

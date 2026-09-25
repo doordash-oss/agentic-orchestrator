@@ -54,16 +54,29 @@ type Options struct {
 	Name string
 	// AllowUnauthenticated is only for tests that intentionally exercise the
 	// server without discovery bootstrap. Production Start requires AuthToken.
-	AllowUnauthenticated bool
-	Features             FeatureLister
-	FeatureStore         FeatureReader
-	Freshness            RepoFreshnessProvider
-	Config               *config.Config
-	Registry             *llm.Registry
-	Sessions             ports.SessionManager
-	Events               <-chan interface{}
-	DomainEvents         <-chan ports.Event
-	Mutations            MutationTarget
+	AllowUnauthenticated        bool
+	Features                    FeatureLister
+	FeatureStore                FeatureReader
+	Freshness                   RepoFreshnessProvider
+	Config                      *config.Config
+	Registry                    *llm.Registry
+	Sessions                    ports.SessionManager
+	Slack                       ports.SlackService
+	SlackWarnings               ports.SlackWarningSource
+	BindSlackDeliveryReporter   func(ports.SlackDeliveryReporter)
+	BindSlackPendingInputSource func(ports.SlackPendingInputSource)
+	BindSlackAnswerPort         func(ports.SlackAnswerPort)
+	Events                      <-chan interface{}
+	DomainEvents                <-chan ports.Event
+	// DomainEventTap, when non-nil, is invoked by the broker's domain
+	// consumer for every orchestrator event alongside the SSE publish.
+	// Taps must be non-blocking.
+	DomainEventTap func(ports.Event)
+	// RuntimeEventTap, when non-nil, is invoked by the broker's runtime
+	// consumer for every session runtime message alongside the SSE
+	// publish. Taps must be non-blocking.
+	RuntimeEventTap func(interface{})
+	Mutations       MutationTarget
 	// PersistProviderModelCatalog writes a successfully discovered provider
 	// catalog before the server installs it in memory. Nil keeps live refreshes
 	// in memory only.
@@ -125,8 +138,21 @@ type HandlerOptions struct {
 	Config                      *config.Config
 	Registry                    *llm.Registry
 	Sessions                    ports.SessionManager
+	Slack                       ports.SlackService
+	SlackWarnings               ports.SlackWarningSource
+	BindSlackDeliveryReporter   func(ports.SlackDeliveryReporter)
+	BindSlackPendingInputSource func(ports.SlackPendingInputSource)
+	BindSlackAnswerPort         func(ports.SlackAnswerPort)
 	Events                      <-chan interface{}
 	DomainEvents                <-chan ports.Event
+	// DomainEventTap, when non-nil, is invoked by the broker's domain
+	// consumer for every orchestrator event alongside the SSE publish.
+	// Taps must be non-blocking.
+	DomainEventTap func(ports.Event)
+	// RuntimeEventTap, when non-nil, is invoked by the broker's runtime
+	// consumer for every session runtime message alongside the SSE
+	// publish. Taps must be non-blocking.
+	RuntimeEventTap             func(interface{})
 	Mutations                   MutationTarget
 	PersistProviderModelCatalog func(llm.LLMProvider, []llm.ModelInfo) error
 	// InitGitRepository overrides the git-init implementation used by the

@@ -35,6 +35,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -701,6 +702,39 @@ func TestReadinessRefreshReprobesAndUnblocksFeatureCreation(t *testing.T) {
 	}
 	if got := target.created.Load(); got != 1 {
 		t.Fatalf("CreateFeature called %d times; want 1 after readiness refresh", got)
+	}
+}
+
+func TestSlackCredentialErrorDoesNotBlockReadinessOrFeatureCreation(t *testing.T) {
+	t.Parallel()
+
+	provider := &readinessProbeProvider{
+		MockProvider: &mocks.MockProvider{
+			ProviderName: "readyprov", CLIDetected: true, Models: []string{"fake-model"},
+		},
+		status: func() llm.ProviderReadiness {
+			return llm.ProviderReadiness{Ready: true}
+		},
+	}
+	target := &createFeatureRecorder{}
+	slackService := &fakeSlackService{status: ports.SlackStatusSnapshot{
+		State: ports.SlackCredentialError,
+	}}
+	handler := newAPIHandler(HandlerOptions{
+		Config: config.NewDefault(), Registry: newReadinessRegistry(provider),
+		Mutations: target, Slack: slackService, DisableHostValidation: true,
+	}).routes()
+
+	if snapshot := getReadinessSnapshot(t, handler); !snapshot.Ready {
+		t.Fatalf("readiness with Slack credential error = %#v; want ready", snapshot)
+	}
+	if w := postTrustedJSON(handler, apiPathFeatures, map[string]string{
+		"name": "allowed despite Slack",
+	}); w.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body=%s; want 201", w.Code, w.Body.String())
+	}
+	if got := target.created.Load(); got != 1 {
+		t.Fatalf("CreateFeature calls = %d; want 1", got)
 	}
 }
 

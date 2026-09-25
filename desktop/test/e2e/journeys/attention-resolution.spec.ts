@@ -417,6 +417,26 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     await waitForAttentionMissing(handle.page, 'ask-bundle');
     transcript.step('AskUser multi-select and free-text drafts survived cross-surface submission');
 
+    transcript.section('Single-question custom answer stays inside its card');
+    await waitForAttentionItem(handle.page, 'ask-single');
+    await expect(questionTurn.getByText('How should existing tables behave?')).toBeVisible();
+    await expect(questionTurn.getByText('Your answer', { exact: true })).toBeVisible();
+    const singleAnswer = questionTurn.getByRole('textbox', { name: 'Existing tables free text' });
+    await expect(questionComposer.getByRole('textbox')).toHaveCount(0);
+    await questionTurn.getByText('Keep current behavior', { exact: true }).click();
+    await singleAnswer.fill('Keep current behavior for 2 weeks, then revisit.');
+    await expect(
+      questionTurn.getByRole('radio', { name: /Keep current behavior/ }),
+    ).not.toBeChecked();
+    await evidenceShot(handle, 'attention-single-custom-answer-in-card');
+    await singleAnswer.press('Enter');
+    await waitForProviderLog(world, 'response:ask-single:');
+    expect(readProviderLog(world)).toContain('Keep current behavior for 2 weeks, then revisit.');
+    await waitForAttentionMissing(handle.page, 'ask-single');
+    transcript.step(
+      'custom text inside the single-question card replaced a choice and submitted with Enter',
+    );
+
     transcript.section('Feature-scoped help request resolved from the cockpit');
     await closeApp(handle);
     handle = null;

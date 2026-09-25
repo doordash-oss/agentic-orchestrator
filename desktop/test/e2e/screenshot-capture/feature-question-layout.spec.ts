@@ -40,7 +40,7 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(turn.locator('.question-turn__meta')).toHaveText('Design · waiting on you');
 
     const cards = turn.locator('.attention-option');
-    await expect(cards).toHaveCount(4);
+    await expect(cards).toHaveCount(5);
     for (const card of await cards.all()) {
       const box = await card.boundingBox();
       expect(box).not.toBeNull();
@@ -48,13 +48,12 @@ for (const theme of ['light', 'dark'] as const) {
       expect(box!.x + box!.width).toBeLessThanOrEqual(1440);
     }
 
-    // The composer strip is docked under the activity; Send waits for an answer.
+    // Custom answers belong to the question card; the docked Send waits for an answer.
     const composer = page.getByRole('region', { name: 'Agent request' });
     await expect(composer.getByRole('button', { name: 'Send' })).toBeDisabled();
-    await expect(
-      composer.getByPlaceholder('Choose an option above, or type your own answer'),
-    ).toBeVisible();
+    await expect(turn.getByRole('textbox', { name: 'Project direction free text' })).toBeVisible();
 
+    await cards.last().scrollIntoViewIfNeeded();
     await page.screenshot({
       path: testInfo.outputPath(`feature-question-${theme}.png`),
       fullPage: false,
@@ -82,9 +81,25 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(page.getByText('Your reply — not sent yet')).toBeVisible();
     await expect(composer.getByRole('button', { name: 'Send' })).toBeEnabled();
 
+    await cards.last().scrollIntoViewIfNeeded();
     await page.screenshot({
       path: testInfo.outputPath(`feature-question-${theme}-selected.png`),
       fullPage: false,
     });
+
+    const customAnswer = turn.getByRole('textbox', { name: 'Project direction free text' });
+    await customAnswer.fill('Prioritize 2 accessibility improvements');
+    await expect(selectedOption).not.toBeChecked();
+    await expect(
+      page.getByText('Prioritize 2 accessibility improvements', { exact: true }),
+    ).toBeVisible();
+    await expect(composer.getByRole('button', { name: 'Send' })).toBeEnabled();
+
+    await page.setViewportSize({ width: 760, height: 900 });
+    await customAnswer.scrollIntoViewIfNeeded();
+    await expect(customAnswer).toBeInViewport();
+    const box = await customAnswer.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(760);
   });
 }

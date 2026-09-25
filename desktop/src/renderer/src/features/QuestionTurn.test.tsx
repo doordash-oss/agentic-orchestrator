@@ -52,20 +52,28 @@ const item: QuestionsAttentionItem = {
   ],
 };
 
-function Harness({ onSubmit = vi.fn() }: { onSubmit?: () => void }) {
+function Harness({
+  onSubmit = vi.fn(),
+  questionItem = item,
+  busy = false,
+}: {
+  onSubmit?: () => void;
+  questionItem?: QuestionsAttentionItem;
+  busy?: boolean;
+}) {
   const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   return (
     <>
       <QuestionConversationTurn
-        item={item}
-        busy={false}
+        item={questionItem}
+        busy={busy}
         drafts={drafts}
         setDrafts={setDrafts}
         onSubmit={onSubmit}
       />
       <QuestionComposer
-        item={item}
-        busy={false}
+        item={questionItem}
+        busy={busy}
         drafts={drafts}
         setDrafts={setDrafts}
         onSubmit={onSubmit}
@@ -126,7 +134,7 @@ describe('QuestionConversationTurn', () => {
   });
 });
 
-describe('QuestionComposer', () => {
+describe('Question answers', () => {
   it('free text answers the question, replacing any selection', async () => {
     const onSubmit = vi.fn();
     const user = userEvent.setup();
@@ -135,8 +143,15 @@ describe('QuestionComposer', () => {
     const send = screen.getByRole('button', { name: 'Send' });
     expect(send).toBeDisabled();
 
-    const input = screen.getByLabelText('Project direction free text');
+    const turn = screen.getByRole('group', { name: 'Agent question' });
+    const input = within(turn).getByRole('textbox', { name: 'Project direction free text' });
+    expect(within(turn).getByText('Your answer')).toBeVisible();
+    const option = within(turn).getByRole('radio', { name: /Harden the review pipeline/ });
+    await user.click(option);
+    await user.keyboard('3');
+    expect(input).toHaveFocus();
     await user.type(input, 'Focus on speed');
+    expect(option).not.toBeChecked();
     expect(send).toBeEnabled();
     await user.keyboard('{Enter}');
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -148,5 +163,38 @@ describe('QuestionComposer', () => {
 
     await user.click(send);
     expect(onSubmit).toHaveBeenCalledTimes(2);
+
+    await user.click(option);
+    expect(input).toHaveValue('');
+    expect(option).toBeChecked();
+  });
+
+  it('keeps digits as text and blocks Enter for incomplete or busy bundles', async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    const questionItem: QuestionsAttentionItem = {
+      ...item,
+      questions: [
+        ...item.questions,
+        { key: 'Any notes?', header: 'Notes', multiSelect: false, options: [] },
+      ],
+    };
+    const { rerender } = render(<Harness questionItem={questionItem} onSubmit={onSubmit} />);
+    const turn = screen.getByRole('group', { name: 'Agent question' });
+    await user.type(within(turn).getByLabelText('Project direction free text'), 'Plan 2{Enter}');
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await user.type(within(turn).getByLabelText('Notes free text'), 'Ship 3 fixes');
+    expect(questionAnswersRequest(questionItem, latestDrafts).answers).toEqual({
+      'Which overall direction should this project take?': 'Plan 2',
+      'Any notes?': 'Ship 3 fixes',
+    });
+    rerender(<Harness questionItem={questionItem} onSubmit={onSubmit} busy />);
+    await user.keyboard('{Enter}');
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    rerender(<Harness questionItem={questionItem} onSubmit={onSubmit} />);
+    await user.keyboard('{Enter}');
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 });

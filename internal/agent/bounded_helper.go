@@ -37,6 +37,20 @@ import (
 // error text.
 var errHelperReturnedErrorResult = errors.New("helper returned an error result")
 
+// errHelperEndedWithoutResult marks a helper process that exited before the
+// CLI produced any result, which is how a provider refusing to start a turn
+// (capacity, transport) surfaces. Retryable like an error result.
+var errHelperEndedWithoutResult = errors.New("helper ended without a result")
+
+// isHelperInfrastructureError reports whether err is a provider or transport
+// failure of the helper itself rather than a verdict or a protocol violation.
+func isHelperInfrastructureError(err error) bool {
+	if err == nil || isProtocolViolationError(err) {
+		return false
+	}
+	return errors.Is(err, errHelperReturnedErrorResult) || errors.Is(err, errHelperEndedWithoutResult)
+}
+
 const (
 	BoundedHelperStatusCompleted          = "completed"
 	BoundedHelperStatusTimedOut           = "timed_out"
@@ -303,6 +317,7 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			result.Status == BoundedHelperStatusFailed &&
 			(isRetryableInfrastructureSessionFailure(sess, ExtractSessionCost(sess), time.Since(sessionStart)) ||
 				errors.Is(err, errHelperReturnedErrorResult) ||
+				errors.Is(err, errHelperEndedWithoutResult) ||
 				isRetryableProviderNetworkFailure(result.Output, err))
 		return result, err, retryable
 	}
@@ -524,7 +539,7 @@ func finalizeBoundedHelperResult(responsePath string, sess ports.SessionHandle, 
 	result := boundedHelperSnapshot(responsePath, sess, BoundedHelperStatusCompleted)
 	if result.Result == nil {
 		result.Status = BoundedHelperStatusFailed
-		return result, fmt.Errorf("running %s: helper ended without a result", label)
+		return result, fmt.Errorf("running %s: %w", label, errHelperEndedWithoutResult)
 	}
 
 	disposition := boundedHelperTurnDisposition(sess, completionDir != "")

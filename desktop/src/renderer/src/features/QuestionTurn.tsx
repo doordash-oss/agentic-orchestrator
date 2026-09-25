@@ -96,14 +96,22 @@ export function QuestionConversationTurn({
           const handleKeys = (event: ReactKeyboardEvent<HTMLFieldSetElement>) => {
             if (event.metaKey || event.ctrlKey || event.altKey) return;
             const target = event.target as HTMLElement;
-            if (target instanceof HTMLInputElement && target.type === 'text') return;
+            const typing = target instanceof HTMLInputElement && target.type === 'text';
             if (event.key === 'Enter') {
               if (!complete || busy) return;
               event.preventDefault();
               onSubmit();
               return;
             }
+            if (typing) return;
             const digit = Number.parseInt(event.key, 10);
+            if (digit === question.options.length + 1) {
+              event.preventDefault();
+              event.currentTarget
+                .querySelector<HTMLInputElement>('.attention-free-text__input')
+                ?.focus();
+              return;
+            }
             if (!Number.isInteger(digit) || digit < 1 || digit > question.options.length) return;
             event.preventDefault();
             const option = question.options[digit - 1]!;
@@ -143,7 +151,7 @@ export function QuestionConversationTurn({
                       type={question.multiSelect ? 'checkbox' : 'radio'}
                       name={`${detailKey}:${question.key}`}
                       value={option.label}
-                      checked={draft.selected.includes(option.label)}
+                      checked={selected}
                       onChange={(event) => chooseOption(option.label, event.currentTarget.checked)}
                     />
                     <span className="attention-option__number" aria-hidden="true">
@@ -165,30 +173,32 @@ export function QuestionConversationTurn({
                   </label>
                 );
               })}
-              {single ? null : (
-                <label
-                  className="attention-option attention-option--other"
-                  data-selected={draft.freeText.trim() === '' ? undefined : true}
-                >
-                  <span className="attention-option__number" aria-hidden="true">
-                    {question.options.length + 1}
-                  </span>
-                  <span className="attention-option__copy">
-                    <span className="attention-option__label">Other</span>
-                    <input
-                      className="attention-free-text__input"
-                      aria-label={`${question.header} free text`}
-                      placeholder="Type your own answer here"
-                      value={draft.freeText}
-                      onChange={(event) =>
-                        setQuestionDraft(setDrafts, detailKey, question.key, {
-                          freeText: event.target.value,
-                        })
-                      }
-                    />
-                  </span>
-                </label>
-              )}
+              <label
+                className="attention-option attention-option--other"
+                data-selected={draft.freeText.trim() === '' ? undefined : true}
+              >
+                <span className="attention-option__number" aria-hidden="true">
+                  {question.options.length + 1}
+                </span>
+                <span className="attention-option__copy">
+                  <span className="attention-option__label">Your answer</span>
+                  <input
+                    className="attention-free-text__input"
+                    aria-label={`${question.header} free text`}
+                    placeholder={
+                      draft.selected.length > 0
+                        ? 'Type your own answer to replace the selected options'
+                        : 'Type your own answer here'
+                    }
+                    value={draft.freeText}
+                    onChange={(event) =>
+                      setQuestionDraft(setDrafts, detailKey, question.key, {
+                        freeText: event.target.value,
+                      })
+                    }
+                  />
+                </span>
+              </label>
             </fieldset>
           );
         })}
@@ -216,46 +226,17 @@ export function QuestionConversationTurn({
   );
 }
 
-/**
- * The composer strip under the live activity: free text answers the single
- * pending question (replacing any selection), Send submits.
- */
-export function QuestionComposer({ item, busy, drafts, setDrafts, onSubmit }: QuestionTurnProps) {
-  const detailKey = `${item.kind}:${item.id}`;
-  const questionDraft = drafts.questions[detailKey] ?? {};
+/** The docked Send action submits the answers drafted inside the question cards. */
+export function QuestionComposer({ item, busy, drafts, onSubmit }: QuestionTurnProps) {
   const complete = questionsComplete(item, drafts);
-  const single = item.questions.length === 1 ? item.questions[0] : undefined;
-  const draft =
-    single === undefined
-      ? undefined
-      : (questionDraft[single.key] ?? { selected: [], freeText: '' });
-  const hasSelection = draft !== undefined && draft.selected.length > 0;
 
   return (
     <div className="question-composer">
-      <span className="question-composer__who">Your answer</span>
-      {single !== undefined && draft !== undefined ? (
-        <input
-          className="question-composer__input"
-          aria-label={`${single.header} free text`}
-          placeholder={
-            hasSelection
-              ? 'Option selected — typing your own answer replaces it'
-              : 'Choose an option above, or type your own answer'
-          }
-          value={draft.freeText}
-          onChange={(event) =>
-            setQuestionDraft(setDrafts, detailKey, single.key, { freeText: event.target.value })
-          }
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' || !complete || busy) return;
-            event.preventDefault();
-            onSubmit();
-          }}
-        />
-      ) : (
-        <span className="question-composer__hint">Answer each question above, then send.</span>
-      )}
+      <span className="question-composer__hint">
+        {item.questions.length === 1
+          ? 'Choose an option or write your answer in the question card.'
+          : 'Answer each question above, then send.'}
+      </span>
       <button
         type="button"
         className="attention-button attention-button--primary"

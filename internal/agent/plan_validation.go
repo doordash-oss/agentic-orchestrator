@@ -424,6 +424,12 @@ func frozenSectionsDigest(planPath string, frozen []string) string {
 const (
 	maxPlanValidationAttempts                 = 10
 	maxValidatorInfrastructureSessionAttempts = 2
+	// maxValidationInfrastructureRounds bounds how many times a whole
+	// validator set is re-run when every failure was provider or transport
+	// infrastructure (model at capacity, transport reset). Rounds wait
+	// validationInfrastructureBackoff between them; approved axes are skipped
+	// through sticky approvals.
+	maxValidationInfrastructureRounds = 3
 )
 
 // DefaultMaxPlanAttempts is the exported default for desktop app use (e.g. extending iterations).
@@ -1175,8 +1181,140 @@ type ValidatorResult struct {
 // quality bar before the per-phase plans exist.
 func runRoadmapMultiValidatorPlanValidation(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) (ReviewStatus, string, error) {
 	validators := roadmapValidatorsForRisk(cfg.Feature.RiskLevel)
-	_, status, feedback, err := runValidatorSet(cfg, sm, attempt, attemptDir, planArtifactPath, validators, validationArtifactRoadmap, planValidationExtras{})
+	_, status, feedback, err := runValidatorSetWithInfrastructureRetry(cfg, sm, attempt, attemptDir, planArtifactPath, validators, validationArtifactRoadmap, planValidationExtras{})
 	return status, feedback, err
+}
+
+// validationInfrastructureBackoff returns the wait before re-running a
+// validator set whose failures were all infrastructure. Capacity errors
+// clear in minutes, not milliseconds, so the waits grow. Tests override it.
+var validationInfrastructureBackoff = func(round int) time.Duration {
+	return time.Duration(round) * 30 * time.Second
+}
+
+// errPlanLoopSuperseded reports that the feature was stopped and restarted
+// while this loop waited: a newer loop owns the phase now, so this one must
+// exit without touching attempt metadata or launching validators.
+var errPlanLoopSuperseded = errors.New("planning loop superseded by a restarted phase")
+
+// planLoopGuard detects interruption across a stop-and-restart. A restart
+// returns the feature to Planning, so status alone cannot tell the old loop
+// it is stale; the active run and phase start captured at entry can.
+type planLoopGuard struct {
+	store      ports.FeatureStore
+	featureID  string
+	activeRun  int
+	phaseStart *time.Time
+}
+
+func newPlanLoopGuard(cfg PlanLoopConfig) planLoopGuard {
+	guard := planLoopGuard{store: cfg.FeatureStore, featureID: cfg.Feature.ID}
+	if cfg.FeatureStore != nil {
+		if f, err := cfg.FeatureStore.Load(cfg.Feature.ID); err == nil {
+			guard.activeRun = f.ActiveRun
+			guard.phaseStart = f.ActivePhaseStart
+		}
+	}
+	return guard
+}
+
+// superseded is true once the feature is interrupted or a restart has moved
+// the run or phase start past the values captured at entry.
+func (g planLoopGuard) superseded() bool {
+	if g.store == nil {
+		return false
+	}
+	f, err := g.store.Load(g.featureID)
+	if err != nil {
+		return false
+	}
+	if f.Status == feature.StatusInterrupted || f.Status == feature.StatusFailed {
+		return true
+	}
+	if f.ActiveRun != g.activeRun {
+		return true
+	}
+	switch {
+	case g.phaseStart == nil && f.ActivePhaseStart == nil:
+		return false
+	case g.phaseStart == nil || f.ActivePhaseStart == nil:
+		return true
+	default:
+		return !g.phaseStart.Equal(*f.ActivePhaseStart)
+	}
+}
+
+// validationBackoffPoll is how often a waiting loop re-checks its guard.
+const validationBackoffPoll = 2 * time.Second
+
+// waitForValidationBackoff sleeps d in guard-checked slices. It returns
+// errPlanLoopSuperseded as soon as the loop has been stopped or replaced.
+func waitForValidationBackoff(guard planLoopGuard, d time.Duration) error {
+	deadline := time.Now().Add(d)
+	for {
+		if guard.superseded() {
+			return errPlanLoopSuperseded
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil
+		}
+		time.Sleep(min(remaining, validationBackoffPoll))
+	}
+}
+
+// runValidatorSetWithInfrastructureRetry re-runs only the validators whose
+// error was a provider or transport failure, preserving every verdict already
+// reached. A protocol violation or any other helper outcome returns at once,
+// so a plan is never revised because a model was busy, and a rejection is
+// never lost because a sibling validator was retried.
+func runValidatorSetWithInfrastructureRetry(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []validatorDomain, kind validationArtifactKind, extras planValidationExtras) ([]ValidatorResult, ReviewStatus, string, error) {
+	guard := newPlanLoopGuard(cfg)
+	results, status, feedback, err := runValidatorSet(cfg, sm, attempt, attemptDir, planArtifactPath, validators, kind, extras)
+	for round := 1; err != nil && round < maxValidationInfrastructureRounds; round++ {
+		retry := infrastructureFailedValidators(results)
+		if len(retry) == 0 {
+			break
+		}
+		if waitErr := waitForValidationBackoff(guard, validationInfrastructureBackoff(round)); waitErr != nil {
+			return results, ReviewFailed, feedback, waitErr
+		}
+		subset := make([]validatorDomain, 0, len(retry))
+		for _, idx := range retry {
+			subset = append(subset, validators[idx])
+		}
+		rerun, _, _, _ := runValidatorSet(cfg, sm, attempt, attemptDir, planArtifactPath, subset, kind, extras)
+		for i, idx := range retry {
+			if i < len(rerun) {
+				results[idx] = rerun[i]
+			}
+		}
+		status, feedback, err = composeValidatorResults(results, cfg.Feature.RiskLevel)
+		for _, result := range results {
+			if isProtocolViolationError(result.Error) {
+				err = result.Error
+				break
+			}
+		}
+	}
+	return results, status, feedback, err
+}
+
+// infrastructureFailedValidators returns the indexes to retry: every errored
+// validator when all errors are infrastructure, none when any error is a
+// verdict-bearing failure such as a protocol violation.
+func infrastructureFailedValidators(results []ValidatorResult) []int {
+	var retry []int
+	for i, result := range results {
+		if result.Error == nil {
+			continue
+		}
+		if !isHelperInfrastructureError(result.Error) {
+			return nil
+		}
+		retry = append(retry, i)
+	}
+	return retry
 }
 
 // runPhasePlanMultiValidatorValidation applies the per-phase axis validator set
@@ -1196,7 +1334,7 @@ func runRoadmapMultiValidatorPlanValidation(cfg PlanLoopConfig, sm ports.Session
 func runPhasePlanMultiValidatorValidation(cfg PhasePlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]ValidatorResult, ReviewStatus, string, error) {
 	validators := phasePlanValidatorsForRisk(cfg.Feature.RiskLevel)
 	extras := planValidationExtras{PriorPhasePlanPaths: cfg.PriorPhasePlanPaths}
-	return runValidatorSet(cfg.PlanLoopConfig, sm, attempt, attemptDir, planArtifactPath, validators, validationArtifactPhasePlan, extras)
+	return runValidatorSetWithInfrastructureRetry(cfg.PlanLoopConfig, sm, attempt, attemptDir, planArtifactPath, validators, validationArtifactPhasePlan, extras)
 }
 
 func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []validatorDomain, kind validationArtifactKind, extras planValidationExtras) ([]ValidatorResult, ReviewStatus, string, error) {
@@ -1477,7 +1615,7 @@ func RunRoadmapPlanningLoop(cfg PlanLoopConfig, sm ports.SessionManager) (result
 			if meta.ReviewStatus == agentStatusApproved {
 				return &PlanLoopResult{FinalStatus: "approved", Iterations: startAttempt}, nil
 			}
-			if meta.ReviewStatus == "VALIDATION_PENDING" {
+			if planAttemptAwaitsValidation(meta) {
 				resumeValidation = true
 			}
 			if meta.ReviewStatus == agentStatusChangesRequested {
@@ -1750,7 +1888,7 @@ roadmapAttemptLoop:
 
 		setValidatingPlan(cfg, false)
 
-		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) || errors.Is(reviewErr, errPlanLoopSuperseded) {
 			return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt}, nil
 		}
 
@@ -1862,7 +2000,7 @@ func RunPhasePlanningLoop(cfg PhasePlanLoopConfig, sm ports.SessionManager) (res
 			if meta.ReviewStatus == agentStatusApproved {
 				return &PlanLoopResult{FinalStatus: "approved", Iterations: startAttempt}, nil
 			}
-			if meta.ReviewStatus == "VALIDATION_PENDING" {
+			if planAttemptAwaitsValidation(meta) {
 				resumeValidation = true
 			}
 			if meta.ReviewStatus == agentStatusChangesRequested {
@@ -2161,7 +2299,7 @@ phasePlanAttemptLoop:
 
 		setValidatingPlan(cfg.PlanLoopConfig, false)
 
-		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) || errors.Is(reviewErr, errPlanLoopSuperseded) {
 			return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt}, nil
 		}
 
@@ -2385,6 +2523,14 @@ func recordApprovedPhasePlanArtifact(cfg PhasePlanLoopConfig, planArtifactPath s
 		f.SetRoadmapPhaseFrontend(cfg.Phase.Number, frontend)
 		return nil
 	})
+}
+
+// planAttemptAwaitsValidation reports whether a committed plan attempt still
+// needs a verdict: validation never ran (VALIDATION_PENDING) or it failed on
+// infrastructure (FAILED). Both resume at validation so a restart never
+// re-plans an unjudged plan against empty critic feedback.
+func planAttemptAwaitsValidation(meta PlanAttemptMeta) bool {
+	return meta.ReviewStatus == "VALIDATION_PENDING" || meta.ReviewStatus == "FAILED"
 }
 
 // setValidatingPlan persists the ValidatingPlan flag on the feature.

@@ -733,7 +733,7 @@ func (s *Store) Delete(id string) error {
 		before = mutationSnapshot(f)
 	}
 	dir := filepath.Join(s.BaseDir, id)
-	if err := removeAllResilient(dir); err != nil {
+	if err := RemoveAllResilient(dir); err != nil {
 		s.mu.Unlock()
 		return fmt.Errorf("deleting feature directory: %w", err)
 	}
@@ -744,12 +744,12 @@ func (s *Store) Delete(id string) error {
 	return nil
 }
 
-// removeAllResilient removes dir even when it contains read-only directories
+// RemoveAllResilient removes dir even when it contains read-only directories
 // such as module caches captured in run artifacts. os.RemoveAll can delete
 // feature.yaml before encountering one of those directories, leaving a path
 // that looks like a corrupt feature on the next scan. Restore owner access to
 // directories after the first failure, then retry the complete removal.
-func removeAllResilient(dir string) error {
+func RemoveAllResilient(dir string) error {
 	if err := os.RemoveAll(dir); err == nil {
 		return nil
 	}
@@ -1053,7 +1053,7 @@ func (s *Store) CleanupOrphanRuns(id string) ([]int, error) {
 			continue
 		}
 		runPath := filepath.Join(runsDir, e.Name())
-		if err := removeAllResilient(runPath); err != nil {
+		if err := RemoveAllResilient(runPath); err != nil {
 			// Preserve in max-on-disk — the directory is still on disk.
 			if n > maxOnDisk {
 				maxOnDisk = n

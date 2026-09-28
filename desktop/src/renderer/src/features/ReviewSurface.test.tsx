@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReviewSession } from '../../../shared/ipc';
@@ -91,6 +91,29 @@ function installMocks(
 }
 
 describe('ReviewSurface recovery and containment', () => {
+  it('names a failed validation instead of reporting it as pending, and can retry', async () => {
+    const api = installMocks();
+    api.validateReview.mockRejectedValueOnce(
+      ipcError('E_PAYLOAD_TOO_LARGE', 'The request body is too large.'),
+    );
+    render(<ReviewSurface featureId={FEATURE_ID} onResolved={() => Promise.resolve()} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).getByText('Draft validation failed')).toHaveClass(
+      'error-surface__caption',
+    );
+    expect(within(alert).getByText('E_PAYLOAD_TOO_LARGE')).toHaveClass('error-surface__code');
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+    expect(screen.getByText('Draft validation failed.')).toBeVisible();
+    expect(screen.queryByText('Validating the draft…')).toBeNull();
+
+    // The retry re-runs the check; the mock now resolves and Approve unlocks.
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Retry validation' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(api.validateReview).toHaveBeenCalledTimes(2);
+  });
+
   it('restores a matching local draft with an honest recovery label and can discard it', async () => {
     const api = installMocks({
       localDraft: {

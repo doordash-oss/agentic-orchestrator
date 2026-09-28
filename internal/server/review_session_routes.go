@@ -88,11 +88,11 @@ func (h *apiHandler) handleSaveReviewDraft(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
-	if !h.requireTrustedJSONMutation(w, r) {
+	if !h.requireTrustedJSONMutationLimited(w, r, MaxReviewDraftBodyBytes) {
 		return
 	}
 	var req ReviewDraftUpdateRequest
-	if !decodeMutationJSON(w, r, &req) {
+	if !decodeMutationJSONLimited(w, r, &req, MaxReviewDraftBodyBytes) {
 		return
 	}
 	resp, err := h.reviewSessionService().SaveDraft(featureID, reviewID, req)
@@ -109,11 +109,11 @@ func (h *apiHandler) handleValidateReviewDraft(w http.ResponseWriter, r *http.Re
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
-	if !h.requireTrustedJSONMutation(w, r) {
+	if !h.requireTrustedJSONMutationLimited(w, r, MaxReviewDraftBodyBytes) {
 		return
 	}
 	var req ReviewDraftValidationRequest
-	if !decodeMutationJSON(w, r, &req) {
+	if !decodeMutationJSONLimited(w, r, &req, MaxReviewDraftBodyBytes) {
 		return
 	}
 	resp, err := h.reviewSessionService().ValidateDraft(featureID, reviewID, req)
@@ -156,7 +156,16 @@ func (h *apiHandler) reviewSessionService() *reviewSessionService {
 	return newReviewSessionService(h.store, decider, h.reviewSessionLocks)
 }
 
+// MaxReviewDraftBodyBytes caps the draft save and validate bodies. They carry
+// the whole review document, which routinely exceeds the command-sized
+// MaxMutationBodyBytes; the desktop client allows the same 2 MiB of text.
+const MaxReviewDraftBodyBytes int64 = 2 * 1024 * 1024
+
 func (h *apiHandler) requireTrustedJSONMutation(w http.ResponseWriter, r *http.Request) bool {
+	return h.requireTrustedJSONMutationLimited(w, r, MaxMutationBodyBytes)
+}
+
+func (h *apiHandler) requireTrustedJSONMutationLimited(w http.ResponseWriter, r *http.Request, maxBytes int64) bool {
 	if r.Header.Get("X-Agentico-Client") != trustedClientHeaderValue {
 		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("trusted local client header is required"))
 		return false
@@ -170,7 +179,7 @@ func (h *apiHandler) requireTrustedJSONMutation(w http.ResponseWriter, r *http.R
 		writeAPIError(w, http.StatusUnsupportedMediaType, errcat.UnsupportedMediaType, errcat.WithDiagnostics("JSON body is required"))
 		return false
 	}
-	if r.ContentLength > MaxMutationBodyBytes {
+	if r.ContentLength > maxBytes {
 		writeAPIError(w, http.StatusRequestEntityTooLarge, errcat.RequestTooLarge, errcat.WithDiagnostics("mutation body is too large"))
 		return false
 	}

@@ -81,6 +81,8 @@ export function ReviewSurface({
   const [runtimeId, setRuntimeId] = useState(DEFAULT_RUNTIME_ID);
   const [view, setView] = useState<View>('edit');
   const [validation, setValidation] = useState<ReviewValidation | null>(null);
+  const [validationError, setValidationError] = useState<CanonicalError | null>(null);
+  const [validationAttempt, setValidationAttempt] = useState(0);
   const [notice, setNotice] = useState('Loading review…');
   const [noticeError, setNoticeError] = useState<NoticeFailure | null>(null);
   const [busy, setBusy] = useState(false);
@@ -178,17 +180,22 @@ export function ReviewSurface({
       void window.agentico
         .validateReview({ featureId, reviewId: session.reviewId, text })
         .then((result) => {
-          if (active) setValidation(result);
+          if (!active) return;
+          setValidation(result);
+          setValidationError(null);
         })
-        .catch(() => {
-          if (active) setValidation(null);
+        .catch((error: unknown) => {
+          // A failed check reads as a failure, never as a pending one.
+          if (!active) return;
+          setValidation(null);
+          setValidationError(parseIpcError(error));
         });
     }, 250);
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [featureId, session, text]);
+  }, [featureId, session, text, validationAttempt]);
 
   const dirty = session !== null && text !== baseText;
   useEffect(() => {
@@ -295,10 +302,12 @@ export function ReviewSurface({
       ? 'Fix validation findings before approving.'
       : dirty
         ? 'Save the draft before approving.'
-        : validation === null ||
-            (validation.applicable && validation.revision !== session.draftRevision)
-          ? 'Validating the draft…'
-          : null;
+        : validationError !== null
+          ? 'Draft validation failed.'
+          : validation === null ||
+              (validation.applicable && validation.revision !== session.draftRevision)
+            ? 'Validating the draft…'
+            : null;
   const iterateDisabledReason = !session.canIterate
     ? 'This review does not accept iterate feedback.'
     : dirty
@@ -569,6 +578,22 @@ export function ReviewSurface({
             </li>
           ))}
         </ul>
+      ) : null}
+      {validationError !== null ? (
+        <div className="review-surface__validation-failure">
+          <ErrorSurface
+            error={validationError}
+            variant="compact"
+            caption="Draft validation failed"
+          />
+          <button
+            type="button"
+            onClick={() => setValidationAttempt((attempt) => attempt + 1)}
+            disabled={busy}
+          >
+            Retry validation
+          </button>
+        </div>
       ) : null}
       <footer className="review-surface__footer">
         {noticeSlot}

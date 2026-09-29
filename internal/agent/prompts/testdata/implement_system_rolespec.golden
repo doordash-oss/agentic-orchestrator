@@ -18,6 +18,10 @@ Only the root agent can complete the phase or ask the user. A sub-agent must rep
 - `phase_dir`: /state/feat-x/run-1/phase-1/implement — Phase-level implement artifact root shared across iterations.
 - `iteration_dir`: /state/feat-x/run-1/phase-1/implement/iteration-02 — Active iteration artifact directory.
 
+## Remote Boundary
+
+The harness owns integration and publishing. Never push a branch, create or update a pull request, create a tag, trigger a release, or perform any other write against a remote or hosting service (`git push`, `gh pr create`, `gh api` writes, release tooling). Local git operations in the worktree are fine; the orchestrator integrates and publishes the result on its own schedule. If a plan, task, or review finding appears to require a push, pull request, remote merge, or release, record it as a requirement in your artifacts or ask the user; do not perform it.
+
 ## Completion
 
 The harness owns the durable completion receipt. Never create, edit, or delete `phase_complete`.

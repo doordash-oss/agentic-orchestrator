@@ -71,6 +71,34 @@ func TestReviewSessionRoutesCommitDraftViaREST(t *testing.T) {
 	}
 }
 
+func TestReviewSessionDraftRoutesAcceptWholeDocumentBodies(t *testing.T) {
+	// Research drafts routinely exceed the command-sized mutation cap; the
+	// draft routes carry the whole document and are capped separately.
+	large := "# Research\n\n" + strings.Repeat("A finding worth keeping.\n", 8000)
+	if int64(len(large)) <= MaxMutationBodyBytes {
+		t.Fatalf("fixture must exceed MaxMutationBodyBytes (%d), got %d", MaxMutationBodyBytes, len(large))
+	}
+	store, f, _ := seedReviewSessionFeature(t, feature.StatusResearchNeedsReview, nil, "research", large)
+	handler := NewHandler(HandlerOptions{
+		Features:              store,
+		FeatureStore:          store,
+		DisableHostValidation: true,
+	})
+
+	created := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews", map[string]any{}, http.StatusOK)
+	validated := doReviewSessionJSON[ReviewDraftValidationResponse](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/validate", ReviewDraftValidationRequest{Text: created.Text}, http.StatusOK)
+	if validated.Applicable || !validated.Valid {
+		t.Fatalf("validation = %+v, want non-applicable passing result", validated)
+	}
+	saved := doReviewSessionJSON[ReviewSessionResponse](t, handler, http.MethodPut, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/draft", ReviewDraftUpdateRequest{BaseRevision: created.DraftRevision, Text: created.Text + "\nEdited.\n"}, http.StatusOK)
+	if saved.Text != created.Text+"\nEdited.\n" {
+		t.Fatalf("saved draft did not round-trip the large document")
+	}
+
+	oversized := strings.Repeat("x", int(MaxReviewDraftBodyBytes)+1)
+	doReviewSessionJSON[map[string]any](t, handler, http.MethodPost, "/api/v1/features/"+f.ID+"/reviews/"+created.ReviewID+"/validate", ReviewDraftValidationRequest{Text: oversized}, http.StatusRequestEntityTooLarge)
+}
+
 func TestReviewSessionReadAndValidationAreSideEffectFree(t *testing.T) {
 	store, f, _ := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Phase plan\n\n## Tasks\n\n### Task 1: Keep it safe\n")
 	handler := NewHandler(HandlerOptions{

@@ -2087,7 +2087,14 @@ func classifyDecodeError(err error) (status int, code errcat.Code, diagnostics s
 }
 
 func decodeMutationJSON(w http.ResponseWriter, r *http.Request, out any) bool {
-	limited := http.MaxBytesReader(w, r.Body, MaxMutationBodyBytes)
+	return decodeMutationJSONLimited(w, r, out, MaxMutationBodyBytes)
+}
+
+// decodeMutationJSONLimited decodes a mutation body under a caller-chosen
+// byte cap, for routes whose payload is a whole document rather than a
+// short command.
+func decodeMutationJSONLimited(w http.ResponseWriter, r *http.Request, out any, maxBytes int64) bool {
+	limited := http.MaxBytesReader(w, r.Body, maxBytes)
 	defer limited.Close()
 	dec := json.NewDecoder(limited)
 	dec.DisallowUnknownFields()

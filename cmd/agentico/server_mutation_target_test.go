@@ -389,6 +389,90 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 	assertJSONDoesNotContain(t, result, "Postgres with read replicas", "Dark launch first")
 }
 
+func TestServerMutationTargetAnswerAskUserForwardsSource(t *testing.T) {
+	input := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
+	source := &ports.AnswerSource{Kind: ports.AnswerSourceSlack, Responder: "Ada"}
+	sess := &mutationTargetSessionView{
+		id:        testSessionAskID,
+		featureID: "feat-ask",
+		phase:     feature.PhaseInquire,
+		status:    ports.SessionWaitingHelp,
+		active:    true,
+		pending: []*llm.ControlRequestMessage{{
+			RequestID: testAskRequestID,
+			Request: llm.ControlRequest{
+				ToolName: toolNameAskUserQuestion,
+				Input:    input,
+			},
+		}},
+	}
+	target := serverMutationTarget{
+		sessions: &mutationTargetSessionManager{sessions: []ports.SessionView{sess}},
+	}
+
+	_, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
+		RequestID: testAskRequestID,
+		SessionID: testSessionAskID,
+		Answers:   map[string]string{"Which DB?": "PostgreSQL"},
+		Source:    source,
+	})
+	if err != nil {
+		t.Fatalf("AnswerAskUser() error = %v", err)
+	}
+	if len(sess.askCalls) != 1 || sess.askCalls[0].source == nil || *sess.askCalls[0].source != *source {
+		t.Fatalf("RespondToAskUser source = %+v, want %+v", sess.askCalls, source)
+	}
+}
+
+func TestServerMutationTargetAnswerMutationsReportNoLongerPending(t *testing.T) {
+	target := serverMutationTarget{
+		sessions: &mutationTargetSessionManager{},
+	}
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "permission",
+			call: func() error {
+				_, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{
+					RequestID: "missing",
+					Decision:  "allow_once",
+				})
+				return err
+			},
+		},
+		{
+			name: "ask user",
+			call: func() error {
+				_, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
+					RequestID: "missing",
+					Answers:   map[string]string{"Question?": "Answer"},
+				})
+				return err
+			},
+		},
+		{
+			name: "help",
+			call: func() error {
+				_, err := target.SendHelp(serverruntime.HelpAnswerRequest{
+					FeatureID: "missing",
+					Message:   "Continue",
+				})
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); !errors.Is(err, serverruntime.ErrNoLongerPending) {
+				t.Fatalf("error = %v, want ErrNoLongerPending", err)
+			}
+		})
+	}
+}
+
 func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *testing.T) {
 	fullQuestion := "Which persistence strategy should the orchestrator use when an AskUserQuestion contains enough detail that the read API truncates the display projection, but the provider still requires the exact original question text as the answer-map key?"
 	truncatedQuestion := fullQuestion[:180] + "..."
@@ -1257,6 +1341,407 @@ func TestServerMutationTargetRuntimeConfigRediscoverReposWhenWorkspaceRootsUncha
 	}
 	if result.Result != "unchanged" {
 		t.Fatalf("RuntimeConfig() result = %+v; want unchanged", result)
+	}
+}
+
+func TestServerMutationTargetRuntimeConfigPersistsSlackLifecycle(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	enabled := true
+	token := "xoxb-secret-1234"
+	checkedAt := time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
+
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{
+			Enabled: &enabled,
+			Token:   &token,
+			DefaultRecipients: &[]serverruntime.SlackRecipient{
+				{TypedText: "@ada", Kind: serverruntime.SlackRecipientKindUser, ID: "U12345678", DisplayName: "Ada"},
+				{TypedText: "#eng", Kind: serverruntime.SlackRecipientKindChannel, ID: "C12345678", DisplayName: "#eng"},
+			},
+		},
+		SlackValidation: &ports.SlackValidation{
+			TokenType: ports.SlackTokenBot,
+			Identity: ports.SlackIdentity{
+				TeamID: "T123", TeamName: "Acme", UserID: "U123", DisplayName: "Agentico", BotID: "B123",
+			},
+			GrantedScopes: []string{"chat:write", "users:read"},
+			MissingScopes: []string{},
+		},
+		SlackCheckedAt: checkedAt,
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(save Slack) error = %v", err)
+	}
+	if result.Result != resultUpdated || cfg.Slack == nil || !cfg.Slack.Enabled ||
+		cfg.Slack.Token != token || cfg.Slack.Identity == nil ||
+		cfg.Slack.Identity.TeamName != "Acme" || len(cfg.Slack.DefaultRecipients) != 2 ||
+		!cfg.Slack.LastValidatedAt.Equal(checkedAt) {
+		t.Fatalf("saved Slack config = %#v, result = %#v", cfg.Slack, result)
+	}
+	if info, err := os.Stat(configPath); err != nil {
+		t.Fatalf("Stat config error = %v", err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("config mode = %#o; want 0600 with token", got)
+	}
+
+	enabled = false
+	result, err = target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{Enabled: &enabled},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(disable Slack) error = %v", err)
+	}
+	if result.Result != resultUpdated || cfg.Slack.Enabled || cfg.Slack.Token != token {
+		t.Fatalf("disabled Slack config = %#v, result = %#v", cfg.Slack, result)
+	}
+
+	clear := true
+	result, err = target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{ClearToken: &clear},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(clear Slack) error = %v", err)
+	}
+	if result.Result != resultUpdated || cfg.Slack.Token != "" || cfg.Slack.Identity != nil ||
+		len(cfg.Slack.GrantedScopes) != 0 || len(cfg.Slack.DefaultRecipients) != 2 ||
+		!cfg.Slack.LastValidatedAt.IsZero() {
+		t.Fatalf("cleared Slack config = %#v, result = %#v", cfg.Slack, result)
+	}
+}
+
+func TestServerMutationTargetRuntimeConfigSlackRecipientSemantics(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Slack = &config.SlackConfig{
+		DefaultRecipients: []config.SlackRecipient{
+			{TypedText: "#existing", Kind: "channel", ID: "C11111111", DisplayName: "#existing"},
+		},
+	}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+
+	enabled := true
+	if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{Enabled: &enabled},
+	}); err != nil {
+		t.Fatalf("RuntimeConfig(omitted recipients) error = %v", err)
+	}
+	if got := cfg.Slack.DefaultRecipients; len(got) != 1 || got[0].ID != "C11111111" {
+		t.Fatalf("omitted recipients changed stored list: %#v", got)
+	}
+
+	empty := []serverruntime.SlackRecipient{}
+	if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{DefaultRecipients: &empty},
+	}); err != nil {
+		t.Fatalf("RuntimeConfig(clear recipients) error = %v", err)
+	}
+	if len(cfg.Slack.DefaultRecipients) != 0 {
+		t.Fatalf("empty recipients did not clear list: %#v", cfg.Slack.DefaultRecipients)
+	}
+}
+
+func TestServerMutationTargetRuntimeConfigSlackCategories(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Slack = &config.SlackConfig{Enabled: true}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+
+	// A categories-only patch stores exactly the sent field, leaves the
+	// other two on, and persists the full mapping once any is off.
+	off := false
+	result, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{
+			Categories: &serverruntime.SlackCategoriesMutation{Progress: &off},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(categories) error = %v", err)
+	}
+	if result.Result != resultUpdated {
+		t.Fatalf("categories-only patch result = %q; want updated", result.Result)
+	}
+	effective := cfg.Slack.Categories.Effective()
+	if effective.Progress || !effective.NeedsInput || !effective.Problems {
+		t.Fatalf("stored categories = %#v; want progress off only", effective)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "categories:") || !strings.Contains(string(data), "progress: false") {
+		t.Fatalf("config file missing stored categories:\n%s", data)
+	}
+
+	// An omitted object leaves stored values untouched in PATCH and PUT.
+	result, err = target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{},
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig(omitted categories) error = %v", err)
+	}
+	if result.Result != "unchanged" {
+		t.Fatalf("omitted categories result = %q; want unchanged", result.Result)
+	}
+	if cfg.Slack.Categories.Effective() != effective {
+		t.Fatalf("omitted categories changed stored mapping: %#v", cfg.Slack.Categories)
+	}
+
+	// Re-enabling the last off category drops the stored mapping so the key
+	// disappears from the file.
+	on := true
+	if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{
+			Categories: &serverruntime.SlackCategoriesMutation{Progress: &on},
+		},
+	}); err != nil {
+		t.Fatalf("RuntimeConfig(categories on) error = %v", err)
+	}
+	if cfg.Slack.Categories != nil {
+		t.Fatalf("all-on categories were persisted: %#v", cfg.Slack.Categories)
+	}
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "categories:") {
+		t.Fatalf("all-on categories persisted:\n%s", data)
+	}
+
+	// The settings accessor reads live values including the defaults.
+	settings := target.SlackSettings()
+	if !settings.Enabled || !settings.Categories.Progress || !settings.Categories.NeedsInput ||
+		!settings.Categories.Problems {
+		t.Fatalf("SlackSettings = %#v; want enabled with all categories on", settings)
+	}
+}
+
+func TestServerMutationTargetRuntimeConfigAutoFillsUserTokenOwner(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	token := "xoxp-secret-1234"
+
+	_, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+		Slack: &serverruntime.SlackConfigMutation{Token: &token},
+		SlackValidation: &ports.SlackValidation{
+			TokenType: ports.SlackTokenUser,
+			Identity: ports.SlackIdentity{
+				UserID: "U12345678", DisplayName: "Ada Lovelace", UserName: "ada",
+			},
+		},
+		SlackCheckedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("RuntimeConfig() error = %v", err)
+	}
+	want := []config.SlackRecipient{{
+		TypedText: "@ada", Kind: "user", ID: "U12345678", DisplayName: "Ada Lovelace",
+	}}
+	if !reflect.DeepEqual(cfg.Slack.DefaultRecipients, want) {
+		t.Fatalf("owner recipients = %#v; want %#v", cfg.Slack.DefaultRecipients, want)
+	}
+}
+
+func TestServerMutationTargetRuntimeConfigOwnerAutoFillGuards(t *testing.T) {
+	existing := []config.SlackRecipient{{
+		TypedText: "#eng", Kind: "channel", ID: "C12345678", DisplayName: "#eng",
+	}}
+	tests := []struct {
+		name      string
+		token     string
+		tokenType ports.SlackTokenType
+		stored    []config.SlackRecipient
+		requested *[]serverruntime.SlackRecipient
+		want      []config.SlackRecipient
+	}{
+		{
+			name:      "bot token",
+			token:     "xoxb-secret-1234",
+			tokenType: ports.SlackTokenBot,
+			want:      nil,
+		},
+		{
+			name:      "explicit empty list",
+			token:     "xoxp-secret-1234",
+			tokenType: ports.SlackTokenUser,
+			requested: &[]serverruntime.SlackRecipient{},
+			want:      nil,
+		},
+		{
+			name:      "existing recipients",
+			token:     "xoxp-secret-1234",
+			tokenType: ports.SlackTokenUser,
+			stored:    existing,
+			want:      existing,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runtimeDir := t.TempDir()
+			configPath := filepath.Join(runtimeDir, "config.yaml")
+			cfg := config.NewDefault()
+			if tc.stored != nil {
+				cfg.Slack = &config.SlackConfig{
+					DefaultRecipients: append([]config.SlackRecipient(nil), tc.stored...),
+				}
+			}
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatalf("Save config error = %v", err)
+			}
+			target := serverMutationTarget{cfg: cfg, configPath: configPath}
+
+			_, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+				Slack: &serverruntime.SlackConfigMutation{
+					Token:             &tc.token,
+					DefaultRecipients: tc.requested,
+				},
+				SlackValidation: &ports.SlackValidation{
+					TokenType: tc.tokenType,
+					Identity: ports.SlackIdentity{
+						UserID: "U12345678", UserName: "ada", DisplayName: "Ada Lovelace",
+					},
+				},
+				SlackCheckedAt: time.Now(),
+			})
+			if err != nil {
+				t.Fatalf("RuntimeConfig() error = %v", err)
+			}
+			if !reflect.DeepEqual(cfg.Slack.DefaultRecipients, tc.want) {
+				t.Fatalf("recipients = %#v; want %#v", cfg.Slack.DefaultRecipients, tc.want)
+			}
+		})
+	}
+}
+
+func TestServerMutationTargetStoreSlackValidationRefreshesStoredToken(t *testing.T) {
+	runtimeDir := t.TempDir()
+	configPath := filepath.Join(runtimeDir, "config.yaml")
+	cfg := config.NewDefault()
+	cfg.Slack = &config.SlackConfig{Token: "xoxp-stored-1234"}
+	if err := config.Save(configPath, cfg); err != nil {
+		t.Fatalf("Save config error = %v", err)
+	}
+	target := serverMutationTarget{cfg: cfg, configPath: configPath}
+	checkedAt := time.Date(2026, time.September, 19, 13, 0, 0, 0, time.UTC)
+	validation := ports.SlackValidation{
+		TokenType: ports.SlackTokenUser,
+		Identity: ports.SlackIdentity{
+			TeamID: "T123", TeamName: "Acme", UserID: "U234", DisplayName: "Ada",
+		},
+		GrantedScopes: []string{"chat:write"},
+		MissingScopes: []string{},
+	}
+
+	token, generation := target.LoadSlackCredential()
+	applied, err := target.StoreSlackValidation(token, generation, &validation, checkedAt)
+	if err != nil {
+		t.Fatalf("StoreSlackValidation() error = %v", err)
+	}
+	if !applied {
+		t.Fatal("StoreSlackValidation() applied = false; want true")
+	}
+	if cfg.Slack.Token != "xoxp-stored-1234" || cfg.Slack.Identity == nil ||
+		cfg.Slack.Identity.DisplayName != "Ada" || !cfg.Slack.LastValidatedAt.Equal(checkedAt) {
+		t.Fatalf("refreshed Slack config = %#v", cfg.Slack)
+	}
+	loaded, err := config.Load(configPath)
+	if err != nil {
+		t.Fatalf("Load config error = %v", err)
+	}
+	if loaded.Slack == nil || loaded.Slack.Token != "xoxp-stored-1234" ||
+		loaded.Slack.Identity == nil || loaded.Slack.Identity.DisplayName != "Ada" {
+		t.Fatalf("persisted Slack config = %#v", loaded.Slack)
+	}
+}
+
+func TestServerMutationTargetFencesSlackValidationByCredentialGeneration(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *serverMutationTarget)
+	}{
+		{
+			name: "replacement",
+			mutate: func(t *testing.T, target *serverMutationTarget) {
+				t.Helper()
+				token := "xoxb-new-5678"
+				if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+					Slack: &serverruntime.SlackConfigMutation{Token: &token},
+					SlackWarning: func() *errcat.Error {
+						value := errcat.New(errcat.SlackUnreachable)
+						return &value
+					}(),
+					SlackCheckedAt: time.Now(),
+				}); err != nil {
+					t.Fatalf("replace Slack token: %v", err)
+				}
+			},
+		},
+		{
+			name: "clearing",
+			mutate: func(t *testing.T, target *serverMutationTarget) {
+				t.Helper()
+				clear := true
+				if _, err := target.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
+					Slack: &serverruntime.SlackConfigMutation{ClearToken: &clear},
+				}); err != nil {
+					t.Fatalf("clear Slack token: %v", err)
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			runtimeDir := t.TempDir()
+			configPath := filepath.Join(runtimeDir, "config.yaml")
+			cfg := config.NewDefault()
+			cfg.Slack = &config.SlackConfig{Token: "xoxb-old-1234"}
+			if err := config.Save(configPath, cfg); err != nil {
+				t.Fatalf("Save config error = %v", err)
+			}
+			target := &serverMutationTarget{cfg: cfg, configPath: configPath}
+			token, generation := target.LoadSlackCredential()
+			tc.mutate(t, target)
+
+			validation := ports.SlackValidation{
+				TokenType: ports.SlackTokenBot,
+				Identity: ports.SlackIdentity{
+					TeamID: "T-old", TeamName: "Old", UserID: "U-old", DisplayName: "Old Agent",
+				},
+				GrantedScopes: []string{"chat:write"},
+				MissingScopes: []string{},
+			}
+			applied, err := target.StoreSlackValidation(token, generation, &validation, time.Now())
+			if err != nil {
+				t.Fatalf("StoreSlackValidation() error = %v", err)
+			}
+			if applied {
+				t.Fatal("StoreSlackValidation() applied = true; want stale result discarded")
+			}
+			if target.SlackCredentialCurrent(token, generation) {
+				t.Fatal("SlackCredentialCurrent() = true for stale credential")
+			}
+			if cfg.Slack != nil && cfg.Slack.Identity != nil {
+				t.Fatalf("stale identity attached to current credential: %#v", cfg.Slack)
+			}
+		})
 	}
 }
 
@@ -2856,6 +3341,7 @@ type mutationTargetAskUserCall struct {
 	requestID string
 	questions json.RawMessage
 	answers   map[string]string
+	source    *ports.AnswerSource
 }
 
 func (s *mutationTargetSessionView) ID() string                       { return s.id }
@@ -2947,6 +3433,9 @@ func (s *mutationTargetSessionView) RespondToControl(requestID string, allow boo
 	return nil
 }
 func (s *mutationTargetSessionView) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
+	return s.RespondToAskUserWithSource(requestID, questions, answers, nil, nil)
+}
+func (s *mutationTargetSessionView) RespondToAskUserWithSource(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation, source *ports.AnswerSource) error {
 	copied := make(map[string]string, len(answers))
 	for k, v := range answers {
 		copied[k] = v
@@ -2955,6 +3444,7 @@ func (s *mutationTargetSessionView) RespondToAskUser(requestID string, questions
 		requestID: requestID,
 		questions: append(json.RawMessage(nil), questions...),
 		answers:   copied,
+		source:    source,
 	})
 	return nil
 }

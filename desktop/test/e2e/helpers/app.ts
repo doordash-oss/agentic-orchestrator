@@ -604,6 +604,38 @@ export async function contractEvidenceShot(
   await handle.page.screenshot({ path: target, fullPage: false, scale: 'css' });
 }
 
+/** Captures a testing-contract artifact from the real packaged Settings window. */
+export async function contractSettingsEvidenceShot(
+  handle: AppHandle,
+  page: Page,
+  name: string,
+  width: number,
+  height: number,
+  theme: 'light' | 'dark',
+): Promise<void> {
+  const dir = process.env['AGENTICO_EVIDENCE_DIR'];
+  if (dir === undefined || dir === '') return;
+  await handle.app.evaluate(
+    ({ BrowserWindow }, size) => {
+      const window = BrowserWindow.getAllWindows().find(
+        (candidate) => candidate.webContents.id !== size.mainId,
+      );
+      if (window === undefined) throw new Error('the Settings window is not open');
+      window.setContentSize(size.width, size.height);
+    },
+    { width, height, mainId: handle.mainWebContentsId },
+  );
+  await page.evaluate(async (preference) => {
+    const info = await window.agentico.setThemePreference(preference);
+    window.dispatchEvent(new CustomEvent('agentico-theme-sync', { detail: info }));
+  }, theme);
+  await expect(page.locator(`html[data-theme="${theme}"]`)).toBeAttached();
+  await page.waitForTimeout(250);
+  const target = path.join(dir, 'screenshots', `${name}.png`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  await page.screenshot({ path: target, fullPage: false, scale: 'css' });
+}
+
 // --- window/theme helpers -------------------------------------------------------
 
 export async function setWindowSize(
@@ -663,6 +695,7 @@ export async function setTheme(handle: AppHandle, theme: 'light' | 'dark'): Prom
 export type SettingsPaneLabel =
   | 'Workspace roots'
   | 'Servers'
+  | 'Slack'
   | 'Providers'
   | 'Appearance'
   | 'Updates'

@@ -117,6 +117,7 @@ func (k SessionKind) String() string {
 type QAPair struct {
 	Question string
 	Answer   string
+	Source   *AnswerSource
 	// Notes captures freeform text the user entered alongside the answer
 	// (Claude Agent SDK annotations.notes). Empty when the user skipped notes.
 	Notes string
@@ -126,6 +127,18 @@ type QAPair struct {
 	// Confidence is the selected option's self-rated confidence when
 	// AutoPicked is true.
 	Confidence float64
+}
+
+// AskUserSourceResponder is the optional provenance-aware ask-user response
+// capability implemented by live sessions.
+type AskUserSourceResponder interface {
+	RespondToAskUserWithSource(
+		requestID string,
+		questions json.RawMessage,
+		answers map[string]string,
+		annotations map[string]llm.AskUserAnnotation,
+		source *AnswerSource,
+	) error
 }
 
 // AskUserAutoPickPurpose identifies the role that emitted an AskUserQuestion

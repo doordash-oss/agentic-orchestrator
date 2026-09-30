@@ -1,0 +1,53 @@
+{
+  "display_information": {
+    "name": "Agentico"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Agentico",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "im:write",
+        "im:history",
+        "channels:history",
+        "groups:history",
+        "mpim:history",
+        "channels:read",
+        "groups:read",
+        "users:read",
+        "users:read.email",
+        "reactions:read",
+        "reactions:write",
+        "files:write"
+      ],
+      "user": [
+        "chat:write",
+        "im:write",
+        "im:history",
+        "channels:history",
+        "groups:history",
+        "mpim:history",
+        "channels:read",
+        "groups:read",
+        "users:read",
+        "users:read.email",
+        "reactions:read",
+        "reactions:write",
+        "files:write"
+      ]
+    }
+  },
+  "settings": {
+    "interactivity": {
+      "is_enabled": false
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

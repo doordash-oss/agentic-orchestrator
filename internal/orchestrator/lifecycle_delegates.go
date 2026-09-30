@@ -489,6 +489,7 @@ type UpdateFeatureConfigInput struct {
 	Checkpoints         feature.Checkpoints
 	InputNotifications  feature.InputNotificationsMode
 	AutomaticReviewMode feature.AutomaticReviewMode
+	SlackNotifications  *feature.SlackNotifications
 }
 
 // UpdateFeatureConfig atomically writes the editable config axes.
@@ -518,6 +519,7 @@ func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeature
 			Checkpoints:         f.Checkpoints,
 			InputNotifications:  feature.NormalizeInputNotificationsMode(f.InputNotifications),
 			AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
+			SlackNotifications:  feature.CloneSlackNotifications(f.SlackNotifications),
 		}
 		f.Models = input.Models
 		f.Effort = input.Effort
@@ -525,6 +527,7 @@ func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeature
 		f.Checkpoints = f.Pipeline.NormalizeCheckpoints(input.Checkpoints, f.IsPublishable())
 		f.InputNotifications = feature.PersistInputNotificationsMode(input.InputNotifications)
 		f.AutomaticReviewMode = feature.PersistAutomaticReviewMode(input.AutomaticReviewMode)
+		f.SlackNotifications = feature.CloneSlackNotifications(input.SlackNotifications)
 		after = feature.ConfigSnapshot{
 			Models:              f.Models,
 			Effort:              f.Effort,
@@ -532,6 +535,7 @@ func (o *Orchestrator) UpdateFeatureConfig(featureID string, input UpdateFeature
 			Checkpoints:         f.Checkpoints,
 			InputNotifications:  feature.NormalizeInputNotificationsMode(f.InputNotifications),
 			AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
+			SlackNotifications:  feature.CloneSlackNotifications(f.SlackNotifications),
 		}
 		return nil
 	})

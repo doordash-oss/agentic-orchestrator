@@ -37,6 +37,7 @@ import {
   FolderIcon,
   ProvidersIcon,
   ServersIcon,
+  SlackIcon,
   UpdateIcon,
 } from '../components/icons';
 
@@ -49,6 +50,7 @@ export interface SettingsPaneDescriptor {
 export const SETTINGS_PANE_CATALOGUE: readonly SettingsPaneDescriptor[] = [
   { id: 'workspace-roots', label: 'Workspace roots', Icon: FolderIcon },
   { id: 'servers', label: 'Servers', Icon: ServersIcon },
+  { id: 'slack', label: 'Slack', Icon: SlackIcon },
   { id: 'providers', label: 'Providers', Icon: ProvidersIcon },
   { id: 'appearance', label: 'Appearance', Icon: AppearanceIcon },
   { id: 'updates', label: 'Updates', Icon: UpdateIcon },

@@ -51,6 +51,7 @@ type PairedConfigInput struct {
 	Checkpoints         Checkpoints            `yaml:"checkpoints"`
 	InputNotifications  InputNotificationsMode `yaml:"input_notifications"`
 	AutomaticReviewMode AutomaticReviewMode    `yaml:"automatic_review_mode"`
+	SlackNotifications  *SlackNotifications   `yaml:"slack_notifications,omitempty"`
 }
 
 // PairedConfigResult describes the outcome of a paired config update.
@@ -71,6 +72,7 @@ func applyPairedConfig(f *Feature, input PairedConfigInput) ConfigSnapshot {
 	f.Checkpoints = input.Checkpoints
 	f.InputNotifications = PersistInputNotificationsMode(input.InputNotifications)
 	f.AutomaticReviewMode = PersistAutomaticReviewMode(input.AutomaticReviewMode)
+	f.SlackNotifications = CloneSlackNotifications(input.SlackNotifications)
 	return configSnapshotOf(f)
 }
 
@@ -83,6 +85,7 @@ func configSnapshotOf(f *Feature) ConfigSnapshot {
 		Checkpoints:         f.Checkpoints,
 		InputNotifications:  NormalizeInputNotificationsMode(f.InputNotifications),
 		AutomaticReviewMode: NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
+		SlackNotifications:  CloneSlackNotifications(f.SlackNotifications),
 	}
 }
 
@@ -97,6 +100,7 @@ func configSnapshotToInput(snap ConfigSnapshot) PairedConfigInput {
 		Checkpoints:         snap.Checkpoints,
 		InputNotifications:  snap.InputNotifications,
 		AutomaticReviewMode: snap.AutomaticReviewMode,
+		SlackNotifications:  CloneSlackNotifications(snap.SlackNotifications),
 	}
 }
 

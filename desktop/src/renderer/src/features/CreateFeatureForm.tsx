@@ -35,6 +35,7 @@ import {
   type RepositorySourceReconcileResult,
   type RepositorySourcesResult,
   type RepositoryState,
+  type SlackRecipient,
   type WorkspaceRootState,
 } from '../../../shared/ipc';
 import { ConsentDialog } from '../components/wizard/ConsentDialog';
@@ -63,8 +64,10 @@ import {
   retainableDraft,
   type CloneAssociation,
   type CreationDraftState,
+  type CreationSlackRecipientRow,
   type PendingCreate,
   type PendingInitialize,
+  type SlackOverride,
 } from './creationDrafts';
 import { InitializeOffer, type InitializeOfferController } from './cloneViews';
 import { PickerCloneDialog } from './PickerCloneDialog';
@@ -368,6 +371,23 @@ export function CreateFeatureForm({
     () => retained?.inquireness ?? 'medium',
   );
   const [exitCriteria, setExitCriteria] = useState(() => retained?.exitCriteria ?? '');
+  const [slackMuted, setSlackMuted] = useState(() => retained?.slackMuted ?? false);
+  const [slackOverrides, setSlackOverrides] = useState<{
+    progress: SlackOverride;
+    needsInput: SlackOverride;
+    problems: SlackOverride;
+  }>(() => retained?.slackOverrides ?? { progress: '', needsInput: '', problems: '' });
+  const [slackRecipients, setSlackRecipients] = useState<readonly CreationSlackRecipientRow[]>(
+    () =>
+      retained?.slackRecipients ?? [
+        { key: 1, input: '', resolved: null, status: 'idle', error: null },
+      ],
+  );
+  const [slackError, setSlackError] = useState<string | null>(null);
+  const nextSlackRecipientKey = useRef(
+    Math.max(1, ...(retained?.slackRecipients.map((row) => row.key) ?? [])),
+  );
+  const slackRecipientRevisions = useRef(new Map<number, number>());
   const [images, setImages] = useState<readonly string[]>(() => retained?.images ?? []);
   const [attachments, setAttachments] = useState<readonly string[]>(
     () => retained?.attachments ?? [],
@@ -534,13 +554,34 @@ export function CreateFeatureForm({
     images.length > 0 ||
     attachments.length > 0 ||
     imageUploads.length > 0 ||
-    attachmentUploads.length > 0;
+    attachmentUploads.length > 0 ||
+    slackMuted ||
+    Object.values(slackOverrides).some((override) => override !== '') ||
+    slackRecipients.some((row) => row.input !== '');
 
   // Catalog + reconciled selections. `repositories` is the current catalog;
   // reconciliation by identity is derived so every catalog change (initial
   // load, folder adoption, SSE refresh) re-reconciles selections without
   // touching any other draft value.
   const loadedDefaultsEarly = state.phase === 'loaded' ? state.defaults : null;
+  const slackDefaults = loadedDefaultsEarly?.defaults as
+    | (CreationDefaults['defaults'] & {
+        slackConfigured?: boolean;
+        slackDefaults?: {
+          categories: { progress: boolean; needsInput: boolean; problems: boolean };
+          recipientNames: readonly string[];
+        };
+      })
+    | null;
+  const slackConfigured = slackDefaults?.slackConfigured === true;
+  const slackResolvedRecipients: SlackRecipient[] = slackRecipients.flatMap((row) =>
+    row.input.trim() && row.resolved !== null ? [row.resolved] : [],
+  );
+  const slackCategories = Object.fromEntries(
+    Object.entries(slackOverrides).filter(([, value]) => value !== ''),
+  ) as Partial<Record<keyof typeof slackOverrides, Exclude<SlackOverride, ''>>>;
+  const slackChanged =
+    slackMuted || Object.keys(slackCategories).length > 0 || slackResolvedRecipients.length > 0;
   const repositories = loadedDefaultsEarly?.repositories ?? EMPTY_REPOSITORIES;
   const reconciledSelections = useMemo(
     () => reconcileRepoSelections(repoSelections, repositories),
@@ -816,6 +857,9 @@ export function CreateFeatureForm({
       riskLevel,
       inquireness,
       exitCriteria,
+      slackMuted,
+      slackOverrides: { ...slackOverrides },
+      slackRecipients: slackRecipients.map((row) => ({ ...row })),
       images: [...images],
       attachments: [...attachments],
       imageUploads: [...imageUploads],
@@ -1778,6 +1822,76 @@ export function CreateFeatureForm({
     if (validateStep(stepIndex)) setStepIndex((current) => Math.min(current + 1, 3));
   };
 
+  const updateSlackRecipient = (key: number, input: string): void => {
+    slackRecipientRevisions.current.set(key, (slackRecipientRevisions.current.get(key) ?? 0) + 1);
+    setSlackError(null);
+    setSlackRecipients((rows) =>
+      rows.map((row) =>
+        row.key === key ? { ...row, input, resolved: null, status: 'idle', error: null } : row,
+      ),
+    );
+  };
+
+  const resolveSlackRecipient = (key: number): void => {
+    const row = slackRecipients.find((candidate) => candidate.key === key);
+    const input = row?.input.trim() ?? '';
+    if (
+      row === undefined ||
+      input === '' ||
+      row.status === 'resolving' ||
+      (row.resolved !== null && row.resolved.typedText === input)
+    )
+      return;
+    const revision = (slackRecipientRevisions.current.get(key) ?? 0) + 1;
+    slackRecipientRevisions.current.set(key, revision);
+    setSlackRecipients((rows) =>
+      rows.map((candidate) =>
+        candidate.key === key
+          ? { ...candidate, input, resolved: null, status: 'resolving', error: null }
+          : candidate,
+      ),
+    );
+    void window.agentico.resolveSlackRecipient({ input }).then(
+      (resolved) => {
+        if (slackRecipientRevisions.current.get(key) !== revision) return;
+        setSlackRecipients((rows) => {
+          const duplicate = rows.some(
+            (candidate) =>
+              candidate.key !== key &&
+              candidate.resolved?.kind === resolved.kind &&
+              candidate.resolved.id === resolved.id,
+          );
+          return rows.map((candidate) =>
+            candidate.key === key
+              ? {
+                  ...candidate,
+                  resolved: duplicate ? null : resolved,
+                  status: duplicate ? 'error' : 'resolved',
+                  error: duplicate ? 'Already in the list' : null,
+                }
+              : candidate,
+          );
+        });
+      },
+      (error: unknown) => {
+        if (slackRecipientRevisions.current.get(key) !== revision) return;
+        const parsed = parseIpcError(error);
+        setSlackRecipients((rows) =>
+          rows.map((candidate) =>
+            candidate.key === key
+              ? {
+                  ...candidate,
+                  resolved: null,
+                  status: 'error',
+                  error: [parsed.summary, parsed.remediation?.hint].filter(Boolean).join(' '),
+                }
+              : candidate,
+          ),
+        );
+      },
+    );
+  };
+
   const submit = (event: FormEvent): void => {
     event.preventDefault();
     // A selected source update may still be mutating the branch the feature
@@ -1797,6 +1911,13 @@ export function CreateFeatureForm({
     }
     if (!validateStep(1)) {
       setStepIndex(1);
+      return;
+    }
+    if (
+      slackConfigured &&
+      slackRecipients.some((row) => row.input.trim() && row.resolved === null)
+    ) {
+      setSlackError('Resolve or remove every recipient before creating.');
       return;
     }
     setFormError(null);
@@ -1838,6 +1959,17 @@ export function CreateFeatureForm({
           exitCriteria,
           models,
           effort,
+          ...(slackConfigured && slackChanged
+            ? {
+                slackNotifications: {
+                  ...(slackMuted ? { mode: 'muted' as const } : {}),
+                  ...slackCategories,
+                  ...(slackResolvedRecipients.length > 0
+                    ? { recipients: slackResolvedRecipients }
+                    : {}),
+                },
+              }
+            : {}),
           checkpoints: {
             inquiryReview: submittedGates.has('inquiryReview') && checkpoints.inquiryReview,
             researchReview: submittedGates.has('researchReview') && checkpoints.researchReview,
@@ -2651,6 +2783,167 @@ export function CreateFeatureForm({
                           />
                         ))}
                       </div>
+                    </fieldset>
+                    <fieldset className="creation-sheet__group">
+                      <legend className="creation-sheet__group-label">Notifications</legend>
+                      {!slackConfigured ? (
+                        <p className="creation-sheet__group-desc creation-sheet__notification-guidance">
+                          Set up Slack in Settings
+                        </p>
+                      ) : (
+                        <>
+                          <div className="creation-sheet__rows">
+                            <label className="creation-sheet__row">
+                              <span className="creation-sheet__row-body">
+                                <b className="creation-sheet__row-name">Mute Slack updates</b>
+                                <span className="creation-sheet__row-hint">
+                                  Stops new updates. Items already posted stay answerable.
+                                </span>
+                              </span>
+                              <input
+                                className="creation-sheet__row-control"
+                                type="checkbox"
+                                checked={slackMuted}
+                                onChange={(event) => setSlackMuted(event.target.checked)}
+                              />
+                            </label>
+                          </div>
+                          {slackMuted ? (
+                            <p className="creation-sheet__group-desc creation-sheet__notification-guidance">
+                              Category choices have no effect while muted.
+                            </p>
+                          ) : null}
+                          <div className="creation-sheet__knob-pair creation-sheet__notification-knobs">
+                            {(
+                              [
+                                ['progress', 'Progress'],
+                                ['needsInput', 'Needs input'],
+                                ['problems', 'Problems'],
+                              ] as const
+                            ).map(([key, label]) => (
+                              <label className="creation-sheet__field" key={key}>
+                                <span className="creation-sheet__field-label">{label}</span>
+                                <select
+                                  className="creation-sheet__select"
+                                  value={slackOverrides[key]}
+                                  onChange={(event) =>
+                                    setSlackOverrides((current) => ({
+                                      ...current,
+                                      [key]: event.target.value as SlackOverride,
+                                    }))
+                                  }
+                                >
+                                  <option value="">
+                                    Workspace default (
+                                    {slackDefaults.slackDefaults?.categories[key] ? 'on' : 'off'})
+                                  </option>
+                                  <option value="on">On</option>
+                                  <option value="off">Off</option>
+                                </select>
+                              </label>
+                            ))}
+                          </div>
+                          <p className="creation-sheet__group-desc creation-sheet__notification-guidance">
+                            Workspace defaults:{' '}
+                            {slackDefaults.slackDefaults?.recipientNames.join(', ') || 'none'}. Also
+                            notify these people or channels:
+                          </p>
+                          <div className="creation-sheet__rows">
+                            {slackRecipients.map((row, index) => {
+                              const errorId = `creation-slack-recipient-${row.key}-error`;
+                              return (
+                                <div className="creation-sheet__row" key={row.key}>
+                                  <div className="creation-sheet__row-body">
+                                    <label
+                                      className="creation-sheet__field"
+                                      htmlFor={`creation-slack-recipient-${row.key}`}
+                                    >
+                                      <span className="sr-only">Recipient {index + 1}</span>
+                                      <input
+                                        id={`creation-slack-recipient-${row.key}`}
+                                        className="creation-sheet__input"
+                                        placeholder="Email, @handle, #channel, or Slack ID"
+                                        value={row.input}
+                                        aria-invalid={fieldAriaInvalid(row.error !== null)}
+                                        aria-describedby={fieldAriaDescribedBy(
+                                          errorId,
+                                          row.error !== null,
+                                        )}
+                                        onChange={(event) => {
+                                          updateSlackRecipient(row.key, event.target.value);
+                                        }}
+                                        onBlur={() => resolveSlackRecipient(row.key)}
+                                        onKeyDown={(event) => {
+                                          if (event.key === 'Enter') {
+                                            event.preventDefault();
+                                            resolveSlackRecipient(row.key);
+                                          }
+                                        }}
+                                      />
+                                    </label>
+                                    {row.status === 'resolving' ? (
+                                      <span className="creation-sheet__row-hint" role="status">
+                                        Resolving...
+                                      </span>
+                                    ) : row.resolved !== null ? (
+                                      <span className="creation-sheet__row-hint" role="status">
+                                        {row.resolved.displayName}
+                                      </span>
+                                    ) : null}
+                                    <FieldError id={errorId} message={row.error} />
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="creation-sheet__row-control creation-sheet__button"
+                                    aria-label={`Remove recipient ${index + 1}`}
+                                    onClick={() => {
+                                      slackRecipientRevisions.current.delete(row.key);
+                                      setSlackRecipients((rows) => {
+                                        const remaining = rows.filter(
+                                          (item) => item.key !== row.key,
+                                        );
+                                        return remaining.length > 0
+                                          ? remaining
+                                          : [
+                                              {
+                                                key: ++nextSlackRecipientKey.current,
+                                                input: '',
+                                                resolved: null,
+                                                status: 'idle',
+                                                error: null,
+                                              },
+                                            ];
+                                      });
+                                      setSlackError(null);
+                                    }}
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <button
+                            type="button"
+                            className="creation-sheet__button"
+                            onClick={() => {
+                              setSlackRecipients((rows) => [
+                                ...rows,
+                                {
+                                  key: ++nextSlackRecipientKey.current,
+                                  input: '',
+                                  resolved: null,
+                                  status: 'idle',
+                                  error: null,
+                                },
+                              ]);
+                            }}
+                          >
+                            Add recipient
+                          </button>
+                          <FieldError id="creation-slack-recipients-error" message={slackError} />
+                        </>
+                      )}
                     </fieldset>
                     <div className="creation-sheet__knobs">
                       <div className="creation-sheet__knob-pair">

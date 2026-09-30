@@ -827,6 +827,7 @@ export function toCanonicalError(err: unknown, fallbackCode: FallbackCode): Cano
 }
 
 const BEARER_RE = /bearer\s+[a-z0-9._~+/=-]+/gi;
+const SLACK_TOKEN_RE = /xox[a-z]-[a-z0-9._~+/=-]+/gi;
 const TOKEN_PARAM_RE = /([?&](?:token|access_token|bearer|key|secret)=)[^\s&"']+/gi;
 const USER_PATH_RE = /(?:\/Users|\/home)\/[^\s:"']+/g;
 
@@ -834,6 +835,7 @@ const USER_PATH_RE = /(?:\/Users|\/home)\/[^\s:"']+/g;
 export function redactText(text: string): string {
   return text
     .replace(BEARER_RE, '[redacted]')
+    .replace(SLACK_TOKEN_RE, '[redacted]')
     .replace(TOKEN_PARAM_RE, '$1[redacted]')
     .replace(USER_PATH_RE, '[path]');
 }

@@ -29,7 +29,6 @@ import (
 // a local file transport (the runner is transport-agnostic; API-level
 // validation lives above it).
 func TestRealRunnerClonesRealGitRepository(t *testing.T) {
-	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -82,7 +81,6 @@ func gitHasHeadRepository(dir string) bool {
 // descendant holding pipes open cannot survive termination or stall the
 // bounded reap.
 func TestRealRunnerTerminatesProcessTree(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	gitShim := filepath.Join(dir, "fake-git")
 	script := `#!/bin/sh
@@ -93,9 +91,7 @@ if [ -n "$child_pid_file" ]; then
 fi
 while true; do sleep 1; done
 `
-	if err := os.WriteFile(gitShim, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutable(t, gitShim, script)
 	childPIDFile := filepath.Join(dir, "child.pid")
 	handle, err := NewRealRunner(gitShim).Start(RunSpec{
 		Remote:  "https://example.com/acme/widget.git",
@@ -185,12 +181,9 @@ func TestCloneEnvironmentPreservesServerSettingsAndSuppressesPrompts(t *testing.
 
 // TestRealRunnerDeadlineKillsTree pins the injectable deadline.
 func TestRealRunnerDeadlineKillsTree(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
 	gitShim := filepath.Join(dir, "fake-git")
-	if err := os.WriteFile(gitShim, []byte("#!/bin/sh\nwhile true; do sleep 1; done\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutable(t, gitShim, "#!/bin/sh\nwhile true; do sleep 1; done\n")
 	handle, err := NewRealRunner(gitShim).Start(RunSpec{
 		Remote:   "https://example.com/acme/widget.git",
 		Staging:  filepath.Join(dir, "staging"),
@@ -251,9 +244,7 @@ func TestRealRunnerDrainsVerboseCloneAndRetainsFinalDiagnostic(t *testing.T) {
 	// 1 MiB capture quota. The final unterminated diagnostic must be observed
 	// before Wait returns so failure classification remains accurate.
 	script := "#!/bin/sh\ndd if=/dev/zero bs=65536 count=32 >&2 2>/dev/null\nprintf '\\nfatal: Authentication failed' >&2\nexit 1\n"
-	if err := os.WriteFile(gitShim, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutable(t, gitShim, script)
 	handle, err := NewRealRunner(gitShim).Start(RunSpec{
 		Remote: "https://example.com/acme/widget.git", Staging: filepath.Join(dir, "staging"),
 		Deadline: 30 * time.Second,
@@ -267,6 +258,17 @@ func TestRealRunnerDrainsVerboseCloneAndRetainsFinalDiagnostic(t *testing.T) {
 	}
 	if got := ClassifyFailure(result); got != FailureAuthentication {
 		t.Fatalf("failure = %s, want authentication failure from final diagnostic: %+v", got, result)
+	}
+}
+
+func writeExecutable(t *testing.T, path, contents string) {
+	t.Helper()
+	tempPath := path + ".tmp"
+	if err := os.WriteFile(tempPath, []byte(contents), 0o755); err != nil {
+		t.Fatalf("write executable fixture: %v", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		t.Fatalf("publish executable fixture: %v", err)
 	}
 }
 

@@ -127,6 +127,7 @@ func setupWorkspaceSlug(f *Feature, repo FeatureRepo, task SetupTask) (string, s
 
 // CreateOptions holds optional parameters for feature creation.
 type CreateOptions struct {
+	SlackNotifications *SlackNotifications
 	// UseCurrentBranch, when true, creates worktrees from the repo's current
 	// HEAD instead of the detected default branch. The BaseBranch field is
 	// still set to the default branch for diff/PR purposes.
@@ -367,22 +368,23 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		status = StatusSettingUpWorktrees
 	}
 	f := &Feature{
-		ID:            id,
-		Name:          name,
-		Slug:          slug,
-		Description:   description,
-		Created:       now,
-		Status:        status,
-		CurrentPhase:  opt.Pipeline.FirstPhase(),
-		Pipeline:      opt.Pipeline,
-		Repos:         featureRepos,
-		Models:        models,
-		Effort:        opt.Effort,
-		ExitCriteria:  exitCriteria,
-		Inquireness:   inq,
-		MaxIterations: m.Config.Defaults.MaxIterations,
-		Checkpoints:   opt.Checkpoints,
-		RiskLevel:     opt.RiskLevel,
+		ID:                 id,
+		Name:               name,
+		Slug:               slug,
+		Description:        description,
+		Created:            now,
+		Status:             status,
+		CurrentPhase:       opt.Pipeline.FirstPhase(),
+		Pipeline:           opt.Pipeline,
+		Repos:              featureRepos,
+		Models:             models,
+		Effort:             opt.Effort,
+		ExitCriteria:       exitCriteria,
+		Inquireness:        inq,
+		MaxIterations:      m.Config.Defaults.MaxIterations,
+		Checkpoints:        opt.Checkpoints,
+		RiskLevel:          opt.RiskLevel,
+		SlackNotifications: CloneSlackNotifications(opt.SlackNotifications),
 		// Feature starts on run-001. Explicit seeding ensures feature.yaml is
 		// never persisted with ActiveRun == 0 (which Store.loadUnlocked treats
 		// as the pre-runs migration trip wire).

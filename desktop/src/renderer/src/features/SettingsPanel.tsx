@@ -40,6 +40,7 @@ import { BUNDLED_RUNTIME_LABEL } from '../components/ServerSwitcher';
 import { FieldError } from '../components/FieldError';
 import { SettingsConfirmationDialog } from './SettingsConfirmationDialog';
 import { ServerUpdateCard } from './ServerUpdateCard';
+import { SlackSettingsPane } from './SlackSettingsPane';
 import type { PaneFocusIntent } from './settingsPanes';
 import type {
   CanonicalError,
@@ -840,6 +841,8 @@ export function SettingsPanel({
           </label>
         </section>
       )}
+
+      {pane === 'slack' && <SlackSettingsPane />}
 
       {pane === 'diagnostics' && (
         <section

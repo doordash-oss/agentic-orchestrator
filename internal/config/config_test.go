@@ -17,11 +17,208 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestSlackConfigRoundTripAndLegacyOmission(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	legacy := NewDefault()
+	if err := Save(path, legacy); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "\nslack:") {
+		t.Fatalf("untouched config gained slack section:\n%s", data)
+	}
+
+	validatedAt := time.Date(2026, 9, 19, 12, 30, 0, 0, time.UTC)
+	want := &SlackConfig{
+		Enabled: false,
+		Token:   "xoxb-sentinel-1234",
+		Identity: &SlackIdentity{
+			TeamID:      "T123",
+			TeamName:    "Agentico Test",
+			UserID:      "U123",
+			DisplayName: "Agentico",
+			BotID:       "B123",
+		},
+		GrantedScopes: []string{"chat:write", "channels:read"},
+		DefaultRecipients: []SlackRecipient{
+			{TypedText: "@ada", Kind: "user", ID: "U12345678", DisplayName: "Ada Lovelace"},
+			{TypedText: "#eng", Kind: "channel", ID: "C12345678", DisplayName: "#eng"},
+		},
+		LastValidatedAt: validatedAt,
+	}
+	legacy.Slack = want
+	if err := Save(path, legacy); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Slack, want) {
+		t.Fatalf("Slack round trip = %#v; want %#v", loaded.Slack, want)
+	}
+
+	want.DefaultRecipients = nil
+	legacy.Slack = want
+	if err := Save(path, legacy); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "default_recipients:") {
+		t.Fatalf("empty recipients were persisted:\n%s", data)
+	}
+}
+
+func TestSlackCategoriesDefaultOnAndSaveOmission(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	source := "slack:\n  enabled: true\n  token: xoxb-sentinel-1234\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Slack == nil || loaded.Slack.Categories != nil {
+		t.Fatalf("config without categories mapping loaded mapping %#v", loaded.Slack)
+	}
+	effective := loaded.Slack.Categories.Effective()
+	if !effective.Progress || !effective.NeedsInput || !effective.Problems {
+		t.Fatalf("omitted categories defaulted off: %#v", effective)
+	}
+	if err := Save(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "categories:") {
+		t.Fatalf("default categories were persisted:\n%s", data)
+	}
+}
+
+func TestSlackCategoriesExplicitFalseRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	source := "slack:\n  enabled: true\n  token: xoxb-sentinel-1234\n" +
+		"  categories:\n    progress: false\n"
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Slack == nil || loaded.Slack.Categories == nil {
+		t.Fatalf("categories mapping was not loaded")
+	}
+	effective := loaded.Slack.Categories.Effective()
+	if effective.Progress || !effective.NeedsInput || !effective.Problems {
+		t.Fatalf("loaded categories = %#v; want progress off, others on", effective)
+	}
+	if err := Save(path, loaded); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(loaded.Slack, reloaded.Slack) {
+		t.Fatalf("categories round trip = %#v; want %#v", reloaded.Slack, loaded.Slack)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"progress: false", "needs_input: true", "problems: true"} {
+		if !strings.Contains(string(data), key) {
+			t.Fatalf("saved categories missing %q:\n%s", key, data)
+		}
+	}
+}
+
+func TestNormalizeCategoriesOmitsAllOnMapping(t *testing.T) {
+	if got := NormalizeCategories(SlackCategories{Progress: true, NeedsInput: true, Problems: true}); got != nil {
+		t.Fatalf("all-on categories were not omitted: %#v", got)
+	}
+	off := NormalizeCategories(SlackCategories{Progress: false, NeedsInput: true, Problems: true})
+	if off == nil {
+		t.Fatal("progress-off categories were omitted")
+	}
+	effective := off.Effective()
+	if effective.Progress || !effective.NeedsInput || !effective.Problems {
+		t.Fatalf("normalized categories effective = %#v", effective)
+	}
+}
+
+func TestSlackTokenMetadata(t *testing.T) {
+	cases := []struct {
+		token    string
+		wantType string
+		wantHint string
+	}{
+		{"xoxb-secret-1234", "bot", "1234"},
+		{"xoxp-secret-abcd", "user", "abcd"},
+		{"xoxa-secret-zzzz", "unsupported", "zzzz"},
+		{"", "unsupported", ""},
+		{"abc", "unsupported", "abc"},
+	}
+	for _, tc := range cases {
+		if got := SlackTokenType(tc.token); got != tc.wantType {
+			t.Errorf("SlackTokenType(%q) = %q; want %q", tc.token, got, tc.wantType)
+		}
+		if got := SlackTokenHint(tc.token); got != tc.wantHint {
+			t.Errorf("SlackTokenHint(%q) = %q; want %q", tc.token, got, tc.wantHint)
+		}
+	}
+}
+
+func TestSaveConfigPermissionsFollowSlackToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	cfg := NewDefault()
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o664); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	} else if got := info.Mode().Perm(); got != 0o664 {
+		t.Fatalf("tokenless save mode = %o; want 664", got)
+	}
+
+	cfg.Slack = &SlackConfig{Token: "xoxb-secret-1234"}
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	} else if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("token save mode = %o; want 600", got)
+	}
+}
 
 func TestNewDefault(t *testing.T) {
 	cfg := NewDefault()

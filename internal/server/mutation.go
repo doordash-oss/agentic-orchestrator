@@ -27,6 +27,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -94,6 +95,10 @@ const trustedClientHeaderValue = "local"
 // apiPathPermissionsAnswer is the permission-answer mutation route, shared
 // between the route matcher and the client request builder.
 const apiPathPermissionsAnswer = "/api/v1/permissions/answer"
+
+// ErrNoLongerPending identifies an answer mutation whose target has already
+// been resolved or otherwise stopped waiting for input.
+var ErrNoLongerPending = errors.New("no longer pending")
 
 type MutationTarget interface {
 	CreateFeature(CreateFeatureRequest) (CreateFeatureResponse, error)
@@ -176,24 +181,25 @@ func (e *ActionConflictError) Unwrap() error {
 }
 
 type CreateFeatureRequest struct {
-	Name                    string                  `json:"name"`
-	Description             string                  `json:"description,omitempty"`
-	Repos                   []string                `json:"repos,omitempty"`
-	Models                  config.ModelConfig      `json:"models,omitempty"`
-	Effort                  config.EffortConfig     `json:"effort,omitempty"`
-	ExitCriteria            string                  `json:"exit_criteria,omitempty"`
-	Inquireness             string                  `json:"inquireness,omitempty"`
-	Images                  []string                `json:"images,omitempty"`
-	ImageUploads            []string                `json:"image_uploads,omitempty"`
-	UseCurrentBranch        bool                    `json:"use_current_branch,omitempty"`
-	UseCurrentBranchPerRepo map[string]bool         `json:"use_current_branch_per_repo,omitempty"`
-	RepositorySources       []RepositorySource      `json:"repository_sources,omitempty"`
-	Checkpoints             feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Attachments             []string                `json:"attachments,omitempty"`
-	AttachmentUploads       []string                `json:"attachment_uploads,omitempty"`
-	RiskLevel               feature.RiskLevel       `json:"risk_level,omitempty"`
-	Pipeline                feature.PipelineProfile `json:"pipeline,omitempty"`
-	IdempotencyKey          string                  `json:"idempotency_key,omitempty"`
+	Name                    string                   `json:"name"`
+	Description             string                   `json:"description,omitempty"`
+	Repos                   []string                 `json:"repos,omitempty"`
+	Models                  config.ModelConfig       `json:"models,omitempty"`
+	Effort                  config.EffortConfig      `json:"effort,omitempty"`
+	ExitCriteria            string                   `json:"exit_criteria,omitempty"`
+	Inquireness             string                   `json:"inquireness,omitempty"`
+	Images                  []string                 `json:"images,omitempty"`
+	ImageUploads            []string                 `json:"image_uploads,omitempty"`
+	UseCurrentBranch        bool                     `json:"use_current_branch,omitempty"`
+	UseCurrentBranchPerRepo map[string]bool          `json:"use_current_branch_per_repo,omitempty"`
+	RepositorySources       []RepositorySource       `json:"repository_sources,omitempty"`
+	Checkpoints             feature.Checkpoints      `json:"checkpoints,omitempty"`
+	Attachments             []string                 `json:"attachments,omitempty"`
+	AttachmentUploads       []string                 `json:"attachment_uploads,omitempty"`
+	RiskLevel               feature.RiskLevel        `json:"risk_level,omitempty"`
+	Pipeline                feature.PipelineProfile  `json:"pipeline,omitempty"`
+	IdempotencyKey          string                   `json:"idempotency_key,omitempty"`
+	SlackNotifications      *SlackNotificationsPatch `json:"slack_notifications,omitempty"`
 }
 
 type RestartFeatureRequest struct {
@@ -202,22 +208,24 @@ type RestartFeatureRequest struct {
 }
 
 type ReviewDecisionRequest struct {
-	Decision  string `json:"decision"`
-	Phase     string `json:"phase,omitempty"`
-	PhasePlan bool   `json:"phase_plan,omitempty"`
-	Roadmap   bool   `json:"roadmap,omitempty"`
-	IsRewind  bool   `json:"is_rewind,omitempty"`
-	Comment   string `json:"comment,omitempty"`
+	Decision  string              `json:"decision"`
+	Phase     string              `json:"phase,omitempty"`
+	PhasePlan bool                `json:"phase_plan,omitempty"`
+	Roadmap   bool                `json:"roadmap,omitempty"`
+	IsRewind  bool                `json:"is_rewind,omitempty"`
+	Comment   string              `json:"comment,omitempty"`
+	Source    *ports.AnswerSource `json:"source,omitempty"`
 }
 
 type FeatureConfigMutationRequest struct {
-	Models              config.ModelConfig      `json:"models,omitempty"`
-	Effort              config.EffortConfig     `json:"effort,omitempty"`
-	Inquireness         string                  `json:"inquireness,omitempty"`
-	Checkpoints         feature.Checkpoints     `json:"checkpoints,omitempty"`
-	Pipeline            feature.PipelineProfile `json:"pipeline,omitempty"`
-	InputNotifications  string                  `json:"input_notifications,omitempty"`
-	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`
+	Models              config.ModelConfig       `json:"models,omitempty"`
+	Effort              config.EffortConfig      `json:"effort,omitempty"`
+	Inquireness         string                   `json:"inquireness,omitempty"`
+	Checkpoints         feature.Checkpoints      `json:"checkpoints,omitempty"`
+	Pipeline            feature.PipelineProfile  `json:"pipeline,omitempty"`
+	InputNotifications  string                   `json:"input_notifications,omitempty"`
+	AutomaticReviewMode *string                  `json:"automatic_review_mode,omitempty"`
+	SlackNotifications  *SlackNotificationsPatch `json:"slack_notifications,omitempty"`
 }
 
 type NeedUserInputResumeRequest struct{}
@@ -247,7 +255,8 @@ type PermissionAnswerRequest struct {
 	RememberScope   *string `json:"remember_scope,omitempty"`
 	// AutoApproveScope turns automatic Bash review on for the request's
 	// feature ("feature") or the workspace ("workspace") before answering.
-	AutoApproveScope string `json:"auto_approve_scope,omitempty"`
+	AutoApproveScope string              `json:"auto_approve_scope,omitempty"`
+	Source           *ports.AnswerSource `json:"source,omitempty"`
 }
 
 const (
@@ -256,21 +265,27 @@ const (
 )
 
 type AskUserAnswerRequest struct {
-	RequestID string            `json:"request_id"`
-	SessionID string            `json:"session_id,omitempty"`
-	Answers   map[string]string `json:"answers"`
+	RequestID string              `json:"request_id"`
+	SessionID string              `json:"session_id,omitempty"`
+	Answers   map[string]string   `json:"answers"`
+	Source    *ports.AnswerSource `json:"source,omitempty"`
 }
 
 type HelpAnswerRequest struct {
-	FeatureID string `json:"feature_id,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
-	Message   string `json:"message"`
+	FeatureID string              `json:"feature_id,omitempty"`
+	SessionID string              `json:"session_id,omitempty"`
+	Message   string              `json:"message"`
+	Source    *ports.AnswerSource `json:"source,omitempty"`
 }
 
 type RuntimeConfigMutationRequest struct {
-	Defaults       RuntimeDefaultsMutation `json:"defaults,omitempty"`
-	WorkspaceRoots *[]string               `json:"workspace_roots,omitempty"`
-	Notifications  *NotificationConfig     `json:"notifications,omitempty"`
+	Defaults        RuntimeDefaultsMutation `json:"defaults,omitempty"`
+	WorkspaceRoots  *[]string               `json:"workspace_roots,omitempty"`
+	Notifications   *NotificationConfig     `json:"notifications,omitempty"`
+	Slack           *SlackConfigMutation    `json:"slack,omitempty"`
+	SlackValidation *ports.SlackValidation  `json:"-"`
+	SlackCheckedAt  time.Time               `json:"-"`
+	SlackWarning    *errcat.Error           `json:"-"`
 }
 
 // RuntimeDefaultsMutation is the patch representation of DefaultsConfig.
@@ -514,7 +529,23 @@ func writeMutationError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusConflict, errcat.InvalidTransition)
 		return
 	}
+	if errors.Is(err, ErrNoLongerPending) {
+		writeAPIError(w, http.StatusConflict, errcat.NoLongerPending)
+		return
+	}
 	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(err.Error()))
+}
+
+func validAnswerSource(source *ports.AnswerSource) bool {
+	return source == nil || source.Kind.Valid()
+}
+
+func validateAnswerSource(w http.ResponseWriter, source *ports.AnswerSource) bool {
+	if validAnswerSource(source) {
+		return true
+	}
+	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("source.kind must be slack or desktop"))
+	return false
 }
 
 // writeRelationshipGuardError maps the typed relationship-guard rejections
@@ -836,6 +867,9 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) {
 		return
 	}
+	if !validateSlackNotifications(w, req.SlackNotifications) {
+		return
+	}
 	if !h.validateRequestedModels(w, req.Models) {
 		return
 	}
@@ -973,6 +1007,9 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 		return true
 	}
 	if !validateAutomaticReviewMode(w, req.AutomaticReviewMode) {
+		return true
+	}
+	if !validateSlackNotifications(w, req.SlackNotifications) {
 		return true
 	}
 	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
@@ -1278,17 +1315,39 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		if req.WorkspaceRoots != nil && !validateWorkspaceRootPaths(w, *req.WorkspaceRoots) {
 			return
 		}
+		if req.Slack != nil && req.Slack.DefaultRecipients != nil &&
+			!validateSlackRecipients(w, *req.Slack.DefaultRecipients) {
+			return
+		}
+		if req.Slack != nil && !h.prepareSlackMutation(w, r.Context(), &req) {
+			return
+		}
+		lockSlackCredential := req.Slack != nil &&
+			(req.Slack.Token != nil || (req.Slack.ClearToken != nil && *req.Slack.ClearToken))
+		if lockSlackCredential {
+			h.slackCredentialMu.Lock()
+			defer h.slackCredentialMu.Unlock()
+		}
 		resp, err := h.mutations.RuntimeConfig(req)
 		if err != nil {
 			writeMutationError(w, err)
 			return
 		}
 		defaultActionFields(&resp, "", resultUpdated)
-		if resp.Result == resultUpdated && h.broker != nil {
-			// A runtime configuration change (workspace roots, defaults,
-			// notifications) reshapes discovery and read models: every
-			// surface re-reads its snapshot. Unchanged mutations publish
-			// nothing.
+		statusPublished := false
+		if resp.Result == resultUpdated && h.slack != nil && req.Slack != nil {
+			switch {
+			case req.Slack.ClearToken != nil && *req.Slack.ClearToken:
+				statusPublished = h.slack.ClearStatus()
+			case req.SlackValidation != nil:
+				statusPublished = h.slack.RecordValidationSuccess(req.SlackCheckedAt)
+			case req.SlackWarning != nil:
+				statusPublished = h.slack.RecordValidationFailure(req.SlackCheckedAt, *req.SlackWarning)
+			}
+		}
+		if resp.Result == resultUpdated && !statusPublished && h.broker != nil {
+			// Slack status changes publish through the service hook. Other
+			// runtime mutations publish here so each change invalidates once.
 			h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
 		}
 		writeActionJSON(w, http.StatusOK, &resp)
@@ -1296,6 +1355,92 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 		w.Header().Set("Allow", "GET, PATCH, PUT")
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 	}
+}
+
+func validateSlackRecipients(w http.ResponseWriter, recipients []SlackRecipient) bool {
+	return validateSlackRecipientsAtPath(w, recipients, "slack.default_recipients")
+}
+
+func validateSlackRecipientsAtPath(w http.ResponseWriter, recipients []SlackRecipient, path string) bool {
+	seen := make(map[string]int, len(recipients))
+	for index, recipient := range recipients {
+		field := ""
+		switch {
+		case strings.TrimSpace(recipient.TypedText) == "":
+			field = "typed_text"
+		case !recipient.Kind.Valid():
+			field = "kind"
+		case strings.TrimSpace(recipient.ID) == "":
+			field = "id"
+		case strings.TrimSpace(recipient.DisplayName) == "":
+			field = "display_name"
+		}
+		if field != "" {
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics(fmt.Sprintf(
+					"%s[%d].%s is invalid", path, index, field,
+				)))
+			return false
+		}
+		key := string(recipient.Kind) + "\x00" + recipient.ID
+		if previous, ok := seen[key]; ok {
+			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+				errcat.WithDiagnostics(fmt.Sprintf(
+					"%s[%d] duplicates entry %d", path, index, previous,
+				)))
+			return false
+		}
+		seen[key] = index
+	}
+	return true
+}
+
+func (h *apiHandler) prepareSlackMutation(w http.ResponseWriter, ctx context.Context, req *RuntimeConfigMutationRequest) bool {
+	mutation := req.Slack
+	if mutation.Token != nil && mutation.ClearToken != nil && *mutation.ClearToken {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("slack token and clear_token cannot be sent together"))
+		return false
+	}
+	if mutation.Token == nil {
+		return true
+	}
+	if *mutation.Token == "" {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest,
+			errcat.WithDiagnostics("slack token must not be empty"))
+		return false
+	}
+	if h.slack == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, errcat.SlackUnreachable)
+		return false
+	}
+	checkedAt := time.Now().UTC()
+	validation, err := h.slack.Validate(ctx, *mutation.Token)
+	if err == nil {
+		req.SlackValidation = &validation
+		req.SlackCheckedAt = checkedAt
+		return true
+	}
+	var validationErr *ports.SlackValidationError
+	if !errors.As(err, &validationErr) {
+		writeAPIError(w, http.StatusBadGateway, errcat.SlackUnreachable)
+		return false
+	}
+	if validationErr.Canonical.Code == errcat.SlackUnreachable {
+		req.SlackWarning = &validationErr.Canonical
+		req.SlackCheckedAt = checkedAt
+		return true
+	}
+	writeRenderedSlackError(w, validationErr.Canonical)
+	return false
+}
+
+func writeRenderedSlackError(w http.ResponseWriter, canonical errcat.Error) {
+	status := http.StatusBadRequest
+	if canonical.Code == errcat.SlackUnreachable {
+		status = http.StatusBadGateway
+	}
+	writeJSON(w, status, ErrorResponse{APIVersion: APIVersion, Error: wireError(canonical)})
 }
 
 // validateWorkspaceRootPaths rejects runtime-config workspace roots that do
@@ -1386,6 +1531,9 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("request_id is required"))
 		return
 	}
+	if !validateAnswerSource(w, req.Source) {
+		return
+	}
 	switch req.Decision {
 	case decisionAllowOnce, decisionAllowRemember, decisionDeny:
 	default:
@@ -1406,6 +1554,8 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope cannot be combined with deny"))
 		return
 	}
+	unlock := h.permissionAnswerLocks.lock(strings.TrimSpace(req.RequestID))
+	defer unlock()
 	resp, err := h.mutations.AnswerPermission(req)
 	if err != nil {
 		writeMutationError(w, err)
@@ -1444,6 +1594,9 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
 			return
 		}
+		if !validateAnswerSource(w, req.Source) {
+			return
+		}
 		resp, err := h.mutations.AnswerAskUser(req)
 		if err != nil {
 			writeMutationError(w, err)
@@ -1467,6 +1620,9 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		}
 		if strings.TrimSpace(req.SessionID) == "" && strings.TrimSpace(req.FeatureID) == "" {
 			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("session_id or feature_id is required"))
+			return
+		}
+		if !validateAnswerSource(w, req.Source) {
 			return
 		}
 		resp, err := h.mutations.SendHelp(req)
@@ -1912,6 +2068,14 @@ func classifyDecodeError(err error) (status int, code errcat.Code, diagnostics s
 	diagnostics = "invalid JSON request"
 	if errors.Is(err, io.ErrUnexpectedEOF) {
 		diagnostics = "truncated JSON request"
+	}
+	var slackErr *slackNotificationsDecodeError
+	if errors.As(err, &slackErr) {
+		diagnostics = slackErr.Error()
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) && typeErr.Field == "source" {
+		diagnostics = typeErr.Field + " has invalid type"
 	}
 	var maxBytesErr *http.MaxBytesError
 	if errors.As(err, &maxBytesErr) {

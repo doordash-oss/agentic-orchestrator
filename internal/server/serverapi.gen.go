@@ -22,6 +22,7 @@ import (
 
 	config "github.com/doordash-oss/agentic-orchestrator/internal/config"
 	feature "github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 const (
@@ -209,6 +210,24 @@ func (e CreateFeatureMutationRequestRiskLevel) Valid() bool {
 	}
 }
 
+// Defines values for EffectiveSlackNotificationsModeSource.
+const (
+	EffectiveSlackNotificationsModeSourceFeature EffectiveSlackNotificationsModeSource = "feature"
+	EffectiveSlackNotificationsModeSourceGlobal  EffectiveSlackNotificationsModeSource = "global"
+)
+
+// Valid indicates whether the value is a known member of the EffectiveSlackNotificationsModeSource enum.
+func (e EffectiveSlackNotificationsModeSource) Valid() bool {
+	switch e {
+	case EffectiveSlackNotificationsModeSourceFeature:
+		return true
+	case EffectiveSlackNotificationsModeSourceGlobal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorClass.
 const (
 	ErrorClassBlocking    ErrorClass = "blocking"
@@ -383,6 +402,69 @@ func (e FeatureConfigInquireness) Valid() bool {
 	case FeatureConfigInquirenessMedium:
 		return true
 	case FeatureConfigInquirenessNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FeatureConfigMutationBodyAutomaticReviewMode.
+const (
+	FeatureConfigMutationBodyAutomaticReviewModeDefault  FeatureConfigMutationBodyAutomaticReviewMode = "default"
+	FeatureConfigMutationBodyAutomaticReviewModeDisabled FeatureConfigMutationBodyAutomaticReviewMode = "disabled"
+	FeatureConfigMutationBodyAutomaticReviewModeEnabled  FeatureConfigMutationBodyAutomaticReviewMode = "enabled"
+)
+
+// Valid indicates whether the value is a known member of the FeatureConfigMutationBodyAutomaticReviewMode enum.
+func (e FeatureConfigMutationBodyAutomaticReviewMode) Valid() bool {
+	switch e {
+	case FeatureConfigMutationBodyAutomaticReviewModeDefault:
+		return true
+	case FeatureConfigMutationBodyAutomaticReviewModeDisabled:
+		return true
+	case FeatureConfigMutationBodyAutomaticReviewModeEnabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FeatureConfigMutationBodyInputNotifications.
+const (
+	FeatureConfigMutationBodyInputNotificationsDefault FeatureConfigMutationBodyInputNotifications = "default"
+	FeatureConfigMutationBodyInputNotificationsEnabled FeatureConfigMutationBodyInputNotifications = "enabled"
+	FeatureConfigMutationBodyInputNotificationsMuted   FeatureConfigMutationBodyInputNotifications = "muted"
+)
+
+// Valid indicates whether the value is a known member of the FeatureConfigMutationBodyInputNotifications enum.
+func (e FeatureConfigMutationBodyInputNotifications) Valid() bool {
+	switch e {
+	case FeatureConfigMutationBodyInputNotificationsDefault:
+		return true
+	case FeatureConfigMutationBodyInputNotificationsEnabled:
+		return true
+	case FeatureConfigMutationBodyInputNotificationsMuted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FeatureConfigMutationBodyInquireness.
+const (
+	FeatureConfigMutationBodyInquirenessHigh   FeatureConfigMutationBodyInquireness = "high"
+	FeatureConfigMutationBodyInquirenessMedium FeatureConfigMutationBodyInquireness = "medium"
+	FeatureConfigMutationBodyInquirenessNone   FeatureConfigMutationBodyInquireness = "none"
+)
+
+// Valid indicates whether the value is a known member of the FeatureConfigMutationBodyInquireness enum.
+func (e FeatureConfigMutationBodyInquireness) Valid() bool {
+	switch e {
+	case FeatureConfigMutationBodyInquirenessHigh:
+		return true
+	case FeatureConfigMutationBodyInquirenessMedium:
+		return true
+	case FeatureConfigMutationBodyInquirenessNone:
 		return true
 	default:
 		return false
@@ -910,22 +992,22 @@ func (e ReviewFeedbackDraftCommentType) Valid() bool {
 
 // Defines values for RewindWorktreeConsequenceResetKind.
 const (
-	Anchor    RewindWorktreeConsequenceResetKind = "anchor"
-	Base      RewindWorktreeConsequenceResetKind = "base"
-	BaseLocal RewindWorktreeConsequenceResetKind = "base-local"
-	None      RewindWorktreeConsequenceResetKind = "none"
+	RewindWorktreeConsequenceResetKindAnchor    RewindWorktreeConsequenceResetKind = "anchor"
+	RewindWorktreeConsequenceResetKindBase      RewindWorktreeConsequenceResetKind = "base"
+	RewindWorktreeConsequenceResetKindBaseLocal RewindWorktreeConsequenceResetKind = "base-local"
+	RewindWorktreeConsequenceResetKindNone      RewindWorktreeConsequenceResetKind = "none"
 )
 
 // Valid indicates whether the value is a known member of the RewindWorktreeConsequenceResetKind enum.
 func (e RewindWorktreeConsequenceResetKind) Valid() bool {
 	switch e {
-	case Anchor:
+	case RewindWorktreeConsequenceResetKindAnchor:
 		return true
-	case Base:
+	case RewindWorktreeConsequenceResetKindBase:
 		return true
-	case BaseLocal:
+	case RewindWorktreeConsequenceResetKindBaseLocal:
 		return true
-	case None:
+	case RewindWorktreeConsequenceResetKindNone:
 		return true
 	default:
 		return false
@@ -947,6 +1029,324 @@ func (e SSEEventErrorClass) Valid() bool {
 	case SSEEventErrorClassNeedsAction:
 		return true
 	case SSEEventErrorClassWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationRecipientKind.
+const (
+	SlackNotificationRecipientKindChannel SlackNotificationRecipientKind = "channel"
+	SlackNotificationRecipientKindUser    SlackNotificationRecipientKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationRecipientKind enum.
+func (e SlackNotificationRecipientKind) Valid() bool {
+	switch e {
+	case SlackNotificationRecipientKindChannel:
+		return true
+	case SlackNotificationRecipientKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationRecipientSource.
+const (
+	SlackNotificationRecipientSourceFeature SlackNotificationRecipientSource = "feature"
+	SlackNotificationRecipientSourceGlobal  SlackNotificationRecipientSource = "global"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationRecipientSource enum.
+func (e SlackNotificationRecipientSource) Valid() bool {
+	switch e {
+	case SlackNotificationRecipientSourceFeature:
+		return true
+	case SlackNotificationRecipientSourceGlobal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationValueSource.
+const (
+	Feature SlackNotificationValueSource = "feature"
+	Global  SlackNotificationValueSource = "global"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationValueSource enum.
+func (e SlackNotificationValueSource) Valid() bool {
+	switch e {
+	case Feature:
+		return true
+	case Global:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationsMode.
+const (
+	SlackNotificationsModeEmpty   SlackNotificationsMode = ""
+	SlackNotificationsModeInherit SlackNotificationsMode = "inherit"
+	SlackNotificationsModeMuted   SlackNotificationsMode = "muted"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationsMode enum.
+func (e SlackNotificationsMode) Valid() bool {
+	switch e {
+	case SlackNotificationsModeEmpty:
+		return true
+	case SlackNotificationsModeInherit:
+		return true
+	case SlackNotificationsModeMuted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationsNeedsInput.
+const (
+	SlackNotificationsNeedsInputEmpty   SlackNotificationsNeedsInput = ""
+	SlackNotificationsNeedsInputInherit SlackNotificationsNeedsInput = "inherit"
+	SlackNotificationsNeedsInputOff     SlackNotificationsNeedsInput = "off"
+	SlackNotificationsNeedsInputOn      SlackNotificationsNeedsInput = "on"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationsNeedsInput enum.
+func (e SlackNotificationsNeedsInput) Valid() bool {
+	switch e {
+	case SlackNotificationsNeedsInputEmpty:
+		return true
+	case SlackNotificationsNeedsInputInherit:
+		return true
+	case SlackNotificationsNeedsInputOff:
+		return true
+	case SlackNotificationsNeedsInputOn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationsProblems.
+const (
+	SlackNotificationsProblemsEmpty   SlackNotificationsProblems = ""
+	SlackNotificationsProblemsInherit SlackNotificationsProblems = "inherit"
+	SlackNotificationsProblemsOff     SlackNotificationsProblems = "off"
+	SlackNotificationsProblemsOn      SlackNotificationsProblems = "on"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationsProblems enum.
+func (e SlackNotificationsProblems) Valid() bool {
+	switch e {
+	case SlackNotificationsProblemsEmpty:
+		return true
+	case SlackNotificationsProblemsInherit:
+		return true
+	case SlackNotificationsProblemsOff:
+		return true
+	case SlackNotificationsProblemsOn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationsProgress.
+const (
+	SlackNotificationsProgressEmpty   SlackNotificationsProgress = ""
+	SlackNotificationsProgressInherit SlackNotificationsProgress = "inherit"
+	SlackNotificationsProgressOff     SlackNotificationsProgress = "off"
+	SlackNotificationsProgressOn      SlackNotificationsProgress = "on"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationsProgress enum.
+func (e SlackNotificationsProgress) Valid() bool {
+	switch e {
+	case SlackNotificationsProgressEmpty:
+		return true
+	case SlackNotificationsProgressInherit:
+		return true
+	case SlackNotificationsProgressOff:
+		return true
+	case SlackNotificationsProgressOn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationsMutationMode.
+const (
+	SlackNotificationsMutationModeEmpty   SlackNotificationsMutationMode = ""
+	SlackNotificationsMutationModeInherit SlackNotificationsMutationMode = "inherit"
+	SlackNotificationsMutationModeMuted   SlackNotificationsMutationMode = "muted"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationsMutationMode enum.
+func (e SlackNotificationsMutationMode) Valid() bool {
+	switch e {
+	case SlackNotificationsMutationModeEmpty:
+		return true
+	case SlackNotificationsMutationModeInherit:
+		return true
+	case SlackNotificationsMutationModeMuted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationsMutationNeedsInput.
+const (
+	SlackNotificationsMutationNeedsInputEmpty   SlackNotificationsMutationNeedsInput = ""
+	SlackNotificationsMutationNeedsInputInherit SlackNotificationsMutationNeedsInput = "inherit"
+	SlackNotificationsMutationNeedsInputOff     SlackNotificationsMutationNeedsInput = "off"
+	SlackNotificationsMutationNeedsInputOn      SlackNotificationsMutationNeedsInput = "on"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationsMutationNeedsInput enum.
+func (e SlackNotificationsMutationNeedsInput) Valid() bool {
+	switch e {
+	case SlackNotificationsMutationNeedsInputEmpty:
+		return true
+	case SlackNotificationsMutationNeedsInputInherit:
+		return true
+	case SlackNotificationsMutationNeedsInputOff:
+		return true
+	case SlackNotificationsMutationNeedsInputOn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationsMutationProblems.
+const (
+	SlackNotificationsMutationProblemsEmpty   SlackNotificationsMutationProblems = ""
+	SlackNotificationsMutationProblemsInherit SlackNotificationsMutationProblems = "inherit"
+	SlackNotificationsMutationProblemsOff     SlackNotificationsMutationProblems = "off"
+	SlackNotificationsMutationProblemsOn      SlackNotificationsMutationProblems = "on"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationsMutationProblems enum.
+func (e SlackNotificationsMutationProblems) Valid() bool {
+	switch e {
+	case SlackNotificationsMutationProblemsEmpty:
+		return true
+	case SlackNotificationsMutationProblemsInherit:
+		return true
+	case SlackNotificationsMutationProblemsOff:
+		return true
+	case SlackNotificationsMutationProblemsOn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackNotificationsMutationProgress.
+const (
+	SlackNotificationsMutationProgressEmpty   SlackNotificationsMutationProgress = ""
+	SlackNotificationsMutationProgressInherit SlackNotificationsMutationProgress = "inherit"
+	SlackNotificationsMutationProgressOff     SlackNotificationsMutationProgress = "off"
+	SlackNotificationsMutationProgressOn      SlackNotificationsMutationProgress = "on"
+)
+
+// Valid indicates whether the value is a known member of the SlackNotificationsMutationProgress enum.
+func (e SlackNotificationsMutationProgress) Valid() bool {
+	switch e {
+	case SlackNotificationsMutationProgressEmpty:
+		return true
+	case SlackNotificationsMutationProgressInherit:
+		return true
+	case SlackNotificationsMutationProgressOff:
+		return true
+	case SlackNotificationsMutationProgressOn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackRecipientKind.
+const (
+	SlackRecipientKindChannel SlackRecipientKind = "channel"
+	SlackRecipientKindUser    SlackRecipientKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the SlackRecipientKind enum.
+func (e SlackRecipientKind) Valid() bool {
+	switch e {
+	case SlackRecipientKindChannel:
+		return true
+	case SlackRecipientKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackRuntimeConfigTokenType.
+const (
+	SlackRuntimeConfigTokenTypeBot  SlackRuntimeConfigTokenType = "bot"
+	SlackRuntimeConfigTokenTypeUser SlackRuntimeConfigTokenType = "user"
+)
+
+// Valid indicates whether the value is a known member of the SlackRuntimeConfigTokenType enum.
+func (e SlackRuntimeConfigTokenType) Valid() bool {
+	switch e {
+	case SlackRuntimeConfigTokenTypeBot:
+		return true
+	case SlackRuntimeConfigTokenTypeUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackStatusState.
+const (
+	Connected       SlackStatusState = "connected"
+	CredentialError SlackStatusState = "credential_error"
+	NotConfigured   SlackStatusState = "not_configured"
+	Warning         SlackStatusState = "warning"
+)
+
+// Valid indicates whether the value is a known member of the SlackStatusState enum.
+func (e SlackStatusState) Valid() bool {
+	switch e {
+	case Connected:
+		return true
+	case CredentialError:
+		return true
+	case NotConfigured:
+		return true
+	case Warning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SlackValidateResponseTokenType.
+const (
+	SlackValidateResponseTokenTypeBot  SlackValidateResponseTokenType = "bot"
+	SlackValidateResponseTokenTypeUser SlackValidateResponseTokenType = "user"
+)
+
+// Valid indicates whether the value is a known member of the SlackValidateResponseTokenType enum.
+func (e SlackValidateResponseTokenType) Valid() bool {
+	switch e {
+	case SlackValidateResponseTokenTypeBot:
+		return true
+	case SlackValidateResponseTokenTypeUser:
 		return true
 	default:
 		return false
@@ -1511,6 +1911,51 @@ func (e ValidateReviewDraftParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for ResolveSlackRecipientParamsXAgenticoClient.
+const (
+	ResolveSlackRecipientParamsXAgenticoClientLocal ResolveSlackRecipientParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ResolveSlackRecipientParamsXAgenticoClient enum.
+func (e ResolveSlackRecipientParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ResolveSlackRecipientParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SendSlackTestMessageParamsXAgenticoClient.
+const (
+	SendSlackTestMessageParamsXAgenticoClientLocal SendSlackTestMessageParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the SendSlackTestMessageParamsXAgenticoClient enum.
+func (e SendSlackTestMessageParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case SendSlackTestMessageParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ValidateSlackParamsXAgenticoClient.
+const (
+	ValidateSlackParamsXAgenticoClientLocal ValidateSlackParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ValidateSlackParamsXAgenticoClient enum.
+func (e ValidateSlackParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ValidateSlackParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AnswerPermissionParamsXAgenticoClient.
 const (
 	AnswerPermissionParamsXAgenticoClientLocal AnswerPermissionParamsXAgenticoClient = "local"
@@ -1843,13 +2288,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -1958,6 +2403,9 @@ type ActionScope struct {
 	RepoSelection string `json:"repo_selection,omitempty"`
 	Type          string `json:"type"`
 }
+
+// AnswerSource defines model for AnswerSource.
+type AnswerSource = ports.AnswerSource
 
 // Artifact defines model for Artifact.
 type Artifact struct {
@@ -2318,7 +2766,10 @@ type CreateFeatureMutationRequest struct {
 	Repos             []string                                `json:"repos,omitempty"`
 	RepositorySources []RepositorySource                      `json:"repository_sources,omitempty"`
 	RiskLevel         CreateFeatureMutationRequestRiskLevel   `json:"risk_level,omitempty"`
-	UseCurrentBranch  bool                                    `json:"use_current_branch,omitempty"`
+
+	// SlackNotifications Omitted fields remain unchanged on update; an empty recipients list clears the additions.
+	SlackNotifications SlackNotificationsMutation `json:"slack_notifications,omitempty"`
+	UseCurrentBranch   bool                       `json:"use_current_branch,omitempty"`
 }
 
 // CreateFeatureMutationRequestInquireness defines model for CreateFeatureMutationRequest.Inquireness.
@@ -2406,6 +2857,20 @@ type DiscardChildResponse struct {
 	Meta       ResponseMeta `json:"meta,omitempty"`
 	Result     string       `json:"result"`
 }
+
+// EffectiveSlackNotifications defines model for EffectiveSlackNotifications.
+type EffectiveSlackNotifications struct {
+	Configured bool                                  `json:"configured"`
+	ModeSource EffectiveSlackNotificationsModeSource `json:"mode_source"`
+	Muted      bool                                  `json:"muted"`
+	NeedsInput SlackNotificationValue                `json:"needs_input"`
+	Problems   SlackNotificationValue                `json:"problems"`
+	Progress   SlackNotificationValue                `json:"progress"`
+	Recipients []SlackNotificationRecipient          `json:"recipients"`
+}
+
+// EffectiveSlackNotificationsModeSource defines model for EffectiveSlackNotifications.ModeSource.
+type EffectiveSlackNotificationsModeSource string
 
 // EffortConfig defines model for EffortConfig.
 type EffortConfig = config.EffortConfig
@@ -2536,6 +3001,11 @@ type FeatureConfig struct {
 	Inquireness         FeatureConfigInquireness         `json:"inquireness"`
 	Models              ModelDefaults                    `json:"models"`
 	Pipeline            string                           `json:"pipeline,omitempty"`
+	SlackConfigured     bool                             `json:"slack_configured"`
+	SlackDefaults       SlackNotificationDefaults        `json:"slack_defaults"`
+
+	// SlackNotifications Stored per-feature values; empty strings inherit the workspace defaults.
+	SlackNotifications SlackNotifications `json:"slack_notifications"`
 }
 
 // FeatureConfigAutomaticReviewMode defines model for FeatureConfig.AutomaticReviewMode.
@@ -2546,6 +3016,29 @@ type FeatureConfigInputNotifications string
 
 // FeatureConfigInquireness defines model for FeatureConfig.Inquireness.
 type FeatureConfigInquireness string
+
+// FeatureConfigMutationBody defines model for FeatureConfigMutationBody.
+type FeatureConfigMutationBody struct {
+	AutomaticReviewMode FeatureConfigMutationBodyAutomaticReviewMode `json:"automatic_review_mode,omitempty"`
+	Checkpoints         Checkpoints                                  `json:"checkpoints,omitempty"`
+	Effort              EffortConfig                                 `json:"effort,omitempty"`
+	InputNotifications  FeatureConfigMutationBodyInputNotifications  `json:"input_notifications,omitempty"`
+	Inquireness         FeatureConfigMutationBodyInquireness         `json:"inquireness,omitempty"`
+	Models              ModelDefaults                                `json:"models,omitempty"`
+	Pipeline            string                                       `json:"pipeline,omitempty"`
+
+	// SlackNotifications Omitted fields remain unchanged on update; an empty recipients list clears the additions.
+	SlackNotifications SlackNotificationsMutation `json:"slack_notifications,omitempty"`
+}
+
+// FeatureConfigMutationBodyAutomaticReviewMode defines model for FeatureConfigMutationBody.AutomaticReviewMode.
+type FeatureConfigMutationBodyAutomaticReviewMode string
+
+// FeatureConfigMutationBodyInputNotifications defines model for FeatureConfigMutationBody.InputNotifications.
+type FeatureConfigMutationBodyInputNotifications string
+
+// FeatureConfigMutationBodyInquireness defines model for FeatureConfigMutationBody.Inquireness.
+type FeatureConfigMutationBodyInquireness string
 
 // FeatureConfigResponse defines model for FeatureConfigResponse.
 type FeatureConfigResponse struct {
@@ -2575,6 +3068,8 @@ type FeatureDefaults struct {
 	Models                 ModelDefaults                        `json:"models"`
 	Pipeline               string                               `json:"pipeline,omitempty"`
 	PipelinePreferences    map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
+	SlackConfigured        bool                                 `json:"slack_configured"`
+	SlackDefaults          SlackNotificationDefaults            `json:"slack_defaults"`
 }
 
 // FeatureDetail defines model for FeatureDetail.
@@ -2645,11 +3140,12 @@ type FeatureDetail struct {
 	RunCount       int                     `json:"run_count"`
 
 	// SetupComplete True when the child's active run setup finished; only set on child features.
-	SetupComplete bool   `json:"setup_complete,omitempty"`
-	Slug          string `json:"slug"`
-	Status        string `json:"status"`
-	Summary       string `json:"summary,omitempty"`
-	Timing        Timing `json:"timing"`
+	SetupComplete      bool                        `json:"setup_complete,omitempty"`
+	SlackNotifications EffectiveSlackNotifications `json:"slack_notifications"`
+	Slug               string                      `json:"slug"`
+	Status             string                      `json:"status"`
+	Summary            string                      `json:"summary,omitempty"`
+	Timing             Timing                      `json:"timing"`
 
 	// Transaction Ordered per-repository transaction journal for multi-repository child-to-parent integration.
 	Transaction       TransactionJournal `json:"transaction,omitempty"`
@@ -3026,9 +3522,10 @@ type PermissionAnswerSchema struct {
 	RememberPattern  string                                  `json:"remember_pattern,omitempty"`
 
 	// RememberScope Existing permission cache scope. Empty string means global.
-	RememberScope *string `json:"remember_scope,omitempty"`
-	RequestID     string  `json:"request_id"`
-	SessionID     string  `json:"session_id,omitempty"`
+	RememberScope *string       `json:"remember_scope,omitempty"`
+	RequestID     string        `json:"request_id"`
+	SessionID     string        `json:"session_id,omitempty"`
+	Source        *AnswerSource `json:"source,omitempty"`
 }
 
 // PermissionAnswerRequestAutoApproveScope Turn automatic Bash review on for the request's feature or for the whole workspace before answering. Not allowed with deny.
@@ -3896,8 +4393,9 @@ type ReviewGate struct {
 
 // ReviewSessionDecisionRequest defines model for ReviewSessionDecisionRequest.
 type ReviewSessionDecisionRequest struct {
-	BaseRevision string `json:"base_revision"`
-	Decision     string `json:"decision"`
+	BaseRevision string        `json:"base_revision"`
+	Decision     string        `json:"decision"`
+	Source       *AnswerSource `json:"source,omitempty"`
 }
 
 // ReviewSessionDecisionResponse defines model for ReviewSessionDecisionResponse.
@@ -4106,6 +4604,14 @@ type RunSummary struct {
 	StartedAt                       *time.Time `json:"started_at,omitempty"`
 }
 
+// RuntimeConfigMutation defines model for RuntimeConfigMutation.
+type RuntimeConfigMutation struct {
+	Defaults       map[string]interface{} `json:"defaults,omitempty"`
+	Notifications  NotificationConfig     `json:"notifications,omitempty"`
+	Slack          SlackConfigMutation    `json:"slack,omitempty"`
+	WorkspaceRoots []string               `json:"workspace_roots,omitempty"`
+}
+
 // RuntimeConfigResponse defines model for RuntimeConfigResponse.
 type RuntimeConfigResponse struct {
 	APIVersion      string             `json:"api_version"`
@@ -4117,6 +4623,7 @@ type RuntimeConfigResponse struct {
 	Providers       []string           `json:"providers"`
 	Repos           []ConfigRepo       `json:"repos"`
 	Runtime         RuntimeIdentity    `json:"runtime"`
+	Slack           SlackRuntimeConfig `json:"slack,omitempty"`
 	WorkspaceRoots  []string           `json:"workspace_roots,omitempty"`
 }
 
@@ -4294,6 +4801,212 @@ type SetupTask struct {
 	Status           string     `json:"status"`
 	UseCurrentBranch bool       `json:"use_current_branch,omitempty"`
 }
+
+// SlackCategories Effective per-category notification defaults. Absent stored settings read as every category on.
+type SlackCategories struct {
+	NeedsInput bool `json:"needs_input"`
+	Problems   bool `json:"problems"`
+	Progress   bool `json:"progress"`
+}
+
+// SlackCategoriesMutation Patch representation of the per-category defaults. An absent field means unchanged.
+type SlackCategoriesMutation struct {
+	NeedsInput *bool `json:"needs_input,omitempty"`
+	Problems   *bool `json:"problems,omitempty"`
+	Progress   *bool `json:"progress,omitempty"`
+}
+
+// SlackConfigMutation defines model for SlackConfigMutation.
+type SlackConfigMutation struct {
+	// Categories Patch representation of the per-category defaults. An absent field means unchanged.
+	Categories        *SlackCategoriesMutation `json:"categories,omitempty"`
+	ClearToken        *bool                    `json:"clear_token,omitempty"`
+	DefaultRecipients *[]SlackRecipient        `json:"default_recipients,omitempty"`
+	Enabled           *bool                    `json:"enabled,omitempty"`
+
+	// Token Write-only Slack OAuth token. Never returned by the API.
+	Token *string `json:"token,omitempty"`
+}
+
+// SlackDeliveryResult defines model for SlackDeliveryResult.
+type SlackDeliveryResult struct {
+	Delivered bool `json:"delivered"`
+
+	// Error Canonical catalog-rendered error.
+	Error     *Error         `json:"error,omitempty"`
+	Recipient SlackRecipient `json:"recipient"`
+}
+
+// SlackIdentity defines model for SlackIdentity.
+type SlackIdentity struct {
+	BotID       string `json:"bot_id,omitempty"`
+	DisplayName string `json:"display_name"`
+	TeamID      string `json:"team_id"`
+	TeamName    string `json:"team_name"`
+	UserID      string `json:"user_id"`
+}
+
+// SlackNotificationDefaults defines model for SlackNotificationDefaults.
+type SlackNotificationDefaults struct {
+	// Categories Effective per-category notification defaults. Absent stored settings read as every category on.
+	Categories     SlackCategories `json:"categories"`
+	RecipientNames []string        `json:"recipient_names"`
+}
+
+// SlackNotificationRecipient defines model for SlackNotificationRecipient.
+type SlackNotificationRecipient struct {
+	DisplayName string                           `json:"display_name"`
+	ID          string                           `json:"id"`
+	Kind        SlackNotificationRecipientKind   `json:"kind"`
+	Source      SlackNotificationRecipientSource `json:"source"`
+	TypedText   string                           `json:"typed_text"`
+}
+
+// SlackNotificationRecipientKind defines model for SlackNotificationRecipient.Kind.
+type SlackNotificationRecipientKind string
+
+// SlackNotificationRecipientSource defines model for SlackNotificationRecipient.Source.
+type SlackNotificationRecipientSource string
+
+// SlackNotificationValue defines model for SlackNotificationValue.
+type SlackNotificationValue struct {
+	Enabled bool                         `json:"enabled"`
+	Source  SlackNotificationValueSource `json:"source"`
+}
+
+// SlackNotificationValueSource defines model for SlackNotificationValue.Source.
+type SlackNotificationValueSource string
+
+// SlackNotifications Stored per-feature values; empty strings inherit the workspace defaults.
+type SlackNotifications struct {
+	Mode       SlackNotificationsMode       `json:"mode"`
+	NeedsInput SlackNotificationsNeedsInput `json:"needs_input"`
+	Problems   SlackNotificationsProblems   `json:"problems"`
+	Progress   SlackNotificationsProgress   `json:"progress"`
+	Recipients []SlackRecipient             `json:"recipients"`
+}
+
+// SlackNotificationsMode defines model for SlackNotifications.Mode.
+type SlackNotificationsMode string
+
+// SlackNotificationsNeedsInput defines model for SlackNotifications.NeedsInput.
+type SlackNotificationsNeedsInput string
+
+// SlackNotificationsProblems defines model for SlackNotifications.Problems.
+type SlackNotificationsProblems string
+
+// SlackNotificationsProgress defines model for SlackNotifications.Progress.
+type SlackNotificationsProgress string
+
+// SlackNotificationsMutation Omitted fields remain unchanged on update; an empty recipients list clears the additions.
+type SlackNotificationsMutation struct {
+	Mode       SlackNotificationsMutationMode       `json:"mode,omitempty"`
+	NeedsInput SlackNotificationsMutationNeedsInput `json:"needs_input,omitempty"`
+	Problems   SlackNotificationsMutationProblems   `json:"problems,omitempty"`
+	Progress   SlackNotificationsMutationProgress   `json:"progress,omitempty"`
+	Recipients []SlackRecipient                     `json:"recipients,omitempty"`
+}
+
+// SlackNotificationsMutationMode defines model for SlackNotificationsMutation.Mode.
+type SlackNotificationsMutationMode string
+
+// SlackNotificationsMutationNeedsInput defines model for SlackNotificationsMutation.NeedsInput.
+type SlackNotificationsMutationNeedsInput string
+
+// SlackNotificationsMutationProblems defines model for SlackNotificationsMutation.Problems.
+type SlackNotificationsMutationProblems string
+
+// SlackNotificationsMutationProgress defines model for SlackNotificationsMutation.Progress.
+type SlackNotificationsMutationProgress string
+
+// SlackRecipient defines model for SlackRecipient.
+type SlackRecipient struct {
+	DisplayName string             `json:"display_name"`
+	ID          string             `json:"id"`
+	Kind        SlackRecipientKind `json:"kind"`
+	TypedText   string             `json:"typed_text"`
+}
+
+// SlackRecipientKind defines model for SlackRecipient.Kind.
+type SlackRecipientKind string
+
+// SlackRecipientResolveRequest defines model for SlackRecipientResolveRequest.
+type SlackRecipientResolveRequest struct {
+	Input string `json:"input"`
+
+	// Token Optional write-only draft token; omitted to use the stored token.
+	Token *string `json:"token,omitempty"`
+}
+
+// SlackRecipientResolveResponse defines model for SlackRecipientResolveResponse.
+type SlackRecipientResolveResponse struct {
+	APIVersion string         `json:"api_version"`
+	Meta       ResponseMeta   `json:"meta,omitempty"`
+	Recipient  SlackRecipient `json:"recipient"`
+}
+
+// SlackRuntimeConfig defines model for SlackRuntimeConfig.
+type SlackRuntimeConfig struct {
+	// Categories Effective per-category notification defaults. Absent stored settings read as every category on.
+	Categories        SlackCategories              `json:"categories"`
+	DefaultRecipients []SlackRecipient             `json:"default_recipients"`
+	Enabled           bool                         `json:"enabled"`
+	GrantedScopes     []string                     `json:"granted_scopes"`
+	Identity          *SlackIdentity               `json:"identity,omitempty"`
+	Manifest          string                       `json:"manifest"`
+	MissingScopes     []string                     `json:"missing_scopes"`
+	Status            SlackStatus                  `json:"status"`
+	TokenHint         string                       `json:"token_hint"`
+	TokenSet          bool                         `json:"token_set"`
+	TokenType         *SlackRuntimeConfigTokenType `json:"token_type,omitempty"`
+}
+
+// SlackRuntimeConfigTokenType defines model for SlackRuntimeConfig.TokenType.
+type SlackRuntimeConfigTokenType string
+
+// SlackStatus defines model for SlackStatus.
+type SlackStatus struct {
+	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
+
+	// LastError Canonical catalog-rendered error.
+	LastError *Error           `json:"last_error,omitempty"`
+	State     SlackStatusState `json:"state"`
+}
+
+// SlackStatusState defines model for SlackStatus.State.
+type SlackStatusState string
+
+// SlackTestMessageRequest defines model for SlackTestMessageRequest.
+type SlackTestMessageRequest struct {
+	Recipients *[]SlackRecipient `json:"recipients,omitempty"`
+}
+
+// SlackTestMessageResponse defines model for SlackTestMessageResponse.
+type SlackTestMessageResponse struct {
+	APIVersion string                `json:"api_version"`
+	Meta       ResponseMeta          `json:"meta,omitempty"`
+	Results    []SlackDeliveryResult `json:"results"`
+}
+
+// SlackValidateRequest defines model for SlackValidateRequest.
+type SlackValidateRequest struct {
+	// Token Optional write-only draft token; omitted to validate the stored token.
+	Token *string `json:"token,omitempty"`
+}
+
+// SlackValidateResponse defines model for SlackValidateResponse.
+type SlackValidateResponse struct {
+	APIVersion         string                         `json:"api_version"`
+	GrantedScopes      []string                       `json:"granted_scopes"`
+	Identity           SlackIdentity                  `json:"identity"`
+	Meta               ResponseMeta                   `json:"meta,omitempty"`
+	MissingScopes      []string                       `json:"missing_scopes"`
+	SuggestedRecipient *SlackRecipient                `json:"suggested_recipient"`
+	TokenType          SlackValidateResponseTokenType `json:"token_type"`
+}
+
+// SlackValidateResponseTokenType defines model for SlackValidateResponse.TokenType.
+type SlackValidateResponseTokenType string
 
 // StageUploadResponse defines model for StageUploadResponse.
 type StageUploadResponse struct {
@@ -4758,9 +5471,6 @@ type RefreshProviderModelsParams struct {
 // RefreshProviderModelsParamsXAgenticoClient defines parameters for RefreshProviderModels.
 type RefreshProviderModelsParamsXAgenticoClient string
 
-// PatchRuntimeConfigJSONBody defines parameters for PatchRuntimeConfig.
-type PatchRuntimeConfigJSONBody map[string]interface{}
-
 // PatchRuntimeConfigParams defines parameters for PatchRuntimeConfig.
 type PatchRuntimeConfigParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -4769,9 +5479,6 @@ type PatchRuntimeConfigParams struct {
 
 // PatchRuntimeConfigParamsXAgenticoClient defines parameters for PatchRuntimeConfig.
 type PatchRuntimeConfigParamsXAgenticoClient string
-
-// PutRuntimeConfigJSONBody defines parameters for PutRuntimeConfig.
-type PutRuntimeConfigJSONBody map[string]interface{}
 
 // PutRuntimeConfigParams defines parameters for PutRuntimeConfig.
 type PutRuntimeConfigParams struct {
@@ -4870,9 +5577,6 @@ type RunFeatureSubactionParamsXAgenticoClient string
 // RunFeatureSubactionParamsSubaction defines parameters for RunFeatureSubaction.
 type RunFeatureSubactionParamsSubaction string
 
-// UpdateFeatureConfigJSONBody defines parameters for UpdateFeatureConfig.
-type UpdateFeatureConfigJSONBody map[string]interface{}
-
 // UpdateFeatureConfigParams defines parameters for UpdateFeatureConfig.
 type UpdateFeatureConfigParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -4959,6 +5663,33 @@ type GetRunLogContentParams struct {
 	Offset Offset `form:"offset,omitempty" json:"offset,omitempty"`
 	Limit  Limit  `form:"limit,omitempty" json:"limit,omitempty"`
 }
+
+// ResolveSlackRecipientParams defines parameters for ResolveSlackRecipient.
+type ResolveSlackRecipientParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ResolveSlackRecipientParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ResolveSlackRecipientParamsXAgenticoClient defines parameters for ResolveSlackRecipient.
+type ResolveSlackRecipientParamsXAgenticoClient string
+
+// SendSlackTestMessageParams defines parameters for SendSlackTestMessage.
+type SendSlackTestMessageParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient SendSlackTestMessageParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// SendSlackTestMessageParamsXAgenticoClient defines parameters for SendSlackTestMessage.
+type SendSlackTestMessageParamsXAgenticoClient string
+
+// ValidateSlackParams defines parameters for ValidateSlack.
+type ValidateSlackParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ValidateSlackParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ValidateSlackParamsXAgenticoClient defines parameters for ValidateSlack.
+type ValidateSlackParamsXAgenticoClient string
 
 // AnswerPermissionParams defines parameters for AnswerPermission.
 type AnswerPermissionParams struct {
@@ -5230,10 +5961,10 @@ type UpdateWorkspaceRepositorySourceParamsXAgenticoClient string
 type RefreshProviderModelsJSONRequestBody = ProviderModelRefreshRequest
 
 // PatchRuntimeConfigJSONRequestBody defines body for PatchRuntimeConfig for application/json ContentType.
-type PatchRuntimeConfigJSONRequestBody PatchRuntimeConfigJSONBody
+type PatchRuntimeConfigJSONRequestBody = RuntimeConfigMutation
 
 // PutRuntimeConfigJSONRequestBody defines body for PutRuntimeConfig for application/json ContentType.
-type PutRuntimeConfigJSONRequestBody PutRuntimeConfigJSONBody
+type PutRuntimeConfigJSONRequestBody = RuntimeConfigMutation
 
 // CreateFeatureJSONRequestBody defines body for CreateFeature for application/json ContentType.
 type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest
@@ -5260,7 +5991,7 @@ type RunFeatureActionJSONRequestBody RunFeatureActionJSONBody
 type RunFeatureSubactionJSONRequestBody RunFeatureSubactionJSONBody
 
 // UpdateFeatureConfigJSONRequestBody defines body for UpdateFeatureConfig for application/json ContentType.
-type UpdateFeatureConfigJSONRequestBody UpdateFeatureConfigJSONBody
+type UpdateFeatureConfigJSONRequestBody = FeatureConfigMutationBody
 
 // CreateReviewSessionJSONRequestBody defines body for CreateReviewSession for application/json ContentType.
 type CreateReviewSessionJSONRequestBody CreateReviewSessionJSONBody
@@ -5273,6 +6004,15 @@ type SaveReviewDraftJSONRequestBody = ReviewDraftUpdateRequest
 
 // ValidateReviewDraftJSONRequestBody defines body for ValidateReviewDraft for application/json ContentType.
 type ValidateReviewDraftJSONRequestBody = ReviewDraftValidationRequest
+
+// ResolveSlackRecipientJSONRequestBody defines body for ResolveSlackRecipient for application/json ContentType.
+type ResolveSlackRecipientJSONRequestBody = SlackRecipientResolveRequest
+
+// SendSlackTestMessageJSONRequestBody defines body for SendSlackTestMessage for application/json ContentType.
+type SendSlackTestMessageJSONRequestBody = SlackTestMessageRequest
+
+// ValidateSlackJSONRequestBody defines body for ValidateSlack for application/json ContentType.
+type ValidateSlackJSONRequestBody = SlackValidateRequest
 
 // AnswerPermissionJSONRequestBody defines body for AnswerPermission for application/json ContentType.
 type AnswerPermissionJSONRequestBody = PermissionAnswerSchema

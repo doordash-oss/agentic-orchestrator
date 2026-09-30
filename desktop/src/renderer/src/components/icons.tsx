@@ -95,6 +95,18 @@ export function BellIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** Slack integration pane, represented by the familiar crossed-channel mark. */
+export function SlackIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M9 3v12a3 3 0 0 1-3 3H3" />
+      <path d="M15 21V9a3 3 0 0 1 3-3h3" />
+      <path d="M3 9h12a3 3 0 0 1 3 3v3" />
+      <path d="M21 15H9a3 3 0 0 1-3-3V9" />
+    </Icon>
+  );
+}
+
 /** The transient toolbar update trigger, shaped after SF Symbols' `arrow.down.circle`. */
 export function UpdateIcon(props: SVGProps<SVGSVGElement>) {
   return (

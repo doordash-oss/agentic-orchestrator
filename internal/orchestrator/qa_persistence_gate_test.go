@@ -95,7 +95,12 @@ func sessionManagerWithQALog(sessionID string) *mocks.MockSessionManager {
 		}
 		v := mocks.NewMockSessionView(sessionID, "feat-gate")
 		v.QALogVal = []ports.QAPair{
-			{Question: "Q1", Answer: "A1", Notes: "note one"},
+			{
+				Question: "Q1",
+				Answer:   "A1",
+				Notes:    "note one",
+				Source:   &ports.AnswerSource{Kind: ports.AnswerSourceSlack, Responder: "Ada"},
+			},
 			{Question: "Q2", Answer: "Auto (Recommended)", AutoPicked: true, Confidence: 0.85},
 		}
 		return v

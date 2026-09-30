@@ -58,12 +58,14 @@ type apiHandler struct {
 	// deduplicated background cache. worktrees stays the uncached authority
 	// for mutations and launch preflights, which must see the worktree as it
 	// is at the instant they act.
-	cleanliness git.CleanlinessInspector
-	cfg         *config.Config
-	registry    *llm.Registry
-	sessions    ports.SessionManager
-	broker      *eventBroker
-	mutations   MutationTarget
+	cleanliness   git.CleanlinessInspector
+	cfg           *config.Config
+	registry      *llm.Registry
+	sessions      ports.SessionManager
+	slack         ports.SlackService
+	slackWarnings ports.SlackWarningSource
+	broker        *eventBroker
+	mutations     MutationTarget
 	// uploads owns the octet-stream upload staging area under the runtime
 	// state dir; nil when the runtime identity has no state dir (tests that
 	// never stage uploads).
@@ -126,12 +128,14 @@ type apiHandler struct {
 
 	// readinessMu guards the cached provider readiness probe results served
 	// by /api/v1/readiness and refreshed by /api/v1/readiness/refresh.
-	readinessMu       sync.Mutex
-	providerReadiness []ProviderReadiness
-	readinessProbedAt time.Time
-	providerRefreshMu sync.Mutex
-	creationMu        sync.Mutex
-	creationResults   map[string]creationResult
+	readinessMu           sync.Mutex
+	providerReadiness     []ProviderReadiness
+	readinessProbedAt     time.Time
+	providerRefreshMu     sync.Mutex
+	creationMu            sync.Mutex
+	creationResults       map[string]creationResult
+	slackCredentialMu     sync.Mutex
+	permissionAnswerLocks *permissionAnswerLockSet
 }
 
 type creationResult struct {
@@ -173,7 +177,9 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		cfg:                     opts.Config,
 		registry:                opts.Registry,
 		sessions:                opts.Sessions,
-		broker:                  newEventBroker(opts.Events, opts.DomainEvents),
+		slack:                   opts.Slack,
+		slackWarnings:           opts.SlackWarnings,
+		broker:                  newEventBrokerTaps(opts.Events, opts.DomainEvents, opts.RuntimeEventTap, opts.DomainEventTap),
 		mutations:               opts.Mutations,
 		uploads:                 newUploadStore(opts.Runtime.StateDir),
 		persistProviderModels:   opts.PersistProviderModelCatalog,
@@ -181,6 +187,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		initGitRepository:       opts.InitGitRepository,
 		initializeGitRepository: opts.InitializeGitRepository,
 		reviewSessionLocks:      newReviewSessionLockSet(),
+		permissionAnswerLocks:   newPermissionAnswerLockSet(),
 		creationResults:         make(map[string]creationResult),
 		originChecks:            newOriginCheckCoordinator(),
 		updateSourceDeadline:    defaultUpdateSourceDeadline,
@@ -188,6 +195,25 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		reconcileSourceDeadline: defaultReconcileSourceDeadline,
 		admission:               opts.Admission,
 		probeActivity:           opts.ProbeActivity,
+	}
+	if handler.slack != nil {
+		handler.slack.SetPublishHook(func() {
+			if handler.broker != nil {
+				handler.broker.publish(snapshotRequiredEventDTO(
+					sseEventConfigUpdated,
+					Resource{Type: resourceTypeRuntime},
+				))
+			}
+		})
+	}
+	if opts.BindSlackDeliveryReporter != nil {
+		opts.BindSlackDeliveryReporter(handler)
+	}
+	if opts.BindSlackPendingInputSource != nil {
+		opts.BindSlackPendingInputSource(handler)
+	}
+	if opts.BindSlackAnswerPort != nil {
+		opts.BindSlackAnswerPort(handler)
 	}
 	if handler.probeActivity == nil {
 		handler.probeActivity = NewProbeActivity()
@@ -260,6 +286,9 @@ const (
 	apiPathHealth                  = "/api/v1/health"
 	apiPathFeatures                = "/api/v1/features"
 	apiPathConfigRuntime           = "/api/v1/config/runtime"
+	apiPathSlackValidate           = "/api/v1/integrations/slack/validate"
+	apiPathSlackRecipientResolve   = "/api/v1/integrations/slack/recipients/resolve"
+	apiPathSlackTestMessage        = "/api/v1/integrations/slack/test-message"
 	apiPathCatalogModels           = "/api/v1/catalog/models"
 	apiPathCatalogRefresh          = "/api/v1/catalog/models/refresh"
 	apiPathReadiness               = "/api/v1/readiness"
@@ -307,6 +336,9 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathFeatures, func(h *apiHandler) http.HandlerFunc { return h.handleFeaturesRoot }},
 	{apiPathFeatures + "/", func(h *apiHandler) http.HandlerFunc { return h.handleFeatureRoutes }},
 	{apiPathConfigRuntime, func(h *apiHandler) http.HandlerFunc { return h.handleRuntimeConfigRoute }},
+	{apiPathSlackValidate, func(h *apiHandler) http.HandlerFunc { return h.handleSlackValidateRoute }},
+	{apiPathSlackRecipientResolve, func(h *apiHandler) http.HandlerFunc { return h.handleSlackRecipientResolveRoute }},
+	{apiPathSlackTestMessage, func(h *apiHandler) http.HandlerFunc { return h.handleSlackTestMessageRoute }},
 	{apiPathCatalogModels, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleModelCatalog) }},
 	{apiPathCatalogRefresh, func(h *apiHandler) http.HandlerFunc { return h.handleProviderModelRefreshRoute }},
 	{apiPathRuntimeReadiness, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleRuntimeReadiness) }},

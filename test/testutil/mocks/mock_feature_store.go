@@ -15,6 +15,8 @@
 package mocks
 
 import (
+	"sync"
+
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -22,6 +24,8 @@ import (
 // overrides and call tracking. Each method delegates to its XxxFn field when
 // non-nil; otherwise it returns DefaultError (and nil for value returns).
 type MockFeatureStore struct {
+	mu sync.Mutex
+
 	// Function overrides — set these to control method behavior.
 	SaveFn           func(f *feature.Feature) error
 	LoadFn           func(id string) (*feature.Feature, error)
@@ -61,7 +65,9 @@ func NewMockFeatureStore() *MockFeatureStore {
 }
 
 func (m *MockFeatureStore) Save(f *feature.Feature) error {
+	m.mu.Lock()
 	m.SaveCalls = append(m.SaveCalls, f)
+	m.mu.Unlock()
 	if m.SaveFn != nil {
 		return m.SaveFn(f)
 	}
@@ -69,7 +75,9 @@ func (m *MockFeatureStore) Save(f *feature.Feature) error {
 }
 
 func (m *MockFeatureStore) Load(id string) (*feature.Feature, error) {
+	m.mu.Lock()
 	m.LoadCalls = append(m.LoadCalls, id)
+	m.mu.Unlock()
 	if m.LoadFn != nil {
 		return m.LoadFn(id)
 	}
@@ -77,7 +85,9 @@ func (m *MockFeatureStore) Load(id string) (*feature.Feature, error) {
 }
 
 func (m *MockFeatureStore) Modify(id string, fn func(f *feature.Feature) error) error {
+	m.mu.Lock()
 	m.ModifyCalls = append(m.ModifyCalls, id)
+	m.mu.Unlock()
 	if m.ModifyFn != nil {
 		return m.ModifyFn(id, fn)
 	}
@@ -92,7 +102,9 @@ func (m *MockFeatureStore) List() ([]*feature.Feature, error) {
 }
 
 func (m *MockFeatureStore) Delete(id string) error {
+	m.mu.Lock()
 	m.DeleteCalls = append(m.DeleteCalls, id)
+	m.mu.Unlock()
 	if m.DeleteFn != nil {
 		return m.DeleteFn(id)
 	}
@@ -100,7 +112,9 @@ func (m *MockFeatureStore) Delete(id string) error {
 }
 
 func (m *MockFeatureStore) CreateRun(featureID string, r *feature.Run) error {
+	m.mu.Lock()
 	m.CreateRunCalls = append(m.CreateRunCalls, featureID)
+	m.mu.Unlock()
 	if m.CreateRunFn != nil {
 		return m.CreateRunFn(featureID, r)
 	}
@@ -108,7 +122,9 @@ func (m *MockFeatureStore) CreateRun(featureID string, r *feature.Run) error {
 }
 
 func (m *MockFeatureStore) LoadRun(featureID string, runNumber int) (*feature.Run, error) {
+	m.mu.Lock()
 	m.LoadRunCalls = append(m.LoadRunCalls, featureID)
+	m.mu.Unlock()
 	if m.LoadRunFn != nil {
 		return m.LoadRunFn(featureID, runNumber)
 	}
@@ -116,7 +132,9 @@ func (m *MockFeatureStore) LoadRun(featureID string, runNumber int) (*feature.Ru
 }
 
 func (m *MockFeatureStore) SaveRun(featureID string, r *feature.Run) error {
+	m.mu.Lock()
 	m.SaveRunCalls = append(m.SaveRunCalls, featureID)
+	m.mu.Unlock()
 	if m.SaveRunFn != nil {
 		return m.SaveRunFn(featureID, r)
 	}
@@ -129,7 +147,9 @@ func (m *MockFeatureStore) SealAndForkRun(
 	fork func(*feature.Run) (*feature.Run, error),
 	populate func(*feature.Run, *feature.Run) error,
 ) (*feature.Feature, error) {
+	m.mu.Lock()
 	m.SealAndForkRunCalls = append(m.SealAndForkRunCalls, featureID)
+	m.mu.Unlock()
 	if m.SealAndForkRunFn != nil {
 		return m.SealAndForkRunFn(featureID, seal, fork, populate)
 	}
@@ -137,7 +157,9 @@ func (m *MockFeatureStore) SealAndForkRun(
 }
 
 func (m *MockFeatureStore) CleanupOrphanRuns(id string) ([]int, error) {
+	m.mu.Lock()
 	m.CleanupOrphanRunsCalls = append(m.CleanupOrphanRunsCalls, id)
+	m.mu.Unlock()
 	if m.CleanupOrphanRunsFn != nil {
 		return m.CleanupOrphanRunsFn(id)
 	}

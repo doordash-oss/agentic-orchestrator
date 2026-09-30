@@ -153,6 +153,71 @@ function makeService(
 }
 
 describe('FeatureService.creationDefaults', () => {
+  it('maps Slack creation defaults and forwards the optional feature section', async () => {
+    const calls: Call[] = [];
+    const { service } = makeService((path, init) => {
+      calls.push(init === undefined ? { path } : { path, init });
+      if (path === '/api/v1/config/runtime') {
+        return {
+          status: 200,
+          body: {
+            ...runtimeConfigBody(),
+            feature_defaults: {
+              ...(runtimeConfigBody().feature_defaults as Record<string, unknown>),
+              slack_configured: true,
+              slack_defaults: {
+                categories: { progress: true, needs_input: false, problems: true },
+                recipient_names: ['Ada Lovelace'],
+              },
+            },
+          },
+        };
+      }
+      return {
+        status: 200,
+        body: { api_version: 'v1', feature_id: 'abcd1234ef567890', result: 'created' },
+      };
+    });
+    const defaults = await service.creationDefaults();
+    expect(defaults.defaults).toMatchObject({
+      slackConfigured: true,
+      slackDefaults: {
+        categories: { progress: true, needsInput: false, problems: true },
+        recipientNames: ['Ada Lovelace'],
+      },
+    });
+    // Use a valid input from the existing creation contract below.
+    const input = {
+      name: 'Slack creation',
+      description: '',
+      repoKeys: ['repo-a'],
+      useCurrentBranch: false,
+      repositorySources: [],
+      pipeline: 'medium' as const,
+      riskLevel: 'medium' as const,
+      inquireness: 'medium' as const,
+      exitCriteria: '',
+      models: {},
+      effort: {},
+      slackNotifications: {
+        mode: 'muted' as const,
+        progress: 'off' as const,
+        recipients: [
+          { typedText: '#eng', kind: 'channel' as const, id: 'C-ENG', displayName: '#eng' },
+        ],
+      },
+      idempotencyKey: '4b1ecea1-d4de-4a1b-b146-41bb97470af6',
+    };
+    await service.createFeature(input);
+    expect(calls.at(-1)?.init?.body).toMatchObject({
+      slack_notifications: {
+        mode: 'muted',
+        progress: 'off',
+        recipients: [{ typed_text: '#eng', kind: 'channel', id: 'C-ENG', display_name: '#eng' }],
+      },
+    });
+  });
+
   it('composes fresh repository eligibility and server defaults in one call', async () => {
     const { service } = makeService(() => ({ status: 200, body: runtimeConfigBody() }));
     const defaults = await service.creationDefaults();
@@ -1338,6 +1403,44 @@ describe('FeatureService.dispatchAction', () => {
 });
 
 describe('FeatureService.getFeature', () => {
+  it('retains effective per-feature Slack values and sources in detail', async () => {
+    const body = detailBody({
+      slack_notifications: {
+        configured: true,
+        muted: false,
+        mode_source: 'global',
+        progress: { enabled: false, source: 'feature' },
+        needs_input: { enabled: true, source: 'global' },
+        problems: { enabled: true, source: 'global' },
+        recipients: [
+          {
+            typed_text: '#eng',
+            kind: 'channel',
+            id: 'C-ENG',
+            display_name: 'Engineering',
+            source: 'feature',
+          },
+        ],
+      },
+    });
+    const { service } = makeService(() => ({ status: 200, body }));
+    await expect(service.getFeature('abcd1234ef567890')).resolves.toMatchObject({
+      slackNotifications: {
+        configured: true,
+        modeSource: 'global',
+        progress: { enabled: false, source: 'feature' },
+        recipients: [
+          {
+            typedText: '#eng',
+            id: 'C-ENG',
+            displayName: 'Engineering',
+            source: 'feature',
+          },
+        ],
+      },
+    });
+  });
+
   it('maps the authoritative detail into the strict renderer snapshot', async () => {
     const { service } = makeService(() => ({ status: 200, body: detailBody() }));
     const snapshot = await service.getFeature('abcd1234ef567890');

@@ -58,6 +58,10 @@ import {
   type InitializeRepositoryRequest,
   type SettingsOpenRequest,
   type SettingsPatch,
+  type SlackRecipientResolveRequest,
+  type SlackSettingsDraft,
+  type SlackTestMessageRequest,
+  type SlackValidationRequest,
   type ThemePreference,
   windowPurposeFromArgv,
   type SessionOutputOpenRequest,
@@ -199,6 +203,14 @@ const api: AgenticoApi = {
   },
   getSettings: () => call(IPC_CHANNELS.settingsGet),
   updateSettings: (patch: SettingsPatch) => call(IPC_CHANNELS.settingsUpdate, patch),
+  getSlackSettings: () => call(IPC_CHANNELS.slackSettingsGet),
+  updateSlackSettings: (draft: SlackSettingsDraft) => call(IPC_CHANNELS.slackSettingsUpdate, draft),
+  validateSlackSettings: (request: SlackValidationRequest) =>
+    call(IPC_CHANNELS.slackSettingsValidate, request),
+  resolveSlackRecipient: (request: SlackRecipientResolveRequest) =>
+    call(IPC_CHANNELS.slackRecipientResolve, request),
+  sendSlackTestMessage: (request: SlackTestMessageRequest) =>
+    call(IPC_CHANNELS.slackTestMessageSend, request),
   openSettingsWindow: (request: SettingsOpenRequest) =>
     call(IPC_CHANNELS.windowOpenSettings, request),
   getThemePreference: () => call(IPC_CHANNELS.themeGet),

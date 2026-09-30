@@ -46,6 +46,7 @@ import type {
   MainWindowUiState,
   RoutedRequest,
   ShellPrefs,
+  SlackSettingsSnapshot,
   UpdateState,
 } from '../../../shared/ipc';
 import {
@@ -194,6 +195,10 @@ export function WorkspaceShell({
   schedulingUpdate = false,
   onDismissUpdate = () => {},
   onOpenUpdatesSettings = () => {},
+  slackSettingsSnapshot = null,
+  slackWarningDismissed = false,
+  onDismissSlackWarning = () => {},
+  onOpenSlackSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
   onOpenAma = () => {},
   onOpenPalette = () => {},
@@ -217,6 +222,10 @@ export function WorkspaceShell({
   schedulingUpdate?: boolean;
   onDismissUpdate?(version: string): void;
   onOpenUpdatesSettings?(): void;
+  slackSettingsSnapshot?: SlackSettingsSnapshot | null;
+  slackWarningDismissed?: boolean;
+  onDismissSlackWarning?(): void;
+  onOpenSlackSettings?(): void;
   onInstallUpdateWhenIdle?(): Promise<void>;
   /** Owned by App: dispatches the same routeRequest the ⌘⇧M accelerator does. */
   onOpenAma?(): void;
@@ -996,6 +1005,12 @@ export function WorkspaceShell({
             onDismiss: onDismissUpdate,
             onOpenSettings: onOpenUpdatesSettings,
             onInstallWhenIdle: onInstallUpdateWhenIdle,
+          }}
+          slackWarning={{
+            snapshot: slackSettingsSnapshot,
+            dismissed: slackWarningDismissed,
+            onDismiss: onDismissSlackWarning,
+            onOpenSettings: onOpenSlackSettings,
           }}
           actionsSlotRef={setActionsSlot}
           overflowSlotRef={setOverflowSlot}

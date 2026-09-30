@@ -255,6 +255,15 @@ export class FeatureService {
           : { inquireness: config.feature_defaults.inquireness }),
         models,
         effort,
+        slackConfigured: config.feature_defaults.slack_configured ?? false,
+        slackDefaults: {
+          categories: {
+            progress: config.feature_defaults.slack_defaults?.categories.progress ?? true,
+            needsInput: config.feature_defaults.slack_defaults?.categories.needs_input ?? true,
+            problems: config.feature_defaults.slack_defaults?.categories.problems ?? true,
+          },
+          recipientNames: config.feature_defaults.slack_defaults?.recipient_names ?? [],
+        },
         // The creation contract's server default: a new feature branch.
         useCurrentBranch: false,
       },
@@ -535,6 +544,34 @@ export class FeatureService {
           manual_publish: validated.checkpoints.manualPublish,
           draft_publish: validated.checkpoints.draftPublish,
         },
+        ...(validated.slackNotifications === undefined
+          ? {}
+          : {
+              slack_notifications: {
+                ...(validated.slackNotifications.mode === undefined
+                  ? {}
+                  : { mode: validated.slackNotifications.mode }),
+                ...(validated.slackNotifications.progress === undefined
+                  ? {}
+                  : { progress: validated.slackNotifications.progress }),
+                ...(validated.slackNotifications.needsInput === undefined
+                  ? {}
+                  : { needs_input: validated.slackNotifications.needsInput }),
+                ...(validated.slackNotifications.problems === undefined
+                  ? {}
+                  : { problems: validated.slackNotifications.problems }),
+                ...(validated.slackNotifications.recipients === undefined
+                  ? {}
+                  : {
+                      recipients: validated.slackNotifications.recipients.map((recipient) => ({
+                        typed_text: recipient.typedText,
+                        kind: recipient.kind,
+                        id: recipient.id,
+                        display_name: recipient.displayName,
+                      })),
+                    }),
+              },
+            }),
         idempotency_key: validated.idempotencyKey,
       },
     });
@@ -1051,6 +1088,25 @@ function toSnapshot(feature: ServerFeatureDetail): FeatureSnapshot {
       enabled: feature.automatic_review.enabled,
       source: feature.automatic_review.source,
     },
+    ...(feature.slack_notifications === undefined
+      ? {}
+      : {
+          slackNotifications: {
+            configured: feature.slack_notifications.configured,
+            muted: feature.slack_notifications.muted,
+            modeSource: feature.slack_notifications.mode_source,
+            progress: feature.slack_notifications.progress,
+            needsInput: feature.slack_notifications.needs_input,
+            problems: feature.slack_notifications.problems,
+            recipients: feature.slack_notifications.recipients.map((recipient) => ({
+              typedText: redactText(recipient.typed_text),
+              kind: recipient.kind,
+              id: recipient.id,
+              displayName: redactText(recipient.display_name),
+              source: recipient.source,
+            })),
+          },
+        }),
     actions: (feature.actions ?? []).map((action) => ({
       id: action.id,
       enabled: action.enabled,

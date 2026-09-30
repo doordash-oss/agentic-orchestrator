@@ -99,10 +99,26 @@ type subscriberState struct {
 }
 
 func newEventBroker(input <-chan interface{}, domain <-chan ports.Event) *eventBroker {
+	return newEventBrokerTaps(input, domain, nil, nil)
+}
+
+// newEventBrokerTaps wires the two optional stream taps: non-blocking
+// consumers invoked alongside SSE publication for every message the
+// broker's two consumer goroutines read. SSE sequencing, coalescing,
+// replay, and the shutdown event are untouched.
+func newEventBrokerTaps(
+	input <-chan interface{},
+	domain <-chan ports.Event,
+	runtimeTap func(interface{}),
+	domainTap func(ports.Event),
+) *eventBroker {
 	b := newEventBrokerWithOptions(eventBrokerOptions{})
 	if input != nil {
 		go func() {
 			for msg := range input {
+				if runtimeTap != nil {
+					runtimeTap(msg)
+				}
 				b.publish(eventDTOFromRuntime(msg))
 			}
 		}()
@@ -110,6 +126,9 @@ func newEventBroker(input <-chan interface{}, domain <-chan ports.Event) *eventB
 	if domain != nil {
 		go func() {
 			for ev := range domain {
+				if domainTap != nil {
+					domainTap(ev)
+				}
 				b.publish(eventDTOFromDomain(ev))
 			}
 		}()

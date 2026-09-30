@@ -22,7 +22,12 @@ limitations under the License.
  * fresh on every reconnect, so resume always starts from the server truth.
  */
 import { useCallback, type Dispatch, type SetStateAction } from 'react';
-import type { AttentionItem, RoutedRequest, UpdateState } from '../../../shared/ipc';
+import type {
+  AttentionItem,
+  RoutedRequest,
+  SlackSettingsSnapshot,
+  UpdateState,
+} from '../../../shared/ipc';
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
 import { deriveWizardState } from '../wizard/deriveWizardState';
@@ -44,6 +49,10 @@ export function ReadinessGate({
   schedulingUpdate = false,
   onDismissUpdate = () => {},
   onOpenUpdatesSettings = () => {},
+  slackSettingsSnapshot = null,
+  slackWarningDismissed = false,
+  onDismissSlackWarning = () => {},
+  onOpenSlackSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
   onOpenAma = () => {},
   onOpenPalette = () => {},
@@ -67,6 +76,10 @@ export function ReadinessGate({
   schedulingUpdate?: boolean;
   onDismissUpdate?(version: string): void;
   onOpenUpdatesSettings?(): void;
+  slackSettingsSnapshot?: SlackSettingsSnapshot | null;
+  slackWarningDismissed?: boolean;
+  onDismissSlackWarning?(): void;
+  onOpenSlackSettings?(): void;
   onInstallUpdateWhenIdle?(): Promise<void>;
   onOpenAma?(): void;
   /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
@@ -115,6 +128,10 @@ export function ReadinessGate({
         schedulingUpdate={schedulingUpdate}
         onDismissUpdate={onDismissUpdate}
         onOpenUpdatesSettings={onOpenUpdatesSettings}
+        slackSettingsSnapshot={slackSettingsSnapshot}
+        slackWarningDismissed={slackWarningDismissed}
+        onDismissSlackWarning={onDismissSlackWarning}
+        onOpenSlackSettings={onOpenSlackSettings}
         onInstallUpdateWhenIdle={onInstallUpdateWhenIdle}
         onOpenAma={onOpenAma}
         onOpenPalette={onOpenPalette}

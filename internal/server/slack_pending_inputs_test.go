@@ -1,0 +1,1376 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package server
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/internal/slack"
+	"github.com/doordash-oss/agentic-orchestrator/internal/slack/testsupport"
+)
+
+func TestPendingSlackInputsSplitsQuestionBundle(t *testing.T) {
+	t.Parallel()
+
+	session := &fakeSessionView{
+		id:        "question-session",
+		featureID: fixtureFeatureID,
+		phase:     feature.PhasePlan,
+		status:    ports.SessionWaitingHelp,
+		pending: []*llm.ControlRequestMessage{pendingReadControl(
+			"question-request",
+			toolNameAskUserQuestion,
+			`{"questions":[`+
+				`{"header":"Scope","question":"Which scope?","options":[{"label":"Focused","description":"Smallest change","confidence":0.86}]},`+
+				`{"header":"Gates","question":"Which gates?","multi_select":true,"options":[{"label":"Race","description":"Run race tests","confidence":0.31}]}`+
+				`]}`,
+		)},
+	}
+	h := &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{session}}}
+
+	got, err := h.PendingSlackInputs(fixtureFeatureID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("PendingSlackInputs() length = %d; want 2", len(got))
+	}
+
+	first := got[0]
+	if first.Kind != ports.SlackPendingQuestion ||
+		first.RequestID != "question-request" ||
+		first.QuestionIndex != 0 ||
+		first.QuestionCount != 2 ||
+		first.Header != "Scope" ||
+		first.Question != "Which scope?" ||
+		first.MultiSelect {
+		t.Errorf("PendingSlackInputs()[0] = %+v; want first single-select question", first)
+	}
+	if len(first.Options) != 1 ||
+		first.Options[0].Label != "Focused" ||
+		first.Options[0].Description != "Smallest change" ||
+		!first.Options[0].HasConfidence ||
+		first.Options[0].Confidence != 0.86 {
+		t.Errorf("PendingSlackInputs()[0].Options = %+v; want projected option with confidence", first.Options)
+	}
+
+	second := got[1]
+	if second.Kind != ports.SlackPendingQuestion ||
+		second.RequestID != "question-request" ||
+		second.QuestionIndex != 1 ||
+		second.QuestionCount != 2 ||
+		second.Header != "Gates" ||
+		second.Question != "Which gates?" ||
+		!second.MultiSelect {
+		t.Errorf("PendingSlackInputs()[1] = %+v; want second multi-select question", second)
+	}
+}
+
+func TestPendingSlackInputsPreservesRawQuestionData(t *testing.T) {
+	t.Parallel()
+
+	longQuestion := strings.Repeat("question", 600)
+	longDescription := strings.Repeat("description", 500)
+	input, err := json.Marshal(map[string]any{
+		"questions": []map[string]any{{
+			"header":   "Deployment scope",
+			"question": longQuestion,
+			"options": []map[string]any{{
+				"label":       "Focused",
+				"description": longDescription,
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	request := pendingReadControl("question-request", toolNameAskUserQuestion, string(input))
+	session := &fakeSessionView{
+		id:        "question-session",
+		featureID: fixtureFeatureID,
+		phase:     feature.PhasePlan,
+		status:    ports.SessionWaitingHelp,
+		pending:   []*llm.ControlRequestMessage{request},
+	}
+	h := &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{session}}}
+
+	got, err := h.PendingSlackInputs(fixtureFeatureID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() length = %d; want 1", len(got))
+	}
+	if got[0].Question != longQuestion {
+		t.Errorf("PendingSlackInputs()[0].Question length = %d; want %d", len(got[0].Question), len(longQuestion))
+	}
+	if len(got[0].Options) != 1 || got[0].Options[0].Description != longDescription {
+		t.Errorf("PendingSlackInputs()[0].Options = %+v; want raw option description", got[0].Options)
+	}
+
+	dto := controlRequestDTO(session, request)
+	if len(dto.Questions) != 1 || len(dto.Questions[0].Question) != askUserQuestionDisplayLimit+3 {
+		t.Errorf("controlRequestDTO().Questions = %+v; want existing question display cap", dto.Questions)
+	}
+	if len(dto.Questions[0].Options) != 1 ||
+		len(dto.Questions[0].Options[0].Description) != askUserOptionDescriptionDisplayLimit+3 {
+		t.Errorf("controlRequestDTO().Questions[0].Options = %+v; want existing option display cap", dto.Questions[0].Options)
+	}
+}
+
+func TestPendingSlackInputsProjectsPermissionContext(t *testing.T) {
+	t.Parallel()
+
+	waitingSince := time.Date(2026, 9, 22, 10, 30, 0, 0, time.UTC)
+	request := pendingReadControl(
+		"permission-request",
+		toolNameBash,
+		`{"command":"go test ./internal/server/...","timeout_ms":120000}`,
+	)
+	request.WaitingSince = waitingSince
+	session := &fakeSessionView{
+		id:             "permission-session",
+		featureID:      fixtureFeatureID,
+		phase:          feature.PhaseImplement,
+		repoName:       repoNameSelf,
+		permCacheScope: repoNameSelf,
+		status:         ports.SessionWaitingPermission,
+		pending:        []*llm.ControlRequestMessage{request},
+	}
+	h := &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{session}}}
+
+	got, err := h.PendingSlackInputs(fixtureFeatureID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() length = %d; want 1", len(got))
+	}
+
+	input := got[0]
+	if input.Kind != ports.SlackPendingPermission ||
+		input.RequestID != "permission-request" ||
+		input.ToolName != toolNameBash ||
+		input.Phase != feature.PhaseImplement.String() ||
+		input.RepoName != repoNameSelf ||
+		!input.WaitingSince.Equal(waitingSince) {
+		t.Errorf("PendingSlackInputs()[0] = %+v; want permission context", input)
+	}
+	if gotCommand, ok := input.Input["command"].(string); !ok || gotCommand != "go test ./internal/server/..." {
+		t.Errorf("PendingSlackInputs()[0].Input[command] = %#v; want exact command", input.Input["command"])
+	}
+	if gotTimeout, ok := input.Input["timeout_ms"].(float64); !ok || gotTimeout != 120000 {
+		t.Errorf("PendingSlackInputs()[0].Input[timeout_ms] = %#v; want 120000", input.Input["timeout_ms"])
+	}
+	if input.RememberPattern == "" {
+		t.Error("PendingSlackInputs()[0].RememberPattern is empty; want inferred preview")
+	}
+}
+
+func TestPendingSlackInputsPreservesRawPermissionInput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{
+			name:    "fitting Bash command beyond API display limit",
+			command: strings.Repeat("x", 2500),
+		},
+		{
+			name: "credential URL crossing API display limit",
+			command: "curl https://" +
+				strings.Repeat("u", 1980) +
+				":password@example.test/private",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input, err := json.Marshal(map[string]any{"command": tt.command})
+			if err != nil {
+				t.Fatalf("json.Marshal() error = %v", err)
+			}
+			request := pendingReadControl("permission-request", toolNameBash, string(input))
+			session := &fakeSessionView{
+				id:        "permission-session",
+				featureID: fixtureFeatureID,
+				phase:     feature.PhaseImplement,
+				repoName:  repoNameSelf,
+				status:    ports.SessionWaitingPermission,
+				pending:   []*llm.ControlRequestMessage{request},
+			}
+			h := &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{session}}}
+
+			got, err := h.PendingSlackInputs(fixtureFeatureID)
+			if err != nil {
+				t.Fatalf("PendingSlackInputs() error = %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("PendingSlackInputs() length = %d; want 1", len(got))
+			}
+			gotCommand, ok := got[0].Input["command"].(string)
+			if !ok {
+				t.Fatalf("PendingSlackInputs()[0].Input[command] = %#v; want string", got[0].Input["command"])
+			}
+			if gotCommand != tt.command {
+				t.Errorf("PendingSlackInputs()[0].Input[command] length = %d; want exact %d-byte command", len(gotCommand), len(tt.command))
+			}
+
+			dtoCommand, ok := controlRequestDTO(session, request).Input["command"].(string)
+			if !ok {
+				t.Fatalf("controlRequestDTO().Input[command] = %#v; want string", controlRequestDTO(session, request).Input["command"])
+			}
+			if len(dtoCommand) != 2003 || !strings.HasSuffix(dtoCommand, "...") {
+				t.Errorf("controlRequestDTO().Input[command] = %d bytes; want existing 2000-byte display cap plus ellipsis", len(dtoCommand))
+			}
+		})
+	}
+}
+
+func TestPendingSlackInputsRealPortPreservesThenRedactsPermissionInput(t *testing.T) {
+	const token = "xoxb-server-port-test-token"
+
+	fakeSlack := testsupport.New(t)
+	var responseCounter atomic.Int64
+	fakeSlack.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+		switch method {
+		case "chat.postMessage", "chat.update":
+			n := responseCounter.Add(1)
+			return testsupport.Response{Body: map[string]any{
+				"ok":      true,
+				"ts":      fmt.Sprintf("1758499200.%06d", n),
+				"channel": fmt.Sprint(request.Fields["channel"]),
+			}}
+		default:
+			return testsupport.Response{Body: map[string]any{"ok": false, "error": "unexpected " + method}}
+		}
+	})
+	t.Setenv(slack.EnvSlackAPIBase, fakeSlack.URL())
+
+	fittingCommand := strings.Repeat("x", 2500)
+	credentialCommand := "curl https://" +
+		strings.Repeat("u", 1980) +
+		":password@example.test/private"
+	fittingInput, err := json.Marshal(map[string]any{"command": fittingCommand})
+	if err != nil {
+		t.Fatalf("json.Marshal() fitting command error = %v", err)
+	}
+	credentialInput, err := json.Marshal(map[string]any{"command": credentialCommand})
+	if err != nil {
+		t.Fatalf("json.Marshal() credential command error = %v", err)
+	}
+	sessionView := &fakeSessionView{
+		id:        "permission-session",
+		featureID: fixtureFeatureID,
+		phase:     feature.PhaseImplement,
+		repoName:  repoNameSelf,
+		status:    ports.SessionWaitingPermission,
+		pending: []*llm.ControlRequestMessage{
+			pendingReadControl("fitting-command", toolNameBash, string(fittingInput)),
+			pendingReadControl("credential-command", toolNameBash, string(credentialInput)),
+		},
+	}
+
+	stateDir := t.TempDir()
+	store := feature.NewStore(stateDir)
+	if err := store.Save(&feature.Feature{
+		ID:            fixtureFeatureID,
+		Name:          "Slack pending input projection",
+		Slug:          "slack-pending-input-projection",
+		Description:   "server port regression fixture",
+		Created:       time.Date(2026, 9, 22, 0, 0, 0, 0, time.UTC),
+		Status:        feature.StatusImplementing,
+		CurrentPhase:  feature.PhaseImplement,
+		SchemaVersion: feature.SchemaVersionCurrent,
+		Pipeline:      feature.PipelineMoonshot,
+		Repos:         []feature.FeatureRepo{{Name: repoNameSelf}},
+	}); err != nil {
+		t.Fatalf("Save() feature error = %v", err)
+	}
+	source := &apiHandler{
+		sessions: fakeSessionManager{views: []ports.SessionView{sessionView}},
+		store:    store,
+	}
+	notifier := slack.NewNotifier(slack.NotifierOptions{
+		Settings: slackPendingInputTestSettings{settings: ports.SlackRuntimeSettings{
+			Enabled: true,
+			Token:   token,
+			Recipients: []ports.SlackRecipient{{
+				TypedText: "#eng", Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng",
+			}},
+			Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+		}},
+		Store:    store,
+		StateDir: stateDir,
+		Pending:  source,
+	})
+	notifier.SetServerName("Local agent")
+	notifier.Start()
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+
+	notifier.RuntimeMessageTap(session.SDKEventMsg{
+		SessionID: "permission-session",
+		FeatureID: fixtureFeatureID,
+		Phase:     feature.PhaseImplement,
+		Message: llm.SDKMessage{
+			Type: "control_request",
+			ControlRequest: &llm.ControlRequestMessage{
+				Type:      "control_request",
+				RequestID: "fitting-command",
+				Request:   llm.ControlRequest{Subtype: "can_use_tool", ToolName: toolNameBash},
+			},
+		},
+	})
+
+	var threadPosts []testsupport.Request
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		threadPosts = threadSlackPosts(fakeSlack.Requests("chat.postMessage"))
+		if len(threadPosts) == 2 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if len(threadPosts) != 2 {
+		t.Fatalf("thread chat.postMessage calls = %d; want 2", len(threadPosts))
+	}
+
+	var fittingPayload, credentialPayload string
+	for _, post := range threadPosts {
+		blocks := fmt.Sprint(post.Fields["blocks"])
+		switch {
+		case strings.Contains(blocks, fittingCommand):
+			fittingPayload = blocks
+		case strings.Contains(blocks, "curl ") && strings.Contains(blocks, "[REDACTED]"):
+			credentialPayload = blocks
+		}
+	}
+	if fittingPayload == "" {
+		t.Error("Slack blocks omitted the complete 2500-byte Bash command")
+	}
+	if credentialPayload == "" {
+		t.Fatalf("Slack blocks omitted the credential command's surrounding text or redaction marker: %+v", threadPosts)
+	}
+	if strings.Contains(credentialPayload, "password") || strings.Contains(credentialPayload, strings.Repeat("u", 1980)) {
+		t.Errorf("Slack blocks leaked URL userinfo: %s", credentialPayload)
+	}
+	if !strings.Contains(credentialPayload, "[REDACTED]") {
+		t.Errorf("Slack blocks lack credential redaction marker: %s", credentialPayload)
+	}
+}
+
+type slackPendingInputTestSettings struct {
+	settings ports.SlackRuntimeSettings
+}
+
+func (s slackPendingInputTestSettings) SlackSettings() ports.SlackRuntimeSettings {
+	return s.settings
+}
+
+func threadSlackPosts(requests []testsupport.Request) []testsupport.Request {
+	var posts []testsupport.Request
+	for _, request := range requests {
+		threadTS, ok := request.Fields["thread_ts"]
+		if ok && fmt.Sprint(threadTS) != "" {
+			posts = append(posts, request)
+		}
+	}
+	return posts
+}
+
+func TestPendingSlackInputsIncludesStoredHelpOnly(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	storedAt := time.Date(2026, 9, 22, 11, 0, 0, 0, time.UTC)
+	f.HelpQueue = []feature.HelpRequest{
+		{Question: "How should this migration proceed?", Time: storedAt, Pending: true},
+		{Question: "Already answered", Time: storedAt.Add(-time.Minute), Pending: false},
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	sessions := fakeSessionManager{views: []ports.SessionView{
+		&fakeSessionView{
+			id:           "coordinating-session",
+			featureID:    f.ID,
+			phase:        feature.PhaseImplement,
+			kind:         ports.KindPhase,
+			status:       ports.SessionWaitingHelp,
+			waitingSince: storedAt.Add(time.Minute),
+		},
+		&fakeSessionView{
+			id:           ChatSessionID,
+			featureID:    f.ID,
+			kind:         ports.KindChat,
+			status:       ports.SessionWaitingHelp,
+			waitingSince: storedAt.Add(2 * time.Minute),
+		},
+	}}
+	h := &apiHandler{sessions: sessions, store: store}
+
+	got, err := h.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() = %+v; want only the pending stored help entry", got)
+	}
+	if got[0].Kind != ports.SlackPendingHelp ||
+		got[0].HelpQuestion != "How should this migration proceed?" ||
+		!got[0].WaitingSince.Equal(storedAt) {
+		t.Errorf("PendingSlackInputs()[0] = %+v; want pending stored help entry", got[0])
+	}
+}
+
+func TestPendingSlackInputsProjectsReviewContextForAllNeedsReviewStatuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		status             feature.Status
+		artifactID         string
+		roadmapPhase       int
+		totalRoadmapPhases int
+		wantMode           string
+		wantTarget         feature.Phase
+		wantRoadmap        bool
+		wantPhasePlan      bool
+	}{
+		{
+			name:       "prompt review",
+			status:     feature.StatusPromptNeedsReview,
+			artifactID: reviewArtifactPrompt,
+			wantMode:   reviewModeGate,
+			wantTarget: feature.PhaseInquire,
+		},
+		{
+			name:       "inquiry review",
+			status:     feature.StatusInquiryNeedsReview,
+			artifactID: feature.PhaseInquire.DirName(),
+			wantMode:   reviewModeGate,
+			wantTarget: feature.PhaseResearch,
+		},
+		{
+			name:       "research review",
+			status:     feature.StatusResearchNeedsReview,
+			artifactID: feature.PhaseResearch.DirName(),
+			wantMode:   reviewModeGate,
+			wantTarget: feature.PhaseDesign,
+		},
+		{
+			name:       "design review",
+			status:     feature.StatusDesignNeedsReview,
+			artifactID: feature.PhaseDesign.DirName(),
+			wantMode:   reviewModeGate,
+			wantTarget: feature.PhasePlan,
+		},
+		{
+			name:               "phase plan review",
+			status:             feature.StatusPlanNeedsReview,
+			artifactID:         "phase-3-plan",
+			roadmapPhase:       3,
+			totalRoadmapPhases: 11,
+			wantMode:           reviewModePlan,
+			wantTarget:         feature.PhaseImplement,
+			wantPhasePlan:      true,
+		},
+		{
+			name:               "roadmap review",
+			status:             feature.StatusPlanNeedsReview,
+			artifactID:         "roadmap",
+			totalRoadmapPhases: 11,
+			wantMode:           reviewModePlan,
+			wantTarget:         feature.PhaseImplement,
+			wantRoadmap:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := "# " + tt.name + "\n"
+			store, f, artifactPath := seedSlackReviewFeature(
+				t,
+				tt.status,
+				tt.artifactID,
+				body,
+				tt.roadmapPhase,
+				tt.totalRoadmapPhases,
+			)
+			service := newReviewSessionService(store, nil)
+			resolved, err := service.resolveContext(f.ID)
+			if err != nil {
+				t.Fatalf("resolveContext() error = %v", err)
+			}
+
+			got, err := (&apiHandler{store: store}).PendingSlackInputs(f.ID)
+			if err != nil {
+				t.Fatalf("PendingSlackInputs() error = %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("PendingSlackInputs() = %+v; want one review", got)
+			}
+			review := got[0]
+			if review.Kind != ports.SlackPendingReview ||
+				review.FeatureID != f.ID ||
+				review.ReviewID != resolved.reviewID ||
+				review.ReviewMode != tt.wantMode ||
+				review.TargetPhase != tt.wantTarget.DirName() ||
+				review.ArtifactID != tt.artifactID ||
+				review.ArtifactPath != artifactPath ||
+				review.RunNumber != 1 ||
+				review.SourceRevision != resolved.sourceRevision ||
+				review.CanIterate != resolved.canIterate ||
+				review.Roadmap != tt.wantRoadmap ||
+				review.PhasePlan != tt.wantPhasePlan ||
+				review.RoadmapPhase != tt.roadmapPhase ||
+				review.TotalRoadmapPhases != tt.totalRoadmapPhases ||
+				review.ArtifactSize != int64(len(body)) {
+				t.Errorf("PendingSlackInputs()[0] = %+v; resolved context = %+v", review, resolved)
+			}
+			if _, err := os.Stat(filepath.Join(store.RunDir(f.ID, 1), "reviews")); !os.IsNotExist(err) {
+				t.Errorf("PendingSlackInputs() review session directory error = %v; want not created", err)
+			}
+		})
+	}
+}
+
+func TestPendingSlackInputsReviewRevisionTracksArtifactBytes(t *testing.T) {
+	t.Parallel()
+
+	store, f, artifactPath := seedSlackReviewFeature(
+		t,
+		feature.StatusPlanNeedsReview,
+		"phase-2-plan",
+		"# Phase 2 plan\n",
+		2,
+		5,
+	)
+	h := &apiHandler{store: store}
+
+	before, err := h.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() before rewrite error = %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("PendingSlackInputs() before rewrite = %+v; want one review", before)
+	}
+	revised := "# Phase 2 plan\n\nRevised.\n"
+	if err := os.WriteFile(artifactPath, []byte(revised), 0o644); err != nil {
+		t.Fatalf("WriteFile() revised artifact error = %v", err)
+	}
+
+	after, err := h.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() after rewrite error = %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("PendingSlackInputs() after rewrite = %+v; want one review", after)
+	}
+	if after[0].ReviewID != before[0].ReviewID {
+		t.Errorf("ReviewID after rewrite = %q; want stable %q", after[0].ReviewID, before[0].ReviewID)
+	}
+	if after[0].SourceRevision == before[0].SourceRevision {
+		t.Errorf("SourceRevision after rewrite = %q; want change from %q", after[0].SourceRevision, before[0].SourceRevision)
+	}
+	if after[0].SourceRevision != textRevision([]byte(revised)) {
+		t.Errorf("SourceRevision after rewrite = %q; want %q", after[0].SourceRevision, textRevision([]byte(revised)))
+	}
+	if after[0].ArtifactSize != int64(len(revised)) {
+		t.Errorf("ArtifactSize after rewrite = %d; want %d", after[0].ArtifactSize, len(revised))
+	}
+}
+
+func TestPendingSlackInputsProjectsRewindReviewRoadmapPhase(t *testing.T) {
+	t.Parallel()
+
+	store, f, artifactPath := seedSlackReviewFeature(
+		t,
+		feature.StatusPlanNeedsReview,
+		"phase-4-plan",
+		"# Phase 4 plan\n",
+		1,
+		6,
+	)
+	target := feature.PhaseImplement
+	rewindRoadmapPhase := 4
+	f.PendingReviewPhase = &target
+	f.PendingRewindReviewRoadmapPhase = &rewindRoadmapPhase
+	f.IsRewind = true
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() rewind review error = %v", err)
+	}
+
+	got, err := (&apiHandler{store: store}).PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() = %+v; want one rewind review", got)
+	}
+	review := got[0]
+	if review.Kind != ports.SlackPendingReview ||
+		review.ReviewMode != reviewModeRewind ||
+		review.TargetPhase != feature.PhaseImplement.DirName() ||
+		review.ArtifactID != "phase-4-plan" ||
+		review.ArtifactPath != artifactPath ||
+		review.RunNumber != 1 ||
+		review.CanIterate ||
+		review.Roadmap ||
+		!review.PhasePlan ||
+		review.RoadmapPhase != 4 ||
+		review.TotalRoadmapPhases != 6 {
+		t.Errorf("PendingSlackInputs()[0] = %+v; want rewind phase-plan context", review)
+	}
+}
+
+func TestPendingSlackInputsProjectsMediumRewindToPlanDescriptionReview(t *testing.T) {
+	t.Parallel()
+
+	store, f, _ := seedSlackReviewFeature(
+		t,
+		feature.StatusDesignNeedsReview,
+		feature.PhaseResearch.DirName(),
+		"stale research\n",
+		0,
+		0,
+	)
+	target := feature.PhasePlan
+	f.Pipeline = feature.PipelineMedium
+	f.PendingReviewPhase = &target
+	f.IsRewind = true
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() medium rewind review error = %v", err)
+	}
+	description := "edited medium description\n"
+	descriptionPath := filepath.Join(store.BaseDir, f.ID, "description-review.md")
+	if err := os.WriteFile(descriptionPath, []byte(description), 0o644); err != nil {
+		t.Fatalf("WriteFile() description review error = %v", err)
+	}
+
+	got, err := (&apiHandler{store: store}).PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() = %+v; want one medium rewind review", got)
+	}
+	review := got[0]
+	if review.Kind != ports.SlackPendingReview ||
+		review.ReviewMode != reviewModeRewind ||
+		review.TargetPhase != feature.PhasePlan.DirName() ||
+		review.ArtifactID != descriptionReviewArtifact ||
+		review.ArtifactPath != descriptionPath ||
+		review.ArtifactSize != int64(len(description)) ||
+		review.SourceRevision != textRevision([]byte(description)) ||
+		review.CanIterate ||
+		review.Roadmap ||
+		review.PhasePlan {
+		t.Errorf("PendingSlackInputs()[0] = %+v; want medium description review context", review)
+	}
+}
+
+func TestPendingSlackInputsResolvesReviewFromSingleFeatureLoad(t *testing.T) {
+	t.Parallel()
+
+	store, f, _ := seedSlackReviewFeature(
+		t,
+		feature.StatusPlanNeedsReview,
+		"phase-2-plan",
+		"# Phase 2 plan\n",
+		2,
+		5,
+	)
+	reader := &singleLoadFeatureReader{Store: store}
+
+	got, err := (&apiHandler{store: reader}).PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Kind != ports.SlackPendingReview {
+		t.Fatalf("PendingSlackInputs() = %+v; want one review", got)
+	}
+	if loads := reader.loads.Load(); loads != 1 {
+		t.Errorf("PendingSlackInputs() feature loads = %d; want 1", loads)
+	}
+}
+
+type singleLoadFeatureReader struct {
+	*feature.Store
+	loads atomic.Int64
+}
+
+func (r *singleLoadFeatureReader) Load(featureID string) (*feature.Feature, error) {
+	r.loads.Add(1)
+	return r.Store.Load(featureID)
+}
+
+func TestPendingSlackInputsOmitsNonReviewAndManualPublish(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		status      feature.Status
+		checkpoints feature.Checkpoints
+	}{
+		{name: "non review", status: feature.StatusImplementing},
+		{
+			name:        "manual publish",
+			status:      feature.StatusCodeReady,
+			checkpoints: feature.Checkpoints{ManualPublish: true},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			store, f := seedReadFeature(t)
+			f.Status = tt.status
+			f.Checkpoints = tt.checkpoints
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+
+			got, err := (&apiHandler{store: store}).PendingSlackInputs(f.ID)
+			if err != nil {
+				t.Fatalf("PendingSlackInputs() error = %v", err)
+			}
+			if len(got) != 0 {
+				t.Errorf("PendingSlackInputs() = %+v; want no review", got)
+			}
+		})
+	}
+}
+
+func TestSlackReviewGateRedactionResolverFailureKeepsOtherKinds(t *testing.T) {
+	store, f := seedReadFeature(t)
+	f.Status = feature.StatusPlanNeedsReview
+	f.CurrentRoadmapPhase = 4
+	f.TotalRoadmapPhases = 6
+	const (
+		token        = "xoxb-review-resolution-token-123456789"
+		secondSecret = "ghp_review_resolution_secret_123456789"
+	)
+	missingArtifact := filepath.Join(
+		store.RunDir(f.ID, 1),
+		"phase-4-plan",
+		"plan-"+token+"-"+secondSecret+".md",
+	)
+	f.Artifacts = map[string]string{"phase-4-plan": missingArtifact}
+	f.Run().Artifacts = f.Artifacts
+	f.HelpQueue = []feature.HelpRequest{{
+		Question: "Keep the existing help request",
+		Time:     time.Date(2026, 9, 22, 13, 0, 0, 0, time.UTC),
+		Pending:  true,
+	}}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	session := &fakeSessionView{
+		id:        "review-projection-session",
+		featureID: f.ID,
+		phase:     feature.PhasePlan,
+		status:    ports.SessionWaitingPermission,
+		pending: []*llm.ControlRequestMessage{
+			pendingReadControl("permission-request", toolNameBash, `{"command":"go test ./internal/server"}`),
+			pendingReadControl("question-request", toolNameAskUserQuestion, `{"questions":[{"question":"Continue?"}]}`),
+		},
+	}
+
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	oldFlags := log.Flags()
+	oldPrefix := log.Prefix()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(oldWriter)
+		log.SetFlags(oldFlags)
+		log.SetPrefix(oldPrefix)
+	})
+
+	got, err := (&apiHandler{
+		store:    store,
+		sessions: fakeSessionManager{views: []ports.SessionView{session}},
+	}).PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("PendingSlackInputs() = %+v; want permission, question, and help", got)
+	}
+	kinds := map[ports.SlackPendingInputKind]int{}
+	for _, item := range got {
+		kinds[item.Kind]++
+	}
+	if kinds[ports.SlackPendingPermission] != 1 ||
+		kinds[ports.SlackPendingQuestion] != 1 ||
+		kinds[ports.SlackPendingHelp] != 1 ||
+		kinds[ports.SlackPendingReview] != 0 {
+		t.Errorf("PendingSlackInputs() kinds = %+v; want existing kinds and no review", kinds)
+	}
+	logText := logs.String()
+	if !strings.Contains(logText, f.ID) ||
+		!strings.Contains(logText, "artifact_missing") {
+		t.Errorf("PendingSlackInputs() log = %q; want feature and safe resolution class", logText)
+	}
+	for _, secret := range []string{token, secondSecret, missingArtifact} {
+		if strings.Contains(logText, secret) {
+			t.Errorf("PendingSlackInputs() log leaked %q: %s", secret, logText)
+		}
+	}
+}
+
+func seedSlackReviewFeature(
+	t *testing.T,
+	status feature.Status,
+	artifactID, body string,
+	roadmapPhase, totalRoadmapPhases int,
+) (*feature.Store, *feature.Feature, string) {
+	t.Helper()
+
+	store := feature.NewStore(t.TempDir())
+	f := &feature.Feature{
+		ID:                  "feat-slack-review-" + strings.ReplaceAll(artifactID, "_", "-"),
+		Name:                "Slack review projection",
+		Slug:                "slack-review-projection",
+		Status:              status,
+		CurrentPhase:        feature.PhasePlan,
+		ActiveRun:           1,
+		RunCount:            1,
+		Pipeline:            feature.PipelineLarge,
+		SchemaVersion:       feature.SchemaVersionCurrent,
+		CurrentRoadmapPhase: roadmapPhase,
+		TotalRoadmapPhases:  totalRoadmapPhases,
+		Artifacts:           map[string]string{},
+	}
+	artifactPath := filepath.Join(store.RunDir(f.ID, 1), artifactID, artifactID+".md")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() artifact directory error = %v", err)
+	}
+	if err := os.WriteFile(artifactPath, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile() artifact error = %v", err)
+	}
+	f.Artifacts[artifactID] = artifactPath
+	f.SetRun(&feature.Run{
+		RunNumber:           1,
+		Artifacts:           f.Artifacts,
+		CurrentRoadmapPhase: roadmapPhase,
+		TotalRoadmapPhases:  totalRoadmapPhases,
+	})
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() review feature error = %v", err)
+	}
+	return store, f, artifactPath
+}
+
+func TestPendingSlackInputsExcludesChatControlRequests(t *testing.T) {
+	t.Parallel()
+
+	chat := &fakeSessionView{
+		id:        ChatSessionID,
+		featureID: fixtureFeatureID,
+		kind:      ports.KindChat,
+		status:    ports.SessionWaitingPermission,
+		pending: []*llm.ControlRequestMessage{
+			pendingReadControl("chat-permission", toolNameBash, `{"command":"echo chat"}`),
+			pendingReadControl("chat-question", toolNameAskUserQuestion, `{"questions":[{"question":"Chat question?"}]}`),
+		},
+	}
+	h := &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{chat}}}
+
+	got, err := h.PendingSlackInputs(fixtureFeatureID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("PendingSlackInputs() = %+v; want no chat controls", got)
+	}
+}
+
+func TestPendingSlackInputsProjectsVerificationGate(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	waitingSince := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-06", "implement", agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary: "Authentication is required.",
+		Questions: []agent.NeedUserInputQuestion{
+			{Index: 1, Prompt: "Retry after signing in?"},
+			{Index: 2, Prompt: "Waive the blocked check?"},
+		},
+		Iteration:    3,
+		WaitingSince: waitingSince,
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ContractPath:     "testing-contract.yaml",
+			ContractRevision: 1,
+			ItemIDs:          []string{"slack-integration"},
+			AllowedActions:   []string{agent.NeedUserVerificationWaive, agent.NeedUserVerificationRetryAfterAuth},
+		},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID:      "slack-integration",
+				Name:        "Slack integration test",
+				RepoName:    repoNameSelf,
+				Command:     "go test ./internal/slack/...",
+				Reason:      "Okta session expired",
+				Remediation: "Sign in and retry",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.CurrentIteration = 3
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	h := &apiHandler{store: store}
+
+	got, err := h.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() length = %d; want 1", len(got))
+	}
+
+	gate := got[0]
+	if gate.Kind != ports.SlackPendingGate ||
+		gate.FeatureID != f.ID ||
+		gate.GatePath != gatePath ||
+		gate.Iteration != 3 ||
+		!gate.WaitingSince.Equal(waitingSince) ||
+		gate.GateSummary != "Authentication is required." {
+		t.Errorf("PendingSlackInputs()[0] = %+v; want gate identity and summary", gate)
+	}
+	if len(gate.GateQuestions) != 2 ||
+		gate.GateQuestions[0] != "Retry after signing in?" ||
+		gate.GateQuestions[1] != "Waive the blocked check?" {
+		t.Errorf("PendingSlackInputs()[0].GateQuestions = %v; want both questions", gate.GateQuestions)
+	}
+	if len(gate.GateBlockers) != 1 {
+		t.Fatalf("PendingSlackInputs()[0].GateBlockers length = %d; want 1", len(gate.GateBlockers))
+	}
+	blocker := gate.GateBlockers[0]
+	if blocker.Name != "Slack integration test" ||
+		blocker.RepoName != repoNameSelf ||
+		blocker.Command != "go test ./internal/slack/..." ||
+		blocker.Reason != "Okta session expired" ||
+		blocker.Remediation != "Sign in and retry" {
+		t.Errorf("PendingSlackInputs()[0].GateBlockers[0] = %+v; want full blocker projection", blocker)
+	}
+}
+
+func TestPendingSlackInputsPreservesRawVerificationGateText(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-06", "implement", agent.NeedUserInputArtifactName)
+	credentialURL := func(user, password string, padding int) string {
+		return "https://" + user + ":" + password + strings.Repeat("x", padding) + "@example.test/private"
+	}
+	summary := "Summary " + credentialURL("alice", "summary-password", agent.NeedUserInputVerificationContextTextMaxLength)
+	question := "Open " + credentialURL("alice", "question-password", 700)
+	name := "Name " + credentialURL("alice", "name-password", agent.NeedUserInputVerificationContextTextMaxLength)
+	repoName := "Repo " + credentialURL("alice", "repo-password", agent.NeedUserInputVerificationRepoNameMaxLength)
+	command := "curl " + credentialURL("alice", "command-password", agent.NeedUserInputVerificationContextTextMaxLength)
+	reason := "Reason " + credentialURL("alice", "reason-password", agent.NeedUserInputVerificationContextTextMaxLength)
+	remediation := "Remediation " + credentialURL("alice", "remediation-password", agent.NeedUserInputVerificationContextTextMaxLength)
+
+	questions := make([]agent.NeedUserInputQuestion, agent.NeedUserInputGateMaxQuestions)
+	questions[0] = agent.NeedUserInputQuestion{Index: 1, Prompt: question}
+	for i := 1; i < len(questions); i++ {
+		questions[i] = agent.NeedUserInputQuestion{Index: i + 1, Prompt: fmt.Sprintf("Question %d", i+1)}
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   summary,
+		Questions: questions,
+		Iteration: 3,
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ContractPath:     "testing-contract.yaml",
+			ContractRevision: 1,
+			ItemIDs:          []string{"slack-integration"},
+			AllowedActions:   []string{agent.NeedUserVerificationWaive},
+		},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID:      "slack-integration",
+				Name:        name,
+				RepoName:    repoName,
+				Command:     command,
+				Reason:      reason,
+				Remediation: remediation,
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.CurrentIteration = 3
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	h := &apiHandler{store: store}
+	got, err := h.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("PendingSlackInputs() length = %d; want 1", len(got))
+	}
+	gate := got[0]
+	if gate.GateSummary != summary {
+		t.Errorf("PendingSlackInputs()[0].GateSummary length = %d; want raw length %d", len(gate.GateSummary), len(summary))
+	}
+	if len(gate.GateQuestions) != len(questions) || gate.GateQuestions[0] != question {
+		t.Errorf("PendingSlackInputs()[0].GateQuestions first length = %d; want raw length %d across %d questions", len(gate.GateQuestions[0]), len(question), len(questions))
+	}
+	if len(gate.GateBlockers) != 1 {
+		t.Fatalf("PendingSlackInputs()[0].GateBlockers length = %d; want 1", len(gate.GateBlockers))
+	}
+	blocker := gate.GateBlockers[0]
+	if blocker.Name != name ||
+		blocker.RepoName != repoName ||
+		blocker.Command != command ||
+		blocker.Reason != reason ||
+		blocker.Remediation != remediation {
+		t.Errorf(
+			"PendingSlackInputs()[0].GateBlockers[0] lengths = name:%d repo:%d command:%d reason:%d remediation:%d; want raw lengths %d, %d, %d, %d, %d",
+			len(blocker.Name), len(blocker.RepoName), len(blocker.Command), len(blocker.Reason), len(blocker.Remediation),
+			len(name), len(repoName), len(command), len(reason), len(remediation),
+		)
+	}
+
+	dto := needUserInputGateDTO(
+		f.ID, entityFeature, "", f.CurrentIteration, f.InputNotifications, f.PendingNeedUserInputPath,
+	)
+	if dto.Summary == summary {
+		t.Error("needUserInputGateDTO().Summary retained raw over-limit text; want existing API display bound")
+	}
+	if len(dto.Questions) != len(questions) || dto.Questions[0].Prompt == question {
+		t.Errorf("needUserInputGateDTO().Questions retained raw boundary-crossing prompt; want existing aggregate display bound")
+	}
+}
+
+func TestPendingSlackInputsRealPortRedactsVerificationGateBeforeSlackTruncation(t *testing.T) {
+	const token = "xoxb-server-gate-port-test-token"
+
+	fakeSlack := testsupport.New(t)
+	var responseCounter atomic.Int64
+	fakeSlack.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+		switch method {
+		case "chat.postMessage", "chat.update":
+			n := responseCounter.Add(1)
+			return testsupport.Response{Body: map[string]any{
+				"ok":      true,
+				"ts":      fmt.Sprintf("1758499200.%06d", n),
+				"channel": fmt.Sprint(request.Fields["channel"]),
+			}}
+		default:
+			return testsupport.Response{Body: map[string]any{"ok": false, "error": "unexpected " + method}}
+		}
+	})
+	t.Setenv(slack.EnvSlackAPIBase, fakeSlack.URL())
+
+	store, f := seedReadFeature(t)
+	gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-06", "implement", agent.NeedUserInputArtifactName)
+	credentialQuestion := "Open https://alice:gate-password" +
+		strings.Repeat("x", 700) +
+		"@example.test/private"
+	questions := make([]agent.NeedUserInputQuestion, agent.NeedUserInputGateMaxQuestions)
+	questions[0] = agent.NeedUserInputQuestion{Index: 1, Prompt: credentialQuestion}
+	for i := 1; i < len(questions); i++ {
+		questions[i] = agent.NeedUserInputQuestion{Index: i + 1, Prompt: fmt.Sprintf("Question %d", i+1)}
+	}
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+		Summary:   "Authentication is required.",
+		Questions: questions,
+		Iteration: 3,
+		VerificationDecision: &agent.NeedUserVerificationDecision{
+			ContractPath:     "testing-contract.yaml",
+			ContractRevision: 1,
+			ItemIDs:          []string{"slack-integration"},
+			AllowedActions:   []string{agent.NeedUserVerificationRetryAfterAuth},
+		},
+		Verification: &agent.NeedUserInputVerificationContext{
+			Blockers: []agent.NeedUserInputVerificationBlocker{{
+				ItemID:      "slack-integration",
+				Name:        "Slack integration test",
+				RepoName:    repoNameSelf,
+				Command:     "go test ./internal/slack/...",
+				Reason:      "Okta session expired",
+				Remediation: "Sign in and retry",
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	f.Status = feature.StatusNeedUserInput
+	f.CurrentIteration = 3
+	f.PendingNeedUserInputPath = gatePath
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	source := &apiHandler{store: store}
+	pending, err := source.PendingSlackInputs(f.ID)
+	if err != nil {
+		t.Fatalf("PendingSlackInputs() error = %v", err)
+	}
+	if len(pending) != 1 || len(pending[0].GateQuestions) != len(questions) {
+		t.Fatalf("PendingSlackInputs() = %+v; want one gate with %d questions", pending, len(questions))
+	}
+	if pending[0].GateQuestions[0] != credentialQuestion {
+		t.Fatalf(
+			"PendingSlackInputs()[0].GateQuestions[0] length = %d; want raw length %d for Slack scrubbing",
+			len(pending[0].GateQuestions[0]),
+			len(credentialQuestion),
+		)
+	}
+
+	notifier := slack.NewNotifier(slack.NotifierOptions{
+		Settings: slackPendingInputTestSettings{settings: ports.SlackRuntimeSettings{
+			Enabled: true,
+			Token:   token,
+			Recipients: []ports.SlackRecipient{{
+				TypedText: "#eng", Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng",
+			}},
+			Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+		}},
+		Store:    store,
+		StateDir: store.BaseDir,
+		Pending:  source,
+	})
+	notifier.SetServerName("Local agent")
+	notifier.Start()
+	t.Cleanup(func() { notifier.Stop(context.Background()) })
+
+	notifier.DomainEventTap(ports.Event{Type: ports.NeedUserInputRequired, FeatureID: f.ID})
+
+	var threadPosts []testsupport.Request
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		threadPosts = threadSlackPosts(fakeSlack.Requests("chat.postMessage"))
+		if len(threadPosts) == 1 {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if len(threadPosts) != 1 {
+		t.Fatalf("thread chat.postMessage calls = %d; want 1", len(threadPosts))
+	}
+
+	for field, payload := range map[string]string{
+		"blocks":   fmt.Sprint(threadPosts[0].Fields["blocks"]),
+		"fallback": fmt.Sprint(threadPosts[0].Fields["text"]),
+	} {
+		for _, fragment := range []string{"alice:", "gate-password", strings.Repeat("x", 64)} {
+			if strings.Contains(payload, fragment) {
+				t.Errorf("Slack %s leaked credential fragment %q", field, fragment)
+			}
+		}
+		if !strings.Contains(payload, "Open https://[REDACTED]@example.test/private") {
+			t.Errorf("Slack %s = %q; want surrounding question text and redaction marker", field, payload)
+		}
+	}
+}
+
+func TestPendingSlackInputsRealPortBoundsVerificationGateBlocks(t *testing.T) {
+	const token = "xoxb-gate-block-limit-test"
+
+	tests := []struct {
+		name             string
+		blockerCount     int
+		wantOverflowNote string
+	}{
+		{name: "fits exactly", blockerCount: 45},
+		{name: "one over", blockerCount: 46, wantOverflowNote: "1 additional blocked check not shown. Open Agentico for full details."},
+		{name: "maximum gate", blockerCount: 100, wantOverflowNote: "55 additional blocked checks not shown. Open Agentico for full details."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeSlack := testsupport.New(t)
+			var responseCounter atomic.Int64
+			var acceptedThreadPosts atomic.Int64
+			fakeSlack.SetDefault(func(method string, request testsupport.Request) testsupport.Response {
+				switch method {
+				case "chat.postMessage":
+					var blocks []json.RawMessage
+					if raw, _ := request.Fields["blocks"].(string); raw != "" {
+						if err := json.Unmarshal([]byte(raw), &blocks); err != nil {
+							return testsupport.Response{Body: map[string]any{"ok": false, "error": "invalid_blocks"}}
+						}
+					}
+					if len(blocks) > 50 {
+						return testsupport.Response{Body: map[string]any{"ok": false, "error": "invalid_blocks"}}
+					}
+					if threadTS, _ := request.Fields["thread_ts"].(string); threadTS != "" {
+						acceptedThreadPosts.Add(1)
+					}
+					fallthrough
+				case "chat.update":
+					n := responseCounter.Add(1)
+					return testsupport.Response{Body: map[string]any{
+						"ok":      true,
+						"ts":      fmt.Sprintf("1758499200.%06d", n),
+						"channel": fmt.Sprint(request.Fields["channel"]),
+					}}
+				default:
+					return testsupport.Response{Body: map[string]any{"ok": false, "error": "unexpected " + method}}
+				}
+			})
+			t.Setenv(slack.EnvSlackAPIBase, fakeSlack.URL())
+
+			store, f := seedReadFeature(t)
+			gatePath := filepath.Join(store.RunDir(f.ID, 1), "phase-06", "implement", agent.NeedUserInputArtifactName)
+			blockers := make([]agent.NeedUserInputVerificationBlocker, tt.blockerCount)
+			itemIDs := make([]string, tt.blockerCount)
+			for i := range blockers {
+				itemID := fmt.Sprintf("check-%03d", i+1)
+				itemIDs[i] = itemID
+				blockers[i] = agent.NeedUserInputVerificationBlocker{
+					ItemID:      itemID,
+					Name:        fmt.Sprintf("Blocked check %d", i+1),
+					RepoName:    repoNameSelf,
+					Command:     fmt.Sprintf("go test ./internal/check-%d", i+1),
+					Reason:      "Authentication required",
+					Remediation: "Sign in and retry",
+				}
+			}
+			blockers[44].Command += " --token " + token
+			if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{
+				Summary:   "Verification requires an authenticated session.",
+				Questions: []agent.NeedUserInputQuestion{{Index: 1, Prompt: "Retry after signing in?"}},
+				Iteration: 3,
+				VerificationDecision: &agent.NeedUserVerificationDecision{
+					ContractPath:     "testing-contract.yaml",
+					ContractRevision: 1,
+					ItemIDs:          itemIDs,
+					AllowedActions:   []string{agent.NeedUserVerificationRetryAfterAuth},
+				},
+				Verification: &agent.NeedUserInputVerificationContext{Blockers: blockers},
+			}); err != nil {
+				t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+			}
+			f.Status = feature.StatusNeedUserInput
+			f.CurrentIteration = 3
+			f.PendingNeedUserInputPath = gatePath
+			if err := store.Save(f); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+
+			source := &apiHandler{store: store}
+			pending, err := source.PendingSlackInputs(f.ID)
+			if err != nil {
+				t.Fatalf("PendingSlackInputs() error = %v", err)
+			}
+			if len(pending) != 1 || len(pending[0].GateBlockers) != tt.blockerCount {
+				t.Fatalf("PendingSlackInputs() blocker count = %d; want %d", len(pending[0].GateBlockers), tt.blockerCount)
+			}
+
+			notifier := slack.NewNotifier(slack.NotifierOptions{
+				Settings: slackPendingInputTestSettings{settings: ports.SlackRuntimeSettings{
+					Enabled: true,
+					Token:   token,
+					Recipients: []ports.SlackRecipient{{
+						TypedText: "#eng", Kind: ports.SlackRecipientChannel, ID: "C-ENG", DisplayName: "#eng",
+					}},
+					Categories: ports.SlackCategoryDefaults{Progress: true, NeedsInput: true, Problems: true},
+				}},
+				Store:    store,
+				StateDir: store.BaseDir,
+				Pending:  source,
+			})
+			notifier.SetServerName("Local agent")
+			notifier.Start()
+			t.Cleanup(func() { notifier.Stop(context.Background()) })
+
+			notifier.DomainEventTap(ports.Event{Type: ports.NeedUserInputRequired, FeatureID: f.ID})
+
+			var threadPosts []testsupport.Request
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				threadPosts = threadSlackPosts(fakeSlack.Requests("chat.postMessage"))
+				if len(threadPosts) > 0 {
+					break
+				}
+				time.Sleep(2 * time.Millisecond)
+			}
+			if len(threadPosts) != 1 {
+				t.Fatalf("thread chat.postMessage calls = %d; want 1", len(threadPosts))
+			}
+			if got := acceptedThreadPosts.Load(); got != 1 {
+				t.Errorf("accepted thread chat.postMessage calls = %d; want 1", got)
+			}
+
+			var sentBlocks []json.RawMessage
+			rawBlocks := fmt.Sprint(threadPosts[0].Fields["blocks"])
+			if err := json.Unmarshal([]byte(rawBlocks), &sentBlocks); err != nil {
+				t.Fatalf("decode Slack blocks: %v", err)
+			}
+			if got := len(sentBlocks); got != 50 {
+				t.Errorf("Slack block count = %d; want 50 at boundary", got)
+			}
+			if strings.Contains(rawBlocks, token) || !strings.Contains(rawBlocks, "[REDACTED]") {
+				t.Errorf("Slack blocks did not redact displayed blocker before truncation")
+			}
+			for _, want := range []string{
+				"Resolve this gate in Agentico by waiving the blocked checks or retrying after signing in.",
+				"Replies are not read here. Resolve this verification gate in Agentico.",
+			} {
+				if !strings.Contains(rawBlocks, want) {
+					t.Errorf("Slack blocks missing resolution instruction %q", want)
+				}
+			}
+			if tt.wantOverflowNote == "" {
+				if strings.Contains(rawBlocks, "additional blocked check") {
+					t.Errorf("Slack blocks contain unexpected overflow note: %s", rawBlocks)
+				}
+			} else if !strings.Contains(rawBlocks, tt.wantOverflowNote) {
+				t.Errorf("Slack blocks missing overflow note %q", tt.wantOverflowNote)
+			}
+		})
+	}
+}

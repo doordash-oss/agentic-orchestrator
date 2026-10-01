@@ -1515,3 +1515,70 @@ func TestSessionGuardHandler_AllowsBareHarnessCLIAgainstContract(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionGuardHandler_ExplainsMalformedHarnessCLIDenial(t *testing.T) {
+	const genericReason = "testing-contract.yaml is harness-owned"
+	for _, tc := range []struct {
+		name           string
+		command        string
+		wantAllowed    bool
+		wantReasonPart string
+	}{
+		{
+			name:           "variable assignment and semicolon",
+			command:        `P=/work/feature/phase-01; "$AGENTICO_BIN" report-blocker --contract "$P/testing-contract.yaml" --dir "$P/implement/iteration-04" --items visual_1 --capability display --reason "no display"`,
+			wantReasonPart: "agentico report-blocker must be invoked as a single bare command",
+		},
+		{
+			name:           "cd and relative paths",
+			command:        `cd /work/feature/phase-01 && "$AGENTICO_BIN" report-blocker --contract testing-contract.yaml --dir implement/iteration-06 --items visual_1 --capability display --reason "no display"`,
+			wantReasonPart: "agentico report-blocker must be invoked as a single bare command",
+		},
+		{
+			name:           "verify-evidence piped",
+			command:        `"$AGENTICO_BIN" verify-evidence --contract /work/testing-contract.yaml --dir /work/iter|tail`,
+			wantReasonPart: "agentico verify-evidence must be invoked as a single bare command",
+		},
+		{
+			name:        "well-formed bare call",
+			command:     `"$AGENTICO_BIN" report-blocker --contract /work/feature/phase-01/testing-contract.yaml --dir /work/feature/phase-01/implement/iteration-06 --items visual_1 --capability display --reason "no display"`,
+			wantAllowed: true,
+		},
+		{
+			name:           "unrelated command",
+			command:        `cat plan.yaml > /work/feature/phase-01/testing-contract.yaml`,
+			wantReasonPart: genericReason,
+		},
+		{
+			name:           "unsanctioned subcommand",
+			command:        `"$AGENTICO_BIN" server --contract /work/testing-contract.yaml`,
+			wantReasonPart: genericReason,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The inner handler allows everything, so a deny can only come
+			// from the guard.
+			handler := Guarded(&mockHandler{behavior: DecisionAllow})
+			decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
+				ToolName:     toolNameBash,
+				Input:        `{"command":` + strconv.Quote(tc.command) + `}`,
+				ProviderName: "claude",
+			})
+			if err != nil {
+				t.Fatalf("CanUseTool() error = %v", err)
+			}
+			if tc.wantAllowed {
+				if decision.Behavior != DecisionAllow {
+					t.Fatalf("Behavior = %q (reason %q), want allow from inner handler", decision.Behavior, decision.Reason)
+				}
+				return
+			}
+			if decision.Behavior != DecisionDeny {
+				t.Fatalf("Behavior = %q, want deny", decision.Behavior)
+			}
+			if !strings.Contains(decision.Reason, tc.wantReasonPart) {
+				t.Fatalf("Reason = %q, want it to contain %q", decision.Reason, tc.wantReasonPart)
+			}
+		})
+	}
+}

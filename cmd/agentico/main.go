@@ -721,9 +721,9 @@ Usage: agentico
        agentico server [flags]
        agentico update [--check|-n]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
-       agentico verify-evidence --contract <testing-contract.yaml> --dir <iteration_dir>
+       agentico verify-evidence --contract </abs/path/testing-contract.yaml> --dir </abs/path/iteration_dir>
        agentico capability-probe <name[(argument)]>
-       agentico report-blocker --contract <testing-contract.yaml> --dir <iteration_dir> \
+       agentico report-blocker --contract </abs/path/testing-contract.yaml> --dir </abs/path/iteration_dir> \
                                --items <id,id,...> --capability <name> --reason <text>
 
 Starts or focuses the installed Agentico desktop app. Use the explicit 'server'
@@ -741,6 +741,9 @@ authenticated-browser(slack.com), display, docker, network(host)) the way the
 harness will. Run 'agentico report-blocker' from implementer sessions when
 required evidence needs a capability the environment lacks; it records the
 blocked rows for the user's decision instead of an unanswerable chat question.
+Agent sessions must run verify-evidence and report-blocker as one bare command
+with absolute literal paths (no cd, &&, ;, pipes, redirects, or shell variables);
+the permission guard refuses any other shape that references the contract.
 
 Server flags (use with 'agentico server'):
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)

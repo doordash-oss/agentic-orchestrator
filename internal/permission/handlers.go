@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -73,6 +74,14 @@ func (h *SessionGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 		}, nil
 	}
 	if requestsHarnessFileMutation(req, testingContractFilename) {
+		if req.ToolName == toolNameBash {
+			if subcommand, ok := attemptedHarnessCLISubcommand(extractBashCommand(req.Input)); ok {
+				return ports.PermissionDecision{
+					Behavior: DecisionDeny,
+					Reason:   malformedHarnessCLIReason(subcommand),
+				}, nil
+			}
+		}
 		return ports.PermissionDecision{
 			Behavior: DecisionDeny,
 			Reason:   "testing-contract.yaml is harness-owned and regenerated every iteration; amend the phase plan's verification section instead",
@@ -751,4 +760,32 @@ func isHarnessCLIInvocation(command string) bool {
 		}
 	}
 	return true
+}
+
+// attemptedHarnessCLISubcommand reports the sanctioned subcommand of an
+// agentico call embedded anywhere in command. It only selects the deny reason
+// for commands isHarnessCLIInvocation already refused; it never allows
+// anything. Shell separators also split fields so `cd x&&agentico ...` is
+// recognized.
+func attemptedHarnessCLISubcommand(command string) (string, bool) {
+	fields := strings.FieldsFunc(command, func(r rune) bool {
+		return unicode.IsSpace(r) || strings.ContainsRune(";&|()`", r)
+	})
+	for i := 0; i+1 < len(fields); i++ {
+		if harnessCLIBinaryRE.MatchString(fields[i]) && harnessCLISubcommands[fields[i+1]] {
+			return fields[i+1], true
+		}
+	}
+	return "", false
+}
+
+// malformedHarnessCLIReason explains why a recognizable harness CLI call was
+// refused, so the agent retries with the sanctioned shape instead of
+// concluding the subcommand is forbidden outright.
+func malformedHarnessCLIReason(subcommand string) string {
+	return fmt.Sprintf(
+		"agentico %s must be invoked as a single bare command: no cd, &&, ;, pipes, redirects or command substitution, "+
+			"no shell variables in arguments, absolute paths for --contract and --dir "+
+			"(e.g. \"$AGENTICO_BIN\" %s --contract /abs/path/testing-contract.yaml --dir /abs/path/implement/iteration-NN ...)",
+		subcommand, subcommand)
 }

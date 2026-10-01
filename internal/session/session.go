@@ -109,7 +109,8 @@ type Session struct {
 
 	// Provider protocol — handles all wire-level communication.
 	// Set before Start() via SessionOpts.Protocol.
-	protocol llm.Protocol
+	protocol             llm.Protocol
+	permissionResponseMu sync.Mutex
 
 	// SDK protocol fields
 	model            string      // from SystemInitMessage — e.g. "opus[1m]", "sonnet"
@@ -1478,6 +1479,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		return true
 	case "":
 		req.AutoApproveOffer = decision.AutoApproveOffer
+		req.AutomaticReview = decision.AutomaticReview
 		return false
 	default:
 		s.respondToControlViaProtocol(req.RequestID, true, req.Request.Input, "")
@@ -1813,8 +1815,65 @@ func (s *Session) ClearRootCompletionIntent() {
 
 // RespondToControl sends a control response to a pending control request.
 func (s *Session) RespondToControl(requestID string, allow bool, reason string) error {
+	s.permissionResponseMu.Lock()
+	defer s.permissionResponseMu.Unlock()
+	return s.respondToPendingControl(requestID, allow, reason)
+}
+
+// RetryAutomaticReview reruns only a previously failed review. It neither
+// grants permission itself nor changes auto mode or remembered rules.
+func (s *Session) RetryAutomaticReview(requestID string) error {
+	if !s.permissionResponseMu.TryLock() {
+		return errors.New("a permission response is already in progress")
+	}
+	defer s.permissionResponseMu.Unlock()
 	s.mu.Lock()
 	pending := s.findPendingControlRequestLocked(requestID)
+	if pending == nil || pending.AutomaticReview == nil || pending.Request.ToolName != "Bash" || s.permHandler == nil {
+		s.mu.Unlock()
+		return errors.New("automatic review is not available for this request")
+	}
+	input := string(pending.Request.Input)
+	s.mu.Unlock()
+	decision, err := s.permHandler.CanUseTool(ports.ToolPermissionRequest{
+		RequestID: requestID, ToolName: "Bash", Input: input,
+		LogicalSessionID: s.id, FeatureID: s.featureID, Phase: s.phase,
+		RepoName: s.repoName, Iteration: s.iteration, ProviderName: s.providerName,
+		Ctx: s.lifecycleCtx(), AppendStatus: s.appendLocalStatus, RetryAutomaticReview: true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := s.lifecycleCtx().Err(); err != nil {
+		return err
+	}
+	if decision.Behavior == "allow" {
+		return s.respondToPendingControl(requestID, true, "")
+	}
+	// A failed or deferred review leaves the request pending for the user.
+	s.mu.Lock()
+	if s.findPendingControlRequestLocked(requestID) == pending {
+		updated := *pending
+		updated.AutomaticReview = decision.AutomaticReview
+		updated.AutoApproveOffer = decision.AutoApproveOffer
+		for i, request := range s.pendingControlRequests {
+			if request == pending {
+				s.pendingControlRequests[i] = &updated
+				break
+			}
+		}
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *Session) respondToPendingControl(requestID string, allow bool, reason string) error {
+	s.mu.Lock()
+	pending := s.findPendingControlRequestLocked(requestID)
+	if pending == nil {
+		s.mu.Unlock()
+		return errors.New("permission request is no longer pending")
+	}
 
 	var originalInput json.RawMessage
 	if pending != nil {

@@ -227,7 +227,11 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 			return nil, nil
 		}
 		if p.opts.NativeToollessReview && len(env.Error) > 0 && string(env.Error) != "null" {
-			return []llm.SDKMessage{p.nativeToollessViolation("JSON-RPC error response")}, nil
+			var rpcError struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal(env.Error, &rpcError)
+			return []llm.SDKMessage{p.nativeToollessProviderFailure(rpcError.Message)}, nil
 		}
 		if msg, emit, handled := p.handleResponse(*env.ID, env.Result, env.Error); handled {
 			if emit {
@@ -1050,6 +1054,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 		case "failed":
 			if p.opts.NativeToollessReview {
+				if completed.Turn.Error != nil {
+					return p.nativeToollessProviderFailure(completed.Turn.Error.Message), true
+				}
 				return p.nativeToollessViolation("review turn failed"), true
 			}
 			p.mu.Lock()
@@ -1589,7 +1596,17 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			errText = fmt.Sprintf("%s (%s)", errText, errNotif.Error.ErrorInfo.RawKind)
 		}
 		if p.opts.NativeToollessReview {
-			return p.nativeToollessViolation("provider error: " + errText), true
+			// Codex owns reconnect retries. Keep reading within the classifier's
+			// existing deadline; this notice is not a terminal result.
+			if errNotif.WillRetry {
+				if errNotif.ThreadID != "" || errNotif.TurnID != "" {
+					if detail := p.nativeToollessTurnMismatch(errNotif.ThreadID, errNotif.TurnID); detail != "" {
+						return p.nativeToollessViolation(detail), true
+					}
+				}
+				return llm.SDKMessage{}, false
+			}
+			return p.nativeToollessProviderFailure(errText + " " + errNotif.AdditionalDetails), true
 		}
 		return llm.SDKMessage{
 			Type:    codexRoleAssistant,
@@ -1662,16 +1679,33 @@ func nativeToollessThreadConfig() map[string]interface{} {
 	}
 }
 
+func (p *Protocol) nativeToollessProviderFailure(message string) llm.SDKMessage {
+	msg := p.nativeToollessViolation("provider error")
+	msg.Result.ReviewFailure = llm.ClassifyReviewFailure(message)
+	msg.Result.Result = msg.Result.ReviewFailure.Reason()
+	return msg
+}
+
 func (p *Protocol) nativeToollessViolation(detail string) llm.SDKMessage {
+	kind := llm.ReviewFailureProtocol
+	switch {
+	case detail == "malformed reviewer decision" || detail == "malformed reviewer output" || detail == "empty reviewer output":
+		kind = llm.ReviewFailureDecision
+	case detail == "review turn failed" || detail == "review turn interrupted":
+		kind = llm.ReviewFailureTurn
+	case strings.HasPrefix(detail, "unexpected server request") || detail == "unexpected command activity" || detail == "unexpected file activity" || detail == "unexpected child agent activity":
+		kind = llm.ReviewFailureInteraction
+	}
 	p.markNativeToollessFailed()
 	return llm.SDKMessage{
 		Type:    "result",
 		Subtype: "error",
 		Result: &llm.ResultMessage{
-			Type:    "result",
-			Subtype: "error",
-			Result:  "Codex native tool-less review failed closed: " + detail,
-			IsError: true,
+			Type:          "result",
+			Subtype:       "error",
+			Result:        kind.Reason(),
+			ReviewFailure: kind,
+			IsError:       true,
 		},
 	}
 }

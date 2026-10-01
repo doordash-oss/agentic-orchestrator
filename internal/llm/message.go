@@ -291,17 +291,19 @@ type ModelUsageEntry struct {
 
 // ResultMessage is the final message with completion status and cost.
 type ResultMessage struct {
-	Type         string                     `json:"type"`
-	Subtype      string                     `json:"subtype"` // "success", "error", "max_turns", "max_budget"
-	SessionID    string                     `json:"session_id"`
-	TotalCostUSD float64                    `json:"total_cost_usd"`
-	Usage        *Usage                     `json:"usage,omitempty"`
-	ModelUsage   map[string]ModelUsageEntry `json:"modelUsage,omitempty"`
-	Result       string                     `json:"result,omitempty"`
-	IsError      bool                       `json:"is_error,omitempty"`
-	DurationMS   float64                    `json:"duration_ms,omitempty"`
-	DurationAPI  float64                    `json:"duration_api_ms,omitempty"`
-	NumTurns     int                        `json:"num_turns,omitempty"`
+	// ReviewFailure is assigned by native adapters, never accepted from wire JSON.
+	ReviewFailure ReviewFailure              `json:"-"`
+	Type          string                     `json:"type"`
+	Subtype       string                     `json:"subtype"` // "success", "error", "max_turns", "max_budget"
+	SessionID     string                     `json:"session_id"`
+	TotalCostUSD  float64                    `json:"total_cost_usd"`
+	Usage         *Usage                     `json:"usage,omitempty"`
+	ModelUsage    map[string]ModelUsageEntry `json:"modelUsage,omitempty"`
+	Result        string                     `json:"result,omitempty"`
+	IsError       bool                       `json:"is_error,omitempty"`
+	DurationMS    float64                    `json:"duration_ms,omitempty"`
+	DurationAPI   float64                    `json:"duration_api_ms,omitempty"`
+	NumTurns      int                        `json:"num_turns,omitempty"`
 
 	// StopReason is the model's reason for ending the final assistant message
 	// of this invocation. Common values: "end_turn" (agent finished its turn),
@@ -352,7 +354,18 @@ type ControlRequestMessage struct {
 	Origin       EventOrigin    `json:"-"`
 	// AutoApproveOffer is set when automatic Bash review is off for the
 	// session but would have handled this request had it been on.
-	AutoApproveOffer *AutoApproveOffer `json:"-"`
+	AutoApproveOffer *AutoApproveOffer      `json:"-"`
+	AutomaticReview  *AutomaticReviewStatus `json:"-"`
+}
+
+// AutomaticReviewStatus explains a human deferral without exposing provider output.
+type AutomaticReviewStatus struct {
+	Provider string
+	Model    string
+	Outcome  string
+	Reason   string
+	Paused   bool
+	RetryAt  time.Time
 }
 
 // AutoApproveOffer describes how automatic Bash review would have treated a

@@ -969,3 +969,35 @@ describe('error items', () => {
     expect(document.querySelector('.attention-status')).toBeNull();
   });
 });
+
+describe('automatic review recovery', () => {
+  it('shows the paused reviewer and retries without granting permission', async () => {
+    const mock = installAgenticoMock();
+    const user = userEvent.setup();
+    render(
+      <PermissionDetailHarness
+        item={{
+          ...permissionItem,
+          automaticReview: {
+            provider: 'codex',
+            model: 'gpt-5.6-luna',
+            outcome: 'provider_error',
+            reason: 'reviewer authentication or authorization failed',
+            paused: true,
+          },
+        }}
+      />,
+    );
+    const notice = screen.getByRole('region', { name: 'Automatic review status' });
+    expect(notice).toHaveTextContent('permissions require your approval');
+    expect(notice).toHaveTextContent('codex / gpt-5.6-luna');
+    expect(notice).toHaveTextContent('authentication or authorization failed');
+    await user.click(screen.getByRole('button', { name: 'Retry automatic review' }));
+    expect(mock.api.answerPermission).toHaveBeenCalledExactlyOnceWith({
+      requestId: 'perm-1',
+      sessionId: 'session-1',
+      decision: 'retry_auto_review',
+    });
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeVisible();
+  });
+});

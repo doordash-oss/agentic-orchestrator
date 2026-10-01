@@ -16,6 +16,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -30,7 +31,7 @@ import (
 // autoReviewBashToolName is the canonical Bash tool name the decorator matches.
 const autoReviewBashToolName = "Bash"
 
-const automaticReviewCircuitBreakerReason = "automatic reviewer unavailable after 2 consecutive provider or protocol failures"
+const automaticReviewCircuitBreakerReason = "automatic reviewer cooling down for 30 seconds after 2 consecutive provider or protocol failures"
 const automaticReviewTimeoutCooldownReason = "automatic reviewer cooling down for 30 seconds after 2 consecutive timeouts"
 const automaticReviewTimeoutCooldown = 30 * time.Second
 
@@ -59,6 +60,10 @@ const (
 // hidden reviewer is launched via autoreview.Classify (not BuildSession), so it
 // is never decorated and cannot recurse.
 type autoReviewPermissionDecorator struct {
+	reviewMu         sync.Mutex
+	liveReviewer     func() (string, autoreview.Reviewer)
+	selection        string
+	lastFailure      autoreview.Result
 	inner            ports.PermissionHandler
 	enabled          func() bool
 	reviewer         autoreview.Reviewer
@@ -80,6 +85,7 @@ type autoReviewClassifyDetailedFunc func(context.Context, autoreview.Reviewer, a
 // original provider session. Its exact-command maps never enter the shared
 // permission cache or any durable store.
 type autoReviewSessionState struct {
+	clock                func() time.Time
 	mu                   sync.Mutex
 	cached               map[string]autoreview.Decision
 	consecutiveFailures  int
@@ -100,6 +106,7 @@ func newAutoReviewSessionState() *autoReviewSessionState {
 func (d *autoReviewPermissionDecorator) sessionState() *autoReviewSessionState {
 	d.stateOnce.Do(func() {
 		d.state = newAutoReviewSessionState()
+		d.state.clock = d.timeNow
 	})
 	return d.state
 }
@@ -140,7 +147,7 @@ func (s *autoReviewSessionState) review(
 	if ctx.Err() != nil {
 		return "", false, autoReviewBreakerUnchanged
 	}
-	if s.disposed || s.unavailable {
+	if s.disposed {
 		return "", false, autoReviewBreakerUnchanged
 	}
 	if !s.cooldownUntil.IsZero() {
@@ -148,6 +155,8 @@ func (s *autoReviewSessionState) review(
 			return "", false, autoReviewBreakerUnchanged
 		}
 		s.cooldownUntil = time.Time{}
+		s.unavailable = false
+		s.consecutiveHardFails = 0
 		s.consecutiveFailures = 0
 		s.consecutiveTimeouts = 0
 		s.halfOpen = true
@@ -160,6 +169,9 @@ func (s *autoReviewSessionState) review(
 	}
 
 	decision, ok, outcome := classify(ctx)
+	if s.clock != nil {
+		now = s.clock()
+	}
 	if ctx.Err() != nil {
 		decision, ok = "", false
 		outcome = autoreview.OutcomeCanceled
@@ -190,6 +202,7 @@ func (s *autoReviewSessionState) review(
 	s.consecutiveTimeouts = 0
 	if s.consecutiveHardFails >= 2 {
 		s.unavailable = true
+		s.cooldownUntil = now.Add(automaticReviewTimeoutCooldown)
 		s.halfOpen = false
 		return "", false, autoReviewBreakerUnavailable
 	}
@@ -199,6 +212,27 @@ func (s *autoReviewSessionState) review(
 		return "", false, autoReviewBreakerCooldown
 	}
 	return "", false, autoReviewBreakerUnchanged
+}
+
+// reset makes an explicit retry or reviewer change eligible immediately.
+// Disposal remains terminal, and approvals from the old reviewer are discarded.
+func (s *autoReviewSessionState) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear(s.cached)
+	s.consecutiveFailures, s.consecutiveTimeouts, s.consecutiveHardFails = 0, 0, 0
+	s.cooldownUntil = time.Time{}
+	s.halfOpen, s.unavailable = false, false
+}
+
+func (d *autoReviewPermissionDecorator) reviewStatus() *llm.AutomaticReviewStatus {
+	provider, model := d.reviewer.Identity()
+	s := d.sessionState()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return &llm.AutomaticReviewStatus{Provider: provider, Model: model,
+		Outcome: string(d.lastFailure.Outcome), Reason: d.lastFailure.FailureReason,
+		Paused: !s.cooldownUntil.IsZero(), RetryAt: s.cooldownUntil}
 }
 
 // isEnabled reads the live automatic-review setting so a mid-session opt-in
@@ -244,8 +278,22 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 	if !permission.ReviewableBashCommand(command) {
 		return decision, nil
 	}
+	d.reviewMu.Lock()
+	defer d.reviewMu.Unlock()
+	if d.liveReviewer != nil {
+		selection, reviewer := d.liveReviewer()
+		if selection != d.selection {
+			d.selection, d.reviewer = selection, reviewer
+			d.sessionState().reset()
+			d.lastFailure = autoreview.Result{}
+		}
+	}
+	if req.RetryAutomaticReview {
+		d.sessionState().reset()
+	}
 	if d.reviewer.Provider == nil {
-		d.persistAutomaticReviewStatus(req, permission.AutomaticReviewFailureStatusLine(command, "unavailable"))
+		d.lastFailure = autoreview.Result{Outcome: autoreview.OutcomeProviderError, FailureReason: "No automatic reviewer is available"}
+		decision.AutomaticReview = d.reviewStatus()
 		return decision, nil
 	}
 	ctx := req.Ctx
@@ -288,6 +336,9 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 			}
 		}
 
+		if detailed.Outcome != autoreview.OutcomeAllow && detailed.Outcome != autoreview.OutcomeDefer {
+			d.lastFailure = detailed
+		}
 		var statusPersisted *bool
 		statusFailureClass, statusFailureReason := "", ""
 		if classifyCtx.Err() == nil {
@@ -310,8 +361,10 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 	switch breakerTransition {
 	case autoReviewBreakerUnavailable:
 		d.emitReviewerUnavailable(req, "circuit_breaker", automaticReviewCircuitBreakerReason)
+		d.persistAutomaticReviewStatus(req, fmt.Sprintf("Automatic review paused after two failures; permissions require your approval. Reviewer: %s:%s. Reason: %s. A new request can retry after 30 seconds.", d.reviewer.Provider.Name(), d.reviewer.Model, d.lastFailure.FailureReason))
 	case autoReviewBreakerCooldown:
 		d.emitReviewerUnavailable(req, "circuit_breaker", automaticReviewTimeoutCooldownReason)
+		d.persistAutomaticReviewStatus(req, "Automatic review paused; permissions require your approval. A new request can retry after 30 seconds.")
 	}
 	if ok && result == autoreview.Defer {
 		// Fresh classifications already append this status inside the callback.
@@ -320,8 +373,8 @@ func (d *autoReviewPermissionDecorator) CanUseTool(req ports.ToolPermissionReque
 			d.persistAutomaticReviewStatus(req, permission.AutomaticReviewDeferStatusLine(command))
 		}
 	}
-	if !ok && !classificationRan && ctx.Err() == nil {
-		d.persistAutomaticReviewStatus(req, permission.AutomaticReviewFailureStatusLine(command, "unavailable"))
+	if !ok && ctx.Err() == nil {
+		decision.AutomaticReview = d.reviewStatus()
 	}
 	if !ok || result != autoreview.Allow {
 		return decision, nil

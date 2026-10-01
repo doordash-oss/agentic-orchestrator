@@ -2281,6 +2281,16 @@ export const AttentionPermissionSchema = z.strictObject({
     .optional(),
   /** Present when auto-approve commands is off but would have handled this request. */
   autoApprove: z.strictObject({ wouldFastPath: z.boolean() }).optional(),
+  automaticReview: z
+    .strictObject({
+      provider: z.string(),
+      model: z.string(),
+      outcome: z.string(),
+      reason: z.string(),
+      paused: z.boolean(),
+      retryAt: z.string().optional(),
+    })
+    .optional(),
 });
 export const AutoApproveScopeSchema = z.enum(['feature', 'workspace']);
 export type AutoApproveScope = z.output<typeof AutoApproveScopeSchema>;
@@ -2451,7 +2461,7 @@ export type AttentionSnapshot = z.output<typeof AttentionSnapshotSchema>;
 export const PermissionDecisionRequestSchema = z.strictObject({
   requestId: AttentionIDSchema,
   sessionId: AttentionIDSchema.optional(),
-  decision: z.enum(['allow_once', 'allow_remember', 'deny']),
+  decision: z.enum(['allow_once', 'allow_remember', 'deny', 'retry_auto_review']),
   rememberPattern: z.string().max(4096).optional(),
   rememberScope: z.string().max(4096).optional(),
   /** Turn auto-approve commands on for the feature or workspace before allowing. */

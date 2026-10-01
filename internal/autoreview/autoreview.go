@@ -514,11 +514,31 @@ func classifyAttempt(
 						result.successful = true
 						result.reason = ""
 					} else {
+						kind := msg.Result.ReviewFailure
+						if kind == "" {
+							kind = llm.ClassifyReviewFailure(msg.Result.Result)
+						}
 						result.retryClass = retryableProviderFailureClass(msg.Result.Result)
+						switch kind {
+						case llm.ReviewFailureTransport:
+							result.retryClass = "transport"
+						case llm.ReviewFailureServer:
+							result.retryClass = "server"
+						case llm.ReviewFailureRateLimit:
+							result.retryClass = "rate-limit"
+						}
 						if result.retryClass != "" {
 							result.reason = "provider returned a retryable " + result.retryClass + " failure"
 						} else {
-							result.reason = "provider returned an unsuccessful review result"
+							result.reason = kind.Reason()
+							switch kind {
+							case llm.ReviewFailureDecision:
+								result.outcome = OutcomeMalformedResponse
+							case llm.ReviewFailureProtocol:
+								result.outcome = OutcomeMalformedResponse
+							case llm.ReviewFailureInteraction:
+								result.outcome = OutcomeUnexpectedInteraction
+							}
 						}
 					}
 					return

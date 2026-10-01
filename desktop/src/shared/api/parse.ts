@@ -167,6 +167,16 @@ export const ServerControlRequestSchema = z.object({
   questions: z.array(ServerAskUserQuestionSchema).max(100).optional(),
   remember: ServerRememberPreviewSchema.optional(),
   auto_approve: z.object({ would_fast_path: z.boolean() }).optional(),
+  automatic_review: z
+    .object({
+      provider: z.string().max(200),
+      model: z.string().max(500),
+      outcome: z.string().max(100),
+      reason: z.string().max(1000),
+      paused: z.boolean(),
+      retry_at: z.string().max(100).optional(),
+    })
+    .optional(),
   waiting_since: z.string().max(100).optional(),
 });
 export const ServerHelpQueueSchema = z.object({

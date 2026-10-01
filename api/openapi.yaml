@@ -2351,7 +2351,7 @@ components:
           type: string
         decision:
           type: string
-          enum: [allow_once, allow_remember, deny]
+          enum: [allow_once, allow_remember, deny, retry_auto_review]
         remember_pattern:
           type: string
         auto_approve_scope:
@@ -6512,8 +6512,30 @@ components:
         remember:
           $ref: "#/components/schemas/PermissionRememberPreview"
           x-go-type-skip-optional-pointer: false
+        automatic_review:
+          $ref: "#/components/schemas/PermissionAutomaticReview"
+          x-go-type-skip-optional-pointer: false
         auto_approve:
           $ref: "#/components/schemas/PermissionAutoApproveOffer"
+          x-go-type-skip-optional-pointer: false
+    PermissionAutomaticReview:
+      type: object
+      description: Sanitized explanation of a failed automatic review; retry never grants permission by itself.
+      required: [provider, model, outcome, reason, paused]
+      properties:
+        provider:
+          type: string
+        model:
+          type: string
+        outcome:
+          type: string
+        reason:
+          type: string
+        paused:
+          type: boolean
+        retry_at:
+          type: string
+          format: date-time
           x-go-type-skip-optional-pointer: false
     PermissionAutoApproveOffer:
       type: object

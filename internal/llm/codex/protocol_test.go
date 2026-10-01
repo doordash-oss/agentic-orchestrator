@@ -1161,3 +1161,49 @@ func TestTurnCompletedAccumulatesShortAndLongContextRates(t *testing.T) {
 		t.Fatalf("TotalCostUSD = %.6f, want %.3f", msg.Result.TotalCostUSD, want)
 	}
 }
+
+func TestNativeReviewReconnectNoticeCanRecover(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+	p.SetThreadIDForTest("thread-review")
+	_, _ = p.ParseLine([]byte(`{"method":"turn/started","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"inProgress"}}}`))
+	for range 2 {
+		msgs, err := p.ParseLine([]byte(`{"method":"error","params":{"threadId":"thread-review","turnId":"turn-1","willRetry":true,"error":{"message":"Reconnecting... 1/5"},"additionalDetails":"SECRET transport details"}}`))
+		if err != nil || len(msgs) != 0 {
+			t.Fatalf("retry notice terminated review: %+v %v", msgs, err)
+		}
+	}
+	_, _ = p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-review","turnId":"turn-1","item":{"id":"i","type":"agentMessage","text":"ALLOW","phase":"final_answer"}}}`))
+	msgs, err := p.ParseLine([]byte(`{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"completed"}}}`))
+	if err != nil || len(msgs) != 1 || msgs[0].Result == nil || !msgs[0].Result.IsSuccess() {
+		t.Fatalf("recovered turn = %+v %v", msgs, err)
+	}
+}
+
+func TestNativeReviewFailureDiagnosticsAreSanitizedAndTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		message string
+		want    llm.ReviewFailure
+	}{
+		{"401 unauthorized token=SECRET", llm.ReviewFailureAuth},
+		{"model not found SECRET", llm.ReviewFailureModel},
+		{"transport disconnected SECRET", llm.ReviewFailureTransport},
+		{"429 rate limit SECRET", llm.ReviewFailureRateLimit},
+		{"unrecognized SECRET", llm.ReviewFailureProvider},
+	} {
+		t.Run(string(tc.want), func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{NativeToollessReview: true})
+			b, _ := json.Marshal(map[string]any{"method": "error", "params": map[string]any{"willRetry": false, "error": map[string]any{"message": tc.message}}})
+			msgs, err := p.ParseLine(b)
+			if err != nil || len(msgs) != 1 || msgs[0].Result == nil || msgs[0].Result.ReviewFailure != tc.want {
+				t.Fatalf("diagnostic = %+v %v", msgs, err)
+			}
+			if strings.Contains(msgs[0].Result.Result, "SECRET") {
+				t.Fatal("raw error leaked")
+			}
+			msgs, _ = p.ParseLine([]byte(`{"method":"turn/completed","params":{"threadId":"thread-review","turn":{"id":"turn-1","status":"completed"}}}`))
+			if len(msgs) != 1 || !msgs[0].Result.IsError {
+				t.Fatal("terminal failure became success")
+			}
+		})
+	}
+}

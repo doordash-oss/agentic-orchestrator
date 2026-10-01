@@ -41,13 +41,14 @@ type PhaseRunner struct {
 	CommandRunner  ports.CommandRunner
 	// CapabilityPolicy configures built-in capability probes for this
 	// server; nil uses the local default.
-	CapabilityPolicy           *CapabilityPolicy
-	Config                     *config.Config
-	StateDir                   string
-	SkillsDir                  string // path to reconciled skills dir; empty = no skills
-	GuidelinesDir              string // path to reconciled guidelines dir; empty = no guidelines
-	DangerouslySkipPermissions bool
-	PermissionCache            *permission.Cache // shared permission cache (nil = no caching)
+	CapabilityPolicy            *CapabilityPolicy
+	Config                      *config.Config
+	CurrentAutomaticReviewModel func() string
+	StateDir                    string
+	SkillsDir                   string // path to reconciled skills dir; empty = no skills
+	GuidelinesDir               string // path to reconciled guidelines dir; empty = no guidelines
+	DangerouslySkipPermissions  bool
+	PermissionCache             *permission.Cache // shared permission cache (nil = no caching)
 
 	// Registry is the LLM provider registry for looking up providers by model.
 	Registry *llm.Registry
@@ -1218,7 +1219,7 @@ func permHandlerFor(skip bool, cache *permission.Cache, repoName string) ports.P
 // general-phase policy. The enabled setting is consulted live on every
 // deferred Bash request, so turning auto-approve on mid-session (for example
 // from a permission prompt) applies to the running session. The reviewer
-// identity stays snapshotted at build time.
+// identity is refreshed when the workspace selection changes.
 func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, enabled func() bool, reviewer autoreview.Reviewer, workDir string, writableRoots []string) ports.PermissionHandler {
 	if !permission.IsAutomaticReviewHandler(original) {
 		return composed
@@ -1269,7 +1270,9 @@ func (pr *PhaseRunner) liveAutomaticReviewEnabled(featureID string, fallbackMode
 // opts.AutoReview.Enabled is non-nil (crash-resume), the reviewer is restored
 // from the snapshotted identity instead of re-resolved, so the resumed session
 // retains the original session's reviewer even if the provider/catalog state
-// changed. Otherwise the current workspace defaults are read, the reviewer is
+// changed. An explicit workspace model edit refreshes this identity on the
+// next review request, including after resume. Otherwise the current defaults
+// are read, the reviewer is
 // resolved, and the full snapshot is returned for the caller to store. The
 // enabled flag itself is read live by the decorator. The hidden reviewer is
 // launched via autoreview.Classify (never BuildSession), so it is never
@@ -1283,7 +1286,7 @@ func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.Permissio
 			snap.UnavailableReason = "snapshotted reviewer provider is no longer available"
 		}
 		handler := decorateHandlerWithAutoReview(composed, original, enabledFn, reviewer, workDir, writableRoots)
-		installAutoReviewObserver(handler, pr.Observer)
+		pr.installAutoReviewSources(handler, snap.Model)
 		return handler, snap
 	}
 	enabled := enabledFn()
@@ -1301,7 +1304,7 @@ func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.Permissio
 		UnavailableReason: unavailableReason,
 	}
 	handler := decorateHandlerWithAutoReview(composed, original, enabledFn, reviewer, workDir, writableRoots)
-	installAutoReviewObserver(handler, pr.Observer)
+	pr.installAutoReviewSources(handler, snap.Model)
 	return handler, snap
 }
 
@@ -1334,6 +1337,26 @@ func automaticReviewSessionBuildNotices(observer *observe.Observer, snap ports.A
 			})
 		},
 	}}
+}
+
+func (pr *PhaseRunner) installAutoReviewSources(handler ports.PermissionHandler, selection string) {
+	installAutoReviewObserver(handler, pr.Observer)
+	if d, ok := handler.(*autoReviewPermissionDecorator); ok {
+		d.selection = selection
+		d.liveReviewer = func() (string, autoreview.Reviewer) {
+			model := selection
+			if pr.CurrentAutomaticReviewModel != nil {
+				model = pr.CurrentAutomaticReviewModel()
+			} else if pr.Config != nil {
+				model = pr.Config.Defaults.Models.AutomaticReview
+			}
+			if model == d.selection {
+				return model, d.reviewer
+			}
+			reviewer, _, _ := autoreview.ResolveReviewer(pr.Registry, model)
+			return model, reviewer
+		}
+	}
 }
 
 func installAutoReviewObserver(handler ports.PermissionHandler, observer *observe.Observer) {

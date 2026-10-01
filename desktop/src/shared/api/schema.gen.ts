@@ -1348,7 +1348,7 @@ export interface components {
             request_id: string;
             session_id?: string;
             /** @enum {string} */
-            decision: "allow_once" | "allow_remember" | "deny";
+            decision: "allow_once" | "allow_remember" | "deny" | "retry_auto_review";
             remember_pattern?: string;
             /**
              * @description Turn automatic Bash review on for the request's feature or for the whole workspace before answering. Not allowed with deny.
@@ -3031,7 +3031,18 @@ export interface components {
             };
             questions?: components["schemas"]["AskUserQuestion"][];
             remember?: components["schemas"]["PermissionRememberPreview"];
+            automatic_review?: components["schemas"]["PermissionAutomaticReview"];
             auto_approve?: components["schemas"]["PermissionAutoApproveOffer"];
+        };
+        /** @description Sanitized explanation of a failed automatic review; retry never grants permission by itself. */
+        PermissionAutomaticReview: {
+            provider: string;
+            model: string;
+            outcome: string;
+            reason: string;
+            paused: boolean;
+            /** Format: date-time */
+            retry_at?: string;
         };
         /** @description Present when automatic Bash review is off for the session but would have handled this request had it been on. */
         PermissionAutoApproveOffer: {

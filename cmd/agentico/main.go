@@ -1702,6 +1702,19 @@ func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnsw
 	if err != nil {
 		return serverruntime.PermissionAnswerResponse{}, err
 	}
+	if req.Decision == "retry_auto_review" {
+		if req.AutoApproveScope != "" || req.RememberScope != nil || req.RememberPattern != "" {
+			return serverruntime.PermissionAnswerResponse{}, errors.New("retry cannot change permission settings")
+		}
+		retry, ok := sess.(interface{ RetryAutomaticReview(string) error })
+		if !ok || pending.AutomaticReview == nil {
+			return serverruntime.PermissionAnswerResponse{}, errors.New("automatic review cannot be retried for this request")
+		}
+		if err := retry.RetryAutomaticReview(pending.RequestID); err != nil {
+			return serverruntime.PermissionAnswerResponse{}, err
+		}
+		return serverruntime.PermissionAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Decision: req.Decision, Result: "reviewed"}, nil
+	}
 	if req.AutoApproveScope != "" {
 		if err := t.enableAutomaticReview(req.AutoApproveScope, sess.FeatureID()); err != nil {
 			return serverruntime.PermissionAnswerResponse{}, err
@@ -3382,6 +3395,13 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	}
 	networkBind := listen.Policy == serverruntime.CompatibilityNetworkRuntimePolicy
 	boot.phaseRunner.CapabilityPolicy = resolveCapabilityPolicy(boot.cfg, boot.runtime.RuntimeDir, networkBind)
+	initialReviewerModel := boot.cfg.Defaults.Models.AutomaticReview
+	boot.phaseRunner.CurrentAutomaticReviewModel = func() string {
+		if current, err := config.Load(boot.runtime.Config); err == nil {
+			return current.Defaults.Models.AutomaticReview
+		}
+		return initialReviewerModel
+	}
 
 	policy := runtimeLaunchPolicy(boot.registry, dangerouslySkipPerms)
 	discoveryClient := &http.Client{Timeout: time.Second}

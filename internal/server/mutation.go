@@ -76,7 +76,7 @@ const (
 
 // errMessageInvalidDecision is the bad_request error message returned when
 // PermissionAnswerRequest.Decision is not one of the allowed values.
-const errMessageInvalidDecision = "decision must be allow_once, allow_remember, or deny"
+const errMessageInvalidDecision = "decision must be allow_once, allow_remember, deny, or retry_auto_review"
 
 // targetPhaseImplement, targetPhaseInquire and targetPhasePlan are lowercase
 // target_phase values accepted by validatePhaseName, matching
@@ -1388,7 +1388,7 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		return
 	}
 	switch req.Decision {
-	case decisionAllowOnce, decisionAllowRemember, decisionDeny:
+	case decisionAllowOnce, decisionAllowRemember, decisionDeny, "retry_auto_review":
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(errMessageInvalidDecision))
 		return
@@ -1403,8 +1403,8 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope must be feature or workspace"))
 		return
 	}
-	if req.AutoApproveScope != "" && req.Decision == decisionDeny {
-		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope cannot be combined with deny"))
+	if req.AutoApproveScope != "" && (req.Decision == decisionDeny || req.Decision == "retry_auto_review") {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope cannot be combined with deny or retry_auto_review"))
 		return
 	}
 	resp, err := h.mutations.AnswerPermission(req)

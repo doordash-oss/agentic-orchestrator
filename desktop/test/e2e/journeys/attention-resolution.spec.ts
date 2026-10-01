@@ -1018,3 +1018,91 @@ async function waitForServerPromptText(world: JourneyWorld, text: string): Promi
     30_000,
   );
 }
+
+test('packaged automatic review explains failures and retries without granting permission', async ({}, testInfo) => {
+  const world = createWorld('review-recovery', {
+    auth: { loggedIn: true, authMethod: 'oauth' },
+    presetWorkspaceRoot: true,
+    attentionProvider: true,
+  });
+  // A real provider boundary with deterministic review failure/recovery.
+  createRepo(world, 'review-recovery-lab', { commit: true });
+  const recoveryMarker = path.join(world.stubDir, 'review-recovers');
+  const stub = fs.readFileSync(world.claudeStub, 'utf8');
+  const hook = [
+    'for arg in "$@"; do',
+    '  if [ "$arg" = "--no-session-persistence" ]; then',
+    `    if [ -f "${recoveryMarker}" ]; then`,
+    `      echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ALLOW"}]}}'`,
+    `      echo '{"type":"result","subtype":"success"}'`,
+    '    else',
+    `      echo '{"type":"result","subtype":"error","is_error":true,"result":"401 unauthorized SECRET"}'`,
+    '    fi',
+    '    exit 0',
+    '  fi',
+    'done',
+  ].join('\n');
+  fs.writeFileSync(
+    world.claudeStub,
+    stub.replace(
+      'IFS= read -r _agentico_prompt || exit 1',
+      `IFS= read -r _agentico_prompt || exit 1\n${hook}`,
+    ),
+  );
+  fs.appendFileSync(world.configPath, '\ndefaults:\n  automatic_review_enabled: true\n');
+  let handle: AppHandle | null = null;
+  try {
+    handle = await launchApp(world, testInfo, { traceName: 'review-recovery' });
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    await createFeatureViaForm(handle, {
+      name: 'Automatic review recovery',
+      description: 'Deterministic failure and recovery through the real permission API.',
+      repoPatterns: [/review-recovery-lab/],
+      waitForReady: true,
+    });
+    await handle.page.getByRole('button', { name: 'Start', exact: true }).click();
+    await waitForAttentionItem(handle.page, 'perm-allow-once');
+    let inbox = await openInbox(handle);
+    let detail = await expandInboxItem(handle, inbox, /Permission/);
+    await expect(detail.getByRole('region', { name: 'Automatic review status' })).toContainText(
+      'authentication or authorization failed',
+    );
+    await detail.getByRole('button', { name: 'Allow once', exact: true }).click();
+    await waitForAttentionMissing(handle.page, 'perm-allow-once');
+    await waitForAttentionItem(handle.page, 'perm-stale');
+    await closeInbox(handle.page);
+    inbox = await openInbox(handle);
+    detail = await expandInboxItem(handle, inbox, /Permission/);
+    await expect(detail.getByRole('region', { name: 'Automatic review status' })).toContainText(
+      'Automatic review paused',
+    );
+    await detail.getByRole('region', { name: 'Automatic review status' }).scrollIntoViewIfNeeded();
+    await evidenceShot(handle, 'automatic-review-paused');
+    await detail.getByRole('button', { name: 'Retry automatic review' }).click();
+    await expect(detail.getByRole('button', { name: 'Retry automatic review' })).toBeEnabled();
+    await expect(detail.getByRole('region', { name: 'Automatic review status' })).toContainText(
+      'Automatic review could not approve this request',
+    );
+    await expect(detail.getByRole('region', { name: 'Automatic review status' })).toContainText(
+      'authentication or authorization failed',
+    );
+    expect(
+      (await handle.page.evaluate(() => window.agentico.getAttention())).items.some(
+        (item) => item.id === 'perm-stale',
+      ),
+    ).toBe(true);
+    expect(readProviderLog(world)).not.toContain('response:perm-stale:');
+    await evidenceShot(handle, 'automatic-review-retry-failed');
+    fs.writeFileSync(recoveryMarker, 'ready');
+    await detail.getByRole('button', { name: 'Retry automatic review' }).click();
+    await waitForAttentionMissing(handle.page, 'perm-stale');
+    await waitForProviderLog(world, 'response:perm-stale:');
+    persistAppLogs(handle, 'review-recovery');
+  } finally {
+    if (handle !== null) await closeApp(handle).catch(() => {});
+    await assertNoLeakedProcessesEventually(world);
+    destroyWorld(world);
+  }
+});

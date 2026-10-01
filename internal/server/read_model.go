@@ -2099,6 +2099,13 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 			Scope:        scope,
 			ScopeDisplay: permissionScopeDisplay(scope),
 		}
+		if status := req.AutomaticReview; status != nil {
+			dto.AutomaticReview = &PermissionAutomaticReview{Provider: status.Provider, Model: status.Model, Outcome: status.Outcome, Reason: status.Reason, Paused: status.Paused}
+			if !status.RetryAt.IsZero() {
+				when := status.RetryAt
+				dto.AutomaticReview.RetryAt = &when
+			}
+		}
 		if req.AutoApproveOffer != nil {
 			dto.AutoApprove = &PermissionAutoApproveOffer{WouldFastPath: req.AutoApproveOffer.WouldFastPath}
 		}

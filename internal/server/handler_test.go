@@ -351,7 +351,7 @@ func TestPermissionAnswerRejectsLegacyAndMissingRememberScope(t *testing.T) {
 		{
 			name:            "auto approve scope with deny",
 			body:            map[string]string{requestIDKey: fixturePermissionRequestID, decisionKey: decisionDeny, "auto_approve_scope": AutoApproveScopeFeature},
-			wantDiagnostics: "auto_approve_scope cannot be combined with deny",
+			wantDiagnostics: "auto_approve_scope cannot be combined with deny or retry_auto_review",
 		},
 	}
 	for _, tc := range tests {

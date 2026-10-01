@@ -1261,3 +1261,42 @@ func TestRespondToControl_SuccessPreservesNewerSameID(t *testing.T) {
 		t.Fatalf("status = %v, want SessionWaitingPermission", status)
 	}
 }
+
+type retryReviewHandler struct {
+	decision ports.PermissionDecision
+	called   bool
+}
+
+func (h *retryReviewHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	h.called = req.RetryAutomaticReview
+	return h.decision, nil
+}
+
+func TestRetryAutomaticReviewRequiresFreshAllow(t *testing.T) {
+	for _, behavior := range []string{"", "allow"} {
+		t.Run("decision="+behavior, func(t *testing.T) {
+			s := NewSession("review-retry", "feature-1", feature.PhaseImplement)
+			s.protocol = &interruptTrackingProtocol{}
+			h := &retryReviewHandler{decision: ports.PermissionDecision{Behavior: behavior, AutomaticReview: &llm.AutomaticReviewStatus{Reason: "still unavailable"}}}
+			s.permHandler = h
+			s.status = SessionWaitingPermission
+			s.recordPendingControlRequestLocked(&llm.ControlRequestMessage{RequestID: "retry-1", Request: llm.ControlRequest{Subtype: "can_use_tool", ToolName: "Bash", Input: json.RawMessage(`{"command":"curl https://example.com"}`)}, AutomaticReview: &llm.AutomaticReviewStatus{Paused: true}})
+			if err := s.RetryAutomaticReview("retry-1"); err != nil {
+				t.Fatal(err)
+			}
+			if !h.called {
+				t.Fatal("retry did not request a fresh classification")
+			}
+			remaining := len(s.PendingControlRequests())
+			if behavior == "allow" && remaining != 0 {
+				t.Fatal("successful retry did not resolve request")
+			}
+			if behavior == "" && remaining != 1 {
+				t.Fatal("failed retry released permission")
+			}
+			if err := s.RetryAutomaticReview("unknown"); err == nil {
+				t.Fatal("missing request accepted")
+			}
+		})
+	}
+}

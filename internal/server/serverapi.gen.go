@@ -478,9 +478,10 @@ func (e PermissionAnswerRequestAutoApproveScope) Valid() bool {
 
 // Defines values for PermissionAnswerRequestDecision.
 const (
-	AllowOnce     PermissionAnswerRequestDecision = "allow_once"
-	AllowRemember PermissionAnswerRequestDecision = "allow_remember"
-	Deny          PermissionAnswerRequestDecision = "deny"
+	AllowOnce       PermissionAnswerRequestDecision = "allow_once"
+	AllowRemember   PermissionAnswerRequestDecision = "allow_remember"
+	Deny            PermissionAnswerRequestDecision = "deny"
+	RetryAutoReview PermissionAnswerRequestDecision = "retry_auto_review"
 )
 
 // Valid indicates whether the value is a known member of the PermissionAnswerRequestDecision enum.
@@ -491,6 +492,8 @@ func (e PermissionAnswerRequestDecision) Valid() bool {
 	case AllowRemember:
 		return true
 	case Deny:
+		return true
+	case RetryAutoReview:
 		return true
 	default:
 		return false
@@ -2287,18 +2290,21 @@ type Context struct {
 // ControlRequest defines model for ControlRequest.
 type ControlRequest struct {
 	// AutoApprove Present when automatic Bash review is off for the session but would have handled this request had it been on.
-	AutoApprove  *PermissionAutoApproveOffer `json:"auto_approve,omitempty"`
-	FeatureID    string                      `json:"feature_id,omitempty"`
-	Input        map[string]interface{}      `json:"input,omitempty"`
-	Phase        string                      `json:"phase,omitempty"`
-	Questions    []AskUserQuestion           `json:"questions,omitempty"`
-	Remember     *PermissionRememberPreview  `json:"remember,omitempty"`
-	RequestID    string                      `json:"request_id"`
-	SessionID    string                      `json:"session_id,omitempty"`
-	Status       string                      `json:"status"`
-	Summary      string                      `json:"summary,omitempty"`
-	ToolName     string                      `json:"tool_name"`
-	WaitingSince time.Time                   `json:"waiting_since"`
+	AutoApprove *PermissionAutoApproveOffer `json:"auto_approve,omitempty"`
+
+	// AutomaticReview Sanitized explanation of a failed automatic review; retry never grants permission by itself.
+	AutomaticReview *PermissionAutomaticReview `json:"automatic_review,omitempty"`
+	FeatureID       string                     `json:"feature_id,omitempty"`
+	Input           map[string]interface{}     `json:"input,omitempty"`
+	Phase           string                     `json:"phase,omitempty"`
+	Questions       []AskUserQuestion          `json:"questions,omitempty"`
+	Remember        *PermissionRememberPreview `json:"remember,omitempty"`
+	RequestID       string                     `json:"request_id"`
+	SessionID       string                     `json:"session_id,omitempty"`
+	Status          string                     `json:"status"`
+	Summary         string                     `json:"summary,omitempty"`
+	ToolName        string                     `json:"tool_name"`
+	WaitingSince    time.Time                  `json:"waiting_since"`
 }
 
 // Cost defines model for Cost.
@@ -3060,6 +3066,16 @@ type PermissionAnswerResponse struct {
 type PermissionAutoApproveOffer struct {
 	// WouldFastPath The deterministic guardrail alone would have approved the command.
 	WouldFastPath bool `json:"would_fast_path"`
+}
+
+// PermissionAutomaticReview Sanitized explanation of a failed automatic review; retry never grants permission by itself.
+type PermissionAutomaticReview struct {
+	Model    string     `json:"model"`
+	Outcome  string     `json:"outcome"`
+	Paused   bool       `json:"paused"`
+	Provider string     `json:"provider"`
+	Reason   string     `json:"reason"`
+	RetryAt  *time.Time `json:"retry_at,omitempty"`
 }
 
 // PermissionRememberPreview defines model for PermissionRememberPreview.

@@ -196,6 +196,8 @@ type ToolPermissionRequest struct {
 	// to the owning session before a permission decision returns. It is
 	// optional and best-effort; callers must not change the decision on error.
 	AppendStatus func(string) error
+	// RetryAutomaticReview requests a fresh classification, never an approval.
+	RetryAutomaticReview bool
 }
 
 // PermissionDecision is the outcome of a permission check.
@@ -205,6 +207,7 @@ type PermissionDecision struct {
 	// AutoApproveOffer accompanies a deferral ("" behavior) for a Bash
 	// request that automatic review would have handled if enabled.
 	AutoApproveOffer *llm.AutoApproveOffer
+	AutomaticReview  *llm.AutomaticReviewStatus
 }
 
 // PermissionHandler decides whether a session may invoke a tool. Defined in

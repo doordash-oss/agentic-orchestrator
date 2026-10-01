@@ -531,6 +531,26 @@ export function AttentionDetail({
             <code>{item.remember.scopeDisplay}</code>
           </p>
         ) : null}
+        {item.automaticReview !== undefined ? (
+          <section aria-label="Automatic review status" className="attention-detail__remember">
+            <p>
+              {item.automaticReview.paused
+                ? 'Automatic review paused after two failures; permissions require your approval.'
+                : 'Automatic review could not approve this request; your permission is required.'}
+            </p>
+            <p>
+              Reviewer: {item.automaticReview.provider || 'Unavailable'}
+              {item.automaticReview.model ? ` / ${item.automaticReview.model}` : ''}
+            </p>
+            <p>{item.automaticReview.reason}</p>
+            {item.automaticReview.paused ? (
+              <p>
+                New requests can retry automatically after the cooldown. You can retry this request
+                now.
+              </p>
+            ) : null}
+          </section>
+        ) : null}
         <div className="attention-detail__actions">
           <button
             className="attention-button attention-button--primary"
@@ -562,6 +582,28 @@ export function AttentionDetail({
           >
             Deny
           </button>
+          {item.automaticReview !== undefined ? (
+            <button
+              className="attention-button"
+              disabled={busy}
+              onClick={() =>
+                submit(
+                  () =>
+                    window.agentico.answerPermission({
+                      requestId: item.id,
+                      ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+                      decision: 'retry_auto_review',
+                    }),
+                  {
+                    successNotice:
+                      'Automatic review retried. Requests still requiring approval remain here.',
+                  },
+                )
+              }
+            >
+              Retry automatic review
+            </button>
+          ) : null}
           {item.autoApprove !== undefined ? (
             <AutoModeSplitButton item={item} busy={busy} submit={submit} />
           ) : null}

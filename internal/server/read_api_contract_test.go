@@ -2144,6 +2144,7 @@ func TestPermissionSnapshotIncludesAutoApproveOffer(t *testing.T) {
 					Input:    json.RawMessage(`{"command":"go test ./..."}`),
 				},
 				AutoApproveOffer: &llm.AutoApproveOffer{WouldFastPath: true},
+				AutomaticReview:  &llm.AutomaticReviewStatus{Provider: "codex", Model: "luna", Outcome: "provider_error", Reason: "reviewer authentication or authorization failed", Paused: true},
 			},
 			{
 				Type:      transcriptTypeControlRequest,
@@ -2176,6 +2177,10 @@ func TestPermissionSnapshotIncludesAutoApproveOffer(t *testing.T) {
 	}
 	if got := offer["would_fast_path"]; got != true {
 		t.Fatalf("auto_approve.would_fast_path = %v, want true", got)
+	}
+	review, ok := byID["perm-offer"]["automatic_review"].(map[string]any)
+	if !ok || review["provider"] != "codex" || review["paused"] != true || review["reason"] != "reviewer authentication or authorization failed" {
+		t.Fatalf("automatic review metadata = %v", review)
 	}
 	if _, present := byID["perm-no-offer"]["auto_approve"]; present {
 		t.Fatalf("perm-no-offer should omit auto_approve, got %v", byID["perm-no-offer"]["auto_approve"])

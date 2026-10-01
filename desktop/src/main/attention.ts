@@ -239,6 +239,20 @@ export class AttentionService {
                   scopeDisplay: request.remember.scope_display,
                 },
               }),
+          ...(request.automatic_review === undefined
+            ? {}
+            : {
+                automaticReview: {
+                  provider: request.automatic_review.provider,
+                  model: request.automatic_review.model,
+                  outcome: request.automatic_review.outcome,
+                  reason: request.automatic_review.reason,
+                  paused: request.automatic_review.paused,
+                  ...(request.automatic_review.retry_at === undefined
+                    ? {}
+                    : { retryAt: request.automatic_review.retry_at }),
+                },
+              }),
           ...(request.auto_approve === undefined
             ? {}
             : { autoApprove: { wouldFastPath: request.auto_approve.would_fast_path } }),

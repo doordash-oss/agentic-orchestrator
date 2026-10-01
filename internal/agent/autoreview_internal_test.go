@@ -1341,9 +1341,8 @@ func TestDecoratorUnavailableReviewerExplainsHumanPrompt(t *testing.T) {
 	if err != nil || got.Behavior != "" {
 		t.Fatalf("no reviewer long tail = %+v, %v; want human deferral", got, err)
 	}
-	want := "Auto-review failed (unavailable); asking you about Bash: curl https://example.com"
-	if len(statuses) != 1 || statuses[0] != want {
-		t.Fatalf("unavailable statuses = %q, want %q", statuses, want)
+	if len(statuses) != 0 || got.AutomaticReview == nil || got.AutomaticReview.Reason != "No automatic reviewer is available" {
+		t.Fatalf("unavailable review = %+v, statuses = %q", got.AutomaticReview, statuses)
 	}
 }
 
@@ -1395,7 +1394,7 @@ func TestDecoratorOpenCircuitExplainsEveryHumanPrompt(t *testing.T) {
 			t.Fatalf("command %q = %+v, %v; want human deferral", command, got, err)
 		}
 	}
-	if len(statuses) != 3 || !strings.Contains(statuses[2], "failed (unavailable)") {
+	if len(statuses) != 3 || !strings.Contains(statuses[2], "Automatic review paused") {
 		t.Fatalf("circuit-breaker statuses = %q, want explanation for all three prompts", statuses)
 	}
 }
@@ -2396,5 +2395,87 @@ func TestSkipPermissionsBypassesDenialsButKeepsStructuralGuard(t *testing.T) {
 		if err != nil || decision.Behavior != tc.want {
 			t.Fatalf("%s: %+v, %v; want %s", tc.tool, decision, err, tc.want)
 		}
+	}
+}
+
+func TestDecoratorProviderFailureRecoversAfterCooldown(t *testing.T) {
+	for _, outcome := range []autoreview.Outcome{autoreview.OutcomeProviderError, autoreview.OutcomeMalformedResponse, autoreview.OutcomeUnexpectedInteraction} {
+		t.Run(string(outcome), func(t *testing.T) {
+			now := time.Now()
+			calls := 0
+			d := &autoReviewPermissionDecorator{inner: deferHandler{}, reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku"}, now: func() time.Time { return now }, classifyDetailed: func(context.Context, autoreview.Reviewer, autoreview.ClassifyRequest) autoreview.Result {
+				calls++
+				if calls <= 3 {
+					return autoreview.Result{Outcome: outcome, FailureReason: "sanitized failure"}
+				}
+				return autoreview.Result{Decision: autoreview.Allow, Outcome: autoreview.OutcomeAllow}
+			}}
+			req := bashReq(`{"command":"curl https://example.com"}`)
+			for range 2 {
+				got, _ := d.CanUseTool(req)
+				if got.Behavior != "" {
+					t.Fatal("failed review approved")
+				}
+			}
+			got, _ := d.CanUseTool(req)
+			if calls != 2 || got.AutomaticReview == nil || !got.AutomaticReview.Paused {
+				t.Fatalf("cooldown = %+v, calls %d", got, calls)
+			}
+			now = now.Add(31 * time.Second)
+			got, _ = d.CanUseTool(req)
+			if calls != 3 || got.Behavior != "" || !got.AutomaticReview.Paused {
+				t.Fatalf("failed probe did not renew cooldown: %+v, calls %d", got, calls)
+			}
+			_, _ = d.CanUseTool(req)
+			if calls != 3 {
+				t.Fatal("review ran during renewed cooldown")
+			}
+			now = now.Add(31 * time.Second)
+			got, _ = d.CanUseTool(req)
+			if calls != 4 || got.Behavior != permission.DecisionAllow {
+				t.Fatalf("recovery = %+v, calls %d", got, calls)
+			}
+		})
+	}
+}
+
+func TestDecoratorReviewerChangeAndExplicitRetryResetFailures(t *testing.T) {
+	calls := 0
+	provider := fakeAllowProvider(t)
+	selection := "old"
+	d := &autoReviewPermissionDecorator{inner: deferHandler{}, reviewer: autoreview.Reviewer{Provider: provider, Model: "old"}, selection: selection,
+		liveReviewer: func() (string, autoreview.Reviewer) {
+			return selection, autoreview.Reviewer{Provider: provider, Model: selection}
+		},
+		classifyDetailed: func(_ context.Context, r autoreview.Reviewer, _ autoreview.ClassifyRequest) autoreview.Result {
+			calls++
+			if r.Model == "old" {
+				return autoreview.Result{Outcome: autoreview.OutcomeProviderError}
+			}
+			return autoreview.Result{Decision: autoreview.Allow, Outcome: autoreview.OutcomeAllow}
+		}}
+	req := bashReq(`{"command":"curl https://example.com"}`)
+	for range 3 {
+		_, _ = d.CanUseTool(req)
+	}
+	if calls != 2 {
+		t.Fatalf("calls %d", calls)
+	}
+	req.RetryAutomaticReview = true
+	got, _ := d.CanUseTool(req)
+	if calls != 3 || got.Behavior != "" {
+		t.Fatal("retry must classify and defer on failure")
+	}
+	req.RetryAutomaticReview = false
+	_, _ = d.CanUseTool(req)
+	selection = "new"
+	got, _ = d.CanUseTool(req)
+	if got.Behavior != permission.DecisionAllow || calls != 5 {
+		t.Fatalf("new reviewer did not recover: %+v calls %d", got, calls)
+	}
+	selection = "old"
+	got, _ = d.CanUseTool(req)
+	if got.Behavior != "" || calls != 6 {
+		t.Fatal("old cached approval survived model change")
 	}
 }

@@ -280,3 +280,175 @@ func TestApplyNeedUserVerificationDecisionRejectsUntrustedGenericGate(t *testing
 		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v, want untrusted-gate rejection", err)
 	}
 }
+
+func unauthorizedWaiverTestContract() *TestingContract {
+	return &TestingContract{Version: 1, Revision: 2, Items: []TestingContractItem{
+		{ID: "visual_1", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent, Name: "Settings screenshot",
+			Policy: TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}},
+		{ID: "plan_1", Source: testingContractPlanSource, Name: "Unit tests", Command: "go test ./...",
+			Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true}},
+		{ID: "plan_2", Source: testingContractPlanSource, Name: "Lint", Command: "make lint",
+			Policy: TestingContractItemPolicy{Required: true}},
+		{ID: "plan_3", Source: testingContractPlanSource, Name: "Build", Command: "go build ./...",
+			Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true}},
+	}}
+}
+
+// forgeWaivedRows marks the named report rows waived the way an implementer
+// writing verification-report.yaml itself would.
+func forgeWaivedRows(report *VerificationReport, itemIDs ...string) {
+	for i := range report.Results {
+		for _, itemID := range itemIDs {
+			if report.Results[i].ItemID == itemID {
+				report.Results[i].Status = VerificationStatusWaived
+				report.Results[i].Notes = "operator said waive"
+			}
+		}
+	}
+}
+
+func TestUnauthorizedWaiverItemIDsSplitsByWaiverPolicy(t *testing.T) {
+	contract := unauthorizedWaiverTestContract()
+	// plan_3 already carries a user waiver, so its waived row is legitimate.
+	contract.Items[3].Disposition = TestingContractItemDisposition{Status: TestingContractDispositionWaived, Reason: "user approved", ChangedBy: "user"}
+	report := BuildContractVerificationReportStub(contract, "/state/testing-contract.yaml")
+	forgeWaivedRows(&report, "visual_1", "plan_1", "plan_2")
+
+	waivable, unwaivable := UnauthorizedWaiverItemIDs(&report, contract)
+	if !reflect.DeepEqual(waivable, []string{"plan_1", "visual_1"}) {
+		t.Fatalf("waivable = %v, want [plan_1 visual_1]", waivable)
+	}
+	if !reflect.DeepEqual(unwaivable, []string{"plan_2"}) {
+		t.Fatalf("unwaivable = %v, want [plan_2]", unwaivable)
+	}
+	if w, u := UnauthorizedWaiverItemIDs(nil, contract); w != nil || u != nil {
+		t.Fatalf("nil report = %v, %v; want none", w, u)
+	}
+}
+
+func TestSynthesizeUnauthorizedWaiverGateAsksUserForExactlyTheWaivableItems(t *testing.T) {
+	contract := unauthorizedWaiverTestContract()
+	contractPath := "/state/feat/testing-contract.yaml"
+	report := BuildContractVerificationReportStub(contract, contractPath)
+	forgeWaivedRows(&report, "visual_1", "plan_1", "plan_2")
+	waivable, _ := UnauthorizedWaiverItemIDs(&report, contract)
+
+	rec := SynthesizeUnauthorizedWaiverGate(contractPath, contract, waivable, 5)
+	if rec.Source != NeedUserInputSourceUnauthorizedWaiver || rec.Iteration != 5 {
+		t.Fatalf("gate source/iteration = %q/%d", rec.Source, rec.Iteration)
+	}
+	decision := rec.VerificationDecision
+	if decision == nil || decision.ContractPath != contractPath || decision.ContractRevision != 2 ||
+		!reflect.DeepEqual(decision.ItemIDs, []string{"plan_1", "visual_1"}) {
+		t.Fatalf("decision = %+v, want plan_1 and visual_1 at revision 2", decision)
+	}
+	// visual_1 is agent-owned evidence that forbids substitution, so the
+	// substitute decline is offered alongside the plain one.
+	if !reflect.DeepEqual(decision.AllowedActions, []string{NeedUserVerificationWaive, NeedUserVerificationRetryAfterAuth, NeedUserVerificationAllowSubstitute}) {
+		t.Fatalf("allowed actions = %v", decision.AllowedActions)
+	}
+	if !strings.Contains(rec.Summary, "waived") || !strings.Contains(rec.Summary, "no user-authorized waiver") {
+		t.Fatalf("summary = %q, want unauthorized-waiver explanation", rec.Summary)
+	}
+	if len(rec.Questions) != 1 || !strings.Contains(rec.Questions[0].Prompt, "WAIVE") || !strings.Contains(rec.Questions[0].Prompt, "decline") {
+		t.Fatalf("questions = %+v, want one confirm-or-decline prompt", rec.Questions)
+	}
+	if rec.Verification == nil || len(rec.Verification.Blockers) != 2 {
+		t.Fatalf("blockers = %+v, want two", rec.Verification)
+	}
+	for _, blocker := range rec.Verification.Blockers {
+		if !strings.Contains(blocker.Reason, "recorded this check as waived without a user-authorized waiver") {
+			t.Fatalf("blocker reason = %q", blocker.Reason)
+		}
+	}
+}
+
+func TestUnauthorizedWaiverGateWaiveMakesReportConsistent(t *testing.T) {
+	contract := unauthorizedWaiverTestContract()
+	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+	if err := WriteTestingContract(contractPath, *contract); err != nil {
+		t.Fatal(err)
+	}
+	report := BuildContractVerificationReportStub(contract, contractPath)
+	forgeWaivedRows(&report, "plan_1")
+	if gate := ValidateVerificationReport(&report, nil, contract, true); !gate.Rejected {
+		t.Fatalf("forged waiver accepted before the user decided: %+v", gate)
+	}
+	waivable, _ := UnauthorizedWaiverItemIDs(&report, contract)
+	rec := SynthesizeUnauthorizedWaiverGate(contractPath, contract, waivable, 1)
+	rec.Questions[0].Answer = NeedUserVerificationWaive
+	gatePath := filepath.Join(filepath.Dir(contractPath), "iteration-01", NeedUserInputArtifactName)
+	if err := ApplyNeedUserVerificationDecision(gatePath, rec); err != nil {
+		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
+	}
+
+	revised, err := ReadTestingContract(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := testingContractItemIndex(revised.Items, "plan_1")
+	if !IsTestingContractItemWaived(revised.Items[idx]) || !strings.EqualFold(revised.Items[idx].Disposition.ChangedBy, "user") {
+		t.Fatalf("plan_1 disposition = %+v, want user waiver", revised.Items[idx].Disposition)
+	}
+	// The harness rebuilds the report from the revised contract on resume.
+	regenerated := BuildContractVerificationReportStub(revised, contractPath)
+	for i := range regenerated.Results {
+		if regenerated.Results[i].Status == VerificationStatusNotRun {
+			regenerated.Results[i].Status = VerificationStatusPassed
+			regenerated.Results[i].Evidence = "ran"
+			regenerated.Results[i].EvidenceData.Summary = "ran"
+		}
+	}
+	if gate := ValidateVerificationReport(&regenerated, nil, revised, true); gate.Rejected {
+		t.Fatalf("report after WAIVE still rejected: %+v", gate.Findings)
+	}
+	if waivable, unwaivable := UnauthorizedWaiverItemIDs(&regenerated, revised); len(waivable)+len(unwaivable) != 0 {
+		t.Fatalf("unauthorized waivers after WAIVE = %v, %v", waivable, unwaivable)
+	}
+}
+
+func TestDeclinedUnauthorizedWaiverItemsReadsAnsweredDeclines(t *testing.T) {
+	artifactDir := t.TempDir()
+	contract := unauthorizedWaiverTestContract()
+	write := func(iteration int, rec NeedUserInputRecord) {
+		t.Helper()
+		path := NeedUserInputPath(filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", iteration)))
+		if err := WriteNeedUserInputRecord(path, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	declined := SynthesizeUnauthorizedWaiverGate("/c", contract, []string{"plan_1"}, 1)
+	declined.Questions[0].Answer = NeedUserVerificationRetryAfterAuth
+	write(1, declined)
+	waived := SynthesizeUnauthorizedWaiverGate("/c", contract, []string{"plan_3"}, 2)
+	waived.Questions[0].Answer = NeedUserVerificationWaive
+	write(2, waived)
+	unanswered := SynthesizeUnauthorizedWaiverGate("/c", contract, []string{"visual_1"}, 3)
+	write(3, unanswered)
+	capability := SynthesizeVerificationNeedUserInputGate("/c", 2, []string{"plan_2"}, 4)
+	capability.Questions[0].Answer = NeedUserVerificationRetryAfterAuth
+	write(4, capability)
+
+	got := declinedUnauthorizedWaiverItems(artifactDir, 4)
+	if !reflect.DeepEqual(got, map[string]bool{"plan_1": true}) {
+		t.Fatalf("declined = %v, want only plan_1", got)
+	}
+}
+
+func TestValidateVerificationReportExplainsDeclinedWaiver(t *testing.T) {
+	contract := unauthorizedWaiverTestContract()
+	report := BuildContractVerificationReportStub(contract, "/state/testing-contract.yaml")
+	forgeWaivedRows(&report, "plan_1", "plan_2")
+	gate := ValidateVerificationReportWithContext(&report, nil, false, VerificationReportValidationContext{
+		Contract:              contract,
+		DeclinedWaiverItemIDs: map[string]bool{"plan_1": true},
+	})
+	details := reportGateDetailsForTest(gate)
+	if !gate.Rejected || !strings.Contains(details, "operator declined to waive this item") {
+		t.Fatalf("details = %q, want declined-waiver finding", details)
+	}
+	// The non-waivable item keeps the original finding.
+	if !strings.Contains(details, "no user-authorized waiver for this item") {
+		t.Fatalf("details = %q, want unchanged finding for plan_2", details)
+	}
+}

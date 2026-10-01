@@ -95,6 +95,10 @@ type ReportGateResult struct {
 type VerificationReportValidationContext struct {
 	IterationDir string
 	Contract     *TestingContract
+	// DeclinedWaiverItemIDs names items the user declined to waive at an
+	// unauthorized-waiver gate; their waived-without-authorization finding
+	// tells the implementer to stop recording them as waived.
+	DeclinedWaiverItemIDs map[string]bool
 }
 
 // hedgePhrases are case-insensitive needles we refuse to see in the
@@ -145,7 +149,7 @@ func ValidateVerificationReportWithContext(report *VerificationReport, required 
 	contract := ctx.Contract
 	contractBacked := contract != nil
 	if contractBacked {
-		validateContractBackedChecks(&result, report, checks, contract)
+		validateContractBackedChecks(&result, report, checks, contract, ctx.DeclinedWaiverItemIDs)
 	} else {
 		validateLegacyRequiredChecks(&result, checks, required)
 	}
@@ -473,7 +477,7 @@ func validateLegacyRequiredChecks(result *ReportGateResult, checks []Verificatio
 	}
 }
 
-func validateContractBackedChecks(result *ReportGateResult, report *VerificationReport, checks []VerificationCheckResult, contract *TestingContract) {
+func validateContractBackedChecks(result *ReportGateResult, report *VerificationReport, checks []VerificationCheckResult, contract *TestingContract, declinedWaivers map[string]bool) {
 	if report.ContractRevision != contract.Revision {
 		result.Findings = append(result.Findings, ReportGateFinding{
 			Category: GateCategorySchema,
@@ -542,11 +546,16 @@ func validateContractBackedChecks(result *ReportGateResult, report *Verification
 				}
 			}
 			if NormalizeStatus(checks[i].Status) == VerificationStatusWaived && !IsTestingContractItemWaived(item) {
+				detail := "status is waived but the bound contract has no user-authorized waiver for this item"
+				if declinedWaivers[itemID] {
+					detail = "status is waived but the operator declined to waive this item at the verification gate; stop recording it as waived " +
+						"(verification-report.yaml is harness-owned) and provide the required evidence instead"
+				}
 				result.Findings = append(result.Findings, ReportGateFinding{
 					CheckName: checkDisplayName(&checks[i]),
 					Category:  GateCategorySchema,
 					Kind:      KindPolicyViolation,
-					Detail:    "status is waived but the bound contract has no user-authorized waiver for this item",
+					Detail:    detail,
 				})
 			}
 			if substituteID := strings.TrimSpace(checks[i].SubstituteItemID); substituteID != "" {

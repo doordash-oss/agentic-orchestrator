@@ -930,11 +930,32 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 				}, nil
 			}
 			if harnessVerification != nil {
-				gate := ValidateVerificationReportWithContext(harnessVerification.Report, nil, true, VerificationReportValidationContext{
+				validation := VerificationReportValidationContext{
 					IterationDir: iterDir,
 					Contract:     verificationContract,
-				})
+				}
+				waivable, _ := UnauthorizedWaiverItemIDs(harnessVerification.Report, verificationContract)
+				if len(waivable) > 0 {
+					validation.DeclinedWaiverItemIDs = declinedUnauthorizedWaiverItems(cfg.ArtifactDir, i)
+				}
+				gate := ValidateVerificationReportWithContext(harnessVerification.Report, nil, true, validation)
 				if gate.Rejected {
+					// Only the user can authorize a waiver, so a waived row the
+					// contract does not back is unresolvable by the implementer.
+					// Ask the user once, like a capability gate: no meta is
+					// written, and resume re-verifies this same iteration
+					// against the decided contract. Items the user already
+					// declined fall through to the implementer finding.
+					if pending := undeclinedItemIDs(waivable, validation.DeclinedWaiverItemIDs); len(pending) > 0 {
+						gatePath := NeedUserInputPath(iterDir)
+						rec := SynthesizeUnauthorizedWaiverGate(testingContractPath, verificationContract, pending, i)
+						if err := WriteNeedUserInputRecord(gatePath, rec); err != nil {
+							return nil, fmt.Errorf("persisting unauthorized waiver gate: %w", err)
+						}
+						consecutiveFailures = 0
+						cfg.Observer.IterationEnded(iterCtx, i, toSessionUsage(cost), time.Since(iterStart), "need_user_input")
+						return &LoopResult{FinalStatus: "need_user_input", Iterations: i, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil
+					}
 					gateViolations := reportGateViolations(gate)
 					lastErr := formatProtocolViolationError(RoleImplementer, iterDir, gateViolations)
 					if done := recordProtocolViolationIteration(am, summaryPath, iterDir, aggregateLogPath, &meta, i, cfg, iterCtx, cost, iterStart, gateViolations, lastErr, &consecutiveFailures, &reviewerFeedback, roundCommits); done != nil {
@@ -2911,6 +2932,17 @@ func preIterationCapabilityGate(cfg ImplementConfig, contractPath, iterDir strin
 		return nil, nil, fmt.Errorf("persisting pre-iteration capability gate: %w", err)
 	}
 	return &LoopResult{FinalStatus: "need_user_input", Iterations: iteration, LastError: rec.Summary, NeedUserInputPath: gatePath}, nil, nil
+}
+
+// undeclinedItemIDs returns the ids in itemIDs that declined does not name.
+func undeclinedItemIDs(itemIDs []string, declined map[string]bool) []string {
+	var out []string
+	for _, itemID := range itemIDs {
+		if !declined[itemID] {
+			out = append(out, itemID)
+		}
+	}
+	return out
 }
 
 // agentReportedBlockerGate routes a RETRY handoff to the user gate when the

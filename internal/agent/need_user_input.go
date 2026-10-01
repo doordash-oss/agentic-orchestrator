@@ -36,7 +36,9 @@ type NeedUserInputRecord struct {
 	Iteration int                     `yaml:"iteration"`
 	// Source records who authored the gate: empty or "harness" for the
 	// deterministic executor, "agent" for an implementer report-blocker
-	// escalation. The user remains the only authority who can waive.
+	// escalation, "unauthorized_waiver" for the harness gate raised when the
+	// implementer recorded checks as waived without a user-authorized waiver.
+	// The user remains the only authority who can waive.
 	Source               string                            `yaml:"source,omitempty"`
 	WaitingSince         time.Time                         `yaml:"waiting_since,omitempty"`
 	VerificationDecision *NeedUserVerificationDecision     `yaml:"verification_decision,omitempty"`
@@ -46,6 +48,13 @@ type NeedUserInputRecord struct {
 // NeedUserInputSourceAgent marks a gate written by the implementer through
 // `agentico report-blocker`.
 const NeedUserInputSourceAgent = "agent"
+
+// NeedUserInputSourceUnauthorizedWaiver marks a harness gate raised because the
+// implementer's verification report records checks as waived that the bound
+// contract has no user-authorized waiver for. Only the user can grant one, so
+// the harness asks once instead of bouncing an unresolvable finding back to
+// the implementer every iteration.
+const NeedUserInputSourceUnauthorizedWaiver = "unauthorized_waiver"
 
 // NeedUserInputVerificationContext is the persisted, sanitized explanation
 // of verification blockers attached to a harness-owned gate artifact.
@@ -473,6 +482,84 @@ func ValidateAgentReportedBlockerGate(rec NeedUserInputRecord, contractPath stri
 		}
 	}
 	return nil
+}
+
+// UnauthorizedWaiverItemIDs returns, sorted, the contract items report marks
+// waived although the bound contract records no user-authorized waiver for
+// them, split by whether the item's policy lets the user grant that waiver.
+func UnauthorizedWaiverItemIDs(report *VerificationReport, contract *TestingContract) (waivable, unwaivable []string) {
+	if report == nil || contract == nil {
+		return nil, nil
+	}
+	seen := make(map[string]bool)
+	for _, result := range reportChecks(report) {
+		itemID := strings.TrimSpace(result.ItemID)
+		if itemID == "" || seen[itemID] || NormalizeStatus(result.Status) != VerificationStatusWaived {
+			continue
+		}
+		idx := testingContractItemIndex(contract.Items, itemID)
+		if idx < 0 || IsTestingContractItemWaived(contract.Items[idx]) {
+			continue
+		}
+		seen[itemID] = true
+		if contract.Items[idx].Policy.AllowWaiver {
+			waivable = append(waivable, itemID)
+		} else {
+			unwaivable = append(unwaivable, itemID)
+		}
+	}
+	sort.Strings(waivable)
+	sort.Strings(unwaivable)
+	return waivable, unwaivable
+}
+
+// SynthesizeUnauthorizedWaiverGate builds the verification gate that asks the
+// user to confirm or decline waivers the implementer recorded without
+// authorization. It has the same decision shape as a capability gate: WAIVE
+// records user-authorized waivers; RETRY_AFTER_AUTH (or ALLOW_SUBSTITUTE, when
+// offered) declines, keeps the checks required, and re-verifies. Callers pass
+// only items whose policy allows waiver.
+func SynthesizeUnauthorizedWaiverGate(contractPath string, contract *TestingContract, itemIDs []string, iteration int) NeedUserInputRecord {
+	report := BuildContractVerificationReportStub(contract, contractPath)
+	rec := SynthesizeVerificationNeedUserInputGateWithContext(contractPath, contract, &report, itemIDs, iteration)
+	rec.Source = NeedUserInputSourceUnauthorizedWaiver
+	rec.Summary = fmt.Sprintf("The implementer recorded %d check(s) as waived, but the testing contract has no user-authorized waiver for them. Confirm or decline the waiver.", len(rec.VerificationDecision.ItemIDs))
+	rec.Questions[0].Prompt = "Enter WAIVE to confirm waiving these checks, or RETRY_AFTER_AUTH to decline and keep them required."
+	for _, action := range rec.VerificationDecision.AllowedActions {
+		if action == NeedUserVerificationAllowSubstitute {
+			rec.Questions[0].Prompt = "Enter WAIVE to confirm waiving these checks, ALLOW_SUBSTITUTE to decline the waiver but accept a faithful substitute, or RETRY_AFTER_AUTH to decline and keep them required."
+		}
+	}
+	if rec.Verification != nil {
+		for i := range rec.Verification.Blockers {
+			rec.Verification.Blockers[i].Reason = "The implementer recorded this check as waived without a user-authorized waiver."
+			rec.Verification.Blockers[i].Remediation = "Waive to confirm the waiver, or decline to keep the check required; verification then reruns and the implementer must provide the evidence."
+		}
+	}
+	return rec
+}
+
+// declinedUnauthorizedWaiverItems returns the item ids the user declined to
+// waive at an answered unauthorized-waiver gate in iterations 1 through
+// throughIteration of artifactDir. A declined item is never re-asked; its
+// finding goes back to the implementer instead.
+func declinedUnauthorizedWaiverItems(artifactDir string, throughIteration int) map[string]bool {
+	declined := make(map[string]bool)
+	for j := 1; j <= throughIteration; j++ {
+		iterDir := filepath.Join(artifactDir, fmt.Sprintf("iteration-%02d", j))
+		rec, err := ReadNeedUserInputRecord(NeedUserInputPath(iterDir))
+		if err != nil || rec.Source != NeedUserInputSourceUnauthorizedWaiver || rec.VerificationDecision == nil {
+			continue
+		}
+		action, err := needUserVerificationAction(rec)
+		if err != nil || action == NeedUserVerificationWaive {
+			continue
+		}
+		for _, itemID := range rec.VerificationDecision.ItemIDs {
+			declined[itemID] = true
+		}
+	}
+	return declined
 }
 
 func verificationWaiverAlreadyApplied(contract *TestingContract, itemIDs []string) bool {

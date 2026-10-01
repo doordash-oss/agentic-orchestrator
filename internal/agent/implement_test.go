@@ -2721,6 +2721,148 @@ func TestImplementLoopRetryAfterAuthReexecutesVerification(t *testing.T) {
 	}
 }
 
+// TestImplementLoopUnauthorizedWaiverRaisesUserGate covers an implementer that
+// records a contract check as waived in verification-report.yaml without a
+// user-authorized waiver. Only the user can waive, so the harness pauses the
+// same iteration on the verification gate instead of bouncing an unresolvable
+// finding back to the implementer; WAIVE then yields a consistent report and
+// RETRY_AFTER_AUTH re-verifies with the check still required.
+func TestImplementLoopUnauthorizedWaiverRaisesUserGate(t *testing.T) {
+	for _, tc := range []struct {
+		answer     string
+		wantStatus VerificationRunStatus
+	}{
+		{answer: NeedUserVerificationWaive, wantStatus: VerificationStatusWaived},
+		{answer: NeedUserVerificationRetryAfterAuth, wantStatus: VerificationStatusPassed},
+	} {
+		t.Run(tc.answer, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			workDir := filepath.Join(tmpDir, "work")
+			artifactDir := filepath.Join(tmpDir, "artifacts")
+			stateRoot := filepath.Join(tmpDir, "state")
+			stateDir := filepath.Join(stateRoot, "test-unauthorized-waiver")
+			scriptsDir := filepath.Join(tmpDir, "scripts")
+			for _, dir := range []string{workDir, artifactDir, stateDir, scriptsDir} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runner := NewExecCommandRunner()
+			runVerificationTestCommand(t, runner, workDir, "git init -q")
+			runVerificationTestCommand(t, runner, workDir, "git config user.email test@example.com")
+			runVerificationTestCommand(t, runner, workDir, "git config user.name Test")
+			runVerificationTestCommand(t, runner, workDir, "git commit --allow-empty -qm base")
+
+			planPath := filepath.Join(artifactDir, "plan.md")
+			if err := os.WriteFile(planPath, []byte("### Automated Verification\n- [ ] Check: `printf ok`\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			agentScript := testutil.WriteScript(t, scriptsDir, "agent.sh",
+				testutil.JSONLInit+"\n"+testutil.WriteImplementSuccessArtifacts(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			reviewScript := testutil.WriteScript(t, scriptsDir, "review.sh",
+				testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
+			f := &feature.Feature{
+				ID: "test-unauthorized-waiver", Name: "Unauthorized Waiver", Slug: "unauthorized-waiver",
+				Status: feature.StatusImplementing, CurrentPhase: feature.PhaseImplement, CurrentRoadmapPhase: 1,
+				Repos: []feature.FeatureRepo{{Name: "repo", Path: workDir, WorktreePath: workDir}},
+			}
+			store := feature.NewStore(stateRoot)
+			if err := store.Save(f); err != nil {
+				t.Fatal(err)
+			}
+			contractPath := PhaseTestingContractPath(stateRoot, f, 1)
+			iterDir := filepath.Join(artifactDir, "iteration-01")
+			reportPath := filepath.Join(iterDir, "verification-report.yaml")
+			inner, captured := capturingBuildSession(agentScript, reviewScript)
+			// The implementer forges a report row as waived, as the
+			// production run did after an operator said "waive" in chat.
+			buildSession := func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+				if len(*captured) == 0 {
+					contract, err := ReadTestingContract(contractPath)
+					if err != nil {
+						t.Fatalf("reading contract before implementer session: %v", err)
+					}
+					report := BuildContractVerificationReportStub(contract, contractPath)
+					for i := range report.Results {
+						report.Results[i].Status = VerificationStatusWaived
+					}
+					if err := os.MkdirAll(iterDir, 0o755); err != nil {
+						t.Fatal(err)
+					}
+					if err := WriteVerificationReport(reportPath, report); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return inner(opts)
+			}
+			eventCh := make(chan interface{}, 100)
+			sm := session.NewManager(eventCh)
+			defer sm.Shutdown()
+
+			cfg := ImplementConfig{
+				Feature: f, FeatureStore: store, WorkDir: workDir, PlanPath: planPath,
+				MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
+				Model: "opus", ReviewModel: "reviewer", ArtifactDir: artifactDir, StateDir: stateDir,
+				DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
+				SkipIterationReview: true, PhaseType: "collapsed",
+			}
+			result, err := RunImplementationLoop(cfg, sm)
+			if err != nil {
+				t.Fatalf("RunImplementationLoop() error = %v", err)
+			}
+			if result.FinalStatus != "need_user_input" || result.Iterations != 1 {
+				t.Fatalf("result = %+v, want same-iteration need_user_input", result)
+			}
+			if _, err := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(err) {
+				t.Fatalf("meta.yaml exists after the waiver gate; resume would consume an iteration: %v", err)
+			}
+			contract, err := ReadTestingContract(contractPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantIDs := make([]string, 0, len(contract.Items))
+			for _, item := range contract.Items {
+				wantIDs = append(wantIDs, item.ID)
+			}
+			rec, err := ReadNeedUserInputRecord(result.NeedUserInputPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rec.Source != NeedUserInputSourceUnauthorizedWaiver || rec.VerificationDecision == nil ||
+				!reflect.DeepEqual(rec.VerificationDecision.ItemIDs, wantIDs) {
+				t.Fatalf("gate = %+v, want unauthorized-waiver decision for %v", rec, wantIDs)
+			}
+
+			rec.Questions[0].Answer = tc.answer
+			if err := WriteNeedUserInputRecord(result.NeedUserInputPath, rec); err != nil {
+				t.Fatal(err)
+			}
+			if err := ApplyNeedUserVerificationDecision(result.NeedUserInputPath, rec); err != nil {
+				t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
+			}
+			resumed, err := RunImplementationLoop(cfg, sm)
+			if err != nil {
+				t.Fatalf("resumed RunImplementationLoop() error = %v", err)
+			}
+			if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
+				t.Fatalf("resumed result = %+v, want iteration-1 review_passed", resumed)
+			}
+			if len(*captured) != 1 {
+				t.Fatalf("BuildSession calls = %d, want the single implementer session; resume must not re-run it", len(*captured))
+			}
+			report, err := ReadVerificationReport(reportPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, row := range report.Results {
+				if row.Status != tc.wantStatus {
+					t.Fatalf("row %s status = %q, want %q", row.ItemID, row.Status, tc.wantStatus)
+				}
+			}
+		})
+	}
+}
+
 func TestImplementLoopHarnessContractErrorRoutesPlanRevisionKeepsSameIteration(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")

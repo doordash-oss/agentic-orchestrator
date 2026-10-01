@@ -283,18 +283,19 @@ type RuntimeConfigMutationRequest struct {
 // value). ModelConfigPatch.AutomaticReview is itself a *string so an omitted
 // nested property stays distinguishable from an explicit empty value.
 type RuntimeDefaultsMutation struct {
-	Effort                   config.EffortConfig                  `json:"effort,omitempty"`
-	Models                   *ModelConfigPatch                    `json:"models,omitempty"`
-	PipelinePreferences      map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
-	ExitCriteria             string                               `json:"exit_criteria,omitempty"`
-	Inquireness              string                               `json:"inquireness,omitempty"`
-	Pipeline                 string                               `json:"pipeline,omitempty"`
-	MaxIterations            int                                  `json:"max_iterations,omitempty"`
-	MaxConsecutiveFailures   int                                  `json:"max_consecutive_failures,omitempty"`
-	MaxConsecutiveNoProgress int                                  `json:"max_consecutive_no_progress,omitempty"`
-	MaxPhasePlanIterations   int                                  `json:"max_phase_plan_iterations,omitempty"`
-	Checkpoints              *config.Checkpoints                  `json:"checkpoints,omitempty"`
-	AutomaticReviewEnabled   *bool                                `json:"automatic_review_enabled,omitempty"`
+	Effort                     config.EffortConfig                  `json:"effort,omitempty"`
+	Models                     *ModelConfigPatch                    `json:"models,omitempty"`
+	PipelinePreferences        map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
+	ExitCriteria               string                               `json:"exit_criteria,omitempty"`
+	Inquireness                string                               `json:"inquireness,omitempty"`
+	Pipeline                   string                               `json:"pipeline,omitempty"`
+	MaxIterations              int                                  `json:"max_iterations,omitempty"`
+	MaxConsecutiveFailures     int                                  `json:"max_consecutive_failures,omitempty"`
+	MaxConsecutiveNoProgress   int                                  `json:"max_consecutive_no_progress,omitempty"`
+	MaxPhasePlanIterations     int                                  `json:"max_phase_plan_iterations,omitempty"`
+	Checkpoints                *config.Checkpoints                  `json:"checkpoints,omitempty"`
+	DangerouslySkipPermissions *bool                                `json:"dangerously_skip_permissions,omitempty"`
+	AutomaticReviewEnabled     *bool                                `json:"automatic_review_enabled,omitempty"`
 }
 
 // ModelConfigPatch is the patch representation of config.ModelConfig for
@@ -1745,7 +1746,7 @@ func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {
 	if _, err := feature.ParseAutomaticReviewMode(*raw); err == nil {
 		return true
 	}
-	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("automatic_review_mode must be default, enabled, or disabled"))
+	writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("automatic_review_mode must be default, enabled, disabled, or dangerously_skip_permissions"))
 	return false
 }
 

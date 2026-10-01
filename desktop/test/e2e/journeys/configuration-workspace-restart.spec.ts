@@ -133,6 +133,20 @@ test('configuration, workspace, and restart journey against the packaged app', a
     const researchGateWasChecked = await researchGate.isChecked();
     await researchGate.click();
 
+    const skipMode = editor.getByRole('radio', { name: 'Dangerously Skip Permissions' });
+    await skipMode.scrollIntoViewIfNeeded();
+    await evidenceShot(handle, 'skip-permissions-feature-choice');
+    await skipMode.click();
+    const skipDialog = handle.page.getByRole('dialog', { name: 'Dangerously Skip Permissions?' });
+    await expect(skipDialog).toBeVisible();
+    await expect(skipMode).not.toBeChecked();
+    await evidenceShot(handle, 'skip-permissions-feature-confirmation');
+    await skipDialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(skipMode).not.toBeChecked();
+    await skipMode.click();
+    await skipDialog.getByRole('button', { name: 'Confirm skip permissions' }).click();
+    await expect(skipMode).toBeChecked();
+
     const saveButton = editor.getByRole('button', { name: 'Save changes' });
     await expect(editor.getByRole('status')).toContainText('Unsaved changes');
     await expect(saveButton).toBeEnabled();
@@ -157,6 +171,7 @@ test('configuration, workspace, and restart journey against the packaged app', a
     });
     expect(persisted.models.implementation).toBe(chosenModel);
     expect(persisted.inquireness).toBe('high');
+    expect(persisted.automaticReviewMode).toBe('dangerously_skip_permissions');
     expect(persisted.checkpoints.researchReview).toBe(!researchGateWasChecked);
     transcript.step(
       `server persisted implementation=${persisted.models.implementation}, inquireness=high, researchReview=${String(!researchGateWasChecked)}`,
@@ -177,11 +192,34 @@ test('configuration, workspace, and restart journey against the packaged app', a
     await defaultsEditor.locator('.config-editor__segment', { hasText: 'None' }).click();
     const defaultsSave = defaultsEditor.getByRole('button', { name: 'Save changes' });
     await expect(defaultsSave).toBeEnabled();
+    const workspaceSkip = defaultsEditor.getByRole('radio', {
+      name: 'Dangerously Skip Permissions',
+    });
+    await workspaceSkip.scrollIntoViewIfNeeded();
+    await evidenceShot(handle, 'skip-permissions-workspace-choice', settings);
+    await workspaceSkip.click();
+    const workspaceConfirmation = settings.getByRole('dialog', {
+      name: 'Dangerously Skip Permissions?',
+    });
+    await expect(workspaceConfirmation).toContainText('all features using the workspace default');
+    expect(
+      (await settings.evaluate(() => window.agentico.getWorkspaceDefaults()))
+        .dangerouslySkipPermissions,
+    ).toBe(false);
+    await evidenceShot(handle, 'skip-permissions-workspace-confirmation', settings);
+    await workspaceConfirmation.getByRole('button', { name: 'Confirm skip permissions' }).click();
+    expect(
+      (await settings.evaluate(() => window.agentico.getWorkspaceDefaults()))
+        .dangerouslySkipPermissions,
+    ).toBe(false);
     await defaultsSave.click();
     await expect(defaultsEditor.getByRole('status')).toContainText('Saved', { timeout: 15_000 });
 
     const workspaceDefaults = await settings.evaluate(() => window.agentico.getWorkspaceDefaults());
     expect(workspaceDefaults.inquireness).toBe('none');
+    expect(workspaceDefaults.dangerouslySkipPermissions).toBe(true);
+    await workspaceSkip.scrollIntoViewIfNeeded();
+    await evidenceShot(handle, 'skip-permissions-workspace-saved', settings);
     transcript.step('workspace default inquireness saved and re-read as none');
 
     await evidenceShot(handle, 'workspace-defaults-structured-form-saved-l-1440x900', settings);

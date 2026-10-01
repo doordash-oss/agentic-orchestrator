@@ -28,7 +28,7 @@ limitations under the License.
  * catalogue. Model options are grouped by provider and effort options stay
  * capability-aware, while untouched values name the effective defaults.
  */
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import type {
   AutomaticReviewMode,
   CanonicalError,
@@ -42,6 +42,7 @@ import type {
   PhaseModels,
   WorkspaceDefaults,
 } from '../../../shared/ipc';
+import { useModalDismiss } from '../components/useModalDismiss';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { retryAction, useIpcLoad } from '../hooks';
 import { parseIpcError } from '../wizard/ipcError';
@@ -462,6 +463,59 @@ interface ConfigFormProps {
   onAutomaticReviewChange(value: string): void;
 }
 
+function SkipPermissionsConfirmation({
+  workspace,
+  onConfirm,
+  onCancel,
+}: {
+  workspace: boolean;
+  onConfirm(): void;
+  onCancel(): void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
+  useModalDismiss(ref, onCancel);
+  return (
+    <div className="consent-dialog__scrim">
+      <div
+        ref={ref}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        className="consent-dialog"
+        tabIndex={-1}
+      >
+        <h2 id={titleId} className="consent-dialog__title config-editor__danger">
+          Dangerously Skip Permissions?
+        </h2>
+        <div id={descriptionId} className="consent-dialog__body">
+          <p>
+            The harness will automatically approve all permission requests without asking you or a
+            permission reviewer agent.
+          </p>
+          <p>Commands can delete files, access credentials, or change external systems.</p>
+          <p>
+            {workspace
+              ? 'This applies to all features using the workspace default.'
+              : 'This overrides the workspace default for this feature.'}{' '}
+            After you save, it applies to subsequent requests, including in running sessions.
+          </p>
+        </div>
+        <div className="consent-dialog__actions">
+          <button type="button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="config-editor__danger" onClick={onConfirm}>
+            Confirm skip permissions
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ConfigForm({
   value,
   defaults,
@@ -476,6 +530,8 @@ function ConfigForm({
   onAutomaticReviewChange,
 }: ConfigFormProps) {
   const inquirenessName = useId();
+  const autoModeName = useId();
+  const [confirmSkip, setConfirmSkip] = useState(false);
   const phaseFields = applicablePhaseFields(pipeline, showUtilities);
   const gates = applicableGates(pipeline);
   const visibleGates = GATE_FIELDS.filter(
@@ -588,22 +644,44 @@ function ConfigForm({
             ))}
           </select>
         </label>
-        <label className="config-editor__row">
+        <div className="config-editor__row">
           <span className="config-editor__row-label">Auto mode</span>
           <span className="config-editor__row-hint">{automaticReview.hint}</span>
-          <select
-            className="config-editor__select"
-            aria-label="Auto mode"
-            value={automaticReview.value}
-            onChange={(event) => onAutomaticReviewChange(event.target.value)}
-          >
+          <div className="config-editor__auto-options" role="radiogroup" aria-label="Auto mode">
             {automaticReview.options.map((option) => (
-              <option key={option.value} value={option.value}>
+              <label
+                key={option.value}
+                className={
+                  option.value === 'dangerously_skip_permissions'
+                    ? 'config-editor__danger'
+                    : undefined
+                }
+              >
+                <input
+                  type="radio"
+                  name={autoModeName}
+                  value={option.value}
+                  checked={automaticReview.value === option.value}
+                  onChange={() => {
+                    if (option.value === 'dangerously_skip_permissions') setConfirmSkip(true);
+                    else onAutomaticReviewChange(option.value);
+                  }}
+                />
                 {option.label}
-              </option>
+              </label>
             ))}
-          </select>
-        </label>
+          </div>
+        </div>
+        {confirmSkip && (
+          <SkipPermissionsConfirmation
+            workspace={showUtilities}
+            onCancel={() => setConfirmSkip(false)}
+            onConfirm={() => {
+              setConfirmSkip(false);
+              onAutomaticReviewChange('dangerously_skip_permissions');
+            }}
+          />
+        )}
       </fieldset>
 
       <fieldset className="config-editor__group">
@@ -709,6 +787,7 @@ const FEATURE_AUTOMATIC_REVIEW_OPTIONS = [
   { value: 'default', label: 'Workspace default' },
   { value: 'enabled', label: 'Enabled' },
   { value: 'disabled', label: 'Disabled' },
+  { value: 'dangerously_skip_permissions', label: 'Dangerously Skip Permissions' },
 ] as const;
 
 export function FeatureConfigPanel({ featureId }: { featureId: string }) {
@@ -809,6 +888,7 @@ const WORKSPACE_ALERT_OPTIONS = [
 const WORKSPACE_AUTOMATIC_REVIEW_OPTIONS = [
   { value: 'disabled', label: 'Disabled' },
   { value: 'enabled', label: 'Enabled' },
+  { value: 'dangerously_skip_permissions', label: 'Dangerously Skip Permissions' },
 ] as const;
 
 export function WorkspaceDefaultsPanel({
@@ -874,14 +954,23 @@ export function WorkspaceDefaultsPanel({
           options: WORKSPACE_ALERT_OPTIONS,
         }}
         automaticReview={{
-          value: draft.automaticReviewEnabled ? 'enabled' : 'disabled',
-          hint: 'Approve shell commands automatically instead of asking you',
+          value:
+            draft.dangerouslySkipPermissions === true
+              ? 'dangerously_skip_permissions'
+              : draft.automaticReviewEnabled
+                ? 'enabled'
+                : 'disabled',
+          hint: 'Enabled uses a reviewer; skip permissions approves every request',
           options: WORKSPACE_AUTOMATIC_REVIEW_OPTIONS,
         }}
         onChange={(next) => setDraft({ ...draft, ...next })}
         onInputAlertsChange={(mode) => setDraft({ ...draft, muteFeatureInput: mode === 'muted' })}
         onAutomaticReviewChange={(mode) =>
-          setDraft({ ...draft, automaticReviewEnabled: mode === 'enabled' })
+          setDraft({
+            ...draft,
+            automaticReviewEnabled: mode === 'enabled',
+            dangerouslySkipPermissions: mode === 'dangerously_skip_permissions',
+          })
         }
       />
       <SaveBar

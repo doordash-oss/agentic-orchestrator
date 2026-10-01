@@ -2442,6 +2442,7 @@ export interface components {
             pipeline?: string;
             checkpoints: unknown;
             automatic_review_enabled?: boolean;
+            dangerously_skip_permissions?: boolean;
         };
         NotificationConfig: {
             mute_feature_input: boolean;
@@ -2461,11 +2462,11 @@ export interface components {
             /** @enum {string} */
             input_notifications?: "default" | "enabled" | "muted";
             /** @enum {string} */
-            automatic_review_mode?: "default" | "enabled" | "disabled";
+            automatic_review_mode?: "default" | "enabled" | "disabled" | "dangerously_skip_permissions";
         };
         AutomaticReviewState: {
             /** @enum {string} */
-            mode: "default" | "enabled" | "disabled";
+            mode: "default" | "enabled" | "disabled" | "dangerously_skip_permissions";
             enabled: boolean;
             /** @enum {string} */
             source: "global" | "feature";

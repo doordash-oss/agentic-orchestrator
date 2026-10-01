@@ -1045,7 +1045,7 @@ export const ServerFeatureDetailSchema = ServerFeatureSummarySchema.extend({
     .optional(),
   actions: z.array(ServerActionSchema),
   automatic_review: z.object({
-    mode: z.enum(['default', 'enabled', 'disabled']),
+    mode: z.enum(['default', 'enabled', 'disabled', 'dangerously_skip_permissions']),
     enabled: z.boolean(),
     source: z.enum(['global', 'feature']),
   }),

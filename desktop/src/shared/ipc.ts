@@ -1528,7 +1528,12 @@ export const VerificationItemViewSchema = z.strictObject({
 });
 export type VerificationItemView = z.output<typeof VerificationItemViewSchema>;
 
-export const AutomaticReviewModeSchema = z.enum(['default', 'enabled', 'disabled']);
+export const AutomaticReviewModeSchema = z.enum([
+  'default',
+  'enabled',
+  'disabled',
+  'dangerously_skip_permissions',
+]);
 export type AutomaticReviewMode = z.output<typeof AutomaticReviewModeSchema>;
 
 export const AutomaticReviewStateSchema = z.strictObject({
@@ -4024,6 +4029,7 @@ export const WorkspaceDefaultsSchema = z.strictObject({
   muteFeatureInput: z.boolean(),
   /** Default Automatic Bash review state for newly dispatched sessions. */
   automaticReviewEnabled: z.boolean(),
+  dangerouslySkipPermissions: z.boolean().optional(),
 });
 export type WorkspaceDefaults = z.output<typeof WorkspaceDefaultsSchema>;
 

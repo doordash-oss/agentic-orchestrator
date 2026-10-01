@@ -10,6 +10,21 @@ When **Auto mode** is off and the pending Bash command is one that automatic rev
 
 Do not use superseded single-key permission shortcuts. When a workflow is blocked on a permission request, use the inbox or cockpit card to answer it, or start workflows with permission rules appropriate for the provider and repository, or use the server launch option described below in a trusted environment.
 
+## Auto mode settings
+
+In **Settings → Workspace defaults → Behavior → Auto mode**, choose **Disabled**,
+**Enabled** (permission reviewer), or the red **Dangerously Skip Permissions** option.
+The same choices are available in a feature's **More actions → Edit configuration**;
+**Workspace default** inherits the workspace setting.
+
+Selecting **Dangerously Skip Permissions** opens a confirmation explaining the scope
+and risks. Choose **Confirm skip permissions**, then **Save changes**. Cancel or Escape
+leaves the previous setting unchanged. The harness approves subsequent permission
+requests directly, including non-shell tools, without consulting permission reviewers
+or cached rules. Changes apply to running sessions' next requests; already pending
+requests still need an answer. Questions and structural session guards remain active.
+Explicit feature choices override the workspace default.
+
 ## Runtime Permission Types
 
 ### Automatically handled

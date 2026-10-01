@@ -166,3 +166,24 @@ func TestAutomaticReviewPersistsOnDisk(t *testing.T) {
 		t.Errorf("disk config missing automatic_review: haiku[200K]:\n%s", string(data))
 	}
 }
+
+func TestSkipPermissionsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := NewDefault()
+	if cfg.Defaults.DangerouslySkipPermissions {
+		t.Fatal("skip must default off")
+	}
+	for _, enabled := range []bool{true, false} {
+		cfg.Defaults.DangerouslySkipPermissions = enabled
+		if err := Save(path, cfg); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if loaded.Defaults.DangerouslySkipPermissions != enabled {
+			t.Fatalf("skip did not persist %v", enabled)
+		}
+	}
+}

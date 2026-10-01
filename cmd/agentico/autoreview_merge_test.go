@@ -142,3 +142,18 @@ func TestMergeModelConfigPhaseOverridePreservesAutomaticReview(t *testing.T) {
 		t.Fatalf("AutomaticReview = %q, want existing reviewer preserved by empty overlay", got.AutomaticReview)
 	}
 }
+
+func TestMergeRuntimeDefaultsSkipPermissions(t *testing.T) {
+	dst := config.DefaultsConfig{}
+	enabled := true
+	if !mergeRuntimeDefaultsMutation(&dst, serverruntime.RuntimeDefaultsMutation{DangerouslySkipPermissions: &enabled}) || !dst.DangerouslySkipPermissions {
+		t.Fatal("skip was not enabled")
+	}
+	if mergeRuntimeDefaultsMutation(&dst, serverruntime.RuntimeDefaultsMutation{}) || !dst.DangerouslySkipPermissions {
+		t.Fatal("omitted skip changed the setting")
+	}
+	enabled = false
+	if !mergeRuntimeDefaultsMutation(&dst, serverruntime.RuntimeDefaultsMutation{DangerouslySkipPermissions: &enabled}) || dst.DangerouslySkipPermissions {
+		t.Fatal("skip was not disabled")
+	}
+}

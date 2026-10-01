@@ -138,6 +138,9 @@ type DefaultsConfig struct {
 	// absent or false flag means disabled; it is never seeded by applyDefaults so
 	// legacy configs load as disabled without altering established defaults.
 	AutomaticReviewEnabled bool `yaml:"automatic_review_enabled,omitempty" json:"automatic_review_enabled,omitempty"`
+	// DangerouslySkipPermissions approves permission requests in the harness without a reviewer.
+	// Explicit feature auto-mode overrides take precedence over this workspace default.
+	DangerouslySkipPermissions bool `yaml:"dangerously_skip_permissions,omitempty" json:"dangerously_skip_permissions,omitempty"`
 }
 
 // PipelinePreference stores the last-used feature-creation settings for a

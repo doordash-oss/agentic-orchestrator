@@ -99,6 +99,7 @@ const RuntimeConfigResponseSchema = z.object({
     checkpoints: ServerCheckpointsSchema.optional(),
     pipeline: z.string().optional(),
     automatic_review_enabled: z.boolean().optional(),
+    dangerously_skip_permissions: z.boolean().optional(),
   }),
   notifications: z.object({ mute_feature_input: z.boolean() }).optional(),
 });
@@ -242,8 +243,10 @@ function normalizeInputNotifications(value: string | undefined): 'default' | 'en
 
 function normalizeAutomaticReviewMode(
   value: string | undefined,
-): 'default' | 'enabled' | 'disabled' {
-  return value === 'enabled' || value === 'disabled' ? value : 'default';
+): 'default' | 'enabled' | 'disabled' | 'dangerously_skip_permissions' {
+  return value === 'enabled' || value === 'disabled' || value === 'dangerously_skip_permissions'
+    ? value
+    : 'default';
 }
 
 function toFeatureConfig(cfg: z.output<typeof ServerFeatureConfigSchema>): FeatureConfig {
@@ -317,6 +320,7 @@ export class ConfigService {
       pipeline: defaults.pipeline ?? '',
       muteFeatureInput: parsed.data.notifications?.mute_feature_input ?? false,
       automaticReviewEnabled: defaults.automatic_review_enabled ?? false,
+      dangerouslySkipPermissions: defaults.dangerously_skip_permissions ?? false,
     };
   }
 
@@ -331,6 +335,7 @@ export class ConfigService {
           checkpoints: toServerCheckpoints(defaults.checkpoints),
           ...(defaults.pipeline === '' ? {} : { pipeline: defaults.pipeline }),
           automatic_review_enabled: defaults.automaticReviewEnabled,
+          dangerously_skip_permissions: defaults.dangerouslySkipPermissions ?? false,
         },
         notifications: { mute_feature_input: defaults.muteFeatureInput },
       },

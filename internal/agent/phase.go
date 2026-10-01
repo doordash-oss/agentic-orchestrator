@@ -1232,21 +1232,35 @@ func decorateHandlerWithAutoReview(composed, original ports.PermissionHandler, e
 	}
 }
 
-// liveAutomaticReviewEnabled resolves the effective automatic-review setting
+// liveAutomaticReviewMode resolves the effective automatic-review setting
 // from the feature's current mode and the current workspace default. The
 // feature record is re-read on each call; fallbackMode applies when it cannot
 // be loaded.
+func (pr *PhaseRunner) liveAutomaticReviewMode(featureID string, fallbackMode feature.AutomaticReviewMode) feature.AutomaticReviewMode {
+	mode := fallbackMode
+	if pr != nil && pr.FeatureStore != nil && featureID != "" {
+		if f, err := pr.FeatureStore.Load(featureID); err == nil && f != nil {
+			mode = f.AutomaticReviewMode
+		}
+	}
+	mode = feature.NormalizeAutomaticReviewMode(mode)
+	if mode != feature.AutomaticReviewDefault {
+		return mode
+	}
+	if pr != nil && pr.Config != nil {
+		if pr.Config.Defaults.DangerouslySkipPermissions {
+			return feature.AutomaticReviewSkipPermissions
+		}
+		if pr.Config.Defaults.AutomaticReviewEnabled {
+			return feature.AutomaticReviewEnabled
+		}
+	}
+	return feature.AutomaticReviewDisabled
+}
+
 func (pr *PhaseRunner) liveAutomaticReviewEnabled(featureID string, fallbackMode feature.AutomaticReviewMode) func() bool {
 	return func() bool {
-		mode := fallbackMode
-		if pr != nil && pr.FeatureStore != nil && featureID != "" {
-			if f, err := pr.FeatureStore.Load(featureID); err == nil && f != nil {
-				mode = f.AutomaticReviewMode
-			}
-		}
-		globalEnabled := pr != nil && pr.Config != nil && pr.Config.Defaults.AutomaticReviewEnabled
-		enabled, _ := feature.ResolveAutomaticReview(mode, globalEnabled)
-		return enabled
+		return pr.liveAutomaticReviewMode(featureID, fallbackMode) == feature.AutomaticReviewEnabled
 	}
 }
 
@@ -1675,6 +1689,18 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		opts.WorkDir,
 		commandWritableRoots,
 	)
+
+	// Keep approval in the harness (rather than provider DSP flags), so changes
+	// take effect on each request, including switching back to reviewed mode.
+	// Tool-free sessions retain their protocol-specific tool restrictions.
+	if !toolFree {
+		permHandler = &skipPermissionsDecorator{
+			inner: permHandler,
+			skip: func() bool {
+				return pr.liveAutomaticReviewMode(opts.FeatureID, opts.AutomaticReviewMode) == feature.AutomaticReviewSkipPermissions
+			},
+		}
+	}
 
 	sessOpts = &ports.SessionOpts{
 		PIDDir: opts.PIDDir,

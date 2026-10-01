@@ -1744,8 +1744,9 @@ func (t *serverMutationTarget) enableAutomaticReview(scope, featureID string) er
 	switch scope {
 	case serverruntime.AutoApproveScopeWorkspace:
 		enabled := true
+		skip := false
 		_, err := t.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
-			Defaults: serverruntime.RuntimeDefaultsMutation{AutomaticReviewEnabled: &enabled},
+			Defaults: serverruntime.RuntimeDefaultsMutation{AutomaticReviewEnabled: &enabled, DangerouslySkipPermissions: &skip},
 		})
 		return err
 	case serverruntime.AutoApproveScopeFeature:
@@ -2893,6 +2894,9 @@ func mergeRuntimeDefaultsMutation(dst *config.DefaultsConfig, patch serverruntim
 	}
 	if len(patch.PipelinePreferences) > 0 {
 		dst.PipelinePreferences = patch.PipelinePreferences
+		changed = true
+	}
+	if patch.DangerouslySkipPermissions != nil && setIfChanged(&dst.DangerouslySkipPermissions, *patch.DangerouslySkipPermissions) {
 		changed = true
 	}
 	if patch.AutomaticReviewEnabled != nil && setIfChanged(&dst.AutomaticReviewEnabled, *patch.AutomaticReviewEnabled) {

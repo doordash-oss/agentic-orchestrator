@@ -456,3 +456,27 @@ func (d *autoReviewPermissionDecorator) emitAutomaticReviewEvent(
 		StatusFailureReason: statusFailureReason,
 	})
 }
+
+// skipPermissionsDecorator selects harness auto-approval live, before either
+// cached permission rules or the reviewer. Structural session guards still
+// apply, just as they do for the existing CLI DSP mode.
+type skipPermissionsDecorator struct {
+	inner ports.PermissionHandler
+	skip  func() bool
+}
+
+func (d *skipPermissionsDecorator) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if d.skip() {
+		return permission.Guarded(&permission.AutoApproveHandler{}).CanUseTool(req)
+	}
+	if d.inner == nil {
+		return ports.PermissionDecision{}, nil
+	}
+	return d.inner.CanUseTool(req)
+}
+
+func (d *skipPermissionsDecorator) Dispose() {
+	if disposable, ok := d.inner.(interface{ Dispose() }); ok {
+		disposable.Dispose()
+	}
+}

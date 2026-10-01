@@ -204,7 +204,7 @@ func (h *apiHandler) featureDetailDTO(f *feature.Feature) (FeatureDetail, error)
 	detail.ExitCriteria = SafeDisplayText(f.ExitCriteria, 500)
 	autoReviewEnabled, autoReviewSource := feature.ResolveAutomaticReview(
 		f.AutomaticReviewMode,
-		h.configOrDefault().Defaults.AutomaticReviewEnabled,
+		h.configOrDefault().Defaults.AutomaticReviewEnabled && !h.configOrDefault().Defaults.DangerouslySkipPermissions,
 	)
 	detail.AutomaticReview = AutomaticReviewState{
 		Mode:    AutomaticReviewStateMode(feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode)),
@@ -1511,13 +1511,14 @@ func featureDefaultsDTO(defaults config.DefaultsConfig) FeatureDefaults {
 		}
 	}
 	return FeatureDefaults{
-		Models:                 defaults.Models,
-		Effort:                 defaults.Effort,
-		PipelinePreferences:    prefs,
-		Inquireness:            defaults.Inquireness,
-		Pipeline:               defaults.Pipeline,
-		Checkpoints:            defaults.Checkpoints,
-		AutomaticReviewEnabled: defaults.AutomaticReviewEnabled,
+		Models:                     defaults.Models,
+		Effort:                     defaults.Effort,
+		PipelinePreferences:        prefs,
+		Inquireness:                defaults.Inquireness,
+		Pipeline:                   defaults.Pipeline,
+		Checkpoints:                defaults.Checkpoints,
+		AutomaticReviewEnabled:     defaults.AutomaticReviewEnabled,
+		DangerouslySkipPermissions: defaults.DangerouslySkipPermissions,
 	}
 }
 

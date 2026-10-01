@@ -5149,6 +5149,8 @@ components:
             name: config
         automatic_review_enabled:
           type: boolean
+        dangerously_skip_permissions:
+          type: boolean
     NotificationConfig:
       type: object
       required: [mute_feature_input]
@@ -5187,14 +5189,14 @@ components:
           enum: [default, enabled, muted]
         automatic_review_mode:
           type: string
-          enum: [default, enabled, disabled]
+          enum: [default, enabled, disabled, dangerously_skip_permissions]
     AutomaticReviewState:
       type: object
       required: [mode, enabled, source]
       properties:
         mode:
           type: string
-          enum: [default, enabled, disabled]
+          enum: [default, enabled, disabled, dangerously_skip_permissions]
         enabled:
           type: boolean
         source:

@@ -14258,3 +14258,21 @@ body {
   user-select: none;
   cursor: col-resize;
 }
+
+.config-editor__auto-options {
+  grid-area: control;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.config-editor__auto-options label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.config-editor__danger {
+  color: var(--bad);
+}

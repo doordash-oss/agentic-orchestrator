@@ -47,43 +47,46 @@ const checkpoints = {
 };
 
 describe('ConfigService effort routing', () => {
-  it('round-trips the feature automatic-review override and reviewer model', async () => {
-    const featureConfig = {
-      api_version: 'v1',
-      feature_id: 'feat-1',
-      current: {
-        models: { automatic_review: 'claude:haiku' },
-        inquireness: 'medium',
-        checkpoints,
-        automatic_review_mode: 'enabled',
-      },
-      defaults: {
-        models: { automatic_review: '' },
-        inquireness: 'medium',
-        checkpoints,
-        automatic_review_mode: 'default',
-      },
-      publishability: { manual_publish: true },
-    };
-    const { service, calls } = makeService((_path, init) =>
-      init?.method === 'POST'
-        ? { status: 200, body: { api_version: 'v1' } }
-        : { status: 200, body: featureConfig },
-    );
+  it.each(['enabled', 'disabled', 'dangerously_skip_permissions'] as const)(
+    'round-trips feature auto mode %s and reviewer model',
+    async (mode) => {
+      const featureConfig = {
+        api_version: 'v1',
+        feature_id: 'feat-1',
+        current: {
+          models: { automatic_review: 'claude:haiku' },
+          inquireness: 'medium',
+          checkpoints,
+          automatic_review_mode: mode,
+        },
+        defaults: {
+          models: { automatic_review: '' },
+          inquireness: 'medium',
+          checkpoints,
+          automatic_review_mode: 'default',
+        },
+        publishability: { manual_publish: true },
+      };
+      const { service, calls } = makeService((_path, init) =>
+        init?.method === 'POST'
+          ? { status: 200, body: { api_version: 'v1' } }
+          : { status: 200, body: featureConfig },
+      );
 
-    const snapshot = await service.getFeatureConfig('feat-1');
-    expect(Reflect.get(snapshot.current, 'automaticReviewMode')).toBe('enabled');
-    expect(Reflect.get(snapshot.current.models, 'automaticReview')).toBe('claude:haiku');
+      const snapshot = await service.getFeatureConfig('feat-1');
+      expect(Reflect.get(snapshot.current, 'automaticReviewMode')).toBe(mode);
+      expect(Reflect.get(snapshot.current.models, 'automaticReview')).toBe('claude:haiku');
 
-    const config = Object.assign({}, snapshot.current, { automaticReviewMode: 'disabled' });
-    await service.updateFeatureConfig({ featureId: 'feat-1', config });
-    expect(calls[1]?.init?.body).toEqual(
-      expect.objectContaining({
-        automatic_review_mode: 'disabled',
-        models: expect.objectContaining({ automatic_review: 'claude:haiku' }),
-      }),
-    );
-  });
+      const config = Object.assign({}, snapshot.current, { automaticReviewMode: mode });
+      await service.updateFeatureConfig({ featureId: 'feat-1', config });
+      expect(calls[1]?.init?.body).toEqual(
+        expect.objectContaining({
+          automatic_review_mode: mode,
+          models: expect.objectContaining({ automatic_review: 'claude:haiku' }),
+        }),
+      );
+    },
+  );
 
   it('round-trips workspace automatic-review enablement and reviewer selection', async () => {
     const runtimeConfig = {
@@ -94,6 +97,7 @@ describe('ConfigService effort routing', () => {
         checkpoints,
         pipeline: 'large',
         automatic_review_enabled: true,
+        dangerously_skip_permissions: true,
       },
       notifications: { mute_feature_input: false },
     };
@@ -105,15 +109,20 @@ describe('ConfigService effort routing', () => {
 
     const defaults = await service.getWorkspaceDefaults();
     expect(Reflect.get(defaults, 'automaticReviewEnabled')).toBe(true);
+    expect(defaults.dangerouslySkipPermissions).toBe(true);
     expect(Reflect.get(defaults.models, 'automaticReview')).toBe('opencode:anthropic/claude-haiku');
 
     await service.updateWorkspaceDefaults(
-      Object.assign({}, defaults, { automaticReviewEnabled: false }),
+      Object.assign({}, defaults, {
+        automaticReviewEnabled: false,
+        dangerouslySkipPermissions: false,
+      }),
     );
     expect(calls[1]?.init?.body).toEqual(
       expect.objectContaining({
         defaults: expect.objectContaining({
           automatic_review_enabled: false,
+          dangerously_skip_permissions: false,
           models: expect.objectContaining({
             automatic_review: 'opencode:anthropic/claude-haiku',
           }),

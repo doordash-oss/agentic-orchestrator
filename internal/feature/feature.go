@@ -477,9 +477,10 @@ func InputNotificationsModeForMuted(muted bool) InputNotificationsMode {
 type AutomaticReviewMode string
 
 const (
-	AutomaticReviewDefault  AutomaticReviewMode = "default"
-	AutomaticReviewEnabled  AutomaticReviewMode = "enabled"
-	AutomaticReviewDisabled AutomaticReviewMode = "disabled"
+	AutomaticReviewDefault         AutomaticReviewMode = "default"
+	AutomaticReviewEnabled         AutomaticReviewMode = "enabled"
+	AutomaticReviewDisabled        AutomaticReviewMode = "disabled"
+	AutomaticReviewSkipPermissions AutomaticReviewMode = "dangerously_skip_permissions"
 )
 
 type AutomaticReviewSource string
@@ -491,7 +492,7 @@ const (
 
 func NormalizeAutomaticReviewMode(mode AutomaticReviewMode) AutomaticReviewMode {
 	switch mode {
-	case AutomaticReviewEnabled, AutomaticReviewDisabled:
+	case AutomaticReviewEnabled, AutomaticReviewDisabled, AutomaticReviewSkipPermissions:
 		return mode
 	default:
 		return AutomaticReviewDefault
@@ -504,7 +505,7 @@ func ParseAutomaticReviewMode(raw string) (AutomaticReviewMode, error) {
 		return AutomaticReviewDefault, nil
 	}
 	switch mode {
-	case AutomaticReviewDefault, AutomaticReviewEnabled, AutomaticReviewDisabled:
+	case AutomaticReviewDefault, AutomaticReviewEnabled, AutomaticReviewDisabled, AutomaticReviewSkipPermissions:
 		return mode, nil
 	default:
 		return "", fmt.Errorf("invalid automatic review mode %q", raw)
@@ -523,7 +524,7 @@ func ResolveAutomaticReview(mode AutomaticReviewMode, globalEnabled bool) (bool,
 	switch NormalizeAutomaticReviewMode(mode) {
 	case AutomaticReviewEnabled:
 		return true, AutomaticReviewSourceFeature
-	case AutomaticReviewDisabled:
+	case AutomaticReviewDisabled, AutomaticReviewSkipPermissions:
 		return false, AutomaticReviewSourceFeature
 	default:
 		return globalEnabled, AutomaticReviewSourceGlobal

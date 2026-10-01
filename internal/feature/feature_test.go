@@ -1892,7 +1892,7 @@ func TestResolveAutomaticReview(t *testing.T) {
 func TestParseAutomaticReviewMode(t *testing.T) {
 	t.Parallel()
 
-	for _, input := range []string{"", "default", "enabled", "disabled"} {
+	for _, input := range []string{"", "default", "enabled", "disabled", "dangerously_skip_permissions"} {
 		input := input
 		t.Run("accepts "+input, func(t *testing.T) {
 			t.Parallel()

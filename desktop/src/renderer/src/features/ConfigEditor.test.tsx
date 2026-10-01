@@ -157,6 +157,64 @@ describe('FeatureConfigPanel', () => {
     await screen.findByText(/Saved\./);
   });
 
+  it.each(['feature', 'workspace'] as const)(
+    'confirms dangerous auto mode before saving %s settings',
+    async (scope) => {
+      const mock = installAgenticoMock();
+      mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);
+      mock.api.getWorkspaceDefaults.mockResolvedValue(DEFAULTS);
+      mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
+      mock.api.updateFeatureConfig.mockResolvedValue(SNAPSHOT);
+      mock.api.updateWorkspaceDefaults.mockResolvedValue(DEFAULTS);
+      render(
+        scope === 'feature' ? (
+          <FeatureConfigPanel featureId="feat-1" />
+        ) : (
+          <WorkspaceDefaultsPanel />
+        ),
+      );
+      const user = userEvent.setup();
+      const group = await screen.findByRole('radiogroup', { name: 'Auto mode' });
+      const skip = within(group).getByRole('radio', { name: 'Dangerously Skip Permissions' });
+      const save = screen.getByRole('button', { name: 'Save changes' });
+      await user.click(skip);
+      const dialog = screen.getByRole('dialog', { name: 'Dangerously Skip Permissions?' });
+      expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
+      expect(skip).not.toBeChecked();
+      expect(save).toBeDisabled();
+      expect(mock.api.updateFeatureConfig).not.toHaveBeenCalled();
+      expect(mock.api.updateWorkspaceDefaults).not.toHaveBeenCalled();
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(skip).not.toBeChecked();
+      await user.click(skip);
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(skip).not.toBeChecked();
+      await user.click(skip);
+      await user.click(screen.getByRole('button', { name: 'Confirm skip permissions' }));
+      expect(skip).toBeChecked();
+      expect(mock.api.updateFeatureConfig).not.toHaveBeenCalled();
+      expect(mock.api.updateWorkspaceDefaults).not.toHaveBeenCalled();
+      await user.click(save);
+      await waitFor(() => {
+        if (scope === 'feature')
+          expect(mock.api.updateFeatureConfig).toHaveBeenCalledWith({
+            featureId: 'feat-1',
+            config: expect.objectContaining({
+              automaticReviewMode: 'dangerously_skip_permissions',
+            }),
+          });
+        else
+          expect(mock.api.updateWorkspaceDefaults).toHaveBeenCalledWith(
+            expect.objectContaining({
+              dangerouslySkipPermissions: true,
+              automaticReviewEnabled: false,
+            }),
+          );
+      });
+    },
+  );
+
   it('edits the feature automatic-review override', async () => {
     const mock = installAgenticoMock();
     mock.api.getFeatureConfig.mockResolvedValue(SNAPSHOT);
@@ -165,9 +223,9 @@ describe('FeatureConfigPanel', () => {
     render(<FeatureConfigPanel featureId="feat-1" />);
     const user = userEvent.setup();
 
-    const picker = await screen.findByLabelText('Auto mode');
-    expect(picker).toHaveValue('default');
-    await user.selectOptions(picker, 'enabled');
+    const picker = await screen.findByRole('radiogroup', { name: 'Auto mode' });
+    expect(within(picker).getByRole('radio', { name: 'Workspace default' })).toBeChecked();
+    await user.click(within(picker).getByRole('radio', { name: 'Enabled' }));
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(mock.api.updateFeatureConfig).toHaveBeenCalledTimes(1));
@@ -457,7 +515,11 @@ describe('WorkspaceDefaultsPanel', () => {
     const reviewer = await screen.findByLabelText('Auto mode reviewer model');
     expect(within(reviewer).getByRole('option', { name: /Automatic/ })).toBeVisible();
     await user.selectOptions(reviewer, 'claude:sonnet');
-    await user.selectOptions(screen.getByLabelText('Auto mode'), 'enabled');
+    await user.click(
+      within(screen.getByRole('radiogroup', { name: 'Auto mode' })).getByRole('radio', {
+        name: 'Enabled',
+      }),
+    );
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(mock.api.updateWorkspaceDefaults).toHaveBeenCalledTimes(1));

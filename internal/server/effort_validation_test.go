@@ -130,7 +130,7 @@ func TestValidateEffortConfig(t *testing.T) {
 func TestValidateAutomaticReviewMode(t *testing.T) {
 	t.Parallel()
 
-	valid := []string{"", "default", "enabled", "disabled"}
+	valid := []string{"", "default", "enabled", "disabled", "dangerously_skip_permissions"}
 	for _, mode := range valid {
 		mode := mode
 		t.Run("accepts "+mode, func(t *testing.T) {

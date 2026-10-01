@@ -49,14 +49,17 @@ func (e ActionImpactPreviewKind) Valid() bool {
 
 // Defines values for AutomaticReviewStateMode.
 const (
-	AutomaticReviewStateModeDefault  AutomaticReviewStateMode = "default"
-	AutomaticReviewStateModeDisabled AutomaticReviewStateMode = "disabled"
-	AutomaticReviewStateModeEnabled  AutomaticReviewStateMode = "enabled"
+	AutomaticReviewStateModeDangerouslySkipPermissions AutomaticReviewStateMode = "dangerously_skip_permissions"
+	AutomaticReviewStateModeDefault                    AutomaticReviewStateMode = "default"
+	AutomaticReviewStateModeDisabled                   AutomaticReviewStateMode = "disabled"
+	AutomaticReviewStateModeEnabled                    AutomaticReviewStateMode = "enabled"
 )
 
 // Valid indicates whether the value is a known member of the AutomaticReviewStateMode enum.
 func (e AutomaticReviewStateMode) Valid() bool {
 	switch e {
+	case AutomaticReviewStateModeDangerouslySkipPermissions:
+		return true
 	case AutomaticReviewStateModeDefault:
 		return true
 	case AutomaticReviewStateModeDisabled:
@@ -328,14 +331,17 @@ func (e FeatureAction) Valid() bool {
 
 // Defines values for FeatureConfigAutomaticReviewMode.
 const (
-	FeatureConfigAutomaticReviewModeDefault  FeatureConfigAutomaticReviewMode = "default"
-	FeatureConfigAutomaticReviewModeDisabled FeatureConfigAutomaticReviewMode = "disabled"
-	FeatureConfigAutomaticReviewModeEnabled  FeatureConfigAutomaticReviewMode = "enabled"
+	FeatureConfigAutomaticReviewModeDangerouslySkipPermissions FeatureConfigAutomaticReviewMode = "dangerously_skip_permissions"
+	FeatureConfigAutomaticReviewModeDefault                    FeatureConfigAutomaticReviewMode = "default"
+	FeatureConfigAutomaticReviewModeDisabled                   FeatureConfigAutomaticReviewMode = "disabled"
+	FeatureConfigAutomaticReviewModeEnabled                    FeatureConfigAutomaticReviewMode = "enabled"
 )
 
 // Valid indicates whether the value is a known member of the FeatureConfigAutomaticReviewMode enum.
 func (e FeatureConfigAutomaticReviewMode) Valid() bool {
 	switch e {
+	case FeatureConfigAutomaticReviewModeDangerouslySkipPermissions:
+		return true
 	case FeatureConfigAutomaticReviewModeDefault:
 		return true
 	case FeatureConfigAutomaticReviewModeDisabled:
@@ -2568,13 +2574,14 @@ type FeatureConfigUpdateResponse struct {
 
 // FeatureDefaults defines model for FeatureDefaults.
 type FeatureDefaults struct {
-	AutomaticReviewEnabled bool                                 `json:"automatic_review_enabled,omitempty"`
-	Checkpoints            config.Checkpoints                   `json:"checkpoints"`
-	Effort                 EffortConfig                         `json:"effort,omitempty"`
-	Inquireness            string                               `json:"inquireness,omitempty"`
-	Models                 ModelDefaults                        `json:"models"`
-	Pipeline               string                               `json:"pipeline,omitempty"`
-	PipelinePreferences    map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
+	AutomaticReviewEnabled     bool                                 `json:"automatic_review_enabled,omitempty"`
+	Checkpoints                config.Checkpoints                   `json:"checkpoints"`
+	DangerouslySkipPermissions bool                                 `json:"dangerously_skip_permissions,omitempty"`
+	Effort                     EffortConfig                         `json:"effort,omitempty"`
+	Inquireness                string                               `json:"inquireness,omitempty"`
+	Models                     ModelDefaults                        `json:"models"`
+	Pipeline                   string                               `json:"pipeline,omitempty"`
+	PipelinePreferences        map[string]config.PipelinePreference `json:"pipeline_preferences,omitempty"`
 }
 
 // FeatureDetail defines model for FeatureDetail.

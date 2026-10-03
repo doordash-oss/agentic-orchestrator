@@ -1229,3 +1229,89 @@ func askUserControlRequest(requestID string) llm.SDKMessage {
 		},
 	}
 }
+
+// startStalledBgTaskHelper runs a craft-review helper whose first turn ends
+// while a background task stays live forever, as a never-true poll loop does.
+func startStalledBgTaskHelper(t *testing.T, sess *boundedBgTaskSession, phaseDir string) <-chan *BoundedHelperResult {
+	t.Helper()
+	sm := mocks.NewMockSessionManager()
+	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
+		return sess, nil
+	}
+	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
+	resultCh := make(chan *BoundedHelperResult, 1)
+	go func() {
+		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
+			sessionID:     "helper-bg-stall",
+			workDir:       t.TempDir(),
+			completionDir: phaseDir,
+			contractPhase: feature.PhaseReview,
+			contractRole:  RoleImplementationReviewCraft,
+		})
+		resultCh <- result
+	}()
+	sess.statusC <- agentStatusSuccess
+	return resultCh
+}
+
+func TestRunBoundedHelper_StalledBackgroundTasks(t *testing.T) {
+	tests := []struct {
+		name        string
+		grace       time.Duration
+		ceiling     time.Duration
+		staleStdout bool
+		withOutcome bool
+		wantStatus  string
+	}{
+		{name: "silent tasks past stall grace commit present outcome", grace: 20 * time.Millisecond, ceiling: time.Hour, staleStdout: true, withOutcome: true, wantStatus: BoundedHelperStatusCompleted},
+		{name: "fresh stdout past ceiling commits present outcome", grace: time.Hour, ceiling: 50 * time.Millisecond, withOutcome: true, wantStatus: BoundedHelperStatusCompleted},
+		{name: "ceiling without outcome is a protocol violation", grace: time.Hour, ceiling: 50 * time.Millisecond, wantStatus: BoundedHelperStatusProtocolViolation},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withBackgroundTaskPollInterval(t, 5*time.Millisecond)
+			withBackgroundTaskStallGrace(t, tt.grace)
+			withBackgroundTaskDeferralCeiling(t, tt.ceiling)
+
+			phaseDir := t.TempDir()
+			sess := newBoundedBgTaskSession(&llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn})
+			sess.liveTasks.Store(1)
+			if tt.staleStdout {
+				sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
+			}
+			if tt.withOutcome {
+				writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
+				sess.setRootIntent(validSuccessCompletionIntent())
+			}
+			stopFresh := make(chan struct{})
+			defer close(stopFresh)
+			if !tt.staleStdout {
+				go func() {
+					for {
+						select {
+						case <-stopFresh:
+							return
+						case <-time.After(2 * time.Millisecond):
+							sess.lastStdoutNs.Store(time.Now().UnixNano())
+						}
+					}
+				}()
+			}
+
+			resultCh := startStalledBgTaskHelper(t, sess, phaseDir)
+			select {
+			case result := <-resultCh:
+				if result.Status != tt.wantStatus {
+					t.Fatalf("Status = %q, want %q", result.Status, tt.wantStatus)
+				}
+			case msg := <-sess.nudges:
+				t.Fatalf("unexpected user message %q; a stalled task needs no nudge", msg)
+			case <-time.After(2 * time.Second):
+				t.Fatal("helper stayed deferred on a stalled background task")
+			}
+			if sess.stopCalls == 0 {
+				t.Fatal("session was not stopped; the stalled task would outlive the helper")
+			}
+		})
+	}
+}

@@ -327,6 +327,8 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 	// re-invokes the agent when the tasks complete, so no nudge is sent and no
 	// budget is consumed. The bgTicker below provides the fallback paths.
 	awaitingBackgroundTasks := false
+	var awaitingSince time.Time
+	silence := novelActivitySilence(sess)
 	autoResumeAttempts := 0
 	bgTicker := time.NewTicker(backgroundTaskPollInterval)
 	defer bgTicker.Stop()
@@ -367,6 +369,26 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 				continue
 			}
 			if liveBackgroundTasks(sess) > 0 {
+				// Same stall grace and ceiling as the implementation waiter: a
+				// never-true poll loop must not hold a finished helper open.
+				ceilingExpired := !awaitingSince.IsZero() &&
+					time.Since(awaitingSince) >= backgroundTaskDeferralCeiling.get()
+				if rootCompletionIntent(sess).Found && !hasPendingRootQuestion(sess) &&
+					(ceilingExpired || silence() >= backgroundTaskStallGrace.get()) {
+					// Stop kills the process group, taking the tasks with it.
+					_ = sess.Stop()
+					stopped := tasksStoppedSession{sess}
+					result, err := finalizeBoundedHelperResult(cfg.responsePath, stopped, label, cfg.requireOutput, cfg.completionDir, cfg.contractPhase, cfg.contractRole)
+					return finish(result, err)
+				}
+				if ceilingExpired {
+					_ = sess.Stop()
+					result := boundedHelperSnapshot(cfg.responsePath, sess, BoundedHelperStatusProtocolViolation)
+					return finish(result, newProtocolViolationError(cfg.contractRole, cfg.completionDir, []ProtocolViolation{{
+						Artifact: "agentico-outcome",
+						Reason:   "delegated tasks exceeded the deferral ceiling without a completion outcome",
+					}}))
+				}
 				continue
 			}
 			quiet := time.Since(sess.LastStdoutAt())
@@ -404,6 +426,9 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 		case <-statusCh:
 			disposition := boundedHelperTurnDisposition(sess, cfg.completionDir != "")
 			if disposition == llm.TurnAwaitingTasks {
+				if !awaitingBackgroundTasks {
+					awaitingSince = time.Now()
+				}
 				awaitingBackgroundTasks = true
 				continue
 			}
@@ -495,6 +520,13 @@ func isRetryableProviderNetworkFailure(output string, err error) bool {
 // boundedHelperTurnDisposition interprets a provider turn. Helpers using the
 // phase completion protocol require a root-owned semantic outcome; ordinary
 // helpers retain their one-shot text-result behavior.
+// tasksStoppedSession reports no live background tasks for a session the
+// waiter already stopped over a task stall, so finalization classifies the
+// root outcome instead of the killed tasks.
+type tasksStoppedSession struct{ ports.SessionHandle }
+
+func (tasksStoppedSession) LiveBackgroundTaskCount() int { return 0 }
+
 func boundedHelperTurnDisposition(sess ports.SessionView, completionProtocol bool) llm.TurnDisposition {
 	result := sess.Cost()
 	if result == nil {

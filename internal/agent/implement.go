@@ -1825,6 +1825,22 @@ var backgroundTaskDeferralCeiling = newAtomicDuration(25 * time.Minute)
 // keep-alive sessions. Var for tests.
 var phaseOutcomeReclassifyInterval = newAtomicDuration(45 * time.Second)
 
+// novelActivitySilence returns a clock of how long the session has produced
+// no novel output. LastStdoutAt is refreshed by any line, so a task that polls
+// forever would reset every grace window; a window counts as silent unless
+// stdout is recent *and* its content changed. Not safe for concurrent use.
+func novelActivitySilence(sess ports.SessionView) func() time.Duration {
+	activityDigest := sessionActivityDigest(sess)
+	lastNovelActivity := time.Now()
+	return func() time.Duration {
+		if digest := sessionActivityDigest(sess); digest != activityDigest {
+			activityDigest = digest
+			lastNovelActivity = time.Now()
+		}
+		return max(time.Since(sess.LastStdoutAt()), time.Since(lastNovelActivity))
+	}
+}
+
 // liveBackgroundTaskCounter is the optional session capability that reports
 // running background subagents. Provider sessions that do not track them
 // (or test doubles that predate the capability) simply never defer.
@@ -2263,18 +2279,7 @@ func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) P
 	bgTicker := time.NewTicker(backgroundTaskPollInterval)
 	defer bgTicker.Stop()
 
-	// Novel-output tracking: LastStdoutAt is refreshed by any line, so a task
-	// that polls forever would reset every grace window. A window counts as
-	// silent unless stdout is recent *and* its content changed.
-	activityDigest := sessionActivityDigest(sess)
-	lastNovelActivity := time.Now()
-	silence := func() time.Duration {
-		if digest := sessionActivityDigest(sess); digest != activityDigest {
-			activityDigest = digest
-			lastNovelActivity = time.Now()
-		}
-		return max(time.Since(sess.LastStdoutAt()), time.Since(lastNovelActivity))
-	}
+	silence := novelActivitySilence(sess)
 
 	// Fallback wake-up: Done never fires for multi-turn keep-alive sessions
 	// and a StatusCh delivery can be lost, so re-derive the status from the

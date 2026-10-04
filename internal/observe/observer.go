@@ -353,8 +353,34 @@ func copyAnyMap(in map[string]any) map[string]any {
 	return out
 }
 
+// MetricsConfig tunes OTLP metric export. The zero value exports cumulative
+// metrics to the trace endpoint.
+type MetricsConfig struct {
+	Disabled bool
+	// Endpoint overrides the trace endpoint for metrics.
+	Endpoint string
+	// Temporality is "cumulative" (default) or "delta".
+	Temporality string
+}
+
+// Option configures optional Observer behavior.
+type Option func(*observerOptions)
+
+type observerOptions struct {
+	metrics MetricsConfig
+}
+
+// WithMetrics sets the metric export configuration.
+func WithMetrics(cfg MetricsConfig) Option {
+	return func(o *observerOptions) { o.metrics = cfg }
+}
+
 // New creates an Observer. When enabled is false, all methods return immediately.
-func New(enabled bool, stateDir string, otelEnabled bool, otelEndpoint string, otelInsecure bool, otelServiceName string) *Observer {
+func New(enabled bool, stateDir string, otelEnabled bool, otelEndpoint string, otelInsecure bool, otelServiceName string, opts ...Option) *Observer {
+	var options observerOptions
+	for _, opt := range opts {
+		opt(&options)
+	}
 	if !enabled && !otelEnabled {
 		return &Observer{enabled: false}
 	}
@@ -363,7 +389,11 @@ func New(enabled bool, stateDir string, otelEnabled bool, otelEndpoint string, o
 		res, _ = telemetryResource(stateDir, otelServiceName)
 	}
 	bridge := newOtelBridgeWithResource(otelEnabled, otelEndpoint, otelInsecure, otelServiceName, res)
-	metrics := newTelemetryMetrics(otelEnabled, otelEndpoint, otelInsecure, res, stateDir)
+	metricsEndpoint := strings.TrimSpace(options.metrics.Endpoint)
+	if metricsEndpoint == "" {
+		metricsEndpoint = otelEndpoint
+	}
+	metrics := newTelemetryMetrics(otelEnabled && !options.metrics.Disabled, metricsEndpoint, otelInsecure, options.metrics.Temporality, res, stateDir)
 	o := &Observer{
 		otel: bridge, metrics: metrics,
 		enabled: true, localEnabled: enabled,

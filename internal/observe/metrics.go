@@ -30,7 +30,10 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var metricCounterNames = []string{
@@ -66,21 +69,39 @@ type telemetryMetrics struct {
 	httpResponseSize metric.Int64Histogram
 }
 
-func newTelemetryMetrics(enabled bool, endpoint string, insecure bool, res *resource.Resource, stateDir string) *telemetryMetrics {
+func newTelemetryMetrics(enabled bool, endpoint string, insecure bool, temporality string, res *resource.Resource, stateDir string) *telemetryMetrics {
 	if !enabled {
 		return nil
 	}
+	delta := false
+	switch strings.ToLower(strings.TrimSpace(temporality)) {
+	case "", "cumulative":
+	case "delta":
+		delta = true
+	default:
+		otelStartupLogf("otel: unknown otel_metrics_temporality %q; using cumulative", temporality)
+	}
 	opts := []otlpmetricgrpc.Option{}
+	if delta {
+		opts = append(opts, otlpmetricgrpc.WithTemporalitySelector(deltaTemporality))
+	}
 	if endpoint != "" {
 		opts = append(opts, otlpmetricgrpc.WithEndpoint(endpoint))
 	}
 	if insecure {
 		opts = append(opts, otlpmetricgrpc.WithInsecure())
 	}
-	exporter, err := otlpmetricgrpc.New(context.Background(), opts...)
+	grpcExporter, err := otlpmetricgrpc.New(context.Background(), opts...)
 	if err != nil {
 		return nil
 	}
+	effective := effectiveOTLPMetricsEndpoint(endpoint)
+	temporalityName := "cumulative"
+	if delta {
+		temporalityName = "delta"
+	}
+	otelStartupLogf("otel: metric export enabled: endpoint=%s insecure=%t temporality=%s", effective, insecure, temporalityName)
+	exporter := &unimplementedGuardExporter{Exporter: grpcExporter, endpoint: effective}
 	interval := 60 * time.Second
 	if raw := strings.TrimSpace(os.Getenv("OTEL_METRIC_EXPORT_INTERVAL")); raw != "" {
 		if ms, err := strconv.ParseInt(raw, 10, 64); err == nil && ms > 0 {
@@ -414,4 +435,48 @@ func (m *telemetryMetrics) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return m.mp.Shutdown(ctx)
+}
+
+// deltaTemporality reports monotonic instruments as deltas, as delta-only
+// gateways require; up-down counters and gauges stay cumulative because
+// their deltas are meaningless.
+func deltaTemporality(kind sdkmetric.InstrumentKind) metricdata.Temporality {
+	switch kind {
+	case sdkmetric.InstrumentKindCounter, sdkmetric.InstrumentKindHistogram, sdkmetric.InstrumentKindObservableCounter:
+		return metricdata.DeltaTemporality
+	default:
+		return metricdata.CumulativeTemporality
+	}
+}
+
+func effectiveOTLPMetricsEndpoint(configured string) string {
+	if configured == "" {
+		if ep := os.Getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"); ep != "" {
+			configured = ep
+		}
+	}
+	return effectiveOTLPEndpoint(configured)
+}
+
+// unimplementedGuardExporter turns metric export off for the life of the
+// process once the collector answers Unimplemented: a trace-only collector
+// never starts accepting metrics, so retrying only floods the log.
+type unimplementedGuardExporter struct {
+	sdkmetric.Exporter
+	endpoint string
+	off      atomic.Bool
+}
+
+func (e *unimplementedGuardExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
+	if e.off.Load() {
+		return nil
+	}
+	err := e.Exporter.Export(ctx, rm)
+	if st, ok := status.FromError(err); ok && err != nil && st.Code() == codes.Unimplemented {
+		if e.off.CompareAndSwap(false, true) {
+			otelStartupLogf("otel: metric export disabled: collector at %s does not accept OTLP metrics; set observability.otel_metrics_endpoint or otel_metrics_disabled", e.endpoint)
+		}
+		return nil
+	}
+	return err
 }

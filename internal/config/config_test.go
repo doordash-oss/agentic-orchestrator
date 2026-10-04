@@ -1699,6 +1699,24 @@ func TestObservabilityConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("metrics_settings", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		cfgPath := filepath.Join(tmpDir, "config.yaml")
+		yml := "observability:\n  otel_metrics_disabled: true\n  otel_metrics_endpoint: metrics:4317\n  otel_metrics_temporality: delta\n"
+		if err := os.WriteFile(cfgPath, []byte(yml), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := Load(cfgPath)
+		if err != nil {
+			t.Fatalf("Load failed: %v", err)
+		}
+		obs := cfg.Observability
+		if !obs.OTelMetricsDisabled || obs.OTelMetricsEndpoint != "metrics:4317" || obs.OTelMetricsTemporality != "delta" {
+			t.Errorf("metrics settings = %+v", obs)
+		}
+	})
+
 	t.Run("new_default_has_observability", func(t *testing.T) {
 		cfg := NewDefault()
 		if !cfg.Observability.Events {

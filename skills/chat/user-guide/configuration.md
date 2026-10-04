@@ -343,19 +343,28 @@ observability:
   otel_endpoint: ""
   otel_insecure: false
   otel_service_name: agentico
+  otel_metrics_disabled: false
+  otel_metrics_endpoint: ""
+  otel_metrics_temporality: cumulative
 ```
 
-| Field               | Default      | Description                                                     |
-| ------------------- | ------------ | --------------------------------------------------------------- |
-| `events`            | `true`       | Enable JSONL event recording per feature                        |
-| `otel_enabled`      | `false`      | Enable OTel traces, durable wide events, and fleet metrics      |
-| `otel_endpoint`     | `""`         | OTLP endpoint for traces and metrics; does not enable telemetry |
-| `otel_insecure`     | `false`      | Allow insecure OTLP connections                                 |
-| `otel_service_name` | `"agentico"` | Service name for every OTel signal                              |
+| Field                      | Default        | Description                                                     |
+| -------------------------- | -------------- | --------------------------------------------------------------- |
+| `events`                   | `true`         | Enable JSONL event recording per feature                        |
+| `otel_enabled`             | `false`        | Enable OTel traces, durable wide events, and fleet metrics      |
+| `otel_endpoint`            | `""`           | OTLP endpoint for traces and metrics; does not enable telemetry |
+| `otel_insecure`            | `false`        | Allow insecure OTLP connections                                 |
+| `otel_service_name`        | `"agentico"`   | Service name for every OTel signal                              |
+| `otel_metrics_disabled`    | `false`        | Export traces and wide events only, no metrics                  |
+| `otel_metrics_endpoint`    | `""`           | OTLP endpoint for metrics; empty uses `otel_endpoint`           |
+| `otel_metrics_temporality` | `"cumulative"` | `cumulative` or `delta`; delta-only gateways need `delta`       |
 
 When `otel_endpoint` is empty, standard common and per-signal OTel environment
 settings are honored. `OTEL_METRIC_EXPORT_INTERVAL` controls the metric export
-interval in milliseconds. Local JSONL and OTel may be enabled independently.
+interval in milliseconds. If the metrics collector answers that it does not
+implement OTLP metrics, as trace-only gateways do, Agentico logs one line and
+stops exporting metrics until restart. Local JSONL and OTel may be enabled
+independently.
 See `docs/observability.md` for metric schemas, privacy constraints, and the
 durable outbox contract.
 

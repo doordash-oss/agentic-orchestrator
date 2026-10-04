@@ -102,6 +102,11 @@ type ObservabilityConfig struct {
 	OTelEndpoint    string `yaml:"otel_endpoint,omitempty"`
 	OTelInsecure    bool   `yaml:"otel_insecure,omitempty"`
 	OTelServiceName string `yaml:"otel_service_name,omitempty"`
+	// Metrics share otel_endpoint unless overridden; trace-only collectors
+	// need either an override or the opt-out.
+	OTelMetricsDisabled    bool   `yaml:"otel_metrics_disabled,omitempty"`
+	OTelMetricsEndpoint    string `yaml:"otel_metrics_endpoint,omitempty"`
+	OTelMetricsTemporality string `yaml:"otel_metrics_temporality,omitempty"`
 
 	parsed bool // set by UnmarshalYAML; not serialized
 }

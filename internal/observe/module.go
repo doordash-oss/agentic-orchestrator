@@ -35,7 +35,12 @@ type Params struct {
 var Module = fx.Module("observe",
 	fx.Provide(func(p Params) *Observer {
 		obs := p.Config.Observability
-		o := New(obs.Events, p.StateDir, obs.OTelEnabled, obs.OTelEndpoint, obs.OTelInsecure, obs.OTelServiceName)
+		o := New(obs.Events, p.StateDir, obs.OTelEnabled, obs.OTelEndpoint, obs.OTelInsecure, obs.OTelServiceName,
+			WithMetrics(MetricsConfig{
+				Disabled:    obs.OTelMetricsDisabled,
+				Endpoint:    obs.OTelMetricsEndpoint,
+				Temporality: obs.OTelMetricsTemporality,
+			}))
 		if p.Store != nil {
 			p.Store.SetMutationObserver(o)
 			if features, err := p.Store.List(); err == nil || feature.IsPartialLoadError(err) {

@@ -1588,7 +1588,8 @@ paths:
       description: >-
         Omitted settings merge over the committed settings. A change during a
         turn waits until the turn ends. The request id is idempotent within a
-        pending change. A harness switch with a process remains locked.
+        pending change. A harness switch retires an idle process or waits for
+        an active turn to finish, then rebuilds history on the destination.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -2461,6 +2462,10 @@ components:
         diagnostics:
           type: string
           description: Raw detail text, deepest disclosure only.
+        attempted_settings:
+          $ref: "#/components/schemas/SupervisorSettings"
+          description: Settings attempted before a supervisor launch failure restored the previous choice.
+          x-go-type-skip-optional-pointer: false
     ErrorRemediation:
       type: object
       description: Catalog-authored next step for an error code.
@@ -5746,6 +5751,10 @@ components:
           type: string
     SupervisorSettingsRequest:
       type: object
+      description: >-
+        Optional fields merge into the committed settings. When harness changes,
+        omitted model selects the destination's first chat-eligible model and
+        omitted effort selects its default (empty) effort.
       additionalProperties: false
       required: [request_id, expected_generation]
       properties:
@@ -5818,7 +5827,8 @@ components:
         failure:
           description: >-
             Canonical error of the most recent launch failure; present only
-            while the lifecycle is `failed`.
+            while the lifecycle is `failed`. attempted_settings is present
+            when a relaunch change was reverted.
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
         pending_requests:
@@ -5849,7 +5859,7 @@ components:
           type: string
         kind:
           type: string
-          enum: [model, effort]
+          enum: [model, effort, harness]
         target:
           $ref: "#/components/schemas/SupervisorSettings"
         requested_at:
@@ -5923,7 +5933,7 @@ components:
       properties:
         marker:
           type: string
-          enum: [interrupted, error, history_not_restored, permission_restricted, settings_changed, settings_reverted]
+          enum: [interrupted, error, history_not_restored, permission_restricted, settings_changed, settings_reverted, harness_change]
           x-enum-varnames:
             - SupervisorMarkerInterrupted
             - SupervisorMarkerError
@@ -5931,10 +5941,17 @@ components:
             - SupervisorMarkerPermissionRestricted
             - SupervisorMarkerSettingsChanged
             - SupervisorMarkerSettingsReverted
+            - SupervisorMarkerHarnessChange
         text:
           type: string
         code:
           type: string
+        from_harness:
+          type: string
+          description: Source harness for a harness_change marker.
+        to_harness:
+          type: string
+          description: Destination harness for a harness_change marker.
     SupervisorRecord:
       type: object
       description: >-

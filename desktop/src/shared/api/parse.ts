@@ -358,6 +358,15 @@ export const CanonicalErrorSchema = z.strictObject({
     })
     .optional(),
   diagnostics: z.string().optional(),
+  // Launch failures may include the settings that were rolled back. This
+  // field is accepted on the error response as well as on the state read model.
+  attempted_settings: z
+    .strictObject({
+      harness: z.string().max(100),
+      model: z.string().max(200),
+      effort: z.string().max(40),
+    })
+    .optional(),
 });
 
 export type CanonicalError = z.output<typeof CanonicalErrorSchema>;
@@ -1537,14 +1546,16 @@ export const ServerSupervisorStateSchema = z.object({
   pending_change: z
     .object({
       request_id: z.string().min(1).max(128),
-      kind: z.enum(['model', 'effort']),
+      kind: z.enum(['model', 'effort', 'harness']),
       target: ServerSupervisorSettingsSchema,
       requested_at: z.string().max(100),
     })
     .optional(),
   effective_model: z.string().max(200),
   permission_mode: ServerSupervisorPermissionModeSchema,
-  failure: CanonicalErrorSchema.optional(),
+  failure: CanonicalErrorSchema.extend({
+    attempted_settings: ServerSupervisorSettingsSchema.optional(),
+  }).optional(),
   pending_requests: z.array(ServerControlRequestSchema).max(100),
   head_seq: ServerSupervisorSeqSchema,
   stream_epoch: z.string().max(200),
@@ -1568,6 +1579,7 @@ export const ServerSupervisorMarkerRecordSchema = z.object({
     'history_not_restored',
     'permission_restricted',
     'settings_changed',
+    'harness_change',
     'settings_reverted',
   ]),
   text: AttentionTextSchema,

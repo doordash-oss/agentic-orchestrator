@@ -70,14 +70,17 @@ const (
 	MarkerPermissionRestricted = "permission_restricted"
 	MarkerSettingsChanged      = "settings_changed"
 	MarkerSettingsReverted     = "settings_reverted"
+	MarkerHarnessChange        = "harness_change"
 )
 
 // MarkerData is the payload of a display-only marker record. Code is the
 // catalog code of an error marker.
 type MarkerData struct {
-	Marker string `json:"marker"`
-	Text   string `json:"text"`
-	Code   string `json:"code,omitempty"`
+	Marker      string `json:"marker"`
+	Text        string `json:"text"`
+	Code        string `json:"code,omitempty"`
+	FromHarness string `json:"from_harness,omitempty"`
+	ToHarness   string `json:"to_harness,omitempty"`
 }
 
 // NoteData is model-only context inserted at a settings boundary.
@@ -144,7 +147,7 @@ type Coordinator struct {
 	settings         Settings
 	appliedChanges   map[string]bool
 	pendingChange    *PendingChange
-	relaunchPrevious *Settings
+	relaunchPrevious *relaunchSettings
 	applyingChange   bool
 	conv             persistedConversation
 	store            *transcriptStore
@@ -181,6 +184,12 @@ type Coordinator struct {
 	interrupt      *interruptAttempt
 	closed         bool
 	subs           map[*Subscription]struct{}
+}
+
+type relaunchSettings struct {
+	Settings        Settings
+	NativeSessionID string
+	Kind            string
 }
 
 type launchAttempt struct {
@@ -381,18 +390,18 @@ func (c *Coordinator) applyBootChange() error {
 	}
 	change := c.pendingChange
 	previous := c.settings
-	if err := saveSettings(c.dir, change.Target); err != nil {
+	previousID := c.conv.NativeSessionID
+	if err := c.commitChangeLocked(change, previous); err != nil {
 		return err
 	}
 	if err := savePendingChange(c.dir, nil); err != nil {
 		return err
 	}
-	c.settings = change.Target
 	c.pendingChange = nil
 	if err := c.rememberChangeLocked(change.RequestID); err != nil {
 		return err
 	}
-	c.appendSettingsRecordsLocked(change, previous, false, "")
+	c.relaunchPrevious = &relaunchSettings{Settings: previous, NativeSessionID: previousID, Kind: change.Kind}
 	return nil
 }
 
@@ -573,6 +582,21 @@ func (c *Coordinator) ChangeSettings(req SettingsChange) (State, error) {
 	if req.Harness != nil {
 		target.Harness = *req.Harness
 	}
+	if target.Harness != c.settings.Harness {
+		if c.opts.Catalog == nil {
+			return State{}, &SettingsInvalidError{Reason: "no model catalog is available"}
+		}
+		if req.Model == nil {
+			model, err := c.opts.Catalog.DefaultModel(target.Harness)
+			if err != nil {
+				return State{}, err
+			}
+			target.Model = model
+		}
+		if req.Effort == nil {
+			target.Effort = ""
+		}
+	}
 	if req.Model != nil {
 		target.Model = *req.Model
 	}
@@ -591,25 +615,24 @@ func (c *Coordinator) ChangeSettings(req SettingsChange) (State, error) {
 		}
 		return c.stateLocked(), nil
 	}
-	if c.lifecycle != LifecycleStopped && c.lifecycle != LifecycleFailed && target.Harness != c.settings.Harness {
-		return State{}, ErrSettingsLocked
-	}
 	kind := "effort"
-	if target.Model != c.settings.Model || target.Harness != c.settings.Harness {
+	if target.Harness != c.settings.Harness {
+		kind = "harness"
+	} else if target.Model != c.settings.Model {
 		kind = "model"
 	}
 	change := &PendingChange{RequestID: req.RequestID, Kind: kind, Target: target, RequestedAt: c.opts.Now().UTC()}
 	if c.lifecycle == LifecycleStopped || c.lifecycle == LifecycleFailed {
 		previous := c.settings
-		if err := saveSettings(c.dir, target); err != nil {
+		previousID := c.conv.NativeSessionID
+		if err := c.commitChangeLocked(change, previous); err != nil {
 			return State{}, err
 		}
-		c.settings = target
 		if err := c.rememberChangeLocked(req.RequestID); err != nil {
 			return State{}, err
 		}
-		if previous.Complete() {
-			c.appendSettingsRecordsLocked(change, previous, false, "")
+		if kind == "harness" && previous.Complete() {
+			c.relaunchPrevious = &relaunchSettings{Settings: previous, NativeSessionID: previousID, Kind: kind}
 		}
 		c.publishStateLocked()
 		return c.stateLocked(), nil
@@ -642,7 +665,7 @@ func (c *Coordinator) applyChange(change *PendingChange) error {
 	effortChanged := change.Target.Effort != c.settings.Effort
 	c.mu.Unlock()
 	updater, capable := sess.(inPlaceSettingsSession)
-	if capable && (harness == "codex" || (harness == "opencode" && !effortChanged)) {
+	if change.Kind != "harness" && capable && (harness == "codex" || (harness == "opencode" && !effortChanged)) {
 		c.mu.Lock()
 		previous := c.settings
 		c.mu.Unlock()
@@ -714,6 +737,7 @@ func (c *Coordinator) CancelPendingChange(id string) (State, error) {
 func (c *Coordinator) applyRelaunchChange(change *PendingChange) error {
 	c.mu.Lock()
 	previous := c.settings
+	previousID := c.conv.NativeSessionID
 	sess := c.session
 	sessionID := c.sessionID
 	if c.pendingChange != nil && c.pendingChange.RequestID == change.RequestID {
@@ -734,22 +758,53 @@ func (c *Coordinator) applyRelaunchChange(change *PendingChange) error {
 	if c.sessionID == sessionID && sess != nil {
 		c.resetProcessLocked()
 	}
-	if err := saveSettings(c.dir, change.Target); err != nil {
+	if err := c.commitChangeLocked(change, previous); err != nil {
 		return err
 	}
 	if err := savePendingChange(c.dir, nil); err != nil {
 		return err
 	}
-	c.settings = change.Target
 	if err := c.rememberChangeLocked(change.RequestID); err != nil {
 		return err
 	}
 	c.pendingChange = nil
-	c.relaunchPrevious = &previous
+	c.relaunchPrevious = &relaunchSettings{Settings: previous, NativeSessionID: previousID, Kind: change.Kind}
 	c.applyingChange = false
 	c.lifecycle = LifecycleStopped
-	c.appendSettingsRecordsLocked(change, previous, false, "")
 	c.publishStateLocked()
+	return nil
+}
+
+func (c *Coordinator) commitChangeLocked(change *PendingChange, previous Settings) error {
+	if change.Kind == "harness" {
+		records, err := c.store.after(0)
+		if err != nil {
+			return err
+		}
+		hasContent := false
+		for _, rec := range records {
+			if rec.Visibility == VisibilityContent {
+				hasContent = true
+				break
+			}
+		}
+		conv := c.conv
+		conv.NativeSessionID = ""
+		if hasContent {
+			conv.NativeSessionID = uuid.NewString()
+		}
+		if err := saveConversation(c.dir, conv); err != nil {
+			return err
+		}
+		c.conv = conv
+	}
+	if err := saveSettings(c.dir, change.Target); err != nil {
+		return err
+	}
+	c.settings = change.Target
+	if previous.Complete() {
+		c.appendSettingsRecordsLocked(change, previous, false, "")
+	}
 	return nil
 }
 
@@ -761,23 +816,39 @@ func (c *Coordinator) appendSettingsRecordsLocked(change *PendingChange, previou
 	text := ""
 	if reverted {
 		marker = MarkerSettingsReverted
-		text = "Couldn't apply " + change.Target.Model + " — still using " + c.settings.Model
+		if change.Kind == "harness" {
+			text = "Couldn't switch to " + harnessDisplayName(change.Target.Harness) + " — still using " + harnessDisplayName(c.settings.Harness)
+		} else {
+			text = "Couldn't apply " + change.Target.Model + " — still using " + c.settings.Model
+		}
 		if reason != "" {
 			text += ": " + reason
 		}
+	} else if change.Kind == "harness" {
+		marker = MarkerHarnessChange
+		text = "Switched to " + harnessDisplayName(change.Target.Harness) + " · " + change.Target.Model
 	} else if change.Kind == "model" {
 		text = "Model changed to " + change.Target.Model
 	} else {
 		text = "Effort changed to " + displayEffort(change.Target.Effort)
 	}
-	c.appendMarkerLocked(c.conv.Generation, "", MarkerData{Marker: marker, Text: text})
+	markerData := MarkerData{Marker: marker, Text: text}
+	if change.Kind == "harness" {
+		markerData.FromHarness = previous.Harness
+		markerData.ToHarness = change.Target.Harness
+	}
+	c.appendMarkerLocked(c.conv.Generation, "", markerData)
 	if reverted {
 		return
 	}
 	if change.Kind == "model" && change.Target.Effort != previous.Effort {
 		c.appendMarkerLocked(c.conv.Generation, "", MarkerData{Marker: MarkerSettingsChanged, Text: "Effort changed to " + displayEffort(change.Target.Effort)})
 	}
-	note := NoteData{Text: "Agentico note: The user changed " + change.Kind + " at this point. Current model: " + change.Target.Model + "; effort: " + change.Target.Effort + "."}
+	noteText := "Agentico note: The user changed " + change.Kind + " at this point. Current model: " + change.Target.Model + "; effort: " + change.Target.Effort + "."
+	if change.Kind == "harness" {
+		noteText = "Agentico note: The user switched this conversation from " + harnessDisplayName(previous.Harness) + " to " + harnessDisplayName(change.Target.Harness) + " at this point. Earlier turns, including tool calls, were produced on " + harnessDisplayName(previous.Harness) + ". Current model: " + change.Target.Model + "; effort: " + displayEffort(change.Target.Effort) + "."
+	}
+	note := NoteData{Text: noteText}
 	data, _ := json.Marshal(note)
 	rec, _, err := c.store.appendRecord(Record{Generation: c.conv.Generation, Kind: KindNote, Visibility: VisibilityModelOnly, Data: data})
 	if err == nil {
@@ -1228,12 +1299,21 @@ func (c *Coordinator) failLaunch(attempt *launchAttempt, cause error) {
 		if c.relaunchPrevious != nil {
 			previous := *c.relaunchPrevious
 			failed := &PendingChange{Kind: "model", Target: c.settings}
-			if failed.Target.Model == previous.Model {
+			if previous.Kind == "harness" {
+				failed.Kind = "harness"
+			} else if failed.Target.Model == previous.Settings.Model {
 				failed.Kind = "effort"
 			}
-			if err := saveSettings(c.dir, previous); err == nil {
-				c.settings = previous
-				c.appendSettingsRecordsLocked(failed, previous, true, cause.Error())
+			attempted := c.settings
+			c.failure.AttemptedSettings = &attempted
+			conv := c.conv
+			conv.NativeSessionID = previous.NativeSessionID
+			if err := saveConversation(c.dir, conv); err == nil {
+				c.conv = conv
+			}
+			if err := saveSettings(c.dir, previous.Settings); err == nil {
+				c.settings = previous.Settings
+				c.appendSettingsRecordsLocked(failed, previous.Settings, true, cause.Error())
 			} else {
 				log.Printf("supervisor: restore settings after failed relaunch: %v", err)
 			}
@@ -1249,13 +1329,11 @@ func (c *Coordinator) failLaunch(attempt *launchAttempt, cause error) {
 		if c.pendingChange != nil {
 			change := c.pendingChange
 			previous := c.settings
-			err := saveSettings(c.dir, change.Target)
+			err := c.commitChangeLocked(change, previous)
 			if err == nil {
 				if err = savePendingChange(c.dir, nil); err == nil {
-					c.settings = change.Target
 					c.pendingChange = nil
 					if err = c.rememberChangeLocked(change.RequestID); err == nil {
-						c.appendSettingsRecordsLocked(change, previous, false, "")
 					}
 				}
 			}
@@ -1334,16 +1412,15 @@ func (c *Coordinator) applyExitLocked(clean bool) {
 	if c.pendingChange != nil {
 		change := c.pendingChange
 		previous := c.settings
-		err := saveSettings(c.dir, change.Target)
+		previousID := c.conv.NativeSessionID
+		err := c.commitChangeLocked(change, previous)
 		if err == nil {
 			if err = savePendingChange(c.dir, nil); err == nil {
-				c.settings = change.Target
 				if err := c.rememberChangeLocked(change.RequestID); err != nil {
 					log.Printf("supervisor: remember applied change: %v", err)
 				}
 				c.pendingChange = nil
-				c.relaunchPrevious = &previous
-				c.appendSettingsRecordsLocked(change, previous, false, "")
+				c.relaunchPrevious = &relaunchSettings{Settings: previous, NativeSessionID: previousID, Kind: change.Kind}
 			}
 		}
 		if err != nil {

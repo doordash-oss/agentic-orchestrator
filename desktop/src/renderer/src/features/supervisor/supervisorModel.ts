@@ -296,6 +296,7 @@ const NOTICE_TONES: Readonly<Record<SupervisorMarker['marker'], ConversationNoti
   history_not_restored: 'caveat',
   permission_restricted: 'caveat',
   settings_changed: 'neutral',
+  harness_change: 'neutral',
   settings_reverted: 'caveat',
 };
 

@@ -235,6 +235,29 @@ func TestModelOnlyNoteBecomesUserHistory(t *testing.T) {
 	compareGolden(t, "note.golden.txt", data)
 }
 
+func TestCrossHarnessGolden(t *testing.T) {
+	data, err := Render(input(t.TempDir(), loadRecords(t, "cross_harness.jsonl")), Options{ContextWindow: windowFor(1_000_000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, data)
+	for _, want := range []string{
+		`Assistant: called Bash with {"command":"go test ./..."}`,
+		`Tool (Bash): result: tests passed`,
+		`Assistant: called Write with {"file_path":"status.txt","content":"checked"}`,
+		`Tool (Write): result: wrote status.txt`,
+		`User: Agentico note: The user switched this conversation from Claude to OpenCode`,
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("cross-harness seed lacks %q", want)
+		}
+	}
+	if bytes.Contains(data, []byte("Switched to OpenCode ·")) {
+		t.Error("display-only harness marker entered rebuilt history")
+	}
+	compareGolden(t, "cross_harness.golden.txt", data)
+}
+
 func TestRebuildBudgetDropsOldestTurn(t *testing.T) {
 	dir := t.TempDir()
 	res, err := New(Options{ContextWindow: windowFor(budgetWindow)}).Rebuild(context.Background(), input(dir, loadRecords(t, "transcript.jsonl")))

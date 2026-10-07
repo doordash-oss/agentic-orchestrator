@@ -353,10 +353,20 @@ func readFakeRollout(threadID string) FakeCodexResume {
 			} `json:"payload"`
 		}
 		if json.Unmarshal([]byte(line), &item) != nil || item.Type != "response_item" ||
-			item.Payload.Type != "message" || item.Payload.Role != "user" {
+			item.Payload.Type != "message" || len(item.Payload.Content) == 0 {
+			continue
+		}
+		if item.Payload.Role == "assistant" {
+			res.LastReply = item.Payload.Content[0].Text
+			continue
+		}
+		if item.Payload.Role != "user" {
 			continue
 		}
 		res.UserItems++
+		if !strings.HasPrefix(item.Payload.Content[0].Text, "Agentico note:") {
+			res.LastPrompt = item.Payload.Content[0].Text
+		}
 		if res.UserItems == 1 && len(item.Payload.Content) > 0 {
 			res.FirstPrompt = item.Payload.Content[0].Text
 		}
@@ -512,6 +522,18 @@ func decision(result json.RawMessage) string {
 
 func (t *fakeTurn) run(text string, sayResumed bool, resume *FakeCodexResume) {
 	switch {
+	case strings.Contains(text, FakeSupervisorRecallFirst):
+		reply := "First user prompt: "
+		if resume != nil {
+			reply += resume.FirstPrompt
+		}
+		t.message(reply, reply)
+	case strings.Contains(text, FakeSupervisorRecallLast):
+		reply := "Last exchange: "
+		if resume != nil {
+			reply += resume.LastPrompt + " | " + resume.LastReply
+		}
+		t.message(reply, reply)
 	case sayResumed:
 		reply := "Not resumed"
 		if resume != nil {

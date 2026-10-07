@@ -2878,7 +2878,7 @@ export type SupervisorSettings = z.output<typeof SupervisorSettingsSchema>;
 
 export const SupervisorPendingChangeSchema = z.strictObject({
   requestId: z.string().min(1).max(128),
-  kind: z.enum(['model', 'effort']),
+  kind: z.enum(['model', 'effort', 'harness']),
   target: SupervisorSettingsSchema,
   requestedAt: z.string().max(100),
 });
@@ -2914,7 +2914,9 @@ export const SupervisorStateSchema = z.strictObject({
   effectiveModel: z.string().max(200),
   permissionMode: SupervisorPermissionModeSchema,
   /** Canonical error of the most recent launch failure; present only while `failed`. */
-  failure: CanonicalErrorSchema.optional(),
+  failure: CanonicalErrorSchema.extend({
+    attemptedSettings: SupervisorSettingsSchema.optional(),
+  }).optional(),
   pendingRequests: z.array(SupervisorPendingRequestSchema).max(100),
   /** Seq of the newest committed transcript record; 0 when empty. */
   headSeq: SupervisorSeqSchema,
@@ -2957,6 +2959,7 @@ export const SupervisorMarkerKindSchema = z.enum([
   'history_not_restored',
   'permission_restricted',
   'settings_changed',
+  'harness_change',
   'settings_reverted',
 ]);
 export type SupervisorMarkerKind = z.output<typeof SupervisorMarkerKindSchema>;
@@ -3019,8 +3022,8 @@ export type SupervisorTranscriptRequest = z.output<typeof SupervisorTranscriptRe
 
 export const SupervisorSettingsRequestSchema = z.strictObject({
   harness: z.string().min(1).max(100),
-  model: z.string().min(1).max(200),
-  effort: z.string().max(40),
+  model: z.string().min(1).max(200).optional(),
+  effort: z.string().max(40).optional(),
   requestId: z
     .string()
     .min(1)

@@ -339,7 +339,12 @@ func (h *apiHandler) writeSupervisorError(w http.ResponseWriter, err error) {
 // supervisorLaunchFailure renders a launch failure as the canonical error
 // both the failed send and the read model's failure field carry.
 func supervisorLaunchFailure(launch *supervisor.LaunchFailedError) Error {
-	return wireError(errcat.New(errcat.SupervisorLaunchFailed, errcat.WithDiagnostics(SafeDisplayText(launch.Err.Error(), 400))))
+	failure := wireError(errcat.New(errcat.SupervisorLaunchFailed, errcat.WithDiagnostics(SafeDisplayText(launch.Err.Error(), 400))))
+	if launch.AttemptedSettings != nil {
+		attempted := launch.AttemptedSettings
+		failure.AttemptedSettings = &SupervisorSettings{Harness: attempted.Harness, Model: attempted.Model, Effort: attempted.Effort}
+	}
+	return failure
 }
 
 // supervisorStateDTO projects the read model; pending requests reuse the
@@ -441,9 +446,11 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 		var data supervisor.MarkerData
 		_ = json.Unmarshal(rec.Data, &data)
 		dto.Marker = &SupervisorMarkerRecord{
-			Marker: SupervisorMarkerRecordMarker(data.Marker),
-			Text:   SafeDisplayText(data.Text, 400),
-			Code:   data.Code,
+			Marker:      SupervisorMarkerRecordMarker(data.Marker),
+			Text:        SafeDisplayText(data.Text, 400),
+			Code:        data.Code,
+			FromHarness: data.FromHarness,
+			ToHarness:   data.ToHarness,
 		}
 	case supervisor.KindNote:
 		var data supervisor.NoteData

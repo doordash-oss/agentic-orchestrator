@@ -77,9 +77,11 @@ import {
 } from '../QuestionTurn';
 import { ConversationTranscript } from '../transcript/ConversationTranscript';
 import { SupervisorModelChip } from './SupervisorModelChip';
+import { SupervisorSwitchDialog, type SupervisorSwitchChoice } from './SupervisorSwitchDialog';
 import {
   buildSupervisorConversation,
   findCatalogueModel,
+  harnessLabel,
   isPausedByRestart,
   isTurnActive,
   mergeRecords,
@@ -159,6 +161,7 @@ export function SupervisorPage({
     filter: string;
     token: number;
   } | null>(null);
+  const [switchChoice, setSwitchChoice] = useState<SupervisorSwitchChoice | null>(null);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   // Requests answered from this page: hidden at once, before the server's
   // next state confirms they are gone.
@@ -385,7 +388,9 @@ export function SupervisorPage({
     }
   };
 
-  const commitSettings = async (target: SupervisorSettings): Promise<void> => {
+  const commitSettings = async (
+    target: Pick<SupervisorSettingsRequest, 'harness' | 'model' | 'effort'>,
+  ): Promise<void> => {
     if (state === null) return;
     try {
       if (state.pendingChange !== undefined) {
@@ -407,29 +412,56 @@ export function SupervisorPage({
     }
   };
 
+  const chooseSwitch = (harness: string, model?: string): void => {
+    if (settingsChosen(settings) && harness !== settings.harness && (state?.headSeq ?? 0) > 0) {
+      setSwitchChoice({ harness, ...(model === undefined ? {} : { model }) });
+      return;
+    }
+    void commitSettings({ harness, ...(model === undefined ? {} : { model }) }).catch((error) =>
+      setInlineError(parseIpcError(error)),
+    );
+  };
+
+  const retrySwitch = async (target: SupervisorSettings): Promise<void> => {
+    try {
+      await commitSettings(target);
+      await send();
+    } catch (error) {
+      setInlineError(parseIpcError(error));
+    }
+  };
+
   const slashCommands: readonly ComposerSlashCommand[] = [
     {
       name: '/model',
       description: 'Change the supervisor model',
       onExecute: (argument) => {
         const query = argument.trim().toLocaleLowerCase();
-        const models = (catalogue?.phaseProviderModels.chat?.[settings.harness] ?? []).map(
-          (id) => findCatalogueModel(catalogue, settings.harness, id) ?? { id },
-        );
-        const matches = models.filter((model) =>
-          [model.id, model.displayName ?? '', ...(model.aliases ?? [])].some(
-            (name) => name.toLocaleLowerCase() === query,
-          ),
-        );
-        if (query !== '' && matches.length === 1) {
-          const model = matches[0]!;
-          const effort =
-            settings.effort !== '' && !model.effortCapabilities?.includes(settings.effort as never)
-              ? ''
-              : settings.effort;
-          void commitSettings({ ...settings, model: model.id, effort }).catch((error) =>
-            setInlineError(parseIpcError(error)),
+        const matches = Object.entries(catalogue?.phaseProviderModels.chat ?? {})
+          .flatMap(([harness, ids]) =>
+            ids.map((id) => ({
+              harness,
+              model: findCatalogueModel(catalogue, harness, id) ?? { id },
+            })),
+          )
+          .filter(({ model }) =>
+            [model.id, model.displayName ?? '', ...(model.aliases ?? [])].some(
+              (name) => name.toLocaleLowerCase() === query,
+            ),
           );
+        if (query !== '' && matches.length === 1) {
+          const { harness, model } = matches[0]!;
+          if (harness !== settings.harness) chooseSwitch(harness, model.id);
+          else {
+            const effort =
+              settings.effort !== '' &&
+              !model.effortCapabilities?.includes(settings.effort as never)
+                ? ''
+                : settings.effort;
+            void commitSettings({ ...settings, model: model.id, effort }).catch((error) =>
+              setInlineError(parseIpcError(error)),
+            );
+          }
         } else setOpenSection({ section: 'model', filter: argument.trim(), token: Date.now() });
       },
     },
@@ -568,16 +600,20 @@ export function SupervisorPage({
         {state?.pendingChange !== undefined ? (
           <div className="supervisor-pending-tray" role="status">
             <span>
-              {state.pendingChange.kind === 'model'
-                ? 'Model change pending'
-                : 'Effort change pending'}{' '}
+              {state.pendingChange.kind === 'harness'
+                ? `Switch to ${harnessLabel(state.pendingChange.target.harness)} pending`
+                : state.pendingChange.kind === 'model'
+                  ? 'Model change pending'
+                  : 'Effort change pending'}{' '}
               — applies when{' '}
               {lifecycle === 'starting' ? 'the supervisor is ready' : 'this turn ends'}
             </span>
             <strong>
-              {state.pendingChange.kind === 'model'
-                ? state.pendingChange.target.model
-                : state.pendingChange.target.effort || 'Default'}
+              {state.pendingChange.kind === 'harness'
+                ? `${harnessLabel(state.pendingChange.target.harness)} · ${state.pendingChange.target.model}`
+                : state.pendingChange.kind === 'model'
+                  ? state.pendingChange.target.model
+                  : state.pendingChange.target.effort || 'Default'}
             </strong>
             <button type="button" onClick={() => void stop()}>
               Stop turn &amp; apply
@@ -597,12 +633,27 @@ export function SupervisorPage({
         ) : null}
         {failure !== null ? (
           <ErrorSurface
-            error={failure}
+            error={
+              failure.attemptedSettings !== undefined &&
+              failure.attemptedSettings.harness !== settings.harness
+                ? {
+                    ...failure,
+                    summary: `Couldn't switch to ${harnessLabel(failure.attemptedSettings.harness)} — still using ${harnessLabel(settings.harness)}`,
+                  }
+                : failure
+            }
             variant="compact"
             localAction={
               draft.trim() === ''
                 ? { label: SUPERVISOR_COPY.retry, disabledReason: SUPERVISOR_COPY.retryNeedsText }
-                : { label: SUPERVISOR_COPY.retry, onAction: () => void send() }
+                : {
+                    label: SUPERVISOR_COPY.retry,
+                    onAction: () =>
+                      void (failure.attemptedSettings !== undefined &&
+                      failure.attemptedSettings.harness !== settings.harness
+                        ? retrySwitch(failure.attemptedSettings)
+                        : send()),
+                  }
             }
           />
         ) : null}
@@ -646,6 +697,7 @@ export function SupervisorPage({
                   settings={settings}
                   catalogue={catalogue}
                   onCommit={commitSettings}
+                  onSwitch={chooseSwitch}
                   openSection={openSection}
                 />
                 <p
@@ -684,6 +736,19 @@ export function SupervisorPage({
           />
         </div>
       </div>
+      {switchChoice !== null ? (
+        <SupervisorSwitchDialog
+          key={`${switchChoice.harness}:${switchChoice.model ?? ''}`}
+          choice={switchChoice}
+          catalogue={catalogue}
+          lifecycle={lifecycle}
+          onCancel={() => setSwitchChoice(null)}
+          onSwitch={async (request) => {
+            await commitSettings(request);
+            setSwitchChoice(null);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

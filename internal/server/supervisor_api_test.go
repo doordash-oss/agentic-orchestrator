@@ -535,7 +535,7 @@ func TestSupervisorMessageOperationDocumentsErrorReference(t *testing.T) {
 }
 
 func TestSupervisorStateProjectsRestartAndFailureFields(t *testing.T) {
-	launch := &supervisor.LaunchFailedError{Err: errors.New("exec: claude: not found")}
+	launch := &supervisor.LaunchFailedError{Err: errors.New("exec: claude: not found"), AttemptedSettings: &supervisor.Settings{Harness: "codex", Model: "gpt", Effort: ""}}
 	failed := supervisorStateDTO(supervisor.State{
 		Lifecycle:       supervisor.LifecycleFailed,
 		LastTurnOutcome: supervisor.OutcomeNone,
@@ -545,6 +545,9 @@ func TestSupervisorStateProjectsRestartAndFailureFields(t *testing.T) {
 	sent := supervisorLaunchFailure(launch)
 	if failed.Failure == nil || failed.Failure.Code != string(errcat.SupervisorLaunchFailed) || failed.Failure.Diagnostics != sent.Diagnostics || failed.Failure.Title != sent.Title {
 		t.Fatalf("failure = %+v, want the sender's envelope %+v", failed.Failure, sent)
+	}
+	if failed.Failure.AttemptedSettings == nil || failed.Failure.AttemptedSettings.Harness != "codex" || failed.Failure.AttemptedSettings.Model != "gpt" {
+		t.Fatalf("attempted settings = %+v", failed.Failure.AttemptedSettings)
 	}
 	if failed.InterruptedBy != SupervisorInterruptedByNone {
 		t.Fatalf("interrupted_by = %q, want none", failed.InterruptedBy)

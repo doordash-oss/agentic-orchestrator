@@ -218,6 +218,38 @@ func TestModelOnlyNoteBecomesUserHistory(t *testing.T) {
 	}
 }
 
+func TestCrossHarnessGolden(t *testing.T) {
+	data, err := Render(input(loadRecords(t, "cross_harness.jsonl")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLineShape(t, data)
+	for _, want := range []string{
+		`"id":"call_shell_01","name":"shell_command"`,
+		`"tool_use_id":"call_shell_01"`,
+		`"id":"call_patch_02","name":"apply_patch"`,
+		`"tool_use_id":"call_patch_02"`,
+		`"role":"user","content":"Agentico note: The user switched this conversation from Codex to Claude`,
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("cross-harness session lacks %q", want)
+		}
+	}
+	if bytes.Contains(data, []byte("Switched to Claude ·")) {
+		t.Error("display-only harness marker entered rebuilt history")
+	}
+	path := filepath.Join("testdata", "cross_harness.golden.jsonl")
+	if *updateGolden {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, want) {
+		t.Fatalf("cross-harness golden mismatch: %v", err)
+	}
+}
+
 // assertLineShape checks the invariants every rebuilt file must satisfy.
 func assertLineShape(t *testing.T, data []byte) {
 	t.Helper()

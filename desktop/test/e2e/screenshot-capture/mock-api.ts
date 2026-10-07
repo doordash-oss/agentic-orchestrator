@@ -2016,7 +2016,11 @@ function makeMockApi(
     updateSupervisorSettings: (request) =>
       Promise.resolve({
         ...SUPERVISOR_STATE,
-        settings: { harness: request.harness, model: request.model, effort: request.effort ?? '' },
+        settings: {
+          harness: request.harness,
+          model: request.model ?? SUPERVISOR_STATE.settings.model,
+          effort: request.effort ?? '',
+        },
       }),
     cancelSupervisorPendingChange: () => Promise.resolve(SUPERVISOR_STATE),
     getSupervisorTranscript: () =>

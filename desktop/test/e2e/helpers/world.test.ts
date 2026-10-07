@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,6 +43,26 @@ const variants: [string, WorldOptions][] = [
   ['rebase', { rebaseProvider: true }],
   ['supervisor', { supervisorProvider: true }],
 ];
+
+test('unlaunchable Codex is detectable and records app-server attempts', () => {
+  const world = createWorld('codex-unlaunchable', { unlaunchableCodex: true });
+  try {
+    expect(execFileSync(world.codexStub, ['--version'], { encoding: 'utf8' })).toContain(
+      'codex-cli',
+    );
+    expect(execFileSync(world.codexStub, ['login', 'status'], { encoding: 'utf8' })).toContain(
+      'Logged in',
+    );
+    expect(
+      execFileSync(world.codexStub, ['debug', 'models', '--bundled'], { encoding: 'utf8' }),
+    ).toContain('gpt-5.4');
+    expect(() => execFileSync(world.codexStub, ['app-server'], { stdio: 'ignore' })).toThrow();
+    expect(fs.readFileSync(world.codexInvocationLog, 'utf8')).toContain('app-server');
+    expect(fs.readFileSync(world.configPath, 'utf8')).toContain(world.codexStub);
+  } finally {
+    destroyWorld(world);
+  }
+});
 
 test.each(variants)(
   '%s stub initializes without a user prompt or workflow activity',

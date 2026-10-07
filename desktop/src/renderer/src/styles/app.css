@@ -14018,6 +14018,67 @@ body {
   letter-spacing: 0.02em;
 }
 
+.supervisor-chip__switch {
+  justify-self: start;
+  margin: 0 0 var(--space-1);
+  padding: 3px var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--accent);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.supervisor-chip__switch:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.supervisor-chip__switch:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.supervisor-switch-dialog {
+  display: grid;
+  gap: var(--space-3);
+  width: min(420px, calc(100vw - 40px));
+  padding: var(--space-5);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.supervisor-switch-dialog h2,
+.supervisor-switch-dialog p {
+  margin: 0;
+}
+
+.supervisor-switch-dialog label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.supervisor-switch-dialog select {
+  width: 100%;
+  padding: var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.supervisor-switch-dialog__actions {
+  display: flex;
+  justify-content: end;
+  gap: var(--space-2);
+}
+.supervisor-switch-dialog__actions button {
+  padding: var(--space-2) var(--space-3);
+}
+.supervisor-switch-dialog :focus-visible {
+  outline: var(--focus-ring);
+}
+
 .supervisor-chip__option {
   position: relative;
   display: flex;

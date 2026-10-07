@@ -119,7 +119,26 @@ export function toSupervisorState(state: ServerSupervisorState): SupervisorState
         effective: state.permission_mode.effective,
         restrictedByPolicy: state.permission_mode.restricted_by_policy,
       },
-      ...(state.failure === undefined ? {} : { failure: state.failure }),
+      ...(state.failure === undefined
+        ? {}
+        : {
+            failure: {
+              code: state.failure.code,
+              class: state.failure.class,
+              title: state.failure.title,
+              summary: state.failure.summary,
+              ...(state.failure.remediation === undefined
+                ? {}
+                : { remediation: state.failure.remediation }),
+              ...(state.failure.context === undefined ? {} : { context: state.failure.context }),
+              ...(state.failure.diagnostics === undefined
+                ? {}
+                : { diagnostics: state.failure.diagnostics }),
+              ...(state.failure.attempted_settings === undefined
+                ? {}
+                : { attemptedSettings: state.failure.attempted_settings }),
+            },
+          }),
       pendingRequests: state.pending_requests.map(supervisorPendingRequest),
       headSeq: state.head_seq,
       streamEpoch: state.stream_epoch,
@@ -209,8 +228,8 @@ export class SupervisorService {
       method: 'PATCH',
       body: {
         harness: input.harness,
-        model: input.model,
-        effort: input.effort,
+        ...(input.model === undefined ? {} : { model: input.model }),
+        ...(input.effort === undefined ? {} : { effort: input.effort }),
         request_id: input.requestId,
         expected_generation: input.expectedGeneration,
       },

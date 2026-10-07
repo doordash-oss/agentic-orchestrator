@@ -244,6 +244,13 @@ func (l *fakeLauncher) request(i int) LaunchRequest {
 // "missing" or an effort named "bogus".
 type acceptAllCatalog struct{}
 
+func (acceptAllCatalog) DefaultModel(harness string) (string, error) {
+	if harness == "codex" {
+		return "old", nil
+	}
+	return "haiku", nil
+}
+
 func (acceptAllCatalog) ValidateSettings(s Settings) error {
 	if s.Model == "missing" {
 		return &SettingsInvalidError{Reason: "model is not available"}

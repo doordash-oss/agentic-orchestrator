@@ -1058,6 +1058,7 @@ func (e SupervisorLifecycle) Valid() bool {
 // Defines values for SupervisorMarkerRecordMarker.
 const (
 	SupervisorMarkerError                SupervisorMarkerRecordMarker = "error"
+	SupervisorMarkerHarnessChange        SupervisorMarkerRecordMarker = "harness_change"
 	SupervisorMarkerHistoryNotRestored   SupervisorMarkerRecordMarker = "history_not_restored"
 	SupervisorMarkerInterrupted          SupervisorMarkerRecordMarker = "interrupted"
 	SupervisorMarkerPermissionRestricted SupervisorMarkerRecordMarker = "permission_restricted"
@@ -1069,6 +1070,8 @@ const (
 func (e SupervisorMarkerRecordMarker) Valid() bool {
 	switch e {
 	case SupervisorMarkerError:
+		return true
+	case SupervisorMarkerHarnessChange:
 		return true
 	case SupervisorMarkerHistoryNotRestored:
 		return true
@@ -1087,14 +1090,17 @@ func (e SupervisorMarkerRecordMarker) Valid() bool {
 
 // Defines values for SupervisorPendingChangeKind.
 const (
-	SupervisorPendingChangeKindEffort SupervisorPendingChangeKind = "effort"
-	SupervisorPendingChangeKindModel  SupervisorPendingChangeKind = "model"
+	SupervisorPendingChangeKindEffort  SupervisorPendingChangeKind = "effort"
+	SupervisorPendingChangeKindHarness SupervisorPendingChangeKind = "harness"
+	SupervisorPendingChangeKindModel   SupervisorPendingChangeKind = "model"
 )
 
 // Valid indicates whether the value is a known member of the SupervisorPendingChangeKind enum.
 func (e SupervisorPendingChangeKind) Valid() bool {
 	switch e {
 	case SupervisorPendingChangeKindEffort:
+		return true
+	case SupervisorPendingChangeKindHarness:
 		return true
 	case SupervisorPendingChangeKindModel:
 		return true
@@ -2767,6 +2773,9 @@ type EffortConfig = config.EffortConfig
 
 // Error Canonical catalog-rendered error.
 type Error struct {
+	// AttemptedSettings Settings attempted before a supervisor launch failure restored the previous choice.
+	AttemptedSettings *SupervisorSettings `json:"attempted_settings,omitempty"`
+
 	// Class Severity treatment class.
 	Class ErrorClass `json:"class"`
 
@@ -4700,9 +4709,15 @@ type SupervisorLifecycle string
 
 // SupervisorMarkerRecord Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker.
 type SupervisorMarkerRecord struct {
-	Code   string                       `json:"code,omitempty"`
-	Marker SupervisorMarkerRecordMarker `json:"marker"`
-	Text   string                       `json:"text"`
+	Code string `json:"code,omitempty"`
+
+	// FromHarness Source harness for a harness_change marker.
+	FromHarness string                       `json:"from_harness,omitempty"`
+	Marker      SupervisorMarkerRecordMarker `json:"marker"`
+	Text        string                       `json:"text"`
+
+	// ToHarness Destination harness for a harness_change marker.
+	ToHarness string `json:"to_harness,omitempty"`
 }
 
 // SupervisorMarkerRecordMarker defines model for SupervisorMarkerRecord.Marker.
@@ -4805,7 +4820,7 @@ type SupervisorSettings struct {
 	Model   string `json:"model"`
 }
 
-// SupervisorSettingsRequest defines model for SupervisorSettingsRequest.
+// SupervisorSettingsRequest Optional fields merge into the committed settings. When harness changes, omitted model selects the destination's first chat-eligible model and omitted effort selects its default (empty) effort.
 type SupervisorSettingsRequest struct {
 	Effort             *string `json:"effort,omitempty"`
 	ExpectedGeneration int64   `json:"expected_generation"`
@@ -4824,7 +4839,7 @@ type SupervisorState struct {
 	// EffectiveModel Model the running harness reports; empty when no process exists.
 	EffectiveModel string `json:"effective_model"`
 
-	// Failure Canonical error of the most recent launch failure; present only while the lifecycle is `failed`.
+	// Failure Canonical error of the most recent launch failure; present only while the lifecycle is `failed`. attempted_settings is present when a relaunch change was reverted.
 	Failure *Error `json:"failure,omitempty"`
 
 	// Generation Number of provider process launches; increments on every launch.

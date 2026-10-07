@@ -1238,7 +1238,7 @@ export interface paths {
         head?: never;
         /**
          * Change the supervisor harness, model or effort.
-         * @description Omitted settings merge over the committed settings. A change during a turn waits until the turn ends. The request id is idempotent within a pending change. A harness switch with a process remains locked.
+         * @description Omitted settings merge over the committed settings. A change during a turn waits until the turn ends. The request id is idempotent within a pending change. A harness switch retires an idle process or waits for an active turn to finish, then rebuilds history on the destination.
          */
         patch: operations["updateSupervisorSettings"];
         trace?: never;
@@ -1417,6 +1417,8 @@ export interface components {
             context?: components["schemas"]["ErrorContext"];
             /** @description Raw detail text, deepest disclosure only. */
             diagnostics?: string;
+            /** @description Settings attempted before a supervisor launch failure restored the previous choice. */
+            attempted_settings?: components["schemas"]["SupervisorSettings"];
         };
         /** @description Catalog-authored next step for an error code. */
         ErrorRemediation: {
@@ -2744,6 +2746,7 @@ export interface components {
             model: string;
             effort: string;
         };
+        /** @description Optional fields merge into the committed settings. When harness changes, omitted model selects the destination's first chat-eligible model and omitted effort selects its default (empty) effort. */
         SupervisorSettingsRequest: {
             request_id: string;
             /** Format: int64 */
@@ -2770,7 +2773,7 @@ export interface components {
             /** @description Model the running harness reports; empty when no process exists. */
             effective_model: string;
             permission_mode: components["schemas"]["SupervisorPermissionMode"];
-            /** @description Canonical error of the most recent launch failure; present only while the lifecycle is `failed`. */
+            /** @description Canonical error of the most recent launch failure; present only while the lifecycle is `failed`. attempted_settings is present when a relaunch change was reverted. */
             failure?: components["schemas"]["Error"];
             pending_requests: components["schemas"]["ControlRequest"][];
             /**
@@ -2788,7 +2791,7 @@ export interface components {
         SupervisorPendingChange: {
             request_id: string;
             /** @enum {string} */
-            kind: "model" | "effort";
+            kind: "model" | "effort" | "harness";
             target: components["schemas"]["SupervisorSettings"];
             /** Format: date-time */
             requested_at: string;
@@ -2818,9 +2821,13 @@ export interface components {
         /** @description Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker. */
         SupervisorMarkerRecord: {
             /** @enum {string} */
-            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted" | "settings_changed" | "settings_reverted";
+            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted" | "settings_changed" | "settings_reverted" | "harness_change";
             text: string;
             code?: string;
+            /** @description Source harness for a harness_change marker. */
+            from_harness?: string;
+            /** @description Destination harness for a harness_change marker. */
+            to_harness?: string;
         };
         /** @description One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`. */
         SupervisorRecord: {

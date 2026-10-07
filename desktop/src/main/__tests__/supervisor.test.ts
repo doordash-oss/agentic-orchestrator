@@ -285,6 +285,46 @@ describe('SupervisorService', () => {
     });
   });
 
+  it('omits untouched model and effort and maps attempted switch settings', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        state: wireState({
+          lifecycle: 'failed',
+          failure: {
+            code: 'supervisor_launch_failed',
+            class: 'blocking',
+            title: 'Supervisor failed to start',
+            summary: 'The harness exited before the handshake.',
+            attempted_settings: { harness: 'codex', model: 'gpt-5', effort: '' },
+          },
+          pending_change: {
+            request_id: 'queued',
+            kind: 'harness',
+            target: { harness: 'codex', model: 'gpt-5', effort: '' },
+            requested_at: '2026-10-06T10:00:00Z',
+          },
+        }),
+      },
+    }));
+    const state = await new SupervisorService({ transport: api }).updateSettings({
+      harness: 'codex',
+      requestId: 'req-untouched',
+      expectedGeneration: 2,
+    });
+    expect(api.apiRequest).toHaveBeenCalledWith('/api/v1/supervisor/settings', {
+      method: 'PATCH',
+      body: { harness: 'codex', request_id: 'req-untouched', expected_generation: 2 },
+    });
+    expect(state.pendingChange?.kind).toBe('harness');
+    expect(state.failure?.attemptedSettings).toEqual({
+      harness: 'codex',
+      model: 'gpt-5',
+      effort: '',
+    });
+  });
+
   it('passes the server canonical settings rejection through unchanged', async () => {
     const api = transport(() => ({
       status: 409,
@@ -311,6 +351,30 @@ describe('SupervisorService', () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CanonicalErrorException);
     expect((err as CanonicalErrorException).canonical.code).toBe('supervisor_settings_locked');
+  });
+
+  it('preserves a launch failure with attempted settings as a canonical error', async () => {
+    const api = transport(() => ({
+      status: 502,
+      body: {
+        api_version: 'v1',
+        error: {
+          code: 'supervisor_launch_failed',
+          class: 'blocking',
+          title: 'Supervisor failed to start',
+          summary: 'The destination exited before the handshake.',
+          attempted_settings: { harness: 'codex', model: 'gpt-5', effort: '' },
+        },
+      },
+    }));
+    const error = await new SupervisorService({ transport: api })
+      .sendMessage({ text: 'Continue' })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(CanonicalErrorException);
+    expect((error as CanonicalErrorException).canonical).toMatchObject({
+      code: 'supervisor_launch_failed',
+      attempted_settings: { harness: 'codex' },
+    });
   });
 
   it('builds the transcript query from the validated cursor and maps the page', async () => {

@@ -47,6 +47,7 @@ export interface SupervisorModelChipProps {
   settings: SupervisorSettings;
   catalogue: ModelCatalogue | null;
   onCommit(request: SupervisorSettings): Promise<void>;
+  onSwitch(harness: string, model?: string): void;
   openSection?: { section: 'model' | 'effort'; filter: string; token: number } | null;
 }
 
@@ -54,6 +55,7 @@ export function SupervisorModelChip({
   settings,
   catalogue,
   onCommit,
+  onSwitch,
   openSection,
 }: SupervisorModelChipProps) {
   const trigger = useRef<HTMLButtonElement>(null);
@@ -105,6 +107,11 @@ export function SupervisorModelChip({
       shown.effort !== '' && nextCapabilities.includes(shown.effort as EffortLevel)
         ? shown.effort
         : '';
+    if (settingsChosen(settings) && harness !== settings.harness) {
+      setOpen(false);
+      onSwitch(harness, model);
+      return;
+    }
     void commit({ harness, model, effort });
   };
 
@@ -157,6 +164,19 @@ export function SupervisorModelChip({
                 disabled={pending !== null}
               >
                 <legend className="supervisor-chip__harness">{group.label}</legend>
+                {settingsChosen(settings) && group.harness !== settings.harness ? (
+                  <button
+                    type="button"
+                    className="supervisor-chip__switch"
+                    disabled={group.models.length === 0}
+                    onClick={() => {
+                      setOpen(false);
+                      onSwitch(group.harness);
+                    }}
+                  >
+                    Switch to {group.label}…
+                  </button>
+                ) : null}
                 {group.models.length === 0 ? (
                   <p className="supervisor-chip__note">{SUPERVISOR_COPY.noModels}</p>
                 ) : (

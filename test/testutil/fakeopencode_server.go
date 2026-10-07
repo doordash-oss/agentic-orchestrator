@@ -667,6 +667,24 @@ func fakeSeedSummary(text string) (int, string) {
 	return n, first
 }
 
+func fakeSeedLastExchange(text string) (string, string) {
+	var user, assistant string
+	for line := range strings.SplitSeq(text, "\n") {
+		line = strings.TrimSpace(line)
+		lower := strings.ToLower(line)
+		switch {
+		case strings.HasPrefix(lower, "user:"):
+			prompt := strings.TrimSpace(line[len("user:"):])
+			if !strings.HasPrefix(prompt, "Agentico note:") {
+				user = prompt
+			}
+		case strings.HasPrefix(lower, "assistant:"):
+			assistant = strings.TrimSpace(line[len("assistant:"):])
+		}
+	}
+	return user, assistant
+}
+
 // --- turns ---
 
 type fakeOpenCodeTurn struct {
@@ -733,7 +751,22 @@ func (t *fakeOpenCodeTurn) hold() {
 }
 
 func (t *fakeOpenCodeTurn) run(text string, seed *FakeOpenCodeSeed) {
+	t.s.mu.Lock()
+	history := t.s.seed
+	t.s.mu.Unlock()
 	switch {
+	case strings.Contains(text, FakeSupervisorRecallFirst):
+		first := ""
+		if history != nil {
+			_, first = fakeSeedSummary(history.Text)
+		}
+		t.message("First user prompt: " + first)
+	case strings.Contains(text, FakeSupervisorRecallLast):
+		user, assistant := "", ""
+		if history != nil {
+			user, assistant = fakeSeedLastExchange(history.Text)
+		}
+		t.message("Last exchange: " + user + " | " + assistant)
 	case seed != nil:
 		n, first := fakeSeedSummary(seed.Text)
 		t.message(fmt.Sprintf("Seeded with %d prior messages: %s", n, first))

@@ -44,6 +44,8 @@ export interface JourneyWorld {
   stubDir: string;
   /** The claude stub CLI (config providers.claude.cli points here). */
   claudeStub: string;
+  /** Detectable Codex CLI that records and fails app-server launches. */
+  codexStub: string;
   /** Path of the stub's auth-state file. */
   authStatePath: string;
   /** Marker file: while present the stub sleeps before answering auth. */
@@ -56,6 +58,7 @@ export interface JourneyWorld {
    * handshake (supervisorProvider worlds only).
    */
   supervisorLaunchFailurePath: string;
+  codexInvocationLog: string;
 }
 
 export interface WorldOptions {
@@ -80,6 +83,8 @@ export interface WorldOptions {
    * the supervisor; every other stream session is a workflow session.
    */
   supervisorProvider?: boolean;
+  /** Include a detectable Codex CLI whose app-server launch always fails. */
+  unlaunchableCodex?: boolean;
 }
 
 /** Prompt markers the supervisorProvider stub reacts to. */
@@ -234,6 +239,25 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
   }
 
   const claudeStub = path.join(stubDir, 'claude-stub');
+  const codexStub = path.join(stubDir, 'codex-stub');
+  const codexInvocationLog = path.join(stubDir, 'codex-invocations.log');
+  if (options.unlaunchableCodex === true) {
+    fs.writeFileSync(
+      codexStub,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then echo "codex-cli 0.156.0"; exit 0; fi',
+        'if [ "$1" = "login" ] && [ "$2" = "status" ]; then echo "Logged in using ChatGPT"; exit 0; fi',
+        `if [ "$1" = "debug" ] && [ "$2" = "models" ] && [ "$3" = "--bundled" ]; then echo '{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","visibility":"list","supported_in_api":true,"context_window":272000},{"slug":"gpt-5.3-codex","display_name":"GPT-5.3 Codex","visibility":"list","supported_in_api":true,"context_window":272000}]}'; exit 0; fi`,
+        'if [ "$1" = "debug" ] && [ "$2" = "models" ]; then exit 3; fi',
+        `printf '%s\\n' "$*" >> "${codexInvocationLog}"`,
+        'echo "Codex app-server unavailable" >&2',
+        'exit 3',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+  }
   const authStatePath = path.join(stubDir, 'claude-auth.json');
   const authDelayPath = path.join(stubDir, 'claude-auth-delay');
   const providerInvocationLog = path.join(stubDir, 'workflow-invocations.log');
@@ -268,12 +292,18 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     workspaceRoot,
     stubDir,
     claudeStub,
+    codexStub,
+    codexInvocationLog,
     authStatePath,
     authDelayPath,
     providerInvocationLog,
     supervisorLaunchFailurePath,
   };
-  writeRuntimeConfig(world, options.presetWorkspaceRoot === true);
+  writeRuntimeConfig(
+    world,
+    options.presetWorkspaceRoot === true,
+    options.unlaunchableCodex === true,
+  );
   return world;
 }
 
@@ -860,7 +890,11 @@ export function setStubAuthenticated(world: JourneyWorld, loggedIn: boolean): vo
  * the stub; codex/opencode are pointed at paths that cannot exist so a
  * provider installed on the host machine can never leak into a journey.
  */
-function writeRuntimeConfig(world: JourneyWorld, presetWorkspaceRoot: boolean): void {
+function writeRuntimeConfig(
+  world: JourneyWorld,
+  presetWorkspaceRoot: boolean,
+  unlaunchableCodex: boolean,
+): void {
   const missing = path.join(world.stubDir, 'missing');
   fs.writeFileSync(
     world.configPath,
@@ -869,7 +903,7 @@ function writeRuntimeConfig(world: JourneyWorld, presetWorkspaceRoot: boolean): 
       '  claude:',
       `    cli: ${world.claudeStub}`,
       '  codex:',
-      `    cli: ${path.join(missing, 'codex')}`,
+      `    cli: ${unlaunchableCodex ? world.codexStub : path.join(missing, 'codex')}`,
       '  opencode:',
       `    cli: ${path.join(missing, 'opencode')}`,
       ...(presetWorkspaceRoot ? ['workspace_roots:', `  - ${world.workspaceRoot}`] : []),

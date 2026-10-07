@@ -255,7 +255,11 @@ function makeServices(): IpcServices {
     updateSupervisorSettings: vi.fn((request) =>
       Promise.resolve(
         supervisorState({
-          settings: { harness: request.harness, model: request.model, effort: request.effort },
+          settings: {
+            harness: request.harness,
+            model: request.model ?? 'claude-sonnet-4-5',
+            effort: request.effort ?? '',
+          },
         }),
       ),
     ),
@@ -807,6 +811,19 @@ describe('registerIpcHandlers', () => {
     ).resolves.toMatchObject({ ok: true, value: { settings: { harness: 'claude' } } });
 
     await expect(
+      handlers.get(IPC_CHANNELS.supervisorSettingsUpdate)!(goodEvent, {
+        harness: 'codex',
+        requestId: 'req-harness-only',
+        expectedGeneration: 1,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(services.updateSupervisorSettings).toHaveBeenCalledWith({
+      harness: 'codex',
+      requestId: 'req-harness-only',
+      expectedGeneration: 1,
+    });
+
+    await expect(
       handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, { before: 10, limit: 50 }),
     ).resolves.toMatchObject({ ok: true, value: { items: [], headSeq: 0 } });
 
@@ -859,7 +876,10 @@ describe('registerIpcHandlers', () => {
       [IPC_CHANNELS.supervisorTranscriptGet, { before: 0 }],
       [IPC_CHANNELS.supervisorTranscriptGet, { after: -1 }],
       [IPC_CHANNELS.supervisorSettingsUpdate, { harness: '', model: 'm' }],
-      [IPC_CHANNELS.supervisorSettingsUpdate, { harness: 'claude', model: 'm', token: 'x' }],
+      [
+        IPC_CHANNELS.supervisorSettingsUpdate,
+        { harness: 'claude', requestId: 'req-extra', expectedGeneration: 1, token: 'x' },
+      ],
     ] as const;
     for (const [channel, payload] of rejected) {
       const result = (await handlers.get(channel)!(goodEvent, payload)) as { ok: boolean };

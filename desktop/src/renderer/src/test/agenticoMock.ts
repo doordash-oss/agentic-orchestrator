@@ -842,7 +842,11 @@ export function installAgenticoMock(
     updateSupervisorSettings: vi.fn((request: SupervisorSettingsRequest) => {
       supervisorCurrent = {
         ...supervisorCurrent,
-        settings: { harness: request.harness, model: request.model, effort: request.effort ?? '' },
+        settings: {
+          harness: request.harness,
+          model: request.model ?? supervisorCurrent.settings.model,
+          effort: request.effort ?? '',
+        },
       };
       return Promise.resolve(supervisorCurrent);
     }),

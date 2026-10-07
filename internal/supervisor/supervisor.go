@@ -208,7 +208,10 @@ func (e *SettingsInvalidError) Error() string { return "invalid supervisor setti
 
 // LaunchFailedError reports a launch or handshake failure; nothing was
 // committed for the send.
-type LaunchFailedError struct{ Err error }
+type LaunchFailedError struct {
+	Err               error
+	AttemptedSettings *Settings
+}
 
 func (e *LaunchFailedError) Error() string { return "supervisor launch failed: " + e.Err.Error() }
 func (e *LaunchFailedError) Unwrap() error { return e.Err }
@@ -244,6 +247,7 @@ type Launcher interface {
 // Catalog validates a settings choice against the model catalog.
 type Catalog interface {
 	ValidateSettings(Settings) error
+	DefaultModel(string) (string, error)
 }
 
 // Options configures a Coordinator.

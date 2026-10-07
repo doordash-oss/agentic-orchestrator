@@ -135,6 +135,8 @@ type FakeCodexResume struct {
 	Found       bool   `json:"found"`
 	UserItems   int    `json:"user_items"`
 	FirstPrompt string `json:"first_prompt,omitempty"`
+	LastPrompt  string `json:"last_prompt,omitempty"`
+	LastReply   string `json:"last_reply,omitempty"`
 }
 
 // FakeCodexProvider is the real Codex provider launched against the fake

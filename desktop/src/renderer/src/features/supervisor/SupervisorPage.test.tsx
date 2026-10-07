@@ -51,7 +51,7 @@ const CATALOGUE: ModelCatalogue = {
       // Not chat-eligible: never offered.
       { id: 'claude-reviewer', displayName: 'Reviewer' },
     ],
-    codex: [{ id: 'gpt-a', displayName: 'GPT A' }],
+    codex: [{ id: 'gpt-a', displayName: 'GPT A', effortCapabilities: ['medium'] }],
   },
   phaseDefaults: {},
   phaseProviderModels: {
@@ -164,14 +164,17 @@ function status(): HTMLElement {
   return screen.getByTestId('supervisor-status');
 }
 
-async function renderPage(overrides: Parameters<typeof installAgenticoMock>[0] = {}): Promise<
+async function renderPage(
+  overrides: Parameters<typeof installAgenticoMock>[0] = {},
+  modelCatalogue: ModelCatalogue = CATALOGUE,
+): Promise<
   ReturnType<typeof installAgenticoMock> & {
     compose(request: SupervisorComposeRequest): void;
     handled: ReturnType<typeof vi.fn>;
   }
 > {
   const mock = installAgenticoMock(overrides);
-  mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
+  mock.api.getModelCatalogue.mockResolvedValue(modelCatalogue);
   const handled = vi.fn();
   const { rerender } = render(<Harness onComposeRequestHandled={handled} />);
   await screen.findByTestId('supervisor-model-chip');
@@ -1070,5 +1073,157 @@ describe('SupervisorPage sub-agent requests', () => {
     ).toBeVisible();
     expect(within(transcript()).getByText('Interrupted · Bash · Sub-agent')).toBeVisible();
     expect(within(transcript()).getByText('Allowed Bash · make test')).toBeVisible();
+  });
+});
+
+describe('SupervisorPage harness switch', () => {
+  const switchCatalogue: ModelCatalogue = {
+    ...CATALOGUE,
+    phaseProviderModels: { chat: { claude: ['claude-opus', 'claude-sonnet'], codex: ['gpt-a'] } },
+    chatDefaultEffort: { codex: 'medium' },
+  };
+
+  it('opens confirmation from the group action and sends only touched fields', async () => {
+    const mock = await renderPage(
+      { supervisorState: supervisorState({ settings: CHOSEN, headSeq: 2, lifecycle: 'idle' }) },
+      switchCatalogue,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('supervisor-model-chip'));
+    await user.click(screen.getByRole('button', { name: 'Switch to Codex…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Switch to Codex' });
+    expect(within(dialog).getByText(/Sub-agents and background shells/)).toBeVisible();
+    expect(within(dialog).getByRole('combobox', { name: 'Model' })).toHaveValue('gpt-a');
+    await user.click(within(dialog).getByRole('button', { name: 'Switch' }));
+    await waitFor(() =>
+      expect(mock.api.updateSupervisorSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ harness: 'codex' }),
+      ),
+    );
+    const request = mock.api.updateSupervisorSettings.mock.lastCall?.[0];
+    expect(request).not.toHaveProperty('model');
+    expect(request).not.toHaveProperty('effort');
+  });
+
+  it('preselects a foreign model, supports Escape, and commits touched pickers', async () => {
+    const mock = await renderPage(
+      { supervisorState: supervisorState({ settings: CHOSEN, headSeq: 2, lifecycle: 'stopped' }) },
+      switchCatalogue,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('supervisor-model-chip'));
+    await user.click(screen.getByRole('radio', { name: 'GPT A' }));
+    const dialog = screen.getByRole('dialog', { name: 'Switch to Codex' });
+    expect(within(dialog).queryByText(/Sub-agents and background shells/)).toBeNull();
+    await user.keyboard('{Escape}');
+    expect(mock.api.updateSupervisorSettings).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId('supervisor-model-chip'));
+    await user.click(screen.getByRole('radio', { name: 'GPT A' }));
+    await user.selectOptions(
+      within(screen.getByRole('dialog', { name: 'Switch to Codex' })).getByRole('combobox', {
+        name: 'Effort',
+      }),
+      'medium',
+    );
+    await user.click(
+      within(screen.getByRole('dialog', { name: 'Switch to Codex' })).getByRole('button', {
+        name: 'Switch',
+      }),
+    );
+    await waitFor(() =>
+      expect(mock.api.updateSupervisorSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ harness: 'codex', model: 'gpt-a', effort: 'medium' }),
+      ),
+    );
+  });
+
+  it('routes a unique foreign /model match to confirmation', async () => {
+    const mock = await renderPage(
+      { supervisorState: supervisorState({ settings: CHOSEN, headSeq: 2 }) },
+      switchCatalogue,
+    );
+    const user = userEvent.setup();
+    await user.type(composer(), '/model GPT A{Enter}');
+    expect(screen.getByRole('dialog', { name: 'Switch to Codex' })).toBeVisible();
+    expect(mock.api.updateSupervisorSettings).not.toHaveBeenCalled();
+    await user.click(
+      within(screen.getByRole('dialog', { name: 'Switch to Codex' })).getByRole('button', {
+        name: 'Cancel',
+      }),
+    );
+    expect(screen.queryByRole('dialog', { name: 'Switch to Codex' })).toBeNull();
+    expect(mock.api.updateSupervisorSettings).not.toHaveBeenCalled();
+  });
+
+  it('commits directly for an empty transcript and disables an empty destination', async () => {
+    const mock = await renderPage(
+      { supervisorState: supervisorState({ settings: CHOSEN, headSeq: 0 }) },
+      switchCatalogue,
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByTestId('supervisor-model-chip'));
+    await user.click(screen.getByRole('button', { name: 'Switch to Codex…' }));
+    expect(screen.queryByRole('dialog', { name: 'Switch to Codex' })).toBeNull();
+    expect(mock.api.updateSupervisorSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ harness: 'codex' }),
+    );
+  });
+
+  it('renders a pending switch with the committed chip and a neutral switch marker', async () => {
+    await renderPage({
+      supervisorState: supervisorState({
+        settings: CHOSEN,
+        lifecycle: 'running',
+        pendingChange: {
+          requestId: 'switch-1',
+          kind: 'harness',
+          target: { harness: 'codex', model: 'gpt-a', effort: '' },
+          requestedAt: '2026-10-06T10:00:00Z',
+        },
+      }),
+      supervisorTranscript: supervisorTranscriptPage({
+        items: [
+          supervisorMarkerRecord(
+            { marker: 'harness_change', text: 'Switched to Codex · gpt-a' },
+            { seq: 1, turnId: '' },
+          ),
+        ],
+        firstSeq: 1,
+        lastSeq: 1,
+        headSeq: 1,
+      }),
+    });
+    expect(screen.getByText(/Switch to Codex pending/)).toBeVisible();
+    expect(screen.getByText('Codex · gpt-a')).toBeVisible();
+    expect(screen.getByTestId('supervisor-model-chip')).toHaveAccessibleName('Claude Opus · High');
+    expect(within(transcript()).getByText('Switched to Codex · gpt-a')).toBeVisible();
+  });
+});
+
+describe('SupervisorPage switch recovery', () => {
+  it('reapplies attempted settings before retrying the composer message', async () => {
+    const attemptedSettings = { harness: 'codex', model: 'gpt-a', effort: '' };
+    const mock = await renderPage({
+      supervisorState: supervisorState({
+        settings: CHOSEN,
+        lifecycle: 'failed',
+        failure: supervisorLaunchFailure({ attemptedSettings }),
+      }),
+    });
+    const user = userEvent.setup();
+    expect(
+      within(screen.getByRole('alert')).getByText("Couldn't switch to Codex — still using Claude"),
+    ).toBeVisible();
+    await user.type(composer(), 'Continue my work');
+    await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }));
+    await waitFor(() =>
+      expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({ text: 'Continue my work' }),
+    );
+    expect(mock.api.updateSupervisorSettings).toHaveBeenCalledWith(
+      expect.objectContaining(attemptedSettings),
+    );
+    expect(mock.api.updateSupervisorSettings.mock.invocationCallOrder[0]).toBeLessThan(
+      mock.api.sendSupervisorMessage.mock.invocationCallOrder[0]!,
+    );
   });
 });

@@ -33,9 +33,10 @@ export function SettingsConfirmationDialog({
     previousFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     requestAnimationFrame(() => {
-      const firstButton =
-        dialogRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)');
-      firstButton?.focus();
+      const firstControl = dialogRef.current?.querySelector<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+      );
+      firstControl?.focus();
     });
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -45,7 +46,9 @@ export function SettingsConfirmationDialog({
       }
       if (event.key !== 'Tab') return;
       const controls = [
-        ...(dialogRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []),
+        ...(dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+        ) ?? []),
       ];
       const first = controls[0];
       const last = controls.at(-1);

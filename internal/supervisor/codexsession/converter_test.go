@@ -251,6 +251,38 @@ func TestModelOnlyNoteBecomesUserHistory(t *testing.T) {
 	}
 }
 
+func TestCrossHarnessGolden(t *testing.T) {
+	data, err := Render(input(loadRecords(t, "cross_harness.jsonl")), testOptions(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLineShape(t, data)
+	for _, want := range []string{
+		`"name":"shell_command"`,
+		`"call_id":"toolu_bash_01"`,
+		`"name":"apply_patch"`,
+		`"call_id":"toolu_write_02"`,
+		`"role":"user","content":[{"type":"input_text","text":"Agentico note: The user switched this conversation from Claude to Codex`,
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("cross-harness rollout lacks %q", want)
+		}
+	}
+	if bytes.Contains(data, []byte("Switched to Codex ·")) {
+		t.Error("display-only harness marker entered rebuilt history")
+	}
+	path := filepath.Join("testdata", "cross_harness.golden.jsonl")
+	if *updateGolden {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, want) {
+		t.Fatalf("cross-harness golden mismatch: %v", err)
+	}
+}
+
 type line struct {
 	Timestamp string          `json:"timestamp"`
 	Type      string          `json:"type"`

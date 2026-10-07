@@ -54,6 +54,12 @@ const (
 // carry.
 const FakeSupervisorSubagentID = "agent_sub_1"
 
+// History recall prompts let cross-harness journeys prove both ends of a rebuilt transcript.
+const (
+	FakeSupervisorRecallFirst = "SUPERVISOR_RECALL_FIRST"
+	FakeSupervisorRecallLast  = "SUPERVISOR_RECALL_LAST"
+)
+
 // FakeSupervisorPartialText is the assistant text a FakeSupervisorPartial
 // turn commits before holding.
 const FakeSupervisorPartialText = "Partial answer before the cut"
@@ -95,6 +101,9 @@ printf '%s' "$sysprompt" > "$(dirname "$0")/` + FakeSupervisorSystemPromptFile +
 // names, under the Claude configuration directory and the physical cwd's
 // encoded project directory, into the reply for the first prompt.
 const fakeSupervisorResumeLines = `resumed=""
+history_first=""
+history_last_user=""
+history_last_assistant=""
 session_id="s"
 if [ -n "$resume" ]; then
   session_id="$resume"
@@ -105,6 +114,12 @@ if [ -n "$resume" ]; then
     count=$(grep -c '"role":"user","content":"' "$file")
     first=$(grep -m1 '"role":"user","content":"' "$file" | sed 's/.*"role":"user","content":"\([^"]*\)".*/\1/')
     resumed="Resumed with $count prior messages: $first"
+    history_first="$first"
+    history_last_user=$(grep '"role":"user","content":"' "$file" | grep -v 'Agentico note:' | tail -1 | sed 's/.*"role":"user","content":"\([^"]*\)".*/\1/')
+    history_last_assistant=$(grep '"type":"assistant"' "$file" | grep '"type":"text","text":"' | tail -1 | sed 's/.*"type":"text","text":"\([^"]*\)".*/\1/')
+    if [ -z "$history_last_assistant" ]; then
+      history_last_assistant=$(grep '"role":"assistant","content":"' "$file" | tail -1 | sed 's/.*"role":"assistant","content":"\([^"]*\)".*/\1/')
+    fi
   else
     resumed="Resume file missing: $file"
   fi
@@ -131,6 +146,16 @@ func FakeClaudeInteractiveScriptBodyWithPermissionMode(permissionMode string) st
 mode=""
 permission_mode="` + permissionMode + `"
 reply() {
+  case "$line" in
+    *` + FakeSupervisorRecallFirst + `*) text="First user prompt: $history_first" ;;
+    *` + FakeSupervisorRecallLast + `*) text="Last exchange: $history_last_user | $history_last_assistant" ;;
+    *) text="" ;;
+  esac
+  if [ -n "$text" ]; then
+    printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}]}}"
+    printf '%s\n' '{"type":"result","subtype":"success"}'
+    return
+  fi
   if [ -n "$resumed" ]; then
     text="$resumed"
     resumed=""

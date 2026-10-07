@@ -141,6 +141,16 @@ type RegistryCatalog struct {
 	Registry *llm.Registry
 }
 
+func (c RegistryCatalog) DefaultModel(harness string) (string, error) {
+	if c.Registry != nil {
+		models := c.Registry.EligibleModelsForPhase(llm.PhaseChat)[harness]
+		if len(models) > 0 {
+			return models[0], nil
+		}
+	}
+	return "", &SettingsInvalidError{Reason: fmt.Sprintf("no chat-eligible models for harness %q", harness)}
+}
+
 // ValidateSettings accepts a detected harness, one of its chat-eligible
 // models, and an effort the model supports (empty means the default).
 func (c RegistryCatalog) ValidateSettings(s Settings) error {

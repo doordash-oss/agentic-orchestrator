@@ -216,7 +216,20 @@ type SystemInitMessage struct {
 	Tools          []string        `json:"tools,omitempty"`
 	MCPServers     []MCPServerInfo `json:"mcp_servers,omitempty"`
 	PermissionMode string          `json:"permissionMode,omitempty"`
+	// ResumeOutcome reports how a resumed launch started: ResumeOutcomeResumed,
+	// ResumeOutcomeFallback, or empty for a fresh session. Providers that
+	// cannot tell leave it empty.
+	ResumeOutcome string `json:"resume_outcome,omitempty"`
 }
+
+// Resume outcomes carried by SystemInitMessage.ResumeOutcome.
+const (
+	// ResumeOutcomeResumed means the requested session was resumed.
+	ResumeOutcomeResumed = "resumed"
+	// ResumeOutcomeFallback means the provider could not read the requested
+	// session and started a fresh one instead.
+	ResumeOutcomeFallback = "fallback"
+)
 
 // MCPServerInfo describes an MCP server connected to the session.
 type MCPServerInfo struct {

@@ -166,6 +166,8 @@ type fakeLauncher struct {
 	exitBeforeHandshake bool
 	// plain sessions cannot carry hidden context.
 	plain bool
+	// init, when set, scripts the init message each launch reports.
+	init func(LaunchRequest) *llm.SystemInitMessage
 }
 
 // plainSession hides the fake's hidden-context capability.
@@ -179,7 +181,7 @@ func (l *fakeLauncher) Launch(_ context.Context, req LaunchRequest) (ports.Sessi
 	if fail {
 		l.failNext--
 	}
-	silent, exitEarly, plain := l.silent, l.exitBeforeHandshake, l.plain
+	silent, exitEarly, plain, initFor := l.silent, l.exitBeforeHandshake, l.plain, l.init
 	l.mu.Unlock()
 	if gate != nil {
 		<-gate
@@ -199,7 +201,11 @@ func (l *fakeLauncher) Launch(_ context.Context, req LaunchRequest) (ports.Sessi
 		sess.exit(ports.SessionFailed)
 	case !silent:
 		sess.emit(llm.SDKMessage{Type: "control_response"})
-		sess.emit(llm.SDKMessage{Type: "system", Subtype: "init", Init: &llm.SystemInitMessage{Model: "haiku-effective"}})
+		init := &llm.SystemInitMessage{Model: "haiku-effective"}
+		if initFor != nil {
+			init = initFor(req)
+		}
+		sess.emit(llm.SDKMessage{Type: "system", Subtype: "init", Init: init})
 	}
 	if plain {
 		return plainSession{sess}, nil

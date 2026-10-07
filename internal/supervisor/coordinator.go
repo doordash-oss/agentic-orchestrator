@@ -137,10 +137,13 @@ type Coordinator struct {
 	keepTurns bool
 	// resumeID is the native session id the current process was resumed
 	// against; empty for a fresh launch.
-	resumeID  string
-	interrupt *interruptAttempt
-	closed    bool
-	subs      map[*Subscription]struct{}
+	resumeID string
+	// fallbackMarked records that this process already reported a failed
+	// resume, so the marker appears once per generation.
+	fallbackMarked bool
+	interrupt      *interruptAttempt
+	closed         bool
+	subs           map[*Subscription]struct{}
 }
 
 type launchAttempt struct {
@@ -395,6 +398,7 @@ func (c *Coordinator) stateLocked() State {
 		ConversationID:  c.conv.ConversationID,
 		Generation:      c.conv.Generation,
 		SessionID:       c.sessionID,
+		NativeSessionID: c.conv.NativeSessionID,
 		Lifecycle:       c.lifecycle,
 		LastTurnOutcome: c.outcome,
 		InterruptedBy:   c.interruptedBy,
@@ -587,7 +591,7 @@ func (c *Coordinator) beginLaunchLocked() (*launchAttempt, error) {
 	c.sessionID = SessionID(conv.ConversationID, conv.Generation)
 	c.lifecycle = LifecycleStarting
 	c.step = StepLaunching
-	if c.converterLocked() != nil {
+	if c.rebuildsLocked() {
 		c.step = StepRebuilding
 	}
 	attempt := &launchAttempt{
@@ -615,6 +619,7 @@ func (c *Coordinator) resetProcessLocked() {
 	c.ending = false
 	c.keepTurns = false
 	c.resumeID = ""
+	c.fallbackMarked = false
 	c.interrupt = nil
 	c.step = ""
 	c.permMode = PermissionMode{Requested: RequestedPermissionMode}
@@ -624,6 +629,23 @@ func (c *Coordinator) resetProcessLocked() {
 // harness; nil means the harness launches fresh every generation.
 func (c *Coordinator) converterLocked() Converter {
 	return c.opts.Converters[c.settings.Harness]
+}
+
+// harnessAssignsIDLocked reports whether the chosen harness mints its own
+// native session id, which the coordinator adopts instead of pre-assigning.
+func (c *Coordinator) harnessAssignsIDLocked() bool {
+	assigned, ok := c.converterLocked().(HarnessAssignedIDs)
+	return ok && assigned.HarnessAssignsSessionID()
+}
+
+// rebuildsLocked reports whether the next launch rebuilds native history:
+// a converter exists and, for a harness that assigns its own ids, an id
+// was already adopted from an earlier launch.
+func (c *Coordinator) rebuildsLocked() bool {
+	if c.converterLocked() == nil {
+		return false
+	}
+	return !c.harnessAssignsIDLocked() || c.conv.NativeSessionID != ""
 }
 
 // setOutcomeLocked records how the latest turn ended and who cut it.
@@ -703,7 +725,7 @@ func (c *Coordinator) runLaunch(attempt *launchAttempt) {
 func (c *Coordinator) rebuildNative(attempt *launchAttempt) (string, error) {
 	c.mu.Lock()
 	converter := c.converterLocked()
-	if converter == nil || c.launch != attempt {
+	if converter == nil || c.launch != attempt || !c.rebuildsLocked() {
 		c.mu.Unlock()
 		return "", nil
 	}
@@ -719,6 +741,7 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (string, error) {
 		nativeID = conv.NativeSessionID
 	}
 	conversationID := c.conv.ConversationID
+	settings := c.settings
 	c.mu.Unlock()
 	records, err := c.store.after(0)
 	if err != nil {
@@ -728,6 +751,8 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (string, error) {
 		ConversationID:  conversationID,
 		NativeSessionID: nativeID,
 		WorkDir:         c.opts.WorkDir,
+		Model:           settings.Model,
+		Effort:          settings.Effort,
 		Records:         records,
 	})
 	var conversion *ConversionError
@@ -1149,13 +1174,56 @@ func (c *Coordinator) observeInitLocked(gen int64, init *llm.SystemInitMessage) 
 			})
 		}
 	}
-	if c.resumeID != "" && init.SessionID != "" && init.SessionID != c.resumeID {
+	if c.harnessAssignsIDLocked() && init.SessionID != "" {
+		c.adoptNativeIDLocked(gen, init)
+	} else if c.resumeID != "" && init.SessionID != "" && init.SessionID != c.resumeID {
 		// The harness chose its own id; later output still belongs to this
 		// generation, so the launch stands.
 		log.Printf("supervisor: harness resumed as session %s, not the pre-assigned %s", init.SessionID, c.resumeID)
 		c.resumeID = init.SessionID
 	}
 	c.publishStateLocked()
+}
+
+// adoptNativeIDLocked applies the id rule for a harness that mints its own
+// session ids: after a launch that did not resume (first launch, empty
+// history, or a resume the harness could not read) the reported id becomes
+// the conversation's native id, so the next rebuild writes under it.
+func (c *Coordinator) adoptNativeIDLocked(gen int64, init *llm.SystemInitMessage) {
+	fallback := init.ResumeOutcome == llm.ResumeOutcomeFallback
+	if fallback && !c.fallbackMarked {
+		c.fallbackMarked = true
+		c.appendMarkerLocked(gen, c.currentTurnLocked(), MarkerData{
+			Marker: MarkerHistoryNotRestored,
+			Text:   harnessDisplayName(c.settings.Harness) + " could not read the restored thread; continuing on a fresh thread",
+		})
+	}
+	if c.resumeID != "" && !fallback {
+		return
+	}
+	c.resumeID = ""
+	if init.SessionID == c.conv.NativeSessionID {
+		return
+	}
+	conv := c.conv
+	conv.NativeSessionID = init.SessionID
+	if err := saveConversation(c.dir, conv); err != nil {
+		log.Printf("supervisor: persist adopted native session id: %v", err)
+		return
+	}
+	c.conv = conv
+}
+
+func harnessDisplayName(harness string) string {
+	switch harness {
+	case "codex":
+		return "Codex"
+	case "claude":
+		return "Claude"
+	case "opencode":
+		return "OpenCode"
+	}
+	return harness
 }
 
 func (c *Coordinator) observeStreamLocked(gen int64, msg llm.SDKMessage) {

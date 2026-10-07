@@ -120,9 +120,12 @@ func (s Settings) Complete() bool { return s.Harness != "" && s.Model != "" }
 
 // State is a point-in-time snapshot of the read model.
 type State struct {
-	ConversationID  string
-	Generation      int64
-	SessionID       string
+	ConversationID string
+	Generation     int64
+	SessionID      string
+	// NativeSessionID is the harness's own session id the transcript is
+	// rebuilt under; empty until one is assigned or adopted.
+	NativeSessionID string
 	Lifecycle       Lifecycle
 	StartingStep    StartingStep
 	LastTurnOutcome TurnOutcome

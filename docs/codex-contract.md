@@ -61,6 +61,8 @@ AGENTIC_CODEX_LIVE=1 AGENTIC_CODEX_MODELS='gpt-5.4,gpt-6-astra' \
   go test ./test/e2e -run '^TestCodexContractLive$' -count=1 -timeout=20m -v
 ```
 
+Without `AGENTIC_CODEX_MODELS` the test uses the first two distinct models of
+the installed CLI's discovered catalog, since account availability varies.
 For each model, the test starts a new thread and then resumes that thread with
 the next model in the list. A one-model list tests same-model resume. Each stage
 has a three-minute inference deadline and a separate 45-second handshake
@@ -75,7 +77,12 @@ with a small fixture validator. It verifies that a marker supplied only in
 `developerInstructions` and a token read from a local fixture reach a structured
 question, that a nonrecommended answer returns to the model, and that an absent
 artifact rejects completion before the corrected artifact is accepted. Fresh
-and resumed stages use different markers and artifacts. Production role
+and resumed stages share the marker and file names, because Codex keeps the
+`developerInstructions` a thread was created with and does not apply
+replacements sent on `thread/resume` (observed with codex-cli 0.156). The
+resumed stage therefore proves the instructions persisted, and it rewrites the
+fixture with a new token and removes the artifact so the model must redo every
+step instead of replaying history. Production role
 contracts and receipt contents are covered by the deterministic suites.
 
 ## Compatibility limits

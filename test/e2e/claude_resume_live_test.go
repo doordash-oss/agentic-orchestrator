@@ -132,7 +132,7 @@ func TestClaudeResumeLive(t *testing.T) {
 		t.Fatalf("no chat-eligible Haiku model in %v", registry.EligibleModelsForPhase(llm.PhaseChat)["claude"])
 	}
 
-	h := &supervisorHarness{t: t, runtimeDir: t.TempDir(), claudeConfigDir: configDir, registry: registry, model: model}
+	h := &supervisorHarness{t: t, runtimeDir: t.TempDir(), claudeConfigDir: configDir, harness: "claude", registry: registry, model: model}
 	h.stateDir = filepath.Join(h.runtimeDir, "state")
 	if err := os.MkdirAll(h.stateDir, 0o755); err != nil {
 		t.Fatal(err)

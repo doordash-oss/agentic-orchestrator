@@ -150,6 +150,12 @@ type Turn struct {
 	Status string `json:"status"`
 }
 
+// TurnInterruptParams holds parameters for turn/interrupt.
+type TurnInterruptParams struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+}
+
 // --- Notifications (inbound) ---
 
 // AgentMessageDelta is an incremental text chunk from the agent.

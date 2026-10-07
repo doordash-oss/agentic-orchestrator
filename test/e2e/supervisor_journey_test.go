@@ -41,6 +41,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/claudesession"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/codexsession"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -104,20 +105,51 @@ type supervisorHarness struct {
 	// claudeConfigDir is CLAUDE_CONFIG_DIR for the server and the child, so
 	// rebuilt native sessions never land in the developer's home.
 	claudeConfigDir string
+	// harness is the provider the journeys choose: "claude" (a fake shell
+	// script) or "codex" (the fake app-server through the real adapter).
+	harness string
+	// codexHome is CODEX_HOME for the server and the child, for the same
+	// reason as claudeConfigDir.
+	codexHome string
 	// abandoned holds coordinators a simulated crash left open.
 	abandoned []*supervisor.Coordinator
 }
 
 func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.Options)) *supervisorHarness {
 	t.Helper()
-	h := &supervisorHarness{t: t, runtimeDir: t.TempDir(), claudeConfigDir: t.TempDir()}
+	h := newHarnessBase(t, "claude")
+	h.script = testutil.WriteFakeClaudeScript(t, body)
+	h.registry = testutil.NewFakeClaudeRegistry(t, h.script)
+	h.init(mutate...)
+	return h
+}
+
+// newCodexSupervisorHarness runs the journeys on the fake Codex app-server
+// launched through the real Codex provider and adapter.
+func newCodexSupervisorHarness(t *testing.T, script testutil.FakeCodexScript, mutate ...func(*supervisor.Options)) *supervisorHarness {
+	t.Helper()
+	h := newHarnessBase(t, "codex")
+	h.script = testutil.WriteFakeCodexScript(t, script)
+	h.registry = testutil.NewFakeCodexRegistry(t, h.script)
+	h.init(mutate...)
+	return h
+}
+
+func newHarnessBase(t *testing.T, harness string) *supervisorHarness {
+	t.Helper()
+	h := &supervisorHarness{t: t, runtimeDir: t.TempDir(), claudeConfigDir: t.TempDir(), codexHome: t.TempDir(), harness: harness}
 	t.Setenv(claudeconfig.EnvConfigDir, h.claudeConfigDir)
+	t.Setenv("CODEX_HOME", h.codexHome)
 	h.stateDir = filepath.Join(h.runtimeDir, "state")
 	if err := os.MkdirAll(h.stateDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	h.script = testutil.WriteFakeClaudeScript(t, body)
-	h.registry = testutil.NewFakeClaudeRegistry(t, h.script)
+	return h
+}
+
+func (h *supervisorHarness) init(mutate ...func(*supervisor.Options)) {
+	t := h.t
+	t.Helper()
 	h.sessions = session.NewManager(nil)
 	h.store = feature.NewStore(h.stateDir)
 	h.runner = agent.NewPhaseRunner(h.sessions, h.store, h.stateDir)
@@ -125,9 +157,9 @@ func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.
 	h.runner.Config = config.NewDefault()
 	h.runner.SkillsDir = filepath.Join(h.runtimeDir, "skills")
 	h.admission = workadmission.New(workadmission.Options{})
-	eligible := h.registry.EligibleModelsForPhase(llm.PhaseChat)["claude"]
+	eligible := h.registry.EligibleModelsForPhase(llm.PhaseChat)[h.harness]
 	if len(eligible) == 0 {
-		t.Fatal("fake Claude has no chat-eligible model")
+		t.Fatalf("fake %s has no chat-eligible model", h.harness)
 	}
 	h.model = eligible[0]
 	h.start(mutate...)
@@ -139,7 +171,6 @@ func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.
 		}
 		h.sessions.Shutdown()
 	})
-	return h
 }
 
 // start builds a coordinator over the harness state directory and serves
@@ -162,6 +193,7 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 		HandshakeTimeout: 10 * time.Second,
 		Converters: map[string]supervisor.Converter{
 			claudesession.Harness: claudesession.New(claudesession.Options{}),
+			codexsession.Harness:  codexsession.New(codexsession.Options{}),
 		},
 	}
 	for _, fn := range mutate {
@@ -269,7 +301,7 @@ func (h *supervisorHarness) waitLifecycle(want server.SupervisorLifecycle) serve
 
 func (h *supervisorHarness) chooseSettings() {
 	h.t.Helper()
-	h.do(http.MethodPatch, "/api/v1/supervisor/settings", map[string]string{"harness": "claude", "model": h.model}, http.StatusOK, nil)
+	h.do(http.MethodPatch, "/api/v1/supervisor/settings", map[string]string{"harness": h.harness, "model": h.model}, http.StatusOK, nil)
 }
 
 func (h *supervisorHarness) send(text, cmid string) server.SupervisorMessageResponse {
@@ -629,7 +661,7 @@ func (h *supervisorHarness) assertLaunchFailed(sent server.Error) {
 	if st.Lifecycle != server.SupervisorLifecycleFailed || st.Failure == nil || st.Failure.Code != sent.Code || st.Failure.Diagnostics != sent.Diagnostics {
 		h.t.Fatalf("state after failure = %+v (failure %+v, sent %+v)", st, st.Failure, sent)
 	}
-	if st.Settings.Harness != "claude" || st.Settings.Model != h.model {
+	if st.Settings.Harness != h.harness || st.Settings.Model != h.model {
 		h.t.Fatalf("settings after failure = %+v", st.Settings)
 	}
 	page := h.transcript("")

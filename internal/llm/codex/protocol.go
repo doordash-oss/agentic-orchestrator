@@ -96,10 +96,26 @@ type Protocol struct {
 	lastAssistantDraft    string
 	fileReadSeen          map[string]struct{}
 	turnStarted           bool
-	nativeReviewTurnID    string
-	nativeDecisionSeen    bool
-	nativeReviewFailed    bool
-	tasksByThread         map[string]codexTaskRef
+	// turnActive is true from turn/start until the root turn completes.
+	turnActive bool
+	// threadReqID is the JSON-RPC id of the pending thread/start or
+	// thread/resume, so its error can end the handshake.
+	threadReqID int
+	// resuming is true while the thread comes from thread/resume; a
+	// thread-store failure on an interactive resume clears it and sets
+	// resumeFallback before a fresh thread/start.
+	resuming       bool
+	resumeFallback bool
+	// interruptReqIDs are turn/interrupt requests whose responses carry no
+	// session output.
+	interruptReqIDs map[int]bool
+	// toolPaths holds the root tool items an interactive session reported
+	// as tool_use and still owes a tool_result, with their changed paths.
+	toolPaths          map[string][]string
+	nativeReviewTurnID string
+	nativeDecisionSeen bool
+	nativeReviewFailed bool
+	tasksByThread      map[string]codexTaskRef
 
 	logFunc func(string, ...interface{})
 }
@@ -131,8 +147,14 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 		model:            llm.StripModelContextWindow(opts.Model),
 		approvalPolicy:   policy,
 		dangerFullAccess: opts.DSP,
+		resuming:         opts.ResumeSessionID != "",
 	}
 }
+
+// codexThreadStoreErrorCode is the JSON-RPC internal-error code Codex
+// returns when it cannot load a thread from its store, e.g. a rebuilt
+// rollout it does not recognise.
+const codexThreadStoreErrorCode = -32603
 
 func (p *Protocol) SetStdin(w io.Writer) {
 	p.mu.Lock()
@@ -153,8 +175,10 @@ func (p *Protocol) logDebug(format string, args ...interface{}) {
 
 // Handshake performs the 3-step Codex initialization:
 // 1. Send initialize + initialized notification
-// 2. Wait for initialize response, then send thread/start
-// 3. Wait for thread/start response, then send turn/start with initial prompt
+// 2. Wait for initialize response, then send thread/start (or thread/resume)
+// 3. Wait for the thread response, then send turn/start with the initial
+// prompt. An empty initial prompt sends no turn: the caller's first user
+// message becomes the thread's first turn.
 func (p *Protocol) Handshake(ctx context.Context) error {
 	// Step 1: Send initialize
 	if err := p.sendInitialize(); err != nil {
@@ -187,6 +211,9 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 	}
 
 	// Step 5: Send initial turn
+	if p.opts.InitialPrompt == "" {
+		return nil
+	}
 	if err := p.startTurn(p.opts.InitialPrompt); err != nil {
 		return err
 	}
@@ -259,11 +286,14 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 	// Notification (method only, no id)
 	if env.Method != "" {
-		msg, ok := p.parseNotification(env.Method, env.Params)
-		if ok {
-			return []llm.SDKMessage{p.stampMessage(msg)}, nil
+		var out []llm.SDKMessage
+		if msg, ok := p.parseNotification(env.Method, env.Params); ok {
+			out = append(out, p.stampMessage(msg))
 		}
-		return nil, nil
+		if block, ok := p.interactiveToolBlock(env.Method, env.Params); ok {
+			out = append(out, p.stampMessage(block))
+		}
+		return out, nil
 	}
 
 	p.logDebug("[codex] unrecognized JSON-RPC message (no method or id)")
@@ -313,11 +343,34 @@ func (p *Protocol) RespondToAskUser(requestID string, _ json.RawMessage, answers
 	return p.respondToAskUser(requestID, answers, annotations)
 }
 
-// Interrupt returns ErrNotSupported — Codex's app-server protocol has no
-// outbound cancel message. The session layer falls back to SIGINT on the
-// process group, which the codex CLI converts into a turn/completed with
-// status="interrupted" (handled in ParseLine).
-func (p *Protocol) Interrupt() error { return llm.ErrNotSupported }
+// Interrupt sends turn/interrupt for the running turn of an interactive
+// session; the app-server answers with a turn/completed whose status is
+// "interrupted" (handled in ParseLine). Other sessions, and an interactive
+// one with no active turn, return ErrNotSupported so the session layer
+// keeps its SIGINT fallback on the process group.
+func (p *Protocol) Interrupt() error {
+	if !p.opts.Interactive {
+		return llm.ErrNotSupported
+	}
+	p.mu.Lock()
+	threadID, turnID, active := p.threadID, p.turnID, p.turnActive
+	if !active || threadID == "" || turnID == "" {
+		p.mu.Unlock()
+		return llm.ErrNotSupported
+	}
+	id := int(nextID.Add(1))
+	if p.interruptReqIDs == nil {
+		p.interruptReqIDs = map[int]bool{}
+	}
+	p.interruptReqIDs[id] = true
+	p.mu.Unlock()
+	return p.writeJSON(Request{
+		JSONRPC: "2.0",
+		Method:  "turn/interrupt",
+		ID:      id,
+		Params:  TurnInterruptParams{ThreadID: threadID, TurnID: turnID},
+	})
+}
 
 // SessionID returns the Codex thread ID once thread/start (or thread/resume)
 // has completed, "" before that. The thread ID is resumable via
@@ -394,6 +447,10 @@ func (p *Protocol) startThread() error {
 		return fmt.Errorf("Codex structured phases require a provider state directory for resumable tool contracts")
 	}
 	id := int(nextID.Add(1))
+	p.mu.Lock()
+	p.threadReqID = id
+	resuming := p.resuming
+	p.mu.Unlock()
 
 	if p.opts.NativeToollessReview && p.opts.ResumeSessionID != "" {
 		return fmt.Errorf("Codex native tool-less review cannot resume a persisted thread")
@@ -403,7 +460,7 @@ func (p *Protocol) startThread() error {
 	// response carries the same {thread:{id}} shape as thread/start, so
 	// handleResponse closes threadReady for both paths. Model, approval
 	// policy, and sandbox are re-supplied per-turn by turn/start.
-	if p.opts.ResumeSessionID != "" {
+	if resuming {
 		if err := p.checkResumableContract(); err != nil {
 			return err
 		}
@@ -468,6 +525,7 @@ func (p *Protocol) startTurn(userPrompt string) error {
 	id := int(nextID.Add(1))
 
 	p.mu.Lock()
+	p.turnActive = true
 	threadID := p.threadID
 	writableRoots := append([]string(nil), p.opts.WritableRoots...)
 	policy := p.approvalPolicy
@@ -535,6 +593,7 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 	id := int(nextID.Add(1))
 
 	p.mu.Lock()
+	p.turnActive = true
 	p.usageState.revision++
 	p.pricingModel = p.model
 	threadID := p.threadID
@@ -622,8 +681,23 @@ func (p *Protocol) writeJSON(v interface{}) error {
 // --- Read methods ---
 
 func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg llm.SDKMessage, emit, handled bool) {
+	p.mu.Lock()
+	isInterrupt := p.interruptReqIDs[id]
+	delete(p.interruptReqIDs, id)
+	isThread := id == p.threadReqID && id != 0
+	p.mu.Unlock()
+	if isInterrupt {
+		// The turn's own turn/completed reports the outcome.
+		if len(errData) > 0 && string(errData) != "null" {
+			p.logDebug("[codex] turn/interrupt %d rejected: %s", id, string(errData))
+		}
+		return llm.SDKMessage{}, false, true
+	}
 	if len(errData) > 0 && string(errData) != "null" {
 		p.logDebug("[codex] error response for request %d: %s", id, string(errData))
+		if isThread {
+			return p.handleThreadError(errData)
+		}
 		return p.errorResultMessage(errData), true, true
 	}
 
@@ -653,6 +727,8 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 		}
 		p.mu.Lock()
 		p.threadID = threadResult.Thread.ID
+		p.threadReqID = 0
+		resumed, fallback := p.resuming, p.resumeFallback
 		if threadResult.Model != "" {
 			p.pricingModel = threadResult.Model
 		}
@@ -662,17 +738,21 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 		}
 		p.closeThreadReadyLocked()
 		p.mu.Unlock()
-		if p.opts.ResumeSessionID != "" {
+		if resumed {
 			p.requestUsageRead()
 		}
 		p.logDebug("[codex] thread started: %s", threadResult.Thread.ID)
-		return llm.SDKMessage{}, false, true
+		if !p.opts.Interactive {
+			return llm.SDKMessage{}, false, true
+		}
+		return p.threadInitMessage(threadResult, resumed, fallback), true, true
 	}
 
 	var turnResult TurnStartResult
 	if err := json.Unmarshal(result, &turnResult); err == nil && turnResult.Turn.ID != "" {
 		p.mu.Lock()
 		p.turnID = turnResult.Turn.ID
+		p.turnActive = true
 		p.mu.Unlock()
 		p.logDebug("[codex] turn started: %s (status=%s)", turnResult.Turn.ID, turnResult.Turn.Status)
 		return llm.SDKMessage{}, false, true
@@ -680,6 +760,74 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 
 	p.logDebug("[codex] unhandled response for request %d", id)
 	return llm.SDKMessage{}, false, false
+}
+
+// threadInitMessage reports the thread to an interactive caller: the thread
+// id as the session id, the effective model, and how a resume went. The
+// permission mode stays empty: Codex has no session-level mode to compare.
+func (p *Protocol) threadInitMessage(res ThreadStartResult, resumed, fallback bool) llm.SDKMessage {
+	model := strings.TrimSpace(res.Model)
+	if model == "" {
+		model = p.model
+	}
+	outcome := ""
+	switch {
+	case resumed:
+		outcome = llm.ResumeOutcomeResumed
+	case fallback:
+		outcome = llm.ResumeOutcomeFallback
+	}
+	return llm.SDKMessage{
+		Type:    "system",
+		Subtype: "init",
+		Init: &llm.SystemInitMessage{
+			Type:          "system",
+			Subtype:       "init",
+			SessionID:     res.Thread.ID,
+			Model:         model,
+			ResumeOutcome: outcome,
+		},
+	}
+}
+
+// handleThreadError ends the handshake on a rejected thread/start or
+// thread/resume instead of letting it wait out its timeout. An interactive
+// resume that Codex cannot load from its thread store falls back to a fresh
+// thread; the init message then reports the fallback.
+func (p *Protocol) handleThreadError(errData json.RawMessage) (llm.SDKMessage, bool, bool) {
+	var rpcErr struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(errData, &rpcErr)
+	p.mu.Lock()
+	if p.resuming && p.opts.Interactive && rpcErr.Code == codexThreadStoreErrorCode {
+		p.resuming = false
+		p.resumeFallback = true
+		p.usageState.resumeBaselinePending = false
+		p.mu.Unlock()
+		p.logDebug("[codex] resume of %s failed (%s); starting a fresh thread", p.opts.ResumeSessionID, rpcErr.Message)
+		if err := p.startThread(); err != nil {
+			p.mu.Lock()
+			p.threadErr = fmt.Errorf("codex fresh thread after failed resume: %w", err)
+			p.closeThreadReadyLocked()
+			p.mu.Unlock()
+		}
+		return llm.SDKMessage{}, false, true
+	}
+	method := "thread/start"
+	if p.resuming {
+		method = "thread/resume"
+	}
+	detail := rpcErr.Message
+	if detail == "" {
+		detail = string(errData)
+	}
+	p.threadErr = fmt.Errorf("codex rejected %s (code %d): %s", method, rpcErr.Code, detail)
+	p.threadReqID = 0
+	p.closeThreadReadyLocked()
+	p.mu.Unlock()
+	return p.errorResultMessage(errData), true, true
 }
 
 // errorResultMessage converts a JSON-RPC error response into a user-visible
@@ -1026,6 +1174,9 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return p.taskProgressForChildThread(completed.ThreadID, "", "", "child turn "+completed.Turn.Status)
 		}
 
+		p.mu.Lock()
+		p.turnActive = false
+		p.mu.Unlock()
 		p.requestUsageRead()
 
 		switch completed.Turn.Status {
@@ -1517,6 +1668,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		if isMain {
 			p.usageState.revision++
 			p.turnID = turnStarted.Turn.ID
+			p.turnActive = true
 		}
 		if isMain && !alreadyStarted {
 			p.turnStarted = true

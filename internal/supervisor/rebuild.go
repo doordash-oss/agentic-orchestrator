@@ -26,7 +26,11 @@ type RebuildInput struct {
 	ConversationID  string
 	NativeSessionID string
 	WorkDir         string
-	Records         []Record
+	// Model and Effort are the conversation's committed settings, for
+	// formats that record them per turn. Empty Effort means the default.
+	Model   string
+	Effort  string
+	Records []Record
 }
 
 // RebuildResult reports what a rebuild wrote. Resume is false when the
@@ -44,6 +48,14 @@ type RebuildResult struct {
 type Converter interface {
 	Harness() string
 	Rebuild(ctx context.Context, in RebuildInput) (RebuildResult, error)
+}
+
+// HarnessAssignedIDs is implemented by converters whose harness mints its
+// own session id and cannot resume under a caller-chosen one. For those the
+// coordinator pre-assigns nothing: it adopts the id the harness reports
+// after a launch that did not resume, and rebuilds under that id later.
+type HarnessAssignedIDs interface {
+	HarnessAssignsSessionID() bool
 }
 
 // ConversionError reports records a converter cannot represent. It is

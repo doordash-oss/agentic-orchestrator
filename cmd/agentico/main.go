@@ -54,6 +54,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/claudesession"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/codexsession"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"go.uber.org/fx"
 	"golang.org/x/term"
@@ -3412,12 +3413,18 @@ func newSupervisorCoordinator(boot *runtimeBootstrap) (*supervisor.Coordinator, 
 			ConfigPath:    boot.runtime.Config,
 			DiscoveryPath: serverruntime.DiscoveryPath(boot.runtime.RuntimeDir),
 		},
-		Admission: boot.admission,
-		// Codex and OpenCode launch fresh until their converters land.
-		Converters: map[string]supervisor.Converter{
-			claudesession.Harness: claudesession.New(claudesession.Options{}),
-		},
+		Admission:  boot.admission,
+		Converters: supervisorConverters(),
 	})
+}
+
+// supervisorConverters rebuilds native history for every harness that has a
+// converter; OpenCode launches fresh until its converter lands.
+func supervisorConverters() map[string]supervisor.Converter {
+	return map[string]supervisor.Converter{
+		claudesession.Harness: claudesession.New(claudesession.Options{}),
+		codexsession.Harness:  codexsession.New(codexsession.Options{}),
+	}
 }
 
 // shutdownRuntimeWork ends the supervisor (refusing any relaunch) and then

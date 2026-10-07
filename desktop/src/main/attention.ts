@@ -17,6 +17,7 @@ limitations under the License.
 import {
   FeatureListResponseSchema,
   PermissionSnapshotResponseSchema,
+  type ServerPermissionSnapshot,
   PromptSnapshotResponseSchema,
   SessionListResponseSchema,
   TestingContractResponseSchema,
@@ -38,7 +39,9 @@ import {
   VerificationGateActionSchema,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   CHAT_SESSION_ID,
+  SUPERVISOR_FEATURE_ID,
   isPendingReviewStatus,
+  isSupervisorSessionId,
   reviewKindLabel,
   type AttentionActionResult,
   type AttentionItem,
@@ -48,6 +51,7 @@ import {
   type GateResumeRequest,
   type HelpAnswerRequest,
   type PermissionDecisionRequest,
+  type SupervisorPendingRequest,
   type TestingContractItem,
   type TestingContractRequest,
   type TestingContractSnapshot,
@@ -141,6 +145,119 @@ function supportedVerificationActions(actions: string[]): VerificationGateAction
   return [...supported];
 }
 
+type ServerControlRequest = ServerPermissionSnapshot['requests'][number];
+type AttentionPermissionItem = Extract<AttentionItem, { kind: 'permission' }>;
+type AttentionQuestionsItem = Extract<AttentionItem, { kind: 'questions' }>;
+
+/**
+ * Who owns a control-request item: a feature tab (optionally through its
+ * refactor parent) or, for the supervisor conversation, the Supervisor page.
+ */
+export type ControlRequestOwner =
+  { featureId?: string; parentFeatureId?: string } | { target: 'supervisor' };
+
+/**
+ * A permission or question raised by the supervisor conversation: its
+ * session id is `__supervisor__.<conversation>.<generation>` and/or its
+ * feature id is the reserved `__supervisor__`. Such requests are never
+ * dropped as orphans even though no listed feature owns them.
+ */
+export function isSupervisorControlRequest(request: {
+  feature_id?: string;
+  session_id?: string;
+}): boolean {
+  return request.feature_id === SUPERVISOR_FEATURE_ID || isSupervisorSessionId(request.session_id);
+}
+
+/** Maps one pending server permission request to its attention item. */
+export function controlRequestPermissionItem(
+  request: ServerControlRequest,
+  owner: ControlRequestOwner,
+): AttentionPermissionItem {
+  return {
+    kind: 'permission' as const,
+    id: request.request_id,
+    ...owner,
+    ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
+    ...(request.phase === undefined ? {} : { phase: request.phase }),
+    toolName: request.tool_name,
+    ...(request.summary === undefined ? {} : { summary: request.summary }),
+    ...(request.input === undefined ? {} : { input: request.input }),
+    waitingSince: request.waiting_since ?? fallbackTime,
+    ...(request.remember === undefined
+      ? {}
+      : {
+          remember: {
+            pattern: request.remember.pattern,
+            scope: request.remember.scope,
+            scopeDisplay: request.remember.scope_display,
+          },
+        }),
+    ...(request.automatic_review === undefined
+      ? {}
+      : {
+          automaticReview: {
+            provider: request.automatic_review.provider,
+            model: request.automatic_review.model,
+            outcome: request.automatic_review.outcome,
+            reason: request.automatic_review.reason,
+            paused: request.automatic_review.paused,
+            ...(request.automatic_review.retry_at === undefined
+              ? {}
+              : { retryAt: request.automatic_review.retry_at }),
+          },
+        }),
+    ...(request.auto_approve === undefined
+      ? {}
+      : { autoApprove: { wouldFastPath: request.auto_approve.would_fast_path } }),
+  };
+}
+
+/** Maps one pending AskUser request to its attention item; null without questions. */
+export function controlRequestQuestionsItem(
+  request: ServerControlRequest,
+  owner: ControlRequestOwner,
+): AttentionQuestionsItem | null {
+  const questions = request.questions ?? [];
+  if (questions.length === 0) return null;
+  return {
+    kind: 'questions' as const,
+    id: request.request_id,
+    ...owner,
+    ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
+    ...(request.phase === undefined ? {} : { phase: request.phase }),
+    waitingSince: request.waiting_since ?? fallbackTime,
+    questions: questions.map((question, index) => ({
+      key: question.question ?? question.header ?? `Question ${index + 1}`,
+      header: question.header ?? question.question ?? `Question ${index + 1}`,
+      multiSelect: question.multi_select === true,
+      options: (question.options ?? []).flatMap((option) =>
+        option.label === undefined
+          ? []
+          : [
+              {
+                label: option.label,
+                ...(option.description === undefined ? {} : { description: option.description }),
+                ...(option.confidence === undefined ? {} : { confidence: option.confidence }),
+              },
+            ],
+      ),
+    })),
+  };
+}
+
+/**
+ * Maps a supervisor control request (from the state read model or a stream
+ * `request` event) to the attention item shape: AskUser requests with
+ * questions become question bundles, everything else a permission.
+ */
+export function supervisorPendingRequest(request: ServerControlRequest): SupervisorPendingRequest {
+  const owner = { target: 'supervisor' as const };
+  return (
+    controlRequestQuestionsItem(request, owner) ?? controlRequestPermissionItem(request, owner)
+  );
+}
+
 /** Server-owned blocking prompts, translated once in the main process. */
 export class AttentionService {
   /**
@@ -179,6 +296,15 @@ export class AttentionService {
       const parent = featureID === undefined ? undefined : parentByChild.get(featureID);
       return parent === undefined ? {} : { parentFeatureId: parent };
     };
+    // Supervisor requests belong to no feature: they keep their session id for
+    // answering and are targeted at the Supervisor page instead of a tab.
+    const ownerOf = (request: ServerControlRequest): ControlRequestOwner =>
+      isSupervisorControlRequest(request)
+        ? { target: 'supervisor' }
+        : {
+            ...(request.feature_id === undefined ? {} : { featureId: request.feature_id }),
+            ...parentOf(request.feature_id),
+          };
     // One attention item per owned error on every listed feature's summary
     // projection. Child-scoped entries route to the parent tab; the wait
     // clock is this service's first observation of the item id.
@@ -218,79 +344,23 @@ export class AttentionService {
     }
     const items: AttentionItem[] = [
       ...permissionsRaw.requests
-        .filter((request) => request.status === 'pending' && hasListedFeature(request.feature_id))
-        .map((request) => ({
-          kind: 'permission' as const,
-          id: request.request_id,
-          ...(request.feature_id === undefined ? {} : { featureId: request.feature_id }),
-          ...parentOf(request.feature_id),
-          ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
-          ...(request.phase === undefined ? {} : { phase: request.phase }),
-          toolName: request.tool_name,
-          ...(request.summary === undefined ? {} : { summary: request.summary }),
-          ...(request.input === undefined ? {} : { input: request.input }),
-          waitingSince: request.waiting_since ?? fallbackTime,
-          ...(request.remember === undefined
-            ? {}
-            : {
-                remember: {
-                  pattern: request.remember.pattern,
-                  scope: request.remember.scope,
-                  scopeDisplay: request.remember.scope_display,
-                },
-              }),
-          ...(request.automatic_review === undefined
-            ? {}
-            : {
-                automaticReview: {
-                  provider: request.automatic_review.provider,
-                  model: request.automatic_review.model,
-                  outcome: request.automatic_review.outcome,
-                  reason: request.automatic_review.reason,
-                  paused: request.automatic_review.paused,
-                  ...(request.automatic_review.retry_at === undefined
-                    ? {}
-                    : { retryAt: request.automatic_review.retry_at }),
-                },
-              }),
-          ...(request.auto_approve === undefined
-            ? {}
-            : { autoApprove: { wouldFastPath: request.auto_approve.would_fast_path } }),
-        })),
+        .filter(
+          (request) =>
+            request.status === 'pending' &&
+            (isSupervisorControlRequest(request) || hasListedFeature(request.feature_id)),
+        )
+        .map((request) => controlRequestPermissionItem(request, ownerOf(request))),
       ...promptsRaw.ask_user_questions
         .filter(
           (request) =>
             request.status === 'pending' &&
             (request.questions?.length ?? 0) > 0 &&
-            hasListedFeature(request.feature_id),
+            (isSupervisorControlRequest(request) || hasListedFeature(request.feature_id)),
         )
-        .map((request) => ({
-          kind: 'questions' as const,
-          id: request.request_id,
-          ...(request.feature_id === undefined ? {} : { featureId: request.feature_id }),
-          ...parentOf(request.feature_id),
-          ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
-          ...(request.phase === undefined ? {} : { phase: request.phase }),
-          waitingSince: request.waiting_since ?? fallbackTime,
-          questions: request.questions!.map((question, index) => ({
-            key: question.question ?? question.header ?? `Question ${index + 1}`,
-            header: question.header ?? question.question ?? `Question ${index + 1}`,
-            multiSelect: question.multi_select === true,
-            options: (question.options ?? []).flatMap((option) =>
-              option.label === undefined
-                ? []
-                : [
-                    {
-                      label: option.label,
-                      ...(option.description === undefined
-                        ? {}
-                        : { description: option.description }),
-                      ...(option.confidence === undefined ? {} : { confidence: option.confidence }),
-                    },
-                  ],
-            ),
-          })),
-        })),
+        .flatMap((request) => {
+          const item = controlRequestQuestionsItem(request, ownerOf(request));
+          return item === null ? [] : [item];
+        }),
       ...promptsRaw.help_queue
         .filter(
           (help) =>

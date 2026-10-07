@@ -45,6 +45,14 @@ import type {
   SessionTranscript,
   ServerListSnapshot,
   Settings,
+  SupervisorActionResult,
+  SupervisorEvent,
+  SupervisorMessageRequest,
+  SupervisorMessageResult,
+  SupervisorRecord,
+  SupervisorSettingsRequest,
+  SupervisorState,
+  SupervisorTranscriptPage,
   ThemeInfo,
   UpdateState,
   ServerUpdateInstallRequest,
@@ -441,6 +449,13 @@ export interface AgenticoMock {
     getTestingContract: ReturnType<typeof vi.fn>;
     startChat: ReturnType<typeof vi.fn>;
     endChat: ReturnType<typeof vi.fn>;
+    getSupervisorState: ReturnType<typeof vi.fn>;
+    updateSupervisorSettings: ReturnType<typeof vi.fn>;
+    getSupervisorTranscript: ReturnType<typeof vi.fn>;
+    sendSupervisorMessage: ReturnType<typeof vi.fn>;
+    interruptSupervisor: ReturnType<typeof vi.fn>;
+    endSupervisor: ReturnType<typeof vi.fn>;
+    onSupervisorEvent: ReturnType<typeof vi.fn>;
     getFeatureConfig: ReturnType<typeof vi.fn>;
     updateFeatureConfig: ReturnType<typeof vi.fn>;
     getWorkspaceDefaults: ReturnType<typeof vi.fn>;
@@ -497,8 +512,67 @@ export interface AgenticoMock {
   routeListenerCount(): number;
   emitSessionOutput(event: SessionOutputEvent): void;
   sessionOutputListenerCount(): number;
+  /** Push one supervisor stream event to every `onSupervisorEvent` listener. */
+  emitSupervisorEvent(event: SupervisorEvent): void;
+  supervisorEventListenerCount(): number;
+  /** The mock's current supervisor read model (updated by settings/send/end). */
+  supervisorState(): SupervisorState;
   emitServersChanged(snapshot: ServerListSnapshot): void;
   serversChangedListenerCount(): number;
+}
+
+/**
+ * Deterministic supervisor read model: a never-launched conversation with
+ * lifecycle `stopped`, empty settings, no pending requests, and an empty
+ * transcript (head seq 0).
+ */
+export function supervisorState(overrides: Partial<SupervisorState> = {}): SupervisorState {
+  return {
+    conversationId: 'supervisor-conversation-1',
+    generation: 0,
+    sessionId: '',
+    lifecycle: 'stopped',
+    lastTurnOutcome: 'none',
+    settings: { harness: '', model: '', effort: '' },
+    effectiveModel: '',
+    pendingRequests: [],
+    headSeq: 0,
+    streamEpoch: 'supervisor-epoch-1',
+    ...overrides,
+  };
+}
+
+/** One committed supervisor transcript record (a user message by default). */
+export function supervisorRecord(overrides: Partial<SupervisorRecord> = {}): SupervisorRecord {
+  const seq = overrides.seq ?? 1;
+  return {
+    seq,
+    id: `supervisor-record-${String(seq)}`,
+    conversationId: 'supervisor-conversation-1',
+    generation: 1,
+    turnId: `supervisor-turn-${String(seq)}`,
+    kind: 'user',
+    visibility: 'content',
+    createdAt: '2026-10-06T10:00:00Z',
+    messages: [{ index: seq, role: 'user', type: 'text', text: 'Hello supervisor' }],
+    ...overrides,
+  };
+}
+
+/** One transcript page; empty (all cursors 0, nothing more) by default. */
+export function supervisorTranscriptPage(
+  overrides: Partial<SupervisorTranscriptPage> = {},
+): SupervisorTranscriptPage {
+  return {
+    conversationId: 'supervisor-conversation-1',
+    items: [],
+    firstSeq: 0,
+    lastSeq: 0,
+    hasMoreBefore: false,
+    hasMoreAfter: false,
+    headSeq: 0,
+    ...overrides,
+  };
 }
 
 export function installAgenticoMock(
@@ -514,6 +588,8 @@ export function installAgenticoMock(
     sessions?: SessionSummary[];
     session?: SessionDetail;
     transcript?: SessionTranscript;
+    supervisorState?: SupervisorState;
+    supervisorTranscript?: SupervisorTranscriptPage;
     attention?: { items: AttentionItem[] };
     cloneOperation?: Partial<CloneOperation>;
     cloneOperations?: CloneOperation[];
@@ -543,6 +619,11 @@ export function installAgenticoMock(
   const routeListeners = new Set<(event: AppRouteEvent) => void>();
   const appEventListeners = new Set<(event: AppEvent) => void>();
   const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
+  const supervisorEventListeners = new Set<(event: SupervisorEvent) => void>();
+  let supervisorCurrent: SupervisorState = overrides.supervisorState ?? supervisorState();
+  const supervisorTranscript =
+    overrides.supervisorTranscript ??
+    supervisorTranscriptPage({ conversationId: supervisorCurrent.conversationId });
   const sessions = overrides.sessions ?? [];
   const updates = overrides.updates ?? defaultUpdateState();
   const serverUpdate = overrides.serverUpdate ?? defaultServerUpdateState();
@@ -673,6 +754,54 @@ export function installAgenticoMock(
     onSessionOutput: vi.fn((listener: (event: SessionOutputEvent) => void) => {
       sessionOutputListeners.add(listener);
       return () => sessionOutputListeners.delete(listener);
+    }),
+    getSupervisorState: vi.fn(() => Promise.resolve(supervisorCurrent)),
+    updateSupervisorSettings: vi.fn((request: SupervisorSettingsRequest) => {
+      supervisorCurrent = {
+        ...supervisorCurrent,
+        settings: { harness: request.harness, model: request.model, effort: request.effort ?? '' },
+      };
+      return Promise.resolve(supervisorCurrent);
+    }),
+    getSupervisorTranscript: vi.fn(() => Promise.resolve(supervisorTranscript)),
+    sendSupervisorMessage: vi.fn(
+      (request: SupervisorMessageRequest): Promise<SupervisorMessageResult> => {
+        const seq = supervisorCurrent.headSeq + 1;
+        const launched =
+          supervisorCurrent.lifecycle === 'stopped' || supervisorCurrent.lifecycle === 'failed';
+        const generation = supervisorCurrent.generation + (launched ? 1 : 0);
+        supervisorCurrent = {
+          ...supervisorCurrent,
+          generation,
+          headSeq: seq,
+          lifecycle: 'running',
+          sessionId: `__supervisor__.${supervisorCurrent.conversationId}.${String(generation)}`,
+        };
+        return Promise.resolve({
+          record: supervisorRecord({
+            seq,
+            conversationId: supervisorCurrent.conversationId,
+            generation,
+            clientMessageId: `supervisor-client-message-${String(seq)}`,
+            messages: [{ index: seq, role: 'user', type: 'text', text: request.text }],
+          }),
+          launched,
+        });
+      },
+    ),
+    interruptSupervisor: vi.fn((): Promise<SupervisorActionResult> =>
+      Promise.resolve({ result: 'accepted', state: supervisorCurrent }),
+    ),
+    endSupervisor: vi.fn((): Promise<SupervisorActionResult> => {
+      const result = supervisorCurrent.lifecycle === 'stopped' ? 'not_active' : 'ended';
+      supervisorCurrent = { ...supervisorCurrent, lifecycle: 'stopped', sessionId: '' };
+      return Promise.resolve({ result, state: supervisorCurrent });
+    }),
+    onSupervisorEvent: vi.fn((listener: (event: SupervisorEvent) => void) => {
+      supervisorEventListeners.add(listener);
+      return () => {
+        supervisorEventListeners.delete(listener);
+      };
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
     inspectRepositorySources: vi.fn((request: RepositorySourcesRequest) =>
@@ -896,6 +1025,11 @@ export function installAgenticoMock(
       for (const listener of sessionOutputListeners) listener(event);
     },
     sessionOutputListenerCount: () => sessionOutputListeners.size,
+    emitSupervisorEvent: (event) => {
+      for (const listener of supervisorEventListeners) listener(event);
+    },
+    supervisorEventListenerCount: () => supervisorEventListeners.size,
+    supervisorState: () => supervisorCurrent,
     emitServersChanged: (snapshot) => {
       for (const listener of serversChangedListeners) listener(snapshot);
     },

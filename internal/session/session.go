@@ -186,6 +186,10 @@ type Session struct {
 	// event path as provider-originated messages.
 	onMessage func(msg llm.SDKMessage)
 
+	// observer receives provider output and control answers synchronously;
+	// nil disables observation. Set before Start and never changed.
+	observer ports.SessionObserver
+
 	// For attach mode: subscribers receive copies of messages
 	attachCh                  chan llm.SDKMessage
 	criticalAttachSendTimeout time.Duration
@@ -1227,6 +1231,9 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 					// attachCh slots that critical messages need.
 					s.streamRing.Push(msg)
 				}
+				if s.observer != nil {
+					s.observer.ObserveSessionMessage(s.id, msg)
+				}
 				continue
 			}
 
@@ -1375,6 +1382,11 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			// Notify external callback
 			if onMessage != nil && !notifiedExternal {
 				onMessage(msg)
+			}
+			// The observer runs last so it sees the session status the
+			// manager derived from this message.
+			if s.observer != nil {
+				s.observer.ObserveSessionMessage(s.id, msg)
 			}
 		}
 	}
@@ -1665,7 +1677,7 @@ func (s *Session) SendUserMessageWithHiddenContext(visible, hiddenContext string
 		return err
 	}
 
-	if s.Kind() == ports.KindChat && strings.TrimSpace(visible) != "" {
+	if s.Kind().Conversational() && strings.TrimSpace(visible) != "" {
 		s.messageLog.Append(llm.SDKMessage{
 			Type:            "user",
 			LocallyAppended: true,
@@ -1879,6 +1891,7 @@ func (s *Session) respondToPendingControl(requestID string, allow bool, reason s
 	if pending != nil {
 		originalInput = pending.Request.Input
 	}
+	toolName := pending.Request.ToolName
 	s.mu.Unlock()
 
 	var err error
@@ -1902,6 +1915,14 @@ func (s *Session) respondToPendingControl(requestID string, allow bool, reason s
 	}
 	s.mu.Unlock()
 
+	if s.observer != nil {
+		s.observer.ObserveControlAnswer(s.id, ports.ControlAnswer{
+			RequestID: requestID,
+			ToolName:  toolName,
+			Allowed:   allow,
+			Reason:    reason,
+		})
+	}
 	return nil
 }
 
@@ -1932,6 +1953,14 @@ func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, 
 		return err
 	}
 	s.appendAskUserMessages(questions, answers, nil)
+	if s.observer != nil {
+		s.observer.ObserveControlAnswer(s.id, ports.ControlAnswer{
+			RequestID: requestID,
+			ToolName:  "AskUserQuestion",
+			Allowed:   true,
+			Answers:   answers,
+		})
+	}
 	return nil
 }
 

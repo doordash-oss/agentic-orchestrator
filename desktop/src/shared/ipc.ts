@@ -106,6 +106,12 @@ export const IPC_CHANNELS = {
   sessionsTranscript: 'agentico:sessions:transcript',
   sessionsOutputOpen: 'agentico:sessions:output-open',
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
+  supervisorStateGet: 'agentico:supervisor:state-get',
+  supervisorSettingsUpdate: 'agentico:supervisor:settings-update',
+  supervisorTranscriptGet: 'agentico:supervisor:transcript-get',
+  supervisorMessageSend: 'agentico:supervisor:message-send',
+  supervisorInterrupt: 'agentico:supervisor:interrupt',
+  supervisorEnd: 'agentico:supervisor:end',
   creationDefaults: 'agentico:creation:defaults',
   creationSources: 'agentico:creation:sources',
   creationOriginStatus: 'agentico:creation:origin-status',
@@ -183,6 +189,7 @@ export const IPC_EVENTS = {
   serversChanged: 'agentico:servers:changed',
   appEvent: 'agentico:events:app',
   sessionOutput: 'agentico:sessions:output',
+  supervisorEvent: 'agentico:supervisor:event',
   routeRequested: 'agentico:route:requested',
 } as const;
 
@@ -2248,6 +2255,16 @@ export type RewindExecuteRequest = z.output<typeof RewindExecuteRequestSchema>;
 
 const AttentionIDSchema = z.string().min(1).max(200);
 const AttentionTextSchema = z.string().max(64 * 1024);
+/**
+ * The non-feature navigation target of an attention item. `supervisor`
+ * marks a permission or question raised by the supervisor conversation: it
+ * carries no feature id, its context label is "Supervisor", and opening it
+ * navigates to the Supervisor page instead of a feature tab.
+ */
+export const AttentionTargetSchema = z.enum(['supervisor']);
+export type AttentionTarget = z.output<typeof AttentionTargetSchema>;
+/** The context label renderer surfaces show for a supervisor-targeted item. */
+export const SUPERVISOR_CONTEXT_LABEL = 'Supervisor';
 export const AttentionOptionSchema = z.strictObject({
   // The server preserves provider-visible option labels up to 1,000 chars.
   label: z.string().max(1000),
@@ -2267,6 +2284,8 @@ export const AttentionPermissionSchema = z.strictObject({
   /** Set when the prompt belongs to a refactor pass: the parent tab owns it. */
   parentFeatureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
+  /** Set when the request belongs to the supervisor conversation (no feature owns it). */
+  target: AttentionTargetSchema.optional(),
   phase: z.string().max(200).optional(),
   toolName: z.string().max(500),
   summary: AttentionTextSchema.optional(),
@@ -2301,6 +2320,8 @@ export const AttentionQuestionBundleSchema = z.strictObject({
   /** Set when the prompt belongs to a refactor pass: the parent tab owns it. */
   parentFeatureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
+  /** Set when the request belongs to the supervisor conversation (no feature owns it). */
+  target: AttentionTargetSchema.optional(),
   phase: z.string().max(200).optional(),
   waitingSince: z.string().max(100),
   questions: z.array(AttentionQuestionSchema).min(1).max(100),
@@ -2428,6 +2449,10 @@ export function attentionOwnerFeatureId(item: AttentionItem): string | undefined
   if (item.kind === 'recovery') return undefined;
   if ('parentFeatureId' in item && item.parentFeatureId !== undefined) return item.parentFeatureId;
   return item.featureId;
+}
+/** True for a permission or question raised by the supervisor conversation. */
+export function isSupervisorAttentionItem(item: AttentionItem): boolean {
+  return (item.kind === 'permission' || item.kind === 'questions') && item.target === 'supervisor';
 }
 /**
  * A synthetic help item: a session idling between turns. 'coordinating' is a
@@ -2812,6 +2837,238 @@ export const SessionOutputEventSchema = z.discriminatedUnion('type', [
   }),
 ]);
 export type SessionOutputEvent = z.output<typeof SessionOutputEventSchema>;
+
+// --- Supervisor conversation -------------------------------------------------
+//
+// Renderer-facing mirrors of the server's `/api/v1/supervisor/*` DTOs. Like
+// every other IPC type they are camelCase; the main process maps the
+// snake_case wire shapes and re-validates here before anything crosses.
+
+/** The supervisor's reserved feature id on session-manager reads. */
+export const SUPERVISOR_FEATURE_ID = '__supervisor__';
+/** Supervisor session ids are `__supervisor__.<conversation-uuid>.<generation>`. */
+export const SUPERVISOR_SESSION_ID_PREFIX = `${SUPERVISOR_FEATURE_ID}.`;
+/** The session-manager kind string supervisor sessions report. */
+export const SUPERVISOR_SESSION_KIND = 'supervisor';
+
+/** True when a session id belongs to a supervisor generation. */
+export function isSupervisorSessionId(sessionId: string | undefined): boolean {
+  return sessionId !== undefined && sessionId.startsWith(SUPERVISOR_SESSION_ID_PREFIX);
+}
+
+/** Upper bound for one supervisor message's text (the server's maxLength). */
+export const SUPERVISOR_MESSAGE_MAX_CHARS = 100_000;
+/** Largest transcript page the server returns. */
+export const SUPERVISOR_TRANSCRIPT_MAX_LIMIT = 500;
+
+const SupervisorSeqSchema = z.number().int().nonnegative();
+const SupervisorIdentifierSchema = z.string().max(200);
+/** Opaque resume epoch; restricted to URL-safe characters so it can never smuggle query syntax. */
+export const SupervisorStreamEpochSchema = z
+  .string()
+  .max(200)
+  .regex(/^[A-Za-z0-9._:~+/=-]*$/);
+
+export const SupervisorLifecycleSchema = z.enum([
+  'stopped',
+  'starting',
+  'idle',
+  'running',
+  'waiting_permission',
+  'waiting_question',
+  'failed',
+]);
+export type SupervisorLifecycle = z.output<typeof SupervisorLifecycleSchema>;
+export const SupervisorStartingStepSchema = z.enum(['launching', 'handshake']);
+export type SupervisorStartingStep = z.output<typeof SupervisorStartingStepSchema>;
+export const SupervisorTurnOutcomeSchema = z.enum(['none', 'completed', 'interrupted', 'failed']);
+export type SupervisorTurnOutcome = z.output<typeof SupervisorTurnOutcomeSchema>;
+
+/** Committed harness choice; empty harness or model means unset, empty effort the harness default. */
+export const SupervisorSettingsSchema = z.strictObject({
+  harness: z.string().max(100),
+  model: z.string().max(200),
+  effort: z.string().max(40),
+});
+export type SupervisorSettings = z.output<typeof SupervisorSettingsSchema>;
+
+/**
+ * One pending supervisor permission or question, in exactly the attention
+ * item shape the inbox already renders (always `target: 'supervisor'`, no
+ * feature id). Answers go through the existing attention submit paths keyed
+ * by `sessionId`.
+ */
+export const SupervisorPendingRequestSchema = z.discriminatedUnion('kind', [
+  AttentionPermissionSchema,
+  AttentionQuestionBundleSchema,
+]);
+export type SupervisorPendingRequest = z.output<typeof SupervisorPendingRequestSchema>;
+
+export const SupervisorStateSchema = z.strictObject({
+  conversationId: SupervisorIdentifierSchema,
+  /** Number of provider process launches; increments on every launch. */
+  generation: SupervisorSeqSchema,
+  /** Session-manager id of the current generation; empty when no process exists. */
+  sessionId: z.string().max(200),
+  lifecycle: SupervisorLifecycleSchema,
+  /** Present only while the lifecycle is `starting`. */
+  startingStep: SupervisorStartingStepSchema.optional(),
+  lastTurnOutcome: SupervisorTurnOutcomeSchema,
+  settings: SupervisorSettingsSchema,
+  /** Model the running harness reports; empty when no process exists. */
+  effectiveModel: z.string().max(200),
+  pendingRequests: z.array(SupervisorPendingRequestSchema).max(100),
+  /** Seq of the newest committed transcript record; 0 when empty. */
+  headSeq: SupervisorSeqSchema,
+  /** Resume epoch for the supervisor event stream. */
+  streamEpoch: SupervisorStreamEpochSchema,
+});
+export type SupervisorState = z.output<typeof SupervisorStateSchema>;
+
+export const SupervisorRecordKindSchema = z.enum([
+  'user',
+  'assistant',
+  'tool_use',
+  'tool_result',
+  'permission',
+  'question',
+]);
+export type SupervisorRecordKind = z.output<typeof SupervisorRecordKindSchema>;
+export const SupervisorRecordVisibilitySchema = z.enum(['content', 'model_only', 'display_only']);
+export type SupervisorRecordVisibility = z.output<typeof SupervisorRecordVisibilitySchema>;
+
+/** The request or verdict carried by `permission` and `question` records. */
+export const SupervisorRequestVerdictSchema = z.strictObject({
+  requestId: AttentionIDSchema,
+  toolName: z.string().max(500),
+  stage: z.enum(['requested', 'resolved']),
+  outcome: z.enum(['pending', 'allowed', 'denied', 'answered']),
+  summary: AttentionTextSchema.optional(),
+});
+export type SupervisorRequestVerdict = z.output<typeof SupervisorRequestVerdictSchema>;
+
+/** One committed transcript record; its `messages` rows carry `index = seq`. */
+export const SupervisorRecordSchema = z.strictObject({
+  seq: z.number().int().positive(),
+  id: SupervisorIdentifierSchema,
+  conversationId: SupervisorIdentifierSchema,
+  generation: SupervisorSeqSchema,
+  turnId: SupervisorIdentifierSchema,
+  kind: SupervisorRecordKindSchema,
+  visibility: SupervisorRecordVisibilitySchema,
+  createdAt: z.string().max(100),
+  clientMessageId: z.string().max(128).optional(),
+  streamMessageId: SupervisorIdentifierSchema.optional(),
+  messages: z.array(TranscriptMessageSchema).max(500),
+  request: SupervisorRequestVerdictSchema.optional(),
+});
+export type SupervisorRecord = z.output<typeof SupervisorRecordSchema>;
+
+/** One page of the durable supervisor transcript, ordered by `seq`. */
+export const SupervisorTranscriptPageSchema = z.strictObject({
+  conversationId: SupervisorIdentifierSchema,
+  items: z.array(SupervisorRecordSchema).max(SUPERVISOR_TRANSCRIPT_MAX_LIMIT),
+  /** Seq of the first returned record; 0 for an empty page. */
+  firstSeq: SupervisorSeqSchema,
+  /** Seq of the last returned record; 0 for an empty page. */
+  lastSeq: SupervisorSeqSchema,
+  hasMoreBefore: z.boolean(),
+  hasMoreAfter: z.boolean(),
+  headSeq: SupervisorSeqSchema,
+});
+export type SupervisorTranscriptPage = z.output<typeof SupervisorTranscriptPageSchema>;
+
+/** Neither cursor reads the newest page; `before` and `after` are mutually exclusive. */
+export const SupervisorTranscriptRequestSchema = z
+  .strictObject({
+    before: z.number().int().positive().optional(),
+    after: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(SUPERVISOR_TRANSCRIPT_MAX_LIMIT).optional(),
+  })
+  .refine((request) => request.before === undefined || request.after === undefined, {
+    message: 'before and after are mutually exclusive.',
+  });
+export type SupervisorTranscriptRequest = z.output<typeof SupervisorTranscriptRequestSchema>;
+
+export const SupervisorSettingsRequestSchema = z.strictObject({
+  harness: z.string().min(1).max(100),
+  model: z.string().min(1).max(200),
+  effort: z.string().max(40).optional(),
+});
+export type SupervisorSettingsRequest = z.output<typeof SupervisorSettingsRequestSchema>;
+
+/** The renderer supplies only the text; the main process mints `client_message_id`. */
+export const SupervisorMessageRequestSchema = z.strictObject({
+  text: z
+    .string()
+    .min(1)
+    .max(SUPERVISOR_MESSAGE_MAX_CHARS)
+    .refine((value) => value.trim() !== ''),
+});
+export type SupervisorMessageRequest = z.output<typeof SupervisorMessageRequestSchema>;
+
+export const SupervisorMessageResultSchema = z.strictObject({
+  record: SupervisorRecordSchema,
+  /** True when this send launched the supervisor process. */
+  launched: z.boolean(),
+});
+export type SupervisorMessageResult = z.output<typeof SupervisorMessageResultSchema>;
+
+export const SupervisorActionResultSchema = z.strictObject({
+  result: z.enum(['accepted', 'ended', 'not_active']),
+  state: SupervisorStateSchema,
+});
+export type SupervisorActionResult = z.output<typeof SupervisorActionResultSchema>;
+
+/** Non-persisted streaming text for a provisional assistant row. */
+export const SupervisorDeltaSchema = z.strictObject({
+  turnId: SupervisorIdentifierSchema,
+  streamMessageId: SupervisorIdentifierSchema,
+  chunkIndex: z.number().int().nonnegative(),
+  text: BoundedTextSchema,
+});
+export type SupervisorDelta = z.output<typeof SupervisorDeltaSchema>;
+
+const SupervisorEventEnvelopeShape = {
+  conversationId: SupervisorIdentifierSchema,
+  generation: SupervisorSeqSchema,
+  streamEpoch: SupervisorStreamEpochSchema,
+};
+
+/**
+ * Supervisor stream pushes (main → renderer on `IPC_EVENTS.supervisorEvent`).
+ * `reset` means the stream cursor was dropped and the renderer must
+ * re-snapshot state and transcript; `stream-status` mirrors the global
+ * stream's live/stale signal for this stream alone.
+ */
+export const SupervisorEventSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('record'),
+    ...SupervisorEventEnvelopeShape,
+    record: SupervisorRecordSchema,
+  }),
+  z.strictObject({
+    type: z.literal('delta'),
+    ...SupervisorEventEnvelopeShape,
+    delta: SupervisorDeltaSchema,
+  }),
+  z.strictObject({
+    type: z.literal('state'),
+    ...SupervisorEventEnvelopeShape,
+    state: SupervisorStateSchema,
+  }),
+  z.strictObject({
+    type: z.literal('request'),
+    ...SupervisorEventEnvelopeShape,
+    request: SupervisorPendingRequestSchema,
+  }),
+  z.strictObject({ type: z.literal('reset') }),
+  z.strictObject({
+    type: z.literal('stream-status'),
+    status: z.enum(['live', 'stale']),
+  }),
+]);
+export type SupervisorEvent = z.output<typeof SupervisorEventSchema>;
 
 // --- Feature creation ---------------------------------------------------------
 
@@ -4301,6 +4558,30 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([SessionOutputCancelRequestSchema]),
     response: SessionOutputCancelResultSchema,
   },
+  [IPC_CHANNELS.supervisorStateGet]: {
+    request: z.tuple([]),
+    response: SupervisorStateSchema,
+  },
+  [IPC_CHANNELS.supervisorSettingsUpdate]: {
+    request: z.tuple([SupervisorSettingsRequestSchema]),
+    response: SupervisorStateSchema,
+  },
+  [IPC_CHANNELS.supervisorTranscriptGet]: {
+    request: z.tuple([SupervisorTranscriptRequestSchema]),
+    response: SupervisorTranscriptPageSchema,
+  },
+  [IPC_CHANNELS.supervisorMessageSend]: {
+    request: z.tuple([SupervisorMessageRequestSchema]),
+    response: SupervisorMessageResultSchema,
+  },
+  [IPC_CHANNELS.supervisorInterrupt]: {
+    request: z.tuple([]),
+    response: SupervisorActionResultSchema,
+  },
+  [IPC_CHANNELS.supervisorEnd]: {
+    request: z.tuple([]),
+    response: SupervisorActionResultSchema,
+  },
   [IPC_CHANNELS.creationDefaults]: {
     request: z.tuple([]),
     response: CreationDefaultsSchema,
@@ -4690,6 +4971,28 @@ export interface AgenticoApi {
   openSessionOutput(request: SessionOutputOpenRequest): Promise<SessionOutputOpenResult>;
   cancelSessionOutput(subscriptionId: string): Promise<boolean>;
   onSessionOutput(listener: (event: SessionOutputEvent) => void): () => void;
+  /** Reads the supervisor conversation's lifecycle read model. */
+  getSupervisorState(): Promise<SupervisorState>;
+  /**
+   * Commits the supervisor harness, model, and effort. Refused with the
+   * server's canonical `supervisor_settings_invalid` (unknown choice) or
+   * `supervisor_settings_locked` (a supervisor process exists).
+   */
+  updateSupervisorSettings(request: SupervisorSettingsRequest): Promise<SupervisorState>;
+  /** Reads one transcript page: newest with no cursor, else before/after a seq. */
+  getSupervisorTranscript(request: SupervisorTranscriptRequest): Promise<SupervisorTranscriptPage>;
+  /**
+   * Sends one user message (launching the supervisor when stopped or
+   * failed). The main process mints the idempotency key; the renderer
+   * supplies only the text.
+   */
+  sendSupervisorMessage(request: SupervisorMessageRequest): Promise<SupervisorMessageResult>;
+  /** Interrupts the current turn; `accepted` returns immediately. */
+  interruptSupervisor(): Promise<SupervisorActionResult>;
+  /** Stops the supervisor process, keeping the transcript and settings. */
+  endSupervisor(): Promise<SupervisorActionResult>;
+  /** Schema-validated supervisor stream pushes; returns the exact unsubscribe. */
+  onSupervisorEvent(listener: (event: SupervisorEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
   inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
   checkRepositoryOriginStatus(

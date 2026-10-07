@@ -1636,6 +1636,11 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 			// rests until the next message — clients surface that in the chat
 			// panel, not as blocking attention. A phase session in the same
 			// state is mid-coordination and needs no human.
+			// The supervisor's between-turn rest is its page's idle state,
+			// never an inbox entry.
+			if sess.Kind() == ports.KindSupervisor {
+				continue
+			}
 			kind := helpKindCoordinating
 			if sess.Kind() == ports.KindChat {
 				kind = helpKindInput

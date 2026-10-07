@@ -17,7 +17,7 @@ limitations under the License.
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionState, RepositoryFileRef } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { FILE_SEARCH_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
@@ -384,5 +384,98 @@ describe('DescriptionComposer locality gating matrix', () => {
       act(() => mock.emitConnection(connection));
       expect(screen.getByRole('button', { name: 'Attach files or photos' })).toBeEnabled();
     }
+  });
+});
+
+/** A conversational host: Enter submits, uploads are off, the footer is the host's. */
+function ConversationalHarness({
+  onSubmit,
+  submitDisabled = false,
+  placeholderOverride,
+}: {
+  onSubmit(value: string): void;
+  submitDisabled?: boolean;
+  placeholderOverride?: string;
+}) {
+  const [value, setValue] = useState('');
+  return (
+    <DescriptionComposer
+      id="conversation"
+      label="Message"
+      hideLabel
+      placeholder="Say something"
+      placeholderOverride={placeholderOverride}
+      value={value}
+      searchRepositories={[]}
+      images={[]}
+      attachments={[]}
+      imageUploads={[]}
+      attachmentUploads={[]}
+      repositoryFiles={[]}
+      onValueChange={setValue}
+      onImagesChange={() => undefined}
+      onAttachmentsChange={() => undefined}
+      onImageUploadsChange={() => undefined}
+      onAttachmentUploadsChange={() => undefined}
+      onRepositoryFilesChange={() => undefined}
+      onError={() => undefined}
+      allowUploads={false}
+      onSubmit={() => onSubmit(value)}
+      submitDisabled={submitDisabled}
+      footer={<button type="button">Footer action</button>}
+    />
+  );
+}
+
+describe('DescriptionComposer conversational props', () => {
+  it('leaves the wizard composer unchanged when none of the optional props are set', async () => {
+    installAgenticoMock();
+    render(<Harness />);
+    const user = userEvent.setup();
+
+    const textarea = await screen.findByLabelText('Description');
+    expect(textarea).toHaveAttribute('placeholder', 'Describe the work');
+    expect(textarea).toHaveAttribute('rows', '6');
+    expect(screen.getByText('Description')).not.toHaveClass('sr-only');
+    await user.type(textarea, 'one{Enter}two');
+    // Enter is still a newline: no submit handler exists.
+    expect(textarea).toHaveValue('one\ntwo');
+  });
+
+  it('submits on Enter, keeps Shift+Enter a newline, and honours the blocked state', async () => {
+    installAgenticoMock();
+    const onSubmit = vi.fn();
+    const { rerender } = render(<ConversationalHarness onSubmit={onSubmit} />);
+    const user = userEvent.setup();
+
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(textarea, 'hello{Shift>}{Enter}{/Shift}there');
+    expect(textarea).toHaveValue('hello\nthere');
+    await user.keyboard('{Enter}');
+    expect(onSubmit).toHaveBeenCalledWith('hello\nthere');
+
+    rerender(
+      <ConversationalHarness onSubmit={onSubmit} submitDisabled placeholderOverride="Not yet" />,
+    );
+    expect(textarea).toHaveAttribute('placeholder', 'Not yet');
+    await user.keyboard('{Enter}');
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    // Typing stays allowed while the submit is blocked.
+    await user.type(textarea, '!');
+    expect(textarea).toHaveValue('hello\nthere!');
+  });
+
+  it('hides the upload affordances, ignores dropped files, and renders the footer slot', async () => {
+    const mock = installAgenticoMock();
+    render(<ConversationalHarness onSubmit={vi.fn()} />);
+
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+    expect(screen.getByText('Message')).toHaveClass('sr-only');
+    expect(screen.queryByRole('button', { name: 'Attach files or photos' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Footer action' })).toBeVisible();
+
+    fireEvent.drop(textarea.closest('.composer')!, { dataTransfer: { files: [IMAGE_FILE()] } });
+    expect(mock.api.importDroppedCreationFiles).not.toHaveBeenCalled();
+    expect(screen.queryByRole('list', { name: 'Attached files' })).toBeNull();
   });
 });

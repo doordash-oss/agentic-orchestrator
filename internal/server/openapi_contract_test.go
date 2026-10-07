@@ -566,6 +566,8 @@ func topLevelPatternForPath(path string) string {
 		return apiPathEvents
 	case path == apiPathUploads:
 		return apiPathUploads
+	case strings.HasPrefix(path, apiPathSupervisor+"/"):
+		return apiPathSupervisor + "/"
 	default:
 		return path
 	}
@@ -664,6 +666,13 @@ func documentedServerRoutes() []documentedRoute {
 		{method: "delete", path: apiPathUpdateInstall, mutation: true},
 		{method: httpMethodGet, path: apiPathEvents, sse: true},
 		{method: httpMethodPost, path: apiPathUploads, mutation: true},
+		{method: httpMethodGet, path: apiPathSupervisorState},
+		{method: "patch", path: apiPathSupervisorSettings, mutation: true},
+		{method: httpMethodGet, path: apiPathSupervisorTranscript},
+		{method: httpMethodPost, path: apiPathSupervisorMessages, mutation: true},
+		{method: httpMethodPost, path: apiPathSupervisorInterrupt, mutation: true},
+		{method: httpMethodPost, path: apiPathSupervisorEnd, mutation: true},
+		{method: httpMethodGet, path: apiPathSupervisorEvents, sse: true},
 	}
 }
 

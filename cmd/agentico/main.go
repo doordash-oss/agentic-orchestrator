@@ -53,6 +53,7 @@ import (
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"go.uber.org/fx"
@@ -1203,6 +1204,9 @@ type runtimeBootstrap struct {
 	// admission is the runtime work-admission boundary: one instance shared
 	// by the orchestrator, repository work, and the HTTP server.
 	admission *workadmission.Coordinator
+	// supervisor owns the supervisor conversation for a serving runtime;
+	// nil outside `agentico server`.
+	supervisor *supervisor.Coordinator
 }
 
 // serverUpdates returns the raw server.updates config values, tolerating a
@@ -3437,6 +3441,14 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}, err)
 	}
 
+	supervisorCoordinator, err := newSupervisorCoordinator(boot)
+	if err != nil {
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("preparing supervisor state: %w", e)})
+		}, err)
+	}
+	boot.supervisor = supervisorCoordinator
+
 	runtimeServer, err := serverruntime.Start(bootCtx, serverruntime.Options{
 		Runtime:      boot.runtime,
 		LaunchPolicy: policy,
@@ -3475,6 +3487,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Admission:   boot.admission,
 		Lifetime:    ctx,
 		HTTPMetrics: boot.observer,
+		Supervisor:  supervisorCoordinator,
 	})
 	if err != nil {
 		return targetStartupFailure(func(e error) {
@@ -3563,8 +3576,38 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	case code := <-installLifecycle.exitCode:
 		return code
 	}
-	shutdownFeatures(boot.orchestrator, boot.sessionManager)
+	shutdownRuntimeWork(boot)
 	return 0
+}
+
+// newSupervisorCoordinator loads the supervisor conversation for this
+// server without launching anything. The provider runs in the workspace
+// root, else the state directory, as chat does.
+func newSupervisorCoordinator(boot *runtimeBootstrap) (*supervisor.Coordinator, error) {
+	stateDir := boot.phaseRunner.StateDir
+	workDir := boot.workspaceDir
+	if workDir == "" {
+		workDir = stateDir
+	}
+	return supervisor.New(supervisor.Options{
+		StateDir:  stateDir,
+		WorkDir:   workDir,
+		Catalog:   supervisor.RegistryCatalog{Registry: boot.registry},
+		Launcher:  &supervisor.SessionLauncher{Runner: boot.phaseRunner, Sessions: boot.sessionManager},
+		Admission: boot.admission,
+	})
+}
+
+// shutdownRuntimeWork ends the supervisor (refusing any relaunch) and then
+// stops features and sessions.
+func shutdownRuntimeWork(boot *runtimeBootstrap) {
+	if boot == nil {
+		return
+	}
+	if boot.supervisor != nil {
+		_ = boot.supervisor.Close()
+	}
+	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 }
 
 // launchIdentity is the update-launch state resolved before bootstrap: the

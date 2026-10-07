@@ -1240,6 +1240,146 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/supervisor/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the supervisor conversation's lifecycle read model.
+         * @description Returns the per-server supervisor conversation identity, generation, lifecycle, committed harness settings, pending requests and the durable transcript head. Never carries transcript records.
+         */
+        get: operations["getSupervisorState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/supervisor/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Choose the supervisor harness, model and effort.
+         * @description Accepted only while the lifecycle is `stopped` or `failed`. `harness` and `model` must name a chat-eligible catalog model of that harness; `effort` must be empty (harness default) or one of the model's effort levels. Failure machine codes: 400 `supervisor_settings_invalid` and 409 `supervisor_settings_locked` while a supervisor process exists.
+         */
+        patch: operations["updateSupervisorSettings"];
+        trace?: never;
+    };
+    "/api/v1/supervisor/transcript": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one page of the durable supervisor transcript.
+         * @description Records are ordered by their per-conversation `seq`. With neither cursor the newest page is returned; `before` pages backwards and `after` pages forwards. A cursor outside the stored range returns an empty page.
+         */
+        get: operations["getSupervisorTranscript"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/supervisor/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send one user message to the supervisor.
+         * @description Launches the supervisor process when the conversation is `stopped` or `failed`; sends arriving while a launch is in flight join it and are delivered in arrival order. A repeated `client_message_id` returns the already-committed record without appending. Failure machine codes: 409 `settings_required` when no harness or model is chosen, 409 `turn_active` while a turn is running, 502 `supervisor_launch_failed` when the launch or handshake fails (no user record is committed), and 503 `update_in_progress` while work admission is closed.
+         */
+        post: operations["sendSupervisorMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/supervisor/interrupt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Interrupt the supervisor's current turn.
+         * @description Returns `accepted` immediately. The lifecycle returns to `idle` only once a turn result or process exit is observed; a harness that does not answer within the grace is terminated and the lifecycle becomes `stopped` with `last_turn_outcome` `interrupted`.
+         */
+        post: operations["interruptSupervisor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/supervisor/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Stop the supervisor process and keep the conversation.
+         * @description Stops the process, keeps the transcript and settings, and sets the lifecycle to `stopped`. Returns `not_active` when no process exists.
+         */
+        post: operations["endSupervisor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/supervisor/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream the supervisor conversation as SSE.
+         * @description The stream opens with a `state` event. Committed transcript records are `record` events whose SSE id is the record `seq`; non-persisted `delta`, `state` and `request` events carry no id. Every event carries `conversation_id`, `generation` and `stream_epoch`. Resume with `Last-Event-ID` or `after`: committed records after the cursor replay from the durable store before live events follow. A cursor beyond the head, a stale `epoch`, or a consumer that falls behind yields one `stream.reset` event with `snapshot_required`, after which the stream continues live from the head.
+         */
+        get: operations["streamSupervisorEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/uploads": {
         parameters: {
             query?: never;
@@ -2610,6 +2750,146 @@ export interface components {
             tool_call?: components["schemas"]["ToolCall"];
             task?: components["schemas"]["Task"];
         };
+        /** @enum {string} */
+        SupervisorLifecycle: "stopped" | "starting" | "idle" | "running" | "waiting_permission" | "waiting_question" | "failed";
+        /**
+         * @description Present only while the lifecycle is `starting`.
+         * @enum {string}
+         */
+        SupervisorStartingStep: "launching" | "handshake";
+        /** @enum {string} */
+        SupervisorTurnOutcome: "none" | "completed" | "interrupted" | "failed";
+        /** @description Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default. */
+        SupervisorSettings: {
+            harness: string;
+            model: string;
+            effort: string;
+        };
+        SupervisorSettingsRequest: {
+            harness: string;
+            model: string;
+            effort?: string;
+        };
+        SupervisorState: {
+            conversation_id: string;
+            /**
+             * Format: int64
+             * @description Number of provider process launches; increments on every launch.
+             */
+            generation: number;
+            /** @description Session-manager id of the current generation (`__supervisor__.<conversation>.<generation>`); empty when no process exists. */
+            session_id: string;
+            lifecycle: components["schemas"]["SupervisorLifecycle"];
+            starting_step?: components["schemas"]["SupervisorStartingStep"];
+            last_turn_outcome: components["schemas"]["SupervisorTurnOutcome"];
+            settings: components["schemas"]["SupervisorSettings"];
+            /** @description Model the running harness reports; empty when no process exists. */
+            effective_model: string;
+            pending_requests: components["schemas"]["ControlRequest"][];
+            /**
+             * Format: int64
+             * @description Seq of the newest committed transcript record; 0 when empty.
+             */
+            head_seq: number;
+            /** @description Resume epoch for the supervisor event stream. */
+            stream_epoch: string;
+        };
+        SupervisorStateResponse: {
+            api_version: string;
+            state: components["schemas"]["SupervisorState"];
+        };
+        /** @enum {string} */
+        SupervisorRecordKind: "user" | "assistant" | "tool_use" | "tool_result" | "permission" | "question";
+        /** @enum {string} */
+        SupervisorRecordVisibility: "content" | "model_only" | "display_only";
+        /** @description Request or verdict carried by `permission` and `question` records. */
+        SupervisorRequestRecord: {
+            request_id: string;
+            tool_name: string;
+            /** @enum {string} */
+            stage: "requested" | "resolved";
+            /** @enum {string} */
+            outcome: "pending" | "allowed" | "denied" | "answered";
+            summary?: string;
+        };
+        /** @description One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`. */
+        SupervisorRecord: {
+            /** Format: int64 */
+            seq: number;
+            id: string;
+            conversation_id: string;
+            /** Format: int64 */
+            generation: number;
+            turn_id: string;
+            kind: components["schemas"]["SupervisorRecordKind"];
+            visibility: components["schemas"]["SupervisorRecordVisibility"];
+            /** Format: date-time */
+            created_at: string;
+            client_message_id?: string;
+            stream_message_id?: string;
+            messages: components["schemas"]["TranscriptMessage"][];
+            request?: components["schemas"]["SupervisorRequestRecord"];
+        };
+        SupervisorTranscriptResponse: {
+            api_version: string;
+            conversation_id: string;
+            items: components["schemas"]["SupervisorRecord"][];
+            /**
+             * Format: int64
+             * @description Seq of the first returned record; 0 for an empty page.
+             */
+            first_seq: number;
+            /**
+             * Format: int64
+             * @description Seq of the last returned record; 0 for an empty page.
+             */
+            last_seq: number;
+            has_more_before: boolean;
+            has_more_after: boolean;
+            /** Format: int64 */
+            head_seq: number;
+        };
+        SupervisorMessageRequest: {
+            text: string;
+            client_message_id: string;
+        };
+        SupervisorMessageResponse: {
+            api_version: string;
+            record: components["schemas"]["SupervisorRecord"];
+            /** @description True when this send launched the supervisor process. */
+            launched: boolean;
+        };
+        SupervisorActionResponse: {
+            api_version: string;
+            /** @enum {string} */
+            result: "accepted" | "ended" | "not_active";
+            state: components["schemas"]["SupervisorState"];
+        };
+        /** @description Non-persisted streaming text for a provisional assistant row. */
+        SupervisorDelta: {
+            turn_id: string;
+            stream_message_id: string;
+            chunk_index: number;
+            text: string;
+        };
+        SupervisorStreamEvent: {
+            /** @enum {string} */
+            kind: "record" | "delta" | "state" | "request" | "stream.reset" | "heartbeat";
+            conversation_id: string;
+            /** Format: int64 */
+            generation: number;
+            stream_epoch: string;
+            /**
+             * Format: int64
+             * @description Record seq for `record` events; the head seq otherwise.
+             */
+            seq?: number;
+            snapshot_required?: boolean;
+            record?: components["schemas"]["SupervisorRecord"];
+            delta?: components["schemas"]["SupervisorDelta"];
+            state?: components["schemas"]["SupervisorState"];
+            request?: components["schemas"]["ControlRequest"];
+        };
         Checkpoints: {
             inquiry_review: boolean;
             research_review: boolean;
@@ -3645,6 +3925,51 @@ export interface components {
             };
             content: {
                 "text/event-stream": components["schemas"]["SessionOutputChunk"];
+            };
+        };
+        /** @description Supervisor lifecycle read model. */
+        SupervisorStateResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SupervisorStateResponse"];
+            };
+        };
+        /** @description One page of the durable supervisor transcript. */
+        SupervisorTranscriptResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SupervisorTranscriptResponse"];
+            };
+        };
+        /** @description The committed user record for a supervisor send. */
+        SupervisorMessageResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SupervisorMessageResponse"];
+            };
+        };
+        /** @description Supervisor lifecycle mutation result. */
+        SupervisorActionResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SupervisorActionResponse"];
+            };
+        };
+        /** @description Supervisor SSE stream carrying `SupervisorStreamEvent` JSON payloads. */
+        SupervisorEventStream: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "text/event-stream": components["schemas"]["SupervisorStreamEvent"];
             };
         };
     };
@@ -5087,6 +5412,134 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["EventStream"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getSupervisorState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["SupervisorStateResponse"];
+            401: components["responses"]["Unauthorized"];
+            503: components["responses"]["ErrorResponse"];
+        };
+    };
+    updateSupervisorSettings: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupervisorSettingsRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["SupervisorStateResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+        };
+    };
+    getSupervisorTranscript: {
+        parameters: {
+            query?: {
+                before?: number;
+                after?: number;
+                /** @description Page size, default 100 and maximum 500. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["SupervisorTranscriptResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    sendSupervisorMessage: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupervisorMessageRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["SupervisorMessageResponse"];
+            400: components["responses"]["ErrorResponse"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
+            502: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
+        };
+    };
+    interruptSupervisor: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["JSONMutation"];
+        responses: {
+            200: components["responses"]["SupervisorActionResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    endSupervisor: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["JSONMutation"];
+        responses: {
+            200: components["responses"]["SupervisorActionResponse"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    streamSupervisorEvents: {
+        parameters: {
+            query?: {
+                after?: number;
+                epoch?: string;
+                heartbeat_ms?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["SupervisorEventStream"];
             401: components["responses"]["Unauthorized"];
         };
     };

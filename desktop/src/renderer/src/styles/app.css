@@ -14276,3 +14276,422 @@ body {
 .config-editor__danger {
   color: var(--bad);
 }
+
+/* ─── Supervisor ──────────────────────────────────────────────────────────
+ * One conversation, read like the AMA transcript but given the whole
+ * content pane: a centered reading column that scrolls on its own, with the
+ * composer docked beneath it. The one signal it adds is the status lamp
+ * beside the harness chip — the conversation's "on" light — so everything
+ * else stays in the shared transcript and attention vocabulary.
+ */
+.content-pane--conversation {
+  overflow: hidden;
+  gap: 0;
+  padding: 0;
+}
+
+.supervisor-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.supervisor-page__transcript {
+  flex: 1;
+  padding-block: var(--space-5) var(--space-4);
+  padding-inline: max(var(--space-5), calc((100% - 760px) / 2));
+}
+
+.supervisor-page__empty {
+  margin-top: auto;
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font: 13px var(--bench-font-text);
+  line-height: 1.5;
+}
+
+.supervisor-page__empty strong {
+  color: var(--text);
+  font: 500 20px var(--bench-font-serif);
+}
+
+.supervisor-page__failure {
+  padding: clamp(20px, 3vw, 44px);
+}
+
+.supervisor-page__requests {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* A pending permission wears the question turn's attention ground, so the
+ * two kinds of "waiting on you" read as one family in the stream. */
+.supervisor-request {
+  border: var(--bench-hairline-width) solid
+    color-mix(in srgb, var(--attention) 42%, var(--hairline));
+  border-radius: var(--bench-radius-card);
+  background: color-mix(in srgb, var(--attention) 7%, var(--content));
+  padding-top: var(--space-3);
+}
+
+.supervisor-request--question {
+  border: 0;
+  background: none;
+  padding-top: 0;
+  display: grid;
+}
+
+.supervisor-request--question .question-turn {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.supervisor-request--question .question-composer {
+  border: var(--bench-hairline-width) solid
+    color-mix(in srgb, var(--attention) 42%, var(--hairline));
+  border-top: 0;
+  border-radius: 0 0 var(--bench-radius-card) var(--bench-radius-card);
+}
+
+.supervisor-page__dock {
+  flex: none;
+  display: grid;
+  gap: var(--space-2);
+  width: min(760px, calc(100% - 2 * var(--space-5)));
+  margin: 0 auto;
+  padding-bottom: var(--space-4);
+}
+
+.supervisor-composer {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-window);
+  background: var(--raised);
+  padding: var(--space-2) var(--space-3);
+  transition: border-color 120ms ease;
+}
+
+.supervisor-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--hairline));
+}
+
+.supervisor-composer .composer {
+  gap: var(--space-2);
+}
+
+/* The textarea sheds its form-field box: the composer frame is the field,
+ * and its focus-within border is the focus indication. */
+.supervisor-composer .form-field__input--multiline {
+  min-height: 44px;
+  max-height: 240px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  padding: var(--space-1) 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.supervisor-composer .form-field__input--multiline:focus-visible {
+  outline: none;
+}
+
+.supervisor-composer .form-field__input--multiline::placeholder {
+  color: var(--faint);
+}
+
+.supervisor-composer__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.supervisor-status {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.supervisor-status__lamp {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.supervisor-status[data-lifecycle='idle'] .supervisor-status__lamp {
+  background: var(--ok);
+}
+
+.supervisor-status[data-lifecycle='starting'] .supervisor-status__lamp,
+.supervisor-status[data-lifecycle='running'] .supervisor-status__lamp {
+  background: var(--accent);
+  animation: supervisor-lamp 1.4s ease-in-out infinite;
+}
+
+.supervisor-status[data-lifecycle='waiting_permission'] .supervisor-status__lamp,
+.supervisor-status[data-lifecycle='waiting_question'] .supervisor-status__lamp {
+  background: var(--attention);
+}
+
+.supervisor-status[data-lifecycle='failed'] .supervisor-status__lamp {
+  background: var(--bad);
+}
+
+@keyframes supervisor-lamp {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .supervisor-status__lamp {
+    animation: none !important;
+  }
+}
+
+.supervisor-composer__send,
+.supervisor-composer__stop {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  padding: 5px var(--space-3);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.supervisor-composer__send {
+  background: var(--accent);
+  color: #fff;
+}
+
+.supervisor-composer__send:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.supervisor-composer__send:disabled {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--faint);
+  cursor: default;
+}
+
+/* Stop is the same slot in ink rather than accent: a different verb, not an
+ * alarm. */
+.supervisor-composer__stop {
+  background: var(--text);
+  color: var(--content);
+}
+
+.supervisor-composer__stop:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.supervisor-composer__stop-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.supervisor-composer__send:focus-visible,
+.supervisor-composer__stop:focus-visible,
+.supervisor-chip__trigger:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The harness chip reads as an instrument readout: mono, pill-shaped, and
+ * accent-tinted only while it still asks to be set. */
+.supervisor-chip__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 320px;
+  padding: 3px var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: 999px;
+  background: var(--content);
+  color: var(--text);
+  font: 500 11.5px var(--bench-font-mono);
+  cursor: pointer;
+}
+
+.supervisor-chip__trigger[data-unset='true'] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline));
+  color: var(--accent);
+  font-family: var(--bench-font-text);
+}
+
+.supervisor-chip__trigger[aria-disabled='true'] {
+  color: var(--muted);
+  cursor: default;
+}
+
+.supervisor-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervisor-chip__chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+}
+
+/* Hangs upward from the composer instead of down from the toolbar. */
+.supervisor-chip__popover {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+  width: 300px;
+  max-height: min(440px, 70vh);
+  overflow-y: auto;
+}
+
+.supervisor-chip__heading {
+  margin: 0;
+  color: var(--muted);
+  font: 600 12px var(--bench-font-text);
+}
+
+.supervisor-chip__groups {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.supervisor-chip__group,
+.supervisor-chip__effort {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.supervisor-chip__harness {
+  padding: 0 0 var(--space-1);
+  color: var(--faint);
+  font: 600 11px var(--bench-font-text);
+  letter-spacing: 0.02em;
+}
+
+.supervisor-chip__option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2);
+  border-radius: var(--bench-radius-control);
+  font: 13px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.supervisor-chip__option:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.supervisor-chip__option[data-current] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.supervisor-chip__option:has(:focus-visible),
+.supervisor-chip__segment:has(:focus-visible) {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.supervisor-chip__option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervisor-chip__check {
+  flex: none;
+  width: 1em;
+  color: var(--accent);
+  font-weight: 600;
+  text-align: right;
+}
+
+.supervisor-chip__note {
+  margin: 0;
+  padding: 2px var(--space-2);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.supervisor-chip__segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.supervisor-chip__segment {
+  position: relative;
+  padding: 3px var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: 999px;
+  font: 500 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.supervisor-chip__segment[data-current] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.supervisor-chip__group:disabled .supervisor-chip__option,
+.supervisor-chip__effort:disabled .supervisor-chip__segment {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* An answered request, collapsed to one line in the stream. */
+.conversation__verdict {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.conversation__verdict-mark {
+  flex: none;
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.conversation__verdict[data-outcome='denied'] .conversation__verdict-mark {
+  color: var(--bad);
+}
+
+.conversation__verdict-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

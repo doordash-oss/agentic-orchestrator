@@ -32,7 +32,11 @@ import {
   attentionOwnerFeatureId,
   CHAT_SESSION_ID,
   ERROR_CLASS_LABELS,
+  isSupervisorAttentionItem,
+  isSupervisorSessionId,
   isSyntheticHelpItem,
+  SUPERVISOR_CONTEXT_LABEL,
+  SUPERVISOR_FEATURE_ID,
   type AttentionActionResult,
   type AttentionItem,
   type AutoApproveScope,
@@ -76,6 +80,12 @@ export function OwnerAwareAttention({
   const ownerIsVisible = useRegisteredErrorCard(item.kind === 'error' ? item.ref : undefined);
   return ownerIsVisible ? null : children;
 }
+
+/**
+ * The shell route sentinel a supervisor item jumps through, like the
+ * recovery jump's `__recovery__`: the shell resolves it to the Supervisor page.
+ */
+export const SUPERVISOR_ATTENTION_ROUTE = SUPERVISOR_FEATURE_ID;
 
 export function emptyAttentionDrafts(): AttentionDrafts {
   return { questions: {}, help: {}, gates: {} };
@@ -196,7 +206,8 @@ export function AttentionInbox({
       setExpanded(
         requested !== undefined &&
           requested.kind !== 'recovery' &&
-          requested.featureId === undefined
+          requested.featureId === undefined &&
+          !isSupervisorAttentionItem(requested)
           ? openRequest.attentionId
           : null,
       );
@@ -359,7 +370,9 @@ export function AttentionInbox({
                   type="button"
                   className="attention-popover__item"
                   aria-expanded={
-                    item.kind !== 'recovery' && item.featureId === undefined
+                    item.kind !== 'recovery' &&
+                    item.featureId === undefined &&
+                    !isSupervisorAttentionItem(item)
                       ? expanded === item.id
                       : undefined
                   }
@@ -367,6 +380,13 @@ export function AttentionInbox({
                     if (item.kind === 'recovery') {
                       setOpen(false);
                       onJump('__recovery__');
+                      return;
+                    }
+                    // A supervisor request is answered on the Supervisor page,
+                    // where its card sits at the bottom of the conversation.
+                    if (isSupervisorAttentionItem(item)) {
+                      setOpen(false);
+                      onJump(SUPERVISOR_ATTENTION_ROUTE, item.id);
                       return;
                     }
                     const ownerFeatureId = attentionOwnerFeatureId(item);
@@ -384,7 +404,9 @@ export function AttentionInbox({
                     <span className="attention-popover__feature">
                       {item.kind === 'recovery'
                         ? 'Recovery workspace'
-                        : featureLabel(attentionOwnerFeatureId(item))}
+                        : isSupervisorAttentionItem(item)
+                          ? SUPERVISOR_CONTEXT_LABEL
+                          : featureLabel(attentionOwnerFeatureId(item))}
                     </span>
                   </span>
                   <span className="attention-popover__waiting">
@@ -1029,10 +1051,21 @@ export function AttentionDetail({
 function AttentionContextMeta({ item }: { item: AttentionItem }) {
   if (item.kind === 'recovery') return null;
   const entries: string[] = [];
-  if ('sessionId' in item && item.sessionId !== undefined && item.sessionId !== CHAT_SESSION_ID) {
+  // The chat and the supervisor are singletons: their session ids name a
+  // generation, not anything a person tells apart.
+  if (
+    'sessionId' in item &&
+    item.sessionId !== undefined &&
+    item.sessionId !== CHAT_SESSION_ID &&
+    !isSupervisorSessionId(item.sessionId)
+  ) {
     entries.push(`session ${shortSessionId(item.sessionId)}`);
   }
-  if ('phase' in item && item.phase !== undefined) entries.push(item.phase);
+  // A supervisor session runs outside any feature phase; the phase its
+  // session carries is a placeholder, not context.
+  if ('phase' in item && item.phase !== undefined && !isSupervisorAttentionItem(item)) {
+    entries.push(item.phase);
+  }
   if (item.kind === 'gate') {
     if (item.iteration !== undefined) entries.push(`iteration ${item.iteration}`);
     if (item.repoName !== undefined) entries.push(item.repoName);

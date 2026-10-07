@@ -318,6 +318,13 @@ export function ConversationTranscript({
           <p key={item.key} className="conversation__verification-tick" data-tone={item.tone}>
             <span aria-hidden="true">{item.symbol}</span> {item.name}
           </p>
+        ) : item.kind === 'verdict' ? (
+          <p key={item.key} className="conversation__verdict" data-outcome={item.outcome}>
+            <span className="conversation__verdict-mark" aria-hidden="true">
+              {item.outcome === 'denied' ? '✕' : '✓'}
+            </span>
+            <span className="conversation__verdict-text">{item.text}</span>
+          </p>
         ) : (
           <ActivityIndicator
             key={item.key}

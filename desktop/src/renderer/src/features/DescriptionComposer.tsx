@@ -18,6 +18,12 @@ limitations under the License.
  * Shared description composer for the creation and refactor wizards: one
  * textarea that accepts pasted or dropped images and documents, an attach
  * menu, removable file chips, and @-mention search over repository files.
+ *
+ * Conversational hosts (the Supervisor page) reuse it through the optional
+ * props: an Enter-to-send submit handler with its own blocked state, a
+ * placeholder override, a hidden label, uploads switched off, and a footer
+ * slot for the host's own controls. Every optional prop defaults to the
+ * wizard behaviour, so the creation and refactor flows are unchanged.
  */
 import {
   useEffect,
@@ -26,6 +32,7 @@ import {
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 import {
   CREATION_ATTACHMENT_LIMIT,
@@ -120,6 +127,26 @@ export interface DescriptionComposerProps {
     update: (files: readonly RepositoryFileRef[]) => readonly RepositoryFileRef[],
   ): void;
   onError(error: CanonicalError): void;
+  /**
+   * Enter (without Shift, outside an open @-mention list and IME
+   * composition) submits through this handler; Shift+Enter keeps inserting a
+   * newline. Omitted, Enter types a newline as before.
+   */
+  onSubmit?(): void;
+  /** Blocks the Enter submit while typing stays allowed. */
+  submitDisabled?: boolean;
+  /** Disables the textarea itself. */
+  disabled?: boolean;
+  /** Replaces `placeholder` while set (e.g. a reason the host cannot send yet). */
+  placeholderOverride?: string;
+  /** Keeps the label as the textarea's accessible name without showing it. */
+  hideLabel?: boolean;
+  /** False hides the attach affordances and ignores pasted or dropped files. */
+  allowUploads?: boolean;
+  /** Host-owned controls rendered beneath the textarea (e.g. a Send button). */
+  footer?: ReactNode;
+  rows?: number;
+  maxLength?: number;
 }
 
 export function DescriptionComposer({
@@ -140,6 +167,15 @@ export function DescriptionComposer({
   onAttachmentUploadsChange,
   onRepositoryFilesChange,
   onError,
+  onSubmit,
+  submitDisabled = false,
+  disabled = false,
+  placeholderOverride,
+  hideLabel = false,
+  allowUploads = true,
+  footer,
+  rows = 6,
+  maxLength = 10000,
 }: DescriptionComposerProps) {
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionResults, setMentionResults] = useState<readonly RepositoryFileRef[]>([]);
@@ -311,7 +347,18 @@ export function DescriptionComposer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (mention === null || mentionResults.length === 0) return;
+    if (mention === null || mentionResults.length === 0) {
+      if (
+        onSubmit !== undefined &&
+        event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        if (!submitDisabled) onSubmit();
+      }
+      return;
+    }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       setMentionIndex((index) => (index + 1) % mentionResults.length);
@@ -329,6 +376,7 @@ export function DescriptionComposer({
   };
 
   const onPaste = (event: ClipboardEvent): void => {
+    if (!allowUploads) return;
     const hasImage = Array.from(event.clipboardData.items ?? []).some((item) =>
       item.type.startsWith('image/'),
     );
@@ -353,22 +401,25 @@ export function DescriptionComposer({
 
   const onDrop = (event: DragEvent): void => {
     event.preventDefault();
-    if (event.dataTransfer.files.length === 0) return;
+    if (!allowUploads || event.dataTransfer.files.length === 0) return;
     importFiles(event.dataTransfer.files);
   };
 
   return (
     <div className="composer" onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
       <label className="form-field">
-        <span className="form-field__label">{label}</span>
+        <span className={hideLabel ? 'form-field__label sr-only' : 'form-field__label'}>
+          {label}
+        </span>
         <textarea
           ref={textareaRef}
           id={id}
           className="form-field__input form-field__input--multiline"
           value={value}
-          maxLength={10000}
-          rows={6}
-          placeholder={placeholder}
+          maxLength={maxLength}
+          rows={rows}
+          disabled={disabled}
+          placeholder={placeholderOverride ?? placeholder}
           onChange={(event) => {
             onValueChange(event.target.value);
             syncMention(event.target);
@@ -411,35 +462,37 @@ export function DescriptionComposer({
           )}
         </div>
       ) : null}
-      <div className="composer__toolbar">
-        <div className="composer__attach" ref={attachMenuRef}>
-          <button
-            type="button"
-            className="composer__attach-button"
-            aria-label="Attach files or photos"
-            aria-haspopup="menu"
-            aria-expanded={attachMenuOpen}
-            onClick={() => setAttachMenuOpen((open) => !open)}
-          >
-            +
-          </button>
-          {attachMenuOpen ? (
-            <div className="composer__attach-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => void pickFiles('image')}>
-                Add photos
-              </button>
-              <button type="button" role="menuitem" onClick={() => void pickFiles('attachment')}>
-                Add files
-              </button>
-            </div>
-          ) : null}
+      {allowUploads ? (
+        <div className="composer__toolbar">
+          <div className="composer__attach" ref={attachMenuRef}>
+            <button
+              type="button"
+              className="composer__attach-button"
+              aria-label="Attach files or photos"
+              aria-haspopup="menu"
+              aria-expanded={attachMenuOpen}
+              onClick={() => setAttachMenuOpen((open) => !open)}
+            >
+              +
+            </button>
+            {attachMenuOpen ? (
+              <div className="composer__attach-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => void pickFiles('image')}>
+                  Add photos
+                </button>
+                <button type="button" role="menuitem" onClick={() => void pickFiles('attachment')}>
+                  Add files
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <span className="composer__hint">
+            {remote
+              ? 'Paste or drop images and documents anywhere in the description; files upload to the server.'
+              : 'Paste or drop images and documents anywhere in the description.'}
+          </span>
         </div>
-        <span className="composer__hint">
-          {remote
-            ? 'Paste or drop images and documents anywhere in the description; files upload to the server.'
-            : 'Paste or drop images and documents anywhere in the description.'}
-        </span>
-      </div>
+      ) : null}
       {images.length > 0 ||
       attachments.length > 0 ||
       imageUploads.length > 0 ||
@@ -552,6 +605,7 @@ export function DescriptionComposer({
           })}
         </ol>
       ) : null}
+      {footer !== undefined ? <div className="composer__footer">{footer}</div> : null}
     </div>
   );
 }

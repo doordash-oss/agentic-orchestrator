@@ -105,6 +105,9 @@ type apiHandler struct {
 	// orchestration, sessions, and repository work; nil disables the
 	// boundary (tests, runtimes without install support).
 	admission *workadmission.Coordinator
+	// supervisor owns the supervisor conversation behind
+	// /api/v1/supervisor; nil serves 503 on that namespace.
+	supervisor SupervisorService
 	// featureDetectFail is the test-only detection-failure seam from
 	// UpdateOptions.DetectFailHook: when set, the feature-activity detector
 	// reports a detection failure instead of probing the store. Nil in
@@ -188,6 +191,7 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		reconcileSourceDeadline: defaultReconcileSourceDeadline,
 		admission:               opts.Admission,
 		probeActivity:           opts.ProbeActivity,
+		supervisor:              opts.Supervisor,
 	}
 	if handler.probeActivity == nil {
 		handler.probeActivity = NewProbeActivity()
@@ -336,6 +340,7 @@ var topLevelServerRoutes = []topLevelRoute{
 	{apiPathUpdateInstall, func(h *apiHandler) http.HandlerFunc { return h.handleUpdateInstallRoute }},
 	{apiPathEvents, func(h *apiHandler) http.HandlerFunc { return methodHandler(h.handleEvents) }},
 	{apiPathUploads, func(h *apiHandler) http.HandlerFunc { return h.handleUploadsRoute }},
+	{apiPathSupervisor + "/", func(h *apiHandler) http.HandlerFunc { return h.handleSupervisorRoutes }},
 }
 
 func (h *apiHandler) routes() http.Handler {
@@ -846,7 +851,7 @@ func authRequiredPath(path string) bool {
 // for these paths because the access_token query parameter is a bearer
 // credential and must never be persisted to a log, trace span, or crash report.
 func sseTokenFallbackAllowed(path string) bool {
-	return path == apiPathEvents || strings.HasSuffix(path, "/output/stream")
+	return path == apiPathEvents || path == apiPathSupervisorEvents || strings.HasSuffix(path, "/output/stream")
 }
 
 func constantTimeEqual(got, want string) bool {

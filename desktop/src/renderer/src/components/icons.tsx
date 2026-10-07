@@ -65,6 +65,30 @@ export function HouseIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/**
+ * The pinned Supervisor row's leading mark, shaped after SF Symbols'
+ * `text.bubble`: like Overview it is a place rather than a feature, and the
+ * place is a conversation.
+ */
+export function SupervisorIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-7.5L7 20v-3.5H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5Z" />
+      <path d="M8 9h8" />
+      <path d="M8 12h5" />
+    </Icon>
+  );
+}
+
+/** The supervisor composer's Stop action, shaped after SF Symbols' `stop.fill`. */
+export function StopIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none" />
+    </Icon>
+  );
+}
+
 export function MinimizeIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Icon {...props}>

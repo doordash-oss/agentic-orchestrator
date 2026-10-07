@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { AttentionSnapshot } from '../../shared/ipc';
+import { actionableAttentionCount, type AttentionSnapshot } from '../../shared/ipc';
 import { AttentionNotificationCoordinator, type NotificationHandle } from '../notifications';
 
 describe('AttentionNotificationCoordinator', () => {
@@ -176,5 +176,44 @@ describe('AttentionNotificationCoordinator error items', () => {
     );
 
     expect(create.mock.calls[0]?.[0].body).toBe('Agentico needs attention.');
+  });
+  it('notifies supervisor permissions and questions as actionable, labelled Supervisor', () => {
+    const notification: NotificationHandle = { show: vi.fn(), on: vi.fn() };
+    const create = vi.fn((_options: { title: string; body: string }) => notification);
+    const coordinator = new AttentionNotificationCoordinator({
+      sink: { isSupported: () => true, create },
+      shouldNotify: () => true,
+      show: vi.fn(),
+    });
+    const featureLabel = vi.fn(() => 'Search revamp');
+    const snapshot: AttentionSnapshot = {
+      items: [
+        {
+          kind: 'permission',
+          id: 'perm-sup',
+          target: 'supervisor',
+          sessionId: '__supervisor__.conv-1.1',
+          toolName: 'Bash',
+          waitingSince: '2026-07-22T12:00:00.000Z',
+        },
+        {
+          kind: 'questions',
+          id: 'ask-sup',
+          target: 'supervisor',
+          sessionId: '__supervisor__.conv-1.1',
+          waitingSince: '2026-07-22T12:00:01.000Z',
+          questions: [{ key: 'Which?', header: 'Which?', multiSelect: false, options: [] }],
+        },
+      ],
+    };
+
+    expect(actionableAttentionCount(snapshot.items)).toBe(2);
+    coordinator.update(snapshot, { previewEnabled: true, featureLabel });
+
+    expect(create.mock.calls.map(([options]) => options.body)).toEqual([
+      'Permission · Supervisor · Bash',
+      'Questions · Supervisor · Which?',
+    ]);
+    expect(featureLabel).not.toHaveBeenCalled();
   });
 });

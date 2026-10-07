@@ -731,6 +731,9 @@ func mutationRouteMethods(path string) ([]string, bool) {
 	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start", "/api/v1/prompts/chat/end":
 		return []string{http.MethodPost}, true
 	}
+	if methods, ok := supervisorMutationMethods(path); ok {
+		return methods, true
+	}
 	if !strings.HasPrefix(path, "/api/v1/features/") {
 		if strings.HasPrefix(path, apiPathWorkspaceClone+"/") {
 			parts := splitPath(strings.TrimPrefix(path, apiPathWorkspaceClone+"/"))
@@ -1885,6 +1888,13 @@ func (h *apiHandler) requireTrustedMutation(w http.ResponseWriter, r *http.Reque
 		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 		return false
 	}
+	return h.requireTrustedClient(w, r)
+}
+
+// requireTrustedClient applies the trusted-mutation request checks (client
+// header, loopback origin, JSON body, size cap) for routes whose target is
+// not the feature mutation surface.
+func (h *apiHandler) requireTrustedClient(w http.ResponseWriter, r *http.Request) bool {
 	if r.Header.Get("X-Agentico-Client") != trustedClientHeaderValue {
 		writeAPIError(w, http.StatusForbidden, errcat.Forbidden, errcat.WithDiagnostics("trusted local client header is required"))
 		return false

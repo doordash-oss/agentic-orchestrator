@@ -45,6 +45,33 @@ type fakeInstallStopper struct {
 	stopBlock    chan struct{}
 	endChatBlock chan struct{}
 	onDispatch   func()
+	// supervisorProcess and endSupervisorCalls model the supervisor stop.
+	supervisorProcess  bool
+	endSupervisorCalls int
+}
+
+func (s *fakeInstallStopper) SupervisorProcess() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.supervisorProcess
+}
+
+func (s *fakeInstallStopper) endSupervisorCallsN() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.endSupervisorCalls
+}
+
+func (s *fakeInstallStopper) EndSupervisor(context.Context) error {
+	s.mu.Lock()
+	s.endSupervisorCalls++
+	s.supervisorProcess = false
+	hook := s.onDispatch
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	return nil
 }
 
 func (s *fakeInstallStopper) setFeatures(ids ...string) {
@@ -600,6 +627,24 @@ func TestUpdateInstallStopFeaturesAndChatScope(t *testing.T) {
 		waitInstallCond(t, 5*time.Second, func() bool { return stopper.endChatCallsN() == 1 }, "chat was never ended")
 		if got := len(stopper.stopCallsSnapshot()); got != 0 {
 			t.Fatalf("stop dispatches = %d, want none without stoppable features", got)
+		}
+		waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.replaceCallsN() == 1 }, "replacement never ran")
+		waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "operation never settled")
+	})
+	t.Run("supervisor_alone", func(t *testing.T) {
+		t.Parallel()
+		stopper := &fakeInstallStopper{supervisorProcess: true}
+		coordinator, _, lifecycle, admission, _ := newStopTestCoordinator(t, stopper)
+		// The supervisor's activity settles once its end is dispatched.
+		stopper.setOnDispatch(func() { admission.setAdmissionActivity(workadmission.Activity{}) })
+		admission.setAdmissionActivity(workadmission.Activity{SupervisorActive: true})
+		if refusal := requestStopInstall(t, coordinator, true); refusal != nil {
+			t.Fatalf("stop install refused: %v", refusal)
+		}
+		waitStopEntered(t, coordinator)
+		waitInstallCond(t, 5*time.Second, func() bool { return stopper.endSupervisorCallsN() == 1 }, "supervisor was never ended")
+		if got := stopper.endChatCallsN(); got != 0 {
+			t.Fatalf("end-chat calls = %d, want none", got)
 		}
 		waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.replaceCallsN() == 1 }, "replacement never ran")
 		waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "operation never settled")

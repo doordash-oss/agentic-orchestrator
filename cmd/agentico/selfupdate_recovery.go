@@ -381,7 +381,7 @@ type failedTargetRecovery struct {
 // resources are removed.
 func (t failedTargetRecovery) teardownPartialStartup() {
 	if t.boot != nil {
-		shutdownFeatures(t.boot.orchestrator, t.boot.sessionManager)
+		shutdownRuntimeWork(t.boot)
 	}
 	if t.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

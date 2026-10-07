@@ -1697,6 +1697,41 @@ var catalog = map[Code]Entry{
 		Actions:     []string{"resume"},
 	},
 
+	// --- Supervisor codes ------------------------------------------------------
+	// The supervisor REST namespace refuses requests with these before any
+	// provider work starts, except supervisor_launch_failed, which reports a
+	// launch or handshake that failed after the send was admitted.
+	SupervisorSettingsLocked: {
+		Class:       ClassNeedsAction,
+		Title:       "Supervisor settings are locked",
+		Summary:     "The harness and model cannot change while the supervisor is running.",
+		Remediation: "End the supervisor, then choose the harness and model again.",
+	},
+	SupervisorSettingsInvalid: {
+		Class:       ClassBlocking,
+		Title:       "Supervisor settings not available",
+		Summary:     "The chosen harness, model or effort is not available for the supervisor.",
+		Remediation: "Choose a model listed for the harness and one of its effort levels.",
+	},
+	SettingsRequired: {
+		Class:       ClassNeedsAction,
+		Title:       "Choose a harness and model",
+		Summary:     "The supervisor needs a harness and model before it can start.",
+		Remediation: "Choose a harness and model, then send the message again.",
+	},
+	TurnActive: {
+		Class:       ClassWarning,
+		Title:       "Supervisor is busy",
+		Summary:     "The supervisor is still working on the previous message.",
+		Remediation: "Wait for the current turn to finish, then send the message again.",
+	},
+	SupervisorLaunchFailed: {
+		Class:       ClassBlocking,
+		Title:       "Supervisor failed to start",
+		Summary:     "The supervisor harness could not be started, so the message was not sent.",
+		Remediation: "Check that the harness is installed and signed in, then send the message again.",
+	},
+
 	// --- Chat-context codes ---------------------------------------------------
 	// An explain-in-chat turn can attach a structured reference to the
 	// durable home of the error it asks about; these two codes report the

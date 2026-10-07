@@ -24,6 +24,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
@@ -57,6 +58,13 @@ type InstallStopper interface {
 	// EndChat ends the singleton chat session; idempotent when it is not
 	// active. An error aborts the installation.
 	EndChat(ctx context.Context) error
+	// SupervisorProcess reports whether a supervisor provider process
+	// exists (any lifecycle other than stopped or failed).
+	SupervisorProcess() bool
+	// EndSupervisor ends the supervisor process, keeping its transcript
+	// and settings; idempotent when no process exists. An error aborts the
+	// installation.
+	EndSupervisor(ctx context.Context) error
 }
 
 // handlerInstallStopper is the production InstallStopper: the pause-stop
@@ -154,6 +162,28 @@ func (s handlerInstallStopper) EndChat(_ context.Context) error {
 	return err
 }
 
+// SupervisorProcess reports whether the supervisor has a provider process.
+func (s handlerInstallStopper) SupervisorProcess() bool {
+	if s.handler.supervisor == nil {
+		return false
+	}
+	switch s.handler.supervisor.State().Lifecycle {
+	case supervisor.LifecycleStopped, supervisor.LifecycleFailed:
+		return false
+	}
+	return true
+}
+
+// EndSupervisor dispatches the same end the REST action performs. While
+// admission is closed the supervisor cannot relaunch underneath it.
+func (s handlerInstallStopper) EndSupervisor(context.Context) error {
+	if s.handler.supervisor == nil {
+		return nil
+	}
+	s.handler.supervisor.End()
+	return nil
+}
+
 // installStopFailure is one authorized-stopping failure: the sanitized
 // result context and the canonical blocker options for the public error.
 type installStopFailure struct {
@@ -197,8 +227,10 @@ func admissionRaceBlockers() []errcat.Option {
 // update_blocked_active_work params snapshot.
 func activeWorkParams(activity workadmission.Activity, pending int) errcat.UpdateBlockedActiveWorkParams {
 	return errcat.UpdateBlockedActiveWorkParams{
-		Features:          activity.Features,
-		ChatActive:        activity.ChatActive,
+		Features: activity.Features,
+		// The supervisor is a conversational session; the public summary
+		// reports it with chat until the summary gains its own field.
+		ChatActive:        activity.ChatActive || activity.SupervisorActive,
 		Clones:            activity.Clones,
 		Uploads:           activity.Uploads,
 		OriginChecks:      activity.OriginChecks,
@@ -258,6 +290,7 @@ func (c *updateCoordinator) installStopBlockers(admission InstallAdmission) []er
 var stoppableAdmissionCategories = []workadmission.Category{
 	workadmission.CategoryFeature,
 	workadmission.CategoryChat,
+	workadmission.CategorySupervisor,
 }
 
 // protectedHeldCategories describes held reservation categories outside the
@@ -327,6 +360,7 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 
 	stoppedFeatures := make(map[string]bool)
 	chatStopped := false
+	supervisorStopped := false
 	for {
 		if err := ctx.Err(); err != nil {
 			return c.stopTimeoutFailure(admission)
@@ -378,6 +412,19 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 				}
 			}
 			chatStopped = true
+		}
+		if stopper.SupervisorProcess() && !supervisorStopped {
+			if ctx.Err() != nil {
+				return c.stopTimeoutFailure(admission)
+			}
+			if err := stopper.EndSupervisor(ctx); err != nil {
+				return &installStopFailure{
+					result: "install_stop_failed:stop",
+					opts: append(c.stopBlockersNow(admission),
+						errcat.WithDiagnostics("ending the supervisor failed: "+selfupdate.SanitizeError(err.Error()))),
+				}
+			}
+			supervisorStopped = true
 		}
 
 		// Confirmation: observed activity and every admission reservation

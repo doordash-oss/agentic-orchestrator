@@ -1495,6 +1495,119 @@ export const LivePreviewResponseSchema = z.object({
   transcript: z.array(ServerTranscriptMessageSchema).max(500),
 });
 
+// --- Supervisor conversation (/api/v1/supervisor/*) ---------------------------
+// Bounded wire shapes; the main process maps them to the camelCase IPC types.
+
+const ServerSupervisorIdSchema = z.string().max(200);
+const ServerSupervisorSeqSchema = z.number().int().nonnegative();
+
+export const ServerSupervisorSettingsSchema = z.object({
+  harness: z.string().max(100),
+  model: z.string().max(200),
+  effort: z.string().max(40),
+});
+
+export const ServerSupervisorStateSchema = z.object({
+  conversation_id: ServerSupervisorIdSchema,
+  generation: ServerSupervisorSeqSchema,
+  session_id: z.string().max(200),
+  lifecycle: z.enum([
+    'stopped',
+    'starting',
+    'idle',
+    'running',
+    'waiting_permission',
+    'waiting_question',
+    'failed',
+  ]),
+  starting_step: z.enum(['launching', 'handshake']).optional(),
+  last_turn_outcome: z.enum(['none', 'completed', 'interrupted', 'failed']),
+  settings: ServerSupervisorSettingsSchema,
+  effective_model: z.string().max(200),
+  pending_requests: z.array(ServerControlRequestSchema).max(100),
+  head_seq: ServerSupervisorSeqSchema,
+  stream_epoch: z.string().max(200),
+});
+export type ServerSupervisorState = z.output<typeof ServerSupervisorStateSchema>;
+
+export const ServerSupervisorRequestRecordSchema = z.object({
+  request_id: AttentionIDSchema,
+  tool_name: z.string().max(500),
+  stage: z.enum(['requested', 'resolved']),
+  outcome: z.enum(['pending', 'allowed', 'denied', 'answered']),
+  summary: AttentionTextSchema.optional(),
+});
+
+export const ServerSupervisorRecordSchema = z.object({
+  seq: z.number().int().positive(),
+  id: ServerSupervisorIdSchema,
+  conversation_id: ServerSupervisorIdSchema,
+  generation: ServerSupervisorSeqSchema,
+  turn_id: ServerSupervisorIdSchema,
+  kind: z.enum(['user', 'assistant', 'tool_use', 'tool_result', 'permission', 'question']),
+  visibility: z.enum(['content', 'model_only', 'display_only']),
+  created_at: z.string().max(100),
+  client_message_id: z.string().max(128).optional(),
+  stream_message_id: ServerSupervisorIdSchema.optional(),
+  messages: z.array(ServerTranscriptMessageSchema).max(500),
+  request: ServerSupervisorRequestRecordSchema.optional(),
+});
+export type ServerSupervisorRecord = z.output<typeof ServerSupervisorRecordSchema>;
+
+export const SupervisorStateResponseSchema = z.object({
+  api_version: z.string(),
+  state: ServerSupervisorStateSchema,
+});
+export type SupervisorStateResponse = z.output<typeof SupervisorStateResponseSchema>;
+
+export const SupervisorTranscriptResponseSchema = z.object({
+  api_version: z.string(),
+  conversation_id: ServerSupervisorIdSchema,
+  items: z.array(ServerSupervisorRecordSchema).max(500),
+  first_seq: ServerSupervisorSeqSchema,
+  last_seq: ServerSupervisorSeqSchema,
+  has_more_before: z.boolean(),
+  has_more_after: z.boolean(),
+  head_seq: ServerSupervisorSeqSchema,
+});
+export type SupervisorTranscriptResponse = z.output<typeof SupervisorTranscriptResponseSchema>;
+
+export const SupervisorMessageResponseSchema = z.object({
+  api_version: z.string(),
+  record: ServerSupervisorRecordSchema,
+  launched: z.boolean(),
+});
+export type SupervisorMessageResponse = z.output<typeof SupervisorMessageResponseSchema>;
+
+export const SupervisorActionResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.enum(['accepted', 'ended', 'not_active']),
+  state: ServerSupervisorStateSchema,
+});
+export type SupervisorActionResponse = z.output<typeof SupervisorActionResponseSchema>;
+
+export const ServerSupervisorDeltaSchema = z.object({
+  turn_id: ServerSupervisorIdSchema,
+  stream_message_id: ServerSupervisorIdSchema,
+  chunk_index: z.number().int().nonnegative(),
+  text: z.string().max(1024 * 1024),
+});
+
+/** One `/api/v1/supervisor/events` SSE payload (the JSON of a `data:` block). */
+export const ServerSupervisorStreamEventSchema = z.object({
+  kind: z.enum(['record', 'delta', 'state', 'request', 'stream.reset', 'heartbeat']),
+  conversation_id: ServerSupervisorIdSchema,
+  generation: ServerSupervisorSeqSchema,
+  stream_epoch: z.string().max(200),
+  seq: ServerSupervisorSeqSchema.optional(),
+  snapshot_required: z.boolean().optional(),
+  record: ServerSupervisorRecordSchema.optional(),
+  delta: ServerSupervisorDeltaSchema.optional(),
+  state: ServerSupervisorStateSchema.optional(),
+  request: ServerControlRequestSchema.optional(),
+});
+export type ServerSupervisorStreamEvent = z.output<typeof ServerSupervisorStreamEventSchema>;
+
 // --- Runtime config (GET /api/v1/config/runtime) — creation-defaults subset --
 
 export const ServerModelDefaultsSchema = z.object({
@@ -1885,3 +1998,25 @@ void _cloneOperationListSubset;
 type CreateRepositoryWireDTO = components['schemas']['CreateRepositoryResponse'];
 const _createRepositorySubset = (value: CreateRepositoryWireDTO): CreateRepositoryResponse => value;
 void _createRepositorySubset;
+type SupervisorStateResponseDTO = components['schemas']['SupervisorStateResponse'];
+const _supervisorStateSubset = (value: SupervisorStateResponseDTO): SupervisorStateResponse =>
+  value;
+void _supervisorStateSubset;
+type SupervisorTranscriptResponseDTO = components['schemas']['SupervisorTranscriptResponse'];
+const _supervisorTranscriptSubset = (
+  value: SupervisorTranscriptResponseDTO,
+): SupervisorTranscriptResponse => value;
+void _supervisorTranscriptSubset;
+type SupervisorMessageResponseDTO = components['schemas']['SupervisorMessageResponse'];
+const _supervisorMessageSubset = (value: SupervisorMessageResponseDTO): SupervisorMessageResponse =>
+  value;
+void _supervisorMessageSubset;
+type SupervisorActionResponseDTO = components['schemas']['SupervisorActionResponse'];
+const _supervisorActionSubset = (value: SupervisorActionResponseDTO): SupervisorActionResponse =>
+  value;
+void _supervisorActionSubset;
+type SupervisorStreamEventDTO = components['schemas']['SupervisorStreamEvent'];
+const _supervisorStreamEventSubset = (
+  value: SupervisorStreamEventDTO,
+): ServerSupervisorStreamEvent => value;
+void _supervisorStreamEventSubset;

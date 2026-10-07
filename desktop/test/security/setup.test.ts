@@ -188,6 +188,12 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
     openSessionOutput: vi.fn(() => 'sub-unused'),
     cancelSessionOutput: vi.fn(() => false),
+    getSupervisorState: vi.fn(() => Promise.reject(new Error('unused'))),
+    updateSupervisorSettings: vi.fn(() => Promise.reject(new Error('unused'))),
+    getSupervisorTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
+    sendSupervisorMessage: vi.fn(() => Promise.reject(new Error('unused'))),
+    interruptSupervisor: vi.fn(() => Promise.reject(new Error('unused'))),
+    endSupervisor: vi.fn(() => Promise.reject(new Error('unused'))),
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],

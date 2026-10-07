@@ -16,6 +16,10 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 import {
+  SessionSummarySchema,
+  SupervisorStateSchema,
+  SupervisorTranscriptRequestSchema,
+  isSupervisorSessionId,
   CompletionPreflightRepoSchema,
   ConnectionStateSchema,
   CreationFileUploadResultSchema,
@@ -2034,5 +2038,71 @@ describe('sidebar width preferences', () => {
     for (const sidebarWidth of [199, 521, 260.5, NaN, Infinity, '300']) {
       expect(SettingsPatchSchema.safeParse({ shell: { sidebarWidth } }).success).toBe(false);
     }
+  });
+});
+
+describe('supervisor IPC schemas', () => {
+  const supervisorSessionId = '__supervisor__.0b9c6f2e-1d2a-4c55-9e1f-2a3b4c5d6e7f.12';
+
+  it('session listing tolerates the supervisor session id, feature id, and kind', () => {
+    expect(SessionIdSchema.safeParse(supervisorSessionId).success).toBe(true);
+    const summary = {
+      id: supervisorSessionId,
+      featureId: '__supervisor__',
+      runNumber: 0,
+      phase: '',
+      kind: 'supervisor',
+      status: 'running',
+      startedAt: '2026-10-06T10:00:00Z',
+      taskActivities: [],
+      runningTaskCount: 0,
+      usage: {},
+    };
+    expect(SessionSummarySchema.parse(summary)).toEqual(summary);
+    expect(isActiveChatSession(summary)).toBe(false);
+    expect(isSupervisorSessionId(supervisorSessionId)).toBe(true);
+    expect(isSupervisorSessionId('__supervisor__')).toBe(false);
+    expect(isSupervisorSessionId('__chat__')).toBe(false);
+    expect(isSupervisorSessionId(undefined)).toBe(false);
+  });
+
+  it('transcript requests reject before+after together and out-of-range cursors', () => {
+    expect(SupervisorTranscriptRequestSchema.safeParse({}).success).toBe(true);
+    expect(SupervisorTranscriptRequestSchema.safeParse({ before: 1, limit: 500 }).success).toBe(
+      true,
+    );
+    expect(SupervisorTranscriptRequestSchema.safeParse({ after: 0 }).success).toBe(true);
+    for (const request of [
+      { before: 2, after: 1 },
+      { before: 0 },
+      { after: -1 },
+      { limit: 0 },
+      { limit: 501 },
+      { after: 1.5 },
+      { cursor: 3 },
+    ]) {
+      expect(SupervisorTranscriptRequestSchema.safeParse(request).success).toBe(false);
+    }
+  });
+
+  it('supervisor state rejects unknown lifecycles, foreign fields, and unsafe epochs', () => {
+    const state = {
+      conversationId: 'conv-1',
+      generation: 0,
+      sessionId: '',
+      lifecycle: 'stopped',
+      lastTurnOutcome: 'none',
+      settings: { harness: '', model: '', effort: '' },
+      effectiveModel: '',
+      pendingRequests: [],
+      headSeq: 0,
+      streamEpoch: '',
+    };
+    expect(SupervisorStateSchema.parse(state)).toEqual(state);
+    expect(SupervisorStateSchema.safeParse({ ...state, lifecycle: 'dancing' }).success).toBe(false);
+    expect(SupervisorStateSchema.safeParse({ ...state, token: 'x' }).success).toBe(false);
+    expect(SupervisorStateSchema.safeParse({ ...state, streamEpoch: 'a&after=1' }).success).toBe(
+      false,
+    );
   });
 });

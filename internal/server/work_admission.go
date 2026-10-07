@@ -141,6 +141,7 @@ func (h *apiHandler) registerAdmissionDetectors(coordinator *workadmission.Coord
 	coordinator.SetDetectors([]workadmission.Detector{
 		h.detectFeatureActivity,
 		h.detectChatActivity,
+		h.detectSupervisorActivity,
 		h.detectCloneActivity,
 		h.detectUploadActivity,
 		h.detectOriginActivity,

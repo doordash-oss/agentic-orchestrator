@@ -47,6 +47,9 @@ const (
 	// CategoryChat covers the singleton chat session from launch through
 	// registration.
 	CategoryChat Category = "chat"
+	// CategorySupervisor covers a supervisor process launch from admission
+	// through registration, after which the supervisor detector reports it.
+	CategorySupervisor Category = "supervisor"
 	// CategoryClone covers repository clone/create operations from queue
 	// admission until the record and its cleanup settle.
 	CategoryClone Category = "clone"
@@ -88,25 +91,27 @@ func AsClosed(err error) (*ClosedError, bool) {
 // state. Detection failure must never be reported as zero activity — the
 // caller treats a detection error as blocking.
 type Activity struct {
-	Features       int
-	ChatActive     bool
-	Clones         int
-	Uploads        int
-	OriginChecks   int
-	RepositoryWork int
+	Features   int
+	ChatActive bool
+	// SupervisorActive reports a supervisor that is starting or in a turn.
+	SupervisorActive bool
+	Clones           int
+	Uploads          int
+	OriginChecks     int
+	RepositoryWork   int
 }
 
 // Busy reports whether any observed activity exists.
 func (a Activity) Busy() bool {
-	return a.Features > 0 || a.ChatActive || a.Clones > 0 ||
+	return a.Features > 0 || a.ChatActive || a.SupervisorActive || a.Clones > 0 ||
 		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
 
 // ProtectedBusy reports whether activity exists that an authorized stop may
 // not interrupt: repository work of every class — clones, uploads, origin
-// checks, and other repository work. Feature and chat activity alone never
-// counts: an explicit-stop install's accepted permission authorizes
-// interrupting exactly that work.
+// checks, and other repository work. Feature, chat and supervisor activity
+// alone never counts: an explicit-stop install's accepted permission
+// authorizes interrupting exactly that work.
 func (a Activity) ProtectedBusy() bool {
 	return a.Clones > 0 || a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
@@ -298,6 +303,7 @@ func (c *Coordinator) Detect(ctx context.Context) (Activity, error) {
 			}
 			merged.Features += activity.Features
 			merged.ChatActive = merged.ChatActive || activity.ChatActive
+			merged.SupervisorActive = merged.SupervisorActive || activity.SupervisorActive
 			merged.Clones += activity.Clones
 			merged.Uploads += activity.Uploads
 			merged.OriginChecks += activity.OriginChecks

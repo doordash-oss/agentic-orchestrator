@@ -414,13 +414,13 @@ export class RuntimeGateway {
    * pass an `/api/v1/...` path and receive status + parsed JSON body only.
    */
   async apiRequest(path: string, init: ApiRequestInit = {}): Promise<HttpResult> {
-    if (!isAllowedApiPath(path)) {
+    const method = init.method ?? 'GET';
+    if (!isAllowedApiPath(path, method)) {
       throw new CanonicalErrorException(buildCanonicalError('E_BAD_API_PATH'));
     }
     if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
       throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
     }
-    const method = init.method ?? 'GET';
     if (path === '/api/v1/readiness/runtime' && method === 'GET') {
       const initial = this.initialReadiness;
       this.initialReadiness = null;
@@ -455,7 +455,7 @@ export class RuntimeGateway {
    * body only.
    */
   async apiUpload(path: string, body: Uint8Array): Promise<HttpResult> {
-    if (!isAllowedApiPath(path)) {
+    if (!isAllowedApiPath(path, 'POST')) {
       throw new CanonicalErrorException(buildCanonicalError('E_BAD_API_PATH'));
     }
     if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
@@ -494,6 +494,39 @@ export class RuntimeGateway {
     }
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
     return openSse(`${this.baseUrl}/api/v1/events${suffix}`, { token: this.token });
+  }
+
+  /**
+   * Opens the authenticated supervisor conversation stream
+   * (`GET /api/v1/supervisor/events`), resuming after a committed record seq
+   * within a stream epoch. The built path must pass the same allowlist as
+   * every REST call; the bearer token and base URL never leave this method.
+   */
+  async openSupervisorEventStream(
+    options: { afterSeq?: number; epoch?: string; heartbeatMs?: number } = {},
+  ): Promise<SseStream> {
+    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
+      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
+    }
+    const openSse = this.deps.openSse;
+    if (openSse === undefined) {
+      throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
+    }
+    const query = new URLSearchParams();
+    if (options.afterSeq !== undefined && options.afterSeq > 0) {
+      query.set('after', String(Math.floor(options.afterSeq)));
+      if (options.epoch !== undefined && options.epoch !== '') {
+        query.set('epoch', options.epoch);
+      }
+    }
+    if (options.heartbeatMs !== undefined) {
+      query.set('heartbeat_ms', String(Math.floor(options.heartbeatMs)));
+    }
+    const path = `/api/v1/supervisor/events${query.size > 0 ? `?${query.toString()}` : ''}`;
+    if (!isAllowedApiPath(path, 'GET')) {
+      throw new CanonicalErrorException(buildCanonicalError('E_BAD_API_PATH'));
+    }
+    return openSse(`${this.baseUrl}${path}`, { token: this.token });
   }
 
   /** Opens one authenticated session stream using only its transcript-row cursor. */

@@ -327,16 +327,19 @@ func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
 
 // IsAutomaticReviewHandler reports whether h uses a permission policy whose
 // undecided Bash requests may be sent through automatic review. In addition to
-// the general phase handlers, Ask Me Anything chat deliberately defers Bash to
-// the same user-facing permission UI and therefore participates in review.
+// the general phase handlers, Ask Me Anything chat and the supervisor
+// deliberately defer Bash to the same user-facing permission UI and therefore
+// participate in review.
 //
-// Keep this separate from IsGeneralPhaseHandler: AMA chat must not inherit
-// unrelated general-phase exceptions such as safe-create approval.
+// Keep this separate from IsGeneralPhaseHandler: AMA chat and the supervisor
+// must not inherit unrelated general-phase exceptions such as safe-create
+// approval.
 func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
 	if guard, ok := h.(*SessionGuardHandler); ok {
 		h = guard.Inner
 	}
-	if _, ok := h.(*AMAHandler); ok {
+	switch h.(type) {
+	case *AMAHandler, *SupervisorHandler:
 		return true
 	}
 	return IsGeneralPhaseHandler(h)
@@ -382,6 +385,22 @@ func (h *AMAHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.Permissi
 	default:
 		return ports.PermissionDecision{}, nil
 	}
+}
+
+// SupervisorHandler is the supervisor conversation's harness-normal policy:
+// read-only inspection and web tools run without a prompt, and everything
+// else — shell, edits, writes, sub-agent spawn — is deferred to the user.
+// Unlike AMAHandler it never denies sub-agents. It is deliberately not a
+// general-phase handler, so phase guards and the safe-create exception
+// never attach to it.
+type SupervisorHandler struct{}
+
+// CanUseTool approves read-only and web tools and defers everything else.
+func (h *SupervisorHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	if isReadOnlyTool(req.ToolName) {
+		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+	}
+	return ports.PermissionDecision{}, nil
 }
 
 // BoundedHelperArtifactHandler auto-approves read-only inspection tools,

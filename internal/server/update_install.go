@@ -1161,7 +1161,9 @@ func (c *updateCoordinator) activeWorkSummary() UpdateActiveWorkSummary {
 	}
 	activity, detectionFailed, pending := c.opts.Activity(context.Background())
 	summary.FeatureCount = activity.Features
-	summary.ChatActive = activity.ChatActive
+	// The supervisor is a conversational session; the summary reports it
+	// with chat until it gains its own field.
+	summary.ChatActive = activity.ChatActive || activity.SupervisorActive
 	summary.CloneCount = activity.Clones
 	summary.UploadCount = activity.Uploads
 	summary.OriginCheckCount = activity.OriginChecks

@@ -30,6 +30,7 @@ import {
   AppEventSchema,
   AppRouteEventSchema,
   SessionOutputEventSchema,
+  SupervisorEventSchema,
   ServerListSnapshotSchema,
   ConnectionStateSchema,
   CREATION_ATTACHMENT_LIMIT,
@@ -63,6 +64,10 @@ import {
   type SessionOutputOpenRequest,
   type SessionOutputOpenResult,
   type SessionOutputEvent,
+  type SupervisorEvent,
+  type SupervisorMessageRequest,
+  type SupervisorSettingsRequest,
+  type SupervisorTranscriptRequest,
   type LocalReviewDraftSaveRequest,
   type LocalReviewDraftLookupRequest,
   type LocalReviewDraftDiscardRequest,
@@ -263,6 +268,30 @@ const api: AgenticoApi = {
     ipcRenderer.on(IPC_EVENTS.sessionOutput, wrapped);
     return () => {
       ipcRenderer.removeListener(IPC_EVENTS.sessionOutput, wrapped);
+    };
+  },
+  getSupervisorState: () => call(IPC_CHANNELS.supervisorStateGet),
+  updateSupervisorSettings: (request: SupervisorSettingsRequest) =>
+    call(IPC_CHANNELS.supervisorSettingsUpdate, request),
+  getSupervisorTranscript: (request: SupervisorTranscriptRequest) =>
+    call(IPC_CHANNELS.supervisorTranscriptGet, request),
+  sendSupervisorMessage: (request: SupervisorMessageRequest) =>
+    call(IPC_CHANNELS.supervisorMessageSend, request),
+  interruptSupervisor: () => call(IPC_CHANNELS.supervisorInterrupt),
+  endSupervisor: () => call(IPC_CHANNELS.supervisorEnd),
+  onSupervisorEvent: (listener: (event: SupervisorEvent) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return; // drop unsafe events silently — fail closed
+      }
+      const event = SupervisorEventSchema.safeParse(payload);
+      if (event.success) listener(event.data);
+    };
+    ipcRenderer.on(IPC_EVENTS.supervisorEvent, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.supervisorEvent, wrapped);
     };
   },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),

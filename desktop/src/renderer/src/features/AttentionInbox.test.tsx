@@ -419,6 +419,32 @@ describe('AttentionInbox popover presentation', () => {
     expect(popover()).not.toBeInTheDocument();
   });
 
+  it('labels a supervisor request "Supervisor" and jumps to the Supervisor page instead of expanding', async () => {
+    const onJump = vi.fn();
+    const supervisorPermission: AttentionItem = {
+      kind: 'permission',
+      id: 'supervisor-perm-1',
+      sessionId: '__supervisor__.supervisor-conversation-1.1',
+      target: 'supervisor',
+      toolName: 'Bash',
+      input: { command: 'make test' },
+      waitingSince: '2026-10-06T10:00:00.000Z',
+    };
+    render(<Harness items={[supervisorPermission]} onJump={onJump} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    const row = screen.getByRole('button', { name: /Permission/ });
+    expect(within(row).getByText('Supervisor')).toBeVisible();
+    // Never the ownerless "Runtime" fallback, and never an inline disclosure.
+    expect(within(row).queryByText('Search revamp')).toBeNull();
+    expect(row).not.toHaveAttribute('aria-expanded');
+
+    await user.click(row);
+    expect(onJump).toHaveBeenCalledWith('__supervisor__', 'supervisor-perm-1');
+    expect(popover()).not.toBeInTheDocument();
+  });
+
   it('keeps a submission notice announced after the popover is dismissed', async () => {
     const mock = installAgenticoMock();
     mock.api.sendHelp.mockResolvedValue({ result: 'submitted' });

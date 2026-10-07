@@ -18,7 +18,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { AttentionService } from '../attention';
 import type { ServerTransport } from '../serverClient';
 import { CanonicalErrorException } from '../../shared/errors';
-import { attentionOwnerFeatureId, CHAT_SESSION_ID } from '../../shared/ipc';
+import {
+  actionableAttentionCount,
+  attentionOwnerFeatureId,
+  CHAT_SESSION_ID,
+  isSupervisorAttentionItem,
+} from '../../shared/ipc';
 
 /** One canonical catalog-rendered rejection body, as the server now emits. */
 function canonicalBody(code: string): Record<string, unknown> {
@@ -1014,5 +1019,230 @@ describe('AttentionService error items', () => {
     };
     const service = new AttentionService(errorTransport([warningEntry]));
     await expect(service.getSnapshot()).rejects.toThrow();
+  });
+});
+
+describe('AttentionService supervisor items', () => {
+  const SUPERVISOR_SESSION = '__supervisor__.0b9c6f2e-1d2a-4c55-9e1f-2a3b4c5d6e7f.3';
+
+  function supervisorTransport(apiRequest?: ServerTransport['apiRequest']): ServerTransport {
+    return {
+      apiRequest:
+        apiRequest ??
+        ((path) => {
+          const body =
+            path === '/api/v1/prompts'
+              ? {
+                  api_version: 'v1',
+                  ask_user_questions: [
+                    {
+                      request_id: 'ask-sup',
+                      session_id: SUPERVISOR_SESSION,
+                      tool_name: 'AskUserQuestion',
+                      status: 'pending',
+                      waiting_since: '2026-10-06T10:00:02Z',
+                      questions: [{ question: 'Which feature first?', options: [{ label: 'A' }] }],
+                    },
+                    {
+                      request_id: 'ask-feature',
+                      feature_id: 'feature-1',
+                      session_id: 'session-f',
+                      tool_name: 'AskUserQuestion',
+                      status: 'pending',
+                      waiting_since: '2026-10-06T10:00:03Z',
+                      questions: [{ question: 'Feature question?' }],
+                    },
+                  ],
+                  help_queue: [
+                    {
+                      feature_id: CHAT_SESSION_ID,
+                      question: 'Agent has a question',
+                      kind: 'input',
+                      pending: true,
+                    },
+                  ],
+                  need_user_inputs: [],
+                }
+              : path === '/api/v1/permissions'
+                ? {
+                    api_version: 'v1',
+                    requests: [
+                      {
+                        request_id: 'perm-sup',
+                        session_id: SUPERVISOR_SESSION,
+                        feature_id: '__supervisor__',
+                        tool_name: 'Bash',
+                        status: 'pending',
+                        waiting_since: '2026-10-06T10:00:00Z',
+                        input: { command: 'git status' },
+                      },
+                      {
+                        // A feature-id-only supervisor request is still recognized.
+                        request_id: 'perm-sup-feature-only',
+                        feature_id: '__supervisor__',
+                        tool_name: 'Read',
+                        status: 'pending',
+                        waiting_since: '2026-10-06T10:00:01Z',
+                      },
+                      {
+                        request_id: 'perm-sup-resolved',
+                        session_id: SUPERVISOR_SESSION,
+                        tool_name: 'Bash',
+                        status: 'allowed',
+                      },
+                      {
+                        request_id: 'perm-feature',
+                        feature_id: 'feature-1',
+                        session_id: 'session-f',
+                        tool_name: 'Edit',
+                        status: 'pending',
+                        waiting_since: '2026-10-06T10:00:04Z',
+                      },
+                      {
+                        request_id: 'perm-orphan',
+                        feature_id: 'missing-feature',
+                        tool_name: 'Bash',
+                        status: 'pending',
+                      },
+                    ],
+                  }
+                : path === '/api/v1/sessions'
+                  ? { api_version: 'v1', sessions: [] }
+                  : {
+                      api_version: 'v1',
+                      features: [
+                        {
+                          id: 'feature-1',
+                          name: 'Active feature',
+                          slug: 'active-feature',
+                          status: 'Running',
+                          current_phase: 'implement',
+                          repos: ['repo-a'],
+                          created_at: '2026-07-16T10:00:00Z',
+                          active_run: 1,
+                          run_count: 1,
+                          progress: {},
+                        },
+                      ],
+                    };
+          return Promise.resolve({ status: 200, body });
+        }),
+    };
+  }
+
+  it('keeps supervisor permissions and questions, targeted at the Supervisor with no feature', async () => {
+    const snapshot = await new AttentionService(supervisorTransport()).getSnapshot();
+    const byId = new Map(snapshot.items.map((item) => [item.id, item]));
+
+    expect(byId.get('perm-sup')).toEqual({
+      kind: 'permission',
+      id: 'perm-sup',
+      target: 'supervisor',
+      sessionId: SUPERVISOR_SESSION,
+      toolName: 'Bash',
+      input: { command: 'git status' },
+      waitingSince: '2026-10-06T10:00:00Z',
+    });
+    expect(byId.get('perm-sup-feature-only')).toMatchObject({
+      kind: 'permission',
+      target: 'supervisor',
+    });
+    expect(byId.get('ask-sup')).toEqual({
+      kind: 'questions',
+      id: 'ask-sup',
+      target: 'supervisor',
+      sessionId: SUPERVISOR_SESSION,
+      waitingSince: '2026-10-06T10:00:02Z',
+      questions: [
+        {
+          key: 'Which feature first?',
+          header: 'Which feature first?',
+          multiSelect: false,
+          options: [{ label: 'A' }],
+        },
+      ],
+    });
+    for (const id of ['perm-sup', 'perm-sup-feature-only', 'ask-sup']) {
+      const item = byId.get(id)!;
+      expect(isSupervisorAttentionItem(item)).toBe(true);
+      expect(attentionOwnerFeatureId(item)).toBeUndefined();
+    }
+    // Resolved supervisor requests and orphaned feature requests stay out.
+    expect(byId.has('perm-sup-resolved')).toBe(false);
+    expect(byId.has('perm-orphan')).toBe(false);
+  });
+
+  it('leaves feature and chat items exactly as before', async () => {
+    const snapshot = await new AttentionService(supervisorTransport()).getSnapshot();
+    const byId = new Map(snapshot.items.map((item) => [item.id, item]));
+
+    expect(byId.get('perm-feature')).toEqual({
+      kind: 'permission',
+      id: 'perm-feature',
+      featureId: 'feature-1',
+      sessionId: 'session-f',
+      toolName: 'Edit',
+      waitingSince: '2026-10-06T10:00:04Z',
+    });
+    expect(byId.get('ask-feature')).toMatchObject({ kind: 'questions', featureId: 'feature-1' });
+    expect(byId.get('ask-feature')).not.toHaveProperty('target');
+    expect(byId.get(`${CHAT_SESSION_ID}:`)).toMatchObject({
+      kind: 'help',
+      sessionId: CHAT_SESSION_ID,
+      waitingKind: 'input',
+    });
+    expect(byId.get(`${CHAT_SESSION_ID}:`)).not.toHaveProperty('target');
+    for (const item of snapshot.items) {
+      if (item.kind === 'permission' || item.kind === 'questions') {
+        expect(isSupervisorAttentionItem(item)).toBe(item.id.includes('-sup'));
+      }
+    }
+  });
+
+  it('counts supervisor permissions and questions as actionable', async () => {
+    const snapshot = await new AttentionService(supervisorTransport()).getSnapshot();
+    const supervisorItems = snapshot.items.filter(isSupervisorAttentionItem);
+    expect(supervisorItems).toHaveLength(3);
+    expect(actionableAttentionCount(supervisorItems)).toBe(3);
+    // Feature permission + feature question + three supervisor items; the
+    // synthetic chat input item never counts.
+    expect(actionableAttentionCount(snapshot.items)).toBe(5);
+  });
+
+  it('answers supervisor requests through the existing routes keyed by the session id', async () => {
+    const apiRequest = vi.fn(() => Promise.resolve({ status: 200, body: { result: 'ok' } }));
+    const service = new AttentionService({ apiRequest } satisfies ServerTransport);
+
+    await service.answerPermission({
+      requestId: 'perm-sup',
+      sessionId: SUPERVISOR_SESSION,
+      decision: 'allow_once',
+    });
+    await service.answerQuestions({
+      requestId: 'ask-sup',
+      sessionId: SUPERVISOR_SESSION,
+      answers: { 'Which feature first?': 'A' },
+    });
+
+    expect(apiRequest.mock.calls).toEqual([
+      [
+        '/api/v1/permissions/answer',
+        {
+          method: 'POST',
+          body: { request_id: 'perm-sup', session_id: SUPERVISOR_SESSION, decision: 'allow_once' },
+        },
+      ],
+      [
+        '/api/v1/prompts/ask-user/answer',
+        {
+          method: 'POST',
+          body: {
+            request_id: 'ask-sup',
+            session_id: SUPERVISOR_SESSION,
+            answers: { 'Which feature first?': 'A' },
+          },
+        },
+      ],
+    ]);
   });
 });

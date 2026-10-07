@@ -1416,13 +1416,22 @@ describe('WorkspaceShell keyboard shortcuts', () => {
     const doneGroup = screen.getByRole('group', { name: 'Done' });
     expect(doneGroup.closest('details')).not.toHaveAttribute('open');
 
+    const supervisorRow = screen.getByRole('option', { name: 'Supervisor' });
+
     overviewRow.focus();
+    // The pinned Supervisor row sits directly below Overview and takes part
+    // in the roving focus like any other row.
+    await userEvent.keyboard('{ArrowDown}');
+    expect(supervisorRow).toHaveFocus();
+    expect(supervisorRow).toHaveAttribute('aria-selected', 'true');
+    expect(overviewRow).toHaveAttribute('aria-selected', 'false');
+
     await userEvent.keyboard('{ArrowDown}');
     expect(waitingRow).toHaveFocus();
     expect(waitingRow).toHaveAttribute('aria-selected', 'true');
-    expect(overviewRow).toHaveAttribute('aria-selected', 'false');
+    expect(supervisorRow).toHaveAttribute('aria-selected', 'false');
 
-    // Only two visible rows exist; ArrowDown from the last one wraps to Overview.
+    // Only three visible rows exist; ArrowDown from the last one wraps to Overview.
     await userEvent.keyboard('{ArrowDown}');
     expect(overviewRow).toHaveFocus();
     expect(overviewRow).toHaveAttribute('aria-selected', 'true');
@@ -2220,5 +2229,133 @@ describe('WorkspaceShell error-item attention jumps', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Publish reviewed changes' });
     const card = await within(dialog).findByRole('alert');
     await waitFor(() => expect(card).toHaveFocus());
+  });
+});
+
+describe('WorkspaceShell Supervisor row', () => {
+  it('pins Supervisor directly below Overview with its own glyph and the option role', async () => {
+    installWaitingAndDoneMock();
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: /Needs a decision/ });
+
+    const options = within(screen.getByRole('listbox', { name: 'Features' })).getAllByRole(
+      'option',
+    );
+    expect(options.slice(0, 2).map((option) => option.id)).toEqual([
+      'sidebar-overview',
+      'sidebar-supervisor',
+    ]);
+    const supervisorRow = screen.getByRole('option', { name: 'Supervisor' });
+    expect(supervisorRow).toHaveAttribute('aria-selected', 'false');
+    expect(supervisorRow).toHaveAttribute('tabindex', '-1');
+    expect(supervisorRow.querySelector('.sidebar__row-glyph--supervisor')).not.toBeNull();
+  });
+
+  it('shows the Supervisor page with its toolbar title and New feature, without persisting it', async () => {
+    const mock = installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('option', { name: 'Supervisor' }));
+    expect(screen.getByRole('option', { name: 'Supervisor' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+    expect(await screen.findByRole('region', { name: 'Supervisor' })).toBeVisible();
+    const toolbar = screen.getByRole('banner', { name: 'Workspace toolbar' });
+    expect(within(toolbar).getByText('Supervisor')).toBeVisible();
+    expect(within(toolbar).getByRole('button', { name: 'New feature' })).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Message the supervisor' })).toBeVisible();
+    // The selection is renderer-local: nothing about it is written.
+    expect(mock.api.updateSettings).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('option', { name: 'Overview' }));
+    expect(screen.queryByRole('region', { name: 'Supervisor' })).toBeNull();
+    expect(within(toolbar).getByText('Overview')).toBeVisible();
+  });
+
+  it('clears a persisted feature when Supervisor is chosen, so a relaunch opens on Overview', async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' });
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(feature)],
+      feature,
+    });
+    render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('option', { name: 'Supervisor' }));
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: null } },
+      }),
+    );
+    expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+  });
+
+  it('keeps ⌘2 on the first feature: the Supervisor row is not numbered', async () => {
+    installWaitingAndDoneMock();
+    render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: 'Supervisor' });
+
+    fireEvent.keyDown(window, { key: '2', metaKey: true });
+    expect(await screen.findByRole('option', { name: /Needs a decision/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('option', { name: 'Supervisor' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+  });
+
+  it('opens the Supervisor page from the supervisor attention route sentinel', async () => {
+    const onAttentionJumpHandled = vi.fn();
+    installAgenticoMock({ settings: settingsWithActive(null), features: [] });
+    render(
+      <WorkspaceShell
+        attentionJump={{ requestId: 7, featureId: '__supervisor__', attentionId: 'perm-1' }}
+        onAttentionJumpHandled={onAttentionJumpHandled}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: 'Supervisor' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      ),
+    );
+    expect(await screen.findByRole('region', { name: 'Supervisor' })).toBeVisible();
+    expect(onAttentionJumpHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the Supervisor page when a feature is selected', async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' });
+    installAgenticoMock({
+      settings: settingsWithActive(null),
+      features: [summaryOf(feature)],
+      feature,
+    });
+    render(<WorkspaceShell />);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole('option', { name: 'Supervisor' }));
+    await user.click(screen.getByRole('option', { name: /Search revamp/ }));
+    expect(screen.getByRole('option', { name: /Search revamp/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    expect(screen.getByRole('option', { name: 'Supervisor' })).toHaveAttribute(
+      'aria-selected',
+      'false',
+    );
+    expect(screen.queryByRole('region', { name: 'Supervisor' })).toBeNull();
   });
 });

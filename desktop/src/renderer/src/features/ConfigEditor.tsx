@@ -317,7 +317,7 @@ export function PhaseRow({
   );
 }
 
-const EFFORT_LABELS: Record<EffortLevel, string> = {
+export const EFFORT_LABELS: Record<EffortLevel, string> = {
   auto: 'Auto',
   low: 'Low',
   medium: 'Medium',

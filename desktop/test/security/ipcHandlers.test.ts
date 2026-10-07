@@ -24,6 +24,8 @@ import {
   type DiagnosticsSnapshot,
   type SessionOutputEvent,
   type ServerUpdateState,
+  type SupervisorRecord,
+  type SupervisorState,
   type UpdateState,
 } from '../../src/shared/ipc';
 
@@ -97,6 +99,37 @@ function diagnosticsSnapshot(): DiagnosticsSnapshot {
       },
     ],
     crashes: [],
+  };
+}
+
+function supervisorState(overrides: Partial<SupervisorState> = {}): SupervisorState {
+  return {
+    conversationId: 'conv-1',
+    generation: 0,
+    sessionId: '',
+    lifecycle: 'stopped',
+    lastTurnOutcome: 'none',
+    settings: { harness: '', model: '', effort: '' },
+    effectiveModel: '',
+    pendingRequests: [],
+    headSeq: 0,
+    streamEpoch: 'epoch-1',
+    ...overrides,
+  };
+}
+
+function supervisorRecord(text: string): SupervisorRecord {
+  return {
+    seq: 1,
+    id: 'rec-1',
+    conversationId: 'conv-1',
+    generation: 1,
+    turnId: 'turn-1',
+    kind: 'user',
+    visibility: 'content',
+    createdAt: '2026-10-06T10:00:00Z',
+    clientMessageId: 'client-1',
+    messages: [{ index: 1, role: 'user', type: 'text', text }],
   };
 }
 
@@ -218,6 +251,32 @@ function makeServices(): IpcServices {
     getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
     openSessionOutput: vi.fn(() => 'sub-unused'),
     cancelSessionOutput: vi.fn(() => false),
+    getSupervisorState: vi.fn(() => Promise.resolve(supervisorState())),
+    updateSupervisorSettings: vi.fn((request) =>
+      Promise.resolve(
+        supervisorState({ settings: { effort: '', ...request } as SupervisorState['settings'] }),
+      ),
+    ),
+    getSupervisorTranscript: vi.fn(() =>
+      Promise.resolve({
+        conversationId: 'conv-1',
+        items: [],
+        firstSeq: 0,
+        lastSeq: 0,
+        hasMoreBefore: false,
+        hasMoreAfter: false,
+        headSeq: 0,
+      }),
+    ),
+    sendSupervisorMessage: vi.fn((request) =>
+      Promise.resolve({ record: supervisorRecord(request.text), launched: true }),
+    ),
+    interruptSupervisor: vi.fn(() =>
+      Promise.resolve({ result: 'accepted' as const, state: supervisorState() }),
+    ),
+    endSupervisor: vi.fn(() =>
+      Promise.resolve({ result: 'not_active' as const, state: supervisorState() }),
+    ),
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],
@@ -705,5 +764,85 @@ describe('registerIpcHandlers', () => {
     });
 
     expect(send).not.toHaveBeenCalledWith(IPC_EVENTS.sessionOutput, expect.anything());
+  });
+  it('supervisor handlers validate requests, mint nothing renderer-side, and pass results through', async () => {
+    const { handlers, services } = register();
+
+    const state = (await handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)) as {
+      ok: boolean;
+      value: SupervisorState;
+    };
+    expect(state).toMatchObject({ ok: true, value: { lifecycle: 'stopped', headSeq: 0 } });
+
+    await expect(
+      handlers.get(IPC_CHANNELS.supervisorSettingsUpdate)!(goodEvent, {
+        harness: 'claude',
+        model: 'claude-sonnet-4-5',
+        effort: 'high',
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { settings: { harness: 'claude' } } });
+
+    await expect(
+      handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, { before: 10, limit: 50 }),
+    ).resolves.toMatchObject({ ok: true, value: { items: [], headSeq: 0 } });
+
+    const sent = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+      text: 'Summarize the open features.',
+    })) as { ok: boolean; value: { launched: boolean } };
+    expect(sent).toMatchObject({ ok: true, value: { launched: true } });
+    expect(services.sendSupervisorMessage).toHaveBeenCalledWith({
+      text: 'Summarize the open features.',
+    });
+
+    await expect(handlers.get(IPC_CHANNELS.supervisorInterrupt)!(goodEvent)).resolves.toMatchObject(
+      { ok: true, value: { result: 'accepted' } },
+    );
+    await expect(handlers.get(IPC_CHANNELS.supervisorEnd)!(goodEvent)).resolves.toMatchObject({
+      ok: true,
+      value: { result: 'not_active' },
+    });
+  });
+
+  it('supervisor handlers fail closed on malformed requests and untrusted senders', async () => {
+    const { handlers, services } = register();
+    const rejected = [
+      // The renderer may never supply the idempotency key.
+      [IPC_CHANNELS.supervisorMessageSend, { text: 'hi', client_message_id: 'forged' }],
+      [IPC_CHANNELS.supervisorMessageSend, { text: '   ' }],
+      [IPC_CHANNELS.supervisorMessageSend, { text: 'x'.repeat(100_001) }],
+      [IPC_CHANNELS.supervisorTranscriptGet, { before: 5, after: 2 }],
+      [IPC_CHANNELS.supervisorTranscriptGet, { limit: 501 }],
+      [IPC_CHANNELS.supervisorTranscriptGet, { before: 0 }],
+      [IPC_CHANNELS.supervisorTranscriptGet, { after: -1 }],
+      [IPC_CHANNELS.supervisorSettingsUpdate, { harness: '', model: 'm' }],
+      [IPC_CHANNELS.supervisorSettingsUpdate, { harness: 'claude', model: 'm', token: 'x' }],
+    ] as const;
+    for (const [channel, payload] of rejected) {
+      const result = (await handlers.get(channel)!(goodEvent, payload)) as { ok: boolean };
+      expect(result.ok, channel).toBe(false);
+    }
+    expect(services.sendSupervisorMessage).not.toHaveBeenCalled();
+    expect(services.getSupervisorTranscript).not.toHaveBeenCalled();
+    expect(services.updateSupervisorSettings).not.toHaveBeenCalled();
+
+    const untrusted = (await handlers.get(IPC_CHANNELS.supervisorStateGet)!(foreignEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(untrusted.error?.code).toBe('E_UNTRUSTED_SENDER');
+    expect(services.getSupervisorState).not.toHaveBeenCalled();
+  });
+
+  it('rejects supervisor state responses that smuggle extra fields', async () => {
+    const services = makeServices();
+    services.getSupervisorState = vi.fn(() =>
+      Promise.resolve({ ...supervisorState(), authToken: 'tok-leak' } as SupervisorState),
+    );
+    const { handlers } = register(services);
+    const result = (await handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)) as {
+      ok: boolean;
+    };
+    expect(result.ok).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('tok-leak');
   });
 });

@@ -348,3 +348,25 @@ func TestPackageImportsOnlyStdlib(t *testing.T) {
 		}
 	}
 }
+
+func TestSupervisorCodesPinShape(t *testing.T) {
+	cases := []struct {
+		code Code
+		want Class
+	}{
+		{SupervisorSettingsLocked, ClassNeedsAction},
+		{SupervisorSettingsInvalid, ClassBlocking},
+		{SettingsRequired, ClassNeedsAction},
+		{TurnActive, ClassWarning},
+		{SupervisorLaunchFailed, ClassBlocking},
+	}
+	for _, tc := range cases {
+		rendered := New(tc.code)
+		if rendered.Code != tc.code || rendered.Class != tc.want {
+			t.Errorf("%s: rendered %+v; want class %q", tc.code, rendered, tc.want)
+		}
+		if rendered.Title == "" || rendered.Summary == "" || rendered.Remediation == nil || rendered.Remediation.Hint == "" {
+			t.Errorf("%s: missing authored title, summary or remediation: %+v", tc.code, rendered)
+		}
+	}
+}

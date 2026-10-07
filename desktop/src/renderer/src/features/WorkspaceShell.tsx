@@ -15,8 +15,9 @@ limitations under the License.
 */
 
 /**
- * The readiness-gated main surface: a translucent Bench sidebar — a pinned
- * Overview row plus five lane-grouped sections of every feature — with
+ * The readiness-gated main surface: a translucent Bench sidebar — pinned
+ * Overview and Supervisor rows plus five lane-grouped sections of every
+ * feature — with
  * exactly one content pane mounted at a time. Feature creation descends over
  * that pane as a window-modal sheet reached from Overview — the pane beneath
  * stays mounted and navigable, so ⌘-digit shortcuts, routed navigation, and
@@ -26,7 +27,10 @@ limitations under the License.
  * here has a settings special case.
  * Local settings store ONLY the active feature id and sidebar collapse
  * state; every feature itself is always reloaded from the server, so
- * existing state survives app restarts without any local domain cache.
+ * existing state survives app restarts without any local domain cache. The
+ * Supervisor selection is renderer-local: choosing it clears the persisted
+ * feature (as Overview does) and is never itself written, so a relaunch
+ * opens on Overview.
  */
 import {
   useCallback,
@@ -68,9 +72,14 @@ import { CreateFeatureForm } from './CreateFeatureForm';
 import { useCreationDrafts, useCreationDraftEntry } from './creationDrafts';
 import { FeatureCockpit } from './FeatureCockpit';
 import { PipRail } from '../components/Pip';
-import { HouseIcon } from '../components/icons';
+import { HouseIcon, SupervisorIcon } from '../components/icons';
 import { updateNoticePending } from '../components/UpdatePopover';
-import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
+import {
+  emptyAttentionDrafts,
+  SUPERVISOR_ATTENTION_ROUTE,
+  type AttentionDrafts,
+} from './AttentionInbox';
+import { SupervisorPage } from './supervisor/SupervisorPage';
 import { SidebarChromeControls } from './SidebarChromeControls';
 import { ServerSwitcher } from '../components/ServerSwitcher';
 import { Toolbar } from './Toolbar';
@@ -105,7 +114,8 @@ type ListState = LoadState<{
   warnings: readonly CanonicalError[];
 }>;
 
-type Selection = { kind: 'overview' } | { kind: 'feature'; featureId: string };
+type Selection =
+  { kind: 'overview' } | { kind: 'supervisor' } | { kind: 'feature'; featureId: string };
 
 const NO_DETAIL_FAILURES: ReadonlyMap<string, CanonicalError> = new Map();
 
@@ -177,7 +187,10 @@ function detailFetchIds(
   return ids;
 }
 
-/** A single addressable sidebar row, in the order ⌘2-9 count by. */
+/**
+ * A single addressable sidebar row, in the order ⌘2-9 count by. The pinned
+ * Supervisor row is deliberately absent: ⌘2 stays the first feature.
+ */
 type SidebarRowEntry = { kind: 'overview' } | { kind: 'feature'; featureId: string };
 
 export function WorkspaceShell({
@@ -288,6 +301,8 @@ export function WorkspaceShell({
   const clearSwitcherRoute = useCallback(() => setSwitcherRoute(null), []);
   const listRequestRef = useRef(0);
   const overviewActiveRef = useRef(false);
+  // Renderer-local, never persisted: see the module doc comment.
+  const [supervisorSelected, setSupervisorSelected] = useState(false);
   // The creation sheet's open flag and retained draft live per server in a
   // store that survives this shell's unmount (a disconnect or a server
   // switch unmounts the whole ready tree; the store lives above it in App).
@@ -549,6 +564,7 @@ export function WorkspaceShell({
 
   const selectFeature = useCallback(
     (featureId: string) => {
+      setSupervisorSelected(false);
       persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId } });
     },
     [persistPatch, scopeKey],
@@ -567,9 +583,18 @@ export function WorkspaceShell({
   }, [persistPatch, shell]);
 
   const selectOverview = useCallback(() => {
+    setSupervisorSelected(false);
     persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId: null } });
     loadList();
   }, [loadList, persistPatch, scopeKey]);
+
+  /** Shows the Supervisor page; only the cleared feature selection is persisted. */
+  const selectSupervisor = useCallback(() => {
+    setSupervisorSelected(true);
+    if ((shellStateRef.current?.featureByServer[scopeKey] ?? null) !== null) {
+      persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId: null } });
+    }
+  }, [persistPatch, scopeKey]);
 
   const handleFeatureDeleted = useCallback(
     (featureId: string) => {
@@ -639,7 +664,10 @@ export function WorkspaceShell({
     if (shell === null || handledAttentionJump.current === attentionJump.requestId) return;
     handledAttentionJump.current = attentionJump.requestId;
     if (attentionJump.featureId === '__recovery__') {
+      setSupervisorSelected(false);
       persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId: null } });
+    } else if (attentionJump.featureId === SUPERVISOR_ATTENTION_ROUTE) {
+      selectSupervisor();
     } else {
       selectFeature(attentionJump.featureId);
       setAttentionPreviewRequest({
@@ -651,7 +679,15 @@ export function WorkspaceShell({
       });
     }
     onAttentionJumpHandled();
-  }, [attentionJump, onAttentionJumpHandled, persistPatch, scopeKey, selectFeature, shell]);
+  }, [
+    attentionJump,
+    onAttentionJumpHandled,
+    persistPatch,
+    scopeKey,
+    selectFeature,
+    selectSupervisor,
+    shell,
+  ]);
 
   const closeAttentionPreview = useCallback(() => setAttentionPreviewRequest(null), []);
 
@@ -748,8 +784,9 @@ export function WorkspaceShell({
   // persisted selection is trusted even if the summary list hasn't returned
   // it yet (or ever) — the cockpit itself renders the "no longer exists"
   // state when the server truly has nothing under that id.
-  const selection: Selection =
-    activeFeatureId !== null
+  const selection: Selection = supervisorSelected
+    ? { kind: 'supervisor' }
+    : activeFeatureId !== null
       ? { kind: 'feature', featureId: activeFeatureId }
       : { kind: 'overview' };
   // Read by the focus/visibility refresh so it only refetches when Overview is shown.
@@ -785,9 +822,13 @@ export function WorkspaceShell({
       : undefined;
   const showTrailingToolbar = selection.kind === 'feature';
   // Stays mounted under the creation sheet so closing it restores focus here.
-  const showNewFeatureButton = selection.kind === 'overview';
+  const showNewFeatureButton = selection.kind === 'overview' || selection.kind === 'supervisor';
   const toolbarTitle =
-    selection.kind === 'feature' ? featureLabel(selection.featureId) : 'Overview';
+    selection.kind === 'feature'
+      ? featureLabel(selection.featureId)
+      : selection.kind === 'supervisor'
+        ? 'Supervisor'
+        : 'Overview';
   const toolbarSubline =
     selection.kind === 'feature' ? repoBranchSubline(selectedFeature) : undefined;
 
@@ -828,6 +869,8 @@ export function WorkspaceShell({
     target.focus();
     if (target.id === 'sidebar-overview') {
       selectOverview();
+    } else if (target.id === 'sidebar-supervisor') {
+      selectSupervisor();
     } else {
       selectFeature(target.id.slice('sidebar-row-'.length));
     }
@@ -894,6 +937,13 @@ export function WorkspaceShell({
             glyph="house"
             selected={selection.kind === 'overview'}
             onSelect={selectOverview}
+          />
+          <SidebarRow
+            id="sidebar-supervisor"
+            label="Supervisor"
+            glyph="supervisor"
+            selected={selection.kind === 'supervisor'}
+            onSelect={selectSupervisor}
           />
           {LANES.map((lane) => {
             const laneFeatures = laneGroups[lane];
@@ -1003,10 +1053,21 @@ export function WorkspaceShell({
         />
         <div
           className={
-            selection.kind === 'feature' ? 'content-pane content-pane--flush' : 'content-pane'
+            selection.kind === 'feature'
+              ? 'content-pane content-pane--flush'
+              : selection.kind === 'supervisor'
+                ? 'content-pane content-pane--conversation'
+                : 'content-pane'
           }
         >
-          {selection.kind === 'feature' ? (
+          {selection.kind === 'supervisor' ? (
+            <SupervisorPage
+              key={scopeKey}
+              attentionDrafts={activeAttentionDrafts}
+              setAttentionDrafts={updateAttentionDrafts}
+              refreshAttention={refreshAttention}
+            />
+          ) : selection.kind === 'feature' ? (
             <FeatureCockpit
               key={selection.featureId}
               active
@@ -1145,11 +1206,12 @@ function SidebarRow({
   subline?: string;
   glyphTone?: 'danger' | 'attention' | 'progress' | 'ok' | 'quiet';
   /**
-   * Feature rows show a status dot; the pinned Overview row shows the house
-   * glyph instead, since it has no status to report. Decorative either way —
-   * the row's accessible name is the label alone.
+   * Feature rows show a status dot; the pinned Overview and Supervisor rows
+   * show a glyph instead (a house, a text bubble), since they are places
+   * with no status to report. Decorative either way — the row's accessible
+   * name is the label alone.
    */
-  glyph?: 'dot' | 'house';
+  glyph?: 'dot' | 'house' | 'supervisor';
   pip?: {
     stageCount: number;
     activeIndex: number;
@@ -1172,6 +1234,13 @@ function SidebarRow({
       {glyph === 'house' ? (
         <span className="sidebar__row-glyph sidebar__row-glyph--house" aria-hidden="true">
           <HouseIcon />
+        </span>
+      ) : glyph === 'supervisor' ? (
+        <span
+          className="sidebar__row-glyph sidebar__row-glyph--house sidebar__row-glyph--supervisor"
+          aria-hidden="true"
+        >
+          <SupervisorIcon />
         </span>
       ) : (
         <span className="sidebar__row-glyph" data-tone={glyphTone ?? 'quiet'} aria-hidden="true" />

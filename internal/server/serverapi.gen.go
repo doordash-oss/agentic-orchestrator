@@ -962,6 +962,225 @@ func (e SSEEventErrorClass) Valid() bool {
 	}
 }
 
+// Defines values for SupervisorActionResponseResult.
+const (
+	SupervisorActionAccepted  SupervisorActionResponseResult = "accepted"
+	SupervisorActionEnded     SupervisorActionResponseResult = "ended"
+	SupervisorActionNotActive SupervisorActionResponseResult = "not_active"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorActionResponseResult enum.
+func (e SupervisorActionResponseResult) Valid() bool {
+	switch e {
+	case SupervisorActionAccepted:
+		return true
+	case SupervisorActionEnded:
+		return true
+	case SupervisorActionNotActive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorLifecycle.
+const (
+	SupervisorLifecycleFailed            SupervisorLifecycle = "failed"
+	SupervisorLifecycleIdle              SupervisorLifecycle = "idle"
+	SupervisorLifecycleRunning           SupervisorLifecycle = "running"
+	SupervisorLifecycleStarting          SupervisorLifecycle = "starting"
+	SupervisorLifecycleStopped           SupervisorLifecycle = "stopped"
+	SupervisorLifecycleWaitingPermission SupervisorLifecycle = "waiting_permission"
+	SupervisorLifecycleWaitingQuestion   SupervisorLifecycle = "waiting_question"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorLifecycle enum.
+func (e SupervisorLifecycle) Valid() bool {
+	switch e {
+	case SupervisorLifecycleFailed:
+		return true
+	case SupervisorLifecycleIdle:
+		return true
+	case SupervisorLifecycleRunning:
+		return true
+	case SupervisorLifecycleStarting:
+		return true
+	case SupervisorLifecycleStopped:
+		return true
+	case SupervisorLifecycleWaitingPermission:
+		return true
+	case SupervisorLifecycleWaitingQuestion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRecordKind.
+const (
+	SupervisorRecordKindAssistant  SupervisorRecordKind = "assistant"
+	SupervisorRecordKindPermission SupervisorRecordKind = "permission"
+	SupervisorRecordKindQuestion   SupervisorRecordKind = "question"
+	SupervisorRecordKindToolResult SupervisorRecordKind = "tool_result"
+	SupervisorRecordKindToolUse    SupervisorRecordKind = "tool_use"
+	SupervisorRecordKindUser       SupervisorRecordKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRecordKind enum.
+func (e SupervisorRecordKind) Valid() bool {
+	switch e {
+	case SupervisorRecordKindAssistant:
+		return true
+	case SupervisorRecordKindPermission:
+		return true
+	case SupervisorRecordKindQuestion:
+		return true
+	case SupervisorRecordKindToolResult:
+		return true
+	case SupervisorRecordKindToolUse:
+		return true
+	case SupervisorRecordKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRecordVisibility.
+const (
+	SupervisorVisibilityContent     SupervisorRecordVisibility = "content"
+	SupervisorVisibilityDisplayOnly SupervisorRecordVisibility = "display_only"
+	SupervisorVisibilityModelOnly   SupervisorRecordVisibility = "model_only"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRecordVisibility enum.
+func (e SupervisorRecordVisibility) Valid() bool {
+	switch e {
+	case SupervisorVisibilityContent:
+		return true
+	case SupervisorVisibilityDisplayOnly:
+		return true
+	case SupervisorVisibilityModelOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRequestRecordOutcome.
+const (
+	SupervisorRequestOutcomeAllowed  SupervisorRequestRecordOutcome = "allowed"
+	SupervisorRequestOutcomeAnswered SupervisorRequestRecordOutcome = "answered"
+	SupervisorRequestOutcomeDenied   SupervisorRequestRecordOutcome = "denied"
+	SupervisorRequestOutcomePending  SupervisorRequestRecordOutcome = "pending"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRequestRecordOutcome enum.
+func (e SupervisorRequestRecordOutcome) Valid() bool {
+	switch e {
+	case SupervisorRequestOutcomeAllowed:
+		return true
+	case SupervisorRequestOutcomeAnswered:
+		return true
+	case SupervisorRequestOutcomeDenied:
+		return true
+	case SupervisorRequestOutcomePending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRequestRecordStage.
+const (
+	SupervisorRequestStageRequested SupervisorRequestRecordStage = "requested"
+	SupervisorRequestStageResolved  SupervisorRequestRecordStage = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRequestRecordStage enum.
+func (e SupervisorRequestRecordStage) Valid() bool {
+	switch e {
+	case SupervisorRequestStageRequested:
+		return true
+	case SupervisorRequestStageResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorStartingStep.
+const (
+	SupervisorStartingStepHandshake SupervisorStartingStep = "handshake"
+	SupervisorStartingStepLaunching SupervisorStartingStep = "launching"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorStartingStep enum.
+func (e SupervisorStartingStep) Valid() bool {
+	switch e {
+	case SupervisorStartingStepHandshake:
+		return true
+	case SupervisorStartingStepLaunching:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorStreamEventKind.
+const (
+	SupervisorEventDelta       SupervisorStreamEventKind = "delta"
+	SupervisorEventHeartbeat   SupervisorStreamEventKind = "heartbeat"
+	SupervisorEventRecord      SupervisorStreamEventKind = "record"
+	SupervisorEventRequest     SupervisorStreamEventKind = "request"
+	SupervisorEventState       SupervisorStreamEventKind = "state"
+	SupervisorEventStreamReset SupervisorStreamEventKind = "stream.reset"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorStreamEventKind enum.
+func (e SupervisorStreamEventKind) Valid() bool {
+	switch e {
+	case SupervisorEventDelta:
+		return true
+	case SupervisorEventHeartbeat:
+		return true
+	case SupervisorEventRecord:
+		return true
+	case SupervisorEventRequest:
+		return true
+	case SupervisorEventState:
+		return true
+	case SupervisorEventStreamReset:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorTurnOutcome.
+const (
+	SupervisorTurnOutcomeCompleted   SupervisorTurnOutcome = "completed"
+	SupervisorTurnOutcomeFailed      SupervisorTurnOutcome = "failed"
+	SupervisorTurnOutcomeInterrupted SupervisorTurnOutcome = "interrupted"
+	SupervisorTurnOutcomeNone        SupervisorTurnOutcome = "none"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorTurnOutcome enum.
+func (e SupervisorTurnOutcome) Valid() bool {
+	switch e {
+	case SupervisorTurnOutcomeCompleted:
+		return true
+	case SupervisorTurnOutcomeFailed:
+		return true
+	case SupervisorTurnOutcomeInterrupted:
+		return true
+	case SupervisorTurnOutcomeNone:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskActivityState.
 const (
 	TaskActivityStateCancelled TaskActivityState = "cancelled"
@@ -1634,6 +1853,66 @@ const (
 func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case ExecuteRecoveryActionsParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EndSupervisorParamsXAgenticoClient.
+const (
+	EndSupervisorParamsXAgenticoClientLocal EndSupervisorParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the EndSupervisorParamsXAgenticoClient enum.
+func (e EndSupervisorParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case EndSupervisorParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InterruptSupervisorParamsXAgenticoClient.
+const (
+	InterruptSupervisorParamsXAgenticoClientLocal InterruptSupervisorParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InterruptSupervisorParamsXAgenticoClient enum.
+func (e InterruptSupervisorParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case InterruptSupervisorParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SendSupervisorMessageParamsXAgenticoClient.
+const (
+	SendSupervisorMessageParamsXAgenticoClientLocal SendSupervisorMessageParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the SendSupervisorMessageParamsXAgenticoClient enum.
+func (e SendSupervisorMessageParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case SendSupervisorMessageParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSupervisorSettingsParamsXAgenticoClient.
+const (
+	UpdateSupervisorSettingsParamsXAgenticoClientLocal UpdateSupervisorSettingsParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSupervisorSettingsParamsXAgenticoClient enum.
+func (e UpdateSupervisorSettingsParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case UpdateSupervisorSettingsParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -4327,6 +4606,177 @@ type StageUploadResponse struct {
 	Size       int64  `json:"size"`
 }
 
+// SupervisorActionResponse defines model for SupervisorActionResponse.
+type SupervisorActionResponse struct {
+	APIVersion string                         `json:"api_version"`
+	Result     SupervisorActionResponseResult `json:"result"`
+	State      SupervisorState                `json:"state"`
+}
+
+// SupervisorActionResponseResult defines model for SupervisorActionResponse.Result.
+type SupervisorActionResponseResult string
+
+// SupervisorDelta Non-persisted streaming text for a provisional assistant row.
+type SupervisorDelta struct {
+	ChunkIndex      int    `json:"chunk_index"`
+	StreamMessageID string `json:"stream_message_id"`
+	Text            string `json:"text"`
+	TurnID          string `json:"turn_id"`
+}
+
+// SupervisorLifecycle defines model for SupervisorLifecycle.
+type SupervisorLifecycle string
+
+// SupervisorMessageRequest defines model for SupervisorMessageRequest.
+type SupervisorMessageRequest struct {
+	ClientMessageID string `json:"client_message_id"`
+	Text            string `json:"text"`
+}
+
+// SupervisorMessageResponse defines model for SupervisorMessageResponse.
+type SupervisorMessageResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// Launched True when this send launched the supervisor process.
+	Launched bool `json:"launched"`
+
+	// Record One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
+	Record SupervisorRecord `json:"record"`
+}
+
+// SupervisorRecord One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
+type SupervisorRecord struct {
+	ClientMessageID string               `json:"client_message_id,omitempty"`
+	ConversationID  string               `json:"conversation_id"`
+	CreatedAt       time.Time            `json:"created_at"`
+	Generation      int64                `json:"generation"`
+	ID              string               `json:"id"`
+	Kind            SupervisorRecordKind `json:"kind"`
+	Messages        []TranscriptMessage  `json:"messages"`
+
+	// Request Request or verdict carried by `permission` and `question` records.
+	Request         *SupervisorRequestRecord   `json:"request,omitempty"`
+	Seq             int64                      `json:"seq"`
+	StreamMessageID string                     `json:"stream_message_id,omitempty"`
+	TurnID          string                     `json:"turn_id"`
+	Visibility      SupervisorRecordVisibility `json:"visibility"`
+}
+
+// SupervisorRecordKind defines model for SupervisorRecordKind.
+type SupervisorRecordKind string
+
+// SupervisorRecordVisibility defines model for SupervisorRecordVisibility.
+type SupervisorRecordVisibility string
+
+// SupervisorRequestRecord Request or verdict carried by `permission` and `question` records.
+type SupervisorRequestRecord struct {
+	Outcome   SupervisorRequestRecordOutcome `json:"outcome"`
+	RequestID string                         `json:"request_id"`
+	Stage     SupervisorRequestRecordStage   `json:"stage"`
+	Summary   string                         `json:"summary,omitempty"`
+	ToolName  string                         `json:"tool_name"`
+}
+
+// SupervisorRequestRecordOutcome defines model for SupervisorRequestRecord.Outcome.
+type SupervisorRequestRecordOutcome string
+
+// SupervisorRequestRecordStage defines model for SupervisorRequestRecord.Stage.
+type SupervisorRequestRecordStage string
+
+// SupervisorSettings Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default.
+type SupervisorSettings struct {
+	Effort  string `json:"effort"`
+	Harness string `json:"harness"`
+	Model   string `json:"model"`
+}
+
+// SupervisorSettingsRequest defines model for SupervisorSettingsRequest.
+type SupervisorSettingsRequest struct {
+	Effort  string `json:"effort,omitempty"`
+	Harness string `json:"harness"`
+	Model   string `json:"model"`
+}
+
+// SupervisorStartingStep Present only while the lifecycle is `starting`.
+type SupervisorStartingStep string
+
+// SupervisorState defines model for SupervisorState.
+type SupervisorState struct {
+	ConversationID string `json:"conversation_id"`
+
+	// EffectiveModel Model the running harness reports; empty when no process exists.
+	EffectiveModel string `json:"effective_model"`
+
+	// Generation Number of provider process launches; increments on every launch.
+	Generation int64 `json:"generation"`
+
+	// HeadSeq Seq of the newest committed transcript record; 0 when empty.
+	HeadSeq         int64                 `json:"head_seq"`
+	LastTurnOutcome SupervisorTurnOutcome `json:"last_turn_outcome"`
+	Lifecycle       SupervisorLifecycle   `json:"lifecycle"`
+	PendingRequests []ControlRequest      `json:"pending_requests"`
+
+	// SessionID Session-manager id of the current generation (`__supervisor__.<conversation>.<generation>`); empty when no process exists.
+	SessionID string `json:"session_id"`
+
+	// Settings Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default.
+	Settings SupervisorSettings `json:"settings"`
+
+	// StartingStep Present only while the lifecycle is `starting`.
+	StartingStep SupervisorStartingStep `json:"starting_step,omitempty"`
+
+	// StreamEpoch Resume epoch for the supervisor event stream.
+	StreamEpoch string `json:"stream_epoch"`
+}
+
+// SupervisorStateResponse defines model for SupervisorStateResponse.
+type SupervisorStateResponse struct {
+	APIVersion string          `json:"api_version"`
+	State      SupervisorState `json:"state"`
+}
+
+// SupervisorStreamEvent defines model for SupervisorStreamEvent.
+type SupervisorStreamEvent struct {
+	ConversationID string `json:"conversation_id"`
+
+	// Delta Non-persisted streaming text for a provisional assistant row.
+	Delta      *SupervisorDelta          `json:"delta,omitempty"`
+	Generation int64                     `json:"generation"`
+	Kind       SupervisorStreamEventKind `json:"kind"`
+
+	// Record One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
+	Record  *SupervisorRecord `json:"record,omitempty"`
+	Request *ControlRequest   `json:"request,omitempty"`
+
+	// Seq Record seq for `record` events; the head seq otherwise.
+	Seq              int64            `json:"seq,omitempty"`
+	SnapshotRequired bool             `json:"snapshot_required,omitempty"`
+	State            *SupervisorState `json:"state,omitempty"`
+	StreamEpoch      string           `json:"stream_epoch"`
+}
+
+// SupervisorStreamEventKind defines model for SupervisorStreamEvent.Kind.
+type SupervisorStreamEventKind string
+
+// SupervisorTranscriptResponse defines model for SupervisorTranscriptResponse.
+type SupervisorTranscriptResponse struct {
+	APIVersion     string `json:"api_version"`
+	ConversationID string `json:"conversation_id"`
+
+	// FirstSeq Seq of the first returned record; 0 for an empty page.
+	FirstSeq      int64              `json:"first_seq"`
+	HasMoreAfter  bool               `json:"has_more_after"`
+	HasMoreBefore bool               `json:"has_more_before"`
+	HeadSeq       int64              `json:"head_seq"`
+	Items         []SupervisorRecord `json:"items"`
+
+	// LastSeq Seq of the last returned record; 0 for an empty page.
+	LastSeq int64 `json:"last_seq"`
+}
+
+// SupervisorTurnOutcome defines model for SupervisorTurnOutcome.
+type SupervisorTurnOutcome string
+
 // Task defines model for Task.
 type Task struct {
 	Description  string `json:"description,omitempty"`
@@ -5096,6 +5546,64 @@ type GetSessionTranscriptParams struct {
 	Limit  Limit `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// EndSupervisorJSONBody defines parameters for EndSupervisor.
+type EndSupervisorJSONBody map[string]interface{}
+
+// EndSupervisorParams defines parameters for EndSupervisor.
+type EndSupervisorParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient EndSupervisorParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// EndSupervisorParamsXAgenticoClient defines parameters for EndSupervisor.
+type EndSupervisorParamsXAgenticoClient string
+
+// StreamSupervisorEventsParams defines parameters for StreamSupervisorEvents.
+type StreamSupervisorEventsParams struct {
+	After       int64  `form:"after,omitempty" json:"after,omitempty"`
+	Epoch       string `form:"epoch,omitempty" json:"epoch,omitempty"`
+	HeartbeatMs int    `form:"heartbeat_ms,omitempty" json:"heartbeat_ms,omitempty"`
+}
+
+// InterruptSupervisorJSONBody defines parameters for InterruptSupervisor.
+type InterruptSupervisorJSONBody map[string]interface{}
+
+// InterruptSupervisorParams defines parameters for InterruptSupervisor.
+type InterruptSupervisorParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InterruptSupervisorParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InterruptSupervisorParamsXAgenticoClient defines parameters for InterruptSupervisor.
+type InterruptSupervisorParamsXAgenticoClient string
+
+// SendSupervisorMessageParams defines parameters for SendSupervisorMessage.
+type SendSupervisorMessageParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient SendSupervisorMessageParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// SendSupervisorMessageParamsXAgenticoClient defines parameters for SendSupervisorMessage.
+type SendSupervisorMessageParamsXAgenticoClient string
+
+// UpdateSupervisorSettingsParams defines parameters for UpdateSupervisorSettings.
+type UpdateSupervisorSettingsParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient UpdateSupervisorSettingsParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// UpdateSupervisorSettingsParamsXAgenticoClient defines parameters for UpdateSupervisorSettings.
+type UpdateSupervisorSettingsParamsXAgenticoClient string
+
+// GetSupervisorTranscriptParams defines parameters for GetSupervisorTranscript.
+type GetSupervisorTranscriptParams struct {
+	Before int64 `form:"before,omitempty" json:"before,omitempty"`
+	After  int64 `form:"after,omitempty" json:"after,omitempty"`
+
+	// Limit Page size, default 100 and maximum 500.
+	Limit int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // CheckForUpdateJSONBody defines parameters for CheckForUpdate.
 type CheckForUpdateJSONBody map[string]interface{}
 
@@ -5320,6 +5828,18 @@ type RefreshRuntimeReadinessJSONRequestBody RefreshRuntimeReadinessJSONBody
 
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
+
+// EndSupervisorJSONRequestBody defines body for EndSupervisor for application/json ContentType.
+type EndSupervisorJSONRequestBody EndSupervisorJSONBody
+
+// InterruptSupervisorJSONRequestBody defines body for InterruptSupervisor for application/json ContentType.
+type InterruptSupervisorJSONRequestBody InterruptSupervisorJSONBody
+
+// SendSupervisorMessageJSONRequestBody defines body for SendSupervisorMessage for application/json ContentType.
+type SendSupervisorMessageJSONRequestBody = SupervisorMessageRequest
+
+// UpdateSupervisorSettingsJSONRequestBody defines body for UpdateSupervisorSettings for application/json ContentType.
+type UpdateSupervisorSettingsJSONRequestBody = SupervisorSettingsRequest
 
 // CheckForUpdateJSONRequestBody defines body for CheckForUpdate for application/json ContentType.
 type CheckForUpdateJSONRequestBody CheckForUpdateJSONBody

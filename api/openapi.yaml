@@ -1606,6 +1606,204 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/supervisor/state:
+    get:
+      operationId: getSupervisorState
+      summary: Read the supervisor conversation's lifecycle read model.
+      description: >-
+        Returns the per-server supervisor conversation identity, generation,
+        lifecycle, committed harness settings, pending requests and the
+        durable transcript head. Never carries transcript records.
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/settings:
+    patch:
+      operationId: updateSupervisorSettings
+      summary: Choose the supervisor harness, model and effort.
+      description: >-
+        Accepted only while the lifecycle is `stopped` or `failed`. `harness`
+        and `model` must name a chat-eligible catalog model of that harness;
+        `effort` must be empty (harness default) or one of the model's effort
+        levels. Failure machine codes: 400 `supervisor_settings_invalid` and
+        409 `supervisor_settings_locked` while a supervisor process exists.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupervisorSettingsRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorStateResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/transcript:
+    get:
+      operationId: getSupervisorTranscript
+      summary: Read one page of the durable supervisor transcript.
+      description: >-
+        Records are ordered by their per-conversation `seq`. With neither
+        cursor the newest page is returned; `before` pages backwards and
+        `after` pages forwards. A cursor outside the stored range returns an
+        empty page.
+      parameters:
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: limit
+          in: query
+          required: false
+          description: Page size, default 100 and maximum 500.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorTranscriptResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/supervisor/messages:
+    post:
+      operationId: sendSupervisorMessage
+      summary: Send one user message to the supervisor.
+      description: >-
+        Launches the supervisor process when the conversation is `stopped`
+        or `failed`; sends arriving while a launch is in flight join it and
+        are delivered in arrival order. A repeated `client_message_id`
+        returns the already-committed record without appending. Failure
+        machine codes: 409 `settings_required` when no harness or model is
+        chosen, 409 `turn_active` while a turn is running, 502
+        `supervisor_launch_failed` when the launch or handshake fails (no
+        user record is committed), and 503 `update_in_progress` while work
+        admission is closed.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupervisorMessageRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorMessageResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/interrupt:
+    post:
+      operationId: interruptSupervisor
+      summary: Interrupt the supervisor's current turn.
+      description: >-
+        Returns `accepted` immediately. The lifecycle returns to `idle` only
+        once a turn result or process exit is observed; a harness that does
+        not answer within the grace is terminated and the lifecycle becomes
+        `stopped` with `last_turn_outcome` `interrupted`.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/supervisor/end:
+    post:
+      operationId: endSupervisor
+      summary: Stop the supervisor process and keep the conversation.
+      description: >-
+        Stops the process, keeps the transcript and settings, and sets the
+        lifecycle to `stopped`. Returns `not_active` when no process exists.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/supervisor/events:
+    get:
+      operationId: streamSupervisorEvents
+      summary: Stream the supervisor conversation as SSE.
+      description: >-
+        The stream opens with a `state` event. Committed transcript records
+        are `record` events whose SSE id is the record `seq`; non-persisted
+        `delta`, `state` and `request` events carry no id. Every event
+        carries `conversation_id`, `generation` and `stream_epoch`. Resume
+        with `Last-Event-ID` or `after`: committed records after the cursor
+        replay from the durable store before live events follow. A cursor
+        beyond the head, a stale `epoch`, or a consumer that falls behind
+        yields one `stream.reset` event with `snapshot_required`, after which
+        the stream continues live from the head.
+      security:
+        - bearerAuth: []
+        - sseAccessToken: []
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: epoch
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: heartbeat_ms
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorEventStream"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/uploads:
     post:
       operationId: stageUpload
@@ -2160,6 +2358,36 @@ components:
         text/event-stream:
           schema:
             $ref: "#/components/schemas/SessionOutputChunk"
+    SupervisorStateResponse:
+      description: Supervisor lifecycle read model.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorStateResponse"
+    SupervisorTranscriptResponse:
+      description: One page of the durable supervisor transcript.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorTranscriptResponse"
+    SupervisorMessageResponse:
+      description: The committed user record for a supervisor send.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorMessageResponse"
+    SupervisorActionResponse:
+      description: Supervisor lifecycle mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorActionResponse"
+    SupervisorEventStream:
+      description: Supervisor SSE stream carrying `SupervisorStreamEvent` JSON payloads.
+      content:
+        text/event-stream:
+          schema:
+            $ref: "#/components/schemas/SupervisorStreamEvent"
 
   headers:
     Sequence:
@@ -5496,6 +5724,338 @@ components:
           x-go-type-skip-optional-pointer: false
         task:
           $ref: "#/components/schemas/Task"
+          x-go-type-skip-optional-pointer: false
+
+    # --- Supervisor conversation: one per server, durable transcript,
+    # lifecycle read model and per-conversation event stream.
+    SupervisorLifecycle:
+      type: string
+      enum: [stopped, starting, idle, running, waiting_permission, waiting_question, failed]
+      x-enum-varnames:
+        - SupervisorLifecycleStopped
+        - SupervisorLifecycleStarting
+        - SupervisorLifecycleIdle
+        - SupervisorLifecycleRunning
+        - SupervisorLifecycleWaitingPermission
+        - SupervisorLifecycleWaitingQuestion
+        - SupervisorLifecycleFailed
+    SupervisorStartingStep:
+      type: string
+      description: Present only while the lifecycle is `starting`.
+      enum: [launching, handshake]
+      x-enum-varnames: [SupervisorStartingStepLaunching, SupervisorStartingStepHandshake]
+    SupervisorTurnOutcome:
+      type: string
+      enum: [none, completed, interrupted, failed]
+      x-enum-varnames:
+        - SupervisorTurnOutcomeNone
+        - SupervisorTurnOutcomeCompleted
+        - SupervisorTurnOutcomeInterrupted
+        - SupervisorTurnOutcomeFailed
+    SupervisorSettings:
+      type: object
+      description: >-
+        Committed harness choice. Empty `harness` or `model` means unset;
+        empty `effort` means the harness default.
+      required: [harness, model, effort]
+      properties:
+        harness:
+          type: string
+        model:
+          type: string
+        effort:
+          type: string
+    SupervisorSettingsRequest:
+      type: object
+      additionalProperties: false
+      required: [harness, model]
+      properties:
+        harness:
+          type: string
+          minLength: 1
+          maxLength: 100
+        model:
+          type: string
+          minLength: 1
+          maxLength: 200
+        effort:
+          type: string
+          maxLength: 40
+    SupervisorState:
+      type: object
+      required:
+        - conversation_id
+        - generation
+        - session_id
+        - lifecycle
+        - last_turn_outcome
+        - settings
+        - effective_model
+        - pending_requests
+        - head_seq
+        - stream_epoch
+      properties:
+        conversation_id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Number of provider process launches; increments on every launch.
+        session_id:
+          type: string
+          description: >-
+            Session-manager id of the current generation
+            (`__supervisor__.<conversation>.<generation>`); empty when no
+            process exists.
+        lifecycle:
+          $ref: "#/components/schemas/SupervisorLifecycle"
+        starting_step:
+          $ref: "#/components/schemas/SupervisorStartingStep"
+        last_turn_outcome:
+          $ref: "#/components/schemas/SupervisorTurnOutcome"
+        settings:
+          $ref: "#/components/schemas/SupervisorSettings"
+        effective_model:
+          type: string
+          description: Model the running harness reports; empty when no process exists.
+        pending_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ControlRequest"
+        head_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Seq of the newest committed transcript record; 0 when empty.
+        stream_epoch:
+          type: string
+          description: Resume epoch for the supervisor event stream.
+    SupervisorStateResponse:
+      type: object
+      required: [api_version, state]
+      properties:
+        api_version:
+          type: string
+        state:
+          $ref: "#/components/schemas/SupervisorState"
+    SupervisorRecordKind:
+      type: string
+      enum: [user, assistant, tool_use, tool_result, permission, question]
+      x-enum-varnames:
+        - SupervisorRecordKindUser
+        - SupervisorRecordKindAssistant
+        - SupervisorRecordKindToolUse
+        - SupervisorRecordKindToolResult
+        - SupervisorRecordKindPermission
+        - SupervisorRecordKindQuestion
+    SupervisorRecordVisibility:
+      type: string
+      enum: [content, model_only, display_only]
+      x-enum-varnames:
+        - SupervisorVisibilityContent
+        - SupervisorVisibilityModelOnly
+        - SupervisorVisibilityDisplayOnly
+    SupervisorRequestRecord:
+      type: object
+      description: Request or verdict carried by `permission` and `question` records.
+      required: [request_id, tool_name, stage, outcome]
+      properties:
+        request_id:
+          type: string
+        tool_name:
+          type: string
+        stage:
+          type: string
+          enum: [requested, resolved]
+          x-enum-varnames: [SupervisorRequestStageRequested, SupervisorRequestStageResolved]
+        outcome:
+          type: string
+          enum: [pending, allowed, denied, answered]
+          x-enum-varnames:
+            - SupervisorRequestOutcomePending
+            - SupervisorRequestOutcomeAllowed
+            - SupervisorRequestOutcomeDenied
+            - SupervisorRequestOutcomeAnswered
+        summary:
+          type: string
+    SupervisorRecord:
+      type: object
+      description: >-
+        One committed transcript record projected with the same redaction
+        the session transcript applies; `messages` rows carry `index = seq`.
+      required:
+        - seq
+        - id
+        - conversation_id
+        - generation
+        - turn_id
+        - kind
+        - visibility
+        - created_at
+        - messages
+      properties:
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+        id:
+          type: string
+        conversation_id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        turn_id:
+          type: string
+        kind:
+          $ref: "#/components/schemas/SupervisorRecordKind"
+        visibility:
+          $ref: "#/components/schemas/SupervisorRecordVisibility"
+        created_at:
+          type: string
+          format: date-time
+        client_message_id:
+          type: string
+        stream_message_id:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/TranscriptMessage"
+        request:
+          $ref: "#/components/schemas/SupervisorRequestRecord"
+          x-go-type-skip-optional-pointer: false
+    SupervisorTranscriptResponse:
+      type: object
+      required:
+        - api_version
+        - conversation_id
+        - items
+        - first_seq
+        - last_seq
+        - has_more_before
+        - has_more_after
+        - head_seq
+      properties:
+        api_version:
+          type: string
+        conversation_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SupervisorRecord"
+        first_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Seq of the first returned record; 0 for an empty page.
+        last_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Seq of the last returned record; 0 for an empty page.
+        has_more_before:
+          type: boolean
+        has_more_after:
+          type: boolean
+        head_seq:
+          type: integer
+          format: int64
+          minimum: 0
+    SupervisorMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [text, client_message_id]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 100000
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9._-]+$"
+    SupervisorMessageResponse:
+      type: object
+      required: [api_version, record, launched]
+      properties:
+        api_version:
+          type: string
+        record:
+          $ref: "#/components/schemas/SupervisorRecord"
+        launched:
+          type: boolean
+          description: True when this send launched the supervisor process.
+    SupervisorActionResponse:
+      type: object
+      required: [api_version, result, state]
+      properties:
+        api_version:
+          type: string
+        result:
+          type: string
+          enum: [accepted, ended, not_active]
+          x-enum-varnames: [SupervisorActionAccepted, SupervisorActionEnded, SupervisorActionNotActive]
+        state:
+          $ref: "#/components/schemas/SupervisorState"
+    SupervisorDelta:
+      type: object
+      description: Non-persisted streaming text for a provisional assistant row.
+      required: [turn_id, stream_message_id, chunk_index, text]
+      properties:
+        turn_id:
+          type: string
+        stream_message_id:
+          type: string
+        chunk_index:
+          type: integer
+          minimum: 0
+        text:
+          type: string
+    SupervisorStreamEvent:
+      type: object
+      required: [kind, conversation_id, generation, stream_epoch]
+      properties:
+        kind:
+          type: string
+          enum: [record, delta, state, request, stream.reset, heartbeat]
+          x-enum-varnames:
+            - SupervisorEventRecord
+            - SupervisorEventDelta
+            - SupervisorEventState
+            - SupervisorEventRequest
+            - SupervisorEventStreamReset
+            - SupervisorEventHeartbeat
+        conversation_id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        stream_epoch:
+          type: string
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Record seq for `record` events; the head seq otherwise.
+        snapshot_required:
+          type: boolean
+        record:
+          $ref: "#/components/schemas/SupervisorRecord"
+          x-go-type-skip-optional-pointer: false
+        delta:
+          $ref: "#/components/schemas/SupervisorDelta"
+          x-go-type-skip-optional-pointer: false
+        state:
+          $ref: "#/components/schemas/SupervisorState"
+          x-go-type-skip-optional-pointer: false
+        request:
+          $ref: "#/components/schemas/ControlRequest"
           x-go-type-skip-optional-pointer: false
 
     # --- Feature/session payload types backing FeatureListResponse,

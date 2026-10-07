@@ -67,6 +67,8 @@ import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
 import { AttentionService } from './attention';
 import { SessionService } from './serverClient';
+import { SupervisorService } from './supervisor';
+import { SupervisorStreamRunner } from './supervisorStream';
 import { ServerUpdateService } from './serverUpdates';
 import { UploadService } from './uploads';
 import { randomUUID } from 'node:crypto';
@@ -649,6 +651,17 @@ if (!hasSingleInstanceLock) {
     const recovery = new RecoveryService(gateway);
     const bulk = new BulkService(features);
     const sessions = new SessionService(gateway, randomUUID, () => gateway.connectedLocality);
+    // The supervisor conversation is fenced by server identity and connection
+    // generation like the other per-server services: a reply crossing a
+    // switch is discarded rather than shown against the new server.
+    const supervisor = new SupervisorService({
+      transport: gateway,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
+      makeClientMessageId: randomUUID,
+    });
     const reviews = new ReviewService(gateway);
     const configService = new ConfigService(gateway);
     const attention = new AttentionService(gateway);
@@ -1380,8 +1393,26 @@ if (!hasSingleInstanceLock) {
         }
       },
     });
+    // The supervisor conversation stream runs beside the global stream while
+    // the gateway is ready, pushing validated records, deltas, state, and
+    // pending requests to every window.
+    const supervisorStream = new SupervisorStreamRunner({
+      source: gateway,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (line) => console.warn(`[agentico-supervisor-events] ${line}`),
+      onPush: (event) => {
+        for (const window of windows.all()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send(IPC_EVENTS.supervisorEvent, event);
+          }
+        }
+        // A new supervisor permission or question changes the badge counts.
+        if (event.type === 'request') void refreshBackgroundState();
+      },
+    });
     stopStreams = () => {
       eventSupervisor.stop();
+      supervisorStream.stop();
       sessions.cancelAll();
       serverList.dispose();
     };
@@ -1399,6 +1430,7 @@ if (!hasSingleInstanceLock) {
         const key = state.serverKey ?? null;
         if (key !== streamServerKey) {
           eventSupervisor.resetCursor();
+          supervisorStream.resetCursor();
           streamServerKey = key;
         }
         if (!legacyDraftsRekeyed && key !== null) {
@@ -1412,10 +1444,12 @@ if (!hasSingleInstanceLock) {
           }
         }
         eventSupervisor.start();
+        supervisorStream.start();
         updates.startAutomaticChecks();
         void refreshBackgroundState();
       } else {
         eventSupervisor.stop();
+        supervisorStream.stop();
         sessions.cancelAll();
         nativeCommands?.update({ attentionCount: 0, amaActive: false });
         publishNativeCommandTestState(nativeCommands);
@@ -1543,6 +1577,20 @@ if (!hasSingleInstanceLock) {
       getSessionTranscript: (request) => sessions.transcript(request),
       openSessionOutput: (request, emit) => sessions.subscribe(request, emit),
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
+      getSupervisorState: () => supervisor.getState(),
+      updateSupervisorSettings: (request) => supervisor.updateSettings(request),
+      getSupervisorTranscript: (request) => supervisor.getTranscript(request),
+      sendSupervisorMessage: async (request) => {
+        const result = await supervisor.sendMessage(request);
+        void updates.refreshActiveWorkSummary();
+        return result;
+      },
+      interruptSupervisor: () => supervisor.interrupt(),
+      endSupervisor: async () => {
+        const result = await supervisor.end();
+        void updates.reconcileScheduledInstall();
+        return result;
+      },
       getCreationDefaults: () => features.creationDefaults(),
       inspectRepositorySources: (request) => features.inspectRepositorySources(request),
       checkRepositoryOriginStatus: (request) => features.checkRepositoryOriginStatus(request),

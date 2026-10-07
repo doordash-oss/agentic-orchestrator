@@ -113,7 +113,8 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
     transcript.section('Pointer selection switches the mounted content');
     const overviewRow = handle.page.getByRole('option', { name: 'Overview' });
     const rows = handle.page.getByRole('listbox', { name: 'Features' }).getByRole('option');
-    await expect(rows).toHaveCount(4); // Overview + the three created features.
+    // Overview + the pinned Supervisor row + the three created features.
+    await expect(rows).toHaveCount(5);
     // The row's bare name only — at-rest rows also carry a status sub-line
     // ("Code ready") in the same option, which a full textContent read
     // would otherwise glue onto the name.
@@ -121,13 +122,23 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
       .getByRole('listbox', { name: 'Features' })
       .locator('.sidebar__row-name')
       .allTextContents();
-    // Visual/DOM order: Overview first, then the three features in lane order.
+    // Visual/DOM order: Overview, the pinned Supervisor row, then the three
+    // features in lane order.
     expect(rowNames[0]).toBe('Overview');
-    const [, firstName, secondName, thirdName] = rowNames as [string, string, string, string];
+    expect(rowNames[1]).toBe('Supervisor');
+    const [, , firstName, secondName, thirdName] = rowNames as [
+      string,
+      string,
+      string,
+      string,
+      string,
+    ];
+    const supervisorRow = rows.nth(1);
+    const supervisorPage = handle.page.getByRole('region', { name: 'Supervisor', exact: true });
 
-    await rows.nth(1).click();
+    await rows.nth(2).click();
     await expect(handle.page.getByLabel(`Feature ${firstName}`)).toBeVisible({ timeout: 15_000 });
-    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true');
+    await expect(rows.nth(2)).toHaveAttribute('aria-selected', 'true');
     await expect(overviewRow).toHaveAttribute('aria-selected', 'false');
     transcript.step(`clicking "${firstName}" mounted its cockpit`);
 
@@ -137,24 +148,32 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
     await overviewRow.focus();
 
     await handle.page.keyboard.press('ArrowDown');
-    await expect(rows.nth(1)).toBeFocused();
-    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true');
-    await expect(handle.page.getByLabel(`Feature ${firstName}`)).toBeVisible({ timeout: 15_000 });
+    await expect(supervisorRow).toBeFocused();
+    await expect(supervisorRow).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorPage).toBeVisible({ timeout: 15_000 });
 
     await handle.page.keyboard.press('ArrowDown');
     await expect(rows.nth(2)).toBeFocused();
     await expect(rows.nth(2)).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorRow).toHaveAttribute('aria-selected', 'false');
+    await expect(handle.page.getByLabel(`Feature ${firstName}`)).toBeVisible({ timeout: 15_000 });
+
+    await handle.page.keyboard.press('ArrowDown');
+    await expect(rows.nth(3)).toBeFocused();
+    await expect(rows.nth(3)).toHaveAttribute('aria-selected', 'true');
     await expect(handle.page.getByLabel(`Feature ${secondName}`)).toBeVisible({ timeout: 15_000 });
 
     await handle.page.keyboard.press('End');
-    await expect(rows.nth(3)).toBeFocused();
-    await expect(rows.nth(3)).toHaveAttribute('aria-selected', 'true');
+    await expect(rows.nth(4)).toBeFocused();
+    await expect(rows.nth(4)).toHaveAttribute('aria-selected', 'true');
     await expect(handle.page.getByLabel(`Feature ${thirdName}`)).toBeVisible({ timeout: 15_000 });
 
     await handle.page.keyboard.press('Home');
     await expect(overviewRow).toBeFocused();
     await expect(overviewRow).toHaveAttribute('aria-selected', 'true');
-    transcript.step('ArrowDown/End/Home moved focus and the mounted content together');
+    transcript.step(
+      'ArrowDown (through the pinned Supervisor row)/End/Home moved focus and the mounted content together',
+    );
 
     transcript.section(
       '⌘2-9 select by absolute sidebar position — reachable even inside a collapsed lane',
@@ -163,7 +182,8 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
     await expect(atRestGroup).toBeHidden();
 
     // ⌘2 → the 1st feature in absolute order, ⌘4 → the 3rd — both still
-    // inside the now-collapsed At rest lane.
+    // inside the now-collapsed At rest lane. The pinned Supervisor row is not
+    // numbered, so it never shifts the feature shortcuts.
     await handle.page.keyboard.press('ControlOrMeta+2');
     await expect(handle.page.getByLabel(`Feature ${firstName}`)).toBeVisible({ timeout: 15_000 });
     await handle.page.keyboard.press('ControlOrMeta+4');

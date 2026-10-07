@@ -58,6 +58,17 @@ export type ConversationItem =
       name: string;
       tone: VerificationTone;
       symbol: string;
+    }
+  | {
+      /**
+       * An answered permission or question collapsed to one line. Never
+       * produced by `buildConversation`: surfaces that keep durable request
+       * records (the supervisor transcript) interleave these themselves.
+       */
+      kind: 'verdict';
+      key: string;
+      outcome: 'allowed' | 'denied' | 'answered';
+      text: string;
     };
 
 /** Stable identity for a row, unique across multi-block responses. */

@@ -52,6 +52,7 @@ import type {
   ThemeInfo,
   UpdateState,
   DiagnosticsSnapshot,
+  SupervisorState,
 } from '../../../src/shared/ipc';
 import {
   applyServersPatch,
@@ -1649,6 +1650,20 @@ const UPDATE_POPOVER_ITEMS: AttentionSnapshot['items'] = [
   },
 ];
 
+/** A never-launched supervisor conversation; capture scenes do not stream it. */
+const SUPERVISOR_STATE: SupervisorState = {
+  conversationId: 'supervisor-conversation-1',
+  generation: 0,
+  sessionId: '',
+  lifecycle: 'stopped',
+  lastTurnOutcome: 'none',
+  settings: { harness: '', model: '', effort: '' },
+  effectiveModel: '',
+  pendingRequests: [],
+  headSeq: 0,
+  streamEpoch: 'supervisor-epoch-1',
+};
+
 function makeMockApi(
   scene: string,
   listeners: Set<(event: AppEvent) => void>,
@@ -2077,6 +2092,26 @@ function makeMockApi(
       sessionOutputListeners.add(listener);
       return () => sessionOutputListeners.delete(listener);
     },
+    getSupervisorState: () => Promise.resolve(SUPERVISOR_STATE),
+    updateSupervisorSettings: (request) =>
+      Promise.resolve({
+        ...SUPERVISOR_STATE,
+        settings: { harness: request.harness, model: request.model, effort: request.effort ?? '' },
+      }),
+    getSupervisorTranscript: () =>
+      Promise.resolve({
+        conversationId: SUPERVISOR_STATE.conversationId,
+        items: [],
+        firstSeq: 0,
+        lastSeq: 0,
+        hasMoreBefore: false,
+        hasMoreAfter: false,
+        headSeq: 0,
+      }),
+    sendSupervisorMessage: () => Promise.reject(new Error('unavailable in screenshot capture')),
+    interruptSupervisor: () => Promise.resolve({ result: 'not_active', state: SUPERVISOR_STATE }),
+    endSupervisor: () => Promise.resolve({ result: 'not_active', state: SUPERVISOR_STATE }),
+    onSupervisorEvent: () => () => undefined,
     getCreationDefaults: () =>
       Promise.resolve({
         repositories: READY_SNAPSHOT.repositories!.map((r) => ({ ...r, valid: true })),

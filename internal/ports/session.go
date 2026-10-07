@@ -80,7 +80,17 @@ const (
 	KindReviewHelper
 	// KindChat is the interactive AMA utility session.
 	KindChat
+	// KindSupervisor is the per-server supervisor conversation's provider
+	// process. It shares chat's conversational semantics.
+	KindSupervisor
 )
+
+// Conversational reports whether the kind is a user-driven conversation
+// whose provider error results end one turn rather than the session, and
+// whose sent user turns are echoed into the session transcript.
+func (k SessionKind) Conversational() bool {
+	return k == KindChat || k == KindSupervisor
+}
 
 // SessionTurnMode controls how a session interprets provider Result messages.
 type SessionTurnMode int
@@ -108,6 +118,8 @@ func (k SessionKind) String() string {
 		return "review-helper"
 	case KindChat:
 		return "chat"
+	case KindSupervisor:
+		return "supervisor"
 	default:
 		return "unknown"
 	}
@@ -312,6 +324,31 @@ type SessionOpts struct {
 	// SessionBuildNotices are published once after the process starts and before
 	// provider handshake. They are local status records, not terminal results.
 	SessionBuildNotices []SessionBuildNotice
+	// Observer, when set, receives the session's provider output and control
+	// answers synchronously. Nil disables observation.
+	Observer SessionObserver
+}
+
+// SessionObserver receives a session's committed provider messages, live
+// stream deltas, surfaced (not auto-handled) control requests and their
+// answers. Messages arrive synchronously on the session's reader goroutine
+// in provider order; answers arrive on the answering goroutine after the
+// provider accepted them. Implementations must not block on session
+// methods that wait for the reader (Stop, Wait).
+type SessionObserver interface {
+	ObserveSessionMessage(sessionID string, msg llm.SDKMessage)
+	ObserveControlAnswer(sessionID string, answer ControlAnswer)
+}
+
+// ControlAnswer is one answered control request as delivered to the
+// provider: a permission verdict or an AskUserQuestion answer set.
+type ControlAnswer struct {
+	RequestID string
+	ToolName  string
+	Allowed   bool
+	Reason    string
+	// Answers maps question text to the chosen answer for AskUserQuestion.
+	Answers map[string]string
 }
 
 // AutoReviewSnapshot bundles the automatic-review settings snapshotted when an

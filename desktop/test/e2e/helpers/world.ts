@@ -65,7 +65,29 @@ export interface WorldOptions {
   attentionProvider?: boolean;
   /** Resolve the completion rebase journey's hermetic conflict and approve review gates. */
   rebaseProvider?: boolean;
+  /**
+   * Serve the supervisor's long-lived interactive Claude session: stream
+   * deterministic replies turn after turn and stay alive between turns.
+   * Prompts carrying SUPERVISOR_E2E_MARKERS script permission and hold turns.
+   */
+  supervisorProvider?: boolean;
 }
+
+/** Prompt markers the supervisorProvider stub reacts to. */
+export const SUPERVISOR_E2E_MARKERS = {
+  /** Blocks the turn on a Bash permission request until it is answered. */
+  permission: 'SUPERVISOR_E2E_PERMISSION',
+  /** Holds the turn until an interrupt arrives, then reports an interrupted result. */
+  hold: 'SUPERVISOR_E2E_HOLD',
+} as const;
+
+/** The deterministic reply the supervisorProvider stub commits for a turn (1-based). */
+export function supervisorStubReply(turn: number): string {
+  return `Supervisor reply ${turn}`;
+}
+
+/** The Bash command the supervisorProvider stub asks permission for. */
+export const SUPERVISOR_E2E_PERMISSION_COMMAND = 'printf supervisor-permission';
 
 const STUB_VERSION = '2.99.0 (Claude Code)';
 
@@ -140,6 +162,7 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     options.workflowProvider === true,
     options.attentionProvider === true,
     options.rebaseProvider === true,
+    options.supervisorProvider === true,
   );
   writeAuthState(authStatePath, options.auth ?? { loggedIn: false });
   if (delaySeconds > 0) {
@@ -182,6 +205,7 @@ function writeStubCli(
   workflowProvider: boolean,
   attentionProvider: boolean,
   rebaseProvider: boolean,
+  supervisorProvider: boolean,
 ): void {
   const script = [
     '#!/bin/sh',
@@ -208,8 +232,17 @@ function writeStubCli(
     `request_id=$(printf '%s\\n' "$_agentico_init" | sed -n 's/.*"request_id" *: *"\\([^"]*\\)".*/\\1/p')`,
     '[ -n "$request_id" ] || exit 1',
     `printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":%s}}\\n' "$request_id" '${STUB_MODEL_CATALOG}'`,
+    // The supervisor launch completes its handshake on the first provider
+    // output and only then sends the first user message, so its session
+    // reports init before that message arrives (as an idle Claude does).
+    ...(supervisorProvider
+      ? [
+          `echo '{"type":"system","subtype":"init","session_id":"e2e-supervisor-session","model":"claude-haiku-4-5"}'`,
+        ]
+      : []),
     // Discovery stops here; only real sessions send a user prompt.
     'IFS= read -r _agentico_prompt || exit 1',
+    ...(supervisorProvider ? supervisorStubLines(providerInvocationLog) : []),
     ...(rebaseProvider
       ? [
           '_context=$(printf "%s\\n" "$@" "$_agentico_prompt")',
@@ -527,6 +560,73 @@ function writeStubCli(
     '',
   ].join('\n');
   fs.writeFileSync(stubPath, script, { mode: 0o755 });
+}
+
+/**
+ * The supervisor's interactive session: one process serves every turn. A
+ * plain prompt streams two text deltas, commits one assistant message with
+ * the same message id, and reports success; the permission marker blocks on
+ * a Bash request until its control response arrives; the hold marker emits
+ * nothing until the interrupt control request, then reports an interrupted
+ * result. The process keeps reading stdin and exits cleanly on EOF.
+ */
+function supervisorStubLines(providerInvocationLog: string): string[] {
+  const { permission, hold } = SUPERVISOR_E2E_MARKERS;
+  const permissionInput = JSON.stringify({ command: SUPERVISOR_E2E_PERMISSION_COMMAND });
+  return [
+    `printf 'session\\n' >> "${providerInvocationLog}"`,
+    'turn=0',
+    'supervisor_reply() {',
+    `  printf '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-e2e-supervisor-%s"}}}\\n' "$turn"`,
+    `  printf '%s\\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Supervisor "}}}'`,
+    `  printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reply %s"}}}\\n' "$turn"`,
+    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-%s","role":"assistant","content":[{"type":"text","text":"Supervisor reply %s"}]}}\\n' "$turn" "$turn"`,
+    `  printf '%s\\n' '{"type":"result","subtype":"success","session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '}',
+    'supervisor_turn() {',
+    '  turn=$((turn + 1))',
+    `  printf 'turn:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '  case "$1" in',
+    `    *${permission}*)`,
+    `      printf '{"type":"control_request","request_id":"supervisor-perm-%s","request":{"subtype":"can_use_tool","tool_name":"Bash","input":${permissionInput}}}\\n' "$turn"`,
+    `      printf 'pending:supervisor-perm-%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      _answered=0',
+    '      while IFS= read -r _line; do',
+    '        case "$_line" in',
+    `          *'"control_response"'*) _answered=1; break ;;`,
+    '        esac',
+    '      done',
+    '      [ "$_answered" = 1 ] || exit 0',
+    `      printf 'response:supervisor-perm-%s:%s\\n' "$turn" "$_line" >> "${providerInvocationLog}"`,
+    '      supervisor_reply',
+    '      ;;',
+    `    *${hold}*)`,
+    `      printf 'holding:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      _interrupted=0',
+    '      while IFS= read -r _line; do',
+    '        case "$_line" in',
+    `          *'"subtype":"interrupt"'*) _interrupted=1; break ;;`,
+    '        esac',
+    '      done',
+    '      [ "$_interrupted" = 1 ] || exit 0',
+    `      printf 'interrupted:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    `      printf '%s\\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '      ;;',
+    '    *)',
+    '      supervisor_reply',
+    '      ;;',
+    '  esac',
+    '}',
+    `case "$_agentico_prompt" in`,
+    `  *'"type":"user"'*) supervisor_turn "$_agentico_prompt" ;;`,
+    'esac',
+    'while IFS= read -r _line; do',
+    '  case "$_line" in',
+    `    *'"type":"user"'*) supervisor_turn "$_line" ;;`,
+    '  esac',
+    'done',
+    'exit 0',
+  ];
 }
 
 export function writeAuthState(authStatePath: string, state: StubAuthState): void {

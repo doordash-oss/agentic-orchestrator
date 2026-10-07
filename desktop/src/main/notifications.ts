@@ -17,7 +17,13 @@ limitations under the License.
 import { Notification } from 'electron';
 import { redactText } from '../shared/errors';
 import type { AttentionItem, AttentionSnapshot } from '../shared/ipc';
-import { attentionOwnerFeatureId, ERROR_CLASS_LABELS, isSyntheticHelpItem } from '../shared/ipc';
+import {
+  attentionOwnerFeatureId,
+  ERROR_CLASS_LABELS,
+  isSupervisorAttentionItem,
+  isSyntheticHelpItem,
+  SUPERVISOR_CONTEXT_LABEL,
+} from '../shared/ipc';
 
 type ActionableAttentionItem = Exclude<AttentionItem, { kind: 'recovery' }>;
 
@@ -101,7 +107,12 @@ function previewBody(
   featureLabel: (featureId: string) => string,
 ): string {
   const owner = attentionOwnerFeatureId(item);
-  const location = owner === undefined ? 'Runtime' : featureLabel(owner);
+  // Supervisor requests have no owning feature; they read as the Supervisor.
+  const location = isSupervisorAttentionItem(item)
+    ? SUPERVISOR_CONTEXT_LABEL
+    : owner === undefined
+      ? 'Runtime'
+      : featureLabel(owner);
   const summary = previewSummary(item);
   return redactText(`${attentionTypeLabel(item)} · ${location}${summary}`).slice(0, 180);
 }

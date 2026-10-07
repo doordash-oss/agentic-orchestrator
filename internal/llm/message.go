@@ -68,6 +68,12 @@ type SDKMessage struct {
 	// These messages are ephemeral — they drive UI activity indicators but
 	// are NOT stored in the message log.
 	StreamDeltaType string `json:"-"`
+	// StreamDeltaText is the text carried by a "text" stream delta.
+	StreamDeltaText string `json:"-"`
+	// StreamMessageID is the provider message id announced by a
+	// message_start stream event; it matches the committed assistant
+	// message's ConversationMsg.ID.
+	StreamMessageID string `json:"-"`
 
 	// LocallyAppended is true for messages synthetically added by the desktop app
 	// (e.g. user-typed chat input in the attach view).
@@ -96,6 +102,7 @@ func (m *SDKMessage) UnmarshalJSON(data []byte) error {
 	switch envelope.Type {
 	case "stream_event":
 		m.StreamDeltaType = extractStreamDeltaType(data)
+		m.StreamDeltaText, m.StreamMessageID = extractStreamDeltaPayload(data)
 		return nil
 	case "system":
 		switch envelope.Subtype {
@@ -171,6 +178,33 @@ func extractStreamDeltaType(data []byte) string {
 	return ev.Event.Delta.Type
 }
 
+// extractStreamDeltaPayload pulls the text of a text delta and the message
+// id of a message_start event from a stream_event envelope.
+func extractStreamDeltaPayload(data []byte) (text, messageID string) {
+	var ev struct {
+		Event struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID string `json:"id"`
+			} `json:"message"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		} `json:"event"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return "", ""
+	}
+	if ev.Event.Delta.Type == "text_delta" {
+		text = ev.Event.Delta.Text
+	}
+	if ev.Event.Type == "message_start" {
+		messageID = ev.Event.Message.ID
+	}
+	return text, messageID
+}
+
 // --- Concrete message types ---
 
 // SystemInitMessage is the first message emitted by the CLI.
@@ -200,6 +234,8 @@ type AssistantMessage struct {
 
 // ConversationMsg is a message in the conversation (assistant or user role).
 type ConversationMsg struct {
+	// ID is the provider message id when the provider reports one.
+	ID      string         `json:"id,omitempty"`
 	Role    string         `json:"role"`
 	Content []ContentBlock `json:"content"`
 	Model   string         `json:"model,omitempty"`

@@ -257,6 +257,9 @@ func TestCLICodeClassesAndTemplates(t *testing.T) {
 		RuntimeInitFailed,
 		ServerStartFailed,
 		ProtocolViolation,
+		DiscoveryMissing,
+		DiscoveryUntrusted,
+		ServerUnreachable,
 	}
 	for _, code := range blocking {
 		entry, ok := Lookup(code)

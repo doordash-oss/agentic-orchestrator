@@ -392,6 +392,10 @@ type ControlRequestMessage struct {
 	// session but would have handled this request had it been on.
 	AutoApproveOffer *AutoApproveOffer      `json:"-"`
 	AutomaticReview  *AutomaticReviewStatus `json:"-"`
+	// DeferralReason is the permission handler's explanation when it left
+	// this request to the user. It is relayed to the model only if the user
+	// denies the request, so the model can retry in an allowed shape.
+	DeferralReason string `json:"-"`
 }
 
 // AutomaticReviewStatus explains a human deferral without exposing provider output.

@@ -54,8 +54,15 @@ func (p FakeClaudeProvider) ModelCatalog() []llm.ModelInfo {
 		Category:      "cheap",
 	}}
 }
-func (p FakeClaudeProvider) BuildCommand(llm.CommandBuildOpts) ([]string, []string, error) {
-	return []string{"sh", p.Script}, nil, nil
+
+// BuildCommand carries a system prompt on the same launch flag the real
+// Claude adapter uses, so scripts can observe the launch channel.
+func (p FakeClaudeProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	cmd := []string{"sh", p.Script}
+	if opts.SystemPrompt != "" {
+		cmd = append(cmd, "--append-system-prompt", opts.SystemPrompt)
+	}
+	return cmd, nil, nil
 }
 func (p FakeClaudeProvider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
 	return claude.NewProtocol(opts)

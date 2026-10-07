@@ -82,22 +82,32 @@ func (t supervisorAnswerTarget) AnswerAskUser(req server.AskUserAnswerRequest) (
 }
 
 type supervisorHarness struct {
-	t         *testing.T
-	stateDir  string
-	script    string
-	registry  *llm.Registry
-	store     *feature.Store
-	sessions  *session.Manager
-	runner    *agent.PhaseRunner
-	admission *workadmission.Coordinator
-	coord     *supervisor.Coordinator
-	srv       *httptest.Server
-	model     string
+	t        *testing.T
+	stateDir string
+	// runtimeDir is the runtime parent of stateDir, exported to the
+	// supervisor child as agent.RuntimeDirEnv.
+	runtimeDir string
+	// agenticoBin overrides the helper binary named in the system prompt;
+	// empty uses the test binary, as AGENTICO_BIN does.
+	agenticoBin string
+	script      string
+	registry    *llm.Registry
+	store       *feature.Store
+	sessions    *session.Manager
+	runner      *agent.PhaseRunner
+	admission   *workadmission.Coordinator
+	coord       *supervisor.Coordinator
+	srv         *httptest.Server
+	model       string
 }
 
 func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.Options)) *supervisorHarness {
 	t.Helper()
-	h := &supervisorHarness{t: t, stateDir: t.TempDir()}
+	h := &supervisorHarness{t: t, runtimeDir: t.TempDir()}
+	h.stateDir = filepath.Join(h.runtimeDir, "state")
+	if err := os.MkdirAll(h.stateDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	h.script = testutil.WriteFakeClaudeScript(t, body)
 	h.registry = testutil.NewFakeClaudeRegistry(t, h.script)
 	h.sessions = session.NewManager(nil)
@@ -105,6 +115,7 @@ func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.
 	h.runner = agent.NewPhaseRunner(h.sessions, h.store, h.stateDir)
 	h.runner.Registry = h.registry
 	h.runner.Config = config.NewDefault()
+	h.runner.SkillsDir = filepath.Join(h.runtimeDir, "skills")
 	h.admission = workadmission.New(workadmission.Options{})
 	eligible := h.registry.EligibleModelsForPhase(llm.PhaseChat)["claude"]
 	if len(eligible) == 0 {
@@ -125,10 +136,17 @@ func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.
 func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 	h.t.Helper()
 	opts := supervisor.Options{
-		StateDir:         h.stateDir,
-		WorkDir:          h.stateDir,
-		Catalog:          supervisor.RegistryCatalog{Registry: h.registry},
-		Launcher:         &supervisor.SessionLauncher{Runner: h.runner, Sessions: h.sessions},
+		StateDir: h.stateDir,
+		WorkDir:  h.stateDir,
+		Catalog:  supervisor.RegistryCatalog{Registry: h.registry},
+		Launcher: &supervisor.SessionLauncher{
+			Runner:        h.runner,
+			Sessions:      h.sessions,
+			RuntimeDir:    h.runtimeDir,
+			ConfigPath:    filepath.Join(h.runtimeDir, "config.yaml"),
+			DiscoveryPath: server.DiscoveryPath(h.runtimeDir),
+			AgenticoBin:   h.agenticoBin,
+		},
 		Admission:        h.admission,
 		HandshakeTimeout: 10 * time.Second,
 	}
@@ -277,6 +295,17 @@ func (h *supervisorHarness) userInputs() []string {
 		texts = append(texts, text)
 	}
 	return texts
+}
+
+// systemPrompt returns the system prompt the latest fake harness launch
+// received on its launch flag.
+func (h *supervisorHarness) systemPrompt() string {
+	h.t.Helper()
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(h.script), testutil.FakeSupervisorSystemPromptFile))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return string(data)
 }
 
 func (h *supervisorHarness) invocations() int {
@@ -446,6 +475,22 @@ func TestSupervisorFirstSendStreamsDurableReplyAndReusesProcess(t *testing.T) {
 	}
 	if n := h.invocations(); n != 1 {
 		t.Fatalf("provider invocations = %d, want 1", n)
+	}
+	// The supervisor prompt rides the launch channel; stdin carries only the
+	// user's own text.
+	sysPrompt := h.systemPrompt()
+	for _, want := range []string{
+		filepath.Join(h.runtimeDir, "skills", "supervisor", "SKILL.md"),
+		"Runtime directory: " + h.runtimeDir,
+		"Discovery file: " + server.DiscoveryPath(h.runtimeDir),
+		" api METHOD /api/v1/",
+	} {
+		if !strings.Contains(sysPrompt, want) {
+			t.Fatalf("launch system prompt lacks %q:\n%s", want, sysPrompt)
+		}
+	}
+	if inputs := h.userInputs(); fmt.Sprint(inputs) != "[hello again]" {
+		t.Fatalf("user inputs = %q, want the user's own text", inputs)
 	}
 	if page := h.transcript(""); recordKinds(page.Items) != "user,assistant,user,assistant" || page.HeadSeq != 4 {
 		t.Fatalf("transcript = %s head %d", recordKinds(page.Items), page.HeadSeq)

@@ -198,6 +198,18 @@ type SummaryUserInput struct {
 	Description string
 }
 
+// SupervisorSystemInput is the data passed to supervisor.system.tmpl. Every
+// path is absolute; HelperCommand is the agentico binary path plus `api`.
+type SupervisorSystemInput struct {
+	RuntimeDir    string
+	StateDir      string
+	WorkDir       string
+	ConfigPath    string
+	DiscoveryPath string
+	SkillPath     string
+	HelperCommand string
+}
+
 // PRDescriptionUserInput is the data passed to pr_description.user.tmpl.
 // Empty fields suppress their corresponding sections so the model is not
 // asked to reason about absent context.

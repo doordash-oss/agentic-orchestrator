@@ -157,6 +157,12 @@ func SummaryUserPrompt(in SummaryUserInput) string {
 	return MustRender("summary.user", in)
 }
 
+// SupervisorSystemPrompt renders the supervisor conversation's launch-channel
+// system prompt (supervisor.system.tmpl).
+func SupervisorSystemPrompt(in SupervisorSystemInput) string {
+	return strings.TrimSpace(MustRender("supervisor.system", in)) + "\n"
+}
+
 // PRDescriptionUserPrompt renders the Publish-phase PR-description prompt
 // (pr_description.user.tmpl).
 func PRDescriptionUserPrompt(in PRDescriptionUserInput) string {

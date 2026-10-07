@@ -261,6 +261,28 @@ bind, connection string, trusted-network expectations, SSH tunneling, and
 keychain recovery), see
 [docs/desktop/remote-servers.md](docs/desktop/remote-servers.md).
 
+### REST Helper
+
+```text
+agentico api [--runtime-dir <dir>] [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path>[?query] [json]
+```
+
+Run `agentico api` on the server machine to make one authenticated REST call
+without handling the bearer token: it reads the server's owner-only discovery
+file (from `--runtime-dir`, then `$AGENTICO_RUNTIME_DIR`, then
+`~/.agentic-orchestrator`), sends the token and trusted-client header itself,
+and prints the response body. A 2xx exits 0; any other status prints the
+server's error envelope and exits 1. Stream paths (`/api/v1/events`,
+`/api/v1/supervisor/events`, `/api/v1/sessions/<id>/output/stream`) require
+`--timeout` and print one line per event until it elapses. Flags may come
+before or after the positionals. For example:
+
+```bash
+agentico api GET /api/v1/features
+agentico api POST /api/v1/features '{"name":"my-feature"}'
+agentico api --timeout 30s GET /api/v1/events
+```
+
 ### Updating
 
 ```text

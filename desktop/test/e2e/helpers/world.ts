@@ -68,7 +68,10 @@ export interface WorldOptions {
   /**
    * Serve the supervisor's long-lived interactive Claude session: stream
    * deterministic replies turn after turn and stay alive between turns.
-   * Prompts carrying SUPERVISOR_E2E_MARKERS script permission and hold turns.
+   * Prompts carrying SUPERVISOR_E2E_MARKERS script permission, hold and
+   * operate turns. Combined with `workflowProvider`, only the process the
+   * supervisor launcher started (it alone carries AGENTICO_RUNTIME_DIR) is
+   * the supervisor; every other stream session is a workflow session.
    */
   supervisorProvider?: boolean;
 }
@@ -79,7 +82,57 @@ export const SUPERVISOR_E2E_MARKERS = {
   permission: 'SUPERVISOR_E2E_PERMISSION',
   /** Holds the turn until an interrupt arrives, then reports an interrupted result. */
   hold: 'SUPERVISOR_E2E_HOLD',
+  /**
+   * Operates Agentico through the real `"$AGENTICO_BIN" api` helper: creates
+   * the feature named in `[...]` right after the marker (build it with
+   * supervisorOperateCreateMarker), dispatches its setup (an API-created
+   * feature waits in SettingUpWorktrees until a client does), posts its
+   * config, and reads it back.
+   */
+  operateCreate: 'SUPERVISOR_E2E_OPERATE_CREATE',
+  /** Starts the feature the last operate-create turn created, through the helper. */
+  operateStart: 'SUPERVISOR_E2E_OPERATE_START',
 } as const;
+
+/** Feature names an operate-create marker may carry (kept sh- and JSON-safe). */
+const OPERATE_FEATURE_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}$/;
+
+/** The operate-create marker text carrying the journey-chosen feature name. */
+export function supervisorOperateCreateMarker(featureName: string): string {
+  if (!OPERATE_FEATURE_NAME.test(featureName)) {
+    throw new Error(`operate feature name ${JSON.stringify(featureName)} is not sh/JSON-safe`);
+  }
+  return `${SUPERVISOR_E2E_MARKERS.operateCreate}[${featureName}]`;
+}
+
+/**
+ * The feature config the operate-create turn posts: every role on the
+ * world's stub Claude provider, no inquiry and no review checkpoints, so a
+ * started feature stays in its first running phase for the workflow stub.
+ */
+export const SUPERVISOR_E2E_OPERATE_CONFIG = {
+  models: {
+    inquiry: 'claude:haiku',
+    research: 'claude:haiku',
+    planning: 'claude:haiku',
+    implementation: 'claude:haiku',
+    review: 'claude:haiku',
+    utilities: 'claude:haiku',
+    kb_build: 'claude:haiku',
+  },
+  inquireness: 'none',
+} as const;
+
+/** The text reply that closes an operate-create turn. */
+export function supervisorOperateCreatedReply(featureName: string): string {
+  return `Created and configured ${featureName}.`;
+}
+
+/** The text reply that closes an operate-start turn. */
+export const SUPERVISOR_E2E_OPERATE_STARTED_REPLY = 'Started the feature.';
+
+/** Invocation-log prefix of every helper command the operate turns run. */
+export const SUPERVISOR_E2E_HELPER_LOG_PREFIX = 'helper:';
 
 /**
  * The heading the server's hidden error-context bundle opens with; the
@@ -238,17 +291,31 @@ function writeStubCli(
     `request_id=$(printf '%s\\n' "$_agentico_init" | sed -n 's/.*"request_id" *: *"\\([^"]*\\)".*/\\1/p')`,
     '[ -n "$request_id" ] || exit 1',
     `printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":%s}}\\n' "$request_id" '${STUB_MODEL_CATALOG}'`,
+    // With both supervisor and workflow scripts, only the supervisor
+    // launcher's child carries AGENTICO_RUNTIME_DIR; alone, every stream
+    // session is the supervisor.
+    ...(supervisorProvider
+      ? [
+          workflowProvider
+            ? 'if [ -n "$AGENTICO_RUNTIME_DIR" ]; then is_supervisor=1; else is_supervisor=0; fi'
+            : 'is_supervisor=1',
+        ]
+      : []),
     // The supervisor launch completes its handshake on the first provider
     // output and only then sends the first user message, so its session
     // reports init before that message arrives (as an idle Claude does).
     ...(supervisorProvider
       ? [
-          `echo '{"type":"system","subtype":"init","session_id":"e2e-supervisor-session","model":"claude-haiku-4-5"}'`,
+          'if [ "$is_supervisor" = 1 ]; then',
+          `  echo '{"type":"system","subtype":"init","session_id":"e2e-supervisor-session","model":"claude-haiku-4-5"}'`,
+          'fi',
         ]
       : []),
     // Discovery stops here; only real sessions send a user prompt.
     'IFS= read -r _agentico_prompt || exit 1',
-    ...(supervisorProvider ? supervisorStubLines(providerInvocationLog) : []),
+    ...(supervisorProvider
+      ? ['if [ "$is_supervisor" = 1 ]; then', ...supervisorStubLines(providerInvocationLog), 'fi']
+      : []),
     ...(rebaseProvider
       ? [
           '_context=$(printf "%s\\n" "$@" "$_agentico_prompt")',
@@ -559,16 +626,63 @@ function writeStubCli(
  * the same message id, and reports success; the permission marker blocks on
  * a Bash request until its control response arrives; the hold marker emits
  * nothing until the interrupt control request, then reports an interrupted
- * result. A turn whose wire text carries a hidden error-context bundle logs
+ * result. The operate markers drive Agentico like a real model would: each
+ * helper call is one assistant `tool_use` (Bash, mirroring the command), the
+ * command run through `eval` exactly as written (so "$AGENTICO_BIN" expands
+ * from the launch environment), one `tool_result` user record carrying its
+ * output, and a `helper:<command>` / `helper-exit:<n>:<code>` pair in the
+ * invocation log; a text reply and a success result close the turn. A turn
+ * whose wire text carries a hidden error-context bundle logs
  * `hidden-context:<turn>`. The process keeps reading stdin and exits cleanly
  * on EOF.
  */
 function supervisorStubLines(providerInvocationLog: string): string[] {
-  const { permission, hold } = SUPERVISOR_E2E_MARKERS;
+  const { permission, hold, operateCreate, operateStart } = SUPERVISOR_E2E_MARKERS;
   const permissionInput = JSON.stringify({ command: SUPERVISOR_E2E_PERMISSION_COMMAND });
+  // Single-quoted inside the sh command text, so it must carry no single quote.
+  const operateConfig = JSON.stringify(SUPERVISOR_E2E_OPERATE_CONFIG);
+  if (operateConfig.includes("'")) throw new Error('operate config must not contain a quote');
+  const helper = '\\"\\$AGENTICO_BIN\\" api';
   return [
     `printf 'session\\n' >> "${providerInvocationLog}"`,
     'turn=0',
+    'tool=0',
+    '_operate_feature=""',
+    // JSON string escaping for arbitrary text: backslashes, then quotes,
+    // then newlines joined as \n (helper bodies are JSON on one line, but a
+    // usage error or a pretty-printed body would not be).
+    'json_escape() {',
+    String.raw`  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'NR > 1 { printf "%s", "\\n" } { printf "%s", $0 }'`,
+    '}',
+    'operate_helper() {',
+    '  tool=$((tool + 1))',
+    `  printf '${SUPERVISOR_E2E_HELPER_LOG_PREFIX}%s\\n' "$1" >> "${providerInvocationLog}"`,
+    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-tool-%s","role":"assistant","content":[{"type":"tool_use","id":"toolu-e2e-supervisor-%s","name":"Bash","input":{"command":"%s"}}]}}\\n' "$tool" "$tool" "$(json_escape "$1")"`,
+    // stdin stays the session's input pipe; the helper must never read it.
+    '  _operate_out=$(eval "$1" </dev/null 2>&1)',
+    '  _operate_code=$?',
+    `  printf 'helper-exit:%s:%s\\n' "$tool" "$_operate_code" >> "${providerInvocationLog}"`,
+    '  if [ "$_operate_code" = 0 ]; then _is_error=false; else _is_error=true; fi',
+    `  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu-e2e-supervisor-%s","content":"%s","is_error":%s}]}}\\n' "$tool" "$(json_escape "$_operate_out")" "$_is_error"`,
+    '}',
+    'operate_reply() {',
+    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-%s","role":"assistant","content":[{"type":"text","text":"%s"}]}}\\n' "$turn" "$(json_escape "$1")"`,
+    `  printf '%s\\n' '{"type":"result","subtype":"success","session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '}',
+    'operate_create() {',
+    String.raw`  _name=$(printf '%s\n' "$1" | sed -n 's/.*${operateCreate}\[\([^]]*\)\].*/\1/p' | head -n 1)`,
+    `  operate_helper "${helper} POST /api/v1/features '{\\"name\\":\\"$_name\\"}'"`,
+    String.raw`  _operate_feature=$(printf '%s\n' "$_operate_out" | sed -n 's/.*"feature_id" *: *"\([^"]*\)".*/\1/p' | head -n 1)`,
+    `  printf 'operate-feature:%s\\n' "$_operate_feature" >> "${providerInvocationLog}"`,
+    `  operate_helper "${helper} POST /api/v1/features/$_operate_feature/actions/setup '{}'"`,
+    `  operate_helper "${helper} POST /api/v1/features/$_operate_feature/config '${operateConfig.replaceAll('"', '\\"')}'"`,
+    `  operate_helper "${helper} GET /api/v1/features/$_operate_feature"`,
+    `  operate_reply "Created and configured $_name."`,
+    '}',
+    'operate_start() {',
+    `  operate_helper "${helper} POST /api/v1/features/$_operate_feature/actions/start '{}'"`,
+    `  operate_reply '${SUPERVISOR_E2E_OPERATE_STARTED_REPLY}'`,
+    '}',
     'supervisor_reply() {',
     `  printf '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-e2e-supervisor-%s"}}}\\n' "$turn"`,
     `  printf '%s\\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Supervisor "}}}'`,
@@ -609,6 +723,14 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     '      [ "$_interrupted" = 1 ] || exit 0',
     `      printf 'interrupted:%s\\n' "$turn" >> "${providerInvocationLog}"`,
     `      printf '%s\\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '      ;;',
+    `    *${operateCreate}*)`,
+    `      printf 'operate-create:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      operate_create "$1"',
+    '      ;;',
+    `    *${operateStart}*)`,
+    `      printf 'operate-start:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      operate_start',
     '      ;;',
     '    *)',
     '      supervisor_reply',

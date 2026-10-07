@@ -17,13 +17,19 @@ limitations under the License.
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
+import path from 'node:path';
 import { createInterface } from 'node:readline';
 import { expect, test } from 'vitest';
 import {
   createWorld,
   destroyWorld,
   providerInvocationCount,
+  SUPERVISOR_E2E_HELPER_LOG_PREFIX,
   SUPERVISOR_E2E_MARKERS,
+  SUPERVISOR_E2E_OPERATE_CONFIG,
+  SUPERVISOR_E2E_OPERATE_STARTED_REPLY,
+  supervisorOperateCreatedReply,
+  supervisorOperateCreateMarker,
   supervisorStubReply,
   type WorldOptions,
 } from './world';
@@ -163,6 +169,167 @@ test('supervisor stub serves streamed, permission and held turns from one proces
   } finally {
     child.kill('SIGKILL');
     lines.close();
+    destroyWorld(world);
+  }
+});
+
+/** A line-oriented driver over one spawned stub process. */
+function driveStub(stub: string, env: NodeJS.ProcessEnv) {
+  const child = spawn(stub, ['--input-format', 'stream-json'], { env });
+  const closed = once(child, 'close');
+  const lines = createInterface({ input: child.stdout });
+  const received: Array<Record<string, unknown>> = [];
+  const waiters: Array<() => void> = [];
+  lines.on('line', (line) => {
+    received.push(JSON.parse(line) as Record<string, unknown>);
+    waiters.splice(0).forEach((wake) => wake());
+  });
+  return {
+    child,
+    closed,
+    lines,
+    received,
+    write(message: unknown): void {
+      child.stdin.write(`${JSON.stringify(message)}\n`);
+    },
+    async next(count: number): Promise<Array<Record<string, unknown>>> {
+      const deadline = Date.now() + 5000;
+      while (received.length < count) {
+        if (Date.now() > deadline) throw new Error(`timed out waiting for ${count} lines`);
+        await new Promise<void>((resolve) => {
+          waiters.push(resolve);
+          setTimeout(resolve, 100);
+        });
+      }
+      return received.splice(0, count);
+    },
+  };
+}
+
+const userTurn = (text: string) => ({
+  type: 'user',
+  message: { role: 'user', content: [{ type: 'text', text }] },
+});
+
+test('supervisor stub operates Agentico through the helper with tool records', async () => {
+  const world = createWorld('supervisor-operate', {
+    supervisorProvider: true,
+    workflowProvider: true,
+  });
+  // A stand-in for the bundled binary: records argv, answers like the helper.
+  const argvLog = path.join(world.stubDir, 'fake-agentico-argv.log');
+  const fakeBin = path.join(world.stubDir, 'fake-agentico');
+  fs.writeFileSync(
+    fakeBin,
+    [
+      '#!/bin/sh',
+      `printf '%s|' "$@" >> "${argvLog}"`,
+      `printf '\\n' >> "${argvLog}"`,
+      'case "$2 $3" in',
+      `  "POST /api/v1/features") printf '%s\\n' '{"feature_id":"feat-operate-1","result":"created"}' ;;`,
+      `  *) printf '%s\\n' '{"note":"back\\\\slash \\"quoted\\""}' 'second line' ;;`,
+      'esac',
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  );
+  const stub = driveStub(world.claudeStub, {
+    PATH: '/usr/bin:/bin',
+    AGENTICO_BIN: fakeBin,
+    AGENTICO_RUNTIME_DIR: world.runtimeDir,
+  });
+  try {
+    stub.write({ type: 'control_request', request_id: 'init', request: { subtype: 'initialize' } });
+    const [, init] = await stub.next(2);
+    expect(init).toMatchObject({ session_id: 'e2e-supervisor-session' });
+
+    stub.write(userTurn(`make one ${supervisorOperateCreateMarker('Operate Lab')}`));
+    const create = await stub.next(10);
+    expect(create.map((line) => line['type'])).toEqual([
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'result',
+    ]);
+    type Block = Record<string, unknown> & { input?: { command?: string } };
+    const block = (index: number): Block =>
+      (create[index] as { message: { content: Block[] } }).message.content[0]!;
+    const commands = [0, 2, 4, 6].map(block);
+    for (const tool of commands) expect(tool).toMatchObject({ type: 'tool_use', name: 'Bash' });
+    expect(commands.map((tool) => tool.input?.command)).toEqual([
+      `"$AGENTICO_BIN" api POST /api/v1/features '{"name":"Operate Lab"}'`,
+      `"$AGENTICO_BIN" api POST /api/v1/features/feat-operate-1/actions/setup '{}'`,
+      `"$AGENTICO_BIN" api POST /api/v1/features/feat-operate-1/config '${JSON.stringify(SUPERVISOR_E2E_OPERATE_CONFIG)}'`,
+      `"$AGENTICO_BIN" api GET /api/v1/features/feat-operate-1`,
+    ]);
+    const results = [1, 3, 5, 7].map(block);
+    expect(results[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: commands[0]!['id'],
+      content: '{"feature_id":"feat-operate-1","result":"created"}',
+      is_error: false,
+    });
+    // Quotes, backslashes and newlines in helper output survive as JSON.
+    expect(results[3]).toMatchObject({
+      content: '{"note":"back\\\\slash \\"quoted\\""}\nsecond line',
+    });
+    expect(JSON.stringify(create[8])).toContain(supervisorOperateCreatedReply('Operate Lab'));
+    expect(create[9]).toMatchObject({ type: 'result', subtype: 'success' });
+
+    stub.write(userTurn(`go ${SUPERVISOR_E2E_MARKERS.operateStart}`));
+    const start = await stub.next(4);
+    expect(start.map((line) => line['type'])).toEqual(['assistant', 'user', 'assistant', 'result']);
+    expect(JSON.stringify(start[0])).toContain('/api/v1/features/feat-operate-1/actions/start');
+    expect(JSON.stringify(start[2])).toContain(SUPERVISOR_E2E_OPERATE_STARTED_REPLY);
+
+    expect(fs.readFileSync(argvLog, 'utf8').split('\n').filter(Boolean)).toEqual([
+      'api|POST|/api/v1/features|{"name":"Operate Lab"}|',
+      'api|POST|/api/v1/features/feat-operate-1/actions/setup|{}|',
+      `api|POST|/api/v1/features/feat-operate-1/config|${JSON.stringify(SUPERVISOR_E2E_OPERATE_CONFIG)}|`,
+      'api|GET|/api/v1/features/feat-operate-1|',
+      'api|POST|/api/v1/features/feat-operate-1/actions/start|{}|',
+    ]);
+    const log = fs.readFileSync(world.providerInvocationLog, 'utf8');
+    const helperLines = log
+      .split('\n')
+      .filter((line) => line.startsWith(SUPERVISOR_E2E_HELPER_LOG_PREFIX));
+    expect(helperLines).toHaveLength(5);
+    expect(log).toContain('operate-feature:feat-operate-1');
+    expect(log).toMatch(/helper-exit:5:0/);
+
+    stub.child.stdin.end();
+    const [code] = await stub.closed;
+    expect(code).toBe(0);
+  } finally {
+    stub.child.kill('SIGKILL');
+    stub.lines.close();
+    destroyWorld(world);
+  }
+});
+
+test('a combined world serves workflow sessions to children without the runtime-dir variable', async () => {
+  const world = createWorld('supervisor-workflow', {
+    supervisorProvider: true,
+    workflowProvider: true,
+  });
+  const stub = driveStub(world.claudeStub, { PATH: '/usr/bin:/bin' });
+  try {
+    stub.write({ type: 'control_request', request_id: 'init', request: { subtype: 'initialize' } });
+    const [response] = await stub.next(1);
+    expect(response).toMatchObject({ type: 'control_response' });
+    stub.write(userTurn('Implementation Context'));
+    const [init] = await stub.next(1);
+    expect(init).toMatchObject({ type: 'system', session_id: 'e2e-workflow-session' });
+  } finally {
+    stub.child.kill('SIGKILL');
+    await stub.closed;
+    stub.lines.close();
     destroyWorld(world);
   }
 });

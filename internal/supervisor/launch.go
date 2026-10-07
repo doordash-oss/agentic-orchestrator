@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -35,29 +37,49 @@ const sessionLabel = "supervisor"
 type SessionLauncher struct {
 	Runner   *agent.PhaseRunner
 	Sessions ports.SessionManager
+	// RuntimeDir is the serving runtime directory, which holds this server's
+	// discovery file. It is exported to the child as agent.RuntimeDirEnv so
+	// the `agentico api` helper binds to this server.
+	RuntimeDir string
+	// ConfigPath is the serving config file, named in the system prompt.
+	ConfigPath string
+	// DiscoveryPath is this server's discovery file, named in the system
+	// prompt so the model knows where the helper looks.
+	DiscoveryPath string
+	// AgenticoBin overrides the helper binary path; empty uses the running
+	// executable, the same path exported as AGENTICO_BIN.
+	AgenticoBin string
 }
 
+// skillRelPath locates the supervisor skill core inside the reconciled
+// skills directory.
+const skillRelPath = "supervisor/SKILL.md"
+
 // Launch builds a harness-normal interactive session: the chosen model and
-// effort, the supervisor permission policy, no appended system prompt, no
-// skill instruction, no disallowed tools, no completion protocol, no
-// ask-user auto-pick and no tool watchdog. The first user message is sent
-// by the coordinator after the handshake.
+// effort, the supervisor permission policy, the supervisor system prompt on
+// the launch channel, no disallowed tools, no completion protocol, no
+// ask-user auto-pick and no tool watchdog. The first user message is sent by
+// the coordinator after the handshake and stays the user's own text.
 func (l *SessionLauncher) Launch(_ context.Context, req LaunchRequest) (ports.SessionView, error) {
 	if l.Runner == nil || l.Sessions == nil {
 		return nil, errors.New("supervisor launcher is not configured")
 	}
 	cmd, env, sessOpts, err := l.Runner.BuildSession(agent.BuildSessionOpts{
-		Model:       req.Settings.Harness + ":" + req.Settings.Model,
-		WorkDir:     req.WorkDir,
-		PIDDir:      req.PIDDir,
-		LogPath:     req.LogPath,
-		PermHandler: &permission.SupervisorHandler{},
-		TurnMode:    ports.TurnModeInteractive,
-		EffortLevel: llm.EffortLevel(req.Settings.Effort),
-		Interactive: true,
+		Model:        req.Settings.Harness + ":" + req.Settings.Model,
+		SystemPrompt: l.systemPrompt(req.WorkDir),
+		WorkDir:      req.WorkDir,
+		PIDDir:       req.PIDDir,
+		LogPath:      req.LogPath,
+		PermHandler:  &permission.SupervisorHandler{},
+		TurnMode:     ports.TurnModeInteractive,
+		EffortLevel:  llm.EffortLevel(req.Settings.Effort),
+		Interactive:  true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build supervisor session: %w", err)
+	}
+	if l.RuntimeDir != "" {
+		env = agent.SetEnv(env, agent.RuntimeDirEnv, l.RuntimeDir)
 	}
 	if sessOpts == nil {
 		sessOpts = &ports.SessionOpts{}
@@ -85,6 +107,28 @@ func (l *SessionLauncher) Launch(_ context.Context, req LaunchRequest) (ports.Se
 		return nil, fmt.Errorf("start supervisor session: %w", err)
 	}
 	return sess, nil
+}
+
+// systemPrompt renders the launch-channel prompt from the runner's paths and
+// this server's runtime identity.
+func (l *SessionLauncher) systemPrompt(workDir string) string {
+	bin := l.AgenticoBin
+	if bin == "" {
+		bin = agent.AgenticoBinPath()
+	}
+	var skillPath string
+	if l.Runner.SkillsDir != "" {
+		skillPath = filepath.Join(l.Runner.SkillsDir, filepath.FromSlash(skillRelPath))
+	}
+	return prompts.SupervisorSystemPrompt(prompts.SupervisorSystemInput{
+		RuntimeDir:    l.RuntimeDir,
+		StateDir:      l.Runner.StateDir,
+		WorkDir:       workDir,
+		ConfigPath:    l.ConfigPath,
+		DiscoveryPath: l.DiscoveryPath,
+		SkillPath:     skillPath,
+		HelperCommand: bin + " api",
+	})
 }
 
 // RegistryCatalog validates settings against the provider registry's

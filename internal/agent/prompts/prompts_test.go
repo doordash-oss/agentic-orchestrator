@@ -582,6 +582,12 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			name: "supervisor_system",
+			render: func() string {
+				return SupervisorSystemPrompt(supervisorSystemFixture)
+			},
+		},
+		{
 			name:   "autoreview_format_retry",
 			render: AutoReviewFormatRetryPrompt,
 		},
@@ -801,6 +807,35 @@ func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 	unavail.SubagentsAvailable = false
 	if strings.Contains(RoleSystemPrompt(unavail), clause) {
 		t.Errorf("SubagentsAvailable=false: subagent clause should be omitted (helper has no subagents)")
+	}
+}
+
+var supervisorSystemFixture = SupervisorSystemInput{
+	RuntimeDir:    "/home/u/.agentic-orchestrator",
+	StateDir:      "/home/u/.agentic-orchestrator/state",
+	WorkDir:       "/home/u/workspace",
+	ConfigPath:    "/home/u/.agentic-orchestrator/config.yaml",
+	DiscoveryPath: "/home/u/.agentic-orchestrator/.agentico-server.json",
+	SkillPath:     "/home/u/.agentic-orchestrator/skills/supervisor/SKILL.md",
+	HelperCommand: "/opt/agentico/bin/agentico api",
+}
+
+// TestSupervisorSystemPromptNamesPathsSkillAndHelper pins the content the
+// supervisor needs on its launch channel, and the retired chat-era
+// constraints it must no longer carry.
+func TestSupervisorSystemPromptNamesPathsSkillAndHelper(t *testing.T) {
+	in := supervisorSystemFixture
+	got := SupervisorSystemPrompt(in)
+	for _, want := range []string{in.RuntimeDir, in.StateDir, in.WorkDir, in.ConfigPath, in.DiscoveryPath, in.SkillPath, in.HelperCommand + " METHOD /api/v1/"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("supervisor system prompt missing %q:\n%s", want, got)
+		}
+	}
+	lower := strings.ToLower(got)
+	for _, banned := range []string{"read-only", "read only", "do not delegate", "never delegate", "current features"} {
+		if strings.Contains(lower, banned) {
+			t.Errorf("supervisor system prompt carries retired language %q", banned)
+		}
 	}
 }
 

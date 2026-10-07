@@ -98,7 +98,7 @@ The cockpit exposes every action present in the server action catalogue:
 - **Artifact browsing** for plans, roadmaps, Q&A, and diffs, with markdown rendering;
 - **Live preview / logs** per run;
 - **Publish, Rebase card, Merge, Refactor card, Review-feedback card, Done, Clean worktree, and Delete** from the aftercare workspace; and
-- **Ask Me Anything** read-only chat.
+- the **Supervisor** conversation.
 
 Disabled controls display every server-provided reason. Successful actions are confirmed only after refreshed feature and session snapshots arrive.
 

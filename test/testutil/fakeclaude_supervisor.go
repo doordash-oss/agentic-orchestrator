@@ -47,6 +47,22 @@ const FakeSupervisorInvocationsFile = "invocations"
 // test can inspect exactly what reached the harness.
 const FakeSupervisorUserInputsFile = "user_inputs"
 
+// FakeSupervisorSystemPromptFile is the file, next to the script, that each
+// fake interactive Claude launch overwrites with the value it received on
+// the --append-system-prompt launch flag (empty when none was passed).
+const FakeSupervisorSystemPromptFile = "system_prompt"
+
+// fakeSupervisorLaunchPrologue records the launch and its system prompt.
+const fakeSupervisorLaunchPrologue = `printf 'x\n' >> "$(dirname "$0")/` + FakeSupervisorInvocationsFile + `"
+sysprompt=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--append-system-prompt" ]; then sysprompt="$arg"; fi
+  prev="$arg"
+done
+printf '%s' "$sysprompt" > "$(dirname "$0")/` + FakeSupervisorSystemPromptFile + `"
+`
+
 // FakeClaudeInteractiveScriptBody returns a long-lived stream-json harness:
 // it answers the initialize handshake, then serves one turn per user
 // message (stream deltas, one assistant message with a message id, and a
@@ -54,8 +70,7 @@ const FakeSupervisorUserInputsFile = "user_inputs"
 // text script permission requests, questions and interrupt handling. Every
 // user line is recorded in FakeSupervisorUserInputsFile.
 func FakeClaudeInteractiveScriptBody() string {
-	return `printf 'x\n' >> "$(dirname "$0")/` + FakeSupervisorInvocationsFile + `"
-turn=0
+	return fakeSupervisorLaunchPrologue + `turn=0
 mode=""
 reply() {
   printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"msg_$turn\"}}}"

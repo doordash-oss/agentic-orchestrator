@@ -1492,6 +1492,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 	case "":
 		req.AutoApproveOffer = decision.AutoApproveOffer
 		req.AutomaticReview = decision.AutomaticReview
+		req.DeferralReason = decision.Reason
 		return false
 	default:
 		s.respondToControlViaProtocol(req.RequestID, true, req.Request.Input, "")
@@ -1892,15 +1893,19 @@ func (s *Session) respondToPendingControl(requestID string, allow bool, reason s
 		originalInput = pending.Request.Input
 	}
 	toolName := pending.Request.ToolName
+	wireReason := reason
+	if !allow {
+		wireReason = withDeferralReason(reason, pending.DeferralReason)
+	}
 	s.mu.Unlock()
 
 	var err error
 	if s.protocol != nil {
-		err = s.protocol.RespondToControl(requestID, allow, originalInput, reason)
+		err = s.protocol.RespondToControl(requestID, allow, originalInput, wireReason)
 	} else if allow {
 		err = s.writeJSON(llm.NewAllowResponse(requestID, originalInput))
 	} else {
-		err = s.writeJSON(llm.NewDenyResponse(requestID, reason))
+		err = s.writeJSON(llm.NewDenyResponse(requestID, wireReason))
 	}
 	if err != nil {
 		return err
@@ -1924,6 +1929,19 @@ func (s *Session) respondToPendingControl(requestID string, allow bool, reason s
 		})
 	}
 	return nil
+}
+
+// withDeferralReason appends the permission handler's deferral explanation to
+// the user's denial so the model learns why the request needed a prompt.
+func withDeferralReason(reason, deferral string) string {
+	switch {
+	case deferral == "":
+		return reason
+	case reason == "":
+		return deferral
+	default:
+		return reason + ". " + deferral
+	}
 }
 
 // RespondToAskUser sends a control response that allows an AskUserQuestion

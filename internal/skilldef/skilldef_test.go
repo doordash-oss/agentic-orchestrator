@@ -288,62 +288,62 @@ func TestReconcileSkills(t *testing.T) {
 	}
 
 	// Verify user guide files are reconciled alongside SKILL.md
-	indexPath := filepath.Join(skillsDir, "chat", "user-guide", "index.md")
+	indexPath := filepath.Join(skillsDir, "supervisor", "user-guide", "index.md")
 	indexData, err := os.ReadFile(indexPath)
 	if err != nil {
-		t.Fatalf("reading chat/user-guide/index.md: %v", err)
+		t.Fatalf("reading supervisor/user-guide/index.md: %v", err)
 	}
 	if !strings.Contains(string(indexData), "Agentic Orchestrator User Guide") {
-		t.Error("chat/user-guide/index.md missing expected content")
+		t.Error("supervisor/user-guide/index.md missing expected content")
 	}
 
-	gettingStartedPath := filepath.Join(skillsDir, "chat", "user-guide", "getting-started.md")
+	gettingStartedPath := filepath.Join(skillsDir, "supervisor", "user-guide", "getting-started.md")
 	gsData, err := os.ReadFile(gettingStartedPath)
 	if err != nil {
-		t.Fatalf("reading chat/user-guide/getting-started.md: %v", err)
+		t.Fatalf("reading supervisor/user-guide/getting-started.md: %v", err)
 	}
 	if !strings.Contains(string(gsData), "Getting Started with Agentic") {
-		t.Error("chat/user-guide/getting-started.md missing expected content")
+		t.Error("supervisor/user-guide/getting-started.md missing expected content")
 	}
 	if strings.Contains(string(gsData), "STUB(Phase 2)") {
-		t.Error("chat/user-guide/getting-started.md still contains STUB(Phase 2)")
+		t.Error("supervisor/user-guide/getting-started.md still contains STUB(Phase 2)")
 	}
 
 	// Verify new Phase 2 topic files are reconciled
-	lifecyclePath := filepath.Join(skillsDir, "chat", "user-guide", "feature-lifecycle.md")
+	lifecyclePath := filepath.Join(skillsDir, "supervisor", "user-guide", "feature-lifecycle.md")
 	lcData, err := os.ReadFile(lifecyclePath)
 	if err != nil {
-		t.Fatalf("reading chat/user-guide/feature-lifecycle.md: %v", err)
+		t.Fatalf("reading supervisor/user-guide/feature-lifecycle.md: %v", err)
 	}
 	if !strings.Contains(string(lcData), "Pipeline Profiles") {
-		t.Error("chat/user-guide/feature-lifecycle.md missing expected content")
+		t.Error("supervisor/user-guide/feature-lifecycle.md missing expected content")
 	}
 
-	configPath := filepath.Join(skillsDir, "chat", "user-guide", "configuration.md")
+	configPath := filepath.Join(skillsDir, "supervisor", "user-guide", "configuration.md")
 	cfgData, err := os.ReadFile(configPath)
 	if err != nil {
-		t.Fatalf("reading chat/user-guide/configuration.md: %v", err)
+		t.Fatalf("reading supervisor/user-guide/configuration.md: %v", err)
 	}
 	if !strings.Contains(string(cfgData), "config.yaml") {
-		t.Error("chat/user-guide/configuration.md missing expected content")
+		t.Error("supervisor/user-guide/configuration.md missing expected content")
 	}
 
-	postPubPath := filepath.Join(skillsDir, "chat", "user-guide", "post-publish.md")
+	postPubPath := filepath.Join(skillsDir, "supervisor", "user-guide", "post-publish.md")
 	ppData, err := os.ReadFile(postPubPath)
 	if err != nil {
-		t.Fatalf("reading chat/user-guide/post-publish.md: %v", err)
+		t.Fatalf("reading supervisor/user-guide/post-publish.md: %v", err)
 	}
 	if !strings.Contains(string(ppData), "Rebase") {
-		t.Error("chat/user-guide/post-publish.md missing expected content")
+		t.Error("supervisor/user-guide/post-publish.md missing expected content")
 	}
 
-	permsPath := filepath.Join(skillsDir, "chat", "user-guide", "permissions.md")
+	permsPath := filepath.Join(skillsDir, "supervisor", "user-guide", "permissions.md")
 	pmData, err := os.ReadFile(permsPath)
 	if err != nil {
-		t.Fatalf("reading chat/user-guide/permissions.md: %v", err)
+		t.Fatalf("reading supervisor/user-guide/permissions.md: %v", err)
 	}
 	if !strings.Contains(string(pmData), "Allow & Remember") {
-		t.Error("chat/user-guide/permissions.md missing expected content")
+		t.Error("supervisor/user-guide/permissions.md missing expected content")
 	}
 }
 
@@ -366,7 +366,7 @@ func TestReconcileSkills_WritesSubdirectoryFiles(t *testing.T) {
 	}
 
 	// Verify user-guide index exists with expected content
-	indexPath := filepath.Join(skillsDir, "chat", "user-guide", "index.md")
+	indexPath := filepath.Join(skillsDir, "supervisor", "user-guide", "index.md")
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
 		t.Fatalf("reading %s: %v", indexPath, err)
@@ -379,7 +379,7 @@ func TestReconcileSkills_WritesSubdirectoryFiles(t *testing.T) {
 	}
 
 	// Verify getting-started.md exists with expected content
-	gsPath := filepath.Join(skillsDir, "chat", "user-guide", "getting-started.md")
+	gsPath := filepath.Join(skillsDir, "supervisor", "user-guide", "getting-started.md")
 	data, err = os.ReadFile(gsPath)
 	if err != nil {
 		t.Fatalf("reading %s: %v", gsPath, err)
@@ -392,9 +392,9 @@ func TestReconcileSkills_WritesSubdirectoryFiles(t *testing.T) {
 	}
 
 	// Verify SKILL.md still exists alongside subdirectory files
-	skillMDPath := filepath.Join(skillsDir, "chat", "SKILL.md")
+	skillMDPath := filepath.Join(skillsDir, "supervisor", "SKILL.md")
 	if _, err := os.Stat(skillMDPath); err != nil {
-		t.Errorf("chat/SKILL.md should still exist: %v", err)
+		t.Errorf("supervisor/SKILL.md should still exist: %v", err)
 	}
 
 	// Verify total skill directory count is unchanged
@@ -414,7 +414,7 @@ func TestReconcileSkills_SubdirectoryIdempotent(t *testing.T) {
 		t.Fatalf("first ReconcileSkills() error: %v", err)
 	}
 
-	indexPath := filepath.Join(skillsDir, "chat", "user-guide", "index.md")
+	indexPath := filepath.Join(skillsDir, "supervisor", "user-guide", "index.md")
 	info, err := os.Stat(indexPath)
 	if err != nil {
 		t.Fatalf("stat %s: %v", indexPath, err)
@@ -439,7 +439,7 @@ func TestReconcileSkills_SubdirectoryIdempotent(t *testing.T) {
 	}
 
 	// No leftover temp files in subdirectories
-	matches, _ := filepath.Glob(filepath.Join(skillsDir, "chat", "user-guide", ".tmp.*"))
+	matches, _ := filepath.Glob(filepath.Join(skillsDir, "supervisor", "user-guide", ".tmp.*"))
 	if len(matches) > 0 {
 		t.Errorf("leftover temp files in user-guide: %v", matches)
 	}
@@ -487,32 +487,32 @@ func TestReconcileSkills_NonSkillMdFiles(t *testing.T) {
 	}{
 		{
 			name:    "user guide index",
-			path:    filepath.Join(skillsDir, "chat", "user-guide", "index.md"),
+			path:    filepath.Join(skillsDir, "supervisor", "user-guide", "index.md"),
 			wantSub: "Agentic Orchestrator User Guide",
 		},
 		{
 			name:    "getting started topic",
-			path:    filepath.Join(skillsDir, "chat", "user-guide", "getting-started.md"),
+			path:    filepath.Join(skillsDir, "supervisor", "user-guide", "getting-started.md"),
 			wantSub: "Getting Started with Agentic Orchestrator",
 		},
 		{
 			name:    "feature lifecycle topic",
-			path:    filepath.Join(skillsDir, "chat", "user-guide", "feature-lifecycle.md"),
+			path:    filepath.Join(skillsDir, "supervisor", "user-guide", "feature-lifecycle.md"),
 			wantSub: "Pipeline Profiles",
 		},
 		{
 			name:    "configuration topic",
-			path:    filepath.Join(skillsDir, "chat", "user-guide", "configuration.md"),
+			path:    filepath.Join(skillsDir, "supervisor", "user-guide", "configuration.md"),
 			wantSub: "config.yaml",
 		},
 		{
 			name:    "post-publish topic",
-			path:    filepath.Join(skillsDir, "chat", "user-guide", "post-publish.md"),
+			path:    filepath.Join(skillsDir, "supervisor", "user-guide", "post-publish.md"),
 			wantSub: "Rebase",
 		},
 		{
 			name:    "permissions topic",
-			path:    filepath.Join(skillsDir, "chat", "user-guide", "permissions.md"),
+			path:    filepath.Join(skillsDir, "supervisor", "user-guide", "permissions.md"),
 			wantSub: "Allow & Remember",
 		},
 	}
@@ -548,7 +548,7 @@ func TestReconcileSkills_NonSkillMdFiles(t *testing.T) {
 	}
 
 	// No leftover temp files in subdirectories
-	matches, _ := filepath.Glob(filepath.Join(skillsDir, "chat", "user-guide", ".tmp.*"))
+	matches, _ := filepath.Glob(filepath.Join(skillsDir, "supervisor", "user-guide", ".tmp.*"))
 	if len(matches) > 0 {
 		t.Errorf("leftover temp files in user-guide: %v", matches)
 	}
@@ -562,26 +562,26 @@ func TestReconcileSkills_SubdirectoryStructure(t *testing.T) {
 	}
 
 	// SKILL.md still exists and is correct
-	skillMd := filepath.Join(skillsDir, "chat", "SKILL.md")
+	skillMd := filepath.Join(skillsDir, "supervisor", "SKILL.md")
 	data, err := os.ReadFile(skillMd)
 	if err != nil {
-		t.Fatalf("reading chat/SKILL.md: %v", err)
+		t.Fatalf("reading supervisor/SKILL.md: %v", err)
 	}
-	if !strings.Contains(string(data), "Agentic Orchestrator Expert Assistant") {
-		t.Error("chat/SKILL.md missing expected content")
+	if !strings.Contains(string(data), "# Agentico Supervisor") {
+		t.Error("supervisor/SKILL.md missing expected content")
 	}
 
 	// user-guide directory is created
-	info, err := os.Stat(filepath.Join(skillsDir, "chat", "user-guide"))
+	info, err := os.Stat(filepath.Join(skillsDir, "supervisor", "user-guide"))
 	if err != nil {
-		t.Fatalf("stat chat/user-guide: %v", err)
+		t.Fatalf("stat supervisor/user-guide: %v", err)
 	}
 	if !info.IsDir() {
-		t.Error("chat/user-guide is not a directory")
+		t.Error("supervisor/user-guide is not a directory")
 	}
 
 	// Files inside nested directory have correct content
-	indexData, err := os.ReadFile(filepath.Join(skillsDir, "chat", "user-guide", "index.md"))
+	indexData, err := os.ReadFile(filepath.Join(skillsDir, "supervisor", "user-guide", "index.md"))
 	if err != nil {
 		t.Fatalf("reading user-guide/index.md: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestReconcileSkills_SubdirectoryStructure(t *testing.T) {
 		{"post-publish.md", "Rebase"},
 		{"permissions.md", "Allow & Remember"},
 	} {
-		data, err := os.ReadFile(filepath.Join(skillsDir, "chat", "user-guide", tc.file))
+		data, err := os.ReadFile(filepath.Join(skillsDir, "supervisor", "user-guide", tc.file))
 		if err != nil {
 			t.Fatalf("reading user-guide/%s: %v", tc.file, err)
 		}
@@ -620,10 +620,54 @@ func TestReconcileSkills_DoesNotWriteMultiRepo(t *testing.T) {
 	if err := ReconcileSkills(skillsDir); err != nil {
 		t.Fatalf("ReconcileSkills() error: %v", err)
 	}
-	multiRepoPath := filepath.Join(skillsDir, "chat", "user-guide", "multi-repo.md")
+	multiRepoPath := filepath.Join(skillsDir, "supervisor", "user-guide", "multi-repo.md")
 	if _, err := os.Stat(multiRepoPath); err == nil {
 		t.Errorf("user-guide/multi-repo.md should not be written by ReconcileSkills (path exists)")
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat user-guide/multi-repo.md: %v", err)
+	}
+}
+
+// TestReconcileSkills_RemovesStaleChatSkill proves an upgrade from a binary
+// that shipped the retired chat skill deletes its reconciled tree, writes the
+// supervisor tree, and leaves a user-authored sibling skill untouched.
+func TestReconcileSkills_RemovesStaleChatSkill(t *testing.T) {
+	skillsDir := filepath.Join(t.TempDir(), "skills")
+	stale := map[string]string{
+		filepath.Join("chat", "SKILL.md"):                "---\ndescription: old chat\n---\n",
+		filepath.Join("chat", "user-guide", "index.md"):  "old guide",
+		filepath.Join("my-skill", "SKILL.md"):            "---\ndescription: mine\n---\nbody\n",
+		filepath.Join("my-skill", "notes", "private.md"): "user notes",
+	}
+	for rel, content := range stale {
+		p := filepath.Join(skillsDir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ReconcileSkills(skillsDir); err != nil {
+		t.Fatalf("ReconcileSkills() error: %v", err)
+	}
+
+	if _, err := os.Lstat(filepath.Join(skillsDir, "chat")); !os.IsNotExist(err) {
+		t.Fatalf("stale chat skill should be removed, stat err = %v", err)
+	}
+	for _, rel := range []string{"SKILL.md", "api-reference.md", "recipes.md", "environment.md", filepath.Join("user-guide", "index.md")} {
+		if _, err := os.Stat(filepath.Join(skillsDir, "supervisor", rel)); err != nil {
+			t.Errorf("supervisor/%s not reconciled: %v", rel, err)
+		}
+	}
+	for _, rel := range []string{filepath.Join("my-skill", "SKILL.md"), filepath.Join("my-skill", "notes", "private.md")} {
+		data, err := os.ReadFile(filepath.Join(skillsDir, rel))
+		if err != nil {
+			t.Fatalf("user-authored %s removed: %v", rel, err)
+		}
+		if string(data) != stale[rel] {
+			t.Errorf("user-authored %s changed: %q", rel, data)
+		}
 	}
 }

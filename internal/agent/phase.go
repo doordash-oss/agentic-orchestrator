@@ -1768,20 +1768,37 @@ func providerStateDir(featureStateDir string) string {
 	return filepath.Join(filepath.Dir(featureStateDir), "provider-state")
 }
 
+// RuntimeDirEnv names the environment variable carrying the serving
+// runtime directory to the supervisor child, so `agentico api` binds to this
+// server's discovery file rather than the default home runtime.
+const RuntimeDirEnv = "AGENTICO_RUNTIME_DIR"
+
 func appendAgenticoBinEnv(env []string) []string {
 	path := currentAgenticoBinPath()
 	if path == "" {
 		return env
 	}
-	entry := "AGENTICO_BIN=" + path
+	return SetEnv(env, "AGENTICO_BIN", path)
+}
+
+// SetEnv returns a copy of env with key set to value, replacing an existing
+// entry for key in place.
+func SetEnv(env []string, key, value string) []string {
+	entry := key + "=" + value
 	out := append([]string(nil), env...)
 	for i, existing := range out {
-		if strings.HasPrefix(existing, "AGENTICO_BIN=") {
+		if strings.HasPrefix(existing, key+"=") {
 			out[i] = entry
 			return out
 		}
 	}
 	return append(out, entry)
+}
+
+// AgenticoBinPath is the absolute path of the running agentico executable,
+// the same value exported to harness children as AGENTICO_BIN.
+func AgenticoBinPath() string {
+	return currentAgenticoBinPath()
 }
 
 func currentAgenticoBinPath() string {

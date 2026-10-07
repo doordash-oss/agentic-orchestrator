@@ -23,6 +23,7 @@ limitations under the License.
  * (`supervisorProvider`), and it counts every real session it serves.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
@@ -49,6 +50,14 @@ import {
 const RUN_NAME = 'supervisor-first-run';
 const CHIP_LABEL = 'Claude Haiku · Default';
 const DETOUR_FEATURE = 'Detour feature';
+/** The reconciled supervisor skill: the core, its references and the guide index. */
+const SUPERVISOR_SKILL_FILES = [
+  'SKILL.md',
+  'api-reference.md',
+  'recipes.md',
+  'environment.md',
+  path.join('user-guide', 'index.md'),
+];
 
 test('supervisor first run: choose a model, converse, approve inline, and stop a held turn', async ({}, testInfo) => {
   const transcript = new Transcript(RUN_NAME, 'Supervisor first-run tracer bullet journey');
@@ -58,6 +67,10 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     supervisorProvider: true,
   });
   createRepo(world, 'supervisor-lab', { commit: true });
+  // A stale skill tree from before the rename, which reconciliation removes.
+  const staleChatSkill = path.join(world.runtimeDir, 'skills', 'chat');
+  fs.mkdirSync(staleChatSkill, { recursive: true });
+  fs.writeFileSync(path.join(staleChatSkill, 'SKILL.md'), '# chat\n');
   let handle: AppHandle | null = null;
 
   try {
@@ -67,6 +80,17 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
       timeout: 60_000,
     });
     transcript.step('app launched and reached the ready workspace');
+
+    transcript.section('The bundled server reconciled the supervisor skill tree');
+    // Reconciliation runs before the server reports ready: the core, its
+    // three references and the user-guide index are on disk, and the
+    // retired `chat` skill directory seeded before launch is gone.
+    const skillsDir = path.join(world.runtimeDir, 'skills');
+    for (const file of SUPERVISOR_SKILL_FILES) {
+      expect(fs.existsSync(path.join(skillsDir, 'supervisor', file)), file).toBe(true);
+    }
+    expect(fs.existsSync(staleChatSkill)).toBe(false);
+    transcript.json('supervisor skill files', SUPERVISOR_SKILL_FILES);
 
     transcript.section('The pinned Supervisor row is home: first, selected and showing on launch');
     const rows = page.getByRole('listbox', { name: 'Features' }).getByRole('option');

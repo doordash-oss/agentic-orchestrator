@@ -294,6 +294,7 @@ func TestGoldenSnapshotsNoOrphanFiles(t *testing.T) {
 		"roadmap_user_refactor_pass":                           true,
 		"scout_user":                                           true,
 		"summary_user":                                         true,
+		"supervisor_system":                                    true,
 		"validate_specialized_grounding":                       true,
 		"validate_specialized_automated_verification_only":     true,
 	}

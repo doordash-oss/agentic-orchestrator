@@ -46,6 +46,23 @@ Programmatic clients send `Authorization: Bearer <auth_token>`. Browser
 SSE endpoints. Mutations also keep the trusted local header,
 `X-Agentico-Client: local`, as CSRF defense in depth.
 
+Shell callers on the server machine use `agentico api METHOD /api/v1/<path>
+[json]` as the sanctioned client instead of building requests by hand. It
+resolves the runtime directory (`--runtime-dir`, then `AGENTICO_RUNTIME_DIR`,
+then the default home runtime directory), trusts the discovery file only when
+it is a regular file owned by the caller with no group or other permission
+bits, and sends `Authorization: Bearer`, `X-Agentico-Client: local`, `Accept:
+application/json` and, with a body, `Content-Type: application/json` to the
+published `base_url`. It never prints headers or the token: a 2xx body goes to
+stdout (exit 0), any other status writes the canonical error envelope to
+stdout (exit 1), and discovery or connection failures render
+`discovery_missing`, `discovery_untrusted` or `server_unreachable` on stderr.
+On the SSE routes it requires `--timeout <duration>`, forwards `--after
+<cursor>` as `Last-Event-ID`, never uses the `access_token` query fallback,
+and prints one line per event payload (heartbeats skipped) until the timeout
+or the server closes the stream. Run `agentico api --help` for the full
+grammar.
+
 The MCP adapter has been removed. The supported client surface is REST plus SSE.
 
 ## Release Availability

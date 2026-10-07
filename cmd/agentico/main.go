@@ -133,6 +133,7 @@ const (
 	launchModeVerifyEvidence
 	launchModeCapabilityProbe
 	launchModeReportBlocker
+	launchModeAPI
 )
 
 type launchOptions struct {
@@ -151,6 +152,7 @@ type launchOptions struct {
 	verifyEvidence    verifyEvidenceOptions
 	capabilityProbe   capabilityProbeOptions
 	reportBlocker     reportBlockerOptions
+	api               apiOptions
 	// updateCheck is set when update mode was selected with --check / -n,
 	// requesting a check-only run that never attempts to install.
 	updateCheck bool
@@ -265,6 +267,8 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 		return runCapabilityProbe(opts.capabilityProbe, stdout, stderr)
 	case launchModeReportBlocker:
 		return runReportBlocker(opts.reportBlocker, stdout, stderr)
+	case launchModeAPI:
+		return runAPI(opts.api, stdout, stderr)
 	case launchModeServer:
 		providers, ok := validateProviderSelection(stderr, opts.enabledProviders)
 		if !ok {
@@ -371,6 +375,10 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if len(args) > 0 && args[0] == cliSubcommandReportBlocker {
 		opts.mode = launchModeReportBlocker
 		return parseReportBlockerArgs(opts, args[1:])
+	}
+	if len(args) > 0 && args[0] == cliSubcommandAPI {
+		opts.mode = launchModeAPI
+		return parseAPIArgs(opts, args[1:])
 	}
 	if len(args) > 0 && args[0] == cliSubcommandServer {
 		opts.mode = launchModeServer
@@ -724,6 +732,7 @@ Usage: agentico
        agentico capability-probe <name[(argument)]>
        agentico report-blocker --contract </abs/path/testing-contract.yaml> --dir </abs/path/iteration_dir> \
                                --items <id,id,...> --capability <name> --reason <text>
+       agentico api [--runtime-dir <dir>] [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path> [json]
 
 Starts or focuses the installed Agentico desktop app. Use the explicit 'server'
 subcommand to start the foreground loopback HTTP server for headless automation.
@@ -743,6 +752,10 @@ blocked rows for the user's decision instead of an unanswerable chat question.
 Agent sessions must run verify-evidence and report-blocker as one bare command
 with absolute literal paths (no cd, &&, ;, pipes, redirects, or shell variables);
 the permission guard refuses any other shape that references the contract.
+Run 'agentico api' on the server machine to make one authenticated REST call
+through the server's discovery file without handling the bearer token; SSE
+stream paths require --timeout and print one line per event. See
+'agentico api --help'.
 
 Server flags (use with 'agentico server'):
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
@@ -3388,10 +3401,16 @@ func newSupervisorCoordinator(boot *runtimeBootstrap) (*supervisor.Coordinator, 
 		workDir = stateDir
 	}
 	return supervisor.New(supervisor.Options{
-		StateDir:  stateDir,
-		WorkDir:   workDir,
-		Catalog:   supervisor.RegistryCatalog{Registry: boot.registry},
-		Launcher:  &supervisor.SessionLauncher{Runner: boot.phaseRunner, Sessions: boot.sessionManager},
+		StateDir: stateDir,
+		WorkDir:  workDir,
+		Catalog:  supervisor.RegistryCatalog{Registry: boot.registry},
+		Launcher: &supervisor.SessionLauncher{
+			Runner:        boot.phaseRunner,
+			Sessions:      boot.sessionManager,
+			RuntimeDir:    boot.runtime.RuntimeDir,
+			ConfigPath:    boot.runtime.Config,
+			DiscoveryPath: serverruntime.DiscoveryPath(boot.runtime.RuntimeDir),
+		},
 		Admission: boot.admission,
 	})
 }

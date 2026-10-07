@@ -156,7 +156,9 @@ func parseFrontmatterFields(fm string) map[string]string {
 // skillsDir. For each top-level skill directory it walks the full subtree
 // and writes every file (SKILL.md plus any companion assets such as
 // user-guide/*.md). Files whose content already matches on disk are
-// skipped; writes use atomic temp-file + rename.
+// skipped; writes use atomic temp-file + rename. The directory of a retired
+// embedded skill (see retiredSkills) is removed; no other file or directory
+// under skillsDir is ever deleted, so user-authored skills survive.
 //
 // A content hash of the embedded FS is persisted to a sibling stamp file
 // after a successful reconcile. If the next call finds a matching stamp,
@@ -172,6 +174,10 @@ func ReconcileSkills(skillsDir string) error {
 	stampPath := stampPathFor(skillsDir)
 	if existing, err := os.ReadFile(stampPath); err == nil && bytes.Equal(existing, []byte(embedHash)) {
 		return nil
+	}
+
+	if err := removeRetiredSkills(skillsDir); err != nil {
+		return err
 	}
 
 	entries, err := fs.ReadDir(skillsFS.FS, ".")
@@ -206,6 +212,35 @@ func ReconcileSkills(skillsDir string) error {
 		// Stamp write failure is non-fatal: the next launch will simply
 		// re-run the walk and find everything already in sync.
 		log.Printf("skilldef: writing reconcile stamp: %v", err)
+	}
+	return nil
+}
+
+// retiredSkills names embedded skills that earlier binaries reconciled to
+// disk and this binary no longer ships. Reconcile removes exactly these
+// top-level directories; nothing else under skillsDir is ever deleted.
+var retiredSkills = []string{
+	// chat was replaced by the supervisor skill.
+	"chat",
+}
+
+// removeRetiredSkills deletes each retired skill's top-level directory under
+// skillsDir when present. A retired name the embedded FS ships again is kept.
+func removeRetiredSkills(skillsDir string) error {
+	for _, name := range retiredSkills {
+		if _, err := fs.Stat(skillsFS.FS, name); err == nil {
+			continue
+		}
+		target := filepath.Join(skillsDir, name)
+		if _, err := os.Lstat(target); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("checking retired skill %s: %w", target, err)
+		}
+		if err := os.RemoveAll(target); err != nil {
+			return fmt.Errorf("removing retired skill %s: %w", target, err)
+		}
 	}
 	return nil
 }

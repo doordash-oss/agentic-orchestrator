@@ -85,7 +85,7 @@ Validated transcript content remains available after the stream finishes. After 
 
 ## Current Desktop Scope
 
-The Electron app delivers first-launch readiness, the intervention-first Home list, the four-step creation wizard, feature creation and durable setup, server-authorized Start/Stop/Resume/Retry/Rewind, live transcript history, raw inspection, reconnect/reset presentation, theme selection, app-owned server recovery, permission decisions, planning and review gates, artifact browsing and editing, runtime and feature configuration editing, post-publish actions (publish, rebase, merge, refactor, review comments, Done, cleanup, delete), desktop notifications, recovery, Ask Me Anything chat, and in-app updates.
+The Electron app delivers first-launch readiness, the intervention-first Home list, the four-step creation wizard, feature creation and durable setup, server-authorized Start/Stop/Resume/Retry/Rewind, live transcript history, raw inspection, reconnect/reset presentation, theme selection, app-owned server recovery, permission decisions, planning and review gates, artifact browsing and editing, runtime and feature configuration editing, post-publish actions (publish, rebase, merge, refactor, review comments, Done, cleanup, delete), desktop notifications, recovery, the Supervisor conversation, and in-app updates.
 
 Every action is reachable through a labeled desktop control and is authorized by the current server action catalogue. Do not use retired terminal-era shortcuts; the desktop app exposes its own keyboard map, command palette, and help overlay.
 

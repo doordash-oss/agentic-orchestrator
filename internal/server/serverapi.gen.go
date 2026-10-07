@@ -983,6 +983,27 @@ func (e SupervisorActionResponseResult) Valid() bool {
 	}
 }
 
+// Defines values for SupervisorInterruptedBy.
+const (
+	SupervisorInterruptedByNone     SupervisorInterruptedBy = "none"
+	SupervisorInterruptedByShutdown SupervisorInterruptedBy = "shutdown"
+	SupervisorInterruptedByUser     SupervisorInterruptedBy = "user"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorInterruptedBy enum.
+func (e SupervisorInterruptedBy) Valid() bool {
+	switch e {
+	case SupervisorInterruptedByNone:
+		return true
+	case SupervisorInterruptedByShutdown:
+		return true
+	case SupervisorInterruptedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupervisorLifecycle.
 const (
 	SupervisorLifecycleFailed            SupervisorLifecycle = "failed"
@@ -1016,9 +1037,34 @@ func (e SupervisorLifecycle) Valid() bool {
 	}
 }
 
+// Defines values for SupervisorMarkerRecordMarker.
+const (
+	SupervisorMarkerError                SupervisorMarkerRecordMarker = "error"
+	SupervisorMarkerHistoryNotRestored   SupervisorMarkerRecordMarker = "history_not_restored"
+	SupervisorMarkerInterrupted          SupervisorMarkerRecordMarker = "interrupted"
+	SupervisorMarkerPermissionRestricted SupervisorMarkerRecordMarker = "permission_restricted"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorMarkerRecordMarker enum.
+func (e SupervisorMarkerRecordMarker) Valid() bool {
+	switch e {
+	case SupervisorMarkerError:
+		return true
+	case SupervisorMarkerHistoryNotRestored:
+		return true
+	case SupervisorMarkerInterrupted:
+		return true
+	case SupervisorMarkerPermissionRestricted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupervisorRecordKind.
 const (
 	SupervisorRecordKindAssistant  SupervisorRecordKind = "assistant"
+	SupervisorRecordKindMarker     SupervisorRecordKind = "marker"
 	SupervisorRecordKindPermission SupervisorRecordKind = "permission"
 	SupervisorRecordKindQuestion   SupervisorRecordKind = "question"
 	SupervisorRecordKindToolResult SupervisorRecordKind = "tool_result"
@@ -1030,6 +1076,8 @@ const (
 func (e SupervisorRecordKind) Valid() bool {
 	switch e {
 	case SupervisorRecordKindAssistant:
+		return true
+	case SupervisorRecordKindMarker:
 		return true
 	case SupervisorRecordKindPermission:
 		return true
@@ -1069,10 +1117,11 @@ func (e SupervisorRecordVisibility) Valid() bool {
 
 // Defines values for SupervisorRequestRecordOutcome.
 const (
-	SupervisorRequestOutcomeAllowed  SupervisorRequestRecordOutcome = "allowed"
-	SupervisorRequestOutcomeAnswered SupervisorRequestRecordOutcome = "answered"
-	SupervisorRequestOutcomeDenied   SupervisorRequestRecordOutcome = "denied"
-	SupervisorRequestOutcomePending  SupervisorRequestRecordOutcome = "pending"
+	SupervisorRequestOutcomeAllowed     SupervisorRequestRecordOutcome = "allowed"
+	SupervisorRequestOutcomeAnswered    SupervisorRequestRecordOutcome = "answered"
+	SupervisorRequestOutcomeDenied      SupervisorRequestRecordOutcome = "denied"
+	SupervisorRequestOutcomeInterrupted SupervisorRequestRecordOutcome = "interrupted"
+	SupervisorRequestOutcomePending     SupervisorRequestRecordOutcome = "pending"
 )
 
 // Valid indicates whether the value is a known member of the SupervisorRequestRecordOutcome enum.
@@ -1083,6 +1132,8 @@ func (e SupervisorRequestRecordOutcome) Valid() bool {
 	case SupervisorRequestOutcomeAnswered:
 		return true
 	case SupervisorRequestOutcomeDenied:
+		return true
+	case SupervisorRequestOutcomeInterrupted:
 		return true
 	case SupervisorRequestOutcomePending:
 		return true
@@ -1111,8 +1162,9 @@ func (e SupervisorRequestRecordStage) Valid() bool {
 
 // Defines values for SupervisorStartingStep.
 const (
-	SupervisorStartingStepHandshake SupervisorStartingStep = "handshake"
-	SupervisorStartingStepLaunching SupervisorStartingStep = "launching"
+	SupervisorStartingStepHandshake  SupervisorStartingStep = "handshake"
+	SupervisorStartingStepLaunching  SupervisorStartingStep = "launching"
+	SupervisorStartingStepRebuilding SupervisorStartingStep = "rebuilding"
 )
 
 // Valid indicates whether the value is a known member of the SupervisorStartingStep enum.
@@ -1121,6 +1173,8 @@ func (e SupervisorStartingStep) Valid() bool {
 	case SupervisorStartingStepHandshake:
 		return true
 	case SupervisorStartingStepLaunching:
+		return true
+	case SupervisorStartingStepRebuilding:
 		return true
 	default:
 		return false
@@ -4568,8 +4622,21 @@ type SupervisorDelta struct {
 	TurnID          string `json:"turn_id"`
 }
 
+// SupervisorInterruptedBy Who cut the most recent turn; meaningful when `last_turn_outcome` is `interrupted`. `user` is Stop or End, `shutdown` is a server shutdown or crash detected at boot.
+type SupervisorInterruptedBy string
+
 // SupervisorLifecycle defines model for SupervisorLifecycle.
 type SupervisorLifecycle string
+
+// SupervisorMarkerRecord Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker.
+type SupervisorMarkerRecord struct {
+	Code   string                       `json:"code,omitempty"`
+	Marker SupervisorMarkerRecordMarker `json:"marker"`
+	Text   string                       `json:"text"`
+}
+
+// SupervisorMarkerRecordMarker defines model for SupervisorMarkerRecord.Marker.
+type SupervisorMarkerRecordMarker string
 
 // SupervisorMessageRequest defines model for SupervisorMessageRequest.
 type SupervisorMessageRequest struct {
@@ -4589,6 +4656,15 @@ type SupervisorMessageResponse struct {
 	Record SupervisorRecord `json:"record"`
 }
 
+// SupervisorPermissionMode Permission mode the supervisor asked the harness for and the mode the running harness reported. `effective` is empty until a process reports it.
+type SupervisorPermissionMode struct {
+	Effective string `json:"effective"`
+	Requested string `json:"requested"`
+
+	// RestrictedByPolicy True when the harness reported a mode other than the requested one.
+	RestrictedByPolicy bool `json:"restricted_by_policy"`
+}
+
 // SupervisorRecord One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
 type SupervisorRecord struct {
 	ClientMessageID string               `json:"client_message_id,omitempty"`
@@ -4597,7 +4673,10 @@ type SupervisorRecord struct {
 	Generation      int64                `json:"generation"`
 	ID              string               `json:"id"`
 	Kind            SupervisorRecordKind `json:"kind"`
-	Messages        []TranscriptMessage  `json:"messages"`
+
+	// Marker Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker.
+	Marker   *SupervisorMarkerRecord `json:"marker,omitempty"`
+	Messages []TranscriptMessage     `json:"messages"`
 
 	// Request Request or verdict carried by `permission` and `question` records.
 	Request         *SupervisorRequestRecord   `json:"request,omitempty"`
@@ -4642,7 +4721,7 @@ type SupervisorSettingsRequest struct {
 	Model   string `json:"model"`
 }
 
-// SupervisorStartingStep Present only while the lifecycle is `starting`.
+// SupervisorStartingStep Present only while the lifecycle is `starting`: `rebuilding` while the harness's native session is rebuilt from the transcript, `launching` while the process spawns, `handshake` until it first answers.
 type SupervisorStartingStep string
 
 // SupervisorState defines model for SupervisorState.
@@ -4652,14 +4731,23 @@ type SupervisorState struct {
 	// EffectiveModel Model the running harness reports; empty when no process exists.
 	EffectiveModel string `json:"effective_model"`
 
+	// Failure Canonical error of the most recent launch failure; present only while the lifecycle is `failed`.
+	Failure *Error `json:"failure,omitempty"`
+
 	// Generation Number of provider process launches; increments on every launch.
 	Generation int64 `json:"generation"`
 
 	// HeadSeq Seq of the newest committed transcript record; 0 when empty.
-	HeadSeq         int64                 `json:"head_seq"`
-	LastTurnOutcome SupervisorTurnOutcome `json:"last_turn_outcome"`
-	Lifecycle       SupervisorLifecycle   `json:"lifecycle"`
-	PendingRequests []ControlRequest      `json:"pending_requests"`
+	HeadSeq int64 `json:"head_seq"`
+
+	// InterruptedBy Who cut the most recent turn; meaningful when `last_turn_outcome` is `interrupted`. `user` is Stop or End, `shutdown` is a server shutdown or crash detected at boot.
+	InterruptedBy   SupervisorInterruptedBy `json:"interrupted_by"`
+	LastTurnOutcome SupervisorTurnOutcome   `json:"last_turn_outcome"`
+	Lifecycle       SupervisorLifecycle     `json:"lifecycle"`
+	PendingRequests []ControlRequest        `json:"pending_requests"`
+
+	// PermissionMode Permission mode the supervisor asked the harness for and the mode the running harness reported. `effective` is empty until a process reports it.
+	PermissionMode SupervisorPermissionMode `json:"permission_mode"`
 
 	// SessionID Session-manager id of the current generation (`__supervisor__.<conversation>.<generation>`); empty when no process exists.
 	SessionID string `json:"session_id"`
@@ -4667,7 +4755,7 @@ type SupervisorState struct {
 	// Settings Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default.
 	Settings SupervisorSettings `json:"settings"`
 
-	// StartingStep Present only while the lifecycle is `starting`.
+	// StartingStep Present only while the lifecycle is `starting`: `rebuilding` while the harness's native session is rebuilt from the transcript, `launching` while the process spawns, `handshake` until it first answers.
 	StartingStep SupervisorStartingStep `json:"starting_step,omitempty"`
 
 	// StreamEpoch Resume epoch for the supervisor event stream.

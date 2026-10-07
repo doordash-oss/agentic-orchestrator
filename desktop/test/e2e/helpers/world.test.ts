@@ -30,7 +30,9 @@ import {
   SUPERVISOR_E2E_OPERATE_STARTED_REPLY,
   supervisorOperateCreatedReply,
   supervisorOperateCreateMarker,
+  supervisorStubPartialReply,
   supervisorStubReply,
+  supervisorStubResumedReply,
   type WorldOptions,
 } from './world';
 
@@ -174,8 +176,15 @@ test('supervisor stub serves streamed, permission and held turns from one proces
 });
 
 /** A line-oriented driver over one spawned stub process. */
-function driveStub(stub: string, env: NodeJS.ProcessEnv) {
-  const child = spawn(stub, ['--input-format', 'stream-json'], { env });
+function driveStub(
+  stub: string,
+  env: NodeJS.ProcessEnv,
+  options: { args?: string[]; cwd?: string } = {},
+) {
+  const child = spawn(stub, ['--input-format', 'stream-json', ...(options.args ?? [])], {
+    env,
+    cwd: options.cwd,
+  });
   const closed = once(child, 'close');
   const lines = createInterface({ input: child.stdout });
   const received: Array<Record<string, unknown>> = [];
@@ -330,6 +339,115 @@ test('a combined world serves workflow sessions to children without the runtime-
     stub.child.kill('SIGKILL');
     await stub.closed;
     stub.lines.close();
+    destroyWorld(world);
+  }
+});
+
+test('supervisor stub commits partial text, then holds the turn without a result', async () => {
+  const world = createWorld('supervisor-partial', { supervisorProvider: true });
+  const stub = driveStub(world.claudeStub, { PATH: '/usr/bin:/bin', HOME: world.home });
+  try {
+    stub.write({ type: 'control_request', request_id: 'init', request: { subtype: 'initialize' } });
+    await stub.next(2);
+    stub.write(userTurn(`go ${SUPERVISOR_E2E_MARKERS.partialHold}`));
+    const [partial] = await stub.next(1);
+    expect(partial).toMatchObject({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: supervisorStubPartialReply(1) }] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(stub.received).toHaveLength(0);
+    expect(fs.readFileSync(world.providerInvocationLog, 'utf8')).toContain('partial-holding:1');
+    stub.write({ type: 'control_request', request_id: 'stop', request: { subtype: 'interrupt' } });
+    const [interrupted] = await stub.next(1);
+    expect(interrupted).toMatchObject({ type: 'result', is_error: true });
+  } finally {
+    stub.child.kill('SIGKILL');
+    stub.lines.close();
+    destroyWorld(world);
+  }
+});
+
+test('supervisor stub resumes from the rebuilt session file under the world home', async () => {
+  const world = createWorld('supervisor-resume', { supervisorProvider: true });
+  const workdir = path.join(world.root, 'work.dir');
+  fs.mkdirSync(workdir);
+  const encoded = fs.realpathSync(workdir).replace(/[/.]/g, '-');
+  const projects = path.join(world.home, '.claude', 'projects', encoded);
+  fs.mkdirSync(projects, { recursive: true });
+  const nativeId = '6f1c2d3e-0000-4000-8000-000000000001';
+  const line = (record: unknown): string => JSON.stringify(record);
+  fs.writeFileSync(
+    path.join(projects, `${nativeId}.jsonl`),
+    [
+      line({ type: 'user', message: { role: 'user', content: 'first prompt' } }),
+      line({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text' }] } }),
+      line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result' }] } }),
+      line({ type: 'user', message: { role: 'user', content: 'second prompt' } }),
+      '',
+    ].join('\n'),
+  );
+  const stub = driveStub(
+    world.claudeStub,
+    { PATH: '/usr/bin:/bin', HOME: world.home },
+    { args: ['--resume', nativeId], cwd: workdir },
+  );
+  try {
+    stub.write({ type: 'control_request', request_id: 'init', request: { subtype: 'initialize' } });
+    const [, init] = await stub.next(2);
+    expect(init).toMatchObject({ type: 'system', subtype: 'init', session_id: nativeId });
+    stub.write(userTurn('continue'));
+    const reply = await stub.next(5);
+    expect(JSON.stringify(reply[3])).toContain(supervisorStubResumedReply(2));
+    stub.write(userTurn('and again'));
+    const next = await stub.next(5);
+    expect(JSON.stringify(next[3])).toContain(supervisorStubReply(2));
+    const log = fs.readFileSync(world.providerInvocationLog, 'utf8').split('\n');
+    expect(log).toContain(`resume:${nativeId}`);
+    expect(log).toContain('history:2');
+  } finally {
+    stub.child.kill('SIGKILL');
+    stub.lines.close();
+    destroyWorld(world);
+  }
+});
+
+test('supervisor stub fails a supervisor launch before any output while the sentinel exists', async () => {
+  const world = createWorld('supervisor-launch-failure', { supervisorProvider: true });
+  fs.writeFileSync(world.supervisorLaunchFailurePath, '');
+  const failing = driveStub(world.claudeStub, {
+    PATH: '/usr/bin:/bin',
+    HOME: world.home,
+    AGENTICO_RUNTIME_DIR: world.runtimeDir,
+  });
+  try {
+    const [code] = await failing.closed;
+    expect(code).toBe(3);
+    expect(failing.received).toHaveLength(0);
+    expect(fs.readFileSync(world.providerInvocationLog, 'utf8')).toContain('launch-failed');
+  } finally {
+    failing.child.kill('SIGKILL');
+    failing.lines.close();
+  }
+  // A catalog probe (no runtime-dir variable) still answers, and so does a
+  // supervisor launch once the sentinel is gone.
+  fs.rmSync(world.supervisorLaunchFailurePath);
+  const healthy = driveStub(world.claudeStub, {
+    PATH: '/usr/bin:/bin',
+    HOME: world.home,
+    AGENTICO_RUNTIME_DIR: world.runtimeDir,
+  });
+  try {
+    healthy.write({
+      type: 'control_request',
+      request_id: 'init',
+      request: { subtype: 'initialize' },
+    });
+    const [response] = await healthy.next(2);
+    expect(response).toMatchObject({ type: 'control_response' });
+  } finally {
+    healthy.child.kill('SIGKILL');
+    healthy.lines.close();
     destroyWorld(world);
   }
 });

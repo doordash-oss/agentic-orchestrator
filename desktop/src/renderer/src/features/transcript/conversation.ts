@@ -37,8 +37,18 @@ export interface SubagentActivity {
   summary?: string;
 }
 
+/** The tone of a one-line notice row: a cut turn, a failure, or a caveat. */
+export type ConversationNoticeTone = 'interrupted' | 'failed' | 'caveat';
+
 export type ConversationItem =
-  | { kind: 'message'; key: string; role: 'user' | 'assistant'; text: string }
+  | {
+      kind: 'message';
+      key: string;
+      role: 'user' | 'assistant';
+      text: string;
+      /** A quiet trailing note on the message, e.g. "Interrupted" for a cut reply. */
+      footer?: string;
+    }
   | {
       kind: 'auto-pick';
       key: string;
@@ -67,7 +77,19 @@ export type ConversationItem =
        */
       kind: 'verdict';
       key: string;
-      outcome: 'allowed' | 'denied' | 'answered';
+      outcome: 'allowed' | 'denied' | 'answered' | 'interrupted';
+      text: string;
+    }
+  | {
+      /**
+       * A display-only notice in the stream (a turn cut by a restart, a
+       * launch failure, a caveat about the session). Like `verdict`, never
+       * produced by `buildConversation`; the supervisor interleaves these
+       * from its durable marker records.
+       */
+      kind: 'notice';
+      key: string;
+      tone: ConversationNoticeTone;
       text: string;
     };
 

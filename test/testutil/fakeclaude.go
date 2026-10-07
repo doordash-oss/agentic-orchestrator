@@ -55,12 +55,15 @@ func (p FakeClaudeProvider) ModelCatalog() []llm.ModelInfo {
 	}}
 }
 
-// BuildCommand carries a system prompt on the same launch flag the real
-// Claude adapter uses, so scripts can observe the launch channel.
+// BuildCommand carries a system prompt and a resumed session id on the same
+// launch flags the real Claude adapter uses, so scripts can observe them.
 func (p FakeClaudeProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
 	cmd := []string{"sh", p.Script}
 	if opts.SystemPrompt != "" {
 		cmd = append(cmd, "--append-system-prompt", opts.SystemPrompt)
+	}
+	if opts.ResumeSessionID != "" {
+		cmd = append(cmd, "--resume", opts.ResumeSessionID)
 	}
 	return cmd, nil, nil
 }

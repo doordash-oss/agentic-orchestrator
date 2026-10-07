@@ -1507,6 +1507,12 @@ export const ServerSupervisorSettingsSchema = z.object({
   effort: z.string().max(40),
 });
 
+export const ServerSupervisorPermissionModeSchema = z.object({
+  requested: z.string().max(100),
+  effective: z.string().max(100),
+  restricted_by_policy: z.boolean(),
+});
+
 export const ServerSupervisorStateSchema = z.object({
   conversation_id: ServerSupervisorIdSchema,
   generation: ServerSupervisorSeqSchema,
@@ -1520,10 +1526,13 @@ export const ServerSupervisorStateSchema = z.object({
     'waiting_question',
     'failed',
   ]),
-  starting_step: z.enum(['launching', 'handshake']).optional(),
+  starting_step: z.enum(['rebuilding', 'launching', 'handshake']).optional(),
   last_turn_outcome: z.enum(['none', 'completed', 'interrupted', 'failed']),
+  interrupted_by: z.enum(['none', 'user', 'shutdown']),
   settings: ServerSupervisorSettingsSchema,
   effective_model: z.string().max(200),
+  permission_mode: ServerSupervisorPermissionModeSchema,
+  failure: CanonicalErrorSchema.optional(),
   pending_requests: z.array(ServerControlRequestSchema).max(100),
   head_seq: ServerSupervisorSeqSchema,
   stream_epoch: z.string().max(200),
@@ -1534,8 +1543,14 @@ export const ServerSupervisorRequestRecordSchema = z.object({
   request_id: AttentionIDSchema,
   tool_name: z.string().max(500),
   stage: z.enum(['requested', 'resolved']),
-  outcome: z.enum(['pending', 'allowed', 'denied', 'answered']),
+  outcome: z.enum(['pending', 'allowed', 'denied', 'answered', 'interrupted']),
   summary: AttentionTextSchema.optional(),
+});
+
+export const ServerSupervisorMarkerRecordSchema = z.object({
+  marker: z.enum(['interrupted', 'error', 'history_not_restored', 'permission_restricted']),
+  text: AttentionTextSchema,
+  code: z.string().max(200).optional(),
 });
 
 export const ServerSupervisorRecordSchema = z.object({
@@ -1544,13 +1559,22 @@ export const ServerSupervisorRecordSchema = z.object({
   conversation_id: ServerSupervisorIdSchema,
   generation: ServerSupervisorSeqSchema,
   turn_id: ServerSupervisorIdSchema,
-  kind: z.enum(['user', 'assistant', 'tool_use', 'tool_result', 'permission', 'question']),
+  kind: z.enum([
+    'user',
+    'assistant',
+    'tool_use',
+    'tool_result',
+    'permission',
+    'question',
+    'marker',
+  ]),
   visibility: z.enum(['content', 'model_only', 'display_only']),
   created_at: z.string().max(100),
   client_message_id: z.string().max(128).optional(),
   stream_message_id: ServerSupervisorIdSchema.optional(),
   messages: z.array(ServerTranscriptMessageSchema).max(500),
   request: ServerSupervisorRequestRecordSchema.optional(),
+  marker: ServerSupervisorMarkerRecordSchema.optional(),
 });
 export type ServerSupervisorRecord = z.output<typeof ServerSupervisorRecordSchema>;
 

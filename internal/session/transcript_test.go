@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/claudeconfig"
 )
 
 func TestClaudeProjectsDirName(t *testing.T) {
@@ -31,9 +33,9 @@ func TestClaudeProjectsDirName(t *testing.T) {
 		{"/home/user/.hidden/dir", "-home-user--hidden-dir"},
 	}
 	for _, tt := range tests {
-		got := claudeProjectsDirName(tt.input)
+		got := claudeconfig.ProjectDirName(tt.input)
 		if got != tt.want {
-			t.Errorf("claudeProjectsDirName(%q) = %q, want %q", tt.input, got, tt.want)
+			t.Errorf("claudeconfig.ProjectDirName(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

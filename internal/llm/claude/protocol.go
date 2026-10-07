@@ -19,14 +19,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/claudeconfig"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
@@ -296,19 +295,11 @@ func (p *Protocol) TranscriptPath() string {
 		return ""
 	}
 
-	home, err := os.UserHomeDir()
+	configDir, err := claudeconfig.DefaultDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".claude", "projects",
-		claudeProjectsDirName(p.opts.WorkDir),
-		sid+".jsonl")
-}
-
-// claudeProjectsDirName encodes a working directory path into the directory
-// name used by the Claude CLI under ~/.claude/projects/.
-func claudeProjectsDirName(workDir string) string {
-	return regexp.MustCompile(`[/.]`).ReplaceAllString(workDir, "-")
+	return filepath.Join(claudeconfig.ProjectsDir(configDir, p.opts.WorkDir), sid+".jsonl")
 }
 
 func (p *Protocol) Close() error {

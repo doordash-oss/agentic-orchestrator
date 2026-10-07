@@ -109,8 +109,10 @@ function supervisorState(overrides: Partial<SupervisorState> = {}): SupervisorSt
     sessionId: '',
     lifecycle: 'stopped',
     lastTurnOutcome: 'none',
+    interruptedBy: 'none',
     settings: { harness: '', model: '', effort: '' },
     effectiveModel: '',
+    permissionMode: { requested: 'default', effective: '', restrictedByPolicy: false },
     pendingRequests: [],
     headSeq: 0,
     streamEpoch: 'epoch-1',
@@ -862,5 +864,71 @@ describe('registerIpcHandlers', () => {
     };
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toContain('tok-leak');
+  });
+
+  it('passes a failed supervisor state with its canonical failure and rejects a smuggling failure', async () => {
+    const failure = {
+      code: 'supervisor_launch_failed',
+      class: 'blocking' as const,
+      title: 'Supervisor failed to start',
+      summary: 'The harness exited before the handshake.',
+    };
+    const services = makeServices();
+    services.getSupervisorState = vi
+      .fn()
+      .mockResolvedValueOnce(
+        supervisorState({ lifecycle: 'failed', interruptedBy: 'none', failure }),
+      )
+      .mockResolvedValueOnce({
+        ...supervisorState({ lifecycle: 'failed' }),
+        failure: { ...failure, authToken: 'tok-leak' },
+      } as SupervisorState);
+    const { handlers } = register(services);
+
+    await expect(handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)).resolves.toMatchObject({
+      ok: true,
+      value: { lifecycle: 'failed', failure },
+    });
+    const smuggled = (await handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)) as {
+      ok: boolean;
+    };
+    expect(smuggled.ok).toBe(false);
+    expect(JSON.stringify(smuggled)).not.toContain('tok-leak');
+  });
+
+  it('passes marker records through the transcript and rejects unknown marker kinds', async () => {
+    const marker = (kind: string) => ({
+      ...supervisorRecord(''),
+      kind: 'marker' as const,
+      visibility: 'display_only' as const,
+      messages: [],
+      marker: { marker: kind, text: 'Interrupted before restart' },
+    });
+    const page = (kind: string) => ({
+      conversationId: 'conv-1',
+      items: [marker(kind)],
+      firstSeq: 1,
+      lastSeq: 1,
+      hasMoreBefore: false,
+      hasMoreAfter: false,
+      headSeq: 1,
+    });
+    const services = makeServices();
+    services.getSupervisorTranscript = vi
+      .fn()
+      .mockResolvedValueOnce(page('interrupted'))
+      .mockResolvedValueOnce(page('reboot'));
+    const { handlers } = register(services);
+
+    await expect(
+      handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, {}),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { items: [{ kind: 'marker', marker: { marker: 'interrupted' } }] },
+    });
+    const unknown = (await handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, {})) as {
+      ok: boolean;
+    };
+    expect(unknown.ok).toBe(false);
   });
 });

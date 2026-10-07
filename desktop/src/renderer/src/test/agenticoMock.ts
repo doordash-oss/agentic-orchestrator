@@ -531,11 +531,26 @@ export function supervisorState(overrides: Partial<SupervisorState> = {}): Super
     sessionId: '',
     lifecycle: 'stopped',
     lastTurnOutcome: 'none',
+    interruptedBy: 'none',
     settings: { harness: '', model: '', effort: '' },
     effectiveModel: '',
+    permissionMode: { requested: 'default', effective: '', restrictedByPolicy: false },
     pendingRequests: [],
     headSeq: 0,
     streamEpoch: 'supervisor-epoch-1',
+    ...overrides,
+  };
+}
+
+/** The canonical launch failure a `failed` supervisor state carries. */
+export function supervisorLaunchFailure(
+  overrides: Partial<NonNullable<SupervisorState['failure']>> = {},
+): NonNullable<SupervisorState['failure']> {
+  return {
+    code: 'supervisor_launch_failed',
+    class: 'blocking',
+    title: 'Supervisor failed to start',
+    summary: 'The harness exited before it answered the handshake.',
     ...overrides,
   };
 }
@@ -555,6 +570,26 @@ export function supervisorRecord(overrides: Partial<SupervisorRecord> = {}): Sup
     messages: [{ index: seq, role: 'user', type: 'text', text: 'Hello supervisor' }],
     ...overrides,
   };
+}
+
+/**
+ * One display-only `marker` record (the interrupted notice by default); the
+ * turn id names the turn it describes.
+ */
+export function supervisorMarkerRecord(
+  marker: NonNullable<SupervisorRecord['marker']> = {
+    marker: 'interrupted',
+    text: 'Interrupted before restart',
+  },
+  overrides: Partial<SupervisorRecord> = {},
+): SupervisorRecord {
+  return supervisorRecord({
+    kind: 'marker',
+    visibility: 'display_only',
+    messages: [],
+    marker,
+    ...overrides,
+  });
 }
 
 /** One transcript page; empty (all cursors 0, nothing more) by default. */
@@ -779,6 +814,8 @@ export function installAgenticoMock(
           headSeq: seq,
           lifecycle: 'running',
           sessionId: `__supervisor__.${supervisorCurrent.conversationId}.${String(generation)}`,
+          // A launch clears the previous launch failure, as the server does.
+          failure: undefined,
         };
         return Promise.resolve({
           record: supervisorRecord({

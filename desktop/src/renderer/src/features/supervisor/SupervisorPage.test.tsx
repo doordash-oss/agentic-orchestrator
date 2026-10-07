@@ -29,6 +29,8 @@ import type {
 import {
   installAgenticoMock,
   ipcError,
+  supervisorLaunchFailure,
+  supervisorMarkerRecord,
   supervisorRecord,
   supervisorState,
   supervisorTranscriptPage,
@@ -100,7 +102,7 @@ function requestRecord(
   kind: 'permission' | 'question',
   requestId: string,
   stage: 'requested' | 'resolved',
-  outcome: 'pending' | 'allowed' | 'denied' | 'answered',
+  outcome: 'pending' | 'allowed' | 'denied' | 'answered' | 'interrupted',
   toolName = kind === 'question' ? 'AskUserQuestion' : 'Bash',
 ): SupervisorRecord {
   return supervisorRecord({
@@ -723,5 +725,210 @@ describe('SupervisorPage explain drafts', () => {
       text: EXPLAIN_DRAFT,
       errorReference: RUN_REFERENCE,
     });
+  });
+});
+
+describe('SupervisorPage restart and launch failure', () => {
+  const pausedState = supervisorState({
+    settings: CHOSEN,
+    generation: 1,
+    lifecycle: 'stopped',
+    lastTurnOutcome: 'interrupted',
+    interruptedBy: 'shutdown',
+    headSeq: 4,
+  });
+  const cutTurn = supervisorTranscriptPage({
+    items: [
+      supervisorRecord({
+        seq: 1,
+        turnId: 'turn-1',
+        messages: [{ index: 1, role: 'user', type: 'text', text: 'Audit the open features' }],
+      }),
+      supervisorRecord({
+        seq: 2,
+        turnId: 'turn-1',
+        kind: 'assistant',
+        messages: [{ index: 2, role: 'assistant', type: 'text', text: 'Starting with the first' }],
+      }),
+      // The restart resolved the cut request with the interrupted outcome.
+      {
+        ...requestRecord(3, 'permission', 'perm-cut', 'resolved', 'interrupted'),
+        turnId: 'turn-1',
+      },
+      supervisorMarkerRecord(undefined, { seq: 4, turnId: 'turn-1' }),
+    ],
+    firstSeq: 1,
+    lastSeq: 4,
+    headSeq: 4,
+  });
+
+  it('shows a restart-cut conversation paused with the marker row, the footer, and the interrupted verdict', async () => {
+    await renderPage({ supervisorState: pausedState, supervisorTranscript: cutTurn });
+
+    expect(status()).toHaveTextContent(
+      'Paused — interrupted before restart. Send a message to continue.',
+    );
+    expect(status()).toHaveAttribute('data-tone', 'paused');
+    const conversation = within(transcript());
+    expect(conversation.getByText('Interrupted before restart')).toBeVisible();
+    expect(conversation.getByText('Interrupted · Bash')).toBeVisible();
+    const reply = conversation.getByText('Starting with the first').closest('article')!;
+    expect(within(reply).getByText('Interrupted')).toBeVisible();
+    // The person's own prompt carries no footer.
+    const prompt = conversation.getByText('Audit the open features').closest('article')!;
+    expect(within(prompt).queryByText('Interrupted')).toBeNull();
+    // Paused is not a lock: the next message sends as usual.
+    const user = userEvent.setup();
+    await user.type(composer(), 'Continue');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+  it('keeps Ready for a turn the person stopped', async () => {
+    await renderPage({
+      supervisorState: { ...pausedState, interruptedBy: 'user' },
+      supervisorTranscript: supervisorTranscriptPage(),
+    });
+    expect(status()).toHaveTextContent('Ready');
+    expect(status()).not.toHaveAttribute('data-tone');
+  });
+
+  it('reads Rebuilding history for the chosen harness ahead of Starting supervisor', async () => {
+    const mock = await renderPage({ supervisorState: pausedState });
+    const pushState = (overrides: Partial<SupervisorState>) =>
+      emit(mock, {
+        type: 'state',
+        ...envelope(pausedState),
+        state: { ...pausedState, ...overrides },
+      });
+
+    pushState({ lifecycle: 'starting', startingStep: 'rebuilding' });
+    expect(status()).toHaveTextContent('Rebuilding history for Claude…');
+    pushState({ lifecycle: 'starting', startingStep: 'launching' });
+    expect(status()).toHaveTextContent('Starting supervisor…');
+  });
+
+  it('renders the history and permission markers as notice rows', async () => {
+    await renderPage({
+      supervisorState: supervisorState({ settings: CHOSEN, lifecycle: 'idle' }),
+      supervisorTranscript: supervisorTranscriptPage({
+        items: [
+          supervisorMarkerRecord(
+            {
+              marker: 'history_not_restored',
+              text: 'History could not be restored for this session; starting without it',
+            },
+            { seq: 1, turnId: '' },
+          ),
+          supervisorMarkerRecord(
+            {
+              marker: 'permission_restricted',
+              text: 'The supervisor runs in plan mode because a policy restricts it.',
+            },
+            { seq: 2, turnId: '' },
+          ),
+        ],
+        firstSeq: 1,
+        lastSeq: 2,
+        headSeq: 2,
+      }),
+    });
+    const conversation = within(transcript());
+    expect(
+      conversation.getByText('History could not be restored for this session; starting without it'),
+    ).toBeVisible();
+    expect(
+      conversation.getByText('The supervisor runs in plan mode because a policy restricts it.'),
+    ).toBeVisible();
+  });
+
+  const failedState = supervisorState({
+    settings: CHOSEN,
+    generation: 1,
+    lifecycle: 'failed',
+    failure: supervisorLaunchFailure(),
+    headSeq: 1,
+  });
+  const failedTranscript = supervisorTranscriptPage({
+    items: [
+      supervisorMarkerRecord(
+        {
+          marker: 'error',
+          text: 'The harness exited before it answered the handshake.',
+          code: 'supervisor_launch_failed',
+        },
+        { seq: 1, turnId: '' },
+      ),
+    ],
+    firstSeq: 1,
+    lastSeq: 1,
+    headSeq: 1,
+  });
+
+  it('shows a failed launch as the status line, the error card, and the marker row', async () => {
+    await renderPage({ supervisorState: failedState, supervisorTranscript: failedTranscript });
+
+    expect(status()).toHaveTextContent('Supervisor failed — Retry');
+    expect(status()).toHaveAttribute('data-lifecycle', 'failed');
+    const card = screen.getByRole('alert');
+    expect(within(card).getByText('Supervisor failed to start')).toBeVisible();
+    expect(within(card).getByText('supervisor_launch_failed')).toBeVisible();
+    expect(
+      within(transcript()).getByText(
+        'Supervisor failed to start · The harness exited before it answered the handshake.',
+      ),
+    ).toBeVisible();
+  });
+
+  it('disables Retry with a reason while the composer is empty', async () => {
+    await renderPage({ supervisorState: failedState, supervisorTranscript: failedTranscript });
+
+    const card = screen.getByRole('alert');
+    expect(within(card).queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(within(card).getByText('Type a message to retry.')).toBeVisible();
+
+    const user = userEvent.setup();
+    await user.type(composer(), 'Try again');
+    expect(within(card).getByRole('button', { name: 'Retry' })).toBeEnabled();
+    expect(within(card).queryByText('Type a message to retry.')).toBeNull();
+  });
+
+  it('re-sends the composer text through the ordinary send path on Retry and drops the card once the launch moves on', async () => {
+    const mock = await renderPage({
+      supervisorState: failedState,
+      supervisorTranscript: failedTranscript,
+    });
+    const user = userEvent.setup();
+    await user.type(composer(), 'Summarize the open features');
+
+    await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }));
+
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledTimes(1);
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({
+      text: 'Summarize the open features',
+    });
+    expect(composer()).toHaveValue('');
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(status()).not.toHaveTextContent('Supervisor failed — Retry');
+  });
+
+  it('keeps one card when the failed send returns the same launch failure, and restores the draft', async () => {
+    const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
+    mock.api.sendSupervisorMessage.mockImplementation(() => {
+      mock.api.getSupervisorState.mockResolvedValue(failedState);
+      return Promise.reject(
+        ipcError('supervisor_launch_failed', 'The harness exited before it answered.', {
+          title: 'Supervisor failed to start',
+        }),
+      );
+    });
+    const user = userEvent.setup();
+
+    await user.type(composer(), 'Hello there');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(status()).toHaveTextContent('Supervisor failed — Retry'));
+    expect(composer()).toHaveValue('Hello there');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' })).toBeEnabled();
   });
 });

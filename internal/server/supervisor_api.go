@@ -282,7 +282,7 @@ func (h *apiHandler) writeSupervisorError(w http.ResponseWriter, err error) {
 	case errors.Is(err, supervisor.ErrTurnActive):
 		writeAPIError(w, http.StatusConflict, errcat.TurnActive)
 	case errors.As(err, &launch):
-		writeAPIError(w, http.StatusBadGateway, errcat.SupervisorLaunchFailed, errcat.WithDiagnostics(SafeDisplayText(launch.Err.Error(), 400)))
+		writeJSON(w, http.StatusBadGateway, ErrorResponse{APIVersion: APIVersion, Error: supervisorLaunchFailure(launch)})
 	case errors.Is(err, supervisor.ErrClosed):
 		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)
 	case errors.Is(err, supervisor.ErrInvalidPageQuery):
@@ -292,6 +292,12 @@ func (h *apiHandler) writeSupervisorError(w http.ResponseWriter, err error) {
 	default:
 		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
 	}
+}
+
+// supervisorLaunchFailure renders a launch failure as the canonical error
+// both the failed send and the read model's failure field carry.
+func supervisorLaunchFailure(launch *supervisor.LaunchFailedError) Error {
+	return wireError(errcat.New(errcat.SupervisorLaunchFailed, errcat.WithDiagnostics(SafeDisplayText(launch.Err.Error(), 400))))
 }
 
 // supervisorStateDTO projects the read model; pending requests reuse the
@@ -304,19 +310,37 @@ func supervisorStateDTO(st supervisor.State) SupervisorState {
 			pending = append(pending, controlRequestDTO(st.Session, req))
 		}
 	}
-	return SupervisorState{
+	interruptedBy := st.InterruptedBy
+	if interruptedBy == "" {
+		interruptedBy = supervisor.InterruptedByNone
+	}
+	dto := SupervisorState{
 		ConversationID:  st.ConversationID,
 		Generation:      st.Generation,
 		SessionID:       st.SessionID,
 		Lifecycle:       SupervisorLifecycle(st.Lifecycle),
 		StartingStep:    SupervisorStartingStep(st.StartingStep),
 		LastTurnOutcome: SupervisorTurnOutcome(st.LastTurnOutcome),
+		InterruptedBy:   SupervisorInterruptedBy(interruptedBy),
 		Settings:        SupervisorSettings{Harness: st.Settings.Harness, Model: st.Settings.Model, Effort: st.Settings.Effort},
 		EffectiveModel:  st.EffectiveModel,
+		PermissionMode: SupervisorPermissionMode{
+			Requested:          st.PermissionMode.Requested,
+			Effective:          st.PermissionMode.Effective,
+			RestrictedByPolicy: st.PermissionMode.RestrictedByPolicy,
+		},
 		PendingRequests: pending,
 		HeadSeq:         st.HeadSeq,
 		StreamEpoch:     st.StreamEpoch,
 	}
+	if dto.PermissionMode.Requested == "" {
+		dto.PermissionMode.Requested = supervisor.RequestedPermissionMode
+	}
+	if st.Failure != nil && st.Lifecycle == supervisor.LifecycleFailed {
+		failure := supervisorLaunchFailure(st.Failure)
+		dto.Failure = &failure
+	}
+	return dto
 }
 
 // supervisorRecordDTO projects one committed record with the same
@@ -364,6 +388,14 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 			Summary:   summary,
 		}
 		dto.Messages = []TranscriptMessage{{Index: index, Role: roleSystem, Type: transcriptTypeControlRequest, Tool: data.ToolName, Status: data.Outcome, Redacted: true}}
+	case supervisor.KindMarker:
+		var data supervisor.MarkerData
+		_ = json.Unmarshal(rec.Data, &data)
+		dto.Marker = &SupervisorMarkerRecord{
+			Marker: SupervisorMarkerRecordMarker(data.Marker),
+			Text:   SafeDisplayText(data.Text, 400),
+			Code:   data.Code,
+		}
 	}
 	if dto.Messages == nil {
 		dto.Messages = []TranscriptMessage{}

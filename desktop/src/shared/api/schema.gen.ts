@@ -2700,12 +2700,24 @@ export interface components {
         /** @enum {string} */
         SupervisorLifecycle: "stopped" | "starting" | "idle" | "running" | "waiting_permission" | "waiting_question" | "failed";
         /**
-         * @description Present only while the lifecycle is `starting`.
+         * @description Present only while the lifecycle is `starting`: `rebuilding` while the harness's native session is rebuilt from the transcript, `launching` while the process spawns, `handshake` until it first answers.
          * @enum {string}
          */
-        SupervisorStartingStep: "launching" | "handshake";
+        SupervisorStartingStep: "rebuilding" | "launching" | "handshake";
         /** @enum {string} */
         SupervisorTurnOutcome: "none" | "completed" | "interrupted" | "failed";
+        /**
+         * @description Who cut the most recent turn; meaningful when `last_turn_outcome` is `interrupted`. `user` is Stop or End, `shutdown` is a server shutdown or crash detected at boot.
+         * @enum {string}
+         */
+        SupervisorInterruptedBy: "none" | "user" | "shutdown";
+        /** @description Permission mode the supervisor asked the harness for and the mode the running harness reported. `effective` is empty until a process reports it. */
+        SupervisorPermissionMode: {
+            requested: string;
+            effective: string;
+            /** @description True when the harness reported a mode other than the requested one. */
+            restricted_by_policy: boolean;
+        };
         /** @description Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default. */
         SupervisorSettings: {
             harness: string;
@@ -2729,9 +2741,13 @@ export interface components {
             lifecycle: components["schemas"]["SupervisorLifecycle"];
             starting_step?: components["schemas"]["SupervisorStartingStep"];
             last_turn_outcome: components["schemas"]["SupervisorTurnOutcome"];
+            interrupted_by: components["schemas"]["SupervisorInterruptedBy"];
             settings: components["schemas"]["SupervisorSettings"];
             /** @description Model the running harness reports; empty when no process exists. */
             effective_model: string;
+            permission_mode: components["schemas"]["SupervisorPermissionMode"];
+            /** @description Canonical error of the most recent launch failure; present only while the lifecycle is `failed`. */
+            failure?: components["schemas"]["Error"];
             pending_requests: components["schemas"]["ControlRequest"][];
             /**
              * Format: int64
@@ -2746,7 +2762,7 @@ export interface components {
             state: components["schemas"]["SupervisorState"];
         };
         /** @enum {string} */
-        SupervisorRecordKind: "user" | "assistant" | "tool_use" | "tool_result" | "permission" | "question";
+        SupervisorRecordKind: "user" | "assistant" | "tool_use" | "tool_result" | "permission" | "question" | "marker";
         /** @enum {string} */
         SupervisorRecordVisibility: "content" | "model_only" | "display_only";
         /** @description Request or verdict carried by `permission` and `question` records. */
@@ -2756,8 +2772,15 @@ export interface components {
             /** @enum {string} */
             stage: "requested" | "resolved";
             /** @enum {string} */
-            outcome: "pending" | "allowed" | "denied" | "answered";
+            outcome: "pending" | "allowed" | "denied" | "answered" | "interrupted";
             summary?: string;
+        };
+        /** @description Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker. */
+        SupervisorMarkerRecord: {
+            /** @enum {string} */
+            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted";
+            text: string;
+            code?: string;
         };
         /** @description One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`. */
         SupervisorRecord: {
@@ -2776,6 +2799,7 @@ export interface components {
             stream_message_id?: string;
             messages: components["schemas"]["TranscriptMessage"][];
             request?: components["schemas"]["SupervisorRequestRecord"];
+            marker?: components["schemas"]["SupervisorMarkerRecord"];
         };
         SupervisorTranscriptResponse: {
             api_version: string;

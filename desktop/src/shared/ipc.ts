@@ -2826,10 +2826,22 @@ export const SupervisorLifecycleSchema = z.enum([
   'failed',
 ]);
 export type SupervisorLifecycle = z.output<typeof SupervisorLifecycleSchema>;
-export const SupervisorStartingStepSchema = z.enum(['launching', 'handshake']);
+export const SupervisorStartingStepSchema = z.enum(['rebuilding', 'launching', 'handshake']);
 export type SupervisorStartingStep = z.output<typeof SupervisorStartingStepSchema>;
 export const SupervisorTurnOutcomeSchema = z.enum(['none', 'completed', 'interrupted', 'failed']);
 export type SupervisorTurnOutcome = z.output<typeof SupervisorTurnOutcomeSchema>;
+/** Who cut the most recent turn; meaningful when the outcome is `interrupted`. */
+export const SupervisorInterruptedBySchema = z.enum(['none', 'user', 'shutdown']);
+export type SupervisorInterruptedBy = z.output<typeof SupervisorInterruptedBySchema>;
+
+/** Permission mode asked for versus the one the running harness reported. */
+export const SupervisorPermissionModeSchema = z.strictObject({
+  requested: z.string().max(100),
+  /** Empty until a process reports its mode. */
+  effective: z.string().max(100),
+  restrictedByPolicy: z.boolean(),
+});
+export type SupervisorPermissionMode = z.output<typeof SupervisorPermissionModeSchema>;
 
 /** Committed harness choice; empty harness or model means unset, empty effort the harness default. */
 export const SupervisorSettingsSchema = z.strictObject({
@@ -2861,9 +2873,14 @@ export const SupervisorStateSchema = z.strictObject({
   /** Present only while the lifecycle is `starting`. */
   startingStep: SupervisorStartingStepSchema.optional(),
   lastTurnOutcome: SupervisorTurnOutcomeSchema,
+  /** Who cut the most recent turn; `shutdown` means a server restart cut it. */
+  interruptedBy: SupervisorInterruptedBySchema,
   settings: SupervisorSettingsSchema,
   /** Model the running harness reports; empty when no process exists. */
   effectiveModel: z.string().max(200),
+  permissionMode: SupervisorPermissionModeSchema,
+  /** Canonical error of the most recent launch failure; present only while `failed`. */
+  failure: CanonicalErrorSchema.optional(),
   pendingRequests: z.array(SupervisorPendingRequestSchema).max(100),
   /** Seq of the newest committed transcript record; 0 when empty. */
   headSeq: SupervisorSeqSchema,
@@ -2879,6 +2896,7 @@ export const SupervisorRecordKindSchema = z.enum([
   'tool_result',
   'permission',
   'question',
+  'marker',
 ]);
 export type SupervisorRecordKind = z.output<typeof SupervisorRecordKindSchema>;
 export const SupervisorRecordVisibilitySchema = z.enum(['content', 'model_only', 'display_only']);
@@ -2889,10 +2907,30 @@ export const SupervisorRequestVerdictSchema = z.strictObject({
   requestId: AttentionIDSchema,
   toolName: z.string().max(500),
   stage: z.enum(['requested', 'resolved']),
-  outcome: z.enum(['pending', 'allowed', 'denied', 'answered']),
+  outcome: z.enum(['pending', 'allowed', 'denied', 'answered', 'interrupted']),
   summary: AttentionTextSchema.optional(),
 });
 export type SupervisorRequestVerdict = z.output<typeof SupervisorRequestVerdictSchema>;
+
+export const SupervisorMarkerKindSchema = z.enum([
+  'interrupted',
+  'error',
+  'history_not_restored',
+  'permission_restricted',
+]);
+export type SupervisorMarkerKind = z.output<typeof SupervisorMarkerKindSchema>;
+
+/**
+ * The display-only notice carried by `marker` records: a turn cut by a
+ * server restart, a launch failure, history that could not be restored, or a
+ * permission mode restricted by policy. `code` is an error marker's catalog code.
+ */
+export const SupervisorMarkerSchema = z.strictObject({
+  marker: SupervisorMarkerKindSchema,
+  text: AttentionTextSchema,
+  code: z.string().max(200).optional(),
+});
+export type SupervisorMarker = z.output<typeof SupervisorMarkerSchema>;
 
 /** One committed transcript record; its `messages` rows carry `index = seq`. */
 export const SupervisorRecordSchema = z.strictObject({
@@ -2908,6 +2946,7 @@ export const SupervisorRecordSchema = z.strictObject({
   streamMessageId: SupervisorIdentifierSchema.optional(),
   messages: z.array(TranscriptMessageSchema).max(500),
   request: SupervisorRequestVerdictSchema.optional(),
+  marker: SupervisorMarkerSchema.optional(),
 });
 export type SupervisorRecord = z.output<typeof SupervisorRecordSchema>;
 

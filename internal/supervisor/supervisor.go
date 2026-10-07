@@ -67,8 +67,9 @@ func (l Lifecycle) inTurn() bool {
 type StartingStep string
 
 const (
-	StepLaunching StartingStep = "launching"
-	StepHandshake StartingStep = "handshake"
+	StepRebuilding StartingStep = "rebuilding"
+	StepLaunching  StartingStep = "launching"
+	StepHandshake  StartingStep = "handshake"
 )
 
 // TurnOutcome is how the most recent turn ended.
@@ -80,6 +81,31 @@ const (
 	OutcomeInterrupted TurnOutcome = "interrupted"
 	OutcomeFailed      TurnOutcome = "failed"
 )
+
+// InterruptedBy says who cut the most recent turn; meaningful when the
+// outcome is OutcomeInterrupted.
+type InterruptedBy string
+
+const (
+	InterruptedByNone InterruptedBy = "none"
+	// InterruptedByUser is Stop, the interrupt grace termination, or End.
+	InterruptedByUser InterruptedBy = "user"
+	// InterruptedByShutdown is a turn cut by a server shutdown or crash,
+	// detected at the next boot.
+	InterruptedByShutdown InterruptedBy = "shutdown"
+)
+
+// RequestedPermissionMode is the permission mode the supervisor asks every
+// harness for.
+const RequestedPermissionMode = "default"
+
+// PermissionMode compares the requested permission mode with the one the
+// running harness reported in its init message.
+type PermissionMode struct {
+	Requested          string
+	Effective          string
+	RestrictedByPolicy bool
+}
 
 // Settings is the committed harness choice. Empty Effort means the harness
 // default.
@@ -100,8 +126,13 @@ type State struct {
 	Lifecycle       Lifecycle
 	StartingStep    StartingStep
 	LastTurnOutcome TurnOutcome
+	InterruptedBy   InterruptedBy
 	Settings        Settings
 	EffectiveModel  string
+	PermissionMode  PermissionMode
+	// Failure is the most recent launch failure; set only while the
+	// lifecycle is failed.
+	Failure *LaunchFailedError
 	// PendingRequests are the surfaced control requests awaiting an answer,
 	// in arrival order. Session is the session they belong to.
 	PendingRequests []*llm.ControlRequestMessage
@@ -157,11 +188,14 @@ type LaunchRequest struct {
 	ConversationID string
 	Generation     int64
 	Settings       Settings
-	WorkDir        string
-	PIDDir         string
-	LogPath        string
-	StderrPath     string
-	Observer       ports.SessionObserver
+	// ResumeSessionID, when set, resumes the harness against the native
+	// session rebuilt from the transcript.
+	ResumeSessionID string
+	WorkDir         string
+	PIDDir          string
+	LogPath         string
+	StderrPath      string
+	Observer        ports.SessionObserver
 	// OnSpawned is called once the process started, before the protocol
 	// handshake runs.
 	OnSpawned func()
@@ -189,6 +223,10 @@ type Options struct {
 	Catalog   Catalog
 	Launcher  Launcher
 	Admission *workadmission.Coordinator
+	// Converters rebuild each harness's native session from the transcript
+	// before launch, keyed by harness name. A harness without one launches
+	// fresh every generation.
+	Converters map[string]Converter
 	// HandshakeTimeout bounds the wait for the provider's first protocol
 	// output after launch. Zero uses DefaultHandshakeTimeout.
 	HandshakeTimeout time.Duration
@@ -196,13 +234,17 @@ type Options struct {
 	// interrupt before the process group is terminated. Zero uses
 	// DefaultInterruptGrace.
 	InterruptGrace time.Duration
-	Now            func() time.Time
-	NewID          func() string
+	// OrphanWait bounds the wait at boot for a previous server's surviving
+	// provider process group to exit. Zero uses DefaultOrphanWait.
+	OrphanWait time.Duration
+	Now        func() time.Time
+	NewID      func() string
 }
 
 const (
 	DefaultHandshakeTimeout = 30 * time.Second
 	DefaultInterruptGrace   = 20 * time.Second
+	DefaultOrphanWait       = 10 * time.Second
 )
 
 // SendResult is the outcome of one accepted send.

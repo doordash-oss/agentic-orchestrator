@@ -37,6 +37,7 @@ const (
 	KindToolResult RecordKind = "tool_result"
 	KindPermission RecordKind = "permission"
 	KindQuestion   RecordKind = "question"
+	KindMarker     RecordKind = "marker"
 )
 
 // Visibility says who a record is for: the model and the UI (content), the

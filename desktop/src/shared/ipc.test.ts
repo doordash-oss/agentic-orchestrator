@@ -2059,13 +2059,42 @@ describe('supervisor IPC schemas', () => {
       sessionId: '',
       lifecycle: 'stopped',
       lastTurnOutcome: 'none',
+      interruptedBy: 'none',
       settings: { harness: '', model: '', effort: '' },
       effectiveModel: '',
+      permissionMode: { requested: 'default', effective: '', restrictedByPolicy: false },
       pendingRequests: [],
       headSeq: 0,
       streamEpoch: '',
     };
     expect(SupervisorStateSchema.parse(state)).toEqual(state);
+    const failed = {
+      ...state,
+      lifecycle: 'failed',
+      startingStep: 'rebuilding',
+      lastTurnOutcome: 'interrupted',
+      interruptedBy: 'shutdown',
+      failure: {
+        code: 'supervisor_launch_failed',
+        class: 'blocking',
+        title: 'Supervisor failed to start',
+        summary: 'The harness exited before the handshake.',
+      },
+    };
+    expect(SupervisorStateSchema.parse(failed)).toEqual(failed);
+    expect(SupervisorStateSchema.safeParse({ ...state, interruptedBy: 'crash' }).success).toBe(
+      false,
+    );
+    expect(SupervisorStateSchema.safeParse({ ...state, startingStep: 'rebooting' }).success).toBe(
+      false,
+    );
+    expect(
+      SupervisorStateSchema.safeParse({ ...failed, failure: { ...failed.failure, token: 'x' } })
+        .success,
+    ).toBe(false);
+    expect(SupervisorStateSchema.safeParse({ ...state, permissionMode: undefined }).success).toBe(
+      false,
+    );
     expect(SupervisorStateSchema.safeParse({ ...state, lifecycle: 'dancing' }).success).toBe(false);
     expect(SupervisorStateSchema.safeParse({ ...state, token: 'x' }).success).toBe(false);
     expect(SupervisorStateSchema.safeParse({ ...state, streamEpoch: 'a&after=1' }).success).toBe(

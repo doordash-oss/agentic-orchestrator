@@ -326,15 +326,19 @@ func TestCoordinator_LaunchFailureCommitsNothingAndNextSendRelaunches(t *testing
 				t.Fatalf("err = %v, want LaunchFailedError", err)
 			}
 			st := c.State()
-			if st.Lifecycle != LifecycleFailed || st.HeadSeq != 0 || st.SessionID != "" {
+			if st.Lifecycle != LifecycleFailed || st.SessionID != "" || st.Failure == nil {
 				t.Fatalf("state after failure = %+v", st)
 			}
+			assertLaunchFailureMarker(t, c)
 			launcher.mu.Lock()
 			launcher.exitBeforeHandshake = false
 			launcher.mu.Unlock()
 			res, err := c.Send(context.Background(), "hello", "", "cm-1")
 			if err != nil || !res.Launched || res.Record.Generation != 2 {
 				t.Fatalf("retry send = %+v, %v", res, err)
+			}
+			if st := c.State(); st.Failure != nil {
+				t.Fatalf("failure survived the retry: %+v", st.Failure)
 			}
 		})
 	}

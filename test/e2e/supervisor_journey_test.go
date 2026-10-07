@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/claudeconfig"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -39,6 +40,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/claudesession"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -99,11 +101,17 @@ type supervisorHarness struct {
 	coord       *supervisor.Coordinator
 	srv         *httptest.Server
 	model       string
+	// claudeConfigDir is CLAUDE_CONFIG_DIR for the server and the child, so
+	// rebuilt native sessions never land in the developer's home.
+	claudeConfigDir string
+	// abandoned holds coordinators a simulated crash left open.
+	abandoned []*supervisor.Coordinator
 }
 
 func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.Options)) *supervisorHarness {
 	t.Helper()
-	h := &supervisorHarness{t: t, runtimeDir: t.TempDir()}
+	h := &supervisorHarness{t: t, runtimeDir: t.TempDir(), claudeConfigDir: t.TempDir()}
+	t.Setenv(claudeconfig.EnvConfigDir, h.claudeConfigDir)
 	h.stateDir = filepath.Join(h.runtimeDir, "state")
 	if err := os.MkdirAll(h.stateDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -126,6 +134,9 @@ func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.
 	t.Cleanup(func() {
 		h.stopServer()
 		_ = h.coord.Close()
+		for _, c := range h.abandoned {
+			_ = c.Close()
+		}
 		h.sessions.Shutdown()
 	})
 	return h
@@ -149,6 +160,9 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 		},
 		Admission:        h.admission,
 		HandshakeTimeout: 10 * time.Second,
+		Converters: map[string]supervisor.Converter{
+			claudesession.Harness: claudesession.New(claudesession.Options{}),
+		},
 	}
 	for _, fn := range mutate {
 		fn(&opts)
@@ -177,6 +191,17 @@ func (h *supervisorHarness) restart() {
 	h.stopServer()
 	_ = h.coord.Close()
 	h.start()
+}
+
+// crash simulates a server process dying mid-flight: the old coordinator is
+// abandoned without Close, so its provider keeps running and its
+// turn-in-flight record stays, and a new coordinator boots over the same
+// state directory.
+func (h *supervisorHarness) crash(mutate ...func(*supervisor.Options)) {
+	h.t.Helper()
+	h.stopServer()
+	h.abandoned = append(h.abandoned, h.coord)
+	h.start(mutate...)
 }
 
 // stopServer drops open event streams first: Close waits for active
@@ -582,16 +607,45 @@ func TestSupervisorLaunchFailureThenRecovery(t *testing.T) {
 	if failed.Error.Code != "supervisor_launch_failed" {
 		t.Fatalf("launch failure = %+v", failed.Error)
 	}
-	if st := h.state(); st.Lifecycle != server.SupervisorLifecycleFailed || st.HeadSeq != 0 {
-		t.Fatalf("state after failure = %+v", st)
-	}
+	h.assertLaunchFailed(failed.Error)
 	if err := os.WriteFile(h.script, []byte("#!/bin/sh\n"+testutil.FakeClaudeInteractiveScriptBody()), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if resp := h.send("hello", "c1"); !resp.Launched || resp.Record.Generation != 2 {
 		t.Fatalf("retry = %+v", resp)
 	}
-	h.waitLifecycle(server.SupervisorLifecycleIdle)
+	if st := h.waitLifecycle(server.SupervisorLifecycleIdle); st.Failure != nil {
+		t.Fatalf("failure survived the retry: %+v", st.Failure)
+	}
+}
+
+// assertLaunchFailed checks the failed read model and transcript: the
+// failure envelope matches what the sender received, an error marker with
+// the catalog code is the newest record, no user record was committed and
+// the settings are intact.
+func (h *supervisorHarness) assertLaunchFailed(sent server.Error) {
+	h.t.Helper()
+	st := h.state()
+	if st.Lifecycle != server.SupervisorLifecycleFailed || st.Failure == nil || st.Failure.Code != sent.Code || st.Failure.Diagnostics != sent.Diagnostics {
+		h.t.Fatalf("state after failure = %+v (failure %+v, sent %+v)", st, st.Failure, sent)
+	}
+	if st.Settings.Harness != "claude" || st.Settings.Model != h.model {
+		h.t.Fatalf("settings after failure = %+v", st.Settings)
+	}
+	page := h.transcript("")
+	if len(page.Items) == 0 {
+		h.t.Fatal("no error marker after a failed launch")
+	}
+	last := page.Items[len(page.Items)-1]
+	if last.Kind != server.SupervisorRecordKindMarker || last.Marker == nil || last.Marker.Marker != server.SupervisorMarkerError ||
+		last.Marker.Code != string(errcat.SupervisorLaunchFailed) || last.Marker.Text == "" {
+		h.t.Fatalf("newest record after failure = %+v", last)
+	}
+	for _, rec := range page.Items {
+		if rec.Kind == server.SupervisorRecordKindUser && rec.Generation == st.Generation {
+			h.t.Fatalf("the failed launch committed a user record: %+v", rec)
+		}
+	}
 }
 
 func TestSupervisorPermissionAndQuestionRequests(t *testing.T) {

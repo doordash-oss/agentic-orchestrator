@@ -485,3 +485,65 @@ func TestSupervisorMessageOperationDocumentsErrorReference(t *testing.T) {
 		}
 	}
 }
+
+func TestSupervisorStateProjectsRestartAndFailureFields(t *testing.T) {
+	launch := &supervisor.LaunchFailedError{Err: errors.New("exec: claude: not found")}
+	failed := supervisorStateDTO(supervisor.State{
+		Lifecycle:       supervisor.LifecycleFailed,
+		LastTurnOutcome: supervisor.OutcomeNone,
+		Failure:         launch,
+		PermissionMode:  supervisor.PermissionMode{Requested: "default", Effective: "plan", RestrictedByPolicy: true},
+	})
+	sent := supervisorLaunchFailure(launch)
+	if failed.Failure == nil || failed.Failure.Code != string(errcat.SupervisorLaunchFailed) || failed.Failure.Diagnostics != sent.Diagnostics || failed.Failure.Title != sent.Title {
+		t.Fatalf("failure = %+v, want the sender's envelope %+v", failed.Failure, sent)
+	}
+	if failed.InterruptedBy != SupervisorInterruptedByNone {
+		t.Fatalf("interrupted_by = %q, want none", failed.InterruptedBy)
+	}
+	if failed.PermissionMode != (SupervisorPermissionMode{Requested: "default", Effective: "plan", RestrictedByPolicy: true}) {
+		t.Fatalf("permission_mode = %+v", failed.PermissionMode)
+	}
+	paused := supervisorStateDTO(supervisor.State{
+		Lifecycle:       supervisor.LifecycleStopped,
+		LastTurnOutcome: supervisor.OutcomeInterrupted,
+		InterruptedBy:   supervisor.InterruptedByShutdown,
+		Failure:         launch,
+	})
+	if paused.Failure != nil || paused.InterruptedBy != SupervisorInterruptedByShutdown || paused.PermissionMode.Requested != "default" {
+		t.Fatalf("paused state = %+v", paused)
+	}
+	payload, err := json.Marshal(paused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), `"failure"`) {
+		t.Fatalf("failure leaked outside the failed lifecycle: %s", payload)
+	}
+}
+
+func TestSupervisorMarkerRecordProjectsMarkerTextAndCode(t *testing.T) {
+	data, err := json.Marshal(supervisor.MarkerData{Marker: supervisor.MarkerError, Text: "exec failed: private-token", Code: string(errcat.SupervisorLaunchFailed)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto := supervisorRecordDTO(supervisor.Record{Seq: 4, Kind: supervisor.KindMarker, Visibility: supervisor.VisibilityDisplayOnly, TurnID: "g1.t1", Data: data}, "")
+	if dto.Marker == nil || dto.Marker.Marker != SupervisorMarkerError || dto.Marker.Code != string(errcat.SupervisorLaunchFailed) {
+		t.Fatalf("marker = %+v", dto.Marker)
+	}
+	if dto.Marker.Text != "exec failed: [redacted]" {
+		t.Fatalf("marker text = %q, want the safe display text", dto.Marker.Text)
+	}
+	if dto.Kind != SupervisorRecordKindMarker || dto.Messages == nil || dto.Request != nil {
+		t.Fatalf("record = %+v", dto)
+	}
+	payload, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"marker":"error"`, `"text":`, `"code":"supervisor_launch_failed"`} {
+		if !strings.Contains(string(payload), key) {
+			t.Fatalf("wire marker %s lacks %s", payload, key)
+		}
+	}
+}

@@ -53,6 +53,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/claudesession"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"go.uber.org/fx"
 	"golang.org/x/term"
@@ -3412,6 +3413,10 @@ func newSupervisorCoordinator(boot *runtimeBootstrap) (*supervisor.Coordinator, 
 			DiscoveryPath: serverruntime.DiscoveryPath(boot.runtime.RuntimeDir),
 		},
 		Admission: boot.admission,
+		// Codex and OpenCode launch fresh until their converters land.
+		Converters: map[string]supervisor.Converter{
+			claudesession.Harness: claudesession.New(claudesession.Options{}),
+		},
 	})
 }
 

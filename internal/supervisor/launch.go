@@ -74,6 +74,9 @@ func (l *SessionLauncher) Launch(_ context.Context, req LaunchRequest) (ports.Se
 		TurnMode:     ports.TurnModeInteractive,
 		EffortLevel:  llm.EffortLevel(req.Settings.Effort),
 		Interactive:  true,
+		// The coordinator rebuilt the native session from the transcript;
+		// the harness resumes it so the model sees the prior conversation.
+		ResumeSessionID: req.ResumeSessionID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build supervisor session: %w", err)

@@ -26,6 +26,7 @@ import (
 //
 //	settings.json                      committed {harness, model, effort}
 //	conversation.json                  current conversation pointer
+//	turns.json                         turns of the current generation awaiting a result
 //	conversations/<id>/transcript.*    durable transcript and index
 //	conversations/<id>/generations/<n> per-launch PID dir and logs
 //
@@ -38,6 +39,7 @@ const (
 	conversationFile    = "conversation.json"
 	conversationsDir    = "conversations"
 	generationsDirName  = "generations"
+	turnsFileName       = "turns.json"
 	persistedFileFormat = 1
 )
 
@@ -53,6 +55,9 @@ type persistedConversation struct {
 	ConversationID string `json:"conversation_id"`
 	Generation     int64  `json:"generation"`
 	StreamEpoch    string `json:"stream_epoch"`
+	// NativeSessionID is the harness session id the transcript is rebuilt
+	// into; minted on the first rebuild and reused by every generation.
+	NativeSessionID string `json:"native_session_id,omitempty"`
 }
 
 func loadSettings(dir string) (Settings, error) {
@@ -85,6 +90,29 @@ func loadConversation(dir string) (persistedConversation, bool, error) {
 func saveConversation(dir string, conv persistedConversation) error {
 	conv.Format = persistedFileFormat
 	return writeJSONAtomic(filepath.Join(dir, conversationFile), conv)
+}
+
+// persistedTurns is the turn-in-flight record: the turns of one generation
+// still awaiting a result, oldest first. Boot reads it to tell a turn cut by
+// a server shutdown or crash from an idle shutdown.
+type persistedTurns struct {
+	Format     int      `json:"format"`
+	Generation int64    `json:"generation"`
+	TurnIDs    []string `json:"turn_ids"`
+}
+
+func loadTurns(dir string) (persistedTurns, error) {
+	var stored persistedTurns
+	_, err := readJSON(filepath.Join(dir, turnsFileName), &stored)
+	return stored, err
+}
+
+func saveTurns(dir string, generation int64, turnIDs []string) error {
+	return writeJSONAtomic(filepath.Join(dir, turnsFileName), persistedTurns{
+		Format:     persistedFileFormat,
+		Generation: generation,
+		TurnIDs:    append([]string{}, turnIDs...),
+	})
 }
 
 // readJSON decodes path into out, reporting found=false for a missing file.

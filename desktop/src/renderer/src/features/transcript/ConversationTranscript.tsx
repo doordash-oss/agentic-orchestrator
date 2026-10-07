@@ -16,9 +16,29 @@ limitations under the License.
 
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { TranscriptMessage } from '../../../../shared/ipc';
-import { friendlyToolName, type ConversationItem, type SubagentActivity } from './conversation';
+import {
+  friendlyToolName,
+  type ConversationItem,
+  type ConversationNoticeTone,
+  type SubagentActivity,
+} from './conversation';
 
 const NEAR_BOTTOM_PX = 40;
+
+type VerdictOutcome = Extract<ConversationItem, { kind: 'verdict' }>['outcome'];
+
+const VERDICT_MARKS: Readonly<Record<VerdictOutcome, string>> = {
+  allowed: '✓',
+  answered: '✓',
+  denied: '✕',
+  interrupted: '‖',
+};
+
+const NOTICE_MARKS: Readonly<Record<ConversationNoticeTone, string>> = {
+  interrupted: '‖',
+  failed: '✕',
+  caveat: '!',
+};
 
 export function ActivityIndicator({
   labels,
@@ -296,6 +316,9 @@ export function ConversationTranscript({
               {item.role === 'user' ? 'You' : assistantName}
             </span>
             <p>{item.text}</p>
+            {item.footer !== undefined ? (
+              <span className="conversation__message-footer">{item.footer}</span>
+            ) : null}
           </article>
         ) : item.kind === 'auto-pick' ? (
           <article
@@ -321,9 +344,16 @@ export function ConversationTranscript({
         ) : item.kind === 'verdict' ? (
           <p key={item.key} className="conversation__verdict" data-outcome={item.outcome}>
             <span className="conversation__verdict-mark" aria-hidden="true">
-              {item.outcome === 'denied' ? '✕' : '✓'}
+              {VERDICT_MARKS[item.outcome]}
             </span>
             <span className="conversation__verdict-text">{item.text}</span>
+          </p>
+        ) : item.kind === 'notice' ? (
+          <p key={item.key} className="conversation__notice" data-tone={item.tone}>
+            <span className="conversation__notice-mark" aria-hidden="true">
+              {NOTICE_MARKS[item.tone]}
+            </span>
+            <span className="conversation__notice-text">{item.text}</span>
           </p>
         ) : (
           <ActivityIndicator

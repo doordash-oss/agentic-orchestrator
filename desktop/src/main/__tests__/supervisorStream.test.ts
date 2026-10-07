@@ -30,8 +30,10 @@ function wireState(overrides: Record<string, unknown> = {}): Record<string, unkn
     session_id: '__supervisor__.conv-1.1',
     lifecycle: 'idle',
     last_turn_outcome: 'completed',
+    interrupted_by: 'none',
     settings: { harness: 'claude', model: 'claude-sonnet-4-5', effort: '' },
     effective_model: 'claude-sonnet-4-5',
+    permission_mode: { requested: 'default', effective: 'default', restricted_by_policy: false },
     pending_requests: [],
     head_seq: 3,
     stream_epoch: EPOCH,
@@ -149,6 +151,23 @@ describe('parseSupervisorStreamEvent', () => {
   it('parses each server kind with its required body', () => {
     for (const event of [
       recordEvent(4),
+      envelope('record', {
+        seq: 5,
+        record: wireRecord(5, {
+          kind: 'marker',
+          visibility: 'display_only',
+          messages: [],
+          marker: { marker: 'interrupted', text: 'Interrupted before restart' },
+        }),
+      }),
+      envelope('state', {
+        state: wireState({
+          lifecycle: 'starting',
+          starting_step: 'rebuilding',
+          last_turn_outcome: 'interrupted',
+          interrupted_by: 'shutdown',
+        }),
+      }),
       envelope('delta', {
         delta: { turn_id: 't', stream_message_id: 'm', chunk_index: 0, text: 'He' },
       }),

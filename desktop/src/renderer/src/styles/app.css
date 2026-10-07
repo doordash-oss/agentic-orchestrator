@@ -585,6 +585,18 @@ body {
   font: 600 11px var(--bench-font-text);
 }
 
+.conversation__message-footer {
+  color: var(--faint);
+  font: 500 11px var(--bench-font-text);
+}
+
+.conversation__message-footer::before {
+  content: '‖';
+  margin-right: 5px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .conversation__message p {
   min-width: 0;
   width: 100%;
@@ -13792,6 +13804,13 @@ body {
   background: var(--bad);
 }
 
+/* Paused by a restart: the working lamp's accent, hollow and still — work
+ * that stopped mid-flight and waits for the next message. */
+.supervisor-status[data-tone='paused'] .supervisor-status__lamp {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
 @keyframes supervisor-lamp {
   50% {
     opacity: 0.35;
@@ -14030,6 +14049,52 @@ body {
 
 .conversation__verdict[data-outcome='denied'] .conversation__verdict-mark {
   color: var(--bad);
+}
+
+.conversation__verdict[data-outcome='interrupted'] .conversation__verdict-mark {
+  color: var(--accent);
+}
+
+/* A seam in the stream: glyph and caption in the verdict's voice, trailed by
+ * a hairline to the column's edge, so a restart or failed launch reads as a
+ * break in time rather than as something anyone said. */
+.conversation__notice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.conversation__notice::after {
+  content: '';
+  flex: 1 0 var(--space-4);
+  align-self: center;
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+}
+
+.conversation__notice-mark {
+  flex: none;
+  font-weight: 700;
+}
+
+.conversation__notice[data-tone='interrupted'] .conversation__notice-mark {
+  color: var(--accent);
+}
+
+.conversation__notice[data-tone='failed'] .conversation__notice-mark {
+  color: var(--bad);
+}
+
+.conversation__notice[data-tone='caveat'] .conversation__notice-mark {
+  color: var(--attention);
+}
+
+.conversation__notice-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .conversation__verdict-text {

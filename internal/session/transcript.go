@@ -19,16 +19,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
-)
 
-// claudeProjectsDirName encodes a working directory path into the directory
-// name used by the Claude CLI under ~/.claude/projects/. The CLI replaces
-// path separators and dots with hyphens.
-func claudeProjectsDirName(workDir string) string {
-	return regexp.MustCompile(`[/.]`).ReplaceAllString(workDir, "-")
-}
+	"github.com/doordash-oss/agentic-orchestrator/internal/claudeconfig"
+)
 
 // TranscriptErrorDetail reads the provider's transcript file to extract
 // the last error message. This catches errors like "Request too large" that
@@ -185,14 +179,12 @@ func ErrorDetailFromOutput(outputPath, workDir string) string {
 		return ""
 	}
 
-	home, err := os.UserHomeDir()
+	configDir, err := claudeconfig.DefaultDir()
 	if err != nil {
 		return ""
 	}
 
-	path := filepath.Join(home, ".claude", "projects",
-		claudeProjectsDirName(workDir),
-		sessionID+".jsonl")
+	path := filepath.Join(claudeconfig.ProjectsDir(configDir, workDir), sessionID+".jsonl")
 
 	return readTranscriptError(path)
 }

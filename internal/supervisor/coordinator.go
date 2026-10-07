@@ -30,8 +30,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
@@ -55,7 +57,26 @@ const (
 	RequestAllowed  = "allowed"
 	RequestDenied   = "denied"
 	RequestAnswered = "answered"
+	// RequestInterrupted resolves a request whose turn was cut by a server
+	// shutdown or crash before it was answered.
+	RequestInterrupted = "interrupted"
 )
+
+// Marker types carried by marker records.
+const (
+	MarkerInterrupted          = "interrupted"
+	MarkerError                = "error"
+	MarkerHistoryNotRestored   = "history_not_restored"
+	MarkerPermissionRestricted = "permission_restricted"
+)
+
+// MarkerData is the payload of a display-only marker record. Code is the
+// catalog code of an error marker.
+type MarkerData struct {
+	Marker string `json:"marker"`
+	Text   string `json:"text"`
+	Code   string `json:"code,omitempty"`
+}
 
 // RequestData is the payload of permission and question records. Input,
 // Reason and Answers stay server-side; projection reduces them.
@@ -93,6 +114,9 @@ type Coordinator struct {
 	lifecycle      Lifecycle
 	step           StartingStep
 	outcome        TurnOutcome
+	interruptedBy  InterruptedBy
+	failure        *LaunchFailedError
+	permMode       PermissionMode
 	session        ports.SessionView
 	sessionID      string
 	effectiveModel string
@@ -106,7 +130,14 @@ type Coordinator struct {
 	streamCount  int
 	// ending marks the current process as being stopped on purpose; its
 	// exit is not a failure.
-	ending    bool
+	ending bool
+	// keepTurns leaves the turn-in-flight record in place when the process
+	// is stopped mid-turn by End or Close, so a clean shutdown and a crash
+	// take the same boot path.
+	keepTurns bool
+	// resumeID is the native session id the current process was resumed
+	// against; empty for a fresh launch.
+	resumeID  string
 	interrupt *interruptAttempt
 	closed    bool
 	subs      map[*Subscription]struct{}
@@ -154,6 +185,9 @@ func New(opts Options) (*Coordinator, error) {
 	if opts.InterruptGrace <= 0 {
 		opts.InterruptGrace = DefaultInterruptGrace
 	}
+	if opts.OrphanWait <= 0 {
+		opts.OrphanWait = DefaultOrphanWait
+	}
 	if opts.WorkDir == "" {
 		opts.WorkDir = opts.StateDir
 	}
@@ -186,16 +220,154 @@ func New(opts Options) (*Coordinator, error) {
 		return nil, err
 	}
 	store.setGeneration(conv.Generation)
-	return &Coordinator{
-		opts:      opts,
-		dir:       dir,
-		settings:  settings,
-		conv:      conv,
-		store:     store,
-		lifecycle: LifecycleStopped,
-		outcome:   OutcomeNone,
-		subs:      map[*Subscription]struct{}{},
-	}, nil
+	c := &Coordinator{
+		opts:          opts,
+		dir:           dir,
+		settings:      settings,
+		conv:          conv,
+		store:         store,
+		lifecycle:     LifecycleStopped,
+		outcome:       OutcomeNone,
+		interruptedBy: InterruptedByNone,
+		permMode:      PermissionMode{Requested: RequestedPermissionMode},
+		subs:          map[*Subscription]struct{}{},
+	}
+	if err := c.recoverBoot(); err != nil {
+		_ = store.close()
+		return nil, err
+	}
+	return c, nil
+}
+
+// recoverBoot reconciles what the previous server process left behind. A
+// surviving provider of the current generation is terminated by process
+// group (never reattached), and every turn the turn-in-flight record still
+// lists is marked interrupted with its unanswered requests resolved, so the
+// conversation reads as paused rather than silently idle.
+func (c *Coordinator) recoverBoot() error {
+	gen := c.conv.Generation
+	// The record is read before the orphan is terminated: whatever the dying
+	// process's owner does on its way out cannot change what this boot saw.
+	inflight, err := loadTurns(c.dir)
+	if err != nil {
+		// A corrupt record must not keep the supervisor from booting; the
+		// cut turn then simply reads as ended.
+		log.Printf("supervisor: read turn-in-flight record: %v", err)
+		inflight = persistedTurns{}
+	}
+	if gen > 0 {
+		sessionID := SessionID(c.conv.ConversationID, gen)
+		switch session.TerminateOrphan(c.generationDir(gen), sessionID, c.opts.OrphanWait) {
+		case session.OrphanTerminated:
+			log.Printf("supervisor: terminated orphaned provider of %s", sessionID)
+		case session.OrphanSurvived:
+			log.Printf("supervisor: orphaned provider of %s outlived its termination wait", sessionID)
+		case session.OrphanMismatch:
+			log.Printf("supervisor: left a live process alone: its identity does not match %s", sessionID)
+		}
+	}
+	records, err := c.store.after(0)
+	if err != nil {
+		return fmt.Errorf("read supervisor transcript: %w", err)
+	}
+	// The process is gone, so no request of this generation can still be
+	// answered.
+	open := openRequests(records, gen)
+	resolve := func(match func(string) bool) error {
+		for i := 0; i < len(open); i++ {
+			req := open[i]
+			if !match(req.rec.TurnID) {
+				continue
+			}
+			open = append(open[:i], open[i+1:]...)
+			i--
+			if err := c.appendBootRecord(req.rec.TurnID, req.rec.Kind, RequestData{
+				RequestID: req.data.RequestID,
+				ToolName:  req.data.ToolName,
+				Stage:     StageResolved,
+				Outcome:   RequestInterrupted,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	cut := map[string]bool{}
+	if inflight.Generation == gen {
+		for _, id := range inflight.TurnIDs {
+			cut[id] = true
+		}
+	}
+	if err := resolve(func(turn string) bool { return !cut[turn] }); err != nil {
+		return err
+	}
+	if len(cut) == 0 {
+		return nil
+	}
+	for _, turn := range inflight.TurnIDs {
+		if err := resolve(func(t string) bool { return t == turn }); err != nil {
+			return err
+		}
+		if err := c.appendBootRecord(turn, KindMarker, MarkerData{Marker: MarkerInterrupted, Text: "Interrupted before restart"}); err != nil {
+			return err
+		}
+	}
+	c.outcome = OutcomeInterrupted
+	c.interruptedBy = InterruptedByShutdown
+	if err := saveTurns(c.dir, gen, nil); err != nil {
+		return fmt.Errorf("clear supervisor turn-in-flight record: %w", err)
+	}
+	return nil
+}
+
+type openRequest struct {
+	rec  Record
+	data RequestData
+}
+
+// openRequests returns the generation's requests still at the requested
+// stage, in arrival order.
+func openRequests(records []Record, gen int64) []openRequest {
+	var open []openRequest
+	for _, rec := range records {
+		if rec.Generation != gen || (rec.Kind != KindPermission && rec.Kind != KindQuestion) {
+			continue
+		}
+		var data RequestData
+		if json.Unmarshal(rec.Data, &data) != nil {
+			continue
+		}
+		if data.Stage == StageRequested {
+			open = append(open, openRequest{rec: rec, data: data})
+			continue
+		}
+		for i, req := range open {
+			if req.data.RequestID == data.RequestID {
+				open = append(open[:i], open[i+1:]...)
+				break
+			}
+		}
+	}
+	return open
+}
+
+// appendBootRecord commits a display-only record at boot, before any
+// subscriber exists.
+func (c *Coordinator) appendBootRecord(turnID string, kind RecordKind, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, _, err := c.store.appendRecord(Record{
+		Generation: c.conv.Generation,
+		TurnID:     turnID,
+		Kind:       kind,
+		Visibility: VisibilityDisplayOnly,
+		Data:       data,
+	}); err != nil {
+		return fmt.Errorf("append supervisor boot record: %w", err)
+	}
+	return nil
 }
 
 func validConversationID(id string) bool {
@@ -225,8 +397,10 @@ func (c *Coordinator) stateLocked() State {
 		SessionID:       c.sessionID,
 		Lifecycle:       c.lifecycle,
 		LastTurnOutcome: c.outcome,
+		InterruptedBy:   c.interruptedBy,
 		Settings:        c.settings,
 		EffectiveModel:  c.effectiveModel,
+		PermissionMode:  c.permMode,
 		PendingRequests: append([]*llm.ControlRequestMessage(nil), c.pending...),
 		Session:         c.session,
 		HeadSeq:         c.store.head(),
@@ -235,6 +409,9 @@ func (c *Coordinator) stateLocked() State {
 	}
 	if c.lifecycle == LifecycleStarting {
 		st.StartingStep = c.step
+	}
+	if c.lifecycle == LifecycleFailed {
+		st.Failure = c.failure
 	}
 	return st
 }
@@ -406,9 +583,13 @@ func (c *Coordinator) beginLaunchLocked() (*launchAttempt, error) {
 	c.conv = conv
 	c.store.setGeneration(conv.Generation)
 	c.resetProcessLocked()
+	c.failure = nil
 	c.sessionID = SessionID(conv.ConversationID, conv.Generation)
 	c.lifecycle = LifecycleStarting
 	c.step = StepLaunching
+	if c.converterLocked() != nil {
+		c.step = StepRebuilding
+	}
 	attempt := &launchAttempt{
 		generation:  conv.Generation,
 		sessionID:   c.sessionID,
@@ -432,8 +613,31 @@ func (c *Coordinator) resetProcessLocked() {
 	c.streamChunks = 0
 	c.streamCount = 0
 	c.ending = false
+	c.keepTurns = false
+	c.resumeID = ""
 	c.interrupt = nil
 	c.step = ""
+	c.permMode = PermissionMode{Requested: RequestedPermissionMode}
+}
+
+// converterLocked returns the native-session converter for the chosen
+// harness; nil means the harness launches fresh every generation.
+func (c *Coordinator) converterLocked() Converter {
+	return c.opts.Converters[c.settings.Harness]
+}
+
+// setOutcomeLocked records how the latest turn ended and who cut it.
+func (c *Coordinator) setOutcomeLocked(outcome TurnOutcome, by InterruptedBy) {
+	c.outcome = outcome
+	c.interruptedBy = by
+}
+
+// persistTurnsLocked rewrites the turn-in-flight record from the turns
+// still awaiting a result.
+func (c *Coordinator) persistTurnsLocked() {
+	if err := saveTurns(c.dir, c.conv.Generation, c.turns); err != nil {
+		log.Printf("supervisor: persist turn-in-flight record: %v", err)
+	}
 }
 
 func (c *Coordinator) generationDir(gen int64) string {
@@ -450,18 +654,24 @@ func (c *Coordinator) runLaunch(attempt *launchAttempt) {
 		c.failLaunch(attempt, fmt.Errorf("prepare generation dir: %w", err))
 		return
 	}
+	resumeID, err := c.rebuildNative(attempt)
+	if err != nil {
+		c.failLaunch(attempt, err)
+		return
+	}
 	obs := &generationObserver{c: c, generation: attempt.generation, handshake: make(chan struct{})}
 	sess, err := c.opts.Launcher.Launch(context.Background(), LaunchRequest{
-		SessionID:      attempt.sessionID,
-		ConversationID: conversationID,
-		Generation:     attempt.generation,
-		Settings:       settings,
-		WorkDir:        c.opts.WorkDir,
-		PIDDir:         genDir,
-		LogPath:        filepath.Join(genDir, "output.txt"),
-		StderrPath:     filepath.Join(genDir, "stderr.log"),
-		Observer:       obs,
-		OnSpawned:      func() { c.markHandshake(attempt) },
+		SessionID:       attempt.sessionID,
+		ConversationID:  conversationID,
+		Generation:      attempt.generation,
+		Settings:        settings,
+		ResumeSessionID: resumeID,
+		WorkDir:         c.opts.WorkDir,
+		PIDDir:          genDir,
+		LogPath:         filepath.Join(genDir, "output.txt"),
+		StderrPath:      filepath.Join(genDir, "stderr.log"),
+		Observer:        obs,
+		OnSpawned:       func() { c.markHandshake(attempt) },
 	})
 	if err != nil {
 		c.failLaunch(attempt, err)
@@ -484,6 +694,90 @@ func (c *Coordinator) runLaunch(attempt *launchAttempt) {
 		return
 	}
 	c.completeLaunch(attempt, sess)
+}
+
+// rebuildNative renders the transcript into the harness's native session
+// under the conversation's stable native id and returns the id to resume,
+// or "" for a fresh launch. A conversion error degrades to a fresh launch
+// with a visible marker; any other error fails the launch.
+func (c *Coordinator) rebuildNative(attempt *launchAttempt) (string, error) {
+	c.mu.Lock()
+	converter := c.converterLocked()
+	if converter == nil || c.launch != attempt {
+		c.mu.Unlock()
+		return "", nil
+	}
+	nativeID := c.conv.NativeSessionID
+	if nativeID == "" {
+		conv := c.conv
+		conv.NativeSessionID = uuid.NewString()
+		if err := saveConversation(c.dir, conv); err != nil {
+			c.mu.Unlock()
+			return "", fmt.Errorf("persist native session id: %w", err)
+		}
+		c.conv = conv
+		nativeID = conv.NativeSessionID
+	}
+	conversationID := c.conv.ConversationID
+	c.mu.Unlock()
+	records, err := c.store.after(0)
+	if err != nil {
+		return "", fmt.Errorf("read transcript for rebuild: %w", err)
+	}
+	res, err := converter.Rebuild(context.Background(), RebuildInput{
+		ConversationID:  conversationID,
+		NativeSessionID: nativeID,
+		WorkDir:         c.opts.WorkDir,
+		Records:         records,
+	})
+	var conversion *ConversionError
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch {
+	case errors.As(err, &conversion):
+		log.Printf("supervisor: %v; launching without history", err)
+		if c.launch == attempt {
+			c.appendMarkerLocked(attempt.generation, "", MarkerData{
+				Marker: MarkerHistoryNotRestored,
+				Text:   "History could not be restored for this session; starting without it",
+			})
+		}
+		res = RebuildResult{}
+	case err != nil:
+		return "", fmt.Errorf("rebuild %s session history: %w", converter.Harness(), err)
+	}
+	if c.launch == attempt && c.step == StepRebuilding {
+		c.step = StepLaunching
+		c.publishStateLocked()
+	}
+	if !res.Resume {
+		return "", nil
+	}
+	if c.launch == attempt {
+		c.resumeID = res.SessionID
+	}
+	return res.SessionID, nil
+}
+
+// appendMarkerLocked commits a display-only marker for the generation.
+func (c *Coordinator) appendMarkerLocked(gen int64, turnID string, marker MarkerData) {
+	data, err := json.Marshal(marker)
+	if err != nil {
+		log.Printf("supervisor: encode %s marker: %v", marker.Marker, err)
+		return
+	}
+	rec, _, err := c.store.appendRecord(Record{
+		Generation: gen,
+		TurnID:     turnID,
+		Kind:       KindMarker,
+		Visibility: VisibilityDisplayOnly,
+		Data:       data,
+	})
+	if err != nil {
+		log.Printf("supervisor: append %s marker: %v", marker.Marker, err)
+		return
+	}
+	c.publishLocked(Event{Kind: EventRecord, Generation: gen, Record: &rec})
 }
 
 func (c *Coordinator) markHandshake(attempt *launchAttempt) {
@@ -552,6 +846,14 @@ func (c *Coordinator) failLaunch(attempt *launchAttempt, cause error) {
 	if c.launch == attempt {
 		c.launch = nil
 		c.resetProcessLocked()
+		c.failure = &LaunchFailedError{Err: cause}
+		// The user record was never committed; the marker is the
+		// transcript's durable trace of the failed attempt.
+		c.appendMarkerLocked(attempt.generation, "", MarkerData{
+			Marker: MarkerError,
+			Text:   cause.Error(),
+			Code:   string(errcat.SupervisorLaunchFailed),
+		})
 		c.lifecycle = LifecycleFailed
 		c.publishStateLocked()
 	}
@@ -586,6 +888,7 @@ func (c *Coordinator) appendUserLocked(text, cmid string) (Record, bool, error) 
 		return rec, existing, err
 	}
 	c.turns = append(c.turns, turnID)
+	c.persistTurnsLocked()
 	c.publishLocked(Event{Kind: EventRecord, Generation: rec.Generation, Record: &rec})
 	return rec, false, nil
 }
@@ -606,14 +909,18 @@ func (c *Coordinator) applyExitLocked(clean bool) {
 	case c.ending:
 		// End, shutdown and interrupt termination set the outcome themselves.
 	case c.interrupt != nil:
-		c.outcome = OutcomeInterrupted
+		c.setOutcomeLocked(OutcomeInterrupted, InterruptedByUser)
 	case !clean || c.lifecycle.inTurn():
-		c.outcome = OutcomeFailed
+		c.setOutcomeLocked(OutcomeFailed, InterruptedByNone)
 	}
 	if c.interrupt != nil {
 		close(c.interrupt.done)
 	}
+	keep := c.keepTurns
 	c.resetProcessLocked()
+	if !keep {
+		c.persistTurnsLocked()
+	}
 	c.lifecycle = LifecycleStopped
 	c.publishStateLocked()
 }
@@ -627,7 +934,7 @@ func (c *Coordinator) Interrupt() (ActionResult, State) {
 	c.mu.Lock()
 	switch {
 	case c.lifecycle == LifecycleStarting && c.launch != nil:
-		c.cancelLaunchLocked(OutcomeInterrupted)
+		c.cancelLaunchLocked(OutcomeInterrupted, InterruptedByUser)
 	case c.lifecycle.inTurn() && c.session != nil && c.interrupt == nil:
 		attempt := &interruptAttempt{done: make(chan struct{})}
 		c.interrupt = attempt
@@ -662,7 +969,7 @@ func (c *Coordinator) interruptGrace(attempt *interruptAttempt, sess ports.Sessi
 		return
 	}
 	c.ending = true
-	c.outcome = OutcomeInterrupted
+	c.setOutcomeLocked(OutcomeInterrupted, InterruptedByUser)
 	c.mu.Unlock()
 	_ = sess.Stop()
 	c.mu.Lock()
@@ -674,14 +981,14 @@ func (c *Coordinator) interruptGrace(attempt *interruptAttempt, sess ports.Sessi
 
 // cancelLaunchLocked abandons the in-flight launch; its goroutine stops the
 // process once the launcher returns and fails the joiners.
-func (c *Coordinator) cancelLaunchLocked(outcome TurnOutcome) {
+func (c *Coordinator) cancelLaunchLocked(outcome TurnOutcome, by InterruptedBy) {
 	attempt := c.launch
 	attempt.cancelled = true
 	close(attempt.cancel)
 	c.launch = nil
 	c.resetProcessLocked()
 	c.lifecycle = LifecycleStopped
-	c.outcome = outcome
+	c.setOutcomeLocked(outcome, by)
 	c.publishStateLocked()
 }
 
@@ -696,7 +1003,7 @@ func (c *Coordinator) endLocked() (ActionResult, State) {
 	c.mu.Lock()
 	switch {
 	case c.launch != nil:
-		c.cancelLaunchLocked(c.outcome)
+		c.cancelLaunchLocked(c.outcome, c.interruptedBy)
 		st := c.stateLocked()
 		c.mu.Unlock()
 		return ActionEnded, st
@@ -704,7 +1011,8 @@ func (c *Coordinator) endLocked() (ActionResult, State) {
 		sess, sessionID := c.session, c.sessionID
 		c.ending = true
 		if c.lifecycle.inTurn() {
-			c.outcome = OutcomeInterrupted
+			c.setOutcomeLocked(OutcomeInterrupted, InterruptedByUser)
+			c.keepTurns = true
 		}
 		c.mu.Unlock()
 		_ = sess.Stop()
@@ -768,9 +1076,8 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	current := sessionID == c.sessionID && gen == c.conv.Generation
-	if msg.Init != nil && current && msg.Init.Model != "" {
-		c.effectiveModel = msg.Init.Model
-		c.publishStateLocked()
+	if msg.Init != nil && current {
+		c.observeInitLocked(gen, msg.Init)
 	}
 	if msg.Type == "stream_event" {
 		if current {
@@ -821,6 +1128,34 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 	case msg.Result != nil && current:
 		c.observeResultLocked(msg.Result)
 	}
+}
+
+// observeInitLocked records what the harness reports at startup: the
+// effective model, the effective permission mode (marking a mode a policy
+// restricted, once per generation), and whether it resumed the pre-assigned
+// native session.
+func (c *Coordinator) observeInitLocked(gen int64, init *llm.SystemInitMessage) {
+	if init.Model != "" {
+		c.effectiveModel = init.Model
+	}
+	if init.PermissionMode != "" && c.permMode.Effective == "" {
+		c.permMode.Effective = init.PermissionMode
+		if init.PermissionMode != c.permMode.Requested {
+			c.permMode.RestrictedByPolicy = true
+			c.appendMarkerLocked(gen, c.currentTurnLocked(), MarkerData{
+				Marker: MarkerPermissionRestricted,
+				Text: fmt.Sprintf("Permission mode restricted by policy: the supervisor runs in %s mode instead of %s",
+					init.PermissionMode, c.permMode.Requested),
+			})
+		}
+	}
+	if c.resumeID != "" && init.SessionID != "" && init.SessionID != c.resumeID {
+		// The harness chose its own id; later output still belongs to this
+		// generation, so the launch stands.
+		log.Printf("supervisor: harness resumed as session %s, not the pre-assigned %s", init.SessionID, c.resumeID)
+		c.resumeID = init.SessionID
+	}
+	c.publishStateLocked()
 }
 
 func (c *Coordinator) observeStreamLocked(gen int64, msg llm.SDKMessage) {
@@ -947,19 +1282,20 @@ func (c *Coordinator) observeAnswer(gen int64, sessionID string, answer ports.Co
 func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 	if len(c.turns) > 0 {
 		c.turns = c.turns[1:]
+		c.persistTurnsLocked()
 	}
 	// Turn end clears any request the harness left unanswered.
 	c.pending = nil
 	c.streamID, c.streamChunks = "", 0
 	switch {
 	case c.interrupt != nil:
-		c.outcome = OutcomeInterrupted
+		c.setOutcomeLocked(OutcomeInterrupted, InterruptedByUser)
 		close(c.interrupt.done)
 		c.interrupt = nil
 	case result.IsError || result.Subtype == "error":
-		c.outcome = OutcomeFailed
+		c.setOutcomeLocked(OutcomeFailed, InterruptedByNone)
 	default:
-		c.outcome = OutcomeCompleted
+		c.setOutcomeLocked(OutcomeCompleted, InterruptedByNone)
 	}
 	if len(c.turns) == 0 {
 		c.lifecycle = LifecycleIdle

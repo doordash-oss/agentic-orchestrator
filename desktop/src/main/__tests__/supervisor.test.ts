@@ -27,8 +27,10 @@ function wireState(overrides: Record<string, unknown> = {}): Record<string, unkn
     session_id: '__supervisor__.conv-1.2',
     lifecycle: 'waiting_permission',
     last_turn_outcome: 'none',
+    interrupted_by: 'none',
     settings: { harness: 'claude', model: 'claude-sonnet-4-5', effort: 'high' },
     effective_model: 'claude-sonnet-4-5',
+    permission_mode: { requested: 'default', effective: 'default', restricted_by_policy: false },
     pending_requests: [
       {
         request_id: 'perm-1',
@@ -93,8 +95,10 @@ describe('SupervisorService', () => {
       sessionId: '__supervisor__.conv-1.2',
       lifecycle: 'waiting_permission',
       lastTurnOutcome: 'none',
+      interruptedBy: 'none',
       settings: { harness: 'claude', model: 'claude-sonnet-4-5', effort: 'high' },
       effectiveModel: 'claude-sonnet-4-5',
+      permissionMode: { requested: 'default', effective: 'default', restrictedByPolicy: false },
       headSeq: 9,
       streamEpoch: 'a1b2c3',
     });
@@ -327,6 +331,104 @@ describe('SupervisorService', () => {
 
     const err = await service.getState().catch((e: unknown) => e);
     expect((err as CanonicalErrorException).canonical.code).toBe('E_SERVER_SWITCHED');
+  });
+
+  it('maps the restart, rebuild and launch-failure fields of the state read model', async () => {
+    const failure = {
+      code: 'supervisor_launch_failed',
+      class: 'blocking',
+      title: 'Supervisor failed to start',
+      summary: 'The harness exited before the handshake.',
+      diagnostics: 'exit status 3',
+    };
+    const api = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        state: wireState({
+          lifecycle: 'failed',
+          pending_requests: [],
+          last_turn_outcome: 'interrupted',
+          interrupted_by: 'shutdown',
+          permission_mode: { requested: 'default', effective: 'plan', restricted_by_policy: true },
+          failure,
+        }),
+      },
+    }));
+    const state = await new SupervisorService({ transport: api }).getState();
+    expect(state).toMatchObject({
+      lifecycle: 'failed',
+      lastTurnOutcome: 'interrupted',
+      interruptedBy: 'shutdown',
+      permissionMode: { requested: 'default', effective: 'plan', restrictedByPolicy: true },
+      failure,
+    });
+
+    const rebuilding = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        state: wireState({ lifecycle: 'starting', starting_step: 'rebuilding' }),
+      },
+    }));
+    await expect(
+      new SupervisorService({ transport: rebuilding }).getState(),
+    ).resolves.toMatchObject({ lifecycle: 'starting', startingStep: 'rebuilding' });
+  });
+
+  it('maps marker records and the interrupted request outcome', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        conversation_id: 'conv-1',
+        items: [
+          {
+            ...wireRecord(7),
+            kind: 'marker',
+            visibility: 'display_only',
+            client_message_id: undefined,
+            messages: [],
+            marker: {
+              marker: 'error',
+              text: 'The harness exited before the handshake.',
+              code: 'supervisor_launch_failed',
+            },
+          },
+          {
+            ...wireRecord(8),
+            kind: 'permission',
+            visibility: 'display_only',
+            client_message_id: undefined,
+            messages: [],
+            request: {
+              request_id: 'perm-1',
+              tool_name: 'Bash',
+              stage: 'resolved',
+              outcome: 'interrupted',
+            },
+          },
+        ],
+        first_seq: 7,
+        last_seq: 8,
+        has_more_before: false,
+        has_more_after: false,
+        head_seq: 8,
+      },
+    }));
+    const page = await new SupervisorService({ transport: api }).getTranscript({});
+    expect(page.items[0]).toMatchObject({
+      kind: 'marker',
+      visibility: 'display_only',
+      messages: [],
+      marker: {
+        marker: 'error',
+        text: 'The harness exited before the handshake.',
+        code: 'supervisor_launch_failed',
+      },
+    });
+    expect(page.items[0]).not.toHaveProperty('request');
+    expect(page.items[1]?.request).toMatchObject({ outcome: 'interrupted', toolName: 'Bash' });
   });
 
   it('fails closed on malformed server payloads', async () => {

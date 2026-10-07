@@ -73,6 +73,7 @@ import { ConversationTranscript } from '../transcript/ConversationTranscript';
 import { SupervisorModelChip } from './SupervisorModelChip';
 import {
   buildSupervisorConversation,
+  isPausedByRestart,
   isTurnActive,
   mergeRecords,
   processExists,
@@ -306,7 +307,23 @@ export function SupervisorPage({
   const waitingOnRequest = lifecycle === 'waiting_permission' || lifecycle === 'waiting_question';
   const transcriptWaiting =
     sending || (turnActive && !waitingOnRequest && !requestPending && provisional.size === 0);
-  const statusLine = supervisorStatusLine(lifecycle, sending);
+  const statusInput = {
+    lifecycle,
+    startingStep: state?.startingStep,
+    lastTurnOutcome: state?.lastTurnOutcome ?? 'none',
+    interruptedBy: state?.interruptedBy ?? 'none',
+    harness: settings.harness,
+  } as const;
+  const statusLine = supervisorStatusLine(statusInput, sending);
+  const paused = !sending && isPausedByRestart(statusInput);
+  // The launch failure lives in the read model, so its card survives a
+  // reload and leaves with the `failed` lifecycle. The sender got the same
+  // canonical error; one card says it once.
+  const failure = lifecycle === 'failed' ? (state?.failure ?? null) : null;
+  const shownInlineError =
+    inlineError !== null && failure !== null && inlineError.code === failure.code
+      ? null
+      : inlineError;
 
   const send = async (): Promise<void> => {
     const text = draft.trim();
@@ -470,7 +487,20 @@ export function SupervisorPage({
         }
       />
       <div className="supervisor-page__dock">
-        {inlineError !== null ? <ErrorSurface error={inlineError} variant="compact" /> : null}
+        {failure !== null ? (
+          <ErrorSurface
+            error={failure}
+            variant="compact"
+            localAction={
+              draft.trim() === ''
+                ? { label: SUPERVISOR_COPY.retry, disabledReason: SUPERVISOR_COPY.retryNeedsText }
+                : { label: SUPERVISOR_COPY.retry, onAction: () => void send() }
+            }
+          />
+        ) : null}
+        {shownInlineError !== null ? (
+          <ErrorSurface error={shownInlineError} variant="compact" />
+        ) : null}
         <div className="supervisor-composer">
           <DescriptionComposer
             id="supervisor-composer"
@@ -514,6 +544,7 @@ export function SupervisorPage({
                   role="status"
                   data-testid="supervisor-status"
                   data-lifecycle={lifecycle}
+                  data-tone={paused ? 'paused' : undefined}
                 >
                   <span className="supervisor-status__lamp" aria-hidden="true" />
                   {statusLine}

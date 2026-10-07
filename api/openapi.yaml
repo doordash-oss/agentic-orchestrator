@@ -5665,9 +5665,12 @@ components:
         - SupervisorLifecycleFailed
     SupervisorStartingStep:
       type: string
-      description: Present only while the lifecycle is `starting`.
-      enum: [launching, handshake]
-      x-enum-varnames: [SupervisorStartingStepLaunching, SupervisorStartingStepHandshake]
+      description: >-
+        Present only while the lifecycle is `starting`: `rebuilding` while the
+        harness's native session is rebuilt from the transcript, `launching`
+        while the process spawns, `handshake` until it first answers.
+      enum: [rebuilding, launching, handshake]
+      x-enum-varnames: [SupervisorStartingStepRebuilding, SupervisorStartingStepLaunching, SupervisorStartingStepHandshake]
     SupervisorTurnOutcome:
       type: string
       enum: [none, completed, interrupted, failed]
@@ -5676,6 +5679,32 @@ components:
         - SupervisorTurnOutcomeCompleted
         - SupervisorTurnOutcomeInterrupted
         - SupervisorTurnOutcomeFailed
+    SupervisorInterruptedBy:
+      type: string
+      description: >-
+        Who cut the most recent turn; meaningful when `last_turn_outcome` is
+        `interrupted`. `user` is Stop or End, `shutdown` is a server
+        shutdown or crash detected at boot.
+      enum: [none, user, shutdown]
+      x-enum-varnames:
+        - SupervisorInterruptedByNone
+        - SupervisorInterruptedByUser
+        - SupervisorInterruptedByShutdown
+    SupervisorPermissionMode:
+      type: object
+      description: >-
+        Permission mode the supervisor asked the harness for and the mode the
+        running harness reported. `effective` is empty until a process
+        reports it.
+      required: [requested, effective, restricted_by_policy]
+      properties:
+        requested:
+          type: string
+        effective:
+          type: string
+        restricted_by_policy:
+          type: boolean
+          description: True when the harness reported a mode other than the requested one.
     SupervisorSettings:
       type: object
       description: >-
@@ -5713,8 +5742,10 @@ components:
         - session_id
         - lifecycle
         - last_turn_outcome
+        - interrupted_by
         - settings
         - effective_model
+        - permission_mode
         - pending_requests
         - head_seq
         - stream_epoch
@@ -5738,11 +5769,21 @@ components:
           $ref: "#/components/schemas/SupervisorStartingStep"
         last_turn_outcome:
           $ref: "#/components/schemas/SupervisorTurnOutcome"
+        interrupted_by:
+          $ref: "#/components/schemas/SupervisorInterruptedBy"
         settings:
           $ref: "#/components/schemas/SupervisorSettings"
         effective_model:
           type: string
           description: Model the running harness reports; empty when no process exists.
+        permission_mode:
+          $ref: "#/components/schemas/SupervisorPermissionMode"
+        failure:
+          description: >-
+            Canonical error of the most recent launch failure; present only
+            while the lifecycle is `failed`.
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
         pending_requests:
           type: array
           items:
@@ -5765,7 +5806,7 @@ components:
           $ref: "#/components/schemas/SupervisorState"
     SupervisorRecordKind:
       type: string
-      enum: [user, assistant, tool_use, tool_result, permission, question]
+      enum: [user, assistant, tool_use, tool_result, permission, question, marker]
       x-enum-varnames:
         - SupervisorRecordKindUser
         - SupervisorRecordKindAssistant
@@ -5773,6 +5814,7 @@ components:
         - SupervisorRecordKindToolResult
         - SupervisorRecordKindPermission
         - SupervisorRecordKindQuestion
+        - SupervisorRecordKindMarker
     SupervisorRecordVisibility:
       type: string
       enum: [content, model_only, display_only]
@@ -5795,13 +5837,35 @@ components:
           x-enum-varnames: [SupervisorRequestStageRequested, SupervisorRequestStageResolved]
         outcome:
           type: string
-          enum: [pending, allowed, denied, answered]
+          enum: [pending, allowed, denied, answered, interrupted]
           x-enum-varnames:
             - SupervisorRequestOutcomePending
             - SupervisorRequestOutcomeAllowed
             - SupervisorRequestOutcomeDenied
             - SupervisorRequestOutcomeAnswered
+            - SupervisorRequestOutcomeInterrupted
         summary:
+          type: string
+    SupervisorMarkerRecord:
+      type: object
+      description: >-
+        Display-only notice carried by `marker` records: a turn cut by a
+        server restart, a launch failure, history that could not be restored,
+        or a permission mode restricted by policy. `code` is the catalog code
+        of an `error` marker.
+      required: [marker, text]
+      properties:
+        marker:
+          type: string
+          enum: [interrupted, error, history_not_restored, permission_restricted]
+          x-enum-varnames:
+            - SupervisorMarkerInterrupted
+            - SupervisorMarkerError
+            - SupervisorMarkerHistoryNotRestored
+            - SupervisorMarkerPermissionRestricted
+        text:
+          type: string
+        code:
           type: string
     SupervisorRecord:
       type: object
@@ -5850,6 +5914,9 @@ components:
             $ref: "#/components/schemas/TranscriptMessage"
         request:
           $ref: "#/components/schemas/SupervisorRequestRecord"
+          x-go-type-skip-optional-pointer: false
+        marker:
+          $ref: "#/components/schemas/SupervisorMarkerRecord"
           x-go-type-skip-optional-pointer: false
     SupervisorTranscriptResponse:
       type: object

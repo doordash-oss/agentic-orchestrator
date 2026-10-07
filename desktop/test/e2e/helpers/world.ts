@@ -50,6 +50,12 @@ export interface JourneyWorld {
   authDelayPath: string;
   /** One line per real stream-json provider session (catalog/auth probes excluded). */
   providerInvocationLog: string;
+  /**
+   * Sentinel file: while present, a supervisor-launched stub process exits
+   * non-zero before printing anything, so the launch fails before its
+   * handshake (supervisorProvider worlds only).
+   */
+  supervisorLaunchFailurePath: string;
 }
 
 export interface WorldOptions {
@@ -82,6 +88,12 @@ export const SUPERVISOR_E2E_MARKERS = {
   permission: 'SUPERVISOR_E2E_PERMISSION',
   /** Holds the turn until an interrupt arrives, then reports an interrupted result. */
   hold: 'SUPERVISOR_E2E_HOLD',
+  /**
+   * Commits one complete assistant text message (supervisorStubPartialReply),
+   * then holds the turn like `hold` without ever reporting a result, so a
+   * server restart cuts a turn that already has partial text.
+   */
+  partialHold: 'SUPERVISOR_E2E_PARTIAL_HOLD',
   /**
    * Operates Agentico through the real `"$AGENTICO_BIN" api` helper: creates
    * the feature named in `[...]` right after the marker (build it with
@@ -143,6 +155,20 @@ export const SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING = 'Chat context';
 /** The deterministic reply the supervisorProvider stub commits for a turn (1-based). */
 export function supervisorStubReply(turn: number): string {
   return `Supervisor reply ${turn}`;
+}
+
+/** The partial assistant text a partial-hold turn commits before holding (1-based turn). */
+export function supervisorStubPartialReply(turn: number): string {
+  return `Partial supervisor reply ${turn}`;
+}
+
+/**
+ * The reply the supervisorProvider stub gives the first prompt of a process
+ * launched with `--resume <id>`: the number of prior user prompts it found
+ * in the rebuilt session file.
+ */
+export function supervisorStubResumedReply(priorMessages: number): string {
+  return `Resumed with ${priorMessages} prior messages`;
 }
 
 /** The Bash command the supervisorProvider stub asks permission for. */
@@ -211,6 +237,7 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
   const authStatePath = path.join(stubDir, 'claude-auth.json');
   const authDelayPath = path.join(stubDir, 'claude-auth-delay');
   const providerInvocationLog = path.join(stubDir, 'workflow-invocations.log');
+  const supervisorLaunchFailurePath = path.join(stubDir, 'supervisor-launch-failure');
   const delaySeconds = options.authDelaySeconds ?? 0;
   writeStubCli(
     claudeStub,
@@ -222,6 +249,7 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     options.attentionProvider === true,
     options.rebaseProvider === true,
     options.supervisorProvider === true,
+    { home, launchFailurePath: supervisorLaunchFailurePath },
   );
   writeAuthState(authStatePath, options.auth ?? { loggedIn: false });
   if (delaySeconds > 0) {
@@ -243,6 +271,7 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     authStatePath,
     authDelayPath,
     providerInvocationLog,
+    supervisorLaunchFailurePath,
   };
   writeRuntimeConfig(world, options.presetWorkspaceRoot === true);
   return world;
@@ -265,6 +294,7 @@ function writeStubCli(
   attentionProvider: boolean,
   rebaseProvider: boolean,
   supervisorProvider: boolean,
+  supervisorPaths: { home: string; launchFailurePath: string },
 ): void {
   const script = [
     '#!/bin/sh',
@@ -287,6 +317,16 @@ function writeStubCli(
     '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
     'done',
     'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
+    // A supervisor launch (only its child carries AGENTICO_RUNTIME_DIR) dies
+    // before printing anything while the failure sentinel exists.
+    ...(supervisorProvider
+      ? [
+          `if [ -n "$AGENTICO_RUNTIME_DIR" ] && [ -e "${supervisorPaths.launchFailurePath}" ]; then`,
+          `  printf 'launch-failed\\n' >> "${providerInvocationLog}"`,
+          '  exit 3',
+          'fi',
+        ]
+      : []),
     'IFS= read -r _agentico_init || exit 1',
     `request_id=$(printf '%s\\n' "$_agentico_init" | sed -n 's/.*"request_id" *: *"\\([^"]*\\)".*/\\1/p')`,
     '[ -n "$request_id" ] || exit 1',
@@ -304,10 +344,12 @@ function writeStubCli(
     // The supervisor launch completes its handshake on the first provider
     // output and only then sends the first user message, so its session
     // reports init before that message arrives (as an idle Claude does).
+    // A resumed session reports the id it resumed, as Claude does.
     ...(supervisorProvider
       ? [
           'if [ "$is_supervisor" = 1 ]; then',
-          `  echo '{"type":"system","subtype":"init","session_id":"e2e-supervisor-session","model":"claude-haiku-4-5"}'`,
+          ...supervisorResumeLines(providerInvocationLog, supervisorPaths.home),
+          `  printf '{"type":"system","subtype":"init","session_id":"%s","model":"claude-haiku-4-5"}\\n' "\${_resume_id:-e2e-supervisor-session}"`,
           'fi',
         ]
       : []),
@@ -621,12 +663,48 @@ function writeStubCli(
 }
 
 /**
+ * `--resume <id>` handling for the supervisor stub: reads the session file
+ * the server rebuilt at `<claude config>/projects/<encoded physical cwd>/<id>.jsonl`
+ * (config is CLAUDE_CONFIG_DIR, else $HOME/.claude; the encoding replaces
+ * every `/` and `.` of `pwd -P` with `-`), counts its prior user prompts
+ * (string `content`; tool results carry arrays), logs `resume:<id>` and
+ * `history:<n>`, and arms the first reply to report the count.
+ */
+function supervisorResumeLines(providerInvocationLog: string, home: string): string[] {
+  return [
+    '  _resume_id=""',
+    '  _resume_reply=""',
+    '  _prev_arg=""',
+    '  for _arg in "$@"; do',
+    '    if [ "$_prev_arg" = "--resume" ]; then _resume_id="$_arg"; fi',
+    '    _prev_arg="$_arg"',
+    '  done',
+    '  if [ -n "$_resume_id" ]; then',
+    `    _claude_config="\${CLAUDE_CONFIG_DIR:-\${HOME:-${home}}/.claude}"`,
+    `    _session_file="$_claude_config/projects/$(pwd -P | sed 's#[/.]#-#g')/$_resume_id.jsonl"`,
+    `    printf 'resume:%s\\n' "$_resume_id" >> "${providerInvocationLog}"`,
+    '    if [ -f "$_session_file" ]; then',
+    `      _history=$(grep -c '"role":"user","content":"' "$_session_file")`,
+    '    else',
+    `      printf 'resume-file-missing:%s\\n' "$_session_file" >> "${providerInvocationLog}"`,
+    '      _history=0',
+    '    fi',
+    `    printf 'history:%s\\n' "$_history" >> "${providerInvocationLog}"`,
+    '    _resume_reply="Resumed with $_history prior messages"',
+    '  fi',
+  ];
+}
+
+/**
  * The supervisor's interactive session: one process serves every turn. A
  * plain prompt streams two text deltas, commits one assistant message with
  * the same message id, and reports success; the permission marker blocks on
  * a Bash request until its control response arrives; the hold marker emits
  * nothing until the interrupt control request, then reports an interrupted
- * result. The operate markers drive Agentico like a real model would: each
+ * result; the partial-hold marker first commits one complete assistant text
+ * message, then holds the same way (a server restart cuts it with no result).
+ * A process resumed with `--resume` answers its first plain prompt with the
+ * resumed history count instead. The operate markers drive Agentico like a real model would: each
  * helper call is one assistant `tool_use` (Bash, mirroring the command), the
  * command run through `eval` exactly as written (so "$AGENTICO_BIN" expands
  * from the launch environment), one `tool_result` user record carrying its
@@ -637,7 +715,7 @@ function writeStubCli(
  * on EOF.
  */
 function supervisorStubLines(providerInvocationLog: string): string[] {
-  const { permission, hold, operateCreate, operateStart } = SUPERVISOR_E2E_MARKERS;
+  const { permission, hold, partialHold, operateCreate, operateStart } = SUPERVISOR_E2E_MARKERS;
   const permissionInput = JSON.stringify({ command: SUPERVISOR_E2E_PERMISSION_COMMAND });
   // Single-quoted inside the sh command text, so it must carry no single quote.
   const operateConfig = JSON.stringify(SUPERVISOR_E2E_OPERATE_CONFIG);
@@ -683,12 +761,28 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     `  operate_helper "${helper} POST /api/v1/features/$_operate_feature/actions/start '{}'"`,
     `  operate_reply '${SUPERVISOR_E2E_OPERATE_STARTED_REPLY}'`,
     '}',
+    // Two deltas split at the first space, then the committed message; the
+    // first reply of a resumed process reports the history it found.
     'supervisor_reply() {',
+    '  _reply="Supervisor reply $turn"',
+    '  if [ -n "$_resume_reply" ]; then _reply="$_resume_reply"; _resume_reply=""; fi',
     `  printf '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-e2e-supervisor-%s"}}}\\n' "$turn"`,
-    `  printf '%s\\n' '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Supervisor "}}}'`,
-    `  printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"reply %s"}}}\\n' "$turn"`,
-    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-%s","role":"assistant","content":[{"type":"text","text":"Supervisor reply %s"}]}}\\n' "$turn" "$turn"`,
+    `  printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"%s "}}}\\n' "\${_reply%% *}"`,
+    `  printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"%s"}}}\\n' "\${_reply#* }"`,
+    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-%s","role":"assistant","content":[{"type":"text","text":"%s"}]}}\\n' "$turn" "$_reply"`,
     `  printf '%s\\n' '{"type":"result","subtype":"success","session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '}',
+    // Blocks until the interrupt control request; EOF ends the process.
+    'hold_turn() {',
+    '  _interrupted=0',
+    '  while IFS= read -r _line; do',
+    '    case "$_line" in',
+    `      *'"subtype":"interrupt"'*) _interrupted=1; break ;;`,
+    '    esac',
+    '  done',
+    '  [ "$_interrupted" = 1 ] || exit 0',
+    `  printf 'interrupted:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    `  printf '%s\\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
     '}',
     'supervisor_turn() {',
     '  turn=$((turn + 1))',
@@ -712,17 +806,14 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     `      printf 'response:supervisor-perm-%s:%s\\n' "$turn" "$_line" >> "${providerInvocationLog}"`,
     '      supervisor_reply',
     '      ;;',
+    `    *${partialHold}*)`,
+    `      printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-partial-%s","role":"assistant","content":[{"type":"text","text":"Partial supervisor reply %s"}]}}\\n' "$turn" "$turn"`,
+    `      printf 'partial-holding:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      hold_turn',
+    '      ;;',
     `    *${hold}*)`,
     `      printf 'holding:%s\\n' "$turn" >> "${providerInvocationLog}"`,
-    '      _interrupted=0',
-    '      while IFS= read -r _line; do',
-    '        case "$_line" in',
-    `          *'"subtype":"interrupt"'*) _interrupted=1; break ;;`,
-    '        esac',
-    '      done',
-    '      [ "$_interrupted" = 1 ] || exit 0',
-    `      printf 'interrupted:%s\\n' "$turn" >> "${providerInvocationLog}"`,
-    `      printf '%s\\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '      hold_turn',
     '      ;;',
     `    *${operateCreate}*)`,
     `      printf 'operate-create:%s\\n' "$turn" >> "${providerInvocationLog}"`,

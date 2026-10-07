@@ -36,7 +36,18 @@ const (
 	FakeSupervisorHold = "SUPERVISOR_HOLD"
 	// FakeSupervisorStubborn holds the turn and ignores interrupts.
 	FakeSupervisorStubborn = "SUPERVISOR_STUBBORN"
+	// FakeSupervisorPartial commits partial assistant text and a Bash tool
+	// call, then holds the turn like FakeSupervisorHold.
+	FakeSupervisorPartial = "SUPERVISOR_PARTIAL"
 )
+
+// FakeSupervisorPartialText is the assistant text a FakeSupervisorPartial
+// turn commits before holding.
+const FakeSupervisorPartialText = "Partial answer before the cut"
+
+// FakeSupervisorArgvFile is the file, next to the script, that each fake
+// interactive Claude launch overwrites with its argv, one argument per line.
+const FakeSupervisorArgvFile = "argv"
 
 // FakeSupervisorInvocationsFile is the file, next to the script, that each
 // fake interactive Claude launch appends one line to.
@@ -52,15 +63,39 @@ const FakeSupervisorUserInputsFile = "user_inputs"
 // the --append-system-prompt launch flag (empty when none was passed).
 const FakeSupervisorSystemPromptFile = "system_prompt"
 
-// fakeSupervisorLaunchPrologue records the launch and its system prompt.
+// fakeSupervisorLaunchPrologue records the launch, its argv and its system
+// prompt, and notes the session id passed on --resume.
 const fakeSupervisorLaunchPrologue = `printf 'x\n' >> "$(dirname "$0")/` + FakeSupervisorInvocationsFile + `"
+printf '%s\n' "$@" > "$(dirname "$0")/` + FakeSupervisorArgvFile + `"
 sysprompt=""
+resume=""
 prev=""
 for arg in "$@"; do
   if [ "$prev" = "--append-system-prompt" ]; then sysprompt="$arg"; fi
+  if [ "$prev" = "--resume" ]; then resume="$arg"; fi
   prev="$arg"
 done
 printf '%s' "$sysprompt" > "$(dirname "$0")/` + FakeSupervisorSystemPromptFile + `"
+`
+
+// fakeSupervisorResumeLines read the rebuilt session file a --resume launch
+// names, under the Claude configuration directory and the physical cwd's
+// encoded project directory, into the reply for the first prompt.
+const fakeSupervisorResumeLines = `resumed=""
+session_id="s"
+if [ -n "$resume" ]; then
+  session_id="$resume"
+  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  enc=$(pwd -P | tr '/.' '--')
+  file="$cfg/projects/$enc/$resume.jsonl"
+  if [ -f "$file" ]; then
+    count=$(grep -c '"role":"user","content":"' "$file")
+    first=$(grep -m1 '"role":"user","content":"' "$file" | sed 's/.*"role":"user","content":"\([^"]*\)".*/\1/')
+    resumed="Resumed with $count prior messages: $first"
+  else
+    resumed="Resume file missing: $file"
+  fi
+fi
 `
 
 // FakeClaudeInteractiveScriptBody returns a long-lived stream-json harness:
@@ -70,14 +105,36 @@ printf '%s' "$sysprompt" > "$(dirname "$0")/` + FakeSupervisorSystemPromptFile +
 // text script permission requests, questions and interrupt handling. Every
 // user line is recorded in FakeSupervisorUserInputsFile.
 func FakeClaudeInteractiveScriptBody() string {
-	return fakeSupervisorLaunchPrologue + `turn=0
+	return FakeClaudeInteractiveScriptBodyWithPermissionMode("default")
+}
+
+// FakeClaudeInteractiveScriptBodyWithPermissionMode is the interactive
+// harness reporting permissionMode in its init message, as a policy that
+// restricts the requested mode would make the real CLI do. A --resume
+// launch answers its first prompt with "Resumed with <n> prior messages:
+// <first prior prompt>" read from the rebuilt session file.
+func FakeClaudeInteractiveScriptBodyWithPermissionMode(permissionMode string) string {
+	return fakeSupervisorLaunchPrologue + fakeSupervisorResumeLines + `turn=0
 mode=""
+permission_mode="` + permissionMode + `"
 reply() {
+  if [ -n "$resumed" ]; then
+    text="$resumed"
+    resumed=""
+    printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"msg_$turn\"}}}"
+    printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}]}}"
+    printf '%s\n' '{"type":"result","subtype":"success"}'
+    return
+  fi
   printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"msg_$turn\"}}}"
   printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello "}}}'
   printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"from turn $turn\"}}}"
   printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello from turn $turn\"}]}}"
   printf '%s\n' '{"type":"result","subtype":"success"}'
+}
+partial() {
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"` + FakeSupervisorPartialText + `\"}]}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_tool_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_partial_$turn\",\"name\":\"Bash\",\"input\":{\"command\":\"sleep 600\"}}]}}"
 }
 request() {
   printf '%s\n' "{\"type\":\"control_request\",\"request_id\":\"req_$turn\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"$1\",\"input\":$2}}"
@@ -86,7 +143,7 @@ while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*)
       printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"init"}}'
-      printf '%s\n' '{"type":"system","subtype":"init","session_id":"s","model":"haiku[200K]"}'
+      printf '%s\n' "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$session_id\",\"model\":\"haiku[200K]\",\"permissionMode\":\"$permission_mode\"}"
       ;;
     *'"subtype":"interrupt"'*)
       if [ "$mode" = hold ]; then
@@ -105,6 +162,7 @@ while IFS= read -r line; do
       printf '%s\n' "$line" >> "$(dirname "$0")/` + FakeSupervisorUserInputsFile + `"
       case "$line" in
         *` + FakeSupervisorHold + `*) mode=hold ;;
+        *` + FakeSupervisorPartial + `*) mode=hold; partial ;;
         *` + FakeSupervisorStubborn + `*) mode=stubborn ;;
         *` + FakeSupervisorPermBash + `*) mode=wait; request Bash '{"command":"make test"}' ;;
         *` + FakeSupervisorPermEdit + `*) mode=wait; request Edit '{"file_path":"main.go","old_string":"a","new_string":"b"}' ;;

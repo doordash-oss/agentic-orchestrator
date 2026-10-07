@@ -95,12 +95,19 @@ export function toSupervisorState(state: ServerSupervisorState): SupervisorState
       lifecycle: state.lifecycle,
       ...(state.starting_step === undefined ? {} : { startingStep: state.starting_step }),
       lastTurnOutcome: state.last_turn_outcome,
+      interruptedBy: state.interrupted_by,
       settings: {
         harness: state.settings.harness,
         model: state.settings.model,
         effort: state.settings.effort,
       },
       effectiveModel: state.effective_model,
+      permissionMode: {
+        requested: state.permission_mode.requested,
+        effective: state.permission_mode.effective,
+        restrictedByPolicy: state.permission_mode.restricted_by_policy,
+      },
+      ...(state.failure === undefined ? {} : { failure: state.failure }),
       pendingRequests: state.pending_requests.map(supervisorPendingRequest),
       headSeq: state.head_seq,
       streamEpoch: state.stream_epoch,
@@ -137,6 +144,15 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
               stage: record.request.stage,
               outcome: record.request.outcome,
               ...(record.request.summary === undefined ? {} : { summary: record.request.summary }),
+            },
+          }),
+      ...(record.marker === undefined
+        ? {}
+        : {
+            marker: {
+              marker: record.marker.marker,
+              text: record.marker.text,
+              ...(record.marker.code === undefined ? {} : { code: record.marker.code }),
             },
           }),
     },

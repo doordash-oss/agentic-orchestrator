@@ -31,6 +31,8 @@ import {
   ipcError,
   supervisorLaunchFailure,
   supervisorMarkerRecord,
+  supervisorPendingPermission,
+  supervisorPendingQuestion,
   supervisorRecord,
   supervisorState,
   supervisorTranscriptPage,
@@ -930,5 +932,100 @@ describe('SupervisorPage restart and launch failure', () => {
     expect(composer()).toHaveValue('Hello there');
     expect(screen.getAllByRole('alert')).toHaveLength(1);
     expect(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' })).toBeEnabled();
+  });
+});
+
+describe('SupervisorPage sub-agent requests', () => {
+  const CHILD = { origin: 'child' as const, childSessionId: 'agent_sub_1' };
+
+  function childRecord(
+    seq: number,
+    kind: 'permission' | 'question',
+    requestId: string,
+    stage: 'requested' | 'resolved',
+    outcome: 'pending' | 'allowed' | 'denied' | 'answered' | 'interrupted',
+  ): SupervisorRecord {
+    const record = requestRecord(seq, kind, requestId, stage, outcome);
+    return { ...record, request: { ...record.request!, ...CHILD } };
+  }
+
+  it('tags a sub-agent permission card and leaves a root card untagged', async () => {
+    await renderPage({
+      supervisorState: supervisorState({
+        settings: CHOSEN,
+        lifecycle: 'waiting_permission',
+        sessionId: SESSION_ID,
+        pendingRequests: [
+          supervisorPendingPermission({ id: 'perm-child', sessionId: SESSION_ID, ...CHILD }),
+          supervisorPendingPermission({ id: 'perm-root', sessionId: SESSION_ID }),
+        ],
+      }),
+    });
+
+    const cards = await within(transcript()).findAllByText(/^Permission request/);
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toHaveTextContent('Permission requestSub-agent');
+    expect(within(cards[0]!).getByText('Sub-agent')).toBeVisible();
+    expect(within(cards[1]!).queryByText('Sub-agent')).toBeNull();
+    expect(cards[1]).toHaveTextContent(/^Permission request$/);
+  });
+
+  it('tags a sub-agent question turn beside its topic', async () => {
+    await renderPage({
+      supervisorState: supervisorState({
+        settings: CHOSEN,
+        lifecycle: 'waiting_question',
+        sessionId: SESSION_ID,
+        pendingRequests: [supervisorPendingQuestion({ sessionId: SESSION_ID, ...CHILD })],
+      }),
+    });
+
+    const turn = within(transcript()).getByRole('group', { name: 'Agent question' });
+    expect(within(turn).getByText('Branch').parentElement).toHaveTextContent('BranchSub-agent');
+    expect(within(turn).getByText('Sub-agent')).toBeVisible();
+  });
+
+  it('leaves a root question turn untagged', async () => {
+    await renderPage({
+      supervisorState: supervisorState({
+        settings: CHOSEN,
+        lifecycle: 'waiting_question',
+        sessionId: SESSION_ID,
+        pendingRequests: [supervisorPendingQuestion({ sessionId: SESSION_ID })],
+      }),
+    });
+
+    const turn = within(transcript()).getByRole('group', { name: 'Agent question' });
+    expect(within(turn).getByText('Branch')).toBeVisible();
+    expect(within(turn).queryByText('Sub-agent')).toBeNull();
+  });
+
+  it('renders answered sub-agent records as tagged verdicts beside untagged root ones', async () => {
+    await renderPage({
+      supervisorState: supervisorState({ settings: CHOSEN, lifecycle: 'idle' }),
+      supervisorTranscript: supervisorTranscriptPage({
+        items: [
+          childRecord(1, 'permission', 'perm-a', 'requested', 'pending'),
+          childRecord(2, 'permission', 'perm-a', 'resolved', 'allowed'),
+          childRecord(3, 'permission', 'perm-b', 'resolved', 'denied'),
+          childRecord(4, 'question', 'question-a', 'requested', 'pending'),
+          childRecord(5, 'question', 'question-a', 'resolved', 'answered'),
+          childRecord(6, 'permission', 'perm-c', 'resolved', 'interrupted'),
+          requestRecord(7, 'permission', 'perm-root', 'requested', 'pending'),
+          requestRecord(8, 'permission', 'perm-root', 'resolved', 'allowed'),
+        ],
+        firstSeq: 1,
+        lastSeq: 8,
+        headSeq: 8,
+      }),
+    });
+
+    expect(within(transcript()).getByText('Allowed · Bash · Sub-agent · make test')).toBeVisible();
+    expect(within(transcript()).getByText('Denied · Bash · Sub-agent')).toBeVisible();
+    expect(
+      within(transcript()).getByText('Answered · Question · Sub-agent · Database'),
+    ).toBeVisible();
+    expect(within(transcript()).getByText('Interrupted · Bash · Sub-agent')).toBeVisible();
+    expect(within(transcript()).getByText('Allowed Bash · make test')).toBeVisible();
   });
 });

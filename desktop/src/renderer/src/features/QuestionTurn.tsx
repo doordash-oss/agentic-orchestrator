@@ -15,11 +15,16 @@ limitations under the License.
 */
 
 import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, SetStateAction } from 'react';
-import type { AskUserAnswerRequest, AttentionItem } from '../../../shared/ipc';
+import {
+  isSubagentAttentionItem,
+  type AskUserAnswerRequest,
+  type AttentionItem,
+} from '../../../shared/ipc';
 import {
   displayQuestionOptionLabel,
   questionAnswer,
   setQuestionDraft,
+  SubagentTag,
   type AttentionDrafts,
 } from './AttentionInbox';
 
@@ -68,6 +73,7 @@ export function QuestionConversationTurn({
   const questionDraft = drafts.questions[detailKey] ?? {};
   const complete = questionsComplete(item, drafts);
   const single = item.questions.length === 1;
+  const subagent = isSubagentAttentionItem(item);
 
   return (
     <>
@@ -121,7 +127,14 @@ export function QuestionConversationTurn({
             <fieldset key={question.key} className="attention-question" onKeyDown={handleKeys}>
               <legend>
                 <span className="question-turn__head">
-                  <span className="question-turn__topic">{question.header}</span>
+                  {subagent && questionIndex === 0 ? (
+                    <span className="question-turn__lead">
+                      <span className="question-turn__topic">{question.header}</span>
+                      <SubagentTag />
+                    </span>
+                  ) : (
+                    <span className="question-turn__topic">{question.header}</span>
+                  )}
                   {questionIndex === 0 ? (
                     <span className="question-turn__meta">
                       {item.phase !== undefined ? `${item.phase} · ` : ''}

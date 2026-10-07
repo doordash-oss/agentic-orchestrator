@@ -194,6 +194,9 @@ type LaunchRequest struct {
 	// ResumeSessionID, when set, resumes the harness against the native
 	// session rebuilt from the transcript.
 	ResumeSessionID string
+	// SeedHistoryPath, when set, names the rendered history a seeding
+	// harness delivers to the new session before the first prompt.
+	SeedHistoryPath string
 	WorkDir         string
 	PIDDir          string
 	LogPath         string

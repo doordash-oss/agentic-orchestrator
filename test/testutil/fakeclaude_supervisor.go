@@ -39,7 +39,20 @@ const (
 	// FakeSupervisorPartial commits partial assistant text and a Bash tool
 	// call, then holds the turn like FakeSupervisorHold.
 	FakeSupervisorPartial = "SUPERVISOR_PARTIAL"
+	// FakeSupervisorSubagentPermBash starts a sub-agent task whose Bash
+	// call raises a blocking permission tagged with the sub-agent's
+	// agent_id, then replies "Sub-agent allowed" or "Sub-agent denied"
+	// from the control response.
+	FakeSupervisorSubagentPermBash = "SUPERVISOR_SUBAGENT_PERM_BASH"
+	// FakeSupervisorSubagentAsk starts a sub-agent task that asks an
+	// AskUserQuestion question tagged with its agent_id, then replies
+	// "Sub-agent answered <label>" with the chosen branch label.
+	FakeSupervisorSubagentAsk = "SUPERVISOR_SUBAGENT_ASK"
 )
+
+// FakeSupervisorSubagentID is the agent_id the fake's sub-agent requests
+// carry.
+const FakeSupervisorSubagentID = "agent_sub_1"
 
 // FakeSupervisorPartialText is the assistant text a FakeSupervisorPartial
 // turn commits before holding.
@@ -139,6 +152,15 @@ partial() {
 request() {
   printf '%s\n' "{\"type\":\"control_request\",\"request_id\":\"req_$turn\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"$1\",\"input\":$2}}"
 }
+subagent_request() {
+  printf '%s\n' "{\"type\":\"system\",\"subtype\":\"task_started\",\"task_id\":\"task_$turn\",\"tool_use_id\":\"toolu_task_$turn\",\"description\":\"delegated work\",\"session_id\":\"$session_id\"}"
+  printf '%s\n' "{\"type\":\"control_request\",\"request_id\":\"req_sub_$turn\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"$1\",\"input\":$2,\"tool_use_id\":\"toolu_sub_$turn\",\"agent_id\":\"` + FakeSupervisorSubagentID + `\"}}"
+}
+subagent_reply() {
+  printf '%s\n' "{\"type\":\"system\",\"subtype\":\"task_notification\",\"task_id\":\"task_$turn\",\"tool_use_id\":\"toolu_task_$turn\",\"status\":\"completed\",\"session_id\":\"$session_id\"}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$1\"}]}}"
+  printf '%s\n' '{"type":"result","subtype":"success"}'
+}
 while IFS= read -r line; do
   case "$line" in
     *'"subtype":"initialize"'*)
@@ -155,12 +177,22 @@ while IFS= read -r line; do
       if [ "$mode" = wait ]; then
         mode=""
         reply
+      elif [ "$mode" = subwait ]; then
+        mode=""
+        case "$line" in
+          *'"Which branch?":"main"'*) subagent_reply "Sub-agent answered main" ;;
+          *'"Which branch?":"dev"'*) subagent_reply "Sub-agent answered dev" ;;
+          *'"behavior":"allow"'*) subagent_reply "Sub-agent allowed" ;;
+          *) subagent_reply "Sub-agent denied" ;;
+        esac
       fi
       ;;
     *'"type":"user"'*)
       turn=$((turn+1))
       printf '%s\n' "$line" >> "$(dirname "$0")/` + FakeSupervisorUserInputsFile + `"
       case "$line" in
+        *` + FakeSupervisorSubagentPermBash + `*) mode=subwait; subagent_request Bash '{"command":"echo codeword"}' ;;
+        *` + FakeSupervisorSubagentAsk + `*) mode=subwait; subagent_request AskUserQuestion '{"questions":[{"question":"Which branch?","header":"Branch","options":[{"label":"main","description":"default"},{"label":"dev","description":"work"}],"multiSelect":false}]}' ;;
         *` + FakeSupervisorHold + `*) mode=hold ;;
         *` + FakeSupervisorPartial + `*) mode=hold; partial ;;
         *` + FakeSupervisorStubborn + `*) mode=stubborn ;;

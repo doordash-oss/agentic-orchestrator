@@ -20,6 +20,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -247,10 +248,38 @@ func matchBrace(s string, start int) (end int, ok bool) {
 	return 0, false
 }
 
+// maxLaunchSecrets bounds the per-launch secrets kept for redaction; older
+// launches' secrets are long gone with their processes.
+const maxLaunchSecrets = 256
+
+var (
+	launchSecretsMu sync.Mutex
+	launchSecrets   []string
+)
+
+// registerLaunchSecret adds a credential Agentico minted for one launch (the
+// OpenCode server password) to the values every diagnostic is scrubbed of.
+// It lives only in the child's environment, so the process-environment scan
+// below cannot find it.
+func registerLaunchSecret(secret string) {
+	if len(secret) < minEnvSecretLen {
+		return
+	}
+	launchSecretsMu.Lock()
+	defer launchSecretsMu.Unlock()
+	launchSecrets = append(launchSecrets, secret)
+	if len(launchSecrets) > maxLaunchSecrets {
+		launchSecrets = launchSecrets[len(launchSecrets)-maxLaunchSecrets:]
+	}
+}
+
 // secretEnvValues returns the values of environment variables whose names look
-// credential-bearing and whose values are long enough to scrub safely.
+// credential-bearing and whose values are long enough to scrub safely, plus
+// the registered per-launch secrets.
 func secretEnvValues() []string {
-	var vals []string
+	launchSecretsMu.Lock()
+	vals := append([]string(nil), launchSecrets...)
+	launchSecretsMu.Unlock()
 	for _, kv := range environFunc() {
 		name, val, ok := strings.Cut(kv, "=")
 		if !ok || len(val) < minEnvSecretLen {

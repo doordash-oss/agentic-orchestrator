@@ -27,6 +27,8 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
@@ -545,5 +547,53 @@ func TestSupervisorMarkerRecordProjectsMarkerTextAndCode(t *testing.T) {
 		if !strings.Contains(string(payload), key) {
 			t.Fatalf("wire marker %s lacks %s", payload, key)
 		}
+	}
+}
+
+func TestSupervisorRequestOriginProjectsOnStateAndRecords(t *testing.T) {
+	sess := &fakeSessionView{id: supervisor.SessionID("c1", 1), featureID: supervisor.FeatureID, status: ports.SessionWaitingPermission}
+	child := &llm.ControlRequestMessage{
+		RequestID: "req-child",
+		Request:   llm.ControlRequest{Subtype: controlSubtypeCanUseTool, ToolName: "Bash", Input: json.RawMessage(`{"command":"ls"}`)},
+		Origin:    llm.EventOrigin{Kind: llm.EventOriginTask, TaskID: "task-1", ChildSessionID: "child-1"},
+	}
+	root := &llm.ControlRequestMessage{
+		RequestID: "req-root",
+		Request:   llm.ControlRequest{Subtype: controlSubtypeCanUseTool, ToolName: "Bash", Input: json.RawMessage(`{"command":"pwd"}`)},
+		Origin:    llm.EventOrigin{Kind: llm.EventOriginRoot},
+	}
+	dto := supervisorStateDTO(supervisor.State{Lifecycle: supervisor.LifecycleWaitingPermission, Session: sess, PendingRequests: []*llm.ControlRequestMessage{child, root}})
+	if len(dto.PendingRequests) != 2 {
+		t.Fatalf("pending = %+v", dto.PendingRequests)
+	}
+	if got := dto.PendingRequests[0]; got.Origin != RequestOriginChild || got.ChildSessionID != "child-1" {
+		t.Fatalf("child pending = %+v", got)
+	}
+	if got := dto.PendingRequests[1]; got.Origin != RequestOriginRoot || got.ChildSessionID != "" {
+		t.Fatalf("root pending = %+v", got)
+	}
+	payload, err := json.Marshal(dto.PendingRequests)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"origin":"child"`, `"child_session_id":"child-1"`, `"origin":"root"`} {
+		if !strings.Contains(string(payload), key) {
+			t.Fatalf("wire pending %s lacks %s", payload, key)
+		}
+	}
+
+	record := func(data supervisor.RequestData) *SupervisorRequestRecord {
+		raw, err := json.Marshal(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return supervisorRecordDTO(supervisor.Record{Seq: 3, Kind: supervisor.KindPermission, Visibility: supervisor.VisibilityDisplayOnly, TurnID: "g1.t1", Data: raw}, "").Request
+	}
+	if got := record(supervisor.RequestData{RequestID: "req-child", ToolName: "Bash", Stage: supervisor.StageResolved, Outcome: supervisor.RequestAllowed, Origin: supervisor.RequestOriginChild, ChildSessionID: "child-1"}); got.Origin != RequestOriginChild || got.ChildSessionID != "child-1" {
+		t.Fatalf("child record = %+v", got)
+	}
+	// A record written before origins existed reads as root.
+	if got := record(supervisor.RequestData{RequestID: "req-old", ToolName: "Bash", Stage: supervisor.StageResolved, Outcome: supervisor.RequestDenied}); got.Origin != RequestOriginRoot || got.ChildSessionID != "" {
+		t.Fatalf("legacy record = %+v", got)
 	}
 }

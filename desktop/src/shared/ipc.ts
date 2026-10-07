@@ -2266,6 +2266,14 @@ export const AttentionTargetSchema = z.enum(['supervisor']);
 export type AttentionTarget = z.output<typeof AttentionTargetSchema>;
 /** The context label renderer surfaces show for a supervisor-targeted item. */
 export const SUPERVISOR_CONTEXT_LABEL = 'Supervisor';
+/**
+ * Who raised a supervisor permission or question: `root` is the
+ * conversation's own agent, `child` one of its sub-agents.
+ */
+export const RequestOriginSchema = z.enum(['root', 'child']);
+export type RequestOrigin = z.output<typeof RequestOriginSchema>;
+/** The tag renderer surfaces show on a request a sub-agent raised. */
+export const SUBAGENT_ORIGIN_LABEL = 'Sub-agent';
 export const AttentionOptionSchema = z.strictObject({
   // The server preserves provider-visible option labels up to 1,000 chars.
   label: z.string().max(1000),
@@ -2311,6 +2319,10 @@ export const AttentionPermissionSchema = z.strictObject({
       retryAt: z.string().optional(),
     })
     .optional(),
+  /** Set on supervisor requests: who raised it. */
+  origin: RequestOriginSchema.optional(),
+  /** The sub-agent's session id; set only when `origin` is `child`. */
+  childSessionId: AttentionIDSchema.optional(),
 });
 export const AutoApproveScopeSchema = z.enum(['feature', 'workspace']);
 export type AutoApproveScope = z.output<typeof AutoApproveScopeSchema>;
@@ -2326,6 +2338,10 @@ export const AttentionQuestionBundleSchema = z.strictObject({
   phase: z.string().max(200).optional(),
   waitingSince: z.string().max(100),
   questions: z.array(AttentionQuestionSchema).min(1).max(100),
+  /** Set on supervisor requests: who raised it. */
+  origin: RequestOriginSchema.optional(),
+  /** The sub-agent's session id; set only when `origin` is `child`. */
+  childSessionId: AttentionIDSchema.optional(),
 });
 export const AttentionHelpSchema = z.strictObject({
   kind: z.literal('help'),
@@ -2450,6 +2466,14 @@ export function attentionOwnerFeatureId(item: AttentionItem): string | undefined
 /** True for a permission or question raised by the supervisor conversation. */
 export function isSupervisorAttentionItem(item: AttentionItem): boolean {
   return (item.kind === 'permission' || item.kind === 'questions') && item.target === 'supervisor';
+}
+/** A supervisor permission or question one of the conversation's sub-agents raised. */
+export function isSubagentAttentionItem(item: AttentionItem): boolean {
+  return (
+    (item.kind === 'permission' || item.kind === 'questions') &&
+    item.target === 'supervisor' &&
+    item.origin === 'child'
+  );
 }
 /**
  * A synthetic help item: a phase session parked mid-coordination between
@@ -2909,6 +2933,10 @@ export const SupervisorRequestVerdictSchema = z.strictObject({
   stage: z.enum(['requested', 'resolved']),
   outcome: z.enum(['pending', 'allowed', 'denied', 'answered', 'interrupted']),
   summary: AttentionTextSchema.optional(),
+  /** Who raised the request; absent reads as `root`. */
+  origin: RequestOriginSchema.optional(),
+  /** The sub-agent's session id; set only when `origin` is `child`. */
+  childSessionId: AttentionIDSchema.optional(),
 });
 export type SupervisorRequestVerdict = z.output<typeof SupervisorRequestVerdictSchema>;
 

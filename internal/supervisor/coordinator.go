@@ -88,6 +88,32 @@ type RequestData struct {
 	Input     json.RawMessage   `json:"input,omitempty"`
 	Reason    string            `json:"reason,omitempty"`
 	Answers   map[string]string `json:"answers,omitempty"`
+	// Origin is who raised the request: RequestOriginRoot for the
+	// conversation's own agent, RequestOriginChild for one of its
+	// sub-agents. Records written before origins existed carry none and
+	// read as root.
+	Origin string `json:"origin,omitempty"`
+	// ChildSessionID names the sub-agent's session for a child request.
+	ChildSessionID string `json:"child_session_id,omitempty"`
+}
+
+// Request origins carried by permission and question records.
+const (
+	RequestOriginRoot  = "root"
+	RequestOriginChild = "child"
+)
+
+// RequestOrigin maps a provider event origin to the request origin and, for
+// a sub-agent, its session id.
+func RequestOrigin(origin llm.EventOrigin) (string, string) {
+	if origin.Kind != llm.EventOriginTask {
+		return RequestOriginRoot, ""
+	}
+	child := origin.ChildSessionID
+	if child == "" {
+		child = origin.TaskID
+	}
+	return RequestOriginChild, child
 }
 
 const askUserQuestionTool = "AskUserQuestion"
@@ -285,10 +311,12 @@ func (c *Coordinator) recoverBoot() error {
 			open = append(open[:i], open[i+1:]...)
 			i--
 			if err := c.appendBootRecord(req.rec.TurnID, req.rec.Kind, RequestData{
-				RequestID: req.data.RequestID,
-				ToolName:  req.data.ToolName,
-				Stage:     StageResolved,
-				Outcome:   RequestInterrupted,
+				RequestID:      req.data.RequestID,
+				ToolName:       req.data.ToolName,
+				Stage:          StageResolved,
+				Outcome:        RequestInterrupted,
+				Origin:         req.data.Origin,
+				ChildSessionID: req.data.ChildSessionID,
 			}); err != nil {
 				return err
 			}
@@ -634,16 +662,31 @@ func (c *Coordinator) converterLocked() Converter {
 // harnessAssignsIDLocked reports whether the chosen harness mints its own
 // native session id, which the coordinator adopts instead of pre-assigning.
 func (c *Coordinator) harnessAssignsIDLocked() bool {
+	if c.seedsHistoryLocked() {
+		return false
+	}
 	assigned, ok := c.converterLocked().(HarnessAssignedIDs)
 	return ok && assigned.HarnessAssignsSessionID()
 }
 
+// seedsHistoryLocked reports whether the chosen harness receives history as
+// a seed file instead of resuming a native session; such a harness has no
+// durable native id at all.
+func (c *Coordinator) seedsHistoryLocked() bool {
+	seeder, ok := c.converterLocked().(HistorySeeder)
+	return ok && seeder.SeedsHistory()
+}
+
 // rebuildsLocked reports whether the next launch rebuilds native history:
 // a converter exists and, for a harness that assigns its own ids, an id
-// was already adopted from an earlier launch.
+// was already adopted from an earlier launch. A seeding harness rebuilds
+// only when the transcript holds history to seed.
 func (c *Coordinator) rebuildsLocked() bool {
 	if c.converterLocked() == nil {
 		return false
+	}
+	if c.seedsHistoryLocked() {
+		return c.store.hasContent()
 	}
 	return !c.harnessAssignsIDLocked() || c.conv.NativeSessionID != ""
 }
@@ -676,7 +719,7 @@ func (c *Coordinator) runLaunch(attempt *launchAttempt) {
 		c.failLaunch(attempt, fmt.Errorf("prepare generation dir: %w", err))
 		return
 	}
-	resumeID, err := c.rebuildNative(attempt)
+	resumeID, seedPath, err := c.rebuildNative(attempt)
 	if err != nil {
 		c.failLaunch(attempt, err)
 		return
@@ -688,6 +731,7 @@ func (c *Coordinator) runLaunch(attempt *launchAttempt) {
 		Generation:      attempt.generation,
 		Settings:        settings,
 		ResumeSessionID: resumeID,
+		SeedHistoryPath: seedPath,
 		WorkDir:         c.opts.WorkDir,
 		PIDDir:          genDir,
 		LogPath:         filepath.Join(genDir, "output.txt"),
@@ -720,22 +764,26 @@ func (c *Coordinator) runLaunch(attempt *launchAttempt) {
 
 // rebuildNative renders the transcript into the harness's native session
 // under the conversation's stable native id and returns the id to resume,
-// or "" for a fresh launch. A conversion error degrades to a fresh launch
-// with a visible marker; any other error fails the launch.
-func (c *Coordinator) rebuildNative(attempt *launchAttempt) (string, error) {
+// or "" for a fresh launch. For a seeding harness it mints no id and
+// returns the seed file instead. A conversion error degrades to a fresh
+// launch with a visible marker; any other error fails the launch.
+func (c *Coordinator) rebuildNative(attempt *launchAttempt) (resumeID, seedPath string, err error) {
 	c.mu.Lock()
 	converter := c.converterLocked()
 	if converter == nil || c.launch != attempt || !c.rebuildsLocked() {
 		c.mu.Unlock()
-		return "", nil
+		return "", "", nil
 	}
+	seeds := c.seedsHistoryLocked()
 	nativeID := c.conv.NativeSessionID
-	if nativeID == "" {
+	if seeds {
+		nativeID = ""
+	} else if nativeID == "" {
 		conv := c.conv
 		conv.NativeSessionID = uuid.NewString()
 		if err := saveConversation(c.dir, conv); err != nil {
 			c.mu.Unlock()
-			return "", fmt.Errorf("persist native session id: %w", err)
+			return "", "", fmt.Errorf("persist native session id: %w", err)
 		}
 		c.conv = conv
 		nativeID = conv.NativeSessionID
@@ -745,12 +793,13 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (string, error) {
 	c.mu.Unlock()
 	records, err := c.store.after(0)
 	if err != nil {
-		return "", fmt.Errorf("read transcript for rebuild: %w", err)
+		return "", "", fmt.Errorf("read transcript for rebuild: %w", err)
 	}
 	res, err := converter.Rebuild(context.Background(), RebuildInput{
 		ConversationID:  conversationID,
 		NativeSessionID: nativeID,
 		WorkDir:         c.opts.WorkDir,
+		ConversationDir: c.store.dir,
 		Model:           settings.Model,
 		Effort:          settings.Effort,
 		Records:         records,
@@ -769,19 +818,22 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (string, error) {
 		}
 		res = RebuildResult{}
 	case err != nil:
-		return "", fmt.Errorf("rebuild %s session history: %w", converter.Harness(), err)
+		return "", "", fmt.Errorf("rebuild %s session history: %w", converter.Harness(), err)
 	}
 	if c.launch == attempt && c.step == StepRebuilding {
 		c.step = StepLaunching
 		c.publishStateLocked()
 	}
 	if !res.Resume {
-		return "", nil
+		return "", "", nil
+	}
+	if seeds {
+		return "", res.Path, nil
 	}
 	if c.launch == attempt {
 		c.resumeID = res.SessionID
 	}
-	return res.SessionID, nil
+	return res.SessionID, "", nil
 }
 
 // appendMarkerLocked commits a display-only marker for the generation.
@@ -1110,8 +1162,9 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 		}
 		return
 	}
-	if msg.Origin.Kind == llm.EventOriginTask {
-		// Sub-agent output belongs to the sub-agent, not the conversation.
+	if msg.Origin.Kind == llm.EventOriginTask && msg.ControlRequest == nil {
+		// Sub-agent output belongs to the sub-agent, not the conversation;
+		// only the permissions and questions it raises reach the user.
 		return
 	}
 	switch {
@@ -1288,12 +1341,15 @@ func (c *Coordinator) surfaceRequestLocked(gen int64, req *llm.ControlRequestMes
 	if req.Request.ToolName == askUserQuestionTool {
 		kind = KindQuestion
 	}
+	origin, child := RequestOrigin(req.Origin)
 	c.appendProviderLocked(gen, kind, RequestData{
-		RequestID: req.RequestID,
-		ToolName:  req.Request.ToolName,
-		Stage:     StageRequested,
-		Outcome:   RequestPending,
-		Input:     req.Request.Input,
+		RequestID:      req.RequestID,
+		ToolName:       req.Request.ToolName,
+		Stage:          StageRequested,
+		Outcome:        RequestPending,
+		Input:          req.Request.Input,
+		Origin:         origin,
+		ChildSessionID: child,
 	}, "")
 	c.publishLocked(Event{Kind: EventRequest, Generation: gen, Request: req, Session: c.session})
 	if c.lifecycle.inTurn() {
@@ -1319,9 +1375,11 @@ func (c *Coordinator) observeAnswer(gen int64, sessionID string, answer ports.Co
 	defer c.mu.Unlock()
 	current := sessionID == c.sessionID && gen == c.conv.Generation
 	toolName := answer.ToolName
+	origin, child := RequestOriginRoot, ""
 	for i, p := range c.pending {
 		if p.RequestID == answer.RequestID {
 			toolName = p.Request.ToolName
+			origin, child = RequestOrigin(p.Origin)
 			c.pending = append(c.pending[:i:i], c.pending[i+1:]...)
 			break
 		}
@@ -1334,12 +1392,14 @@ func (c *Coordinator) observeAnswer(gen int64, sessionID string, answer ports.Co
 		outcome = RequestAllowed
 	}
 	c.appendProviderLocked(gen, kind, RequestData{
-		RequestID: answer.RequestID,
-		ToolName:  toolName,
-		Stage:     StageResolved,
-		Outcome:   outcome,
-		Reason:    answer.Reason,
-		Answers:   answer.Answers,
+		RequestID:      answer.RequestID,
+		ToolName:       toolName,
+		Stage:          StageResolved,
+		Outcome:        outcome,
+		Reason:         answer.Reason,
+		Answers:        answer.Answers,
+		Origin:         origin,
+		ChildSessionID: child,
 	}, "")
 	if current && (c.lifecycle == LifecycleWaitingPermission || c.lifecycle == LifecycleWaitingQuestion) {
 		c.lifecycle = c.waitingLifecycleLocked()

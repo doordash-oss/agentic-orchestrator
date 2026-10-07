@@ -395,10 +395,16 @@ describe('preload surface', () => {
         waitingSince: '2026-10-06T10:00:00Z',
       },
     };
+    // A sub-agent's request carries its origin and child session id.
+    const childRequest = {
+      ...request,
+      request: { ...request.request, id: 'perm-2', origin: 'child', childSessionId: 'agent_sub_1' },
+    };
     for (const valid of [
       record,
       delta,
       request,
+      childRequest,
       { type: 'reset' },
       { type: 'stream-status', status: 'live' },
       { type: 'stream-status', status: 'stale' },
@@ -415,6 +421,14 @@ describe('preload surface', () => {
     listener({}, { type: 'stream.reset' });
     listener({}, { ...record, streamEpoch: 'epoch?after=1&x' });
     listener({}, { ...request, request: { ...request.request, target: 'feature' } });
+    listener({}, { ...childRequest, request: { ...childRequest.request, origin: 'parent' } });
+    listener(
+      {},
+      {
+        ...childRequest,
+        request: { ...childRequest.request, childSessionId: 'x'.repeat(201) },
+      },
+    );
     listener({}, JSON.parse('{"type":"reset","__proto__":{"polluted":true}}'));
     expect(cb).not.toHaveBeenCalled();
 

@@ -130,6 +130,137 @@ describe('SupervisorService', () => {
     ]);
   });
 
+  it('carries a sub-agent origin on pending requests and request records', async () => {
+    const childRecord = {
+      ...wireRecord(10),
+      kind: 'permission',
+      visibility: 'display_only',
+      client_message_id: undefined,
+      messages: [],
+      request: {
+        request_id: 'perm-child',
+        tool_name: 'Bash',
+        stage: 'resolved',
+        outcome: 'allowed',
+        origin: 'child',
+        child_session_id: 'agent_sub_1',
+      },
+    };
+    const rootRecord = {
+      ...childRecord,
+      seq: 11,
+      id: 'rec-11',
+      request: {
+        ...childRecord.request,
+        request_id: 'perm-root',
+        origin: 'root',
+        child_session_id: undefined,
+      },
+    };
+    const api = transport((path) =>
+      path.startsWith('/api/v1/supervisor/transcript')
+        ? {
+            status: 200,
+            body: {
+              api_version: 'v1',
+              conversation_id: 'conv-1',
+              items: [childRecord, rootRecord],
+              first_seq: 10,
+              last_seq: 11,
+              has_more_before: false,
+              has_more_after: false,
+              head_seq: 11,
+            },
+          }
+        : {
+            status: 200,
+            body: {
+              api_version: 'v1',
+              state: wireState({
+                pending_requests: [
+                  {
+                    request_id: 'perm-child',
+                    session_id: '__supervisor__.conv-1.2',
+                    tool_name: 'Bash',
+                    status: 'pending',
+                    waiting_since: '2026-10-06T10:00:00Z',
+                    origin: 'child',
+                    child_session_id: 'agent_sub_1',
+                  },
+                  {
+                    request_id: 'ask-child',
+                    session_id: '__supervisor__.conv-1.2',
+                    tool_name: 'AskUserQuestion',
+                    status: 'pending',
+                    waiting_since: '2026-10-06T10:01:00Z',
+                    questions: [{ question: 'Which branch?', options: [{ label: 'main' }] }],
+                    origin: 'child',
+                    child_session_id: 'agent_sub_1',
+                  },
+                  {
+                    request_id: 'perm-root',
+                    session_id: '__supervisor__.conv-1.2',
+                    tool_name: 'Bash',
+                    status: 'pending',
+                    waiting_since: '2026-10-06T10:02:00Z',
+                    origin: 'root',
+                  },
+                ],
+              }),
+            },
+          },
+    );
+    const service = new SupervisorService({ transport: api });
+
+    const state = await service.getState();
+    expect(
+      state.pendingRequests.map((item) => [item.id, item.origin, item.childSessionId]),
+    ).toEqual([
+      ['perm-child', 'child', 'agent_sub_1'],
+      ['ask-child', 'child', 'agent_sub_1'],
+      ['perm-root', 'root', undefined],
+    ]);
+    const page = await service.getTranscript({});
+    expect(page.items.map((item) => item.request)).toEqual([
+      {
+        requestId: 'perm-child',
+        toolName: 'Bash',
+        stage: 'resolved',
+        outcome: 'allowed',
+        origin: 'child',
+        childSessionId: 'agent_sub_1',
+      },
+      {
+        requestId: 'perm-root',
+        toolName: 'Bash',
+        stage: 'resolved',
+        outcome: 'allowed',
+        origin: 'root',
+      },
+    ]);
+  });
+
+  it('rejects a request record with an unknown origin', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        state: wireState({
+          pending_requests: [
+            {
+              request_id: 'perm-x',
+              tool_name: 'Bash',
+              status: 'pending',
+              origin: 'grandchild',
+            },
+          ],
+        }),
+      },
+    }));
+    const service = new SupervisorService({ transport: api });
+    await expect(service.getState()).rejects.toThrow();
+  });
+
   it('patches settings with only the declared fields', async () => {
     const api = transport(() => ({ status: 200, body: { api_version: 'v1', state: wireState() } }));
     const service = new SupervisorService({ transport: api });

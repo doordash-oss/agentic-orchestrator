@@ -15,10 +15,30 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
-import { SupervisorEventSchema } from '../../../shared/ipc';
-import { installAgenticoMock, supervisorRecord, supervisorState } from './agenticoMock';
+import { SupervisorEventSchema, SupervisorStateSchema } from '../../../shared/ipc';
+import {
+  installAgenticoMock,
+  supervisorPendingPermission,
+  supervisorPendingQuestion,
+  supervisorRecord,
+  supervisorState,
+} from './agenticoMock';
 
 describe('installAgenticoMock supervisor surface', () => {
+  it('builds schema-valid root and sub-agent pending requests', () => {
+    const child = { origin: 'child' as const, childSessionId: 'agent_sub_1' };
+    const state = supervisorState({
+      lifecycle: 'waiting_permission',
+      pendingRequests: [
+        supervisorPendingPermission(),
+        supervisorPendingPermission({ id: 'perm-child', ...child }),
+        supervisorPendingQuestion({ id: 'ask-child', ...child }),
+      ],
+    });
+    expect(SupervisorStateSchema.safeParse(state).success).toBe(true);
+    expect(state.pendingRequests.map((item) => item.origin)).toEqual(['root', 'child', 'child']);
+  });
+
   it('defaults to a stopped, unconfigured supervisor with an empty transcript', async () => {
     const mock = installAgenticoMock();
 

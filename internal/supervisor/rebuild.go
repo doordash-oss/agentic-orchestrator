@@ -21,11 +21,15 @@ import (
 
 // RebuildInput is one native-session rebuild request: the durable records up
 // to the transcript head, rendered into the harness's own session store
-// under the pre-assigned native session id.
+// under the pre-assigned native session id. A HistorySeeder gets no native
+// id and writes its seed under ConversationDir instead.
 type RebuildInput struct {
 	ConversationID  string
 	NativeSessionID string
 	WorkDir         string
+	// ConversationDir is the conversation's durable directory, where a
+	// HistorySeeder writes its seed file.
+	ConversationDir string
 	// Model and Effort are the conversation's committed settings, for
 	// formats that record them per turn. Empty Effort means the default.
 	Model   string
@@ -34,7 +38,8 @@ type RebuildInput struct {
 }
 
 // RebuildResult reports what a rebuild wrote. Resume is false when the
-// selected history was empty and nothing was written.
+// selected history was empty and nothing was written. For a HistorySeeder,
+// Path is the seed file and SessionID is empty.
 type RebuildResult struct {
 	Resume    bool
 	SessionID string
@@ -56,6 +61,15 @@ type Converter interface {
 // after a launch that did not resume, and rebuilds under that id later.
 type HarnessAssignedIDs interface {
 	HarnessAssignsSessionID() bool
+}
+
+// HistorySeeder is implemented by converters whose harness cannot resume a
+// rebuilt native session and instead receives the history as a seed before
+// the first prompt. For those the coordinator mints and adopts no native id
+// (the conversation's native id stays empty), never resumes, and passes the
+// rebuild result's Path to the launch as the seed file.
+type HistorySeeder interface {
+	SeedsHistory() bool
 }
 
 // ConversionError reports records a converter cannot represent. It is

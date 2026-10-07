@@ -897,6 +897,9 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 	s.process = cmd
 	s.stdin = stdinPipe
 	s.stdout = stdoutPipe
+	if interposer, ok := s.protocol.(llm.StdoutInterposer); ok {
+		s.stdout = interposer.InterposeStdout(stdoutPipe)
+	}
 
 	// Start the stream-ring drainer before any producer goroutines
 	// begin pushing events.
@@ -1433,8 +1436,10 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 
 	// AskUserQuestion normally surfaces to the desktop app, except for allowlisted
 	// confidence-qualified creator questions that the session can answer safely.
+	// Sub-agent questions are denied outside the supervisor, whose user answers
+	// them directly.
 	if req.Request.ToolName == "AskUserQuestion" {
-		if msg.Origin.Kind == llm.EventOriginTask {
+		if msg.Origin.Kind == llm.EventOriginTask && s.Kind() != ports.KindSupervisor {
 			s.respondToControlViaProtocol(
 				req.RequestID,
 				false,

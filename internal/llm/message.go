@@ -436,6 +436,9 @@ type ControlRequest struct {
 	Input      json.RawMessage `json:"input,omitempty"`
 	HookName   string          `json:"hook_name,omitempty"`
 	CallbackID string          `json:"callback_id,omitempty"`
+	// AgentID names the sub-agent a Claude can_use_tool request came from;
+	// empty for the root agent.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // ControlResponse is the wire format for responding to control_request messages.

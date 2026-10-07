@@ -896,6 +896,24 @@ func (e RepositoryUpdateSourceResponseResult) Valid() bool {
 	}
 }
 
+// Defines values for RequestOrigin.
+const (
+	RequestOriginChild RequestOrigin = "child"
+	RequestOriginRoot  RequestOrigin = "root"
+)
+
+// Valid indicates whether the value is a known member of the RequestOrigin enum.
+func (e RequestOrigin) Valid() bool {
+	switch e {
+	case RequestOriginChild:
+		return true
+	case RequestOriginRoot:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ReviewFeedbackDraftCommentType.
 const (
 	Issue      ReviewFeedbackDraftCommentType = "issue"
@@ -2571,17 +2589,23 @@ type ControlRequest struct {
 
 	// AutomaticReview Sanitized explanation of a failed automatic review; retry never grants permission by itself.
 	AutomaticReview *PermissionAutomaticReview `json:"automatic_review,omitempty"`
-	FeatureID       string                     `json:"feature_id,omitempty"`
-	Input           map[string]interface{}     `json:"input,omitempty"`
-	Phase           string                     `json:"phase,omitempty"`
-	Questions       []AskUserQuestion          `json:"questions,omitempty"`
-	Remember        *PermissionRememberPreview `json:"remember,omitempty"`
-	RequestID       string                     `json:"request_id"`
-	SessionID       string                     `json:"session_id,omitempty"`
-	Status          string                     `json:"status"`
-	Summary         string                     `json:"summary,omitempty"`
-	ToolName        string                     `json:"tool_name"`
-	WaitingSince    time.Time                  `json:"waiting_since"`
+
+	// ChildSessionID The sub-agent's session id; present only when `origin` is `child`.
+	ChildSessionID string                 `json:"child_session_id,omitempty"`
+	FeatureID      string                 `json:"feature_id,omitempty"`
+	Input          map[string]interface{} `json:"input,omitempty"`
+
+	// Origin Who raised a permission or question: `root` for the session's own agent, `child` for one of its sub-agents. Supervisor requests always carry it; a supervisor record written before origins existed reads as `root`.
+	Origin       RequestOrigin              `json:"origin,omitempty"`
+	Phase        string                     `json:"phase,omitempty"`
+	Questions    []AskUserQuestion          `json:"questions,omitempty"`
+	Remember     *PermissionRememberPreview `json:"remember,omitempty"`
+	RequestID    string                     `json:"request_id"`
+	SessionID    string                     `json:"session_id,omitempty"`
+	Status       string                     `json:"status"`
+	Summary      string                     `json:"summary,omitempty"`
+	ToolName     string                     `json:"tool_name"`
+	WaitingSince time.Time                  `json:"waiting_since"`
 }
 
 // Cost defines model for Cost.
@@ -4030,6 +4054,9 @@ type RepositoryUpdateSourceResponseReason string
 // RepositoryUpdateSourceResponseResult updated: the branch advanced — by compare-and-swap for an unoccupied branch, or by the working-tree-aware fast-forward for a branch held only by the original checkout. already_up_to_date: equality no-op after revalidation, including a completed original-checkout replay. stale: a displayed expectation no longer matches or the original checkout is not provably safe; nothing was mutated.
 type RepositoryUpdateSourceResponseResult string
 
+// RequestOrigin Who raised a permission or question: `root` for the session's own agent, `child` for one of its sub-agents. Supervisor requests always carry it; a supervisor record written before origins existed reads as `root`.
+type RequestOrigin string
+
 // Resource defines model for Resource.
 type Resource struct {
 	// ChildID Direct child feature id for a relationship lifecycle event.
@@ -4694,6 +4721,11 @@ type SupervisorRecordVisibility string
 
 // SupervisorRequestRecord Request or verdict carried by `permission` and `question` records.
 type SupervisorRequestRecord struct {
+	// ChildSessionID The sub-agent's session id; present only when `origin` is `child`.
+	ChildSessionID string `json:"child_session_id,omitempty"`
+
+	// Origin Who raised a permission or question: `root` for the session's own agent, `child` for one of its sub-agents. Supervisor requests always carry it; a supervisor record written before origins existed reads as `root`.
+	Origin    RequestOrigin                  `json:"origin,omitempty"`
 	Outcome   SupervisorRequestRecordOutcome `json:"outcome"`
 	RequestID string                         `json:"request_id"`
 	Stage     SupervisorRequestRecordStage   `json:"stage"`

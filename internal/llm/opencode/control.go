@@ -102,7 +102,7 @@ func (p *Protocol) buildPermissionControl(reqID string, pp RequestPermissionPara
 	if p.pendingPerms == nil {
 		p.pendingPerms = make(map[string]permissionOptions)
 	}
-	p.pendingPerms[reqID] = permissionOptions{allowID: allowID, rejectID: rejectID}
+	p.pendingPerms[reqID] = permissionOptions{allowID: allowID, alwaysID: alwaysOptionID(pp.Options), rejectID: rejectID}
 	p.mu.Unlock()
 
 	return llm.SDKMessage{
@@ -239,12 +239,49 @@ func classifyOptionIDs(options []PermissionOption) (allowID, rejectID string) {
 	return allowID, rejectID
 }
 
+// alwaysOptionID returns the allow_always option id, or "" when none is
+// offered.
+func alwaysOptionID(options []PermissionOption) string {
+	for _, o := range options {
+		if o.Kind == OptionKindAllowAlways {
+			return o.OptionID
+		}
+	}
+	return ""
+}
+
 // RespondToControl answers a permission request as an ACP outcome: approval
 // selects an allow-kind option and denial selects a reject-kind option. A denial
 // with no reject option (or an unknown request) is answered "cancelled" so the
 // action does not run and OpenCode still unblocks. originalInput and reason are
 // accepted for interface parity; OpenCode's outcome carries neither.
 func (p *Protocol) RespondToControl(requestID string, allow bool, _ json.RawMessage, _ string) error {
+	if isBridgedRequestID(requestID) {
+		reply := replyReject
+		if allow {
+			if strings.HasPrefix(requestID, bridgedQuestionPrefix) {
+				return fmt.Errorf("opencode question %q must be answered with RespondToAskUser", requestID)
+			}
+			reply = replyOnce
+		}
+		return p.respondBridged(requestID, reply, nil)
+	}
+	return p.respondToControl(requestID, allow, false)
+}
+
+// RespondToControlRemember implements llm.RememberingControlResponder: the
+// approval is remembered by OpenCode for the rest of the session (the
+// "always" reply, or the allow_always option over ACP when offered).
+func (p *Protocol) RespondToControlRemember(requestID string) error {
+	if strings.HasPrefix(requestID, bridgedPermissionPrefix) {
+		return p.respondBridged(requestID, replyAlways, nil)
+	}
+	return p.respondToControl(requestID, true, true)
+}
+
+var _ llm.RememberingControlResponder = (*Protocol)(nil)
+
+func (p *Protocol) respondToControl(requestID string, allow, remember bool) error {
 	id, err := strconv.Atoi(requestID)
 	if err != nil {
 		return fmt.Errorf("invalid opencode request id %q: %w", requestID, err)
@@ -263,7 +300,10 @@ func (p *Protocol) RespondToControl(requestID string, allow bool, _ json.RawMess
 	outcome := OutcomeCancelled
 	optionID := ""
 	if allow {
-		if perm.allowID != "" {
+		if remember && perm.alwaysID != "" {
+			outcome = OutcomeSelected
+			optionID = perm.alwaysID
+		} else if perm.allowID != "" {
 			outcome = OutcomeSelected
 			optionID = perm.allowID
 		} else {
@@ -375,6 +415,9 @@ func (p *Protocol) buildQuestionControl(reqID string, pp RequestPermissionParams
 func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
 	if strings.HasPrefix(requestID, syntheticAskUserPrefix) {
 		return p.sendPrompt(buildAskUserAnswerEnvelope(questions, answers))
+	}
+	if strings.HasPrefix(requestID, bridgedQuestionPrefix) {
+		return p.respondBridgedAskUser(requestID, answers)
 	}
 
 	p.mu.Lock()

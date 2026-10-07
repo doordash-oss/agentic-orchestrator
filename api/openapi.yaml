@@ -5846,6 +5846,20 @@ components:
             - SupervisorRequestOutcomeInterrupted
         summary:
           type: string
+        origin:
+          $ref: "#/components/schemas/RequestOrigin"
+        child_session_id:
+          type: string
+          description: The sub-agent's session id; present only when `origin` is `child`.
+    RequestOrigin:
+      type: string
+      description: >-
+        Who raised a permission or question: `root` for the session's own
+        agent, `child` for one of its sub-agents. Supervisor requests always
+        carry it; a supervisor record written before origins existed reads as
+        `root`.
+      enum: [root, child]
+      x-enum-varnames: [RequestOriginRoot, RequestOriginChild]
     SupervisorMarkerRecord:
       type: object
       description: >-
@@ -7071,6 +7085,11 @@ components:
         auto_approve:
           $ref: "#/components/schemas/PermissionAutoApproveOffer"
           x-go-type-skip-optional-pointer: false
+        origin:
+          $ref: "#/components/schemas/RequestOrigin"
+        child_session_id:
+          type: string
+          description: The sub-agent's session id; present only when `origin` is `child`.
     PermissionAutomaticReview:
       type: object
       description: Sanitized explanation of a failed automatic review; retry never grants permission by itself.

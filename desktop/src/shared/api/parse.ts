@@ -155,6 +155,8 @@ export const ServerRememberPreviewSchema = z.object({
   scope: z.string().max(4096),
   scope_display: z.string().max(4096),
 });
+/** Who raised a permission or question: the session's own agent or one of its sub-agents. */
+export const ServerRequestOriginSchema = z.enum(['root', 'child']);
 export const ServerControlRequestSchema = z.object({
   request_id: AttentionIDSchema,
   session_id: AttentionIDSchema.optional(),
@@ -178,6 +180,8 @@ export const ServerControlRequestSchema = z.object({
     })
     .optional(),
   waiting_since: z.string().max(100).optional(),
+  origin: ServerRequestOriginSchema.optional(),
+  child_session_id: AttentionIDSchema.optional(),
 });
 export const ServerHelpQueueSchema = z.object({
   feature_id: AttentionIDSchema,
@@ -1545,6 +1549,8 @@ export const ServerSupervisorRequestRecordSchema = z.object({
   stage: z.enum(['requested', 'resolved']),
   outcome: z.enum(['pending', 'allowed', 'denied', 'answered', 'interrupted']),
   summary: AttentionTextSchema.optional(),
+  origin: ServerRequestOriginSchema.optional(),
+  child_session_id: AttentionIDSchema.optional(),
 });
 
 export const ServerSupervisorMarkerRecordSchema = z.object({

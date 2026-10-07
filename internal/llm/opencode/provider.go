@@ -203,8 +203,26 @@ func (p *Provider) AvailableModels() []string {
 // inherited compatibility/config sources are scrubbed through environment flags —
 // none of which mutates the user's global OpenCode configuration. Any build
 // failure aborts before a launchable command exists. See buildManagedSession.
+//
+// Interactive sessions take the interactive launch profile instead (see
+// buildInteractiveSession).
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
-	return buildManagedSession(p.cliBinary(), opts, p.effortOptions(opts.Model, opts.EffortLevel))
+	effort := p.effortOptions(opts.Model, opts.EffortLevel)
+	if opts.Interactive {
+		return buildInteractiveSession(p.cliBinary(), opts, effort)
+	}
+	return buildManagedSession(p.cliBinary(), opts, effort)
+}
+
+// buildInteractiveSession is the launch profile for human-driven chat: the
+// session launch plus the embedded HTTP server the child-session bridge
+// follows. The server flags come last so argv ends with them.
+func buildInteractiveSession(binary string, opts llm.CommandBuildOpts, effortOptions map[string]any) ([]string, []string, error) {
+	args, env, err := buildManagedSession(binary, opts, effortOptions)
+	if err != nil {
+		return nil, nil, err
+	}
+	return withServerBridge(args, env)
 }
 
 // validateBackendModel reports whether a stripped OpenCode backend model is a

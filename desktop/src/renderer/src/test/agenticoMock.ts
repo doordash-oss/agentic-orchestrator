@@ -49,6 +49,7 @@ import type {
   SupervisorEvent,
   SupervisorMessageRequest,
   SupervisorMessageResult,
+  SupervisorPendingRequest,
   SupervisorRecord,
   SupervisorSettingsRequest,
   SupervisorState,
@@ -538,6 +539,56 @@ export function supervisorState(overrides: Partial<SupervisorState> = {}): Super
     pendingRequests: [],
     headSeq: 0,
     streamEpoch: 'supervisor-epoch-1',
+    ...overrides,
+  };
+}
+
+type SupervisorPendingPermission = Extract<SupervisorPendingRequest, { kind: 'permission' }>;
+type SupervisorPendingQuestion = Extract<SupervisorPendingRequest, { kind: 'questions' }>;
+
+/**
+ * One pending supervisor permission (a root-agent Bash request by default).
+ * Pass `origin: 'child'` and a `childSessionId` for a sub-agent's request.
+ */
+export function supervisorPendingPermission(
+  overrides: Partial<SupervisorPendingPermission> = {},
+): SupervisorPendingPermission {
+  return {
+    kind: 'permission',
+    id: 'supervisor-permission-1',
+    sessionId: '__supervisor__.supervisor-conversation-1.1',
+    target: 'supervisor',
+    toolName: 'Bash',
+    summary: 'make test',
+    input: { command: 'make test' },
+    waitingSince: '2026-10-06T10:00:00.000Z',
+    origin: 'root',
+    ...overrides,
+  };
+}
+
+/**
+ * One pending supervisor question (a root-agent single-choice question by
+ * default). Pass `origin: 'child'` and a `childSessionId` for a sub-agent's.
+ */
+export function supervisorPendingQuestion(
+  overrides: Partial<SupervisorPendingQuestion> = {},
+): SupervisorPendingQuestion {
+  return {
+    kind: 'questions',
+    id: 'supervisor-question-1',
+    sessionId: '__supervisor__.supervisor-conversation-1.1',
+    target: 'supervisor',
+    waitingSince: '2026-10-06T10:00:00.000Z',
+    questions: [
+      {
+        key: 'Which branch should the sub-task use?',
+        header: 'Branch',
+        multiSelect: false,
+        options: [{ label: 'main' }, { label: 'dev' }],
+      },
+    ],
+    origin: 'root',
     ...overrides,
   };
 }

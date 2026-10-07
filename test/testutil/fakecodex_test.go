@@ -37,6 +37,7 @@ import (
 
 func TestMain(m *testing.M) {
 	testutil.RunFakeCodexIfRequested()
+	testutil.RunFakeOpenCodeIfRequested()
 	os.Exit(m.Run())
 }
 

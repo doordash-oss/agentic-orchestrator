@@ -135,6 +135,19 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 			TaskID:         msg.TaskNotification.TaskID,
 			ChildSessionID: msg.TaskNotification.SessionID,
 		}
+	case msg.ControlRequest != nil && msg.ControlRequest.Request.AgentID != "" && p.opts.Interactive:
+		// A permission a sub-agent raises names the sub-agent. Only
+		// human-driven chat routes it as the sub-agent's own request;
+		// orchestrated phases keep treating it as the root agent's.
+		agentID := msg.ControlRequest.Request.AgentID
+		msg.Origin = llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         agentID,
+			ChildSessionID: agentID,
+		}
+	}
+	if msg.ControlRequest != nil {
+		msg.ControlRequest.Origin = msg.Origin
 	}
 
 	return []llm.SDKMessage{msg}, nil

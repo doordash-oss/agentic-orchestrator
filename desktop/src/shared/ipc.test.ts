@@ -17,6 +17,10 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import {
   SessionSummarySchema,
+  SupervisorEventSchema,
+  SupervisorPendingRequestSchema,
+  SupervisorRequestVerdictSchema,
+  isSubagentAttentionItem,
   SupervisorMessageRequestSchema,
   SupervisorStateSchema,
   SupervisorTranscriptRequestSchema,
@@ -1995,6 +1999,70 @@ describe('sidebar width preferences', () => {
 
 describe('supervisor IPC schemas', () => {
   const supervisorSessionId = '__supervisor__.0b9c6f2e-1d2a-4c55-9e1f-2a3b4c5d6e7f.12';
+
+  it('pending requests, verdicts and the pushed request event accept a request origin', () => {
+    const permission = {
+      kind: 'permission' as const,
+      id: 'perm-child',
+      target: 'supervisor' as const,
+      sessionId: supervisorSessionId,
+      toolName: 'Bash',
+      waitingSince: '2026-10-06T10:00:00Z',
+      origin: 'child' as const,
+      childSessionId: 'agent_sub_1',
+    };
+    const parsed = SupervisorPendingRequestSchema.parse(permission);
+    expect(parsed).toEqual(permission);
+    expect(isSubagentAttentionItem(parsed)).toBe(true);
+    expect(isSubagentAttentionItem({ ...parsed, origin: 'root' })).toBe(false);
+    const { target: _target, ...featurePermission } = permission;
+    expect(isSubagentAttentionItem(featurePermission)).toBe(false);
+    expect(
+      SupervisorPendingRequestSchema.safeParse({ ...permission, origin: 'parent' }).success,
+    ).toBe(false);
+    expect(
+      SupervisorPendingRequestSchema.safeParse({
+        kind: 'questions',
+        id: 'ask-child',
+        target: 'supervisor',
+        waitingSince: '2026-10-06T10:00:00Z',
+        questions: [{ key: 'Which?', header: 'Which?', multiSelect: false, options: [] }],
+        origin: 'child',
+        childSessionId: 'agent_sub_1',
+      }).success,
+    ).toBe(true);
+    expect(
+      SupervisorRequestVerdictSchema.safeParse({
+        requestId: 'perm-child',
+        toolName: 'Bash',
+        stage: 'resolved',
+        outcome: 'allowed',
+        origin: 'child',
+        childSessionId: 'agent_sub_1',
+      }).success,
+    ).toBe(true);
+    expect(
+      SupervisorRequestVerdictSchema.safeParse({
+        requestId: 'perm-child',
+        toolName: 'Bash',
+        stage: 'resolved',
+        outcome: 'allowed',
+        origin: 'sibling',
+      }).success,
+    ).toBe(false);
+    const envelope = { conversationId: 'conv-1', generation: 1, streamEpoch: 'epoch-1' };
+    expect(
+      SupervisorEventSchema.safeParse({ type: 'request', ...envelope, request: permission })
+        .success,
+    ).toBe(true);
+    expect(
+      SupervisorEventSchema.safeParse({
+        type: 'request',
+        ...envelope,
+        request: { ...permission, childSessionId: '' },
+      }).success,
+    ).toBe(false);
+  });
 
   it('session listing tolerates the supervisor session id, feature id, and kind', () => {
     expect(SessionIdSchema.safeParse(supervisorSessionId).success).toBe(true);

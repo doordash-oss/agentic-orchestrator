@@ -154,6 +154,10 @@ func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
 			"--providers opencode",
 			"1.17.9",
 			"zero cost",
+			"Supervisor conversation on OpenCode",
+			"Sub-agent permission bridge",
+			"OPENCODE_ENABLE_QUESTION_TOOL",
+			"noReply",
 		},
 		filepath.Join("skills", "supervisor", "user-guide", "permissions.md"): {
 			"OpenCode tool mediation",
@@ -161,6 +165,7 @@ func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
 			"--dangerously-skip-permissions",
 			"still pauses for you",
 			"managed per-session config",
+			"sub-agent permission bridge",
 		},
 		filepath.Join("skills", "supervisor", "user-guide", "getting-started.md"): {
 			"co-equal",

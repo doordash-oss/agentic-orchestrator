@@ -151,6 +151,43 @@ func TestClaudeProtocol_AssignsRootAndTaskOrigins(t *testing.T) {
 	}
 }
 
+// TestClaudeProtocol_SubagentControlRequestOrigin pins that an interactive
+// session tags a can_use_tool request carrying agent_id as the sub-agent's,
+// while an orchestrated phase keeps it on the root agent.
+func TestClaudeProtocol_SubagentControlRequestOrigin(t *testing.T) {
+	line := []byte(`{"type":"control_request","request_id":"req_1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"tool_use_id":"toolu_1","agent_id":"agent-7"}}`)
+	rootLine := []byte(`{"type":"control_request","request_id":"req_2","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}`)
+
+	interactive := NewProtocol(llm.ProtocolOpts{Interactive: true})
+	msgs, err := interactive.ParseLine(line)
+	if err != nil {
+		t.Fatalf("ParseLine(sub-agent): %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].ControlRequest == nil {
+		t.Fatalf("messages = %+v", msgs)
+	}
+	want := llm.EventOrigin{Kind: llm.EventOriginTask, TaskID: "agent-7", ChildSessionID: "agent-7"}
+	if msgs[0].Origin != want || msgs[0].ControlRequest.Origin != want {
+		t.Fatalf("origin = %+v / %+v, want %+v", msgs[0].Origin, msgs[0].ControlRequest.Origin, want)
+	}
+	msgs, err = interactive.ParseLine(rootLine)
+	if err != nil {
+		t.Fatalf("ParseLine(root): %v", err)
+	}
+	if !msgs[0].Origin.IsRoot() || !msgs[0].ControlRequest.Origin.IsRoot() {
+		t.Fatalf("root request origin = %+v", msgs[0].Origin)
+	}
+
+	phase := NewProtocol(llm.ProtocolOpts{})
+	msgs, err = phase.ParseLine(line)
+	if err != nil {
+		t.Fatalf("ParseLine(phase): %v", err)
+	}
+	if !msgs[0].Origin.IsRoot() {
+		t.Fatalf("phase sub-agent request origin = %+v, want root", msgs[0].Origin)
+	}
+}
+
 func TestClaudeProtocol_Interrupt_WritesControlRequest(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{})
 	var buf bytes.Buffer

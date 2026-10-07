@@ -117,6 +117,8 @@ OpenCode tool requests use the same Agentico permission layer as Claude and Code
 
 Agentico supplies OpenCode with a managed per-session config under the state directory through `OPENCODE_CONFIG` and `OPENCODE_CONFIG_CONTENT`. It never edits the global OpenCode configuration. The managed config bounds execute, edit, write, fetch, search, task, question, and read access to the session’s mounted roots.
 
+The Supervisor conversation on OpenCode keeps your own OpenCode configuration and adds only a minimal permission overlay (see [Supervisor conversation on OpenCode](configuration.md#opencode)). Requests from the primary session arrive as `session/request_permission`. Requests and questions raised by OpenCode sub-agents arrive through the sub-agent permission bridge and are tagged “Sub-agent” on the inline card and in the inbox. You answer both the same way.
+
 ## `--dangerously-skip-permissions`
 
 Starting a foreground server with `--dangerously-skip-permissions` auto-approves gated tool surfaces:

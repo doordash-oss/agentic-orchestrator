@@ -3667,6 +3667,30 @@ body {
   font: 11px var(--bench-font-mono);
 }
 
+/* The topic and its sub-agent tag stay together on the head's leading edge. */
+.question-turn__lead {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* Provenance tag on a request a sub-agent raised: the hairline chip the
+ * ownership and carried badges use — a word, never color alone. */
+.origin-tag {
+  display: inline-block;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: 3px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 400 11px/1.5 var(--bench-font-text);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.attention-popover__feature .origin-tag {
+  margin-inline-start: var(--space-2);
+}
+
 .question-turn__prompt {
   color: var(--text);
   font: 400 15px/1.5 var(--bench-font-serif);

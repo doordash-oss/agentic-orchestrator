@@ -119,13 +119,26 @@ type Protocol struct {
 	formatRetryCount int
 	synthSeq         int
 
+	// bridge follows OpenCode's HTTP event stream for interactive sessions
+	// (see bridge.go); nil otherwise. bridged holds the bridged requests the
+	// session has not answered, keyed by their Agentico request id;
+	// bridgedDone remembers OpenCode request ids already answered or
+	// resolved, so a replayed event cannot surface them again; bridgeSeq is
+	// the latest reconcile pass seen.
+	bridge      *serverBridge
+	bridged     map[string]*bridgedRequest
+	bridgedDone map[string]bool
+	bridgeSeq   int
+
 	logFunc func(string, ...interface{})
 }
 
 // permissionOptions records the option ids a permission request offers, so an
 // approve/deny decision from the session layer maps to a concrete ACP outcome.
+// alwaysID is the session-wide approval a remembered answer selects.
 type permissionOptions struct {
 	allowID  string
+	alwaysID string
 	rejectID string
 }
 
@@ -145,12 +158,18 @@ type toolCallState struct {
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
 func NewProtocol(opts llm.ProtocolOpts) *Protocol {
-	return &Protocol{
+	p := &Protocol{
 		opts:            opts,
 		model:           BackendModel(opts.Model),
 		contextWindow:   opts.ContextWindow,
 		resumeSessionID: strings.TrimSpace(opts.ResumeSessionID),
 	}
+	if opts.Interactive && !opts.NativeToollessReview {
+		if client, ok := serverEndpointFromLaunch(opts.LaunchArgs, opts.LaunchEnv); ok {
+			p.bridge = newServerBridge(client, p.logDebug)
+		}
+	}
+	return p
 }
 
 // SetLogFunc sets a logging function for debug output.
@@ -172,7 +191,10 @@ func (p *Protocol) SetStdin(w io.Writer) {
 //  1. initialize — negotiate the protocol version and read agent capabilities.
 //  2. session/new (or session/load when resuming) — establish the session,
 //     rooted at the resolved work directory, the prompt is delivered to.
-//  3. session/prompt — deliver the rendered Agentico phase prompt as the first
+//  3. For interactive sessions launched with the embedded HTTP server, open
+//     the child-session bridge's event stream (see bridge.go); a server that
+//     is unreachable or rejects the credentials fails the handshake.
+//  4. session/prompt — deliver the rendered Agentico phase prompt as the first
 //     user turn. The prompt response arrives asynchronously and is surfaced as
 //     a terminal result by ParseLine.
 func (p *Protocol) Handshake(ctx context.Context) error {
@@ -193,6 +215,12 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 
 	if err := p.startSession(ctx); err != nil {
 		return err
+	}
+
+	if p.bridge != nil {
+		if err := p.bridge.start(ctx); err != nil {
+			return fmt.Errorf("opencode child-session bridge: %s", sanitizeDiagnostic(err.Error()))
+		}
 	}
 
 	return p.sendPrompt(p.opts.InitialPrompt)
@@ -399,6 +427,12 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	// before treating unparseable content as a protocol violation.
 	if len(bytes.TrimSpace(line)) == 0 {
 		return nil, nil
+	}
+
+	if p.bridge != nil && bytes.HasPrefix(line, bridgeLinePrefix) {
+		if msgs, ok := p.handleBridgeLine(line); ok {
+			return msgs, nil
+		}
 	}
 
 	var env inboundEnvelope
@@ -1614,8 +1648,14 @@ func (p *Protocol) TranscriptPath() string {
 	return p.transcriptPath
 }
 
-// Close performs no cleanup; the session layer owns process teardown.
-func (p *Protocol) Close() error { return nil }
+// Close stops the child-session bridge; the session layer owns process
+// teardown.
+func (p *Protocol) Close() error {
+	if p.bridge != nil {
+		p.bridge.stop()
+	}
+	return nil
+}
 
 // --- test accessors ---
 

@@ -31,9 +31,11 @@ import {
   ATTENTION_SUBMITTED_NOTICE,
   attentionOwnerFeatureId,
   ERROR_CLASS_LABELS,
+  isSubagentAttentionItem,
   isSupervisorAttentionItem,
   isSupervisorSessionId,
   isSyntheticHelpItem,
+  SUBAGENT_ORIGIN_LABEL,
   SUPERVISOR_CONTEXT_LABEL,
   SUPERVISOR_FEATURE_ID,
   type AttentionActionResult,
@@ -407,6 +409,7 @@ export function AttentionInbox({
                         : isSupervisorAttentionItem(item)
                           ? SUPERVISOR_CONTEXT_LABEL
                           : featureLabel(attentionOwnerFeatureId(item))}
+                      {isSubagentAttentionItem(item) ? <SubagentTag /> : null}
                     </span>
                   </span>
                   <span className="attention-popover__waiting">
@@ -1072,7 +1075,10 @@ function AttentionContextMeta({ item }: { item: AttentionItem }) {
   entries.push(formatWaitingSince(item.waitingSince));
   return (
     <header className="attention-ask">
-      <span className="attention-ask__eyebrow">{attentionAskLabel(item)}</span>
+      <span className="attention-ask__eyebrow">
+        {attentionAskLabel(item)}
+        {isSubagentAttentionItem(item) ? <SubagentTag /> : null}
+      </span>
       <div className="attention-detail__meta" aria-label="Attention context">
         {entries.map((entry, index) => (
           <span key={`${index}:${entry}`}>{entry}</span>
@@ -1080,6 +1086,14 @@ function AttentionContextMeta({ item }: { item: AttentionItem }) {
       </div>
     </header>
   );
+}
+
+/**
+ * Marks a supervisor request a sub-agent raised, in the same hairline-chip
+ * language as the other provenance badges.
+ */
+export function SubagentTag() {
+  return <span className="origin-tag">{SUBAGENT_ORIGIN_LABEL}</span>;
 }
 
 function attentionAskLabel(item: Exclude<AttentionItem, { kind: 'recovery' }>): string {

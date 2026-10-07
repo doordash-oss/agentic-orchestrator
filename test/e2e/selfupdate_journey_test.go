@@ -61,6 +61,7 @@ var selfupdateBuildDir string
 // built at most once per test-binary run and cleaned up afterwards.
 func TestMain(m *testing.M) {
 	testutil.RunFakeCodexIfRequested()
+	testutil.RunFakeOpenCodeIfRequested()
 	dir, err := os.MkdirTemp("", "agentico-selfupdate-e2e-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "selfupdate e2e: create build dir: %v\n", err)

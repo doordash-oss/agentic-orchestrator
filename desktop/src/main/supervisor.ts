@@ -144,6 +144,10 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
               stage: record.request.stage,
               outcome: record.request.outcome,
               ...(record.request.summary === undefined ? {} : { summary: record.request.summary }),
+              ...(record.request.origin === undefined ? {} : { origin: record.request.origin }),
+              ...(record.request.origin === 'child' && record.request.child_session_id !== undefined
+                ? { childSessionId: record.request.child_session_id }
+                : {}),
             },
           }),
       ...(record.marker === undefined

@@ -216,6 +216,24 @@ describe('parseSupervisorStreamEvent', () => {
         block(JSON.stringify({ ...envelope('heartbeat'), generation: -1 })),
       ),
     ).toBeNull();
+    // A request with an origin outside root/child, or an unbounded child id.
+    const request = { request_id: 'p1', tool_name: 'Bash', status: 'pending' };
+    expect(
+      parseSupervisorStreamEvent(
+        block(JSON.stringify(envelope('request', { request: { ...request, origin: 'parent' } }))),
+      ),
+    ).toBeNull();
+    expect(
+      parseSupervisorStreamEvent(
+        block(
+          JSON.stringify(
+            envelope('request', {
+              request: { ...request, origin: 'child', child_session_id: 'x'.repeat(201) },
+            }),
+          ),
+        ),
+      ),
+    ).toBeNull();
   });
 });
 
@@ -280,6 +298,57 @@ describe('SupervisorStreamRunner', () => {
     });
     // The supervisor request never carries the reserved feature id.
     expect(harness.pushes[4]).not.toHaveProperty('request.featureId');
+    for (const push of harness.pushes) {
+      expect(SupervisorEventSchema.safeParse(push).success).toBe(true);
+    }
+  });
+
+  it('pushes a sub-agent request with its origin and child session id', async () => {
+    const harness = makeHarness([
+      {
+        lines: frames([
+          envelope('request', {
+            request: {
+              request_id: 'perm-child',
+              session_id: '__supervisor__.conv-1.1',
+              feature_id: '__supervisor__',
+              tool_name: 'Bash',
+              status: 'pending',
+              waiting_since: '2026-10-06T10:00:00Z',
+              origin: 'child',
+              child_session_id: 'agent_sub_1',
+            },
+          }),
+          envelope('request', {
+            request: {
+              request_id: 'perm-root',
+              session_id: '__supervisor__.conv-1.1',
+              tool_name: 'Bash',
+              status: 'pending',
+              origin: 'root',
+            },
+          }),
+        ]),
+      },
+      { lines: [], stayOpen: true },
+    ]);
+    harness.runner.start();
+    await harness.settle(3);
+    harness.runner.stop();
+
+    const requests = harness.pushes.filter((push) => push.type === 'request');
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({
+      request: {
+        kind: 'permission',
+        id: 'perm-child',
+        target: 'supervisor',
+        origin: 'child',
+        childSessionId: 'agent_sub_1',
+      },
+    });
+    expect(requests[1]).toMatchObject({ request: { id: 'perm-root', origin: 'root' } });
+    expect(requests[1]).not.toHaveProperty('request.childSessionId');
     for (const push of harness.pushes) {
       expect(SupervisorEventSchema.safeParse(push).success).toBe(true);
     }

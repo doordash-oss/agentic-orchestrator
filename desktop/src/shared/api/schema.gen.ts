@@ -2774,7 +2774,15 @@ export interface components {
             /** @enum {string} */
             outcome: "pending" | "allowed" | "denied" | "answered" | "interrupted";
             summary?: string;
+            origin?: components["schemas"]["RequestOrigin"];
+            /** @description The sub-agent's session id; present only when `origin` is `child`. */
+            child_session_id?: string;
         };
+        /**
+         * @description Who raised a permission or question: `root` for the session's own agent, `child` for one of its sub-agents. Supervisor requests always carry it; a supervisor record written before origins existed reads as `root`.
+         * @enum {string}
+         */
+        RequestOrigin: "root" | "child";
         /** @description Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker. */
         SupervisorMarkerRecord: {
             /** @enum {string} */
@@ -3285,6 +3293,9 @@ export interface components {
             remember?: components["schemas"]["PermissionRememberPreview"];
             automatic_review?: components["schemas"]["PermissionAutomaticReview"];
             auto_approve?: components["schemas"]["PermissionAutoApproveOffer"];
+            origin?: components["schemas"]["RequestOrigin"];
+            /** @description The sub-agent's session id; present only when `origin` is `child`. */
+            child_session_id?: string;
         };
         /** @description Sanitized explanation of a failed automatic review; retry never grants permission by itself. */
         PermissionAutomaticReview: {

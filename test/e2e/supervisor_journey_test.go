@@ -42,6 +42,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/claudesession"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/codexsession"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/opencodesession"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -194,6 +195,9 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 		Converters: map[string]supervisor.Converter{
 			claudesession.Harness: claudesession.New(claudesession.Options{}),
 			codexsession.Harness:  codexsession.New(codexsession.Options{}),
+			opencodesession.Harness: opencodesession.New(opencodesession.Options{
+				ContextWindow: opencodesession.RegistryContextWindow(h.registry),
+			}),
 		},
 	}
 	for _, fn := range mutate {
@@ -705,7 +709,7 @@ func TestSupervisorPermissionAndQuestionRequests(t *testing.T) {
 			t.Fatalf("%s: no request event before the waiting state", tc.tool)
 		}
 		st := h.state()
-		if len(st.PendingRequests) != 1 || st.PendingRequests[0].ToolName != tc.tool || st.PendingRequests[0].SessionID != st.SessionID {
+		if len(st.PendingRequests) != 1 || st.PendingRequests[0].ToolName != tc.tool || st.PendingRequests[0].SessionID != st.SessionID || st.PendingRequests[0].Origin != server.RequestOriginRoot {
 			t.Fatalf("%s pending = %+v", tc.tool, st.PendingRequests)
 		}
 		h.do(http.MethodPost, "/api/v1/permissions/answer", map[string]string{
@@ -728,7 +732,7 @@ func TestSupervisorPermissionAndQuestionRequests(t *testing.T) {
 	h.send("decide "+testutil.FakeSupervisorAsk, "q1")
 	stream.until("question", isState(server.SupervisorLifecycleWaitingQuestion))
 	st := h.state()
-	if len(st.PendingRequests) != 1 || len(st.PendingRequests[0].Questions) == 0 {
+	if len(st.PendingRequests) != 1 || len(st.PendingRequests[0].Questions) == 0 || st.PendingRequests[0].Origin != server.RequestOriginRoot {
 		t.Fatalf("question pending = %+v", st.PendingRequests)
 	}
 	h.do(http.MethodPost, "/api/v1/prompts/ask-user/answer", map[string]any{
@@ -738,6 +742,9 @@ func TestSupervisorPermissionAndQuestionRequests(t *testing.T) {
 
 	var verdicts []string
 	for _, rec := range h.transcript("?limit=500").Items {
+		if rec.Request != nil && (rec.Request.Origin != server.RequestOriginRoot || rec.Request.ChildSessionID != "") {
+			t.Fatalf("root request record origin = %q/%q", rec.Request.Origin, rec.Request.ChildSessionID)
+		}
 		if rec.Request != nil && rec.Request.Stage == server.SupervisorRequestStageResolved {
 			if rec.Visibility != server.SupervisorVisibilityDisplayOnly {
 				t.Fatalf("verdict visibility = %s", rec.Visibility)

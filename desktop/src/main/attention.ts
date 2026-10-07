@@ -164,6 +164,21 @@ export function isSupervisorControlRequest(request: {
   return request.feature_id === SUPERVISOR_FEATURE_ID || isSupervisorSessionId(request.session_id);
 }
 
+/**
+ * The origin fields a supervisor item carries: who raised the request, and
+ * for a sub-agent its session id. Feature items carry none.
+ */
+function supervisorOriginFields(
+  request: ServerControlRequest,
+  owner: ControlRequestOwner,
+): { origin?: 'root' | 'child'; childSessionId?: string } {
+  const origin = request.origin;
+  if (!('target' in owner) || origin === undefined) return {};
+  return origin === 'child' && request.child_session_id !== undefined
+    ? { origin, childSessionId: request.child_session_id }
+    : { origin };
+}
+
 /** Maps one pending server permission request to its attention item. */
 export function controlRequestPermissionItem(
   request: ServerControlRequest,
@@ -205,6 +220,7 @@ export function controlRequestPermissionItem(
     ...(request.auto_approve === undefined
       ? {}
       : { autoApprove: { wouldFastPath: request.auto_approve.would_fast_path } }),
+    ...supervisorOriginFields(request, owner),
   };
 }
 
@@ -238,6 +254,7 @@ export function controlRequestQuestionsItem(
             ],
       ),
     })),
+    ...supervisorOriginFields(request, owner),
   };
 }
 

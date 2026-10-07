@@ -118,6 +118,9 @@ type transcriptStore struct {
 	offsets []int64
 	size    int64
 	byCMID  map[string]int64
+	// content reports whether any record carries history a harness would
+	// see on rebuild.
+	content bool
 	newID   func() string
 	now     func() time.Time
 }
@@ -172,6 +175,9 @@ func (s *transcriptStore) load() error {
 		}
 		if rec.Generation > s.generation {
 			s.generation = rec.Generation
+		}
+		if isHistoryContent(rec) {
+			s.content = true
 		}
 	}
 	if !s.indexMatches() {
@@ -262,6 +268,26 @@ func (s *transcriptStore) setGeneration(gen int64) {
 	s.mu.Unlock()
 }
 
+// hasContent reports whether the transcript holds any record a rebuild
+// selects: a user, assistant, tool_use or tool_result record that the model
+// saw.
+func (s *transcriptStore) hasContent() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.content
+}
+
+func isHistoryContent(rec Record) bool {
+	if rec.Visibility != VisibilityContent && rec.Visibility != VisibilityModelOnly {
+		return false
+	}
+	switch rec.Kind {
+	case KindUser, KindAssistant, KindToolUse, KindToolResult:
+		return true
+	}
+	return false
+}
+
 func (s *transcriptStore) head() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -312,6 +338,9 @@ func (s *transcriptStore) appendRecord(rec Record) (Record, bool, error) {
 	s.size += int64(len(line))
 	if rec.Kind == KindUser && rec.ClientMessageID != "" {
 		s.byCMID[rec.ClientMessageID] = rec.Seq
+	}
+	if isHistoryContent(rec) {
+		s.content = true
 	}
 	// The JSONL is the system of record; a failed index rewrite is repaired
 	// by the rebuild on the next open.

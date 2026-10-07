@@ -20,16 +20,17 @@ limitations under the License.
  * status line and the Send/Stop morph read, and how durable transcript
  * records plus live deltas become the shared conversation items.
  */
-import type {
-  CatalogueModel,
-  EffortLevel,
-  ModelCatalogue,
-  SupervisorLifecycle,
-  SupervisorMarker,
-  SupervisorRecord,
-  SupervisorSettings,
-  SupervisorState,
-  TranscriptMessage,
+import {
+  SUBAGENT_ORIGIN_LABEL,
+  type CatalogueModel,
+  type EffortLevel,
+  type ModelCatalogue,
+  type SupervisorLifecycle,
+  type SupervisorMarker,
+  type SupervisorRecord,
+  type SupervisorSettings,
+  type SupervisorState,
+  type TranscriptMessage,
 } from '../../../../shared/ipc';
 import { EFFORT_LABELS } from '../ConfigEditor';
 import {
@@ -239,6 +240,7 @@ function isRequestRecord(record: SupervisorRecord): boolean {
 
 function verdictText(record: SupervisorRecord, requestedSummary: string | undefined): string {
   const request = record.request!;
+  if (request.origin === 'child') return subagentVerdictText(record, requestedSummary);
   // A request the restart cut was never answered: name what it was for.
   if (request.outcome === 'interrupted') {
     return `Interrupted · ${record.kind === 'question' ? 'Question' : request.toolName}`;
@@ -250,6 +252,33 @@ function verdictText(record: SupervisorRecord, requestedSummary: string | undefi
   }
   const verb = request.outcome === 'allowed' ? 'Allowed' : 'Denied';
   return `${verb} ${request.toolName}${detail}`;
+}
+
+/**
+ * A sub-agent's verdict reads as dot-separated facts — what happened, to
+ * what, who asked — so the origin sits in the same rhythm as the tool:
+ * "Allowed · Bash · Sub-agent · make test".
+ */
+function subagentVerdictText(
+  record: SupervisorRecord,
+  requestedSummary: string | undefined,
+): string {
+  const request = record.request!;
+  const subject = record.kind === 'question' ? 'Question' : request.toolName;
+  const verb =
+    request.outcome === 'interrupted'
+      ? 'Interrupted'
+      : record.kind === 'question'
+        ? 'Answered'
+        : request.outcome === 'allowed'
+          ? 'Allowed'
+          : 'Denied';
+  const parts = [verb, subject, SUBAGENT_ORIGIN_LABEL];
+  const summary = (request.summary ?? requestedSummary)?.trim();
+  if (request.outcome !== 'interrupted' && summary !== undefined && summary !== '') {
+    parts.push(summary);
+  }
+  return parts.join(' · ');
 }
 
 function verdictOutcome(

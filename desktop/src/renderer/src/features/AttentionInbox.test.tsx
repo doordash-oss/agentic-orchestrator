@@ -465,6 +465,33 @@ describe('AttentionInbox popover presentation', () => {
     expect(popover()).not.toBeInTheDocument();
   });
 
+  it('tags a sub-agent supervisor request beside its "Supervisor" label', async () => {
+    const base = {
+      kind: 'permission' as const,
+      sessionId: '__supervisor__.supervisor-conversation-1.1',
+      target: 'supervisor' as const,
+      toolName: 'Bash',
+      waitingSince: '2026-10-06T10:00:00.000Z',
+    };
+    const child: AttentionItem = {
+      ...base,
+      id: 'supervisor-perm-child',
+      origin: 'child',
+      childSessionId: 'agent_sub_1',
+    };
+    const root: AttentionItem = { ...base, id: 'supervisor-perm-root', origin: 'root' };
+    render(<Harness items={[child, root]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    const [childRow, rootRow] = screen.getAllByRole('button', { name: /Permission/ });
+    const tag = within(childRow!).getByText('Sub-agent');
+    expect(tag).toBeVisible();
+    expect(tag.parentElement).toHaveTextContent(/^SupervisorSub-agent$/);
+    expect(within(rootRow!).getByText('Supervisor')).toBeVisible();
+    expect(within(rootRow!).queryByText('Sub-agent')).toBeNull();
+  });
+
   it('keeps a submission notice announced after the popover is dismissed', async () => {
     const mock = installAgenticoMock();
     mock.api.sendHelp.mockResolvedValue({ result: 'submitted' });

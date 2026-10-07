@@ -386,6 +386,10 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 			Stage:     SupervisorRequestRecordStage(data.Stage),
 			Outcome:   SupervisorRequestRecordOutcome(data.Outcome),
 			Summary:   summary,
+			Origin:    RequestOriginRoot,
+		}
+		if data.Origin == supervisor.RequestOriginChild {
+			dto.Request.Origin, dto.Request.ChildSessionID = RequestOriginChild, data.ChildSessionID
 		}
 		dto.Messages = []TranscriptMessage{{Index: index, Role: roleSystem, Type: transcriptTypeControlRequest, Tool: data.ToolName, Status: data.Outcome, Redacted: true}}
 	case supervisor.KindMarker:

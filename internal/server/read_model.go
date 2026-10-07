@@ -36,6 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
@@ -2086,6 +2087,8 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 		WaitingSince: req.WaitingSince,
 		Summary:      safeControlSummary(req),
 	}
+	origin, child := supervisor.RequestOrigin(req.Origin)
+	dto.Origin, dto.ChildSessionID = RequestOrigin(origin), child
 	if req.Request.ToolName == toolNameAskUserQuestion {
 		dto.Questions = safeAskUserQuestions(sess, req)
 	} else {

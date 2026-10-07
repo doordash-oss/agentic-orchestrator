@@ -1453,6 +1453,8 @@ type BuildSessionOpts struct {
 	// see its doc comment for why this changes text-parsed AskUserQuestion
 	// providers' behavior.
 	Interactive bool
+	// SeedHistoryPath is forwarded to llm.ProtocolOpts.SeedHistoryPath.
+	SeedHistoryPath string
 	// AutoReview carries the snapshotted automatic-review settings for this
 	// session. When AutoReview.Enabled is non-nil (crash-resume), the
 	// snapshotted values are used; otherwise BuildSession reads the current
@@ -1675,6 +1677,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		WritableRoots:        commandWritableRoots,
 		ReadRoots:            readRoots,
 		WorkDir:              opts.WorkDir,
+		Interactive:          opts.Interactive,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)
@@ -1699,7 +1702,10 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		StateDir:             providerStateDir(pr.StateDir),
 		ResumeSessionID:      opts.ResumeSessionID,
 		Interactive:          opts.Interactive,
+		SeedHistoryPath:      opts.SeedHistoryPath,
 		StructuredCompletion: opts.CompletionProtocol && !opts.Interactive,
+		LaunchArgs:           cmd,
+		LaunchEnv:            env,
 	})
 
 	// Snapshot the automatic-review settings and decorate the permission

@@ -774,6 +774,25 @@ describe('registerIpcHandlers', () => {
     };
     expect(state).toMatchObject({ ok: true, value: { lifecycle: 'stopped', headSeq: 0 } });
 
+    // A sub-agent's pending request passes through with its origin intact.
+    const childPending = {
+      kind: 'permission' as const,
+      id: 'perm-child',
+      target: 'supervisor' as const,
+      sessionId: '__supervisor__.conv-1.1',
+      toolName: 'Bash',
+      waitingSince: '2026-10-06T10:00:00Z',
+      origin: 'child' as const,
+      childSessionId: 'agent_sub_1',
+    };
+    vi.mocked(services.getSupervisorState).mockResolvedValueOnce(
+      supervisorState({ lifecycle: 'waiting_permission', pendingRequests: [childPending] }),
+    );
+    await expect(handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)).resolves.toMatchObject({
+      ok: true,
+      value: { lifecycle: 'waiting_permission', pendingRequests: [childPending] },
+    });
+
     await expect(
       handlers.get(IPC_CHANNELS.supervisorSettingsUpdate)!(goodEvent, {
         harness: 'claude',

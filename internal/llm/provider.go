@@ -241,6 +241,23 @@ type Protocol interface {
 	Close() error
 }
 
+// StdoutInterposer is implemented by protocols that deliver messages from a
+// side channel (such as a provider's HTTP event stream) through the same
+// ordered ParseLine path as the process's stdout. The session calls it once,
+// before Handshake, and reads the returned stream in place of stdout; the
+// returned stream must end when stdout ends.
+type StdoutInterposer interface {
+	InterposeStdout(stdout io.ReadCloser) io.ReadCloser
+}
+
+// RememberingControlResponder is implemented by protocols whose provider can
+// itself remember an approval for the rest of the session. The session calls
+// it instead of RespondToControl(allow=true) when the user approves and asks
+// for the decision to be remembered.
+type RememberingControlResponder interface {
+	RespondToControlRemember(requestID string) error
+}
+
 // CommandBuildOpts contains all parameters needed to build a CLI command.
 type CommandBuildOpts struct {
 	Model                string
@@ -297,6 +314,10 @@ type CommandBuildOpts struct {
 	// static review policy and the declared execution-context fields, with
 	// no project-injected instructions that could alter the classification.
 	NoCustomization bool
+	// Interactive marks human-driven chat, mirroring ProtocolOpts.Interactive,
+	// so a provider can choose its interactive launch profile. Non-interactive
+	// sessions build exactly the orchestrated-phase command.
+	Interactive bool
 }
 
 // ProtocolOpts contains all parameters needed to create a Protocol instance.
@@ -328,6 +349,16 @@ type ProtocolOpts struct {
 	// instructions; OpenCode skips its text-based question extraction. These
 	// sessions use ordinary chat replies instead of the phase question policy.
 	Interactive bool
+	// SeedHistoryPath, when non-empty, names a rendered history file the
+	// protocol delivers to the new session as context, without a model reply,
+	// before the first prompt. Used by harnesses that seed history rather
+	// than resume a native session.
+	SeedHistoryPath string
+	// LaunchArgs and LaunchEnv are the command and environment BuildCommand
+	// returned for this session, so a protocol can recover per-launch values
+	// its command builder chose (OpenCode's HTTP port and server password).
+	LaunchArgs []string
+	LaunchEnv  []string
 }
 
 // EffortLevel is a provider-agnostic effort/reasoning level that each provider

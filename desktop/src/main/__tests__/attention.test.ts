@@ -20,6 +20,7 @@ import type { ServerTransport } from '../serverClient';
 import { CanonicalErrorException } from '../../shared/errors';
 import {
   actionableAttentionCount,
+  AttentionSnapshotSchema,
   attentionOwnerFeatureId,
   isSupervisorAttentionItem,
 } from '../../shared/ipc';
@@ -1178,6 +1179,56 @@ describe('AttentionService supervisor items', () => {
         expect(isSupervisorAttentionItem(item)).toBe(item.id.includes('-sup'));
       }
     }
+  });
+
+  it('tags supervisor requests with their origin and leaves feature requests untagged', async () => {
+    const base = supervisorTransport();
+    const childIds = new Set(['perm-sup', 'ask-sup', 'perm-feature']);
+    type WireRequest = { request_id: string } & Record<string, unknown>;
+    const tag = (request: WireRequest): WireRequest =>
+      childIds.has(request.request_id)
+        ? { ...request, origin: 'child', child_session_id: 'agent_sub_1' }
+        : { ...request, origin: 'root' };
+    const transport: ServerTransport = {
+      apiRequest: async (path, init) => {
+        const result = await base.apiRequest(path, init);
+        const body = result.body as Record<string, unknown>;
+        if (path === '/api/v1/permissions') {
+          return {
+            ...result,
+            body: { ...body, requests: (body['requests'] as WireRequest[]).map(tag) },
+          };
+        }
+        if (path === '/api/v1/prompts') {
+          return {
+            ...result,
+            body: {
+              ...body,
+              ask_user_questions: (body['ask_user_questions'] as WireRequest[]).map(tag),
+            },
+          };
+        }
+        return result;
+      },
+    };
+    const snapshot = await new AttentionService(transport).getSnapshot();
+    const byId = new Map(snapshot.items.map((item) => [item.id, item]));
+    expect(byId.get('perm-sup')).toMatchObject({
+      target: 'supervisor',
+      origin: 'child',
+      childSessionId: 'agent_sub_1',
+    });
+    expect(byId.get('ask-sup')).toMatchObject({
+      kind: 'questions',
+      target: 'supervisor',
+      origin: 'child',
+      childSessionId: 'agent_sub_1',
+    });
+    expect(byId.get('perm-sup-feature-only')).toMatchObject({ origin: 'root' });
+    expect(byId.get('perm-sup-feature-only')).not.toHaveProperty('childSessionId');
+    expect(byId.get('perm-feature')).not.toHaveProperty('origin');
+    expect(byId.get('perm-feature')).not.toHaveProperty('childSessionId');
+    expect(AttentionSnapshotSchema.safeParse(snapshot).success).toBe(true);
   });
 
   it('counts supervisor permissions and questions as actionable', async () => {

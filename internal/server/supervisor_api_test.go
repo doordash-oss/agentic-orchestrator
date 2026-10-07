@@ -80,6 +80,42 @@ func (s *recordingSupervisor) UpdateSettings(st supervisor.Settings) (supervisor
 	return s.state, nil
 }
 
+func (s *recordingSupervisor) ChangeSettings(change supervisor.SettingsChange) (supervisor.State, error) {
+	st := s.State().Settings
+	if change.Harness != nil {
+		st.Harness = *change.Harness
+	}
+	if change.Model != nil {
+		st.Model = *change.Model
+	}
+	if change.Effort != nil {
+		st.Effort = *change.Effort
+	}
+	return s.UpdateSettings(st)
+}
+
+func (s *recordingSupervisor) CancelPendingChange(_ string) (supervisor.State, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil {
+		return supervisor.State{}, s.err
+	}
+	s.state.PendingChange = nil
+	return s.state, nil
+}
+
+func TestSupervisorRoutes_CancelPendingChange(t *testing.T) {
+	svc := &recordingSupervisor{state: supervisor.State{ConversationID: "conv-1", PendingChange: &supervisor.PendingChange{RequestID: "change-1", Kind: "model", Target: supervisor.Settings{Harness: "claude", Model: "sonnet"}}}}
+	h := newSupervisorTestHandler(svc, nil)
+	var body SupervisorStateResponse
+	serveSupervisor(t, h, supervisorRequest(http.MethodDelete, apiPathSupervisorPendingChange+"change-1", ""), http.StatusOK, &body)
+	if body.State.PendingChange != nil {
+		t.Fatalf("pending change survived cancel: %+v", body.State.PendingChange)
+	}
+	serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorPendingChange+"change-1", ""), http.StatusMethodNotAllowed, nil)
+	serveSupervisor(t, h, supervisorRequest(http.MethodDelete, apiPathSupervisorPendingChange+"bad/id", ""), http.StatusNotFound, nil)
+}
+
 func (s *recordingSupervisor) Send(_ context.Context, text, hiddenContext, cmid string) (supervisor.SendResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -158,11 +194,12 @@ func TestSupervisorRoutes_StateAndSettingsShapes(t *testing.T) {
 		t.Fatalf("state = %+v", state)
 	}
 
-	serveSupervisor(t, h, supervisorRequest(http.MethodPatch, apiPathSupervisorSettings, `{"harness":"claude","model":"haiku"}`), http.StatusOK, &state)
+	serveSupervisor(t, h, supervisorRequest(http.MethodPatch, apiPathSupervisorSettings, `{"harness":"claude","model":"haiku","request_id":"change-1","expected_generation":0}`), http.StatusOK, &state)
 	if state.State.Settings != (SupervisorSettings{Harness: "claude", Model: "haiku"}) {
 		t.Fatalf("settings = %+v", state.State.Settings)
 	}
 	serveSupervisor(t, h, supervisorRequest(http.MethodPatch, apiPathSupervisorSettings, `{"harness":"claude"}`), http.StatusBadRequest, nil)
+	serveSupervisor(t, h, supervisorRequest(http.MethodPatch, apiPathSupervisorSettings, `{"request_id":"change-2","model":"sonnet"}`), http.StatusBadRequest, nil)
 	serveSupervisor(t, h, supervisorRequest(http.MethodPatch, apiPathSupervisorSettings, `{"harness":"claude","model":"m","extra":1}`), http.StatusBadRequest, nil)
 	if len(svc.settings) != 1 {
 		t.Fatalf("invalid bodies reached the coordinator: %+v", svc.settings)
@@ -182,6 +219,9 @@ func TestSupervisorRoutes_ErrorsRenderThroughCanonicalEnvelope(t *testing.T) {
 		code   errcat.Code
 	}{
 		{supervisor.ErrSettingsLocked, http.StatusConflict, errcat.SupervisorSettingsLocked},
+		{&supervisor.StaleGenerationError{Current: 7}, http.StatusConflict, errcat.StaleGeneration},
+		{&supervisor.ChangePendingError{RequestID: "change-0"}, http.StatusConflict, errcat.ChangePending},
+		{supervisor.ErrPendingChangeNotFound, http.StatusNotFound, errcat.PendingChangeNotFound},
 		{&supervisor.SettingsInvalidError{Reason: "model is not available"}, http.StatusBadRequest, errcat.SupervisorSettingsInvalid},
 		{supervisor.ErrSettingsRequired, http.StatusConflict, errcat.SettingsRequired},
 		{supervisor.ErrTurnActive, http.StatusConflict, errcat.TurnActive},
@@ -192,12 +232,18 @@ func TestSupervisorRoutes_ErrorsRenderThroughCanonicalEnvelope(t *testing.T) {
 		t.Run(string(tc.code), func(t *testing.T) {
 			h := newSupervisorTestHandler(&recordingSupervisor{err: tc.err}, nil)
 			path, body := apiPathSupervisorMessages, `{"text":"hi","client_message_id":"cm-1"}`
-			if tc.code == errcat.SupervisorSettingsLocked || tc.code == errcat.SupervisorSettingsInvalid {
-				path, body = apiPathSupervisorSettings, `{"harness":"claude","model":"haiku"}`
+			if tc.code == errcat.SupervisorSettingsLocked || tc.code == errcat.SupervisorSettingsInvalid || tc.code == errcat.StaleGeneration || tc.code == errcat.ChangePending {
+				path, body = apiPathSupervisorSettings, `{"harness":"claude","model":"haiku","request_id":"change-1","expected_generation":0}`
+			}
+			if tc.code == errcat.PendingChangeNotFound {
+				path, body = apiPathSupervisorPendingChange+"change-1", ""
 			}
 			method := http.MethodPost
 			if path == apiPathSupervisorSettings {
 				method = http.MethodPatch
+			}
+			if tc.code == errcat.PendingChangeNotFound {
+				method = http.MethodDelete
 			}
 			var resp ErrorResponse
 			serveSupervisor(t, h, supervisorRequest(method, path, body), tc.status, &resp)

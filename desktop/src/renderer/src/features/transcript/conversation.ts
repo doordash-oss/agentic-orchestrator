@@ -38,7 +38,7 @@ export interface SubagentActivity {
 }
 
 /** The tone of a one-line notice row: a cut turn, a failure, or a caveat. */
-export type ConversationNoticeTone = 'interrupted' | 'failed' | 'caveat';
+export type ConversationNoticeTone = 'interrupted' | 'failed' | 'caveat' | 'neutral';
 
 export type ConversationItem =
   | {

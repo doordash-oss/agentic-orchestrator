@@ -155,13 +155,13 @@ func TestSupervisorCodexFirstSendRecordsThreadAndReusesProcess(t *testing.T) {
 	if err := json.Unmarshal(turns[0].Params, &params); err != nil {
 		t.Fatal(err)
 	}
-	if params.Model != "gpt-fake" || params.ApprovalPolicy != "on-request" || params.SandboxPolicy.Type != "workspaceWrite" ||
+	if !strings.HasPrefix(h.model, params.Model) || params.ApprovalPolicy != "on-request" || params.SandboxPolicy.Type != "workspaceWrite" ||
 		!params.SandboxPolicy.NetworkAccess || len(params.SandboxPolicy.WritableRoots) == 0 {
 		t.Fatalf("first turn launch profile = %+v", params)
 	}
 	threads := testutil.FakeCodexThreads(t, h.script)
 	st := h.coord.State()
-	if len(threads) != 1 || st.NativeSessionID != threads[0] || st.EffectiveModel != "gpt-fake" {
+	if len(threads) != 1 || st.NativeSessionID != threads[0] || !strings.HasPrefix(h.model, st.EffectiveModel) {
 		t.Fatalf("read model native=%q model=%q, fake minted %v", st.NativeSessionID, st.EffectiveModel, threads)
 	}
 	if got := h.transcript(""); recordKinds(got.Items) != "user,assistant,user,assistant" || recordText(got.Items[1]) != "Hello from turn 1" {

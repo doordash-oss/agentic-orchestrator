@@ -295,6 +295,8 @@ const NOTICE_TONES: Readonly<Record<SupervisorMarker['marker'], ConversationNoti
   error: 'failed',
   history_not_restored: 'caveat',
   permission_restricted: 'caveat',
+  settings_changed: 'neutral',
+  settings_reverted: 'caveat',
 };
 
 /** The one-line copy of a marker; the interrupted notice reads the same whatever the server wrote. */
@@ -335,6 +337,7 @@ export function buildSupervisorConversation(
 ): ConversationItem[] {
   const requestedSummaries = new Map<string, string>();
   for (const record of records) {
+    if (record.kind === 'note') continue;
     const summary = record.request?.summary;
     if (record.request?.stage === 'requested' && summary !== undefined) {
       requestedSummaries.set(record.request.requestId, summary);
@@ -366,6 +369,7 @@ export function buildSupervisorConversation(
     }
   };
   for (const record of records) {
+    if (record.kind === 'note') continue;
     if (record.kind === 'marker') {
       flush();
       const marker = record.marker;

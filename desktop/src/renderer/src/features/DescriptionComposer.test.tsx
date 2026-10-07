@@ -22,7 +22,11 @@ import type { ConnectionState, RepositoryFileRef } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { FILE_SEARCH_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
 import { STAGED_ON_OTHER_SERVER, type ComposerUploadItem } from './stagedItems';
-import { DescriptionComposer } from './DescriptionComposer';
+import {
+  DescriptionComposer,
+  runComposerSlashCommand,
+  type ComposerSlashCommand,
+} from './DescriptionComposer';
 
 afterEach(cleanup);
 
@@ -392,10 +396,12 @@ function ConversationalHarness({
   onSubmit,
   submitDisabled = false,
   placeholderOverride,
+  slashCommands,
 }: {
   onSubmit(value: string): void;
   submitDisabled?: boolean;
   placeholderOverride?: string;
+  slashCommands?: readonly ComposerSlashCommand[];
 }) {
   const [value, setValue] = useState('');
   return (
@@ -421,6 +427,7 @@ function ConversationalHarness({
       onError={() => undefined}
       allowUploads={false}
       onSubmit={() => onSubmit(value)}
+      slashCommands={slashCommands}
       submitDisabled={submitDisabled}
       footer={<button type="button">Footer action</button>}
     />
@@ -428,6 +435,64 @@ function ConversationalHarness({
 }
 
 describe('DescriptionComposer conversational props', () => {
+  it('lists registered slash commands, selects with keys, and dismisses with Escape', async () => {
+    installAgenticoMock();
+    const onSubmit = vi.fn();
+    const commands: readonly ComposerSlashCommand[] = [
+      { name: '/model', description: 'Change model', onExecute: vi.fn() },
+      { name: '/effort', description: 'Change effort', onExecute: vi.fn() },
+    ];
+    render(<ConversationalHarness onSubmit={onSubmit} slashCommands={commands} />);
+    const user = userEvent.setup();
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+
+    await user.type(textarea, '/');
+    const listbox = screen.getByRole('listbox', { name: 'Commands' });
+    expect(listbox).toHaveTextContent('Change model');
+    expect(listbox).toHaveTextContent('Change effort');
+    expect(screen.getByRole('option', { name: '/model Change model' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await user.keyboard('{ArrowDown}{Tab}');
+    expect(textarea).toHaveValue('/effort ');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.clear(textarea);
+    await user.type(textarea, '/');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull();
+    expect(textarea).toHaveValue('/');
+    await user.type(textarea, 'm');
+    expect(screen.getByRole('option', { name: '/model Change model' })).toBeVisible();
+  });
+
+  it('runs registered commands on Enter without sending a message, even when send is blocked', async () => {
+    installAgenticoMock();
+    const onSubmit = vi.fn();
+    const onModel = vi.fn();
+    const commands: readonly ComposerSlashCommand[] = [
+      { name: '/model', description: 'Change model', onExecute: onModel },
+    ];
+    render(<ConversationalHarness onSubmit={onSubmit} slashCommands={commands} submitDisabled />);
+    const user = userEvent.setup();
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+
+    await user.type(textarea, '/model Sonnet 4{Enter}');
+    expect(onModel).toHaveBeenCalledWith('Sonnet 4');
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue('');
+
+    await user.type(textarea, '/unknown value{Enter}');
+    expect(onModel).toHaveBeenCalledTimes(1);
+    expect(textarea).toHaveValue('/unknown value');
+    expect(runComposerSlashCommand('/model default', commands)).toBe(true);
+    expect(onModel).toHaveBeenLastCalledWith('default');
+    expect(runComposerSlashCommand('/unknown value', commands)).toBe(false);
+    expect(runComposerSlashCommand('/model other\nmessage', commands)).toBe(false);
+  });
+
   it('leaves the wizard composer unchanged when none of the optional props are set', async () => {
     installAgenticoMock();
     render(<Harness />);
@@ -440,6 +505,9 @@ describe('DescriptionComposer conversational props', () => {
     await user.type(textarea, 'one{Enter}two');
     // Enter is still a newline: no submit handler exists.
     expect(textarea).toHaveValue('one\ntwo');
+    await user.clear(textarea);
+    await user.type(textarea, '/');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull();
   });
 
   it('submits on Enter, keeps Shift+Enter a newline, and honours the blocked state', async () => {

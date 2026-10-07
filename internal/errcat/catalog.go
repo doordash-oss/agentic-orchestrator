@@ -1761,6 +1761,9 @@ var catalog = map[Code]Entry{
 		Summary:     "The supervisor harness could not be started, so the message was not sent.",
 		Remediation: "Check that the harness is installed and signed in, then send the message again.",
 	},
+	ChangePending:         {Class: ClassNeedsAction, Title: "Settings change pending", Summary: "Another settings change is waiting to apply.", Remediation: "Cancel the pending change before choosing another setting."},
+	StaleGeneration:       {Class: ClassNeedsAction, Title: "Supervisor state changed", Summary: "The supervisor generation changed before the settings request arrived.", Remediation: "Refresh the supervisor state and try again."},
+	PendingChangeNotFound: {Class: ClassWarning, Title: "Pending change not found", Summary: "That settings change is no longer pending.", Remediation: "Refresh the supervisor state."},
 
 	// --- Chat-context codes ---------------------------------------------------
 	// An explain-in-chat turn can attach a structured reference to the

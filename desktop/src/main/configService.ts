@@ -119,6 +119,9 @@ const ModelCatalogResponseSchema = z.object({
   provider_models: z.record(z.string(), z.array(ServerModelInfoSchema)).optional(),
   phase_defaults: ServerModelsSchema.optional(),
   phase_provider_models: z.record(z.string(), z.record(z.string(), z.array(z.string()))).optional(),
+  chat_default_effort: z
+    .record(z.string(), z.enum(['low', 'medium', 'high', 'xhigh', 'max']))
+    .optional(),
 });
 
 const ProviderModelRefreshResponseSchema = z.object({
@@ -398,5 +401,6 @@ function toModelCatalogue(data: z.output<typeof ModelCatalogResponseSchema>): Mo
     providerModels,
     phaseDefaults: toPhaseModels(data.phase_defaults ?? {}),
     phaseProviderModels: data.phase_provider_models ?? {},
+    chatDefaultEffort: data.chat_default_effort ?? {},
   };
 }

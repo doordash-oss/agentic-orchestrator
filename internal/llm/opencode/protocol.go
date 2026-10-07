@@ -59,14 +59,17 @@ type Protocol struct {
 	sessionReady chan struct{}
 
 	// Request ids for the handshake exchanges, used to route responses.
-	initID        int
-	sessionNewID  int
-	sessionLoadID int
-	promptID      int
-	modelChangeID int
-	promptModel   string
-	promptActive  bool
-	promptQueue   []string
+	initID            int
+	sessionNewID      int
+	sessionLoadID     int
+	promptID          int
+	modelChangeID     int
+	modelChangeDone   chan error
+	modelChangeTarget string
+	promptModel       string
+	deferredPrompt    string
+	promptActive      bool
+	promptQueue       []string
 
 	negotiatedVersion int
 	acpSessionID      string
@@ -456,9 +459,22 @@ func (p *Protocol) sendSessionLoad() error {
 }
 
 func (p *Protocol) sendPrompt(text string) error {
-	if err := p.sendModelChangeIfNeeded(); err != nil {
+	p.mu.Lock()
+	p.deferredPrompt = text
+	p.mu.Unlock()
+	changing, err := p.sendModelChangeIfNeeded()
+	if err != nil {
+		p.mu.Lock()
+		p.deferredPrompt = ""
+		p.mu.Unlock()
 		return err
 	}
+	if changing {
+		return nil
+	}
+	p.mu.Lock()
+	p.deferredPrompt = ""
+	p.mu.Unlock()
 	id := int(nextID.Add(1))
 	p.mu.Lock()
 	p.promptID = id
@@ -500,21 +516,62 @@ func (p *Protocol) SetPromptModel(model string) {
 	p.mu.Unlock()
 }
 
-func (p *Protocol) sendModelChangeIfNeeded() error {
+// ApplySettings changes the live interactive model and confirms the ACP reply
+// before the coordinator commits the new setting. Effort is encoded in the
+// launch overlay; the coordinator relaunches for an effort change.
+func (p *Protocol) ApplySettings(ctx context.Context, model, _ string) error {
+	if !p.opts.Interactive {
+		return fmt.Errorf("OpenCode settings update requires an interactive session")
+	}
+	p.SetPromptModel(model)
+	changing, err := p.sendModelChangeIfNeeded()
+	if err != nil {
+		return err
+	}
+	if !changing {
+		return nil
+	}
+	p.mu.Lock()
+	done := p.modelChangeDone
+	p.mu.Unlock()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		p.mu.Lock()
+		p.promptModel = p.model
+		p.mu.Unlock()
+		return ctx.Err()
+	}
+}
+
+func (p *Protocol) sendModelChangeIfNeeded() (bool, error) {
 	p.mu.Lock()
 	model, current, sessionID := p.promptModel, p.model, p.acpSessionID
 	if model == "" || model == current {
 		p.mu.Unlock()
-		return nil
+		return false, nil
+	}
+	if p.modelChangeID != 0 {
+		p.mu.Unlock()
+		return false, fmt.Errorf("OpenCode model switch already in flight")
 	}
 	id := int(nextID.Add(1))
 	p.modelChangeID = id
+	p.modelChangeDone = make(chan error, 1)
+	p.modelChangeTarget = model
 	p.mu.Unlock()
 	req := Request{JSONRPC: "2.0", ID: id, Method: "session/set_model", Params: map[string]string{"sessionId": sessionID, "modelId": model}}
 	if err := p.writeJSON(req); err != nil {
-		return fmt.Errorf("sending session/set_model request: %w", err)
+		p.mu.Lock()
+		p.modelChangeID = 0
+		p.modelChangeDone = nil
+		p.modelChangeTarget = ""
+		p.promptModel = current
+		p.mu.Unlock()
+		return false, fmt.Errorf("sending session/set_model request: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func (p *Protocol) writeJSON(v interface{}) error {
@@ -739,13 +796,30 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 		return messages
 
 	case modelChangeID:
-		if hasErr {
-			p.logDebug("[opencode] session/set_model failed: %s", rpcErrorDetail(env.Error))
-			return nil
-		}
 		p.mu.Lock()
-		p.model = p.promptModel
+		p.modelChangeID = 0
+		done := p.modelChangeDone
+		p.modelChangeDone = nil
+		target := p.modelChangeTarget
+		p.modelChangeTarget = ""
+		deferred := p.deferredPrompt
+		p.deferredPrompt = ""
+		var changeErr error
+		if hasErr {
+			changeErr = fmt.Errorf("session/set_model refused: %s", rpcErrorDetail(env.Error))
+			p.promptModel = p.model
+		} else {
+			p.model = target
+		}
 		p.mu.Unlock()
+		if done != nil {
+			done <- changeErr
+		}
+		if deferred != "" {
+			if err := p.sendPrompt(deferred); err != nil {
+				return seal(p.terminalError(err.Error()))
+			}
+		}
 		return nil
 
 	default:

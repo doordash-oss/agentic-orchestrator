@@ -186,6 +186,46 @@ function emit(mock: ReturnType<typeof installAgenticoMock>, event: SupervisorEve
 }
 
 describe('SupervisorPage settings', () => {
+  it('shows a pending target while retaining the committed chip and cancels by id', async () => {
+    const pending = {
+      requestId: 'req-next',
+      kind: 'model' as const,
+      target: { ...CHOSEN, model: 'claude-sonnet' },
+      requestedAt: '2026-10-06T10:00:00Z',
+    };
+    const mock = await renderPage({
+      supervisorState: supervisorState({
+        lifecycle: 'running',
+        settings: CHOSEN,
+        pendingChange: pending,
+      }),
+    });
+    expect(screen.getByTestId('supervisor-model-chip')).toHaveAccessibleName('Claude Opus · High');
+    expect(screen.getByText(/Model change pending/)).toHaveTextContent(
+      'applies when this turn ends',
+    );
+    expect(screen.getByText('claude-sonnet')).toBeVisible();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(mock.api.cancelSupervisorPendingChange).toHaveBeenCalledWith({ requestId: 'req-next' });
+  });
+
+  it('handles model and effort slash commands without sending messages', async () => {
+    const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
+    const user = userEvent.setup();
+    await user.type(composer(), '/effort high{Enter}');
+    await waitFor(() =>
+      expect(mock.api.updateSupervisorSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ effort: 'high' }),
+      ),
+    );
+    await user.type(composer(), '/model Sonnet{Enter}');
+    await waitFor(() =>
+      expect(mock.api.updateSupervisorSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ model: 'claude-sonnet', effort: '' }),
+      ),
+    );
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+  });
   it('disables Send with the choose placeholder while no harness and model are set', async () => {
     await renderPage();
     const user = userEvent.setup();
@@ -213,14 +253,16 @@ describe('SupervisorPage settings', () => {
       within(claude)
         .getAllByRole('radio')
         .map((radio) => radio.parentElement?.textContent),
-    ).toEqual(['Opus', 'Sonnet']);
+    ).toEqual(['Opus ★', 'Sonnet']);
 
     await user.click(within(claude).getByRole('radio', { name: 'Opus' }));
-    expect(mock.api.updateSupervisorSettings).toHaveBeenCalledWith({
-      harness: 'claude',
-      model: 'claude-opus',
-      effort: '',
-    });
+    expect(mock.api.updateSupervisorSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        harness: 'claude',
+        model: 'claude-opus',
+        effort: '',
+      }),
+    );
     await waitFor(() =>
       expect(screen.getByTestId('supervisor-model-chip')).toHaveAccessibleName(
         'Claude Opus · Default',
@@ -235,11 +277,13 @@ describe('SupervisorPage settings', () => {
         .map((radio) => radio.parentElement?.textContent),
     ).toEqual(['Default', 'Low', 'Medium', 'High']);
     await user.click(within(effort).getByRole('radio', { name: 'High' }));
-    expect(mock.api.updateSupervisorSettings).toHaveBeenLastCalledWith({
-      harness: 'claude',
-      model: 'claude-opus',
-      effort: 'high',
-    });
+    expect(mock.api.updateSupervisorSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        harness: 'claude',
+        model: 'claude-opus',
+        effort: 'high',
+      }),
+    );
     await waitFor(() =>
       expect(screen.getByTestId('supervisor-model-chip')).toHaveAccessibleName(
         'Claude Opus · High',
@@ -264,15 +308,14 @@ describe('SupervisorPage settings', () => {
     expect(within(codex).queryByRole('radio')).toBeNull();
   });
 
-  it('keeps the chip read-only while a supervisor process exists', async () => {
+  it('keeps the chip available while a supervisor process exists', async () => {
     await renderPage({ supervisorState: supervisorState({ lifecycle: 'idle', settings: CHOSEN }) });
     const user = userEvent.setup();
 
     const chip = screen.getByTestId('supervisor-model-chip');
     expect(chip).toHaveAccessibleName('Claude Opus · High');
-    expect(chip).toHaveAttribute('aria-disabled', 'true');
     await user.click(chip);
-    expect(screen.queryByRole('region', { name: 'Harness and model' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Harness and model' })).toBeVisible();
   });
 });
 

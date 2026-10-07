@@ -104,6 +104,26 @@ export interface DescriptionComposerHandle {
   focus(): void;
 }
 
+export interface ComposerSlashCommand {
+  /** Command name including the leading slash, such as `/model`. */
+  name: string;
+  description: string;
+  onExecute(argument: string): void;
+}
+
+/** Also used by host-owned Send buttons, which submit outside the textarea. */
+export function runComposerSlashCommand(
+  value: string,
+  commands: readonly ComposerSlashCommand[],
+): boolean {
+  const match = /^(\/[a-z][a-z0-9-]*)(?:[ \t]+([^\r\n]*))?$/i.exec(value.trim());
+  if (match === null) return false;
+  const command = commands.find((candidate) => candidate.name === match[1]);
+  if (command === undefined) return false;
+  command.onExecute((match[2] ?? '').trim());
+  return true;
+}
+
 export interface DescriptionComposerProps {
   id: string;
   label: string;
@@ -142,6 +162,8 @@ export interface DescriptionComposerProps {
    * newline. Omitted, Enter types a newline as before.
    */
   onSubmit?(): void;
+  /** Optional commands offered when the draft starts with `/`. */
+  slashCommands?: readonly ComposerSlashCommand[];
   /** Blocks the Enter submit while typing stays allowed. */
   submitDisabled?: boolean;
   /** Disables the textarea itself. */
@@ -179,6 +201,7 @@ export function DescriptionComposer({
   onRepositoryFilesChange,
   onError,
   onSubmit,
+  slashCommands = [],
   submitDisabled = false,
   disabled = false,
   placeholderOverride,
@@ -193,6 +216,9 @@ export function DescriptionComposer({
   const [mentionResults, setMentionResults] = useState<readonly RepositoryFileRef[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionStatus, setMentionStatus] = useState<'idle' | 'searching'>('idle');
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
@@ -349,6 +375,29 @@ export function DescriptionComposer({
     setMention(detectMention(element.value, element.selectionStart));
   };
 
+  const syncSlash = (element: HTMLTextAreaElement): void => {
+    const beforeCaret = element.value.slice(0, element.selectionStart);
+    setSlashQuery(/^\/[a-z0-9-]*$/i.test(beforeCaret) ? beforeCaret.toLowerCase() : null);
+    setSlashIndex(0);
+  };
+
+  const matchingSlashCommands =
+    slashQuery === null || slashDismissed
+      ? []
+      : slashCommands.filter((command) => command.name.toLowerCase().startsWith(slashQuery));
+
+  const applySlashCommand = (command: ComposerSlashCommand): void => {
+    onValueChange(`${command.name} `);
+    setSlashQuery(null);
+    requestAnimationFrame(() => {
+      const element = textareaRef.current;
+      if (element !== null) {
+        element.focus();
+        element.setSelectionRange(element.value.length, element.value.length);
+      }
+    });
+  };
+
   const applyMention = (file: RepositoryFileRef): void => {
     if (mention === null) return;
     const reference = `@${file.repoKey}/${file.path}`;
@@ -372,6 +421,31 @@ export function DescriptionComposer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (!event.nativeEvent.isComposing && matchingSlashCommands.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSlashIndex((index) => (index + 1) % matchingSlashCommands.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSlashIndex(
+          (index) => (index - 1 + matchingSlashCommands.length) % matchingSlashCommands.length,
+        );
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        const command = matchingSlashCommands[slashIndex];
+        if (command !== undefined) applySlashCommand(command);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+    }
     if (mention === null || mentionResults.length === 0) {
       if (
         onSubmit !== undefined &&
@@ -380,7 +454,8 @@ export function DescriptionComposer({
         !event.nativeEvent.isComposing
       ) {
         event.preventDefault();
-        if (!submitDisabled) onSubmit();
+        if (runComposerSlashCommand(value, slashCommands)) onValueChange('');
+        else if (!submitDisabled) onSubmit();
       }
       return;
     }
@@ -448,8 +523,13 @@ export function DescriptionComposer({
           onChange={(event) => {
             onValueChange(event.target.value);
             syncMention(event.target);
+            setSlashDismissed(false);
+            syncSlash(event.target);
           }}
-          onSelect={(event) => syncMention(event.currentTarget)}
+          onSelect={(event) => {
+            syncMention(event.currentTarget);
+            if (!slashDismissed) syncSlash(event.currentTarget);
+          }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
@@ -485,6 +565,26 @@ export function DescriptionComposer({
               </button>
             ))
           )}
+        </div>
+      ) : null}
+      {matchingSlashCommands.length > 0 ? (
+        <div className="composer__mentions" role="listbox" aria-label="Commands">
+          {matchingSlashCommands.map((command, index) => (
+            <button
+              key={command.name}
+              type="button"
+              role="option"
+              aria-label={`${command.name} ${command.description}`}
+              aria-selected={index === slashIndex}
+              data-active={index === slashIndex}
+              className="composer__mention-option"
+              onMouseEnter={() => setSlashIndex(index)}
+              onClick={() => applySlashCommand(command)}
+            >
+              <b>{command.name}</b>
+              <span>{command.description}</span>
+            </button>
+          ))}
         </div>
       ) : null}
       {allowUploads ? (

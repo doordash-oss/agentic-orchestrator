@@ -106,6 +106,7 @@ export const IPC_CHANNELS = {
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
   supervisorStateGet: 'agentico:supervisor:state-get',
   supervisorSettingsUpdate: 'agentico:supervisor:settings-update',
+  supervisorPendingChangeCancel: 'agentico:supervisor:pending-change-cancel',
   supervisorTranscriptGet: 'agentico:supervisor:transcript-get',
   supervisorMessageSend: 'agentico:supervisor:message-send',
   supervisorInterrupt: 'agentico:supervisor:interrupt',
@@ -2875,6 +2876,14 @@ export const SupervisorSettingsSchema = z.strictObject({
 });
 export type SupervisorSettings = z.output<typeof SupervisorSettingsSchema>;
 
+export const SupervisorPendingChangeSchema = z.strictObject({
+  requestId: z.string().min(1).max(128),
+  kind: z.enum(['model', 'effort']),
+  target: SupervisorSettingsSchema,
+  requestedAt: z.string().max(100),
+});
+export type SupervisorPendingChange = z.output<typeof SupervisorPendingChangeSchema>;
+
 /**
  * One pending supervisor permission or question, in exactly the attention
  * item shape the inbox already renders (always `target: 'supervisor'`, no
@@ -2900,6 +2909,7 @@ export const SupervisorStateSchema = z.strictObject({
   /** Who cut the most recent turn; `shutdown` means a server restart cut it. */
   interruptedBy: SupervisorInterruptedBySchema,
   settings: SupervisorSettingsSchema,
+  pendingChange: SupervisorPendingChangeSchema.optional(),
   /** Model the running harness reports; empty when no process exists. */
   effectiveModel: z.string().max(200),
   permissionMode: SupervisorPermissionModeSchema,
@@ -2921,6 +2931,7 @@ export const SupervisorRecordKindSchema = z.enum([
   'permission',
   'question',
   'marker',
+  'note',
 ]);
 export type SupervisorRecordKind = z.output<typeof SupervisorRecordKindSchema>;
 export const SupervisorRecordVisibilitySchema = z.enum(['content', 'model_only', 'display_only']);
@@ -2945,6 +2956,8 @@ export const SupervisorMarkerKindSchema = z.enum([
   'error',
   'history_not_restored',
   'permission_restricted',
+  'settings_changed',
+  'settings_reverted',
 ]);
 export type SupervisorMarkerKind = z.output<typeof SupervisorMarkerKindSchema>;
 
@@ -3007,9 +3020,26 @@ export type SupervisorTranscriptRequest = z.output<typeof SupervisorTranscriptRe
 export const SupervisorSettingsRequestSchema = z.strictObject({
   harness: z.string().min(1).max(100),
   model: z.string().min(1).max(200),
-  effort: z.string().max(40).optional(),
+  effort: z.string().max(40),
+  requestId: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9._-]+$/),
+  expectedGeneration: SupervisorSeqSchema,
 });
 export type SupervisorSettingsRequest = z.output<typeof SupervisorSettingsRequestSchema>;
+
+export const SupervisorPendingChangeCancelRequestSchema = z.strictObject({
+  requestId: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9._-]+$/),
+});
+export type SupervisorPendingChangeCancelRequest = z.output<
+  typeof SupervisorPendingChangeCancelRequestSchema
+>;
 
 /**
  * The renderer supplies the text and, for an explain draft, the error-home
@@ -4276,6 +4306,7 @@ export type CatalogueModel = z.output<typeof CatalogueModelSchema>;
 
 export const ModelCatalogueSchema = z.strictObject({
   providerOrder: z.array(z.string().max(100)).max(20),
+  chatDefaultEffort: z.record(z.string().max(100), EffortLevelSchema).optional(),
   providerModels: z.record(z.string().max(100), z.array(CatalogueModelSchema).max(200)),
   /** Recommended model per phase field (keys match PhaseModels). */
   phaseDefaults: PhaseModelsSchema,
@@ -4520,6 +4551,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   },
   [IPC_CHANNELS.supervisorSettingsUpdate]: {
     request: z.tuple([SupervisorSettingsRequestSchema]),
+    response: SupervisorStateSchema,
+  },
+  [IPC_CHANNELS.supervisorPendingChangeCancel]: {
+    request: z.tuple([SupervisorPendingChangeCancelRequestSchema]),
     response: SupervisorStateSchema,
   },
   [IPC_CHANNELS.supervisorTranscriptGet]: {
@@ -4933,6 +4968,9 @@ export interface AgenticoApi {
    * `supervisor_settings_locked` (a supervisor process exists).
    */
   updateSupervisorSettings(request: SupervisorSettingsRequest): Promise<SupervisorState>;
+  cancelSupervisorPendingChange(
+    request: SupervisorPendingChangeCancelRequest,
+  ): Promise<SupervisorState>;
   /** Reads one transcript page: newest with no cursor, else before/after a seq. */
   getSupervisorTranscript(request: SupervisorTranscriptRequest): Promise<SupervisorTranscriptPage>;
   /**

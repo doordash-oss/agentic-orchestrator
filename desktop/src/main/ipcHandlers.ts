@@ -91,6 +91,7 @@ import {
   type SupervisorMessageRequest,
   type SupervisorMessageResult,
   type SupervisorSettingsRequest,
+  type SupervisorPendingChangeCancelRequest,
   type SupervisorState,
   type SupervisorTranscriptPage,
   type SupervisorTranscriptRequest,
@@ -228,6 +229,9 @@ export interface IpcServices {
   cancelSessionOutput(subscriptionId: string): boolean;
   getSupervisorState(): Promise<SupervisorState>;
   updateSupervisorSettings(request: SupervisorSettingsRequest): Promise<SupervisorState>;
+  cancelSupervisorPendingChange(
+    request: SupervisorPendingChangeCancelRequest,
+  ): Promise<SupervisorState>;
   getSupervisorTranscript(request: SupervisorTranscriptRequest): Promise<SupervisorTranscriptPage>;
   sendSupervisorMessage(request: SupervisorMessageRequest): Promise<SupervisorMessageResult>;
   interruptSupervisor(): Promise<SupervisorActionResult>;
@@ -462,6 +466,10 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.supervisorStateGet]: () => services.getSupervisorState(),
     [IPC_CHANNELS.supervisorSettingsUpdate]: (_event, request: SupervisorSettingsRequest) =>
       services.updateSupervisorSettings(request),
+    [IPC_CHANNELS.supervisorPendingChangeCancel]: (
+      _event,
+      request: SupervisorPendingChangeCancelRequest,
+    ) => services.cancelSupervisorPendingChange(request),
     [IPC_CHANNELS.supervisorTranscriptGet]: (_event, request: SupervisorTranscriptRequest) =>
       services.getSupervisorTranscript(request),
     [IPC_CHANNELS.supervisorMessageSend]: (_event, request: SupervisorMessageRequest) =>

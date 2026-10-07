@@ -40,6 +40,7 @@ import {
   SupervisorMessageResultSchema,
   SupervisorRecordSchema,
   SupervisorSettingsRequestSchema,
+  SupervisorPendingChangeCancelRequestSchema,
   SupervisorStateSchema,
   SupervisorTranscriptPageSchema,
   SupervisorTranscriptRequestSchema,
@@ -49,6 +50,7 @@ import {
   type SupervisorMessageResult,
   type SupervisorRecord,
   type SupervisorSettingsRequest,
+  type SupervisorPendingChangeCancelRequest,
   type SupervisorState,
   type SupervisorTranscriptPage,
   type SupervisorTranscriptRequest,
@@ -101,6 +103,16 @@ export function toSupervisorState(state: ServerSupervisorState): SupervisorState
         model: state.settings.model,
         effort: state.settings.effort,
       },
+      ...(state.pending_change === undefined
+        ? {}
+        : {
+            pendingChange: {
+              requestId: state.pending_change.request_id,
+              kind: state.pending_change.kind,
+              target: state.pending_change.target,
+              requestedAt: state.pending_change.requested_at,
+            },
+          }),
       effectiveModel: state.effective_model,
       permissionMode: {
         requested: state.permission_mode.requested,
@@ -198,9 +210,24 @@ export class SupervisorService {
       body: {
         harness: input.harness,
         model: input.model,
-        ...(input.effort === undefined ? {} : { effort: input.effort }),
+        effort: input.effort,
+        request_id: input.requestId,
+        expected_generation: input.expectedGeneration,
       },
     });
+    return toSupervisorState(validateWithSchema(body, SupervisorStateResponseSchema).state);
+  }
+
+  async cancelPendingChange(
+    request: SupervisorPendingChangeCancelRequest,
+  ): Promise<SupervisorState> {
+    const input = validateWithSchema(request, SupervisorPendingChangeCancelRequestSchema);
+    const body = await this.request(
+      `/api/v1/supervisor/pending-change/${encodeURIComponent(input.requestId)}`,
+      {
+        method: 'DELETE',
+      },
+    );
     return toSupervisorState(validateWithSchema(body, SupervisorStateResponseSchema).state);
   }
 
@@ -257,7 +284,7 @@ export class SupervisorService {
 
   private request(
     path: string,
-    init?: { method: 'POST' | 'PATCH'; body: Record<string, unknown> },
+    init?: { method: 'POST' | 'PATCH' | 'DELETE'; body?: Record<string, unknown> },
   ): Promise<unknown> {
     return fencedServerRequest(this.deps.transport, this.deps.identity, path, init);
   }

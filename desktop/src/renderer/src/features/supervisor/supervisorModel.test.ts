@@ -138,6 +138,33 @@ describe('supervisorModel', () => {
     ]);
   });
 
+  it('shows setting notices but never renders a model-only note', () => {
+    const changed = supervisorRecord({
+      seq: 1,
+      kind: 'marker',
+      visibility: 'display_only',
+      messages: [],
+      marker: { marker: 'settings_changed', text: 'Model changed to Sonnet' },
+    });
+    const note = supervisorRecord({
+      seq: 2,
+      kind: 'note',
+      visibility: 'model_only',
+      messages: [{ index: 2, role: 'user', type: 'text', text: 'Agentico note' }],
+    });
+    const reverted = supervisorRecord({
+      seq: 3,
+      kind: 'marker',
+      visibility: 'display_only',
+      messages: [],
+      marker: { marker: 'settings_reverted', text: 'Could not apply Sonnet' },
+    });
+    expect(buildSupervisorConversation([changed, note, reverted])).toEqual([
+      { kind: 'notice', key: 'notice-1', tone: 'neutral', text: 'Model changed to Sonnet' },
+      { kind: 'notice', key: 'notice-3', tone: 'caveat', text: 'Could not apply Sonnet' },
+    ]);
+  });
+
   it('never foots a reply from an earlier turn', () => {
     const items = buildSupervisorConversation([
       supervisorRecord({

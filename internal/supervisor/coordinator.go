@@ -68,6 +68,8 @@ const (
 	MarkerError                = "error"
 	MarkerHistoryNotRestored   = "history_not_restored"
 	MarkerPermissionRestricted = "permission_restricted"
+	MarkerSettingsChanged      = "settings_changed"
+	MarkerSettingsReverted     = "settings_reverted"
 )
 
 // MarkerData is the payload of a display-only marker record. Code is the
@@ -76,6 +78,11 @@ type MarkerData struct {
 	Marker string `json:"marker"`
 	Text   string `json:"text"`
 	Code   string `json:"code,omitempty"`
+}
+
+// NoteData is model-only context inserted at a settings boundary.
+type NoteData struct {
+	Text string `json:"text"`
 }
 
 // RequestData is the payload of permission and question records. Input,
@@ -133,20 +140,24 @@ type Coordinator struct {
 
 	opMu sync.Mutex
 
-	mu             sync.Mutex
-	settings       Settings
-	conv           persistedConversation
-	store          *transcriptStore
-	lifecycle      Lifecycle
-	step           StartingStep
-	outcome        TurnOutcome
-	interruptedBy  InterruptedBy
-	failure        *LaunchFailedError
-	permMode       PermissionMode
-	session        ports.SessionView
-	sessionID      string
-	effectiveModel string
-	launch         *launchAttempt
+	mu               sync.Mutex
+	settings         Settings
+	appliedChanges   map[string]bool
+	pendingChange    *PendingChange
+	relaunchPrevious *Settings
+	applyingChange   bool
+	conv             persistedConversation
+	store            *transcriptStore
+	lifecycle        Lifecycle
+	step             StartingStep
+	outcome          TurnOutcome
+	interruptedBy    InterruptedBy
+	failure          *LaunchFailedError
+	permMode         PermissionMode
+	session          ports.SessionView
+	sessionID        string
+	effectiveModel   string
+	launch           *launchAttempt
 	// turns holds the delivered turns still awaiting a result, oldest first.
 	turns        []string
 	turnCount    int
@@ -217,6 +228,9 @@ func New(opts Options) (*Coordinator, error) {
 	if opts.OrphanWait <= 0 {
 		opts.OrphanWait = DefaultOrphanWait
 	}
+	if opts.SettingsUpdateTimeout <= 0 {
+		opts.SettingsUpdateTimeout = DefaultSettingsUpdateTimeout
+	}
 	if opts.WorkDir == "" {
 		opts.WorkDir = opts.StateDir
 	}
@@ -225,6 +239,14 @@ func New(opts Options) (*Coordinator, error) {
 		return nil, fmt.Errorf("create supervisor state dir: %w", err)
 	}
 	settings, err := loadSettings(dir)
+	if err != nil {
+		return nil, err
+	}
+	pendingChange, err := loadPendingChange(dir)
+	if err != nil {
+		return nil, err
+	}
+	appliedChanges, err := loadAppliedChanges(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -250,16 +272,18 @@ func New(opts Options) (*Coordinator, error) {
 	}
 	store.setGeneration(conv.Generation)
 	c := &Coordinator{
-		opts:          opts,
-		dir:           dir,
-		settings:      settings,
-		conv:          conv,
-		store:         store,
-		lifecycle:     LifecycleStopped,
-		outcome:       OutcomeNone,
-		interruptedBy: InterruptedByNone,
-		permMode:      PermissionMode{Requested: RequestedPermissionMode},
-		subs:          map[*Subscription]struct{}{},
+		opts:           opts,
+		dir:            dir,
+		settings:       settings,
+		appliedChanges: appliedChanges,
+		pendingChange:  pendingChange,
+		conv:           conv,
+		store:          store,
+		lifecycle:      LifecycleStopped,
+		outcome:        OutcomeNone,
+		interruptedBy:  InterruptedByNone,
+		permMode:       PermissionMode{Requested: RequestedPermissionMode},
+		subs:           map[*Subscription]struct{}{},
 	}
 	if err := c.recoverBoot(); err != nil {
 		_ = store.close()
@@ -333,7 +357,7 @@ func (c *Coordinator) recoverBoot() error {
 		return err
 	}
 	if len(cut) == 0 {
-		return nil
+		return c.applyBootChange()
 	}
 	for _, turn := range inflight.TurnIDs {
 		if err := resolve(func(t string) bool { return t == turn }); err != nil {
@@ -348,7 +372,36 @@ func (c *Coordinator) recoverBoot() error {
 	if err := saveTurns(c.dir, gen, nil); err != nil {
 		return fmt.Errorf("clear supervisor turn-in-flight record: %w", err)
 	}
+	return c.applyBootChange()
+}
+
+func (c *Coordinator) applyBootChange() error {
+	if c.pendingChange == nil {
+		return nil
+	}
+	change := c.pendingChange
+	previous := c.settings
+	if err := saveSettings(c.dir, change.Target); err != nil {
+		return err
+	}
+	if err := savePendingChange(c.dir, nil); err != nil {
+		return err
+	}
+	c.settings = change.Target
+	c.pendingChange = nil
+	if err := c.rememberChangeLocked(change.RequestID); err != nil {
+		return err
+	}
+	c.appendSettingsRecordsLocked(change, previous, false, "")
 	return nil
+}
+
+func (c *Coordinator) rememberChangeLocked(id string) error {
+	if id == "" {
+		return nil
+	}
+	c.appliedChanges[id] = true
+	return saveAppliedChanges(c.dir, c.appliedChanges)
 }
 
 type openRequest struct {
@@ -431,6 +484,7 @@ func (c *Coordinator) stateLocked() State {
 		LastTurnOutcome: c.outcome,
 		InterruptedBy:   c.interruptedBy,
 		Settings:        c.settings,
+		PendingChange:   c.pendingChange,
 		EffectiveModel:  c.effectiveModel,
 		PermissionMode:  c.permMode,
 		PendingRequests: append([]*llm.ControlRequestMessage(nil), c.pending...),
@@ -489,6 +543,253 @@ func (c *Coordinator) UpdateSettings(s Settings) (State, error) {
 	c.settings = s
 	c.publishStateLocked()
 	return c.stateLocked(), nil
+}
+
+// ChangeSettings validates and merges a versioned request. A busy process
+// retains one durable target; an idle process is retired before commit.
+func (c *Coordinator) ChangeSettings(req SettingsChange) (State, error) {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if req.RequestID == "" {
+		return State{}, &SettingsInvalidError{Reason: "request_id is required"}
+	}
+	if c.appliedChanges[req.RequestID] {
+		return c.stateLocked(), nil
+	}
+	if c.pendingChange != nil {
+		if c.pendingChange.RequestID == req.RequestID {
+			return c.stateLocked(), nil
+		}
+	}
+	if req.ExpectedGeneration != c.conv.Generation {
+		return State{}, &StaleGenerationError{Current: c.conv.Generation}
+	}
+	if c.pendingChange != nil {
+		return State{}, &ChangePendingError{RequestID: c.pendingChange.RequestID}
+	}
+	target := c.settings
+	if req.Harness != nil {
+		target.Harness = *req.Harness
+	}
+	if req.Model != nil {
+		target.Model = *req.Model
+	}
+	if req.Effort != nil {
+		target.Effort = *req.Effort
+	}
+	if c.opts.Catalog == nil {
+		return State{}, &SettingsInvalidError{Reason: "no model catalog is available"}
+	}
+	if err := c.opts.Catalog.ValidateSettings(target); err != nil {
+		return State{}, &SettingsInvalidError{Reason: err.Error()}
+	}
+	if target == c.settings {
+		if err := c.rememberChangeLocked(req.RequestID); err != nil {
+			return State{}, err
+		}
+		return c.stateLocked(), nil
+	}
+	if c.lifecycle != LifecycleStopped && c.lifecycle != LifecycleFailed && target.Harness != c.settings.Harness {
+		return State{}, ErrSettingsLocked
+	}
+	kind := "effort"
+	if target.Model != c.settings.Model || target.Harness != c.settings.Harness {
+		kind = "model"
+	}
+	change := &PendingChange{RequestID: req.RequestID, Kind: kind, Target: target, RequestedAt: c.opts.Now().UTC()}
+	if c.lifecycle == LifecycleStopped || c.lifecycle == LifecycleFailed {
+		previous := c.settings
+		if err := saveSettings(c.dir, target); err != nil {
+			return State{}, err
+		}
+		c.settings = target
+		if err := c.rememberChangeLocked(req.RequestID); err != nil {
+			return State{}, err
+		}
+		if previous.Complete() {
+			c.appendSettingsRecordsLocked(change, previous, false, "")
+		}
+		c.publishStateLocked()
+		return c.stateLocked(), nil
+	}
+	if c.lifecycle == LifecycleIdle {
+		c.mu.Unlock()
+		err := c.applyChange(change)
+		c.mu.Lock()
+		if err != nil {
+			return State{}, err
+		}
+		return c.stateLocked(), nil
+	}
+	if err := savePendingChange(c.dir, change); err != nil {
+		return State{}, err
+	}
+	c.pendingChange = change
+	c.publishStateLocked()
+	return c.stateLocked(), nil
+}
+
+type inPlaceSettingsSession interface {
+	ApplySettings(context.Context, string, string) error
+}
+
+func (c *Coordinator) applyChange(change *PendingChange) error {
+	c.mu.Lock()
+	sess := c.session
+	harness := c.settings.Harness
+	effortChanged := change.Target.Effort != c.settings.Effort
+	c.mu.Unlock()
+	updater, capable := sess.(inPlaceSettingsSession)
+	if capable && (harness == "codex" || (harness == "opencode" && !effortChanged)) {
+		c.mu.Lock()
+		previous := c.settings
+		c.mu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), c.opts.SettingsUpdateTimeout)
+		err := updater.ApplySettings(ctx, change.Target.Model, change.Target.Effort)
+		cancel()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.session == nil && c.pendingChange == nil {
+			c.applyingChange = false
+			c.publishStateLocked()
+			return nil
+		}
+		if err != nil {
+			c.pendingChange = nil
+			if persistErr := savePendingChange(c.dir, nil); persistErr != nil {
+				return persistErr
+			}
+			if persistErr := c.rememberChangeLocked(change.RequestID); persistErr != nil {
+				return persistErr
+			}
+			c.appendSettingsRecordsLocked(change, previous, true, harnessDisplayName(harness)+": "+err.Error())
+			c.lifecycle = LifecycleIdle
+			c.publishStateLocked()
+			return nil
+		}
+		if err := saveSettings(c.dir, change.Target); err != nil {
+			return err
+		}
+		if err := savePendingChange(c.dir, nil); err != nil {
+			return err
+		}
+		c.settings = change.Target
+		if err := c.rememberChangeLocked(change.RequestID); err != nil {
+			return err
+		}
+		c.pendingChange = nil
+		c.applyingChange = false
+		c.lifecycle = LifecycleIdle
+		c.appendSettingsRecordsLocked(change, previous, false, "")
+		c.publishStateLocked()
+		return nil
+	}
+	return c.applyRelaunchChange(change)
+}
+
+func (c *Coordinator) CancelPendingChange(id string) (State, error) {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pendingChange == nil || c.pendingChange.RequestID != id {
+		return State{}, ErrPendingChangeNotFound
+	}
+	if err := savePendingChange(c.dir, nil); err != nil {
+		return State{}, err
+	}
+	c.pendingChange = nil
+	if c.applyingChange && len(c.turns) == 0 {
+		c.applyingChange = false
+		if c.session != nil {
+			c.lifecycle = LifecycleIdle
+		}
+	}
+	c.publishStateLocked()
+	return c.stateLocked(), nil
+}
+
+func (c *Coordinator) applyRelaunchChange(change *PendingChange) error {
+	c.mu.Lock()
+	previous := c.settings
+	sess := c.session
+	sessionID := c.sessionID
+	if c.pendingChange != nil && c.pendingChange.RequestID == change.RequestID {
+		if err := savePendingChange(c.dir, nil); err != nil {
+			c.mu.Unlock()
+			return err
+		}
+		c.pendingChange = nil
+	}
+	c.applyingChange = true
+	c.ending = true
+	c.mu.Unlock()
+	if sess != nil {
+		_ = sess.Stop()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionID == sessionID && sess != nil {
+		c.resetProcessLocked()
+	}
+	if err := saveSettings(c.dir, change.Target); err != nil {
+		return err
+	}
+	if err := savePendingChange(c.dir, nil); err != nil {
+		return err
+	}
+	c.settings = change.Target
+	if err := c.rememberChangeLocked(change.RequestID); err != nil {
+		return err
+	}
+	c.pendingChange = nil
+	c.relaunchPrevious = &previous
+	c.applyingChange = false
+	c.lifecycle = LifecycleStopped
+	c.appendSettingsRecordsLocked(change, previous, false, "")
+	c.publishStateLocked()
+	return nil
+}
+
+func (c *Coordinator) appendSettingsRecordsLocked(change *PendingChange, previous Settings, reverted bool, reason string) {
+	if change == nil {
+		return
+	}
+	marker := MarkerSettingsChanged
+	text := ""
+	if reverted {
+		marker = MarkerSettingsReverted
+		text = "Couldn't apply " + change.Target.Model + " — still using " + c.settings.Model
+		if reason != "" {
+			text += ": " + reason
+		}
+	} else if change.Kind == "model" {
+		text = "Model changed to " + change.Target.Model
+	} else {
+		text = "Effort changed to " + displayEffort(change.Target.Effort)
+	}
+	c.appendMarkerLocked(c.conv.Generation, "", MarkerData{Marker: marker, Text: text})
+	if reverted {
+		return
+	}
+	if change.Kind == "model" && change.Target.Effort != previous.Effort {
+		c.appendMarkerLocked(c.conv.Generation, "", MarkerData{Marker: MarkerSettingsChanged, Text: "Effort changed to " + displayEffort(change.Target.Effort)})
+	}
+	note := NoteData{Text: "Agentico note: The user changed " + change.Kind + " at this point. Current model: " + change.Target.Model + "; effort: " + change.Target.Effort + "."}
+	data, _ := json.Marshal(note)
+	rec, _, err := c.store.appendRecord(Record{Generation: c.conv.Generation, Kind: KindNote, Visibility: VisibilityModelOnly, Data: data})
+	if err == nil {
+		c.publishLocked(Event{Kind: EventRecord, Generation: c.conv.Generation, Record: &rec})
+	}
+}
+
+func displayEffort(effort string) string {
+	if effort == "" {
+		return "Default"
+	}
+	return effort
 }
 
 // Send commits one user message and delivers it to the harness, launching
@@ -924,6 +1225,20 @@ func (c *Coordinator) failLaunch(attempt *launchAttempt, cause error) {
 		c.launch = nil
 		c.resetProcessLocked()
 		c.failure = &LaunchFailedError{Err: cause}
+		if c.relaunchPrevious != nil {
+			previous := *c.relaunchPrevious
+			failed := &PendingChange{Kind: "model", Target: c.settings}
+			if failed.Target.Model == previous.Model {
+				failed.Kind = "effort"
+			}
+			if err := saveSettings(c.dir, previous); err == nil {
+				c.settings = previous
+				c.appendSettingsRecordsLocked(failed, previous, true, cause.Error())
+			} else {
+				log.Printf("supervisor: restore settings after failed relaunch: %v", err)
+			}
+			c.relaunchPrevious = nil
+		}
 		// The user record was never committed; the marker is the
 		// transcript's durable trace of the failed attempt.
 		c.appendMarkerLocked(attempt.generation, "", MarkerData{
@@ -931,6 +1246,23 @@ func (c *Coordinator) failLaunch(attempt *launchAttempt, cause error) {
 			Text:   cause.Error(),
 			Code:   string(errcat.SupervisorLaunchFailed),
 		})
+		if c.pendingChange != nil {
+			change := c.pendingChange
+			previous := c.settings
+			err := saveSettings(c.dir, change.Target)
+			if err == nil {
+				if err = savePendingChange(c.dir, nil); err == nil {
+					c.settings = change.Target
+					c.pendingChange = nil
+					if err = c.rememberChangeLocked(change.RequestID); err == nil {
+						c.appendSettingsRecordsLocked(change, previous, false, "")
+					}
+				}
+			}
+			if err != nil {
+				log.Printf("supervisor: apply change after failed launch: %v", err)
+			}
+		}
 		c.lifecycle = LifecycleFailed
 		c.publishStateLocked()
 	}
@@ -999,7 +1331,28 @@ func (c *Coordinator) applyExitLocked(clean bool) {
 		c.persistTurnsLocked()
 	}
 	c.lifecycle = LifecycleStopped
-	c.publishStateLocked()
+	if c.pendingChange != nil {
+		change := c.pendingChange
+		previous := c.settings
+		err := saveSettings(c.dir, change.Target)
+		if err == nil {
+			if err = savePendingChange(c.dir, nil); err == nil {
+				c.settings = change.Target
+				if err := c.rememberChangeLocked(change.RequestID); err != nil {
+					log.Printf("supervisor: remember applied change: %v", err)
+				}
+				c.pendingChange = nil
+				c.relaunchPrevious = &previous
+				c.appendSettingsRecordsLocked(change, previous, false, "")
+			}
+		}
+		if err != nil {
+			log.Printf("supervisor: apply change after exit: %v", err)
+		}
+	}
+	if !c.applyingChange {
+		c.publishStateLocked()
+	}
 }
 
 // Interrupt asks the harness to interrupt the current turn and returns at
@@ -1408,6 +1761,9 @@ func (c *Coordinator) observeAnswer(gen int64, sessionID string, answer ports.Co
 }
 
 func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
+	if c.relaunchPrevious != nil && !result.IsError && result.Subtype != "error" {
+		c.relaunchPrevious = nil
+	}
 	if len(c.turns) > 0 {
 		c.turns = c.turns[1:]
 		c.persistTurnsLocked()
@@ -1426,11 +1782,27 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 		c.setOutcomeLocked(OutcomeCompleted, InterruptedByNone)
 	}
 	if len(c.turns) == 0 {
+		if c.pendingChange != nil {
+			c.applyingChange = true
+			go c.applyPendingChange()
+			return
+		}
 		c.lifecycle = LifecycleIdle
 	} else {
 		c.lifecycle = LifecycleRunning
 	}
 	c.publishStateLocked()
+}
+
+func (c *Coordinator) applyPendingChange() {
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	c.mu.Lock()
+	change := c.pendingChange
+	c.mu.Unlock()
+	if change != nil {
+		_ = c.applyChange(change)
+	}
 }
 
 // Subscription is one live event consumer. Replay holds the committed

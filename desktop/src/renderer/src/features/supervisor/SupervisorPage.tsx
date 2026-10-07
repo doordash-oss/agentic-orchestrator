@@ -48,6 +48,7 @@ import type {
   SupervisorPendingRequest,
   SupervisorRecord,
   SupervisorSettingsRequest,
+  SupervisorSettings,
   SupervisorState,
 } from '../../../../shared/ipc';
 import { ErrorSurface } from '../../components/ErrorSurface';
@@ -63,7 +64,12 @@ import {
   type AttentionSubmitOptions,
 } from '../AttentionInbox';
 import { useModelCatalogue } from '../ConfigEditor';
-import { DescriptionComposer, type DescriptionComposerHandle } from '../DescriptionComposer';
+import {
+  DescriptionComposer,
+  runComposerSlashCommand,
+  type ComposerSlashCommand,
+  type DescriptionComposerHandle,
+} from '../DescriptionComposer';
 import {
   QuestionComposer,
   QuestionConversationTurn,
@@ -73,10 +79,10 @@ import { ConversationTranscript } from '../transcript/ConversationTranscript';
 import { SupervisorModelChip } from './SupervisorModelChip';
 import {
   buildSupervisorConversation,
+  findCatalogueModel,
   isPausedByRestart,
   isTurnActive,
   mergeRecords,
-  processExists,
   settingsChosen,
   SUPERVISOR_COPY,
   supervisorStatusLine,
@@ -148,6 +154,11 @@ export function SupervisorPage({
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [inlineError, setInlineError] = useState<CanonicalError | null>(null);
+  const [openSection, setOpenSection] = useState<{
+    section: 'model' | 'effort';
+    filter: string;
+    token: number;
+  } | null>(null);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   // Requests answered from this page: hidden at once, before the server's
   // next state confirms they are gone.
@@ -326,6 +337,10 @@ export function SupervisorPage({
       : inlineError;
 
   const send = async (): Promise<void> => {
+    if (runComposerSlashCommand(draft, slashCommands)) {
+      setDraft('');
+      return;
+    }
     const text = draft.trim();
     if (!canSend) return;
     const reference = errorReference;
@@ -370,10 +385,73 @@ export function SupervisorPage({
     }
   };
 
-  const commitSettings = async (request: SupervisorSettingsRequest): Promise<void> => {
-    const next = await window.agentico.updateSupervisorSettings(request);
-    setState(next);
+  const commitSettings = async (target: SupervisorSettings): Promise<void> => {
+    if (state === null) return;
+    try {
+      if (state.pendingChange !== undefined) {
+        const cancelled = await window.agentico.cancelSupervisorPendingChange({
+          requestId: state.pendingChange.requestId,
+        });
+        setState(cancelled);
+      }
+      const request: SupervisorSettingsRequest = {
+        ...target,
+        requestId: crypto.randomUUID(),
+        expectedGeneration: state.generation,
+      };
+      const next = await window.agentico.updateSupervisorSettings(request);
+      setState(next);
+    } catch (error) {
+      await refreshState();
+      throw error;
+    }
   };
+
+  const slashCommands: readonly ComposerSlashCommand[] = [
+    {
+      name: '/model',
+      description: 'Change the supervisor model',
+      onExecute: (argument) => {
+        const query = argument.trim().toLocaleLowerCase();
+        const models = (catalogue?.phaseProviderModels.chat?.[settings.harness] ?? []).map(
+          (id) => findCatalogueModel(catalogue, settings.harness, id) ?? { id },
+        );
+        const matches = models.filter((model) =>
+          [model.id, model.displayName ?? '', ...(model.aliases ?? [])].some(
+            (name) => name.toLocaleLowerCase() === query,
+          ),
+        );
+        if (query !== '' && matches.length === 1) {
+          const model = matches[0]!;
+          const effort =
+            settings.effort !== '' && !model.effortCapabilities?.includes(settings.effort as never)
+              ? ''
+              : settings.effort;
+          void commitSettings({ ...settings, model: model.id, effort }).catch((error) =>
+            setInlineError(parseIpcError(error)),
+          );
+        } else setOpenSection({ section: 'model', filter: argument.trim(), token: Date.now() });
+      },
+    },
+    {
+      name: '/effort',
+      description: 'Change the supervisor effort',
+      onExecute: (argument) => {
+        const query = argument.trim().toLocaleLowerCase();
+        const levels = [
+          '',
+          ...(findCatalogueModel(catalogue, settings.harness, settings.model)?.effortCapabilities ??
+            []),
+        ];
+        const matched = levels.find((level) => (level === '' ? 'default' : level) === query);
+        if (query !== '' && matched !== undefined) {
+          void commitSettings({ ...settings, effort: matched }).catch((error) =>
+            setInlineError(parseIpcError(error)),
+          );
+        } else setOpenSection({ section: 'effort', filter: argument.trim(), token: Date.now() });
+      },
+    },
+  ];
 
   const submitAttention = async (
     item: SupervisorPendingRequest,
@@ -487,6 +565,36 @@ export function SupervisorPage({
         }
       />
       <div className="supervisor-page__dock">
+        {state?.pendingChange !== undefined ? (
+          <div className="supervisor-pending-tray" role="status">
+            <span>
+              {state.pendingChange.kind === 'model'
+                ? 'Model change pending'
+                : 'Effort change pending'}{' '}
+              — applies when{' '}
+              {lifecycle === 'starting' ? 'the supervisor is ready' : 'this turn ends'}
+            </span>
+            <strong>
+              {state.pendingChange.kind === 'model'
+                ? state.pendingChange.target.model
+                : state.pendingChange.target.effort || 'Default'}
+            </strong>
+            <button type="button" onClick={() => void stop()}>
+              Stop turn &amp; apply
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                void window.agentico
+                  .cancelSupervisorPendingChange({ requestId: state.pendingChange!.requestId })
+                  .then(setState)
+                  .catch((error) => setInlineError(parseIpcError(error)))
+              }
+            >
+              Cancel
+            </button>
+          </div>
+        ) : null}
         {failure !== null ? (
           <ErrorSurface
             error={failure}
@@ -530,14 +638,15 @@ export function SupervisorPage({
             onRepositoryFilesChange={ignoreUpdate}
             onError={setInlineError}
             onSubmit={() => void send()}
+            slashCommands={slashCommands}
             submitDisabled={!canSend}
             footer={
               <div className="supervisor-composer__footer">
                 <SupervisorModelChip
                   settings={settings}
                   catalogue={catalogue}
-                  locked={processExists(lifecycle)}
                   onCommit={commitSettings}
+                  openSection={openSection}
                 />
                 <p
                   className="supervisor-status"

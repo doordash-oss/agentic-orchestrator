@@ -167,8 +167,21 @@ func TestFakeCodexJSONRPC(t *testing.T) {
 		if got := testutil.FakeCodexThreads(t, path); len(got) != 1 || got[0] != thread {
 			t.Fatalf("minted threads = %v, want [%s]", got, thread)
 		}
-		if resp := r.response(r.call("thread/settings/update", map[string]any{"threadId": thread})); resp["error"] != nil {
+		if resp := r.response(r.call("thread/settings/update", map[string]any{"threadId": thread, "model": "gpt-fake-next", "effort": "high"})); resp["error"] != nil {
 			t.Fatalf("settings update = %v", resp)
+		}
+		requests := testutil.FakeCodexRequests(t, path)
+		var settings struct {
+			Model  string `json:"model"`
+			Effort string `json:"effort"`
+		}
+		for _, request := range requests {
+			if request.Method == "thread/settings/update" {
+				_ = json.Unmarshal(request.Params, &settings)
+			}
+		}
+		if settings.Model != "gpt-fake-next" || settings.Effort != "high" {
+			t.Fatalf("recorded settings = %+v", settings)
 		}
 		if resp := r.response(r.call("account/usage/read", map[string]any{})); string(resp["result"]) != "{}" {
 			t.Fatalf("usage read = %v", resp)
@@ -196,6 +209,17 @@ func TestFakeCodexJSONRPC(t *testing.T) {
 		r.handshake()
 		if resp := r.response(r.call("thread/settings/update", map[string]any{})); resp["error"] == nil {
 			t.Fatalf("rejected settings update = %v", resp)
+		}
+	})
+
+	t.Run("settings update delayed", func(t *testing.T) {
+		r, _ := startFakeRPC(t, testutil.FakeCodexScript{DelaySettingsUpdateMS: 80})
+		r.handshake()
+		thread := threadIDOf(t, r.response(r.call("thread/start", map[string]any{"model": "gpt-fake", "cwd": home})))
+		started := time.Now()
+		resp := r.response(r.call("thread/settings/update", map[string]any{"threadId": thread, "model": "gpt-fake-next", "effort": "high"}))
+		if resp["error"] != nil || time.Since(started) < 70*time.Millisecond {
+			t.Fatalf("delayed settings response = %v after %s", resp, time.Since(started))
 		}
 	})
 

@@ -360,6 +360,9 @@ func TestSupervisorCodesPinShape(t *testing.T) {
 		{SettingsRequired, ClassNeedsAction},
 		{TurnActive, ClassWarning},
 		{SupervisorLaunchFailed, ClassBlocking},
+		{ChangePending, ClassNeedsAction},
+		{StaleGeneration, ClassNeedsAction},
+		{PendingChangeNotFound, ClassWarning},
 	}
 	for _, tc := range cases {
 		rendered := New(tc.code)

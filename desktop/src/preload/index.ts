@@ -66,6 +66,7 @@ import {
   type SupervisorEvent,
   type SupervisorMessageRequest,
   type SupervisorSettingsRequest,
+  type SupervisorPendingChangeCancelRequest,
   type SupervisorTranscriptRequest,
   type LocalReviewDraftSaveRequest,
   type LocalReviewDraftLookupRequest,
@@ -270,6 +271,8 @@ const api: AgenticoApi = {
   getSupervisorState: () => call(IPC_CHANNELS.supervisorStateGet),
   updateSupervisorSettings: (request: SupervisorSettingsRequest) =>
     call(IPC_CHANNELS.supervisorSettingsUpdate, request),
+  cancelSupervisorPendingChange: (request: SupervisorPendingChangeCancelRequest) =>
+    call(IPC_CHANNELS.supervisorPendingChangeCancel, request),
   getSupervisorTranscript: (request: SupervisorTranscriptRequest) =>
     call(IPC_CHANNELS.supervisorTranscriptGet, request),
   sendSupervisorMessage: (request: SupervisorMessageRequest) =>

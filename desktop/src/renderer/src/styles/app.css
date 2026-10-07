@@ -13743,6 +13743,34 @@ body {
   padding-bottom: var(--space-4);
 }
 
+.supervisor-pending-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  padding: var(--space-2) var(--space-3);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.supervisor-pending-tray strong {
+  color: var(--text);
+}
+.supervisor-pending-tray button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.supervisor-pending-tray button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
 .supervisor-composer {
   border: var(--bench-hairline-width) solid var(--hairline);
   border-radius: var(--bench-radius-window);
@@ -13955,6 +13983,17 @@ body {
   margin: 0;
   color: var(--muted);
   font: 600 12px var(--bench-font-text);
+}
+
+.supervisor-chip__popover input[aria-label='Filter models'] {
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--text);
+  font: 12px var(--bench-font-text);
 }
 
 .supervisor-chip__groups {

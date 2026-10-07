@@ -108,6 +108,13 @@ type ThreadResumeParams struct {
 	Config                map[string]interface{} `json:"config,omitempty"`
 }
 
+// ThreadSettingsUpdateParams changes the model and effort on an existing thread.
+type ThreadSettingsUpdateParams struct {
+	ThreadID string  `json:"threadId"`
+	Model    string  `json:"model"`
+	Effort   *string `json:"effort"`
+}
+
 // ThreadStartResult is the response to thread/start and thread/resume.
 type ThreadStartResult struct {
 	Thread         Thread `json:"thread"`

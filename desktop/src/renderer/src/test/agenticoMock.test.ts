@@ -59,7 +59,13 @@ describe('installAgenticoMock supervisor surface', () => {
   it('applies settings, sends deterministically, and ends', async () => {
     const mock = installAgenticoMock();
 
-    await window.agentico.updateSupervisorSettings({ harness: 'claude', model: 'claude-opus' });
+    await window.agentico.updateSupervisorSettings({
+      harness: 'claude',
+      model: 'claude-opus',
+      effort: '',
+      requestId: 'req-1',
+      expectedGeneration: 0,
+    });
     const sent = await window.agentico.sendSupervisorMessage({ text: 'Hi' });
     expect(sent.launched).toBe(true);
     expect(sent.record).toMatchObject({ seq: 1, kind: 'user', messages: [{ text: 'Hi' }] });

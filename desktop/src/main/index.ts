@@ -1504,6 +1504,7 @@ if (!hasSingleInstanceLock) {
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
       getSupervisorState: () => supervisor.getState(),
       updateSupervisorSettings: (request) => supervisor.updateSettings(request),
+      cancelSupervisorPendingChange: (request) => supervisor.cancelPendingChange(request),
       getSupervisorTranscript: (request) => supervisor.getTranscript(request),
       sendSupervisorMessage: async (request) => {
         const result = await supervisor.sendMessage(request);

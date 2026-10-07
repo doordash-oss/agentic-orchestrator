@@ -217,7 +217,7 @@ func stopJourneyFeatureStatus(t *testing.T, baseURL, token, featureID string) st
 func startStopJourneySupervisor(t *testing.T, baseURL, token string) {
 	t.Helper()
 	model := stopJourneySupervisorModel(t, baseURL, token)
-	status, body, err := installStopMutation(http.MethodPatch, baseURL, token, "/api/v1/supervisor/settings", `{"harness":"claude","model":"`+model+`"}`)
+	status, body, err := installStopMutation(http.MethodPatch, baseURL, token, "/api/v1/supervisor/settings", `{"harness":"claude","model":"`+model+`","request_id":"initial-settings","expected_generation":0}`)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("supervisor settings: status %d err %v body %s", status, err, body)
 	}

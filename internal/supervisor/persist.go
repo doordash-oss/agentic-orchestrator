@@ -34,13 +34,15 @@ import (
 // the recovering session manager scans, so a surviving supervisor process
 // is never restored as a synthetic session.
 const (
-	supervisorDirName   = "supervisor"
-	settingsFileName    = "settings.json"
-	conversationFile    = "conversation.json"
-	conversationsDir    = "conversations"
-	generationsDirName  = "generations"
-	turnsFileName       = "turns.json"
-	persistedFileFormat = 1
+	supervisorDirName      = "supervisor"
+	settingsFileName       = "settings.json"
+	conversationFile       = "conversation.json"
+	conversationsDir       = "conversations"
+	generationsDirName     = "generations"
+	turnsFileName          = "turns.json"
+	pendingChangeFileName  = "pending-change.json"
+	appliedChangesFileName = "applied-changes.json"
+	persistedFileFormat    = 1
 )
 
 type persistedSettings struct {
@@ -48,6 +50,34 @@ type persistedSettings struct {
 	Harness string `json:"harness"`
 	Model   string `json:"model"`
 	Effort  string `json:"effort"`
+}
+
+type persistedPendingChange struct {
+	Format int            `json:"format"`
+	Change *PendingChange `json:"change,omitempty"`
+}
+
+func loadPendingChange(dir string) (*PendingChange, error) {
+	var stored persistedPendingChange
+	_, err := readJSON(filepath.Join(dir, pendingChangeFileName), &stored)
+	return stored.Change, err
+}
+
+func savePendingChange(dir string, change *PendingChange) error {
+	return writeJSONAtomic(filepath.Join(dir, pendingChangeFileName), persistedPendingChange{Format: persistedFileFormat, Change: change})
+}
+
+func loadAppliedChanges(dir string) (map[string]bool, error) {
+	var stored map[string]bool
+	_, err := readJSON(filepath.Join(dir, appliedChangesFileName), &stored)
+	if stored == nil {
+		stored = map[string]bool{}
+	}
+	return stored, err
+}
+
+func saveAppliedChanges(dir string, ids map[string]bool) error {
+	return writeJSONAtomic(filepath.Join(dir, appliedChangesFileName), ids)
 }
 
 type persistedConversation struct {

@@ -38,6 +38,7 @@ const NOTICE_MARKS: Readonly<Record<ConversationNoticeTone, string>> = {
   interrupted: '‖',
   failed: '✕',
   caveat: '!',
+  neutral: '•',
 };
 
 export function ActivityIndicator({

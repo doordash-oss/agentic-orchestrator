@@ -116,12 +116,15 @@ const (
 	FakeOpenCodeSessionsFile = "sessions.jsonl"
 )
 
-// FakeOpenCodeModel is the fake provider's only chat-eligible model.
+// FakeOpenCodeModel is the fake provider's default chat model.
 const FakeOpenCodeModel = "fake/opencode-fake"
+const FakeOpenCodeSecondModel = "fake/opencode-second"
 
 // FakeOpenCodeScript configures the fake. The fake re-reads it at every
 // launch, so a test can change behaviour between generations.
 type FakeOpenCodeScript struct {
+	// RejectSetModel makes ACP session/set_model return a scripted refusal.
+	RejectSetModel bool `json:"reject_set_model,omitempty"`
 	// NoHTTP never starts the HTTP server.
 	NoHTTP bool `json:"no_http,omitempty"`
 	// RejectPassword answers 401 to every HTTP request.
@@ -232,6 +235,16 @@ func fakeOpenCodeCatalog() []llm.ModelInfo {
 			llm.EffortLow:  {"reasoningEffort": "low"},
 			llm.EffortHigh: {"reasoningEffort": "high"},
 		},
+	}, {
+		ID:                 FakeOpenCodeSecondModel,
+		DisplayName:        "OpenCode Second",
+		ContextWindow:      200000,
+		Category:           "cheap",
+		EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortHigh},
+		EffortVariants: map[llm.EffortLevel]map[string]any{
+			llm.EffortLow:  {"reasoningEffort": "low"},
+			llm.EffortHigh: {"reasoningEffort": "high"},
+		},
 	}}
 }
 
@@ -243,9 +256,12 @@ func (p *FakeOpenCodeProvider) MinVersion() [3]int            { return [3]int{} 
 func (p *FakeOpenCodeProvider) EnvVarsToExclude() []string    { return nil }
 func (p *FakeOpenCodeProvider) SupportsSessionResume() bool   { return p.inner.SupportsSessionResume() }
 func (p *FakeOpenCodeProvider) ModelCatalog() []llm.ModelInfo { return fakeOpenCodeCatalog() }
-func (p *FakeOpenCodeProvider) AvailableModels() []string     { return []string{FakeOpenCodeModel} }
+func (p *FakeOpenCodeProvider) AvailableModels() []string {
+	return []string{FakeOpenCodeModel, FakeOpenCodeSecondModel}
+}
 func (p *FakeOpenCodeProvider) MatchesModel(model string) bool {
-	return opencode.BackendModel(model) == FakeOpenCodeModel
+	backend := opencode.BackendModel(model)
+	return backend == FakeOpenCodeModel || backend == FakeOpenCodeSecondModel
 }
 func (p *FakeOpenCodeProvider) ComputeCost(string, int64, int64) float64 { return 0 }
 func (p *FakeOpenCodeProvider) ContextWindowForModel(string) int         { return 200000 }

@@ -157,6 +157,92 @@ func TestCodexInteractiveHandshakeSkipsEmptyTurnAndReportsThread(t *testing.T) {
 	}
 }
 
+func TestCodexInteractiveSettingsUpdateControlsLaterTurns(t *testing.T) {
+	p, w, _, err := handshake(t, llm.ProtocolOpts{WorkDir: "/w", Model: "old", EffortLevel: llm.EffortLow, Interactive: true}, threadOK("th-1", "old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.ApplySettings(context.Background(), "new", "high") }()
+	id, params := w.await(t, "thread/settings/update")
+	if string(params) != `{"threadId":"th-1","model":"new","effort":"high"}` {
+		t.Fatalf("settings params = %s", params)
+	}
+	if msgs := parse(t, p, `{"id":`+id+`,"result":{}}`); len(msgs) != 0 {
+		t.Fatalf("settings response emitted %+v", msgs)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SendUserMessage("hi"); err != nil {
+		t.Fatal(err)
+	}
+	_, turn := w.await(t, "turn/start")
+	var got TurnStartParams
+	if err := json.Unmarshal(turn, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "new" || got.Effort != "high" {
+		t.Fatalf("turn = %+v", got)
+	}
+}
+
+func TestCodexSettingsUpdateRejectionKeepsCachedValues(t *testing.T) {
+	p, w, _, err := handshake(t, llm.ProtocolOpts{WorkDir: "/w", Model: "old", EffortLevel: llm.EffortLow, Interactive: true}, threadOK("th-1", "old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- p.ApplySettings(context.Background(), "new", "high") }()
+	id, _ := w.await(t, "thread/settings/update")
+	if msgs := parse(t, p, `{"id":`+id+`,"error":{"code":-32600,"message":"not allowed"}}`); len(msgs) != 0 {
+		t.Fatalf("settings error emitted %+v", msgs)
+	}
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "not allowed") {
+		t.Fatalf("ApplySettings = %v", err)
+	}
+	if err := p.SendUserMessage("hi"); err != nil {
+		t.Fatal(err)
+	}
+	_, raw := w.await(t, "turn/start")
+	var turn TurnStartParams
+	if err := json.Unmarshal(raw, &turn); err != nil {
+		t.Fatal(err)
+	}
+	if turn.Model != "old" || turn.Effort != "low" {
+		t.Fatalf("turn = %+v", turn)
+	}
+}
+
+func TestCodexSettingsUpdateTimeoutAndNonInteractiveRefusal(t *testing.T) {
+	p, w, _, err := handshake(t, llm.ProtocolOpts{WorkDir: "/w", Model: "old", EffortLevel: llm.EffortLow, Interactive: true}, threadOK("th-1", "old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := p.ApplySettings(ctx, "new", "high"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("timeout = %v", err)
+	}
+	id, _ := w.await(t, "thread/settings/update")
+	parse(t, p, `{"id":`+id+`,"result":{}}`)
+	if err := p.SendUserMessage("hi"); err != nil {
+		t.Fatal(err)
+	}
+	_, raw := w.await(t, "turn/start")
+	var turn TurnStartParams
+	if err := json.Unmarshal(raw, &turn); err != nil {
+		t.Fatal(err)
+	}
+	if turn.Model != "old" || turn.Effort != "low" {
+		t.Fatalf("turn = %+v", turn)
+	}
+	worker := NewProtocol(llm.ProtocolOpts{Model: "old", EffortLevel: llm.EffortLow})
+	if err := worker.ApplySettings(context.Background(), "new", "high"); !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("worker update = %v", err)
+	}
+}
+
 func TestCodexNonInteractiveHandshakeKeepsInitialTurnAndNoInit(t *testing.T) {
 	_, w, msgs, err := handshake(t, llm.ProtocolOpts{WorkDir: "/w", Model: "gpt-x", InitialPrompt: "do it"}, threadOK("th-1", ""))
 	if err != nil {

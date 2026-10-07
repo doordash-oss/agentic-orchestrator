@@ -38,6 +38,7 @@ const (
 	KindPermission RecordKind = "permission"
 	KindQuestion   RecordKind = "question"
 	KindMarker     RecordKind = "marker"
+	KindNote       RecordKind = "note"
 )
 
 // Visibility says who a record is for: the model and the UI (content), the
@@ -282,7 +283,7 @@ func isHistoryContent(rec Record) bool {
 		return false
 	}
 	switch rec.Kind {
-	case KindUser, KindAssistant, KindToolUse, KindToolResult:
+	case KindUser, KindAssistant, KindToolUse, KindToolResult, KindNote:
 		return true
 	}
 	return false

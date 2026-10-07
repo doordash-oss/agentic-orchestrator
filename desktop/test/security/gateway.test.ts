@@ -328,6 +328,9 @@ describe('gateway API path allowlist for the supervisor namespace', () => {
   });
 
   it('rejects wrong methods and unknown supervisor routes', async () => {
+    expect(isAllowedApiPath('/api/v1/supervisor/pending-change/req-1', 'DELETE')).toBe(true);
+    expect(isAllowedApiPath('/api/v1/supervisor/pending-change/req-1', 'GET')).toBe(false);
+    expect(isAllowedApiPath('/api/v1/supervisor/pending-change/../state', 'DELETE')).toBe(false);
     const record = { states: [] as ConnectionState[], logs: [] as string[], urls: [] as string[] };
     const gateway = new RuntimeGateway(attachDeps(record));
     await gateway.start();

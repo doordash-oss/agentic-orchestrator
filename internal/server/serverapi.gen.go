@@ -1061,6 +1061,8 @@ const (
 	SupervisorMarkerHistoryNotRestored   SupervisorMarkerRecordMarker = "history_not_restored"
 	SupervisorMarkerInterrupted          SupervisorMarkerRecordMarker = "interrupted"
 	SupervisorMarkerPermissionRestricted SupervisorMarkerRecordMarker = "permission_restricted"
+	SupervisorMarkerSettingsChanged      SupervisorMarkerRecordMarker = "settings_changed"
+	SupervisorMarkerSettingsReverted     SupervisorMarkerRecordMarker = "settings_reverted"
 )
 
 // Valid indicates whether the value is a known member of the SupervisorMarkerRecordMarker enum.
@@ -1074,6 +1076,28 @@ func (e SupervisorMarkerRecordMarker) Valid() bool {
 		return true
 	case SupervisorMarkerPermissionRestricted:
 		return true
+	case SupervisorMarkerSettingsChanged:
+		return true
+	case SupervisorMarkerSettingsReverted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorPendingChangeKind.
+const (
+	SupervisorPendingChangeKindEffort SupervisorPendingChangeKind = "effort"
+	SupervisorPendingChangeKindModel  SupervisorPendingChangeKind = "model"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorPendingChangeKind enum.
+func (e SupervisorPendingChangeKind) Valid() bool {
+	switch e {
+	case SupervisorPendingChangeKindEffort:
+		return true
+	case SupervisorPendingChangeKindModel:
+		return true
 	default:
 		return false
 	}
@@ -1083,6 +1107,7 @@ func (e SupervisorMarkerRecordMarker) Valid() bool {
 const (
 	SupervisorRecordKindAssistant  SupervisorRecordKind = "assistant"
 	SupervisorRecordKindMarker     SupervisorRecordKind = "marker"
+	SupervisorRecordKindNote       SupervisorRecordKind = "note"
 	SupervisorRecordKindPermission SupervisorRecordKind = "permission"
 	SupervisorRecordKindQuestion   SupervisorRecordKind = "question"
 	SupervisorRecordKindToolResult SupervisorRecordKind = "tool_result"
@@ -1096,6 +1121,8 @@ func (e SupervisorRecordKind) Valid() bool {
 	case SupervisorRecordKindAssistant:
 		return true
 	case SupervisorRecordKindMarker:
+		return true
+	case SupervisorRecordKindNote:
 		return true
 	case SupervisorRecordKindPermission:
 		return true
@@ -1946,6 +1973,21 @@ func (e SendSupervisorMessageParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for CancelSupervisorPendingChangeParamsXAgenticoClient.
+const (
+	CancelSupervisorPendingChangeParamsXAgenticoClientLocal CancelSupervisorPendingChangeParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CancelSupervisorPendingChangeParamsXAgenticoClient enum.
+func (e CancelSupervisorPendingChangeParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CancelSupervisorPendingChangeParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateSupervisorSettingsParamsXAgenticoClient.
 const (
 	UpdateSupervisorSettingsParamsXAgenticoClientLocal UpdateSupervisorSettingsParamsXAgenticoClient = "local"
@@ -2173,13 +2215,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -3215,6 +3257,7 @@ type Model struct {
 // ModelCatalogResponse defines model for ModelCatalogResponse.
 type ModelCatalogResponse struct {
 	APIVersion          string                         `json:"api_version"`
+	ChatDefaultEffort   map[string]string              `json:"chat_default_effort"`
 	Meta                ResponseMeta                   `json:"meta,omitempty"`
 	PhaseDefaults       ModelDefaults                  `json:"phase_defaults"`
 	PhaseProviderModels map[string]map[string][]string `json:"phase_provider_models"`
@@ -4683,6 +4726,19 @@ type SupervisorMessageResponse struct {
 	Record SupervisorRecord `json:"record"`
 }
 
+// SupervisorPendingChange defines model for SupervisorPendingChange.
+type SupervisorPendingChange struct {
+	Kind        SupervisorPendingChangeKind `json:"kind"`
+	RequestID   string                      `json:"request_id"`
+	RequestedAt time.Time                   `json:"requested_at"`
+
+	// Target Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default.
+	Target SupervisorSettings `json:"target"`
+}
+
+// SupervisorPendingChangeKind defines model for SupervisorPendingChange.Kind.
+type SupervisorPendingChangeKind string
+
 // SupervisorPermissionMode Permission mode the supervisor asked the harness for and the mode the running harness reported. `effective` is empty until a process reports it.
 type SupervisorPermissionMode struct {
 	Effective string `json:"effective"`
@@ -4704,6 +4760,9 @@ type SupervisorRecord struct {
 	// Marker Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker.
 	Marker   *SupervisorMarkerRecord `json:"marker,omitempty"`
 	Messages []TranscriptMessage     `json:"messages"`
+
+	// Note Bounded text of a model-only Agentico note.
+	Note string `json:"note,omitempty"`
 
 	// Request Request or verdict carried by `permission` and `question` records.
 	Request         *SupervisorRequestRecord   `json:"request,omitempty"`
@@ -4748,9 +4807,11 @@ type SupervisorSettings struct {
 
 // SupervisorSettingsRequest defines model for SupervisorSettingsRequest.
 type SupervisorSettingsRequest struct {
-	Effort  string `json:"effort,omitempty"`
-	Harness string `json:"harness"`
-	Model   string `json:"model"`
+	Effort             *string `json:"effort,omitempty"`
+	ExpectedGeneration int64   `json:"expected_generation"`
+	Harness            *string `json:"harness,omitempty"`
+	Model              *string `json:"model,omitempty"`
+	RequestID          string  `json:"request_id"`
 }
 
 // SupervisorStartingStep Present only while the lifecycle is `starting`: `rebuilding` while the harness's native session is rebuilt from the transcript, `launching` while the process spawns, `handshake` until it first answers.
@@ -4773,10 +4834,11 @@ type SupervisorState struct {
 	HeadSeq int64 `json:"head_seq"`
 
 	// InterruptedBy Who cut the most recent turn; meaningful when `last_turn_outcome` is `interrupted`. `user` is Stop or End, `shutdown` is a server shutdown or crash detected at boot.
-	InterruptedBy   SupervisorInterruptedBy `json:"interrupted_by"`
-	LastTurnOutcome SupervisorTurnOutcome   `json:"last_turn_outcome"`
-	Lifecycle       SupervisorLifecycle     `json:"lifecycle"`
-	PendingRequests []ControlRequest        `json:"pending_requests"`
+	InterruptedBy   SupervisorInterruptedBy  `json:"interrupted_by"`
+	LastTurnOutcome SupervisorTurnOutcome    `json:"last_turn_outcome"`
+	Lifecycle       SupervisorLifecycle      `json:"lifecycle"`
+	PendingChange   *SupervisorPendingChange `json:"pending_change,omitempty"`
+	PendingRequests []ControlRequest         `json:"pending_requests"`
 
 	// PermissionMode Permission mode the supervisor asked the harness for and the mode the running harness reported. `effective` is empty until a process reports it.
 	PermissionMode SupervisorPermissionMode `json:"permission_mode"`
@@ -5629,6 +5691,15 @@ type SendSupervisorMessageParams struct {
 
 // SendSupervisorMessageParamsXAgenticoClient defines parameters for SendSupervisorMessage.
 type SendSupervisorMessageParamsXAgenticoClient string
+
+// CancelSupervisorPendingChangeParams defines parameters for CancelSupervisorPendingChange.
+type CancelSupervisorPendingChangeParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CancelSupervisorPendingChangeParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CancelSupervisorPendingChangeParamsXAgenticoClient defines parameters for CancelSupervisorPendingChange.
+type CancelSupervisorPendingChangeParamsXAgenticoClient string
 
 // UpdateSupervisorSettingsParams defines parameters for UpdateSupervisorSettings.
 type UpdateSupervisorSettingsParams struct {

@@ -229,6 +229,28 @@ func TestRebuildGolden(t *testing.T) {
 	}
 }
 
+func TestModelOnlyNoteBecomesUserHistory(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	recs = append(recs, supervisor.Record{Seq: 40, ID: "note-40", Generation: 2, CreatedAt: recs[len(recs)-1].CreatedAt, Kind: supervisor.KindNote, Visibility: supervisor.VisibilityModelOnly, Data: json.RawMessage(`{"text":"Agentico note: The model changed to sonnet."}`)})
+	data, err := Render(input(recs), testOptions(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"role":"user","content":[{"type":"input_text","text":"Agentico note: The model changed to sonnet."}]`)) {
+		t.Fatalf("note absent from user history: %s", data)
+	}
+	path := filepath.Join("testdata", "note.golden.jsonl")
+	if *updateGolden {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, want) {
+		t.Fatalf("note golden mismatch: %v", err)
+	}
+}
+
 type line struct {
 	Timestamp string          `json:"timestamp"`
 	Type      string          `json:"type"`

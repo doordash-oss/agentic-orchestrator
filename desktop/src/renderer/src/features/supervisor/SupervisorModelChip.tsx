@@ -22,13 +22,12 @@ limitations under the License.
  * the checked radios always reflect what the server committed, with the
  * in-flight pick shown only while its commit is pending.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   CanonicalError,
   EffortLevel,
   ModelCatalogue,
   SupervisorSettings,
-  SupervisorSettingsRequest,
 } from '../../../../shared/ipc';
 import { ChevronDownIcon } from '../../components/icons';
 import { ErrorSurface } from '../../components/ErrorSurface';
@@ -47,21 +46,29 @@ import {
 export interface SupervisorModelChipProps {
   settings: SupervisorSettings;
   catalogue: ModelCatalogue | null;
-  /** True while a supervisor process exists: the choice cannot change. */
-  locked: boolean;
-  onCommit(request: SupervisorSettingsRequest): Promise<void>;
+  onCommit(request: SupervisorSettings): Promise<void>;
+  openSection?: { section: 'model' | 'effort'; filter: string; token: number } | null;
 }
 
 export function SupervisorModelChip({
   settings,
   catalogue,
-  locked,
   onCommit,
+  openSection,
 }: SupervisorModelChipProps) {
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<SupervisorSettings | null>(null);
   const [error, setError] = useState<CanonicalError | null>(null);
+  const [modelFilter, setModelFilter] = useState('');
+  const effortRef = useRef<HTMLFieldSetElement>(null);
+  useEffect(() => {
+    if (openSection === null || openSection === undefined) return;
+    setOpen(true);
+    setModelFilter(openSection.section === 'model' ? openSection.filter : '');
+    if (openSection.section === 'effort')
+      requestAnimationFrame(() => effortRef.current?.scrollIntoView?.({ block: 'nearest' }));
+  }, [openSection]);
   const dismiss = useCallback(() => setOpen(false), []);
   const groups = useMemo(
     () => (catalogue === null ? null : supervisorHarnessGroups(catalogue)),
@@ -77,11 +84,11 @@ export function SupervisorModelChip({
   const label = supervisorChipLabel(settings, catalogue);
 
   const commit = async (next: SupervisorSettings): Promise<void> => {
-    if (pending !== null || locked) return;
+    if (pending !== null) return;
     setPending(next);
     setError(null);
     try {
-      await onCommit({ harness: next.harness, model: next.model, effort: next.effort });
+      await onCommit(next);
     } catch (err) {
       setError(parseIpcError(err));
     } finally {
@@ -112,18 +119,15 @@ export function SupervisorModelChip({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls="supervisor-model-popover"
-        aria-disabled={locked}
-        title={locked ? SUPERVISOR_COPY.chipLocked : undefined}
         onClick={() => {
-          if (locked) return;
           setOpen((current) => !current);
         }}
       >
         <span className="supervisor-chip__label">{label}</span>
-        {locked ? null : <ChevronDownIcon className="supervisor-chip__chevron" />}
+        <ChevronDownIcon className="supervisor-chip__chevron" />
       </button>
       <ToolbarPopover
-        open={open && !locked}
+        open={open}
         id="supervisor-model-popover"
         className="supervisor-chip__popover"
         label={SUPERVISOR_COPY.chipPopover}
@@ -131,6 +135,12 @@ export function SupervisorModelChip({
         onDismiss={dismiss}
       >
         <h2 className="supervisor-chip__heading">{SUPERVISOR_COPY.chipPopover}</h2>
+        <input
+          aria-label="Filter models"
+          value={modelFilter}
+          onChange={(event) => setModelFilter(event.target.value)}
+          placeholder="Find a model"
+        />
         {error !== null ? <ErrorSurface error={error} variant="compact" /> : null}
         {groups === null ? (
           <p className="supervisor-chip__note" role="status">
@@ -150,38 +160,53 @@ export function SupervisorModelChip({
                 {group.models.length === 0 ? (
                   <p className="supervisor-chip__note">{SUPERVISOR_COPY.noModels}</p>
                 ) : (
-                  group.models.map((model) => {
-                    const current = shown.harness === group.harness && shown.model === model.id;
-                    return (
-                      <label
-                        key={model.id}
-                        className="supervisor-chip__option"
-                        data-current={current ? true : undefined}
-                      >
-                        <input
-                          className="sr-only"
-                          type="radio"
-                          name="supervisor-model"
-                          value={`${group.harness}:${model.id}`}
-                          checked={current}
-                          onChange={() => chooseModel(group.harness, model.id)}
-                        />
-                        <span className="supervisor-chip__option-name">
-                          {modelLabel(catalogue, group.harness, model.id)}
-                        </span>
-                        <span className="supervisor-chip__check" aria-hidden="true">
-                          {current ? '✓' : ''}
-                        </span>
-                      </label>
-                    );
-                  })
+                  group.models
+                    .filter(
+                      (model) =>
+                        modelFilter === '' ||
+                        [model.id, model.displayName ?? '', ...(model.aliases ?? [])].some((name) =>
+                          name.toLocaleLowerCase().includes(modelFilter.toLocaleLowerCase()),
+                        ),
+                    )
+                    .map((model) => {
+                      const current = shown.harness === group.harness && shown.model === model.id;
+                      return (
+                        <label
+                          key={model.id}
+                          className="supervisor-chip__option"
+                          data-current={current ? true : undefined}
+                        >
+                          <input
+                            className="sr-only"
+                            type="radio"
+                            name="supervisor-model"
+                            value={`${group.harness}:${model.id}`}
+                            checked={current}
+                            onChange={() => chooseModel(group.harness, model.id)}
+                          />
+                          <span className="supervisor-chip__option-name">
+                            {modelLabel(catalogue, group.harness, model.id)}
+                            {catalogue?.phaseProviderModels.chat?.[group.harness]?.[0] ===
+                            model.id ? (
+                              <span aria-hidden="true" title="Recommended model">
+                                {' '}
+                                ★
+                              </span>
+                            ) : null}
+                          </span>
+                          <span className="supervisor-chip__check" aria-hidden="true">
+                            {current ? '✓' : ''}
+                          </span>
+                        </label>
+                      );
+                    })
                 )}
               </fieldset>
             ))}
           </div>
         )}
         {chosen ? (
-          <fieldset className="supervisor-chip__effort" disabled={pending !== null}>
+          <fieldset ref={effortRef} className="supervisor-chip__effort" disabled={pending !== null}>
             <legend className="supervisor-chip__harness">Effort</legend>
             <div className="supervisor-chip__segments">
               {['', ...capabilities].map((level) => {
@@ -200,7 +225,9 @@ export function SupervisorModelChip({
                       checked={current}
                       onChange={() => void commit({ ...shown, effort: level })}
                     />
-                    {effortLabel(level)}
+                    {level === '' && catalogue?.chatDefaultEffort?.[shown.harness]
+                      ? `Default · ${effortLabel(catalogue.chatDefaultEffort[shown.harness] ?? '')}`
+                      : effortLabel(level)}
                   </label>
                 );
               })}

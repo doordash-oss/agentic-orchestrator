@@ -78,6 +78,8 @@ type Protocol struct {
 	threadID              string
 	turnID                string
 	model                 string
+	effort                string
+	settingsRequests      map[int]chan error
 	approvalPolicy        string
 	dangerFullAccess      bool
 	inputTokens           int
@@ -145,6 +147,7 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 		opts:             opts,
 		usageState:       usageState{resumeBaselinePending: opts.ResumeSessionID != ""},
 		model:            llm.StripModelContextWindow(opts.Model),
+		effort:           string(opts.EffortLevel),
 		approvalPolicy:   policy,
 		dangerFullAccess: opts.DSP,
 		resuming:         opts.ResumeSessionID != "",
@@ -319,6 +322,55 @@ func (p *Protocol) SendUserMessage(text string) error {
 		return fmt.Errorf("Codex native tool-less review permits exactly one turn")
 	}
 	return p.sendFollowUpTurn(text)
+}
+
+// ApplySettings changes an idle interactive thread after Codex confirms the
+// update. The caller provides a bounded context for the response wait.
+func (p *Protocol) ApplySettings(ctx context.Context, model, effort string) error {
+	if !p.opts.Interactive || p.opts.NativeToollessReview {
+		return llm.ErrNotSupported
+	}
+	id := int(nextID.Add(1))
+	ch := make(chan error, 1)
+	p.mu.Lock()
+	if p.threadID == "" || p.turnActive {
+		p.mu.Unlock()
+		return fmt.Errorf("codex settings update requires an idle interactive thread")
+	}
+	threadID := p.threadID
+	if p.settingsRequests == nil {
+		p.settingsRequests = make(map[int]chan error)
+	}
+	p.settingsRequests[id] = ch
+	p.mu.Unlock()
+	var effortValue *string
+	if effort != "" {
+		effortValue = &effort
+	}
+	err := p.writeJSON(Request{JSONRPC: "2.0", Method: "thread/settings/update", ID: id,
+		Params: ThreadSettingsUpdateParams{ThreadID: threadID, Model: llm.StripModelContextWindow(model), Effort: effortValue}})
+	if err != nil {
+		p.mu.Lock()
+		delete(p.settingsRequests, id)
+		p.mu.Unlock()
+		return fmt.Errorf("sending Codex settings update: %w", err)
+	}
+	select {
+	case err = <-ch:
+	case <-ctx.Done():
+		p.mu.Lock()
+		delete(p.settingsRequests, id)
+		p.mu.Unlock()
+		return fmt.Errorf("waiting for Codex settings update: %w", ctx.Err())
+	}
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.model = llm.StripModelContextWindow(model)
+	p.effort = effort
+	p.mu.Unlock()
+	return nil
 }
 
 // RespondToControl sends an allow/deny response for an approval request.
@@ -530,9 +582,11 @@ func (p *Protocol) startTurn(userPrompt string) error {
 	writableRoots := append([]string(nil), p.opts.WritableRoots...)
 	policy := p.approvalPolicy
 	dangerFullAccess := p.dangerFullAccess
+	model, effort := p.model, p.effort
 	p.mu.Unlock()
-
-	model := p.model
+	if !p.opts.Interactive {
+		effort = ""
+	}
 	if p.opts.NativeToollessReview {
 		req := Request{
 			JSONRPC: "2.0",
@@ -581,6 +635,7 @@ func (p *Protocol) startTurn(userPrompt string) error {
 			ApprovalPolicy: policy,
 			SandboxPolicy:  sandboxPolicy,
 			Model:          model,
+			Effort:         effort,
 		},
 	}
 	return p.writeJSON(req)
@@ -599,9 +654,13 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 	threadID := p.threadID
 	policy := p.approvalPolicy
 	model := p.model
+	effort := p.effort
 	writableRoots := append([]string(nil), p.opts.WritableRoots...)
 	dangerFullAccess := p.dangerFullAccess
 	p.mu.Unlock()
+	if !p.opts.Interactive {
+		effort = ""
+	}
 
 	if policy == "" {
 		policy = "on-request"
@@ -631,6 +690,7 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 			ApprovalPolicy: policy,
 			SandboxPolicy:  sandbox,
 			Model:          model,
+			Effort:         effort,
 		},
 	}
 	return p.writeJSON(req)
@@ -682,10 +742,28 @@ func (p *Protocol) writeJSON(v interface{}) error {
 
 func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg llm.SDKMessage, emit, handled bool) {
 	p.mu.Lock()
+	settingsReply := p.settingsRequests[id]
+	delete(p.settingsRequests, id)
 	isInterrupt := p.interruptReqIDs[id]
 	delete(p.interruptReqIDs, id)
 	isThread := id == p.threadReqID && id != 0
 	p.mu.Unlock()
+	if settingsReply != nil {
+		var err error
+		if len(errData) > 0 && string(errData) != "null" {
+			var rpcErr struct {
+				Message string `json:"message"`
+			}
+			_ = json.Unmarshal(errData, &rpcErr)
+			reason := rpcErr.Message
+			if reason == "" {
+				reason = string(errData)
+			}
+			err = fmt.Errorf("Codex settings update rejected: %s", reason)
+		}
+		settingsReply <- err
+		return llm.SDKMessage{}, false, true
+	}
 	if isInterrupt {
 		// The turn's own turn/completed reports the outcome.
 		if len(errData) > 0 && string(errData) != "null" {

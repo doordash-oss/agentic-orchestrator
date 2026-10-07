@@ -1693,6 +1693,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
 		Model:                bareModel,
+		EffortLevel:          opts.EffortLevel,
 		ContextWindow:        contextWindow,
 		WorkDir:              opts.WorkDir,
 		SystemPrompt:         opts.SystemPrompt,

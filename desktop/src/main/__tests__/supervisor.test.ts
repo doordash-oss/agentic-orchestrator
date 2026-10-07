@@ -265,11 +265,23 @@ describe('SupervisorService', () => {
     const api = transport(() => ({ status: 200, body: { api_version: 'v1', state: wireState() } }));
     const service = new SupervisorService({ transport: api });
 
-    await service.updateSettings({ harness: 'codex', model: 'gpt-5' });
+    await service.updateSettings({
+      harness: 'codex',
+      model: 'gpt-5',
+      effort: '',
+      requestId: 'req-1',
+      expectedGeneration: 0,
+    });
 
     expect(api.apiRequest).toHaveBeenCalledWith('/api/v1/supervisor/settings', {
       method: 'PATCH',
-      body: { harness: 'codex', model: 'gpt-5' },
+      body: {
+        harness: 'codex',
+        model: 'gpt-5',
+        effort: '',
+        request_id: 'req-1',
+        expected_generation: 0,
+      },
     });
   });
 
@@ -289,7 +301,13 @@ describe('SupervisorService', () => {
     const service = new SupervisorService({ transport: api });
 
     const err = await service
-      .updateSettings({ harness: 'claude', model: 'm' })
+      .updateSettings({
+        harness: 'claude',
+        model: 'm',
+        effort: '',
+        requestId: 'req-2',
+        expectedGeneration: 0,
+      })
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CanonicalErrorException);
     expect((err as CanonicalErrorException).canonical.code).toBe('supervisor_settings_locked');

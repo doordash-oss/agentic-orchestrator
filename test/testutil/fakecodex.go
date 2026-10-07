@@ -85,8 +85,11 @@ const (
 	FakeCodexSignalsFile = "signals"
 )
 
-// FakeCodexModel is the fake provider's only chat-eligible model.
-const FakeCodexModel = "gpt-fake[200K]"
+// FakeCodexModel and FakeCodexSecondModel are chat-eligible fake models.
+const (
+	FakeCodexModel       = "gpt-fake[200K]"
+	FakeCodexSecondModel = "gpt-fake-next[200K]"
+)
 
 // FakeCodexRPCError is a scripted JSON-RPC error.
 type FakeCodexRPCError struct {
@@ -108,6 +111,8 @@ type FakeCodexScript struct {
 	Model string `json:"model,omitempty"`
 	// RejectSettingsUpdate fails thread/settings/update.
 	RejectSettingsUpdate bool `json:"reject_settings_update,omitempty"`
+	// DelaySettingsUpdateMS delays its response to exercise caller timeouts.
+	DelaySettingsUpdateMS int `json:"delay_settings_update_ms,omitempty"`
 	// ExitOnLaunch makes the fake exit at once with this status.
 	ExitOnLaunch int `json:"exit_on_launch,omitempty"`
 }
@@ -154,14 +159,19 @@ func NewFakeCodexProvider(t testing.TB, script string) *FakeCodexProvider {
 }
 
 func fakeCodexCatalog() []llm.ModelInfo {
-	return []llm.ModelInfo{{
+	first := llm.ModelInfo{
 		ID:                 FakeCodexModel,
 		DisplayName:        "GPT Fake",
 		Aliases:            []string{"gpt-fake"},
 		ContextWindow:      200000,
 		Category:           "cheap",
 		EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh},
-	}}
+	}
+	second := first
+	second.ID = FakeCodexSecondModel
+	second.DisplayName = "GPT Fake Next"
+	second.Aliases = []string{"gpt-fake-next"}
+	return []llm.ModelInfo{first, second}
 }
 
 func (p *FakeCodexProvider) Name() string                  { return "codex" }
@@ -172,9 +182,12 @@ func (p *FakeCodexProvider) MinVersion() [3]int            { return [3]int{} }
 func (p *FakeCodexProvider) EnvVarsToExclude() []string    { return nil }
 func (p *FakeCodexProvider) SupportsSessionResume() bool   { return true }
 func (p *FakeCodexProvider) ModelCatalog() []llm.ModelInfo { return fakeCodexCatalog() }
-func (p *FakeCodexProvider) AvailableModels() []string     { return []string{FakeCodexModel} }
+func (p *FakeCodexProvider) AvailableModels() []string {
+	return []string{FakeCodexModel, FakeCodexSecondModel}
+}
 func (p *FakeCodexProvider) MatchesModel(model string) bool {
-	return strings.EqualFold(model, FakeCodexModel) || strings.EqualFold(model, "gpt-fake")
+	return strings.EqualFold(model, FakeCodexModel) || strings.EqualFold(model, "gpt-fake") ||
+		strings.EqualFold(model, FakeCodexSecondModel) || strings.EqualFold(model, "gpt-fake-next")
 }
 func (p *FakeCodexProvider) ComputeCost(string, int64, int64) float64 { return 0 }
 func (p *FakeCodexProvider) ContextWindowForModel(string) int         { return 200000 }

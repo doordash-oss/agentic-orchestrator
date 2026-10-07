@@ -196,7 +196,7 @@ func (h *helperJourney) supervisorState() (server.SupervisorState, []byte) {
 // chat-eligible catalog model.
 func (h *helperJourney) chooseSupervisor() {
 	h.t.Helper()
-	status, raw := h.request(http.MethodPatch, "/api/v1/supervisor/settings", `{"harness":"claude","model":"`+h.model+`"}`)
+	status, raw := h.request(http.MethodPatch, "/api/v1/supervisor/settings", `{"harness":"claude","model":"`+h.model+`","request_id":"initial-settings","expected_generation":0}`)
 	if status != http.StatusOK {
 		h.t.Fatalf("supervisor settings status = %d body %s", status, raw)
 	}

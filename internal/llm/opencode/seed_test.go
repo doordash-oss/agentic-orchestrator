@@ -59,8 +59,36 @@ func TestPromptChangesModelBeforeTurnOnlyWhenNeeded(t *testing.T) {
 		}
 		calls = append(calls, call)
 	}
-	if len(calls) != 2 || calls[0].Method != "session/set_model" || calls[1].Method != "session/prompt" || calls[0].Params["modelId"] != "vendor/second" {
+	if len(calls) != 1 || calls[0].Method != "session/set_model" || calls[0].Params["modelId"] != "vendor/second" {
 		t.Fatalf("calls = %+v", calls)
+	}
+	response, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": p.modelChangeID, "result": map[string]any{}})
+	if _, err := p.ParseLine(response); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("session/prompt")) {
+		t.Fatal("prompt was not sent after set_model response")
+	}
+}
+
+func TestPromptModelRefusalUsesPreviousModel(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{Model: "opencode:vendor/first"})
+	p.acpSessionID = "ses_fresh"
+	var out bytes.Buffer
+	p.SetStdin(&out)
+	p.SetPromptModel("opencode:vendor/second")
+	if err := p.sendPrompt("hello"); err != nil {
+		t.Fatal(err)
+	}
+	response, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": p.modelChangeID, "error": map[string]any{"code": -32000, "message": "rejected"}})
+	if _, err := p.ParseLine(response); err != nil {
+		t.Fatal(err)
+	}
+	if p.model != "vendor/first" || p.promptModel != "vendor/first" {
+		t.Fatalf("model state after refusal = %q / %q", p.model, p.promptModel)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("session/prompt")) {
+		t.Fatal("prompt was not sent on previous model")
 	}
 }
 

@@ -305,7 +305,7 @@ func (h *supervisorHarness) waitLifecycle(want server.SupervisorLifecycle) serve
 
 func (h *supervisorHarness) chooseSettings() {
 	h.t.Helper()
-	h.do(http.MethodPatch, "/api/v1/supervisor/settings", map[string]string{"harness": h.harness, "model": h.model}, http.StatusOK, nil)
+	h.do(http.MethodPatch, "/api/v1/supervisor/settings", map[string]any{"harness": h.harness, "model": h.model, "request_id": "initial-settings", "expected_generation": 0}, http.StatusOK, nil)
 }
 
 func (h *supervisorHarness) send(text, cmid string) server.SupervisorMessageResponse {

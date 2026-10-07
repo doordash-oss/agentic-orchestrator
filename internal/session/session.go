@@ -1649,6 +1649,21 @@ func (s *Session) SendUserMessage(text string) error {
 	return s.SendUserMessageWithHiddenContext(text, "")
 }
 
+// ApplySettings delegates an in-place model/effort change to a provider that
+// supports it. The supervisor can fall back to a relaunch otherwise.
+func (s *Session) ApplySettings(ctx context.Context, model, effort string) error {
+	s.mu.Lock()
+	p := s.protocol
+	s.mu.Unlock()
+	updater, ok := p.(interface {
+		ApplySettings(context.Context, string, string) error
+	})
+	if !ok {
+		return llm.ErrNotSupported
+	}
+	return updater.ApplySettings(ctx, model, effort)
+}
+
 // SendUserMessageWithHiddenContext sends a user turn whose provider-bound
 // text is the hidden context, a blank line, then the visible message, while
 // the locally appended chat transcript record carries only the visible

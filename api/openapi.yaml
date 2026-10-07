@@ -1584,13 +1584,11 @@ paths:
   /api/v1/supervisor/settings:
     patch:
       operationId: updateSupervisorSettings
-      summary: Choose the supervisor harness, model and effort.
+      summary: Change the supervisor harness, model or effort.
       description: >-
-        Accepted only while the lifecycle is `stopped` or `failed`. `harness`
-        and `model` must name a chat-eligible catalog model of that harness;
-        `effort` must be empty (harness default) or one of the model's effort
-        levels. Failure machine codes: 400 `supervisor_settings_invalid` and
-        409 `supervisor_settings_locked` while a supervisor process exists.
+        Omitted settings merge over the committed settings. A change during a
+        turn waits until the turn ends. The request id is idempotent within a
+        pending change. A harness switch with a process remains locked.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -1607,6 +1605,29 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
         "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/pending-change/{request_id}:
+    delete:
+      operationId: cancelSupervisorPendingChange
+      summary: Cancel one queued settings change.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
           $ref: "#/components/responses/ErrorResponse"
 
   /api/v1/supervisor/transcript:
@@ -3914,6 +3935,7 @@ components:
               provider_models,
               phase_defaults,
               phase_provider_models,
+              chat_default_effort,
             ]
           properties:
             provider_order:
@@ -3936,6 +3958,10 @@ components:
                   type: array
                   items:
                     type: string
+            chat_default_effort:
+              type: object
+              additionalProperties:
+                type: string
     ProviderModelRefreshRequest:
       type: object
       additionalProperties: false
@@ -5721,19 +5747,27 @@ components:
     SupervisorSettingsRequest:
       type: object
       additionalProperties: false
-      required: [harness, model]
+      required: [request_id, expected_generation]
       properties:
+        request_id:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,128}$'
+        expected_generation:
+          type: integer
+          format: int64
+          minimum: 0
         harness:
           type: string
-          minLength: 1
           maxLength: 100
+          x-go-type-skip-optional-pointer: false
         model:
           type: string
-          minLength: 1
           maxLength: 200
+          x-go-type-skip-optional-pointer: false
         effort:
           type: string
           maxLength: 40
+          x-go-type-skip-optional-pointer: false
     SupervisorState:
       type: object
       required:
@@ -5773,6 +5807,9 @@ components:
           $ref: "#/components/schemas/SupervisorInterruptedBy"
         settings:
           $ref: "#/components/schemas/SupervisorSettings"
+        pending_change:
+          $ref: "#/components/schemas/SupervisorPendingChange"
+          x-go-type-skip-optional-pointer: false
         effective_model:
           type: string
           description: Model the running harness reports; empty when no process exists.
@@ -5804,9 +5841,23 @@ components:
           type: string
         state:
           $ref: "#/components/schemas/SupervisorState"
+    SupervisorPendingChange:
+      type: object
+      required: [request_id, kind, target, requested_at]
+      properties:
+        request_id:
+          type: string
+        kind:
+          type: string
+          enum: [model, effort]
+        target:
+          $ref: "#/components/schemas/SupervisorSettings"
+        requested_at:
+          type: string
+          format: date-time
     SupervisorRecordKind:
       type: string
-      enum: [user, assistant, tool_use, tool_result, permission, question, marker]
+      enum: [user, assistant, tool_use, tool_result, permission, question, marker, note]
       x-enum-varnames:
         - SupervisorRecordKindUser
         - SupervisorRecordKindAssistant
@@ -5815,6 +5866,7 @@ components:
         - SupervisorRecordKindPermission
         - SupervisorRecordKindQuestion
         - SupervisorRecordKindMarker
+        - SupervisorRecordKindNote
     SupervisorRecordVisibility:
       type: string
       enum: [content, model_only, display_only]
@@ -5871,12 +5923,14 @@ components:
       properties:
         marker:
           type: string
-          enum: [interrupted, error, history_not_restored, permission_restricted]
+          enum: [interrupted, error, history_not_restored, permission_restricted, settings_changed, settings_reverted]
           x-enum-varnames:
             - SupervisorMarkerInterrupted
             - SupervisorMarkerError
             - SupervisorMarkerHistoryNotRestored
             - SupervisorMarkerPermissionRestricted
+            - SupervisorMarkerSettingsChanged
+            - SupervisorMarkerSettingsReverted
         text:
           type: string
         code:
@@ -5913,6 +5967,9 @@ components:
           type: string
         kind:
           $ref: "#/components/schemas/SupervisorRecordKind"
+        note:
+          type: string
+          description: Bounded text of a model-only Agentico note.
         visibility:
           $ref: "#/components/schemas/SupervisorRecordVisibility"
         created_at:

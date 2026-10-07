@@ -1237,10 +1237,27 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Choose the supervisor harness, model and effort.
-         * @description Accepted only while the lifecycle is `stopped` or `failed`. `harness` and `model` must name a chat-eligible catalog model of that harness; `effort` must be empty (harness default) or one of the model's effort levels. Failure machine codes: 400 `supervisor_settings_invalid` and 409 `supervisor_settings_locked` while a supervisor process exists.
+         * Change the supervisor harness, model or effort.
+         * @description Omitted settings merge over the committed settings. A change during a turn waits until the turn ends. The request id is idempotent within a pending change. A harness switch with a process remains locked.
          */
         patch: operations["updateSupervisorSettings"];
+        trace?: never;
+    };
+    "/api/v1/supervisor/pending-change/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cancel one queued settings change. */
+        delete: operations["cancelSupervisorPendingChange"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/supervisor/transcript": {
@@ -1978,6 +1995,9 @@ export interface components {
                 [key: string]: {
                     [key: string]: string[];
                 };
+            };
+            chat_default_effort: {
+                [key: string]: string;
             };
         };
         ProviderModelRefreshRequest: {
@@ -2725,8 +2745,11 @@ export interface components {
             effort: string;
         };
         SupervisorSettingsRequest: {
-            harness: string;
-            model: string;
+            request_id: string;
+            /** Format: int64 */
+            expected_generation: number;
+            harness?: string;
+            model?: string;
             effort?: string;
         };
         SupervisorState: {
@@ -2743,6 +2766,7 @@ export interface components {
             last_turn_outcome: components["schemas"]["SupervisorTurnOutcome"];
             interrupted_by: components["schemas"]["SupervisorInterruptedBy"];
             settings: components["schemas"]["SupervisorSettings"];
+            pending_change?: components["schemas"]["SupervisorPendingChange"];
             /** @description Model the running harness reports; empty when no process exists. */
             effective_model: string;
             permission_mode: components["schemas"]["SupervisorPermissionMode"];
@@ -2761,8 +2785,16 @@ export interface components {
             api_version: string;
             state: components["schemas"]["SupervisorState"];
         };
+        SupervisorPendingChange: {
+            request_id: string;
+            /** @enum {string} */
+            kind: "model" | "effort";
+            target: components["schemas"]["SupervisorSettings"];
+            /** Format: date-time */
+            requested_at: string;
+        };
         /** @enum {string} */
-        SupervisorRecordKind: "user" | "assistant" | "tool_use" | "tool_result" | "permission" | "question" | "marker";
+        SupervisorRecordKind: "user" | "assistant" | "tool_use" | "tool_result" | "permission" | "question" | "marker" | "note";
         /** @enum {string} */
         SupervisorRecordVisibility: "content" | "model_only" | "display_only";
         /** @description Request or verdict carried by `permission` and `question` records. */
@@ -2786,7 +2818,7 @@ export interface components {
         /** @description Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker. */
         SupervisorMarkerRecord: {
             /** @enum {string} */
-            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted";
+            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted" | "settings_changed" | "settings_reverted";
             text: string;
             code?: string;
         };
@@ -2800,6 +2832,8 @@ export interface components {
             generation: number;
             turn_id: string;
             kind: components["schemas"]["SupervisorRecordKind"];
+            /** @description Bounded text of a model-only Agentico note. */
+            note?: string;
             visibility: components["schemas"]["SupervisorRecordVisibility"];
             /** Format: date-time */
             created_at: string;
@@ -5396,6 +5430,27 @@ export interface operations {
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
             409: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
+        };
+    };
+    cancelSupervisorPendingChange: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["SupervisorStateResponse"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
         };
     };
     getSupervisorTranscript: {

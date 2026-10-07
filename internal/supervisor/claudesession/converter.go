@@ -222,7 +222,7 @@ func selected(rec *supervisor.Record) bool {
 		return false
 	}
 	switch rec.Kind {
-	case supervisor.KindUser, supervisor.KindAssistant, supervisor.KindToolUse, supervisor.KindToolResult:
+	case supervisor.KindUser, supervisor.KindAssistant, supervisor.KindToolUse, supervisor.KindToolResult, supervisor.KindNote:
 		return true
 	}
 	return false
@@ -259,7 +259,7 @@ func decodePayload(rec *supervisor.Record, v any) error {
 }
 
 func decodeEntry(rec *supervisor.Record) (entry, error) {
-	if rec.Kind == supervisor.KindUser {
+	if rec.Kind == supervisor.KindUser || rec.Kind == supervisor.KindNote {
 		var u supervisor.UserData
 		if err := decodePayload(rec, &u); err != nil {
 			return entry{}, err

@@ -32,4 +32,7 @@ const (
 	// SupervisorLaunchFailed reports that the supervisor process failed to
 	// launch or complete its handshake; no user message was committed.
 	SupervisorLaunchFailed Code = "supervisor_launch_failed"
+	ChangePending          Code = "change_pending"
+	StaleGeneration        Code = "stale_generation"
+	PendingChangeNotFound  Code = "pending_change_not_found"
 )

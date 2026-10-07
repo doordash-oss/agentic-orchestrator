@@ -368,6 +368,19 @@ func TestFakeOpenCodeHTTPSurface(t *testing.T) {
 		}
 	})
 
+	t.Run("set model rejection", func(t *testing.T) {
+		a, path := startFakeACP(t, testutil.FakeOpenCodeScript{RejectSetModel: true})
+		root := a.openSession()
+		resp := a.response(a.call("session/set_model", map[string]string{"sessionId": root, "modelId": testutil.FakeOpenCodeSecondModel}))
+		if resp["error"] == nil {
+			t.Fatalf("set_model response = %v, want rejection", resp)
+		}
+		models := testutil.FakeOpenCodeSetModels(t, path)
+		if len(models) != 1 || models[0].ModelID != testutil.FakeOpenCodeSecondModel {
+			t.Fatalf("recorded set models = %+v", models)
+		}
+	})
+
 	t.Run("cancel, stubborn and load", func(t *testing.T) {
 		a, path := startFakeACP(t, testutil.FakeOpenCodeScript{})
 		root := a.openSession()

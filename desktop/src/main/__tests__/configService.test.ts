@@ -191,6 +191,7 @@ describe('ConfigService effort routing', () => {
         },
         phase_defaults: { implementation: 'opus' },
         phase_provider_models: { implementation: { claude: ['opus'] } },
+        chat_default_effort: { claude: 'high' },
       },
     }));
 
@@ -202,6 +203,15 @@ describe('ConfigService effort routing', () => {
       'high',
       'max',
     ]);
+    expect(catalogue.chatDefaultEffort?.claude).toBe('high');
+  });
+
+  it('rejects an unknown chat default effort from the server', async () => {
+    const { service } = makeService(() => ({
+      status: 200,
+      body: { api_version: 'v1', chat_default_effort: { claude: 'impossible' } },
+    }));
+    await expect(service.getModelCatalogue()).rejects.toThrow();
   });
 
   it('refreshes one provider and converts the combined readiness and catalogue response', async () => {

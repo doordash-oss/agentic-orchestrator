@@ -202,6 +202,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     cancelSessionOutput: vi.fn(() => false),
     getSupervisorState: vi.fn(() => Promise.reject(new Error('unused'))),
     updateSupervisorSettings: vi.fn(() => Promise.reject(new Error('unused'))),
+    cancelSupervisorPendingChange: vi.fn(() => Promise.reject(new Error('unused'))),
     getSupervisorTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
     sendSupervisorMessage: vi.fn(() => Promise.reject(new Error('unused'))),
     interruptSupervisor: vi.fn(() => Promise.reject(new Error('unused'))),

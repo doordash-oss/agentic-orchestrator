@@ -19,6 +19,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -91,6 +92,45 @@ func responseLine(t *testing.T, id int, result any) []byte {
 		t.Fatalf("marshal response: %v", err)
 	}
 	return b
+}
+
+func TestApplySettingsWaitsForSetModelResponse(t *testing.T) {
+	for _, reject := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reject=%t", reject), func(t *testing.T) {
+			h := newHandshakeHarness(t, llm.ProtocolOpts{Model: "opencode:vendor/first", Interactive: true})
+			h.p.acpSessionID = "ses_x"
+			result := make(chan error, 1)
+			go func() { result <- h.p.ApplySettings(context.Background(), "opencode:vendor/second", "high") }()
+			req := h.nextRequest(t)
+			if req.Method != "session/set_model" {
+				t.Fatalf("method = %q", req.Method)
+			}
+			select {
+			case err := <-result:
+				t.Fatalf("ApplySettings returned before response: %v", err)
+			default:
+			}
+			id, err := parseID(req.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reject {
+				h.feed(t, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"error":{"code":-32000,"message":"rejected"}}`, id)))
+			} else {
+				h.feed(t, responseLine(t, id, map[string]any{}))
+			}
+			if err := <-result; (err != nil) != reject {
+				t.Fatalf("ApplySettings error = %v, reject = %t", err, reject)
+			}
+			want := "vendor/second"
+			if reject {
+				want = "vendor/first"
+			}
+			if h.p.model != want || h.p.promptModel != want {
+				t.Fatalf("model state = %q / %q, want %q", h.p.model, h.p.promptModel, want)
+			}
+		})
+	}
 }
 
 func errorResponseLine(t *testing.T, id int, code int, msg string) []byte {

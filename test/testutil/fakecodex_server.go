@@ -51,6 +51,7 @@ type fakeCodexServer struct {
 	mu          sync.Mutex
 	threadID    string
 	model       string
+	effort      string
 	rollout     string
 	resume      *FakeCodexResume
 	sayResumed  bool
@@ -222,11 +223,35 @@ func (s *fakeCodexServer) dispatch(line fakeCodexLine) {
 	case "turn/interrupt":
 		s.turnInterrupt(id)
 	case "thread/settings/update":
-		if s.script.RejectSettingsUpdate {
-			s.replyError(id, -32600, "settings update rejected")
+		var params struct {
+			ThreadID string `json:"threadId"`
+			Model    string `json:"model"`
+			Effort   string `json:"effort"`
+		}
+		if err := json.Unmarshal(line.Params, &params); err != nil {
+			s.replyError(id, -32602, "invalid settings update")
 			return
 		}
-		s.reply(id, map[string]any{})
+		respond := func() {
+			if s.script.RejectSettingsUpdate {
+				s.replyError(id, -32600, "settings update rejected")
+				return
+			}
+			s.mu.Lock()
+			if params.ThreadID != s.threadID {
+				s.mu.Unlock()
+				s.replyError(id, -32602, "unknown thread")
+				return
+			}
+			s.model, s.effort = params.Model, params.Effort
+			s.mu.Unlock()
+			s.reply(id, map[string]any{})
+		}
+		if s.script.DelaySettingsUpdateMS > 0 {
+			go func() { time.Sleep(time.Duration(s.script.DelaySettingsUpdateMS) * time.Millisecond); respond() }()
+		} else {
+			respond()
+		}
 	case "account/usage/read":
 		s.reply(id, map[string]any{})
 	default:
@@ -394,7 +419,16 @@ type fakeTurn struct {
 
 func (s *fakeCodexServer) turnStart(id int64, raw json.RawMessage) {
 	text := FakeCodexRequest{Params: raw}.TurnText()
+	var settings struct {
+		Model  string `json:"model"`
+		Effort string `json:"effort"`
+	}
+	_ = json.Unmarshal(raw, &settings)
 	s.mu.Lock()
+	if settings.Model != "" {
+		s.model = settings.Model
+	}
+	s.effort = settings.Effort
 	s.turns++
 	t := &fakeTurn{s: s, threadID: s.threadID, n: s.turns, interrupt: make(chan int64, 4)}
 	t.turnID = fmt.Sprintf("turn-%d-%d", s.launch, s.turns)

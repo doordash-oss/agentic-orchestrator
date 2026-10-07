@@ -450,6 +450,7 @@ export interface AgenticoMock {
     getTestingContract: ReturnType<typeof vi.fn>;
     getSupervisorState: ReturnType<typeof vi.fn>;
     updateSupervisorSettings: ReturnType<typeof vi.fn>;
+    cancelSupervisorPendingChange: ReturnType<typeof vi.fn>;
     getSupervisorTranscript: ReturnType<typeof vi.fn>;
     sendSupervisorMessage: ReturnType<typeof vi.fn>;
     interruptSupervisor: ReturnType<typeof vi.fn>;
@@ -843,6 +844,10 @@ export function installAgenticoMock(
         ...supervisorCurrent,
         settings: { harness: request.harness, model: request.model, effort: request.effort ?? '' },
       };
+      return Promise.resolve(supervisorCurrent);
+    }),
+    cancelSupervisorPendingChange: vi.fn(() => {
+      supervisorCurrent = { ...supervisorCurrent, pendingChange: undefined };
       return Promise.resolve(supervisorCurrent);
     }),
     getSupervisorTranscript: vi.fn(() => Promise.resolve(supervisorTranscript)),

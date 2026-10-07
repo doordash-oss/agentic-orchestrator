@@ -677,6 +677,8 @@ function supervisorResumeLines(providerInvocationLog: string, home: string): str
     '  _prev_arg=""',
     '  for _arg in "$@"; do',
     '    if [ "$_prev_arg" = "--resume" ]; then _resume_id="$_arg"; fi',
+    `    if [ "$_prev_arg" = "--model" ]; then printf 'launch-model:%s\\n' "$_arg" >> "${providerInvocationLog}"; fi`,
+    `    if [ "$_prev_arg" = "--effort" ]; then printf 'launch-effort:%s\\n' "$_arg" >> "${providerInvocationLog}"; fi`,
     '    _prev_arg="$_arg"',
     '  done',
     '  if [ -n "$_resume_id" ]; then',

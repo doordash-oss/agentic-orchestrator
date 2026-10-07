@@ -254,9 +254,12 @@ function makeServices(): IpcServices {
     getSupervisorState: vi.fn(() => Promise.resolve(supervisorState())),
     updateSupervisorSettings: vi.fn((request) =>
       Promise.resolve(
-        supervisorState({ settings: { effort: '', ...request } as SupervisorState['settings'] }),
+        supervisorState({
+          settings: { harness: request.harness, model: request.model, effort: request.effort },
+        }),
       ),
     ),
+    cancelSupervisorPendingChange: vi.fn(() => Promise.resolve(supervisorState())),
     getSupervisorTranscript: vi.fn(() =>
       Promise.resolve({
         conversationId: 'conv-1',
@@ -798,6 +801,8 @@ describe('registerIpcHandlers', () => {
         harness: 'claude',
         model: 'claude-sonnet-4-5',
         effort: 'high',
+        requestId: 'req-1',
+        expectedGeneration: 1,
       }),
     ).resolves.toMatchObject({ ok: true, value: { settings: { harness: 'claude' } } });
 

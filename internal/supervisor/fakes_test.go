@@ -33,14 +33,16 @@ type fakeSession struct {
 	*mocks.MockSessionView
 	observer ports.SessionObserver
 
-	mu         sync.Mutex
-	sent       []string
-	hidden     []string
-	interrupts int
-	stops      int
-	status     ports.SessionStatus
-	done       chan struct{}
-	exitOnce   sync.Once
+	mu              sync.Mutex
+	sent            []string
+	hidden          []string
+	interrupts      int
+	stops           int
+	settingsUpdates int
+	settingsError   error
+	status          ports.SessionStatus
+	done            chan struct{}
+	exitOnce        sync.Once
 	// ignoreStop keeps the process alive on Stop until exit is called.
 	ignoreStop bool
 }
@@ -76,6 +78,13 @@ func (f *fakeSession) Interrupt() error {
 	f.interrupts++
 	f.mu.Unlock()
 	return nil
+}
+
+func (f *fakeSession) ApplySettings(_ context.Context, _, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.settingsUpdates++
+	return f.settingsError
 }
 
 func (f *fakeSession) Stop() error {

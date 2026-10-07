@@ -243,6 +243,45 @@ func TestBuildCommand_InteractiveUsesMinimalOverlay(t *testing.T) {
 	}
 }
 
+func TestBuildCommand_InteractiveEffortCoversEligibleModels(t *testing.T) {
+	p := New()
+	noText := false
+	p.SetModelCatalog([]llm.ModelInfo{
+		{ID: "vendor/first", EffortVariants: map[llm.EffortLevel]map[string]any{llm.EffortHigh: {"reasoningEffort": "high"}}},
+		{ID: "vendor/second", EffortVariants: map[llm.EffortLevel]map[string]any{llm.EffortHigh: {"reasoningEffort": "high"}}},
+		{ID: "other/third", EffortVariants: map[llm.EffortLevel]map[string]any{llm.EffortHigh: {"reasoningEffort": "high"}}},
+		{ID: "vendor/no-variant"},
+		{ID: "vendor/no-text", Capabilities: &llm.ModelCapabilities{TextOutput: &noText}, EffortVariants: map[llm.EffortLevel]map[string]any{llm.EffortHigh: {"reasoningEffort": "high"}}},
+	})
+	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "vendor/first", Interactive: true, EffortLevel: llm.EffortHigh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overlay struct {
+		Provider map[string]struct {
+			Models map[string]struct {
+				Options map[string]any `json:"options"`
+			} `json:"models"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(configContentValue(t, env)), &overlay); err != nil {
+		t.Fatal(err)
+	}
+	for provider, models := range map[string][]string{"vendor": {"first", "second"}, "other": {"third"}} {
+		for _, model := range models {
+			if got := overlay.Provider[provider].Models[model].Options["reasoningEffort"]; got != "high" {
+				t.Errorf("%s/%s effort = %v", provider, model, got)
+			}
+		}
+	}
+	if _, ok := overlay.Provider["vendor"].Models["no-variant"]; ok {
+		t.Error("model without high variant was overlaid")
+	}
+	if _, ok := overlay.Provider["vendor"].Models["no-text"]; ok {
+		t.Error("non-chat model was overlaid")
+	}
+}
+
 func TestOpenCodeProvider_CLIBinaryDefault(t *testing.T) {
 	if got := New().cliBinary(); got != "opencode" {
 		t.Errorf("cliBinary() = %q, want opencode", got)

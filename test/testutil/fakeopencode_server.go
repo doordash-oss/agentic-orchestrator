@@ -314,6 +314,10 @@ func (s *fakeOpenCode) dispatch(line fakeOpenCodeLine) {
 		}
 		_ = json.Unmarshal(line.Params, &params)
 		s.appendJSON(FakeOpenCodeSetModelsFile, FakeOpenCodeSetModel{Launch: s.launch, Method: line.Method, SessionID: params.SessionID, ModelID: params.ModelID})
+		if s.script.RejectSetModel {
+			s.replyError(line.ID, -32000, "model switch rejected by fake OpenCode")
+			return
+		}
 		s.reply(line.ID, map[string]any{})
 	case "session/set_config_option":
 		var params struct {

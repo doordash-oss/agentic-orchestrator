@@ -218,6 +218,12 @@ function hasUploadsQuery(rawQuery: string): boolean {
 
 function isAllowedSupervisorRequest(parts: string[], method: string): boolean {
   if (parts.length > 2) return false;
+  if (
+    parts.length === 1 &&
+    method === 'DELETE' &&
+    /^\/api\/v1\/supervisor\/pending-change\/[A-Za-z0-9._-]{1,128}$/.test(parts[0] ?? '')
+  )
+    return true;
   const route = SUPERVISOR_ROUTES[parts[0] ?? ''];
   if (route === undefined || route.method !== method) return false;
   if (parts.length === 1) return true;

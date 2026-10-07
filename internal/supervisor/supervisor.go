@@ -115,6 +115,33 @@ type Settings struct {
 	Effort  string
 }
 
+// SettingsChange merges optional fields over the committed settings.
+type SettingsChange struct {
+	Harness, Model, Effort *string
+	RequestID              string
+	ExpectedGeneration     int64
+}
+
+// PendingChange is the one durable settings change waiting for a turn or launch.
+type PendingChange struct {
+	RequestID   string    `json:"request_id"`
+	Kind        string    `json:"kind"`
+	Target      Settings  `json:"target"`
+	RequestedAt time.Time `json:"requested_at"`
+}
+
+type StaleGenerationError struct{ Current int64 }
+
+func (e *StaleGenerationError) Error() string {
+	return fmt.Sprintf("stale supervisor generation: %d", e.Current)
+}
+
+type ChangePendingError struct{ RequestID string }
+
+func (e *ChangePendingError) Error() string { return "supervisor change pending: " + e.RequestID }
+
+var ErrPendingChangeNotFound = errors.New("supervisor pending change not found")
+
 // Complete reports whether a harness and model are chosen.
 func (s Settings) Complete() bool { return s.Harness != "" && s.Model != "" }
 
@@ -131,6 +158,7 @@ type State struct {
 	LastTurnOutcome TurnOutcome
 	InterruptedBy   InterruptedBy
 	Settings        Settings
+	PendingChange   *PendingChange
 	EffectiveModel  string
 	PermissionMode  PermissionMode
 	// Failure is the most recent launch failure; set only while the
@@ -243,14 +271,17 @@ type Options struct {
 	// OrphanWait bounds the wait at boot for a previous server's surviving
 	// provider process group to exit. Zero uses DefaultOrphanWait.
 	OrphanWait time.Duration
-	Now        func() time.Time
-	NewID      func() string
+	// SettingsUpdateTimeout bounds an in-place provider settings update.
+	SettingsUpdateTimeout time.Duration
+	Now                   func() time.Time
+	NewID                 func() string
 }
 
 const (
-	DefaultHandshakeTimeout = 30 * time.Second
-	DefaultInterruptGrace   = 20 * time.Second
-	DefaultOrphanWait       = 10 * time.Second
+	DefaultHandshakeTimeout      = 30 * time.Second
+	DefaultInterruptGrace        = 20 * time.Second
+	DefaultOrphanWait            = 10 * time.Second
+	DefaultSettingsUpdateTimeout = 10 * time.Second
 )
 
 // SendResult is the outcome of one accepted send.

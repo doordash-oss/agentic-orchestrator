@@ -33,14 +33,15 @@ import (
 )
 
 const (
-	apiPathSupervisor           = "/api/v1/supervisor"
-	apiPathSupervisorState      = apiPathSupervisor + "/state"
-	apiPathSupervisorSettings   = apiPathSupervisor + "/settings"
-	apiPathSupervisorTranscript = apiPathSupervisor + "/transcript"
-	apiPathSupervisorMessages   = apiPathSupervisor + "/messages"
-	apiPathSupervisorInterrupt  = apiPathSupervisor + "/interrupt"
-	apiPathSupervisorEnd        = apiPathSupervisor + "/end"
-	apiPathSupervisorEvents     = apiPathSupervisor + "/events"
+	apiPathSupervisor              = "/api/v1/supervisor"
+	apiPathSupervisorState         = apiPathSupervisor + "/state"
+	apiPathSupervisorSettings      = apiPathSupervisor + "/settings"
+	apiPathSupervisorPendingChange = apiPathSupervisor + "/pending-change/"
+	apiPathSupervisorTranscript    = apiPathSupervisor + "/transcript"
+	apiPathSupervisorMessages      = apiPathSupervisor + "/messages"
+	apiPathSupervisorInterrupt     = apiPathSupervisor + "/interrupt"
+	apiPathSupervisorEnd           = apiPathSupervisor + "/end"
+	apiPathSupervisorEvents        = apiPathSupervisor + "/events"
 )
 
 // maxSupervisorMessageRunes bounds one supervisor message's text.
@@ -56,6 +57,8 @@ type SupervisorService interface {
 	Busy() bool
 	Transcript(supervisor.PageQuery) (supervisor.Page, error)
 	UpdateSettings(supervisor.Settings) (supervisor.State, error)
+	ChangeSettings(supervisor.SettingsChange) (supervisor.State, error)
+	CancelPendingChange(string) (supervisor.State, error)
 	Send(ctx context.Context, text, hiddenContext, clientMessageID string) (supervisor.SendResult, error)
 	Interrupt() (supervisor.ActionResult, supervisor.State)
 	End() (supervisor.ActionResult, supervisor.State)
@@ -66,6 +69,9 @@ type SupervisorService interface {
 // supervisorMutationMethods allowlists the supervisor mutation routes for
 // the trusted-mutation preflight.
 func supervisorMutationMethods(path string) ([]string, bool) {
+	if supervisorPendingChangeID(path) != "" {
+		return []string{http.MethodDelete}, true
+	}
 	switch path {
 	case apiPathSupervisorSettings:
 		return []string{http.MethodPatch}, true
@@ -98,6 +104,9 @@ func (h *apiHandler) handleSupervisorRoutes(w http.ResponseWriter, r *http.Reque
 }
 
 func supervisorRoute(path string) (func(*apiHandler, http.ResponseWriter, *http.Request), string) {
+	if supervisorPendingChangeID(path) != "" {
+		return (*apiHandler).handleSupervisorPendingChange, http.MethodDelete
+	}
 	switch path {
 	case apiPathSupervisorState:
 		return (*apiHandler).handleSupervisorState, http.MethodGet
@@ -122,20 +131,45 @@ func (h *apiHandler) handleSupervisorState(w http.ResponseWriter, _ *http.Reques
 }
 
 func (h *apiHandler) handleSupervisorSettings(w http.ResponseWriter, r *http.Request) {
-	var req SupervisorSettingsRequest
+	var req struct {
+		Harness            *string `json:"harness"`
+		Model              *string `json:"model"`
+		Effort             *string `json:"effort"`
+		RequestID          string  `json:"request_id"`
+		ExpectedGeneration *int64  `json:"expected_generation"`
+	}
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
-	settings := supervisor.Settings{
-		Harness: strings.TrimSpace(req.Harness),
-		Model:   strings.TrimSpace(req.Model),
-		Effort:  strings.TrimSpace(req.Effort),
-	}
-	if !settings.Complete() {
-		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("harness and model are required"))
+	if !supervisorClientMessageID.MatchString(req.RequestID) {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("request_id is required and must match ^[A-Za-z0-9._-]{1,128}$"))
 		return
 	}
-	st, err := h.supervisor.UpdateSettings(settings)
+	if req.ExpectedGeneration == nil || *req.ExpectedGeneration < 0 {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("expected_generation is required and must be non-negative"))
+		return
+	}
+	st, err := h.supervisor.ChangeSettings(supervisor.SettingsChange{Harness: req.Harness, Model: req.Model, Effort: req.Effort, RequestID: req.RequestID, ExpectedGeneration: *req.ExpectedGeneration})
+	if err != nil {
+		h.writeSupervisorError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, SupervisorStateResponse{APIVersion: APIVersion, State: supervisorStateDTO(st)})
+}
+
+func supervisorPendingChangeID(path string) string {
+	if !strings.HasPrefix(path, apiPathSupervisorPendingChange) {
+		return ""
+	}
+	id := strings.TrimPrefix(path, apiPathSupervisorPendingChange)
+	if !supervisorClientMessageID.MatchString(id) || id == "." || id == ".." {
+		return ""
+	}
+	return id
+}
+
+func (h *apiHandler) handleSupervisorPendingChange(w http.ResponseWriter, r *http.Request) {
+	st, err := h.supervisor.CancelPendingChange(supervisorPendingChangeID(r.URL.Path))
 	if err != nil {
 		h.writeSupervisorError(w, err)
 		return
@@ -271,12 +305,20 @@ func (h *apiHandler) writeSupervisorError(w http.ResponseWriter, err error) {
 		return
 	}
 	var invalid *supervisor.SettingsInvalidError
+	var stale *supervisor.StaleGenerationError
+	var pending *supervisor.ChangePendingError
 	var launch *supervisor.LaunchFailedError
 	switch {
 	case errors.Is(err, supervisor.ErrSettingsLocked):
 		writeAPIError(w, http.StatusConflict, errcat.SupervisorSettingsLocked)
 	case errors.As(err, &invalid):
 		writeAPIError(w, http.StatusBadRequest, errcat.SupervisorSettingsInvalid, errcat.WithDiagnostics(invalid.Reason))
+	case errors.As(err, &stale):
+		writeAPIError(w, http.StatusConflict, errcat.StaleGeneration, errcat.WithDiagnostics(fmt.Sprintf("current_generation=%d", stale.Current)))
+	case errors.As(err, &pending):
+		writeAPIError(w, http.StatusConflict, errcat.ChangePending, errcat.WithDiagnostics("pending_request_id="+pending.RequestID))
+	case errors.Is(err, supervisor.ErrPendingChangeNotFound):
+		writeAPIError(w, http.StatusNotFound, errcat.PendingChangeNotFound)
 	case errors.Is(err, supervisor.ErrSettingsRequired):
 		writeAPIError(w, http.StatusConflict, errcat.SettingsRequired)
 	case errors.Is(err, supervisor.ErrTurnActive):
@@ -332,6 +374,9 @@ func supervisorStateDTO(st supervisor.State) SupervisorState {
 		PendingRequests: pending,
 		HeadSeq:         st.HeadSeq,
 		StreamEpoch:     st.StreamEpoch,
+	}
+	if st.PendingChange != nil {
+		dto.PendingChange = &SupervisorPendingChange{RequestID: st.PendingChange.RequestID, Kind: SupervisorPendingChangeKind(st.PendingChange.Kind), Target: SupervisorSettings{Harness: st.PendingChange.Target.Harness, Model: st.PendingChange.Target.Model, Effort: st.PendingChange.Target.Effort}, RequestedAt: st.PendingChange.RequestedAt}
 	}
 	if dto.PermissionMode.Requested == "" {
 		dto.PermissionMode.Requested = supervisor.RequestedPermissionMode
@@ -400,6 +445,10 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 			Text:   SafeDisplayText(data.Text, 400),
 			Code:   data.Code,
 		}
+	case supervisor.KindNote:
+		var data supervisor.NoteData
+		_ = json.Unmarshal(rec.Data, &data)
+		dto.Note = SafeDisplayText(data.Text, 400)
 	}
 	if dto.Messages == nil {
 		dto.Messages = []TranscriptMessage{}

@@ -667,6 +667,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: apiPathUploads, mutation: true},
 		{method: httpMethodGet, path: apiPathSupervisorState},
 		{method: "patch", path: apiPathSupervisorSettings, mutation: true},
+		{method: "delete", path: apiPathSupervisorPendingChange + "{request_id}", mutation: true},
 		{method: httpMethodGet, path: apiPathSupervisorTranscript},
 		{method: httpMethodPost, path: apiPathSupervisorMessages, mutation: true},
 		{method: httpMethodPost, path: apiPathSupervisorInterrupt, mutation: true},

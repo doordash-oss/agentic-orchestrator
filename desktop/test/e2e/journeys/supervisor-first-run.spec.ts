@@ -154,7 +154,7 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     await expectReady(page);
     await expect(conversation(page)).toContainText('Hello supervisor, what is running?');
     expect(await capturedDeltaText(page)).toContain(supervisorStubReply(1));
-    await expect(chip(page)).toHaveAttribute('aria-disabled', 'true');
+    await expect(chip(page)).toBeEnabled();
     const firstState = await page.evaluate(() => window.agentico.getSupervisorState());
     expect(firstState.sessionId).toMatch(/^__supervisor__\.[0-9a-f-]+\.\d+$/);
     expect(firstState.lastTurnOutcome).toBe('completed');

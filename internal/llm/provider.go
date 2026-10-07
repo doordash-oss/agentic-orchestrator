@@ -323,6 +323,7 @@ type CommandBuildOpts struct {
 // ProtocolOpts contains all parameters needed to create a Protocol instance.
 type ProtocolOpts struct {
 	Model          string
+	EffortLevel    EffortLevel
 	ContextWindow  int
 	WorkDir        string
 	SystemPrompt   string

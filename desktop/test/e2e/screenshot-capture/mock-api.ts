@@ -2018,6 +2018,7 @@ function makeMockApi(
         ...SUPERVISOR_STATE,
         settings: { harness: request.harness, model: request.model, effort: request.effort ?? '' },
       }),
+    cancelSupervisorPendingChange: () => Promise.resolve(SUPERVISOR_STATE),
     getSupervisorTranscript: () =>
       Promise.resolve({
         conversationId: SUPERVISOR_STATE.conversationId,

@@ -1534,6 +1534,14 @@ export const ServerSupervisorStateSchema = z.object({
   last_turn_outcome: z.enum(['none', 'completed', 'interrupted', 'failed']),
   interrupted_by: z.enum(['none', 'user', 'shutdown']),
   settings: ServerSupervisorSettingsSchema,
+  pending_change: z
+    .object({
+      request_id: z.string().min(1).max(128),
+      kind: z.enum(['model', 'effort']),
+      target: ServerSupervisorSettingsSchema,
+      requested_at: z.string().max(100),
+    })
+    .optional(),
   effective_model: z.string().max(200),
   permission_mode: ServerSupervisorPermissionModeSchema,
   failure: CanonicalErrorSchema.optional(),
@@ -1554,7 +1562,14 @@ export const ServerSupervisorRequestRecordSchema = z.object({
 });
 
 export const ServerSupervisorMarkerRecordSchema = z.object({
-  marker: z.enum(['interrupted', 'error', 'history_not_restored', 'permission_restricted']),
+  marker: z.enum([
+    'interrupted',
+    'error',
+    'history_not_restored',
+    'permission_restricted',
+    'settings_changed',
+    'settings_reverted',
+  ]),
   text: AttentionTextSchema,
   code: z.string().max(200).optional(),
 });
@@ -1573,6 +1588,7 @@ export const ServerSupervisorRecordSchema = z.object({
     'permission',
     'question',
     'marker',
+    'note',
   ]),
   visibility: z.enum(['content', 'model_only', 'display_only']),
   created_at: z.string().max(100),

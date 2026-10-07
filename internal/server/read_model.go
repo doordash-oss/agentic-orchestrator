@@ -1294,6 +1294,7 @@ func (h *apiHandler) modelCatalogSnapshot() ModelCatalogResponse {
 		ProviderModels:      map[string][]Model{},
 		PhaseProviderModels: map[string]map[string][]string{},
 		PhaseDefaults:       h.configOrDefault().Defaults.Models,
+		ChatDefaultEffort:   map[string]string{},
 	}
 	if h.registry != nil {
 		defaults := h.registry.CatalogDefaultModels()
@@ -1302,6 +1303,7 @@ func (h *apiHandler) modelCatalogSnapshot() ModelCatalogResponse {
 		}
 		for _, provider := range h.registry.DetectedProviders() {
 			name := provider.Name()
+			resp.ChatDefaultEffort[name] = string(llm.EffortLow)
 			resp.ProviderOrder = append(resp.ProviderOrder, name)
 			for _, model := range h.registry.ModelsForProvider(name) {
 				resp.ProviderModels[name] = append(resp.ProviderModels[name], modelDTO(model))

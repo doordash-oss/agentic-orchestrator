@@ -212,15 +212,42 @@ func (p *Provider) AvailableModels() []string {
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
 	effort := p.effortOptions(opts.Model, opts.EffortLevel)
 	if opts.Interactive {
-		return buildInteractiveSession(p.cliBinary(), opts, effort)
+		return buildInteractiveSession(p.cliBinary(), opts, p.interactiveEffortOptions(opts.EffortLevel))
 	}
 	return buildManagedSession(p.cliBinary(), opts, effort)
+}
+
+// interactiveEffortOptions prepares every chat model before an ACP model switch.
+// A missing variant leaves that model to OpenCode's own default options.
+func (p *Provider) interactiveEffortOptions(level llm.EffortLevel) map[string]any {
+	providers := make(map[string]any)
+	for _, info := range p.ModelCatalog() {
+		if info.Capabilities != nil && info.Capabilities.TextOutput != nil && !*info.Capabilities.TextOutput {
+			continue
+		}
+		options := info.EffortVariants[level]
+		if len(options) == 0 {
+			continue
+		}
+		backend := BackendModel(info.ID)
+		if validateBackendModel(backend) != nil {
+			continue
+		}
+		provider, model, _ := splitBackend(backend)
+		entry, ok := providers[provider].(map[string]any)
+		if !ok {
+			entry = map[string]any{"models": map[string]any{}}
+			providers[provider] = entry
+		}
+		entry["models"].(map[string]any)[model] = map[string]any{"options": options}
+	}
+	return providers
 }
 
 // buildInteractiveSession overlays only the supervisor policy on the user's
 // OpenCode configuration. It leaves plugins, skills, project config and MCP
 // servers available, while the embedded HTTP server handles child requests.
-func buildInteractiveSession(binary string, opts llm.CommandBuildOpts, effortOptions map[string]any) ([]string, []string, error) {
+func buildInteractiveSession(binary string, opts llm.CommandBuildOpts, effortProviders map[string]any) ([]string, []string, error) {
 	backend := BackendModel(opts.Model)
 	if err := validateBackendModel(backend); err != nil {
 		return nil, nil, err
@@ -261,11 +288,8 @@ func buildInteractiveSession(binary string, opts llm.CommandBuildOpts, effortOpt
 		}
 		overlay["instructions"] = []string{instructionsPath}
 	}
-	if len(effortOptions) != 0 {
-		provider, model, _ := splitBackend(backend)
-		overlay["provider"] = map[string]any{provider: map[string]any{
-			"models": map[string]any{model: map[string]any{"options": effortOptions}},
-		}}
+	if len(effortProviders) != 0 {
+		overlay["provider"] = effortProviders
 	}
 	content, err := json.Marshal(overlay)
 	if err != nil {

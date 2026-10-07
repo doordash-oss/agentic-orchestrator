@@ -348,6 +348,16 @@ func (s *fakeOpenCode) httpHandler() http.Handler {
 		writeFakeJSON(w, s.pendingList(s.pendingQues))
 		s.listedOnce.Do(func() { close(s.listed) })
 	})
+	mux.HandleFunc("GET /session/{id}/message", func(w http.ResponseWriter, r *http.Request) {
+		s.mu.Lock()
+		seed := s.seed
+		s.mu.Unlock()
+		if seed == nil || seed.SessionID != r.PathValue("id") {
+			writeFakeJSON(w, []any{})
+			return
+		}
+		writeFakeJSON(w, []any{map[string]any{"info": map[string]string{"role": "user"}, "parts": []any{map[string]string{"type": "text", "text": seed.Text}}}})
+	})
 	mux.HandleFunc("POST /permission/{id}/reply", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			Reply string `json:"reply"`
@@ -384,7 +394,7 @@ func (s *fakeOpenCode) httpHandler() http.Handler {
 		}
 		writeFakeJSON(w, true)
 	})
-	mux.HandleFunc("POST /session/{id}/prompt", s.servePrompt)
+	mux.HandleFunc("POST /session/{id}/message", s.servePrompt)
 	return s.withAuth(mux)
 }
 

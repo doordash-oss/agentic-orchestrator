@@ -41,12 +41,12 @@ func TestBuildCommand_InteractiveAddsServerBridge(t *testing.T) {
 	if tail[0] != "--port" || tail[2] != "--hostname" || tail[3] != "127.0.0.1" {
 		t.Fatalf("server flags = %q", tail)
 	}
-	if !reflect.DeepEqual(env[:len(baseEnv)], baseEnv) || len(env) != len(baseEnv)+2 {
-		t.Fatalf("interactive env adds %q, want the password and question flag", env[len(baseEnv):])
+	if len(env) != 3 || !strings.HasPrefix(env[0], configContentEnvVar+"=") {
+		t.Fatalf("interactive env = %q, want inline overlay plus bridge credentials", env)
 	}
-	password := strings.TrimPrefix(env[len(baseEnv)], serverPasswordEnvVar+"=")
-	if len(password) != 64 || env[len(baseEnv)+1] != questionToolEnvVar+"=1" {
-		t.Fatalf("bridge env = %q", env[len(baseEnv):])
+	password := strings.TrimPrefix(env[1], serverPasswordEnvVar+"=")
+	if len(password) != 64 || env[2] != questionToolEnvVar+"=1" {
+		t.Fatalf("bridge env = %q", env[1:])
 	}
 	if got := sanitizeDiagnostic("connect failed with " + password); strings.Contains(got, password) {
 		t.Fatalf("diagnostic keeps the server password: %q", got)

@@ -133,7 +133,7 @@ type FakeOpenCodeScript struct {
 	// ResolveChildElsewhere answers a child request itself shortly after
 	// publishing it, as another OpenCode client would.
 	ResolveChildElsewhere bool `json:"resolve_child_elsewhere,omitempty"`
-	// SeedError fails every POST /session/{id}/prompt with this HTTP status.
+	// SeedError fails every POST /session/{id}/message with this HTTP status.
 	SeedError int `json:"seed_error,omitempty"`
 	// ExitOnLaunch makes the fake exit at once with this status.
 	ExitOnLaunch int `json:"exit_on_launch,omitempty"`
@@ -173,7 +173,7 @@ type FakeOpenCodeLaunchEnv struct {
 // FakeOpenCodeRedacted stands in for a recorded secret.
 const FakeOpenCodeRedacted = "[set]"
 
-// FakeOpenCodeSeed is one recorded POST /session/{id}/prompt.
+// FakeOpenCodeSeed is one recorded POST /session/{id}/message.
 type FakeOpenCodeSeed struct {
 	Launch    int    `json:"launch"`
 	SessionID string `json:"session_id"`

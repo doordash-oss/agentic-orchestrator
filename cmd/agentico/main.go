@@ -1750,6 +1750,11 @@ func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnsw
 		RememberScope:    rememberScope,
 		RememberScopeSet: req.RememberScope != nil,
 	}, func(requestID string, allow bool, reason string) error {
+		if allow && req.Decision == "allow_remember" {
+			if remembering, ok := sess.(interface{ RespondToControlRemember(string) error }); ok {
+				return remembering.RespondToControlRemember(requestID)
+			}
+		}
 		return sess.RespondToControl(requestID, allow, reason)
 	})
 	if err != nil {

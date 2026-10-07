@@ -26,9 +26,12 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -214,15 +217,61 @@ func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, 
 	return buildManagedSession(p.cliBinary(), opts, effort)
 }
 
-// buildInteractiveSession is the launch profile for human-driven chat: the
-// session launch plus the embedded HTTP server the child-session bridge
-// follows. The server flags come last so argv ends with them.
+// buildInteractiveSession overlays only the supervisor policy on the user's
+// OpenCode configuration. It leaves plugins, skills, project config and MCP
+// servers available, while the embedded HTTP server handles child requests.
 func buildInteractiveSession(binary string, opts llm.CommandBuildOpts, effortOptions map[string]any) ([]string, []string, error) {
-	args, env, err := buildManagedSession(binary, opts, effortOptions)
-	if err != nil {
+	backend := BackendModel(opts.Model)
+	if err := validateBackendModel(backend); err != nil {
 		return nil, nil, err
 	}
-	return withServerBridge(args, env)
+	overlay := map[string]any{
+		"model": backend,
+		"permission": map[string]any{
+			"bash":               map[string]string{"*": "ask"},
+			"edit":               map[string]string{"*": "ask"},
+			"external_directory": map[string]string{"*": "ask"},
+			"task":               map[string]string{"*": "ask"},
+			"skill":              map[string]string{"*": "ask"},
+			"question":           "ask",
+			"read":               map[string]string{"*": "allow"},
+			"webfetch":           "allow",
+			"websearch":          "allow",
+		},
+		"agent": map[string]any{
+			"general": map[string]any{"permission": map[string]any{"task": map[string]string{"*": "deny"}}},
+			"explore": map[string]any{"permission": map[string]any{"task": map[string]string{"*": "deny"}}},
+		},
+		"autoupdate": false,
+	}
+	if strings.TrimSpace(opts.SystemPrompt) != "" {
+		if strings.TrimSpace(opts.StateDir) == "" {
+			return nil, nil, fmt.Errorf("OpenCode supervisor instructions require a provider state directory")
+		}
+		if err := os.MkdirAll(opts.StateDir, managedDirPerm); err != nil {
+			return nil, nil, fmt.Errorf("creating OpenCode supervisor directory: %s", sanitizeDiagnostic(err.Error()))
+		}
+		generationDir, err := os.MkdirTemp(opts.StateDir, "opencode-supervisor-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("creating OpenCode supervisor generation: %s", sanitizeDiagnostic(err.Error()))
+		}
+		instructionsPath := filepath.Join(generationDir, instructionsFileName)
+		if err := os.WriteFile(instructionsPath, []byte(opts.SystemPrompt), managedFilePerm); err != nil {
+			return nil, nil, fmt.Errorf("writing OpenCode supervisor instructions: %s", sanitizeDiagnostic(err.Error()))
+		}
+		overlay["instructions"] = []string{instructionsPath}
+	}
+	if len(effortOptions) != 0 {
+		provider, model, _ := splitBackend(backend)
+		overlay["provider"] = map[string]any{provider: map[string]any{
+			"models": map[string]any{model: map[string]any{"options": effortOptions}},
+		}}
+	}
+	content, err := json.Marshal(overlay)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshaling OpenCode supervisor config: marshal failed")
+	}
+	return withServerBridge([]string{binary, "acp"}, []string{configContentEnvVar + "=" + string(content)})
 }
 
 // validateBackendModel reports whether a stripped OpenCode backend model is a

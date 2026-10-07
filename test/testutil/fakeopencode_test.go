@@ -346,7 +346,7 @@ func TestFakeOpenCodeHTTPSurface(t *testing.T) {
 			t.Fatalf("set_model = %v", resp)
 		}
 		seed := "Prior conversation\nUser: what is the codeword?\nAssistant: it is ALPHA\n"
-		if code, body := a.http(http.MethodPost, "/session/"+root+"/prompt", map[string]any{"noReply": true, "parts": []map[string]string{{"type": "text", "text": seed}}}, true); code != http.StatusOK {
+		if code, body := a.http(http.MethodPost, "/session/"+root+"/message", map[string]any{"noReply": true, "parts": []map[string]string{{"type": "text", "text": seed}}}, true); code != http.StatusOK {
 			t.Fatalf("seed post = %d %s", code, body)
 		}
 		seeds := testutil.FakeOpenCodeSeeds(t, path)
@@ -362,7 +362,7 @@ func TestFakeOpenCodeHTTPSurface(t *testing.T) {
 		if len(models) != 1 || models[0].ModelID != "fake/other" || models[0].SessionID != root {
 			t.Fatalf("set models = %+v", models)
 		}
-		a.http(http.MethodPost, "/session/"+root+"/prompt", map[string]any{"parts": []map[string]string{{"type": "text", "text": "reply please"}}}, true)
+		a.http(http.MethodPost, "/session/"+root+"/message", map[string]any{"parts": []map[string]string{{"type": "text", "text": "reply please"}}}, true)
 		if n := testutil.FakeOpenCodeModelReplies(t, path); n != 1 {
 			t.Fatalf("model replies after a replying prompt = %d", n)
 		}

@@ -162,6 +162,87 @@ func TestBuildCommand_ACPStdioWithModelEnv(t *testing.T) {
 	}
 }
 
+func TestBuildCommand_InteractiveUsesMinimalOverlay(t *testing.T) {
+	state := t.TempDir()
+	cmd, env, err := New().BuildCommand(llm.CommandBuildOpts{
+		Model: "opencode:openai/gpt-5", Interactive: true,
+		StateDir: state, SystemPrompt: "Supervisor instructions",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd) != 6 || !slices.Equal(cmd[:2], []string{"opencode", "acp"}) {
+		t.Fatalf("interactive command = %v", cmd)
+	}
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if key == configFileEnvVar || key == "OPENCODE_PURE" || strings.HasPrefix(key, "OPENCODE_DISABLE_") {
+			t.Errorf("interactive environment contains isolation key %s", key)
+		}
+	}
+	var overlay map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(configContentValue(t, env)), &overlay); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"model", "instructions", "permission", "agent", "autoupdate"} {
+		if _, ok := overlay[key]; !ok {
+			t.Errorf("overlay missing %s", key)
+		}
+	}
+	if len(overlay) != 5 {
+		t.Errorf("overlay has unexpected keys: %v", overlay)
+	}
+	var instructions []string
+	if err := json.Unmarshal(overlay["instructions"], &instructions); err != nil || len(instructions) != 1 {
+		t.Fatalf("instructions = %s: %v", overlay["instructions"], err)
+	}
+	if !strings.HasPrefix(instructions[0], state+string(os.PathSeparator)) || strings.Contains(instructions[0], managedRootDirName+string(os.PathSeparator)) {
+		t.Errorf("instructions path %q is not directly under launch state", instructions[0])
+	}
+	if body, err := os.ReadFile(instructions[0]); err != nil || string(body) != "Supervisor instructions" {
+		t.Fatalf("instructions body = %q, %v", body, err)
+	}
+	var permissions map[string]json.RawMessage
+	if err := json.Unmarshal(overlay["permission"], &permissions); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{
+		"bash": "ask", "edit": "ask", "external_directory": "ask",
+		"task": "ask", "skill": "ask", "read": "allow",
+	} {
+		var pattern map[string]string
+		if err := json.Unmarshal(permissions[key], &pattern); err != nil {
+			t.Fatalf("permission[%s] pattern: %v", key, err)
+		}
+		if got := pattern["*"]; got != want {
+			t.Errorf("permission[%s][*] = %q, want %q", key, got, want)
+		}
+	}
+	for key, want := range map[string]string{"question": "ask", "webfetch": "allow", "websearch": "allow"} {
+		var action string
+		if err := json.Unmarshal(permissions[key], &action); err != nil || action != want {
+			t.Errorf("permission[%s] = %s, want %q (%v)", key, permissions[key], want, err)
+		}
+	}
+	if len(permissions) != 9 {
+		t.Errorf("permission map has %d keys, want 9", len(permissions))
+	}
+	var agents map[string]struct {
+		Permission map[string]map[string]string `json:"permission"`
+	}
+	if err := json.Unmarshal(overlay["agent"], &agents); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"general", "explore"} {
+		if agents[name].Permission["task"]["*"] != "deny" {
+			t.Errorf("agent %s task permission = %v", name, agents[name].Permission)
+		}
+	}
+	if len(agents) != 2 || string(overlay["autoupdate"]) != "false" {
+		t.Errorf("agent/autoupdate = %v/%s", agents, overlay["autoupdate"])
+	}
+}
+
 func TestOpenCodeProvider_CLIBinaryDefault(t *testing.T) {
 	if got := New().cliBinary(); got != "opencode" {
 		t.Errorf("cliBinary() = %q, want opencode", got)

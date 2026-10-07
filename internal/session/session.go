@@ -1838,6 +1838,39 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 	return s.respondToPendingControl(requestID, allow, reason)
 }
 
+// RespondToControlRemember lets providers with a native session permission
+// memory receive the user's remembered approval as such.
+func (s *Session) RespondToControlRemember(requestID string) error {
+	s.permissionResponseMu.Lock()
+	defer s.permissionResponseMu.Unlock()
+	if _, ok := s.protocol.(llm.RememberingControlResponder); !ok {
+		return s.respondToPendingControl(requestID, true, "")
+	}
+	s.mu.Lock()
+	pending := s.findPendingControlRequestLocked(requestID)
+	if pending == nil {
+		s.mu.Unlock()
+		return errors.New("permission request is no longer pending")
+	}
+	toolName := pending.Request.ToolName
+	s.mu.Unlock()
+	if err := s.protocol.(llm.RememberingControlResponder).RespondToControlRemember(requestID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.findPendingControlRequestLocked(requestID) == pending {
+		s.removePendingControlRequestLocked(requestID)
+	}
+	if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
+		s.setStatusLocked(SessionRunning)
+	}
+	s.mu.Unlock()
+	if s.observer != nil {
+		s.observer.ObserveControlAnswer(s.id, ports.ControlAnswer{RequestID: requestID, ToolName: toolName, Allowed: true})
+	}
+	return nil
+}
+
 // RetryAutomaticReview reruns only a previously failed review. It neither
 // grants permission itself nor changes auto mode or remembered rules.
 func (s *Session) RetryAutomaticReview(requestID string) error {

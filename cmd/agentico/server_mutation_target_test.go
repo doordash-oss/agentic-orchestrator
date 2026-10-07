@@ -222,6 +222,9 @@ func TestServerMutationTargetAnswerPermissionAllowRememberPersistsBeforeAnswer(t
 	if len(sess.controlCalls) != 1 || !sess.controlCalls[0].allow {
 		t.Fatalf("RespondToControl calls = %+v, want one allow", sess.controlCalls)
 	}
+	if len(sess.rememberedCalls) != 1 || sess.rememberedCalls[0] != testPermRequestID {
+		t.Fatalf("native remembered approvals = %v, want request %s", sess.rememberedCalls, testPermRequestID)
+	}
 	if result.Decision != decisionAllowRemember || result.Result != resultAnswered {
 		t.Fatalf("AnswerPermission() result = %+v, want remembered answer", result)
 	}
@@ -2575,6 +2578,7 @@ type mutationTargetSessionView struct {
 	pending          []*llm.ControlRequestMessage
 	sentMessages     []string
 	controlCalls     []mutationTargetControlCall
+	rememberedCalls  []string
 	askCalls         []mutationTargetAskUserCall
 	onRespondControl func() error
 }
@@ -2673,6 +2677,14 @@ func (s *mutationTargetSessionView) RespondToControl(requestID string, allow boo
 		reason:        reason,
 		originalInput: original,
 	})
+	return nil
+}
+
+func (s *mutationTargetSessionView) RespondToControlRemember(requestID string) error {
+	if err := s.RespondToControl(requestID, true, ""); err != nil {
+		return err
+	}
+	s.rememberedCalls = append(s.rememberedCalls, requestID)
 	return nil
 }
 func (s *mutationTargetSessionView) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {

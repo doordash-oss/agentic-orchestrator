@@ -26,6 +26,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -139,9 +140,10 @@ func serverEndpointFromLaunch(args, env []string) (serverClient, bool) {
 // credential. Errors never carry the password: it travels only in the
 // Authorization header, which the HTTP client never echoes.
 type serverClient struct {
-	addr     string
-	password string
-	http     *http.Client
+	addr      string
+	password  string
+	directory string
+	http      *http.Client
 }
 
 // errServerCredentialsRejected marks a 401 or 403 from the embedded server.
@@ -169,6 +171,9 @@ func (c *serverClient) request(ctx context.Context, method, path string, body an
 		return nil, err
 	}
 	req.SetBasicAuth(serverUsername, c.password)
+	if c.directory != "" {
+		req.Header.Set("x-opencode-directory", url.PathEscape(c.directory))
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

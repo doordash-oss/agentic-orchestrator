@@ -32,6 +32,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
+	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -85,6 +86,7 @@ type supervisorHarness struct {
 	stateDir  string
 	script    string
 	registry  *llm.Registry
+	store     *feature.Store
 	sessions  *session.Manager
 	runner    *agent.PhaseRunner
 	admission *workadmission.Coordinator
@@ -99,7 +101,8 @@ func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.
 	h.script = testutil.WriteFakeClaudeScript(t, body)
 	h.registry = testutil.NewFakeClaudeRegistry(t, h.script)
 	h.sessions = session.NewManager(nil)
-	h.runner = agent.NewPhaseRunner(h.sessions, feature.NewStore(h.stateDir), h.stateDir)
+	h.store = feature.NewStore(h.stateDir)
+	h.runner = agent.NewPhaseRunner(h.sessions, h.store, h.stateDir)
 	h.runner.Registry = h.registry
 	h.runner.Config = config.NewDefault()
 	h.admission = workadmission.New(workadmission.Options{})
@@ -141,6 +144,8 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 		AuthToken:             supervisorTestToken,
 		DisableHostValidation: true,
 		Registry:              h.registry,
+		FeatureStore:          h.store,
+		Features:              h.store,
 		Sessions:              h.sessions,
 		Mutations:             supervisorAnswerTarget{sessions: h.sessions},
 		Supervisor:            coord,
@@ -236,6 +241,42 @@ func (h *supervisorHarness) transcript(query string) server.SupervisorTranscript
 	var resp server.SupervisorTranscriptResponse
 	h.do(http.MethodGet, "/api/v1/supervisor/transcript"+query, nil, http.StatusOK, &resp)
 	return resp
+}
+
+// userInputs returns the text of every user message that reached the fake
+// harness on stdin, in arrival order.
+func (h *supervisorHarness) userInputs() []string {
+	h.t.Helper()
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(h.script), testutil.FakeSupervisorUserInputsFile))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	var texts []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var msg struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &msg); err != nil {
+			h.t.Fatalf("decode user input %q: %v", line, err)
+		}
+		var text string
+		if err := json.Unmarshal(msg.Message.Content, &text); err != nil {
+			var blocks []llm.ContentBlock
+			if err := json.Unmarshal(msg.Message.Content, &blocks); err != nil {
+				h.t.Fatalf("decode user content %s: %v", msg.Message.Content, err)
+			}
+			for _, block := range blocks {
+				text += block.Text
+			}
+		}
+		texts = append(texts, text)
+	}
+	return texts
 }
 
 func (h *supervisorHarness) invocations() int {
@@ -647,7 +688,7 @@ func TestSupervisorAdmissionAndShutdown(t *testing.T) {
 
 	// The stopper's path: close admission for stopping, end the
 	// supervisor, and refuse relaunch while closed.
-	if !h.admission.CloseForStopping(workadmission.CategoryFeature, workadmission.CategoryChat, workadmission.CategorySupervisor) {
+	if !h.admission.CloseForStopping(workadmission.CategoryFeature, workadmission.CategorySupervisor) {
 		t.Fatal("admission did not close for stopping")
 	}
 	sessionID := h.state().SessionID
@@ -672,5 +713,102 @@ func TestSupervisorAdmissionAndShutdown(t *testing.T) {
 	case <-sess.Done():
 	case <-time.After(10 * time.Second):
 		t.Fatal("shutdown left the supervisor process running")
+	}
+}
+
+// TestSupervisorErrorReferenceDeliversHiddenContextOnlyToHarness drives an
+// explain-in-chat message with an error reference on the first send (the
+// launch path) and on a follow-up (the live process): the harness receives
+// the resolved bundle ahead of the visible text each time, while the
+// committed records, the transcript and the stream carry only the visible
+// text. A malformed or stale reference is refused before anything reaches
+// the harness or the transcript.
+func TestSupervisorErrorReferenceDeliversHiddenContextOnlyToHarness(t *testing.T) {
+	h := newSupervisorHarness(t, testutil.FakeClaudeInteractiveScriptBody())
+	const marker = "diagnostics-only-the-harness-sees"
+	failed := &feature.Feature{
+		ID: "feat-explain", Name: "Explain Feature", Slug: "feat-explain",
+		Status: feature.StatusFailed, CurrentPhase: feature.PhaseImplement,
+		ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent,
+	}
+	failed.Run().Failure = &errcat.FailureRecord{Code: errcat.IterationBudgetExhausted, Diagnostics: marker}
+	if err := h.store.Save(failed); err != nil {
+		t.Fatal(err)
+	}
+	h.chooseSettings()
+	ref := map[string]string{"scope": "run", "code": string(errcat.IterationBudgetExhausted), "feature_id": failed.ID}
+
+	for _, tc := range []struct {
+		ref    map[string]string
+		status int
+		code   string
+	}{
+		{map[string]string{"scope": "run", "code": string(errcat.IterationBudgetExhausted)}, http.StatusBadRequest, "chat_context_invalid"},
+		{map[string]string{"scope": "run", "code": string(errcat.WorktreeSetupFailed), "feature_id": failed.ID}, http.StatusNotFound, "chat_context_not_found"},
+	} {
+		var refused server.ErrorResponse
+		h.do(http.MethodPost, "/api/v1/supervisor/messages", map[string]any{"text": "Explain", "client_message_id": "bad", "error_reference": tc.ref}, tc.status, &refused)
+		if refused.Error.Code != tc.code {
+			t.Fatalf("reference %v = %+v, want %s", tc.ref, refused.Error, tc.code)
+		}
+	}
+	if st := h.state(); st.HeadSeq != 0 || st.Lifecycle != server.SupervisorLifecycleStopped || h.invocations() != 0 {
+		t.Fatalf("refused references changed state: %+v invocations=%d", st, h.invocations())
+	}
+
+	send := func(text, cmid string) server.SupervisorMessageResponse {
+		var resp server.SupervisorMessageResponse
+		h.do(http.MethodPost, "/api/v1/supervisor/messages", map[string]any{"text": text, "client_message_id": cmid, "error_reference": ref}, http.StatusOK, &resp)
+		return resp
+	}
+	stream := h.openStream("")
+	stream.until("initial state", isState(server.SupervisorLifecycleStopped))
+	first := send("Explain this failure", "e1")
+	if !first.Launched {
+		t.Fatalf("first send did not launch: %+v", first)
+	}
+	events := stream.until("idle after first turn", isState(server.SupervisorLifecycleIdle))
+	if second := send("Tell me more", "e2"); second.Launched {
+		t.Fatalf("follow-up relaunched: %+v", second)
+	}
+	events = append(events, stream.until("idle after follow-up", isState(server.SupervisorLifecycleIdle))...)
+
+	inputs := h.userInputs()
+	if len(inputs) != 2 {
+		t.Fatalf("harness user inputs = %q, want two", inputs)
+	}
+	for i, visible := range []string{"Explain this failure", "Tell me more"} {
+		bundle, text, ok := strings.Cut(inputs[i], "\n\n"+visible)
+		if !ok || text != "" || !strings.Contains(bundle, "error[iteration_budget_exhausted]") || !strings.Contains(bundle, marker) || !strings.Contains(bundle, failed.ID) {
+			t.Fatalf("harness input %d = %q, want the hidden bundle then %q", i, inputs[i], visible)
+		}
+	}
+	if raw, _ := json.Marshal(first); strings.Contains(string(raw), marker) {
+		t.Fatalf("message response leaked the bundle: %s", raw)
+	}
+	for _, ev := range events {
+		if raw, _ := json.Marshal(ev.data); strings.Contains(string(raw), marker) {
+			t.Fatalf("stream event leaked the bundle: %s", raw)
+		}
+	}
+	page := h.transcript("")
+	var users []string
+	for _, rec := range page.Items {
+		if raw, _ := json.Marshal(rec); strings.Contains(string(raw), marker) || strings.Contains(string(raw), "iteration_budget_exhausted") {
+			t.Fatalf("transcript record leaked the bundle: %s", raw)
+		}
+		if rec.Kind == server.SupervisorRecordKindUser {
+			users = append(users, rec.Messages[0].Text)
+		}
+	}
+	if strings.Join(users, "|") != "Explain this failure|Tell me more" || h.invocations() != 1 {
+		t.Fatalf("committed user texts = %q invocations=%d", users, h.invocations())
+	}
+	durable, err := os.ReadFile(filepath.Join(h.stateDir, "supervisor", "conversations", page.ConversationID, "transcript.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(durable), marker) || !strings.Contains(string(durable), "Tell me more") {
+		t.Fatalf("durable transcript = %s", durable)
 	}
 }

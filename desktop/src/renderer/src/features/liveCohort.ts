@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { CHAT_SESSION_ID, type SessionSummary } from '../../../shared/ipc';
+import type { SessionSummary } from '../../../shared/ipc';
 import { orderRunSessions, sessionDisplayLabel, sessionGroup } from './reviewModel';
 
 export type CohortTabStatus = 'running' | 'completed' | 'failed';
@@ -39,10 +39,6 @@ export function cohortTabStatus(session: SessionSummary): CohortTabStatus {
   return 'running';
 }
 
-function isChatSession(session: SessionSummary): boolean {
-  return session.id === CHAT_SESSION_ID || normalize(session.kind) === 'chat';
-}
-
 export interface CohortMembership {
   /** Ordered session ids that make up the visible cohort. */
   sessionIds: string[];
@@ -57,7 +53,7 @@ export const EMPTY_COHORT: CohortMembership = { sessionIds: [], phase: '' };
 /**
  * Resolve the current concurrent cohort from the run's sessions.
  *
- * - Starts with every active non-chat session in the run.
+ * - Starts with every active session in the run.
  * - Restores current-iteration terminal review peers during hydration.
  * - Retains completed members until the feature phase changes.
  * - Replaces the cohort when the retained batch is fully terminal and a
@@ -70,18 +66,17 @@ export function computeCohort(
   currentIteration?: number,
   currentReviewAxes?: readonly string[],
 ): CohortMembership {
-  const candidates = runSessions.filter((session) => !isChatSession(session));
-  const byId = new Map(candidates.map((session) => [session.id, session]));
-  const activeIds = candidates
+  const byId = new Map(runSessions.map((session) => [session.id, session]));
+  const activeIds = runSessions
     .filter((session) => !isTerminalSessionStatus(session.status))
     .map((session) => session.id);
 
-  const allIds = candidates.map((session) => session.id);
+  const allIds = runSessions.map((session) => session.id);
   const currentReviewAxisSet = new Set(currentReviewAxes ?? []);
   const currentReviewIds =
     currentIteration === undefined || currentReviewAxisSet.size === 0
       ? []
-      : candidates
+      : runSessions
           .filter(
             (session) =>
               session.kind === 'validator' &&

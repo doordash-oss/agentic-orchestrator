@@ -743,7 +743,7 @@ func TestUpdateInstallPostAcceptedIdleSnapshot(t *testing.T) {
 	if snapshot.Signature != Unverified {
 		t.Fatalf("signature = %q, want unverified before verification", snapshot.Signature)
 	}
-	if snapshot.ActiveWorkSummary.FeatureCount != 0 || snapshot.ActiveWorkSummary.ChatActive ||
+	if snapshot.ActiveWorkSummary.FeatureCount != 0 || snapshot.ActiveWorkSummary.SupervisorActive ||
 		snapshot.ActiveWorkSummary.CloneCount != 0 || snapshot.ActiveWorkSummary.UploadCount != 0 ||
 		snapshot.ActiveWorkSummary.OriginCheckCount != 0 || snapshot.ActiveWorkSummary.PendingAdmissions != 0 {
 		t.Fatalf("active_work_summary = %+v, want zero counts", snapshot.ActiveWorkSummary)

@@ -59,7 +59,7 @@ import type {
   ServerUpdateState,
   WindowPurpose,
 } from '../../../shared/ipc';
-import { defaultSettings } from '../../../shared/ipc';
+import { defaultSettings, SupervisorMessageRequestSchema } from '../../../shared/ipc';
 
 /**
  * A rejection shaped the way the preload rethrows envelope errors: the
@@ -447,8 +447,6 @@ export interface AgenticoMock {
     resolveGate: ReturnType<typeof vi.fn>;
     waiveTestingContract: ReturnType<typeof vi.fn>;
     getTestingContract: ReturnType<typeof vi.fn>;
-    startChat: ReturnType<typeof vi.fn>;
-    endChat: ReturnType<typeof vi.fn>;
     getSupervisorState: ReturnType<typeof vi.fn>;
     updateSupervisorSettings: ReturnType<typeof vi.fn>;
     getSupervisorTranscript: ReturnType<typeof vi.fn>;
@@ -725,8 +723,6 @@ export function installAgenticoMock(
       Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
     ),
     getTestingContract: vi.fn(() => Promise.resolve({ available: false as const })),
-    startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
-    endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
     listSessions: vi.fn(() => Promise.resolve(sessions)),
     getSession: vi.fn((sessionId: string) => {
       if (overrides.session !== undefined) return Promise.resolve(overrides.session);
@@ -766,6 +762,13 @@ export function installAgenticoMock(
     getSupervisorTranscript: vi.fn(() => Promise.resolve(supervisorTranscript)),
     sendSupervisorMessage: vi.fn(
       (request: SupervisorMessageRequest): Promise<SupervisorMessageResult> => {
+        // The IPC contract fails closed on a malformed request (an
+        // undisciplined error reference included) before anything is sent.
+        if (!SupervisorMessageRequestSchema.safeParse(request).success) {
+          return Promise.reject(
+            ipcError('E_SCHEMA_MISMATCH', 'The request did not match the expected shape.'),
+          );
+        }
         const seq = supervisorCurrent.headSeq + 1;
         const launched =
           supervisorCurrent.lifecycle === 'stopped' || supervisorCurrent.lifecycle === 'failed';
@@ -783,6 +786,7 @@ export function installAgenticoMock(
             conversationId: supervisorCurrent.conversationId,
             generation,
             clientMessageId: `supervisor-client-message-${String(seq)}`,
+            // Only the visible text is committed; the reference rides hidden.
             messages: [{ index: seq, role: 'user', type: 'text', text: request.text }],
           }),
           launched,

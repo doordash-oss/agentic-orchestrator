@@ -66,7 +66,8 @@ MCowBQYDK2VwAyEAmhM+TNlJSPzGSFwd/DakW3G6MzxCpouletrsW4WAezE=
 
 export interface UpdateActiveWork {
   featureCount: number;
-  amaActive: boolean;
+  /** The supervisor is starting, running, or waiting on a permission or question. */
+  supervisorActive: boolean;
   detectionFailed: boolean;
 }
 
@@ -273,7 +274,7 @@ export class UpdateCoordinator {
       return this.fail('E_UPDATE_NOT_READY');
     }
     const active = await this.options.detectActiveWork();
-    if (!active.detectionFailed && active.featureCount === 0 && !active.amaActive) {
+    if (!active.detectionFailed && active.featureCount === 0 && !active.supervisorActive) {
       return this.applyStagedUpdate();
     }
     this.state = {
@@ -309,7 +310,7 @@ export class UpdateCoordinator {
     }
     const active = await this.options.detectActiveWork();
     if (
-      (active.featureCount > 0 || active.amaActive || active.detectionFailed) &&
+      (active.featureCount > 0 || active.supervisorActive || active.detectionFailed) &&
       !request.stopActiveWork
     ) {
       this.state = {
@@ -349,9 +350,9 @@ export class UpdateCoordinator {
     try {
       active = await this.options.detectActiveWork();
     } catch {
-      active = { featureCount: 0, amaActive: false, detectionFailed: true };
+      active = { featureCount: 0, supervisorActive: false, detectionFailed: true };
     }
-    if (active.detectionFailed || active.featureCount > 0 || active.amaActive) {
+    if (active.detectionFailed || active.featureCount > 0 || active.supervisorActive) {
       this.state = {
         ...this.state,
         status: 'ready',
@@ -813,11 +814,11 @@ export class UpdateCoordinator {
   private async activeWorkSummaryForInstallSurface(): Promise<string | undefined> {
     try {
       const active = await this.options.detectActiveWork();
-      if (active.detectionFailed || active.featureCount > 0 || active.amaActive) {
+      if (active.detectionFailed || active.featureCount > 0 || active.supervisorActive) {
         return activeSummary(active);
       }
     } catch {
-      return activeSummary({ featureCount: 0, amaActive: false, detectionFailed: true });
+      return activeSummary({ featureCount: 0, supervisorActive: false, detectionFailed: true });
     }
     return undefined;
   }
@@ -827,9 +828,9 @@ export class UpdateCoordinator {
     try {
       active = await this.options.detectActiveWork();
     } catch {
-      active = { featureCount: 0, amaActive: false, detectionFailed: true };
+      active = { featureCount: 0, supervisorActive: false, detectionFailed: true };
     }
-    if (!active.detectionFailed && active.featureCount === 0 && !active.amaActive) {
+    if (!active.detectionFailed && active.featureCount === 0 && !active.supervisorActive) {
       this.options.diagnostics?.record(
         'update',
         'info',
@@ -1052,8 +1053,8 @@ function activeSummary(active: UpdateActiveWork): string {
   if (active.featureCount > 0) {
     parts.push(`${active.featureCount} workflow${active.featureCount === 1 ? '' : 's'}`);
   }
-  if (active.amaActive) parts.push('AMA session');
-  return parts.length === 0 ? 'No active workflows or AMA sessions.' : parts.join(' and ');
+  if (active.supervisorActive) parts.push(parts.length === 0 ? 'The supervisor' : 'the supervisor');
+  return parts.length === 0 ? 'No active workflows or supervisor work.' : parts.join(' and ');
 }
 
 async function fetchJson(fetchImpl: typeof fetch, url: string, maxBytes: number): Promise<unknown> {

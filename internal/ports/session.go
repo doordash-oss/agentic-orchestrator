@@ -62,8 +62,9 @@ func (s SessionStatus) String() string {
 }
 
 // SessionKind classifies a session by its role so the desktop app and observer layer
-// can label, group, and filter sessions uniformly. Chat also remains available
-// for follow-up messages after a failed turn, unlike autonomous phase work.
+// can label, group, and filter sessions uniformly. The supervisor also remains
+// available for follow-up messages after a failed turn, unlike autonomous
+// phase work.
 type SessionKind int
 
 const (
@@ -78,10 +79,8 @@ const (
 	KindValidator
 	// KindReviewHelper is a read-only code-review helper session.
 	KindReviewHelper
-	// KindChat is the interactive AMA utility session.
-	KindChat
 	// KindSupervisor is the per-server supervisor conversation's provider
-	// process. It shares chat's conversational semantics.
+	// process.
 	KindSupervisor
 )
 
@@ -89,7 +88,7 @@ const (
 // whose provider error results end one turn rather than the session, and
 // whose sent user turns are echoed into the session transcript.
 func (k SessionKind) Conversational() bool {
-	return k == KindChat || k == KindSupervisor
+	return k == KindSupervisor
 }
 
 // SessionTurnMode controls how a session interprets provider Result messages.
@@ -116,8 +115,6 @@ func (k SessionKind) String() string {
 		return "validator"
 	case KindReviewHelper:
 		return "review-helper"
-	case KindChat:
-		return "chat"
 	case KindSupervisor:
 		return "supervisor"
 	default:
@@ -155,7 +152,6 @@ const (
 	AskUserAutoPickPurposeImplement        AskUserAutoPickPurpose = "implement"
 	AskUserAutoPickPurposeReview           AskUserAutoPickPurpose = "review"
 	AskUserAutoPickPurposeKBBuild          AskUserAutoPickPurpose = "kb_build"
-	AskUserAutoPickPurposeChat             AskUserAutoPickPurpose = "chat"
 	AskUserAutoPickPurposeFinalReview      AskUserAutoPickPurpose = "final_review"
 	AskUserAutoPickPurposeValidator        AskUserAutoPickPurpose = "validator"
 	AskUserAutoPickPurposeRoadmapReviser   AskUserAutoPickPurpose = "roadmap_reviser"

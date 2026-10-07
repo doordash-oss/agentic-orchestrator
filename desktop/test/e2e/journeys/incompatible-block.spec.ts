@@ -17,16 +17,18 @@ limitations under the License.
 /**
  * Journey 4 — incompatible external runtime: a live loopback process
  * presents a health response whose compatibility declaration this app does
- * not support (foreign schema series + runtime policy), with a matching
- * owner-only discovery record. The app must hard-block with guidance,
- * offer no way to stop the foreign process, never present credentials to
- * it, and leave it running.
+ * not support, with a matching owner-only discovery record. Two contracts
+ * are covered: a foreign one (unknown schema series + runtime policy) and
+ * exactly the previous release's (schema series 1 with the real loopback
+ * runtime policy). Either way the app must hard-block with guidance, offer
+ * no way to stop the foreign process, never present credentials to it, and
+ * leave it running.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from '@playwright/test';
+import { expect, test, type TestInfo } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
@@ -47,13 +49,49 @@ import {
 
 const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
 
+/** One incompatible contract the stub runtime can present on health. */
+interface StubContract {
+  /** The fixture's `--contract` selector. */
+  name: 'foreign' | 'previous';
+  /** The declaration the stub presents, recorded in the transcript. */
+  declaration: Record<string, unknown>;
+  /** Transcript journey title. */
+  title: string;
+  /** World and trace name suffix, unique per test. */
+  slug: string;
+}
+
 test('incompatible external runtime: blocked with guidance, never stopped', async ({}, testInfo) => {
-  const transcript = new Transcript(
-    'ownership-compatibility',
-    'Journey 4 — incompatible external runtime is blocked and never stopped',
-    { append: true },
-  );
-  const world = createWorld('incompatible', { auth: { loggedIn: true } });
+  await runIncompatibleJourney(testInfo, {
+    name: 'foreign',
+    declaration: {
+      api_version: 'v1',
+      schema_version: 99,
+      min_client_schema: 99,
+      runtime_policy: 'quantum-entangled-v99',
+    },
+    title: 'Journey 4 — incompatible external runtime is blocked and never stopped',
+    slug: 'incompatible',
+  });
+});
+
+test('previous-release runtime (schema series 1): blocked with guidance, never stopped', async ({}, testInfo) => {
+  await runIncompatibleJourney(testInfo, {
+    name: 'previous',
+    declaration: {
+      api_version: 'v1',
+      schema_version: 1,
+      min_client_schema: 1,
+      runtime_policy: 'loopback-bearer-v1',
+    },
+    title: 'Journey 4 — a previous-release runtime (schema series 1) is blocked and never stopped',
+    slug: 'incompatible-previous',
+  });
+});
+
+async function runIncompatibleJourney(testInfo: TestInfo, contract: StubContract): Promise<void> {
+  const transcript = new Transcript('ownership-compatibility', contract.title, { append: true });
+  const world = createWorld(contract.slug, { auth: { loggedIn: true } });
 
   let stub: ChildProcess | null = null;
   let handle: AppHandle | null = null;
@@ -72,6 +110,8 @@ test('incompatible external runtime: blocked with guidance, never stopped', asyn
         canonicalStateDir,
         '--log',
         requestLog,
+        '--contract',
+        contract.name,
       ],
       { env: minimalEnv(world), stdio: ['ignore', 'pipe', 'pipe'] },
     );
@@ -94,15 +134,10 @@ test('incompatible external runtime: blocked with guidance, never stopped', asyn
       mode: 0o600,
     });
     transcript.step(`stub runtime pid ${stub.pid} listening at ${baseUrl}`);
-    transcript.json('health compatibility declaration the stub presents', {
-      api_version: 'v1',
-      schema_version: 99,
-      min_client_schema: 99,
-      runtime_policy: 'quantum-entangled-v99',
-    });
+    transcript.json('health compatibility declaration the stub presents', contract.declaration);
 
     transcript.section('The app blocks: incompatible state with guidance, no stop affordance');
-    handle = await launchApp(world, testInfo, { traceName: 'incompatible-block' });
+    handle = await launchApp(world, testInfo, { traceName: `${contract.slug}-block` });
     const shell = handle.page.getByLabel('Agentico connection');
     await expect(shell).toBeVisible();
     await expect(
@@ -115,14 +150,14 @@ test('incompatible external runtime: blocked with guidance, never stopped', asyn
     // Recovery offers retry or another server, without a disconnected chat action.
     const buttons = await shell.getByRole('button').allTextContents();
     expect(buttons).toEqual(['Retry', 'Choose another server']);
-    await evidenceShot(handle, 'incompatible-blocked');
+    await evidenceShot(handle, `${contract.slug}-blocked`);
     const connection = await handle.page.evaluate(() => window.agentico.getConnectionStatus());
     transcript.json('connection state (via IPC): blocked, external ownership', connection);
     expect(connection.status).toBe('incompatible');
     expect(connection.ownership).toBe('external');
 
     transcript.section('The app only ever probed health — no credential was presented');
-    persistAppLogs(handle, 'incompatible-app');
+    persistAppLogs(handle, `${contract.slug}-app`);
     await closeApp(handle);
     handle = null;
     const requests = fs
@@ -164,7 +199,7 @@ test('incompatible external runtime: blocked with guidance, never stopped', asyn
     assertNoLeakedProcesses(world);
     destroyWorld(world);
   }
-});
+}
 
 async function readPort(child: ChildProcess): Promise<number> {
   return new Promise<number>((resolve, reject) => {

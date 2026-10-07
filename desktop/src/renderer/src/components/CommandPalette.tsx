@@ -477,7 +477,7 @@ export function isEditingShortcutTarget(target: EventTarget | null): boolean {
 
 /** Reads the currently selected sidebar row directly from its DOM markup —
  * the fastest read of "what's on screen right now", ahead of any settings
- * round trip. The Overview row is not a feature id and reports as none
+ * round trip. The Supervisor row is not a feature id and reports as none
  * selected. */
 function selectedFeatureIdFromDom(): string | null {
   const selected = document.querySelector(

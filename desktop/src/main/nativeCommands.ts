@@ -14,7 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { BrowserWindow, Menu, Tray, nativeImage, type App } from 'electron';
+import {
+  BrowserWindow,
+  Menu,
+  Tray,
+  nativeImage,
+  type App,
+  type MenuItemConstructorOptions,
+} from 'electron';
 import { commandById } from '../shared/commands';
 import {
   disabledMainWindowUiState,
@@ -35,7 +42,8 @@ export interface NativeCommandControllerDeps {
 
 export interface BackgroundStatus {
   attentionCount: number;
-  amaActive: boolean;
+  /** The supervisor lifecycle is starting, running, or waiting on the user. */
+  supervisorActive: boolean;
 }
 
 export interface NativeCommandSnapshot extends BackgroundStatus {
@@ -51,7 +59,7 @@ export interface NativeCommandSnapshot extends BackgroundStatus {
 export class NativeCommandController {
   private tray: Tray | null = null;
   private trayFallbackActive = false;
-  private status: BackgroundStatus = { attentionCount: 0, amaActive: false };
+  private status: BackgroundStatus = { attentionCount: 0, supervisorActive: false };
   /** Everything-disabled until the main window's renderer pushes its first summary. */
   private uiState: MainWindowUiState = disabledMainWindowUiState();
   private menuRevision = 0;
@@ -117,32 +125,8 @@ export class NativeCommandController {
    * settings-targeted route must raise the Settings window rather than the
    * main one.
    */
-  private route(target: AppRouteEvent['target']): void {
-    this.deps.route({ target });
-  }
-
   private routeEvent(event: AppRouteEvent): void {
     this.deps.route(event);
-  }
-
-  private showItem() {
-    const command = commandById('global.show');
-    return {
-      id: command.id,
-      label: command.label,
-      accelerator: command.accelerator,
-      click: () => this.deps.showWindow(),
-    };
-  }
-
-  private quitItem() {
-    const command = commandById('global.quit');
-    return {
-      id: command.id,
-      label: command.label,
-      accelerator: command.accelerator,
-      click: () => this.deps.quit(),
-    };
   }
 
   /** Rebuilds and installs the menu bar from the current summary. */
@@ -167,33 +151,70 @@ export class NativeCommandController {
   private refreshTray(): void {
     if (this.tray === null) return;
     this.tray.setImage(createTrayIcon(this.status.attentionCount));
-    this.tray.setToolTip(
-      [
-        'Agentico',
-        `${this.status.attentionCount} attention`,
-        this.status.amaActive ? 'AMA active' : 'AMA idle',
-      ].join(' - '),
-    );
+    this.tray.setToolTip(trayToolTip(this.status));
     this.tray.setContextMenu(
-      Menu.buildFromTemplate([
-        this.showItem(),
-        {
-          label: `Attention (${this.status.attentionCount})`,
-          click: () => this.route('attention'),
-        },
-        {
-          label: this.status.amaActive ? 'AMA (active)' : 'AMA',
-          click: () => this.route('ama'),
-        },
-        {
-          label: 'Updates',
-          click: () => this.routeEvent({ target: 'settings', settingsSection: 'updates' }),
-        },
-        { type: 'separator' },
-        this.quitItem(),
-      ]),
+      Menu.buildFromTemplate(
+        buildTrayMenuTemplate(this.status, {
+          showWindow: () => this.deps.showWindow(),
+          route: (event) => this.routeEvent(event),
+          quit: () => this.deps.quit(),
+        }),
+      ),
     );
   }
+}
+
+export function trayToolTip(status: BackgroundStatus): string {
+  return [
+    'Agentico',
+    `${status.attentionCount} attention`,
+    status.supervisorActive ? 'Supervisor working' : 'Supervisor idle',
+  ].join(' - ');
+}
+
+export interface TrayMenuHandlers {
+  showWindow(): void;
+  route(event: AppRouteEvent): void;
+  quit(): void;
+}
+
+/**
+ * The tray's context menu as a pure template. The Supervisor item goes home:
+ * the Supervisor page is what the main window shows with no feature selected.
+ */
+export function buildTrayMenuTemplate(
+  status: BackgroundStatus,
+  handlers: TrayMenuHandlers,
+): MenuItemConstructorOptions[] {
+  const show = commandById('global.show');
+  const quit = commandById('global.quit');
+  return [
+    {
+      id: show.id,
+      label: show.label,
+      accelerator: show.accelerator,
+      click: () => handlers.showWindow(),
+    },
+    {
+      label: `Attention (${status.attentionCount})`,
+      click: () => handlers.route({ target: 'attention' }),
+    },
+    {
+      label: status.supervisorActive ? 'Supervisor (working)' : 'Supervisor',
+      click: () => handlers.route({ target: 'home' }),
+    },
+    {
+      label: 'Updates',
+      click: () => handlers.route({ target: 'settings', settingsSection: 'updates' }),
+    },
+    { type: 'separator' },
+    {
+      id: quit.id,
+      label: quit.label,
+      accelerator: quit.accelerator,
+      click: () => handlers.quit(),
+    },
+  ];
 }
 
 function adjustFocusedZoom(delta: number): void {

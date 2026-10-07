@@ -126,7 +126,7 @@ function previewSummary(item: ActionableAttentionItem): string {
     case 'gate':
       return item.summary === undefined ? '' : ` · ${item.summary}`;
     case 'help':
-      // Synthetic ('input'/'coordinating') items are filtered before notifying.
+      // Synthetic ('coordinating') items are filtered before notifying.
       return ' · Help request';
     case 'review':
       return ` · ${item.reviewKind} review`;

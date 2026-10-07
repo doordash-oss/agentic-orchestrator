@@ -61,7 +61,7 @@ const (
 // Combined per-request limits across local paths plus upload references.
 // They mirror the desktop CREATION_IMAGE_LIMIT / CREATION_ATTACHMENT_LIMIT
 // caps (desktop/src/shared/ipc.ts) and are enforced server-side on feature
-// create, refactor launch, and chat start.
+// create and refactor launch.
 const (
 	maxFeatureImagesTotal      = 12
 	maxFeatureAttachmentsTotal = 24
@@ -82,9 +82,6 @@ const (
 	// uploadStagingDirName is the state-dir subdirectory holding staged
 	// upload bytes, their JSON sidecars, and durable consumption copies.
 	uploadStagingDirName = "uploads"
-	// uploadChatDirName keeps chat image copies aligned with the chat session
-	// directory name (chatName in cmd/agentico/main.go).
-	uploadChatDirName = "chat"
 	// uploadOrphanTTL reaps staged uploads (and durable consumption copies)
 	// that were never consumed after this age.
 	uploadOrphanTTL = 24 * time.Hour
@@ -407,12 +404,11 @@ type consumedUploads struct {
 // the request is deduplicated, every reference is validated and claimed (so
 // no concurrent transaction can resolve it), and staged bytes are copied
 // into destDir under per-claim handoff names (the staging dir itself is the
-// feature launch handoff; the chat dir for chat images). Any failure
-// releases every claim and removes prior copies, so a rejected request
-// consumes nothing. The durable copies are what the existing async copy
-// pipeline (feature setup image/attachment tasks) or the chat prompt
-// embedding consume; deleting the staged source at commit time satisfies
-// the copy-then-delete single-use rule because the copies are durable.
+// feature launch handoff). Any failure releases every claim and removes
+// prior copies, so a rejected request consumes nothing. The durable copies
+// are what the existing async copy pipeline (feature setup image/attachment
+// tasks) consumes; deleting the staged source at commit time satisfies the
+// copy-then-delete single-use rule because the copies are durable.
 func (s *uploadStore) consume(imageRefs, attachmentRefs []string, destDir string) (*consumedUploads, error) {
 	if len(imageRefs) == 0 && len(attachmentRefs) == 0 {
 		return nil, nil

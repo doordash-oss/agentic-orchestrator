@@ -68,8 +68,8 @@ test('bulk resume/retry: fresh preview, sequential dispatch, cancellation, and s
         repoPatterns: [/alpha/],
       });
       transcript.step(`created feature \`${name}\` through the form`);
-      const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-      await overviewOption.click();
+      const supervisorOption = handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+      await supervisorOption.click();
       await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
         timeout: 10_000,
       });
@@ -107,8 +107,27 @@ test('bulk resume/retry: fresh preview, sequential dispatch, cancellation, and s
     transcript.step('relaunched against seeded state');
 
     transcript.section('Bulk preview panel');
-    const bulkPanel = handle.page.locator('.bulk-preview').first();
+    // The palette's Bulk Resume / Retry command (⌘⇧B) opens the Recovery sheet
+    // with the bulk preview already loading — no click on Fresh preview.
+    await handle.page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    const palette = handle.page.getByRole('dialog', { name: 'Command palette' });
+    await expect(palette).toBeVisible({ timeout: 10_000 });
+    await palette.getByLabel('Search features and commands').fill('bulk resume / retry');
+    await palette
+      .getByRole('option')
+      .filter({
+        has: handle.page.locator('.command-palette__item-label', {
+          hasText: /^Bulk Resume \/ Retry$/,
+        }),
+      })
+      .click();
+    await expect(palette).toHaveCount(0);
+    const recoverySheet = handle.page.getByRole('dialog', { name: 'Recovery', exact: true });
+    await expect(recoverySheet).toBeVisible({ timeout: 10_000 });
+    const bulkPanel = recoverySheet.getByRole('region', { name: 'Bulk resume and retry' });
     await expect(bulkPanel).toBeVisible({ timeout: 10_000 });
+    await expect(bulkPanel.locator('.bulk-preview__eligible')).toBeVisible({ timeout: 15_000 });
+    transcript.step('the palette command opened the Recovery sheet with the preview auto-loaded');
 
     const refreshButton = bulkPanel.getByRole('button', { name: 'Fresh preview' });
     await refreshButton.click();

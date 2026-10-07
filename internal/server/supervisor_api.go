@@ -56,7 +56,7 @@ type SupervisorService interface {
 	Busy() bool
 	Transcript(supervisor.PageQuery) (supervisor.Page, error)
 	UpdateSettings(supervisor.Settings) (supervisor.State, error)
-	Send(ctx context.Context, text, clientMessageID string) (supervisor.SendResult, error)
+	Send(ctx context.Context, text, hiddenContext, clientMessageID string) (supervisor.SendResult, error)
 	Interrupt() (supervisor.ActionResult, supervisor.State)
 	End() (supervisor.ActionResult, supervisor.State)
 	Subscribe(after int64, hasAfter bool, epoch string) (*supervisor.Subscription, error)
@@ -218,7 +218,23 @@ func (h *apiHandler) handleSupervisorMessage(w http.ResponseWriter, r *http.Requ
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("client_message_id is required and must match ^[A-Za-z0-9._-]{1,128}$"))
 		return
 	}
-	res, err := h.supervisor.Send(r.Context(), req.Text, req.ClientMessageID)
+	// The error reference is validated and resolved against durable state
+	// before anything is sent or appended; the bundle reaches the harness
+	// as hidden context and never enters the record or the response.
+	if field := validateChatContextReference(req.ErrorReference); field != "" {
+		writeChatContextInvalid(w, req.ErrorReference, field)
+		return
+	}
+	hiddenContext := ""
+	if !chatContextAbsent(req.ErrorReference) {
+		bundle, rejection := h.resolveChatContext(req.ErrorReference)
+		if rejection != nil {
+			rejection.write(w, req.ErrorReference)
+			return
+		}
+		hiddenContext = bundle
+	}
+	res, err := h.supervisor.Send(r.Context(), req.Text, hiddenContext, req.ClientMessageID)
 	if err != nil {
 		h.writeSupervisorError(w, err)
 		return

@@ -26,10 +26,11 @@ limitations under the License.
  *    Show/Hide labels flip with it;
  *  - the Feature menu carries all fifteen verbs always — disabled and visible,
  *    never hidden — matching the selected feature's action catalogue, and the
- *    whole group is disabled on Overview;
+ *    whole group is disabled on the Supervisor page;
  *  - Feature ▸ Stop surfaces the cockpit's own confirmation before anything is
  *    dispatched, and the confirmed stop lands;
- *  - the Navigate items and the tray still route exactly as before.
+ *  - Navigate ▸ Supervisor (⌘1) goes home to the Supervisor page, and the
+ *    tray still routes exactly as before.
  */
 import { expect, test } from '@playwright/test';
 import {
@@ -87,6 +88,12 @@ async function probe<T>(what: string, attempt: () => Promise<T>, budgetMs = 20_0
 interface MenuState {
   topLevel: string[];
   file: Array<{ id: string | undefined; label: string; enabled: boolean }>;
+  navigate: Array<{
+    id: string | undefined;
+    label: string;
+    enabled: boolean;
+    accelerator: string | undefined;
+  }>;
   view: Array<{ id: string | undefined; label: string; enabled: boolean }>;
   feature: Array<{ id: string | undefined; label: string; enabled: boolean; visible: boolean }>;
 }
@@ -111,6 +118,12 @@ function readMenuState(handle: AppHandle): Promise<MenuState> {
         id: item.id,
         label: item.label,
         enabled: item.enabled,
+      })),
+      navigate: submenu('Navigate').map((item) => ({
+        id: item.id,
+        label: item.label,
+        enabled: item.enabled,
+        accelerator: item.accelerator ?? undefined,
       })),
       view: submenu('View').map((item) => ({
         id: item.id,
@@ -200,17 +213,45 @@ test(
       ]);
       transcript.step('File, View, Feature, and Window are in the standard order with their items');
 
-      transcript.section('On Overview the whole Feature menu is disabled — visible, never hidden');
+      transcript.section('Navigate ▸ Recovery opens the Recovery sheet');
+      const navigateIds = initial.navigate.map((item) => item.id);
+      const recoveryItem = initial.navigate.find((item) => item.id === 'global.recovery');
+      expect(recoveryItem).toEqual({
+        id: 'global.recovery',
+        label: 'Recovery',
+        enabled: true,
+        accelerator: undefined,
+      });
+      // It sits just above Bulk Resume / Retry, which opens the same sheet.
+      expect(navigateIds.indexOf('global.recovery')).toBe(navigateIds.indexOf('global.bulk') - 1);
+      await clickMenuItem(handle, 'global.recovery');
+      const recoverySheet = handle.page.getByRole('dialog', { name: 'Recovery', exact: true });
+      await expect(recoverySheet).toBeVisible({ timeout: 15_000 });
+      await expect(recoverySheet.getByRole('region', { name: 'Recovery workspace' })).toBeVisible();
+      await expect(
+        recoverySheet.getByRole('region', { name: 'Bulk resume and retry' }),
+      ).toBeVisible();
+      await handle.page.keyboard.press('Escape');
+      await expect(recoverySheet).toHaveCount(0);
+      transcript.step('Navigate ▸ Recovery opened the sheet and Escape put it away');
+
+      transcript.section(
+        'On the Supervisor page the whole Feature menu is disabled — visible, never hidden',
+      );
+      // Home is the Supervisor page: launch lands on it with no feature selected.
+      const supervisorRow = handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+      await expect(supervisorRow).toHaveAttribute('aria-selected', 'true');
+      await expect(handle.page.locator('.toolbar__title-name')).toHaveText('Supervisor');
       expect(initial.feature.map((item) => item.label)).toEqual(EXPECTED_FEATURE_LABELS);
       expect(initial.feature.every((item) => item.visible)).toBe(true);
       expect(initial.feature.every((item) => !item.enabled)).toBe(true);
-      // Overview has no inspector to show or hide; New Feature works regardless.
+      // The Supervisor page has no inspector to show or hide; New Feature works regardless.
       expect(initial.view.find((item) => item.id === 'global.toggle-inspector')?.enabled).toBe(
         false,
       );
       expect(initial.file.find((item) => item.id === 'global.new-feature')?.enabled).toBe(true);
       transcript.step(
-        'all fifteen verbs present and dimmed on Overview, with Show Inspector dimmed too',
+        'all fifteen verbs present and dimmed on Supervisor, with Show Inspector dimmed too',
       );
 
       transcript.section('File ▸ New Feature opens the creation sheet');
@@ -358,18 +399,24 @@ test(
       );
       transcript.step('the confirmed stop dispatched and the feature reached a terminal state');
 
-      transcript.section('Navigate and the tray still route exactly as before');
+      transcript.section('Navigate ▸ Supervisor (⌘1) goes home; the tray still routes as before');
+      const homeItem = (await menuState(handle)).navigate.find((item) => item.id === 'global.home');
+      expect(homeItem).toEqual({
+        id: 'global.home',
+        label: 'Supervisor',
+        enabled: true,
+        accelerator: 'CommandOrControl+1',
+      });
       await clickMenuItem(handle, 'global.home');
-      await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
-        'aria-selected',
-        'true',
-        { timeout: 30_000 },
-      );
+      await expect(supervisorRow).toHaveAttribute('aria-selected', 'true', { timeout: 30_000 });
+      await expect(
+        handle.page.getByRole('region', { name: 'Supervisor', exact: true }),
+      ).toBeVisible();
       await expect(cockpit).toHaveCount(0);
-      // Back on Overview the Feature menu goes dark again, still listing fifteen.
+      // Back on Supervisor the Feature menu goes dark again, still listing fifteen.
       await waitFor(
         async () => (await menuState(handle!)).feature.every((item) => !item.enabled),
-        'the Feature menu to go dark on Overview',
+        'the Feature menu to go dark on the Supervisor page',
         15_000,
       );
       const trayState = await probe('the native-command controller state', () =>
@@ -382,7 +429,7 @@ test(
       );
       expect(trayState).not.toBeNull();
       expect(trayState!.trayInstalled || trayState!.trayFallbackActive).toBe(true);
-      transcript.step('Navigate ▸ Overview routed as before and the tray is still installed');
+      transcript.step('Navigate ▸ Supervisor (⌘1) went home and the tray is still installed');
 
       transcript.step('journey complete');
       failed = false;

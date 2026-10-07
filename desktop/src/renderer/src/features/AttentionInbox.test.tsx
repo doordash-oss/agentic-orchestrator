@@ -419,6 +419,26 @@ describe('AttentionInbox popover presentation', () => {
     expect(popover()).not.toBeInTheDocument();
   });
 
+  it('routes the recovery detail’s Open recovery through the recovery jump sentinel', async () => {
+    installAgenticoMock();
+    const onJump = vi.fn();
+    render(
+      <AttentionDetail
+        item={recoveryItem}
+        busy={false}
+        submit={(action) => void action()}
+        onJump={onJump}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('1 live orphan process need recovery.')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Open recovery' }));
+    // The shell resolves the sentinel by opening the Recovery sheet.
+    expect(onJump).toHaveBeenCalledWith('__recovery__');
+  });
+
   it('labels a supervisor request "Supervisor" and jumps to the Supervisor page instead of expanding', async () => {
     const onJump = vi.fn();
     const supervisorPermission: AttentionItem = {
@@ -740,17 +760,6 @@ describe('AttentionInbox help detail', () => {
     const user = userEvent.setup();
 
     await user.click(screen.getByRole('button', { name: /Attention inbox, 0 pending/ }));
-    expect(screen.getByText('No blocking input is waiting.')).toBeVisible();
-  });
-
-  // A chat resting after a reply is its normal state, not blocking input: the
-  // AMA panel is its reply surface, so the inbox and the badge stay quiet.
-  it('keeps a chat session waiting on the user out of the rows and the badge', async () => {
-    render(<Harness items={[{ ...helpWaitingItem, waitingKind: 'input' }]} onJump={vi.fn()} />);
-    const user = userEvent.setup();
-
-    await user.click(screen.getByRole('button', { name: /Attention inbox, 0 pending/ }));
-    expect(screen.queryByRole('button', { name: /Agent waiting/ })).not.toBeInTheDocument();
     expect(screen.getByText('No blocking input is waiting.')).toBeVisible();
   });
 });

@@ -804,48 +804,13 @@ func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 	}
 }
 
-func TestChatSystemPromptDefinesAMASpecificProtocol(t *testing.T) {
-	got := ChatSystemPrompt(ChatSystemInput{
-		SkillPath:       "/state/skills/chat/SKILL.md",
-		RuntimeRoot:     "/isolated/agentico",
-		StateDir:        "/isolated/agentico/features",
-		ConfigPath:      "/isolated/agentico/config.yaml",
-		WorkspaceDir:    "/workspace/repo",
-		CurrentFeatures: "- **2d-retro-game-maker** (ID: feat-1): Build a game maker - Status: Implementing",
-	})
-
-	for _, want := range []string{
-		"Agentic Orchestrator Expert Assistant",
-		"Answer directly whenever the user's request is clear enough",
-		"/state/skills/chat/SKILL.md",
-		"Runtime root: `/isolated/agentico`",
-		"Feature state directory: `/isolated/agentico/features`",
-		"Config file: `/isolated/agentico/config.yaml`",
-		"Workspace: `/workspace/repo`",
-		"Do not substitute the default paths from the user guide",
-		"2d-retro-game-maker",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("ChatSystemPrompt() missing %q:\n%s", want, got)
-		}
-	}
-	paths := strings.Join([]string{
-		"- Runtime root: `/isolated/agentico`",
-		"- Feature state directory: `/isolated/agentico/features`",
-		"- Config file: `/isolated/agentico/config.yaml`",
-		"- Workspace: `/workspace/repo`",
-	}, "\n")
-	if !strings.Contains(got, paths) {
-		t.Fatalf("ChatSystemPrompt() runtime paths are not rendered as separate bullets:\n%s", got)
-	}
-}
-
 func TestLegacyPromptSurfacesAreRemoved(t *testing.T) {
 	removedPaths := []string{
 		filepath.Join("templates", "system_completion_protocol.tmpl"),
 		filepath.Join("templates", "system_implement_completion_protocol.tmpl"),
 		filepath.Join("templates", "system_validator.tmpl"),
 		filepath.Join("templates", "system_final_review.tmpl"),
+		filepath.Join("templates", "chat.system.tmpl"),
 		filepath.Join("partials", "design_reference.tmpl"),
 		filepath.Join("partials", "skill_instruction.tmpl"),
 		filepath.Join("partials", "preflight.tmpl"),

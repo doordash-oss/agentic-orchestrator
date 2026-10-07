@@ -134,6 +134,10 @@ var (
 	ErrClosed           = errors.New("supervisor is shut down")
 )
 
+// ErrHiddenContextUnsupported refuses a message carrying hidden context on
+// a session that cannot deliver it, rather than dropping the context.
+var ErrHiddenContextUnsupported = errors.New("supervisor session cannot carry hidden context")
+
 // SettingsInvalidError rejects a harness, model or effort the catalog does
 // not offer.
 type SettingsInvalidError struct{ Reason string }

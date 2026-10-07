@@ -62,7 +62,7 @@ describe('ReadinessGate first snapshot', () => {
     const mock = installAgenticoMock({ readiness: readySnapshot() });
     mock.api.getReadiness.mockReturnValue(new Promise(() => {}));
     render(<ReadinessGate />);
-    expect(await screen.findByRole('option', { name: 'Overview' })).toBeVisible();
+    expect(await screen.findByRole('option', { name: 'Supervisor' })).toBeVisible();
     expect(mock.api.getReadiness).not.toHaveBeenCalled();
     expect(mock.api.getRuntimeReadiness).toHaveBeenCalledTimes(1);
   });
@@ -70,7 +70,7 @@ describe('ReadinessGate first snapshot', () => {
   it('sends an already-ready runtime straight to the main view without the wizard', async () => {
     installAgenticoMock({ readiness: readySnapshot() });
     render(<ReadinessGate />);
-    expect(await screen.findByRole('option', { name: 'Overview' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Supervisor' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'New feature' })).toBeInTheDocument();
     expect(screen.queryByRole('form', { name: /create a feature/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
@@ -116,7 +116,7 @@ describe('ReadinessGate gating', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /check again/i }));
 
-    expect(await screen.findByRole('option', { name: 'Overview' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Supervisor' })).toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
   });
 
@@ -124,7 +124,7 @@ describe('ReadinessGate gating', () => {
     installAgenticoMock({ readiness: readySnapshot({ workspaceRoots: [], repositories: [] }) });
     render(<ReadinessGate />);
 
-    expect(await screen.findByRole('option', { name: 'Overview' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Supervisor' })).toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
   });
 

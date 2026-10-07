@@ -352,11 +352,11 @@ test("two-server switching: A→B→A restores each server's truth and selection
     await expect(handle.page.getByRole('option', { name: new RegExp(FEATURE_NAME) })).toHaveCount(
       0,
     );
-    // beta had no recorded selection: the shell lands on Overview.
-    await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    // beta had no recorded selection: the shell lands on the Supervisor page.
+    await expect(
+      handle.page.getByRole('option', { name: 'Supervisor', exact: true }),
+    ).toHaveAttribute('aria-selected', 'true');
+    await expect(handle.page.locator('.toolbar__title-name')).toHaveText('Supervisor');
     const betaSettings = await handle.page.evaluate(() => window.agentico.getSettings());
     expect(betaSettings.servers.lastUsed).toBe(betaState.serverKey);
     expect(betaState.serverKey).not.toBe(alphaKey);
@@ -370,7 +370,8 @@ test("two-server switching: A→B→A restores each server's truth and selection
     await openSwitcher(handle, 'beta');
     await handle.page.getByRole('option', { name: /alpha at .+ — Available/ }).click();
     // The restored workspace lands on alpha's recorded selection (the
-    // feature, not Overview — so no New feature button this time).
+    // feature, not the Supervisor page — "New feature" shows on both, so the
+    // selected row is the signal).
     await waitFor(
       async () => (await connectionState(handle!)).serverName === 'alpha',
       'alpha re-attach',
@@ -387,7 +388,7 @@ test("two-server switching: A→B→A restores each server's truth and selection
     // The creation sheet is window-modal, so the in-app switcher is not the
     // boundary a draft crosses: a server-level disconnect is. Alpha opens a
     // draft and gives it user-owned values first.
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await handle.page.getByRole('option', { name: 'Supervisor', exact: true }).click();
     await handle.page.getByRole('button', { name: 'New feature' }).click();
     const alphaSheet = handle.page.getByRole('dialog', { name: 'New feature' });
     await expect(alphaSheet).toBeVisible({ timeout: 30_000 });

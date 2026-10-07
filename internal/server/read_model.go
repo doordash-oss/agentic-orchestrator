@@ -57,12 +57,11 @@ const (
 // AskUserQuestion control request has no readable question of its own.
 const agentQuestionPrompt = "Agent has a question"
 
-// HelpQueue.Kind values. "question" and "input" both await the user; only
-// "coordinating" is a byproduct of a phase session parking between turns, which
-// no human needs to answer.
+// HelpQueue.Kind values. "question" awaits the user; "coordinating" is a
+// byproduct of a phase session parking between turns, which no human needs
+// to answer.
 const (
 	helpKindQuestion     = "question"
-	helpKindInput        = "input"
 	helpKindCoordinating = "coordinating"
 )
 
@@ -1632,24 +1631,17 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 			if sess == nil || sess.Status() != ports.SessionWaitingHelp || sessionHasPendingAskUserControl(sess) {
 				continue
 			}
-			// A chat session waiting between turns has delivered its reply and
-			// rests until the next message — clients surface that in the chat
-			// panel, not as blocking attention. A phase session in the same
-			// state is mid-coordination and needs no human.
-			// The supervisor's between-turn rest is its page's idle state,
-			// never an inbox entry.
+			// A phase session waiting between turns is mid-coordination and
+			// needs no human. The supervisor's between-turn rest is its
+			// page's idle state, never an inbox entry.
 			if sess.Kind() == ports.KindSupervisor {
 				continue
-			}
-			kind := helpKindCoordinating
-			if sess.Kind() == ports.KindChat {
-				kind = helpKindInput
 			}
 			help = append(help, orderedHelpQueue{
 				dto: HelpQueue{
 					FeatureID: sess.FeatureID(),
 					Question:  agentQuestionPrompt,
-					Kind:      kind,
+					Kind:      helpKindCoordinating,
 					Pending:   true,
 					Time:      sess.WaitingSince(),
 				},

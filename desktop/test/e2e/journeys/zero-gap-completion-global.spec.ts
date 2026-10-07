@@ -45,7 +45,7 @@ import {
   waitFor,
 } from '../helpers/world';
 
-test('zero-gap completion and global parity: diff, irreversible impact, AMA, recovery, and keyboard', async ({}, testInfo) => {
+test('zero-gap completion and global parity: diff, irreversible impact, recovery, and keyboard', async ({}, testInfo) => {
   test.setTimeout(300_000);
   const world = createWorld('zero-gap-completion-global', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
@@ -139,39 +139,35 @@ test('zero-gap completion and global parity: diff, irreversible impact, AMA, rec
     await handle.page.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
 
-    await handle.page.keyboard.press('Alt+Space');
-    const ama = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await expect(ama).toBeVisible();
-    await ama.getByRole('textbox', { name: 'Ask Agentico' }).fill('Summarize completion state.');
-    await ama.getByRole('button', { name: 'Send' }).click();
-    await expect(ama.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
-      timeout: 60_000,
-    });
-    await handle.page.keyboard.press('Alt+Space');
-    await expect(ama).toHaveCount(0);
-
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
-    const recovery = handle.page.getByRole('region', { name: 'Recovery workspace' });
+    // Recovery and Bulk share the Recovery sheet; the palette's Recovery
+    // command opens it over the feature page. ⌘K is ignored inside a text
+    // field, so drop whatever focus the closed palette handed back first.
+    await handle.page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await handle.page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');
+    await expect(palette).toBeVisible();
+    await palette.getByLabel('Search features and commands').fill('recovery');
+    await palette.getByRole('option', { name: 'Recovery', exact: true }).click();
+    await expect(palette).toHaveCount(0);
+    const recoverySheet = handle.page.getByRole('dialog', { name: 'Recovery', exact: true });
+    await expect(recoverySheet).toBeVisible();
+    const recovery = recoverySheet.getByRole('region', { name: 'Recovery workspace' });
     await expect(recovery).toBeVisible();
     await expect(recovery.getByRole('button', { name: 'Skip' })).toHaveCount(0);
-    const bulk = handle.page.getByRole('region', { name: 'Bulk resume and retry' });
+    const bulk = recoverySheet.getByRole('region', { name: 'Bulk resume and retry' });
     await bulk.getByRole('button', { name: 'Fresh preview' }).click();
     await expect(bulk.getByText(/No features are eligible/)).toBeVisible({
       timeout: 30_000,
     });
     await contractEvidenceShot(
       handle,
-      'global-attention-ama-panel-recovery-entry-and-bulk-action-status-remain-reachable-760x900',
+      'global-attention-recovery-entry-and-bulk-action-status-remain-reachable-760x900',
       760,
       900,
       'light',
     );
     persistAppLogs(handle, 'zero-gap-completion-global-app-server');
   } finally {
-    if (handle !== null) {
-      await handle.page.evaluate(() => window.agentico.endChat()).catch(() => {});
-      await closeApp(handle).catch(() => {});
-    }
+    if (handle !== null) await closeApp(handle).catch(() => {});
     await waitFor(() => !hasWorldProcesses(world.root), 'provider and server child reap', 10_000);
     await assertNoLeakedProcesses(world);
     destroyWorld(world);

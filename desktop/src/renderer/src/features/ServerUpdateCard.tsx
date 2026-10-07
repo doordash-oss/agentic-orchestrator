@@ -246,8 +246,9 @@ export function ServerUpdateCard({
             <h2 className="restart-prompt__title">Stop work and install now?</h2>
             <p className="restart-prompt__summary">
               The server sends stop requests before restarting into{' '}
-              <code>{state.targetVersion ?? state.latestVersion}</code>. Workflows and chat may be
-              interrupted if they do not stop cleanly; repository work blocks the install.
+              <code>{state.targetVersion ?? state.latestVersion}</code>. Workflows and the
+              supervisor may be interrupted if they do not stop cleanly; repository work blocks the
+              install.
             </p>
             <p className="restart-prompt__summary">
               {state.activeWorkSummary ?? 'Live work is rechecked before anything is stopped.'}

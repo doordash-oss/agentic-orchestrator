@@ -399,7 +399,7 @@ describe('ErrorSurface explain-in-chat slot', () => {
     }
   });
 
-  it('issues the routed request with autoSubmit, the reference, and the templated draft', async () => {
+  it('routes the templated draft and the reference to the supervisor without sending', async () => {
     const requestRoute = renderWithChat(
       <ErrorSurface
         error={FULL_ERROR}
@@ -410,10 +410,9 @@ describe('ErrorSurface explain-in-chat slot', () => {
     await user.click(screen.getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledTimes(1);
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft: `Explain the "${FULL_ERROR.title}" error (${FULL_ERROR.code}) on ${FEATURE_NAME} and what I should do next.`,
-      autoSubmit: true,
-      chatContext: RUN_REFERENCE,
+      errorReference: RUN_REFERENCE,
     });
   });
 
@@ -424,23 +423,21 @@ describe('ErrorSurface explain-in-chat slot', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft: `Explain the "${FULL_ERROR.title}" error (${FULL_ERROR.code}) and what I should do next.`,
-      autoSubmit: true,
-      chatContext: RUN_REFERENCE,
+      errorReference: RUN_REFERENCE,
     });
   });
 
-  it('carries no chatContext when the explain prop passes no reference', async () => {
+  it('carries no errorReference when the explain prop passes no reference', async () => {
     const requestRoute = renderWithChat(
       <ErrorSurface error={FULL_ERROR} explain={{ featureName: FEATURE_NAME }} />,
     );
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft: `Explain the "${FULL_ERROR.title}" error (${FULL_ERROR.code}) on ${FEATURE_NAME} and what I should do next.`,
-      autoSubmit: true,
     });
   });
 

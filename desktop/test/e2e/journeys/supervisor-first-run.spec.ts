@@ -27,6 +27,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
+  createFeatureViaForm,
   evidenceShot,
   launchApp,
   persistAppLogs,
@@ -47,6 +48,7 @@ import {
 
 const RUN_NAME = 'supervisor-first-run';
 const CHIP_LABEL = 'Claude Haiku · Default';
+const DETOUR_FEATURE = 'Detour feature';
 
 test('supervisor first run: choose a model, converse, approve inline, and stop a held turn', async ({}, testInfo) => {
   const transcript = new Transcript(RUN_NAME, 'Supervisor first-run tracer bullet journey');
@@ -66,16 +68,21 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     });
     transcript.step('app launched and reached the ready workspace');
 
-    transcript.section('The pinned Supervisor row opens the Supervisor page');
+    transcript.section('The pinned Supervisor row is home: first, selected and showing on launch');
     const rows = page.getByRole('listbox', { name: 'Features' }).getByRole('option');
-    await expect(rows.nth(0)).toHaveAccessibleName('Overview');
-    await expect(rows.nth(1)).toHaveAccessibleName('Supervisor');
-    await openSupervisor(page);
+    await expect(rows.nth(0)).toHaveAccessibleName('Supervisor');
+    await expect(rows.nth(0)).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('option', { name: 'Overview' })).toHaveCount(0);
+    // The sidebar footer no longer carries a separate Ask chip.
+    await expect(
+      page.locator('.sidebar__footer').getByRole('button', { name: /^Ask/ }),
+    ).toHaveCount(0);
+    await expect(supervisorPage(page)).toBeVisible();
     await expect(page.locator('.toolbar__title-name')).toHaveText('Supervisor');
     await expect(page.getByRole('button', { name: 'New feature' })).toBeVisible();
     await expect(conversation(page)).toContainText('Start a conversation with the supervisor.');
     await expect(status(page)).toHaveAttribute('data-lifecycle', 'stopped');
-    transcript.step('Supervisor row is second, after Overview, and shows the empty conversation');
+    transcript.step('Supervisor row is first and selected, and shows the empty conversation');
 
     transcript.section('Without settings Send is disabled behind the choose-a-model placeholder');
     await expect(composer(page)).toHaveAttribute(
@@ -105,20 +112,15 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(0);
     transcript.json('committed supervisor settings', committed.settings);
 
-    transcript.section('The committed choice survives a reload; Overview and Ask stay reachable');
+    transcript.section('The committed choice survives a reload, which lands back on Supervisor');
     await page.reload();
     await expect(page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
       timeout: 60_000,
     });
-    await expect(page.getByRole('option', { name: 'Overview' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Ask ⌥Space/ })).toBeVisible();
-    await openSupervisor(page);
+    await expect(supervisorRow(page)).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorPage(page)).toBeVisible();
     await expect(chip(page)).toHaveAccessibleName(CHIP_LABEL);
-    await page.getByRole('option', { name: 'Overview' }).click();
-    await expect(page.locator('.toolbar__title-name')).toHaveText('Overview');
-    await openSupervisor(page);
-    await expect(chip(page)).toHaveAccessibleName(CHIP_LABEL);
-    transcript.step(`chip still reads "${CHIP_LABEL}" after a reload and an Overview round trip`);
+    transcript.step(`chip still reads "${CHIP_LABEL}" after a reload`);
 
     await captureSupervisorDeltas(page);
 
@@ -160,9 +162,15 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     await evidenceShot(handle, 'supervisor-first-run-permission');
 
     // The inbox carries the same request under the Supervisor context and
-    // routes back to the Supervisor page from anywhere.
-    await page.getByRole('option', { name: 'Overview' }).click();
-    await expect(page.locator('.toolbar__title-name')).toHaveText('Overview');
+    // routes back to the Supervisor page from anywhere: open a feature (the
+    // only other page there is) while the request is pending. The feature is
+    // never started, so the provider still serves exactly one session.
+    await createFeatureViaForm(handle, {
+      name: DETOUR_FEATURE,
+      repoPatterns: [/supervisor-lab/],
+    });
+    await expect(page.locator('.toolbar__title-name')).toHaveText(DETOUR_FEATURE);
+    await expect(supervisorRow(page)).toHaveAttribute('aria-selected', 'false');
     const inbox = await openInbox(page);
     const inboxItem = inbox.getByRole('button', { name: /Supervisor/ });
     await expect(inboxItem).toHaveCount(1);
@@ -171,6 +179,7 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     await inboxItem.click();
     await expect(page.getByRole('complementary', { name: 'Attention inbox' })).toHaveCount(0);
     await expect(page.locator('.toolbar__title-name')).toHaveText('Supervisor');
+    await expect(supervisorRow(page)).toHaveAttribute('aria-selected', 'true');
     await expect(card).toBeVisible();
 
     await conversation(page).getByRole('button', { name: 'Allow once', exact: true }).click();
@@ -226,13 +235,9 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
   }
 });
 
-async function openSupervisor(page: Page): Promise<void> {
-  await page.getByRole('option', { name: 'Supervisor' }).click();
-  await expect(page.getByRole('option', { name: 'Supervisor' })).toHaveAttribute(
-    'aria-selected',
-    'true',
-  );
-  await expect(supervisorPage(page)).toBeVisible();
+/** The pinned first sidebar row; exact so a feature row naming the supervisor never matches. */
+function supervisorRow(page: Page): Locator {
+  return page.getByRole('option', { name: 'Supervisor', exact: true });
 }
 
 function supervisorPage(page: Page): Locator {

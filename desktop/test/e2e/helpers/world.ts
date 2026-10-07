@@ -81,6 +81,12 @@ export const SUPERVISOR_E2E_MARKERS = {
   hold: 'SUPERVISOR_E2E_HOLD',
 } as const;
 
+/**
+ * The heading the server's hidden error-context bundle opens with; the
+ * supervisorProvider stub logs each turn whose wire text carries it.
+ */
+export const SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING = 'Chat context';
+
 /** The deterministic reply the supervisorProvider stub commits for a turn (1-based). */
 export function supervisorStubReply(turn: number): string {
   return `Supervisor reply ${turn}`;
@@ -514,21 +520,6 @@ function writeStubCli(
           '    exit 0',
           '  fi',
           '}',
-          'case "$_agentico_prompt" in',
-          '  *"attention chat help"*)',
-          `    echo '{"type":"system","subtype":"init","session_id":"e2e-attention-chat"}'`,
-          `    echo '{"type":"result","subtype":"success","session_id":"e2e-attention-chat","total_cost_usd":0}'`,
-          `    printf 'chat-waiting\\n' >> "${providerInvocationLog}"`,
-          '    while :; do',
-          '      if IFS= read -r _help; then',
-          `      printf 'help-response:%s\\n' "$_help" >> "${providerInvocationLog}"`,
-          '        exit 0',
-          '      fi',
-          '      sleep 0.2',
-          '    done',
-          '    exit 0',
-          '    ;;',
-          'esac',
           `echo '{"type":"system","subtype":"init","session_id":"e2e-attention-session"}'`,
           `echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Attention fixture ready."}]}}'`,
           `emit_request '{"type":"control_request","request_id":"perm-allow-once","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"printf allow-once"}}}' "perm-allow-once"`,
@@ -568,7 +559,9 @@ function writeStubCli(
  * the same message id, and reports success; the permission marker blocks on
  * a Bash request until its control response arrives; the hold marker emits
  * nothing until the interrupt control request, then reports an interrupted
- * result. The process keeps reading stdin and exits cleanly on EOF.
+ * result. A turn whose wire text carries a hidden error-context bundle logs
+ * `hidden-context:<turn>`. The process keeps reading stdin and exits cleanly
+ * on EOF.
  */
 function supervisorStubLines(providerInvocationLog: string): string[] {
   const { permission, hold } = SUPERVISOR_E2E_MARKERS;
@@ -586,6 +579,11 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     'supervisor_turn() {',
     '  turn=$((turn + 1))',
     `  printf 'turn:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '  case "$1" in',
+    `    *'${SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING}'*)`,
+    `      printf 'hidden-context:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      ;;',
+    '  esac',
     '  case "$1" in',
     `    *${permission}*)`,
     `      printf '{"type":"control_request","request_id":"supervisor-perm-%s","request":{"subtype":"can_use_tool","tool_name":"Bash","input":${permissionInput}}}\\n' "$turn"`,

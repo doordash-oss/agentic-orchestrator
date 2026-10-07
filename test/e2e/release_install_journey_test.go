@@ -244,13 +244,15 @@ func (f *releaseServeFixture) publishRelease(t *testing.T, spec releaseServeSpec
 }
 
 // releaseEnvelopeJSON builds the desktop-shaped release envelope, optionally
-// advertising the typed server contract.
+// advertising the typed server contract. The advertised contract matches
+// the running server's series so the candidate stays installable.
 func releaseEnvelopeJSON(t *testing.T, version string, withContract bool) []byte {
 	t.Helper()
 	contract := ""
 	if withContract {
-		contract = `,
-  "server_contract": {"api_version": 1, "schema_version": 1, "min_client_schema": 1}`
+		contract = fmt.Sprintf(`,
+  "server_contract": {"api_version": 1, "schema_version": %d, "min_client_schema": %d}`,
+			server.CompatibilitySchemaVersion, server.CompatibilityMinClientSchema)
 	}
 	return []byte(fmt.Sprintf(`{
   "schema_version": 1,

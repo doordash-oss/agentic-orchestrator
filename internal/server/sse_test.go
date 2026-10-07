@@ -268,7 +268,7 @@ func TestEventBrokerThrottlesSessionOutputActivity(t *testing.T) {
 // event carries the resource identity of the event that couldn't be
 // delivered — not a generic runtime marker. A generic marker only triggers a
 // Health-only refetch client-side (see client_sse.go's dispatch), which can
-// permanently strand a session (e.g. the AMA chat session waiting on a
+// permanently strand a session (e.g. a phase session waiting on a
 // completion event) that never gets another event of its own to retrigger a
 // real refresh.
 func TestEventBrokerCoalescedMarkerCarriesTriggeringResource(t *testing.T) {
@@ -286,7 +286,7 @@ func TestEventBrokerCoalescedMarkerCarriesTriggeringResource(t *testing.T) {
 
 	triggering := SSEEvent{
 		Kind:     sseEventSessionUpdated,
-		Resource: Resource{Type: resourceTypeSession, ID: ChatSessionID, FeatureID: "some-feature"},
+		Resource: Resource{Type: resourceTypeSession, ID: "sess-waiting", FeatureID: "some-feature"},
 	}
 	b.publish(triggering)
 	<-ch

@@ -88,7 +88,7 @@ test('attention inbox is keyboard reachable and restores focus to the bell', asy
     await setWindowSize(handle, 1280, 900);
     await bell.click();
     await expect(inbox).toBeVisible();
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await handle.page.getByRole('option', { name: 'Supervisor', exact: true }).click();
     await expect(inbox).toHaveCount(0);
 
     transcript.step(

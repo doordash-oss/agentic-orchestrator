@@ -21,7 +21,7 @@ import { ServerUpdateService, describeActiveWork, projectServerUpdate } from '..
 
 const IDLE_SUMMARY = {
   feature_count: 0,
-  chat_active: false,
+  supervisor_active: false,
   clone_count: 0,
   upload_count: 0,
   origin_check_count: 0,
@@ -72,7 +72,7 @@ describe('projectServerUpdate', () => {
         stop_active_work: false,
         target_version: '2.0.0',
         scheduled_for: '2026-09-17T01:00:00Z',
-        active_work_summary: { ...IDLE_SUMMARY, feature_count: 2, chat_active: true },
+        active_work_summary: { ...IDLE_SUMMARY, feature_count: 2, supervisor_active: true },
       }),
     );
     expect(state).toMatchObject({
@@ -84,7 +84,7 @@ describe('projectServerUpdate', () => {
       method: 'idle',
       stopActiveWork: false,
       scheduledFor: '2026-09-17T01:00:00Z',
-      activeWorkSummary: '2 features and chat active on the server.',
+      activeWorkSummary: '2 features and the supervisor active on the server.',
     });
     expect(projectServerUpdate(snapshot())).not.toHaveProperty('scheduledFor');
   });
@@ -108,6 +108,9 @@ describe('describeActiveWork', () => {
     expect(describeActiveWork(IDLE_SUMMARY)).toBeUndefined();
     expect(describeActiveWork({ ...IDLE_SUMMARY, feature_count: 1 })).toBe(
       '1 feature active on the server.',
+    );
+    expect(describeActiveWork({ ...IDLE_SUMMARY, supervisor_active: true })).toBe(
+      'The supervisor active on the server.',
     );
     expect(describeActiveWork({ ...IDLE_SUMMARY, clone_count: 1, upload_count: 2 })).toBe(
       '3 repository operations active on the server.',

@@ -168,6 +168,18 @@ describe('application menu structure', () => {
     expect(item?.registerAccelerator).toBe(false);
   });
 
+  it('lists Recovery in Navigate beside Bulk Resume / Retry, with no accelerator', () => {
+    const navigate = submenuOf(
+      buildApplicationMenuTemplate(deps(disabledMainWindowUiState())),
+      'Navigate',
+    );
+    const ids = navigate.map((item) => item.id);
+    expect(ids.indexOf('global.recovery')).toBe(ids.indexOf('global.bulk') - 1);
+    const recovery = navigate.find((item) => item.id === 'global.recovery');
+    expect(recovery?.label).toBe('Recovery');
+    expect(recovery?.accelerator).toBeUndefined();
+  });
+
   it('lists the fifteen feature verbs in catalogue order', () => {
     const feature = submenuOf(
       buildApplicationMenuTemplate(deps(disabledMainWindowUiState())),
@@ -267,6 +279,8 @@ describe('application menu dispatch', () => {
       ['global.home', 'home'],
       ['global.switch-server', 'switch-server'],
       ['global.attention', 'attention'],
+      ['global.recovery', 'recovery'],
+      ['global.bulk', 'bulk'],
     ] as const) {
       route.mockClear();
       itemById(template, id)?.click?.(undefined as never, undefined as never, undefined as never);

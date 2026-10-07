@@ -78,7 +78,7 @@ func TestCoordinator_SettingsLockedWhileProcessExistsAndInvalidChoicesRejected(t
 		t.Fatalf("unsupported effort err = %v, want SettingsInvalidError", err)
 	}
 	chooseSettings(t, c)
-	if _, err := c.Send(context.Background(), "hi", "cm-1"); err != nil {
+	if _, err := c.Send(context.Background(), "hi", "", "cm-1"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.UpdateSettings(Settings{Harness: "claude", Model: "sonnet"}); !errors.Is(err, ErrSettingsLocked) {
@@ -95,7 +95,7 @@ func TestCoordinator_SettingsLockedWhileProcessExistsAndInvalidChoicesRejected(t
 func TestCoordinator_SendWithoutSettingsIsRefusedAndAppendsNothing(t *testing.T) {
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher)
-	if _, err := c.Send(context.Background(), "hi", "cm-1"); !errors.Is(err, ErrSettingsRequired) {
+	if _, err := c.Send(context.Background(), "hi", "", "cm-1"); !errors.Is(err, ErrSettingsRequired) {
 		t.Fatalf("err = %v, want ErrSettingsRequired", err)
 	}
 	if c.State().HeadSeq != 0 || launcher.launchCount() != 0 {
@@ -120,7 +120,7 @@ func TestCoordinator_ConcurrentSendsOnStoppedConversationStartOneProcessInArriva
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			res, err := c.Send(context.Background(), fmt.Sprintf("msg-%d", i), fmt.Sprintf("cm-%d", i))
+			res, err := c.Send(context.Background(), fmt.Sprintf("msg-%d", i), "", fmt.Sprintf("cm-%d", i))
 			results[i] = outcome{res, err}
 		}()
 	}
@@ -130,7 +130,7 @@ func TestCoordinator_ConcurrentSendsOnStoppedConversationStartOneProcessInArriva
 	go func() {
 		defer wg.Done()
 		waitFor(t, "first joiner", func() bool { return joinerCount(c) > 0 })
-		if _, err := c.Send(context.Background(), "msg-0", "cm-0"); err != nil {
+		if _, err := c.Send(context.Background(), "msg-0", "", "cm-0"); err != nil {
 			t.Errorf("duplicate joiner: %v", err)
 		}
 	}()
@@ -196,11 +196,11 @@ func TestCoordinator_TurnStreamsDeltasCommitsAssistantAndReturnsIdle(t *testing.
 	}
 	defer c.Unsubscribe(sub)
 
-	res, err := c.Send(context.Background(), "hello", "cm-1")
+	res, err := c.Send(context.Background(), "hello", "", "cm-1")
 	if err != nil || !res.Launched || res.Record.Kind != KindUser {
 		t.Fatalf("send = %+v, %v", res, err)
 	}
-	if _, err := c.Send(context.Background(), "again", "cm-2"); !errors.Is(err, ErrTurnActive) {
+	if _, err := c.Send(context.Background(), "again", "", "cm-2"); !errors.Is(err, ErrTurnActive) {
 		t.Fatalf("send while running err = %v, want ErrTurnActive", err)
 	}
 	sess := launcher.session(0)
@@ -249,7 +249,7 @@ func TestCoordinator_TurnStreamsDeltasCommitsAssistantAndReturnsIdle(t *testing.
 		t.Fatalf("transcript kinds = %v (deltas must not persist)", kinds)
 	}
 	// The idle process is reused by the next send.
-	if res, err := c.Send(context.Background(), "second", "cm-3"); err != nil || res.Launched {
+	if res, err := c.Send(context.Background(), "second", "", "cm-3"); err != nil || res.Launched {
 		t.Fatalf("second send = %+v, %v", res, err)
 	}
 	if launcher.launchCount() != 1 || fmt.Sprint(sess.Sent()) != "[hello second]" {
@@ -261,11 +261,11 @@ func TestCoordinator_RepeatedClientMessageIDReturnsCommittedRecord(t *testing.T)
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher)
 	chooseSettings(t, c)
-	first, err := c.Send(context.Background(), "hello", "cm-1")
+	first, err := c.Send(context.Background(), "hello", "", "cm-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := c.Send(context.Background(), "hello", "cm-1")
+	again, err := c.Send(context.Background(), "hello", "", "cm-1")
 	if err != nil || again.Record.Seq != first.Record.Seq || again.Launched {
 		t.Fatalf("repeat = %+v, %v", again, err)
 	}
@@ -278,13 +278,13 @@ func TestCoordinator_RelaunchUsesNewGenerationAndRejectsRetiredOutput(t *testing
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher)
 	chooseSettings(t, c)
-	if _, err := c.Send(context.Background(), "one", "cm-1"); err != nil {
+	if _, err := c.Send(context.Background(), "one", "", "cm-1"); err != nil {
 		t.Fatal(err)
 	}
 	launcher.session(0).emit(successResult())
 	waitLifecycle(t, c, LifecycleIdle)
 	c.End()
-	if _, err := c.Send(context.Background(), "two", "cm-2"); err != nil {
+	if _, err := c.Send(context.Background(), "two", "", "cm-2"); err != nil {
 		t.Fatal(err)
 	}
 	st := c.State()
@@ -320,7 +320,7 @@ func TestCoordinator_LaunchFailureCommitsNothingAndNextSendRelaunches(t *testing
 			}
 			c := newTestCoordinator(t, t.TempDir(), launcher)
 			chooseSettings(t, c)
-			_, err := c.Send(context.Background(), "hello", "cm-1")
+			_, err := c.Send(context.Background(), "hello", "", "cm-1")
 			var failed *LaunchFailedError
 			if !errors.As(err, &failed) {
 				t.Fatalf("err = %v, want LaunchFailedError", err)
@@ -332,7 +332,7 @@ func TestCoordinator_LaunchFailureCommitsNothingAndNextSendRelaunches(t *testing
 			launcher.mu.Lock()
 			launcher.exitBeforeHandshake = false
 			launcher.mu.Unlock()
-			res, err := c.Send(context.Background(), "hello", "cm-1")
+			res, err := c.Send(context.Background(), "hello", "", "cm-1")
 			if err != nil || !res.Launched || res.Record.Generation != 2 {
 				t.Fatalf("retry send = %+v, %v", res, err)
 			}
@@ -345,7 +345,7 @@ func TestCoordinator_HandshakeTimeoutFailsLaunch(t *testing.T) {
 	c := newTestCoordinator(t, t.TempDir(), launcher, func(o *Options) { o.HandshakeTimeout = 50 * time.Millisecond })
 	chooseSettings(t, c)
 	var failed *LaunchFailedError
-	if _, err := c.Send(context.Background(), "hello", "cm-1"); !errors.As(err, &failed) {
+	if _, err := c.Send(context.Background(), "hello", "", "cm-1"); !errors.As(err, &failed) {
 		t.Fatalf("err = %v, want LaunchFailedError", err)
 	}
 	if launcher.session(0).Stops() == 0 {
@@ -357,7 +357,7 @@ func TestCoordinator_UncleanExitStopsWithFailedOutcome(t *testing.T) {
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher)
 	chooseSettings(t, c)
-	if _, err := c.Send(context.Background(), "hello", "cm-1"); err != nil {
+	if _, err := c.Send(context.Background(), "hello", "", "cm-1"); err != nil {
 		t.Fatal(err)
 	}
 	launcher.session(0).exit(ports.SessionFailed)
@@ -373,7 +373,7 @@ func TestCoordinator_PermissionRequestSurfacesAndAnswerResumesTurn(t *testing.T)
 	chooseSettings(t, c)
 	sub, _ := c.Subscribe(0, false, "")
 	defer c.Unsubscribe(sub)
-	if _, err := c.Send(context.Background(), "run ls", "cm-1"); err != nil {
+	if _, err := c.Send(context.Background(), "run ls", "", "cm-1"); err != nil {
 		t.Fatal(err)
 	}
 	sess := launcher.session(0)
@@ -442,7 +442,7 @@ func TestCoordinator_InterruptReturnsAtOnceAndIdlesOnlyAfterResult(t *testing.T)
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher, func(o *Options) { o.InterruptGrace = time.Minute })
 	chooseSettings(t, c)
-	if _, err := c.Send(context.Background(), "long task", "cm-1"); err != nil {
+	if _, err := c.Send(context.Background(), "long task", "", "cm-1"); err != nil {
 		t.Fatal(err)
 	}
 	sess := launcher.session(0)
@@ -465,7 +465,7 @@ func TestCoordinator_InterruptIgnoredTerminatesAfterGrace(t *testing.T) {
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher, func(o *Options) { o.InterruptGrace = 50 * time.Millisecond })
 	chooseSettings(t, c)
-	if _, err := c.Send(context.Background(), "stubborn", "cm-1"); err != nil {
+	if _, err := c.Send(context.Background(), "stubborn", "", "cm-1"); err != nil {
 		t.Fatal(err)
 	}
 	c.Interrupt()
@@ -482,7 +482,7 @@ func TestCoordinator_EndKeepsTranscriptAndSettings(t *testing.T) {
 	if result, _ := c.End(); result != ActionNotActive {
 		t.Fatalf("End with no process = %s", result)
 	}
-	if _, err := c.Send(context.Background(), "hello", "cm-1"); err != nil {
+	if _, err := c.Send(context.Background(), "hello", "", "cm-1"); err != nil {
 		t.Fatal(err)
 	}
 	launcher.session(0).emit(assistantText("m", "hi"))
@@ -511,7 +511,7 @@ func TestCoordinator_ClosedAdmissionRefusesLaunchAndBusyTracksLifecycle(t *testi
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := c.Send(context.Background(), "hello", "cm-1")
+		_, err := c.Send(context.Background(), "hello", "", "cm-1")
 		done <- err
 	}()
 	waitFor(t, "starting", func() bool { return c.State().Lifecycle == LifecycleStarting })
@@ -537,7 +537,7 @@ func TestCoordinator_ClosedAdmissionRefusesLaunchAndBusyTracksLifecycle(t *testi
 	if !admission.CloseIfQuiesced() {
 		t.Fatal("admission did not close")
 	}
-	_, err := c.Send(context.Background(), "again", "cm-2")
+	_, err := c.Send(context.Background(), "again", "", "cm-2")
 	if _, ok := workadmission.AsClosed(err); !ok {
 		t.Fatalf("send during closed admission err = %v, want ClosedError", err)
 	}
@@ -550,7 +550,7 @@ func TestCoordinator_SubscribeReplaysAfterCursorAndResetsOnBadCursor(t *testing.
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher)
 	chooseSettings(t, c)
-	if _, err := c.Send(context.Background(), "one", "cm-1"); err != nil {
+	if _, err := c.Send(context.Background(), "one", "", "cm-1"); err != nil {
 		t.Fatal(err)
 	}
 	launcher.session(0).emit(assistantText("a", "reply one"))
@@ -579,5 +579,90 @@ func TestCoordinator_SubscribeReplaysAfterCursorAndResetsOnBadCursor(t *testing.
 		if !sub.Reset {
 			t.Fatalf("%s: subscription not reset", name)
 		}
+	}
+}
+
+func TestCoordinator_HiddenContextReachesHarnessOnLaunchAndLiveSendsButNotTranscript(t *testing.T) {
+	gate := make(chan struct{})
+	launcher := &fakeLauncher{gate: gate}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := c.Send(context.Background(), "explain the failure", "BUNDLE-LAUNCH", "cm-1"); err != nil {
+			t.Errorf("initiator: %v", err)
+		}
+	}()
+	waitFor(t, "initiator", func() bool { return joinerCount(c) == 1 })
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := c.Send(context.Background(), "and this one", "BUNDLE-JOINED", "cm-2"); err != nil {
+			t.Errorf("joiner: %v", err)
+		}
+	}()
+	waitFor(t, "joiner", func() bool { return joinerCount(c) == 2 })
+	close(gate)
+	wg.Wait()
+
+	sess := launcher.session(0)
+	if got := fmt.Sprint(sess.Sent()); got != "[explain the failure and this one]" {
+		t.Fatalf("launch deliveries = %s", got)
+	}
+	if got := fmt.Sprint(sess.Hidden()); got != "[BUNDLE-LAUNCH BUNDLE-JOINED]" {
+		t.Fatalf("launch hidden context = %s", got)
+	}
+	sess.emit(successResult())
+	sess.emit(successResult())
+	waitLifecycle(t, c, LifecycleIdle)
+
+	if _, err := c.Send(context.Background(), "follow up", "BUNDLE-LIVE", "cm-3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Send(context.Background(), "follow up", "BUNDLE-LIVE", "cm-3"); err != nil {
+		t.Fatalf("repeat: %v", err)
+	}
+	if got := fmt.Sprint(sess.Hidden()); got != "[BUNDLE-LAUNCH BUNDLE-JOINED BUNDLE-LIVE]" {
+		t.Fatalf("hidden context after live send = %s", got)
+	}
+	page, err := c.Transcript(PageQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, rec := range page.Items {
+		if strings.Contains(string(rec.Data), "BUNDLE") {
+			t.Fatalf("hidden context reached the transcript: %s", rec.Data)
+		}
+		var data UserData
+		_ = json.Unmarshal(rec.Data, &data)
+		texts = append(texts, data.Text)
+	}
+	if got := strings.Join(texts, "|"); got != "explain the failure|and this one|follow up" {
+		t.Fatalf("committed user texts = %q", got)
+	}
+}
+
+func TestCoordinator_HiddenContextOnIncapableSessionIsRefusedBeforeCommit(t *testing.T) {
+	launcher := &fakeLauncher{plain: true}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+
+	if _, err := c.Send(context.Background(), "explain", "BUNDLE", "cm-1"); !errors.Is(err, ErrHiddenContextUnsupported) {
+		t.Fatalf("launch send err = %v, want ErrHiddenContextUnsupported", err)
+	}
+	waitLifecycle(t, c, LifecycleIdle)
+	if head := c.State().HeadSeq; head != 0 {
+		t.Fatalf("refused launch send appended: head=%d", head)
+	}
+	if _, err := c.Send(context.Background(), "explain", "BUNDLE", "cm-2"); !errors.Is(err, ErrHiddenContextUnsupported) {
+		t.Fatalf("live send err = %v, want ErrHiddenContextUnsupported", err)
+	}
+	st := c.State()
+	if st.HeadSeq != 0 || st.Lifecycle != LifecycleIdle || len(launcher.session(0).Sent()) != 0 {
+		t.Fatalf("refused live send changed state: %+v sent=%v", st, launcher.session(0).Sent())
 	}
 }

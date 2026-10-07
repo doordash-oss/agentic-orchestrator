@@ -43,6 +43,7 @@ import {
   SupervisorStateSchema,
   SupervisorTranscriptPageSchema,
   SupervisorTranscriptRequestSchema,
+  type ErrorReference,
   type SupervisorActionResult,
   type SupervisorMessageRequest,
   type SupervisorMessageResult,
@@ -65,6 +66,23 @@ export interface SupervisorServiceDeps {
   identity?: ServerIdentitySource;
   /** Mints the per-send idempotency key; defaults to a random UUID. */
   makeClientMessageId?: () => string;
+}
+
+/**
+ * Re-serializes an error-home reference to the server's snake_case wire
+ * shape. The server rejects unknown fields and empty-string keys, so only the
+ * fields the reference actually carries cross the wire.
+ */
+export function toWireErrorReference(reference: ErrorReference): Record<string, string> {
+  return {
+    scope: reference.scope,
+    code: reference.code,
+    ...(reference.featureId === undefined ? {} : { feature_id: reference.featureId }),
+    ...(reference.repository === undefined ? {} : { repository: reference.repository }),
+    ...(reference.taskKey === undefined ? {} : { task_key: reference.taskKey }),
+    ...(reference.snapshotId === undefined ? {} : { snapshot_id: reference.snapshotId }),
+    ...(reference.key === undefined ? {} : { key: reference.key }),
+  };
 }
 
 /** Maps the wire state read model to the renderer shape. */
@@ -185,7 +203,13 @@ export class SupervisorService {
     }
     const body = await this.request('/api/v1/supervisor/messages', {
       method: 'POST',
-      body: { text: input.text, client_message_id: clientMessageId },
+      body: {
+        text: input.text,
+        client_message_id: clientMessageId,
+        ...(input.errorReference === undefined
+          ? {}
+          : { error_reference: toWireErrorReference(input.errorReference) }),
+      },
     });
     const response = validateWithSchema(body, SupervisorMessageResponseSchema);
     return validateWithSchema(

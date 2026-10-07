@@ -92,6 +92,32 @@ describe('command catalogue parity', () => {
     ]);
   });
 
+  it('labels the ⌘1 home command "Supervisor", keeping its id, accelerator and home target', () => {
+    expect(commandById('global.home')).toEqual({
+      id: 'global.home',
+      label: 'Supervisor',
+      group: 'navigation',
+      accelerator: 'CommandOrControl+1',
+      target: 'home',
+      paletteVisible: true,
+    });
+    expect(paletteEntryIds()).toContain('global.home');
+  });
+
+  it('offers Recovery as a palette-visible navigation command with no accelerator', () => {
+    const recovery = commandById('global.recovery');
+    expect(recovery).toEqual({
+      id: 'global.recovery',
+      label: 'Recovery',
+      group: 'navigation',
+      target: 'recovery',
+      paletteVisible: true,
+    });
+    expect(paletteEntryIds()).toContain('global.recovery');
+    // ⌘⇧B keeps opening the same sheet through the bulk route.
+    expect(commandById('global.bulk').target).toBe('bulk');
+  });
+
   it('maps every feature command onto its server action, except the local editor', () => {
     expect(featureActionId('feature.pause-stop')).toBe('pause-stop');
     expect(featureActionId('feature.review-feedback')).toBe('review-feedback');
@@ -111,7 +137,7 @@ describe('accelerator regression', () => {
     ['global.home', 'CommandOrControl+1'],
     ['global.settings', 'CommandOrControl+,'],
     ['global.attention', 'CommandOrControl+Shift+A'],
-    ['global.ama', 'CommandOrControl+Shift+M'],
+    ['global.message-supervisor', 'CommandOrControl+Shift+M'],
     ['global.bulk', 'CommandOrControl+Shift+B'],
     ['global.quit', 'CommandOrControl+Q'],
     ['global.close-window', 'CommandOrControl+W'],

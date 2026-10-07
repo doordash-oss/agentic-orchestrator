@@ -19,11 +19,9 @@ limitations under the License.
  * selection, the roving-tabindex Arrow/Home/End keyboard model (scoped to
  * whatever a lane's `<details>` disclosure currently shows), ⌘2-9 absolute
  * sidebar-position selection (reachable even inside a collapsed lane, unlike
- * Arrow/Home/End), the sidebar-toggle button and ⌘⌃S collapse paths, and the
- * ~700px auto-collapse breakpoint. ⌘1 itself is out of scope here — it only
- * renamed the existing "Home" label to "Overview"; the dispatch path
- * (native menu accelerator → routeRequest) is unchanged and already covered
- * elsewhere.
+ * Arrow/Home/End), ⌘1 going home to the pinned Supervisor row (the first
+ * row, selected on launch, and never counted by ⌘2-9), the sidebar-toggle
+ * button and ⌘⌃S collapse paths, and the ~700px auto-collapse breakpoint.
  */
 import { expect, test } from '@playwright/test';
 import {
@@ -57,6 +55,17 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
       timeout: 60_000,
     });
     transcript.step('app launched and reached the ready workspace');
+
+    transcript.section('The pinned Supervisor row is first and selected on launch');
+    const listbox = handle.page.getByRole('listbox', { name: 'Features' });
+    const rows = listbox.getByRole('option');
+    const supervisorRow = rows.nth(0);
+    const supervisorPage = handle.page.getByRole('region', { name: 'Supervisor', exact: true });
+    await expect(supervisorRow).toHaveAccessibleName('Supervisor');
+    await expect(supervisorRow).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorPage).toBeVisible();
+    await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveCount(0);
+    transcript.step('Supervisor is the only pinned row, first and selected, its page mounted');
 
     transcript.section('Resize the sidebar with pointer and keyboard');
     const divider = handle.page.getByRole('separator', { name: 'Resize sidebar' });
@@ -100,8 +109,9 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
         repoPatterns: [/sidebar-lab/],
         waitForReady: true,
       });
-      // Back to Overview so "New feature" is reachable for the next one.
-      await handle.page.getByRole('option', { name: 'Overview' }).click();
+      // "New feature" stays in the toolbar on the feature page just opened,
+      // so the next creation starts from right here.
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
     }
     const atRestGroup = handle.page.getByRole('group', { name: 'At rest' });
     await expect(atRestGroup).toBeVisible();
@@ -111,68 +121,58 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
     transcript.step('three features created, all grouped under At rest');
 
     transcript.section('Pointer selection switches the mounted content');
-    const overviewRow = handle.page.getByRole('option', { name: 'Overview' });
-    const rows = handle.page.getByRole('listbox', { name: 'Features' }).getByRole('option');
-    // Overview + the pinned Supervisor row + the three created features.
-    await expect(rows).toHaveCount(5);
+    // The pinned Supervisor row + the three created features — no Overview.
+    await expect(rows).toHaveCount(4);
     // The row's bare name only — at-rest rows also carry a status sub-line
     // ("Code ready") in the same option, which a full textContent read
     // would otherwise glue onto the name.
-    const rowNames = await handle.page
-      .getByRole('listbox', { name: 'Features' })
-      .locator('.sidebar__row-name')
-      .allTextContents();
-    // Visual/DOM order: Overview, the pinned Supervisor row, then the three
-    // features in lane order.
-    expect(rowNames[0]).toBe('Overview');
-    expect(rowNames[1]).toBe('Supervisor');
-    const [, , firstName, secondName, thirdName] = rowNames as [
-      string,
-      string,
-      string,
-      string,
-      string,
-    ];
-    const supervisorRow = rows.nth(1);
-    const supervisorPage = handle.page.getByRole('region', { name: 'Supervisor', exact: true });
+    const rowNames = await listbox.locator('.sidebar__row-name').allTextContents();
+    // Visual/DOM order: the pinned Supervisor row, then the three features in
+    // lane order.
+    expect(rowNames[0]).toBe('Supervisor');
+    const [, firstName, secondName, thirdName] = rowNames as [string, string, string, string];
 
-    await rows.nth(2).click();
+    await rows.nth(1).click();
     await expect(handle.page.getByLabel(`Feature ${firstName}`)).toBeVisible({ timeout: 15_000 });
-    await expect(rows.nth(2)).toHaveAttribute('aria-selected', 'true');
-    await expect(overviewRow).toHaveAttribute('aria-selected', 'false');
-    transcript.step(`clicking "${firstName}" mounted its cockpit`);
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorRow).toHaveAttribute('aria-selected', 'false');
+    await expect(supervisorPage).toHaveCount(0);
+    transcript.step(`clicking "${firstName}" mounted its cockpit in place of the Supervisor page`);
 
     transcript.section('Arrow/Home/End move focus and selection together through visible rows');
-    await overviewRow.click();
-    await expect(overviewRow).toHaveAttribute('aria-selected', 'true');
-    await overviewRow.focus();
-
-    await handle.page.keyboard.press('ArrowDown');
-    await expect(supervisorRow).toBeFocused();
+    await supervisorRow.click();
     await expect(supervisorRow).toHaveAttribute('aria-selected', 'true');
     await expect(supervisorPage).toBeVisible({ timeout: 15_000 });
+    await supervisorRow.focus();
 
     await handle.page.keyboard.press('ArrowDown');
-    await expect(rows.nth(2)).toBeFocused();
-    await expect(rows.nth(2)).toHaveAttribute('aria-selected', 'true');
+    await expect(rows.nth(1)).toBeFocused();
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true');
     await expect(supervisorRow).toHaveAttribute('aria-selected', 'false');
     await expect(handle.page.getByLabel(`Feature ${firstName}`)).toBeVisible({ timeout: 15_000 });
 
     await handle.page.keyboard.press('ArrowDown');
-    await expect(rows.nth(3)).toBeFocused();
-    await expect(rows.nth(3)).toHaveAttribute('aria-selected', 'true');
+    await expect(rows.nth(2)).toBeFocused();
+    await expect(rows.nth(2)).toHaveAttribute('aria-selected', 'true');
     await expect(handle.page.getByLabel(`Feature ${secondName}`)).toBeVisible({ timeout: 15_000 });
 
     await handle.page.keyboard.press('End');
-    await expect(rows.nth(4)).toBeFocused();
-    await expect(rows.nth(4)).toHaveAttribute('aria-selected', 'true');
+    await expect(rows.nth(3)).toBeFocused();
+    await expect(rows.nth(3)).toHaveAttribute('aria-selected', 'true');
     await expect(handle.page.getByLabel(`Feature ${thirdName}`)).toBeVisible({ timeout: 15_000 });
 
     await handle.page.keyboard.press('Home');
-    await expect(overviewRow).toBeFocused();
-    await expect(overviewRow).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorRow).toBeFocused();
+    await expect(supervisorRow).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorPage).toBeVisible({ timeout: 15_000 });
+
+    // ArrowUp from the first row wraps to the last, so the Supervisor row is
+    // inside the roving cycle in both directions.
+    await handle.page.keyboard.press('ArrowUp');
+    await expect(rows.nth(3)).toBeFocused();
+    await expect(rows.nth(3)).toHaveAttribute('aria-selected', 'true');
     transcript.step(
-      'ArrowDown (through the pinned Supervisor row)/End/Home moved focus and the mounted content together',
+      'ArrowDown/End/Home/ArrowUp moved focus and the mounted content together, Supervisor row included',
     );
 
     transcript.section(
@@ -192,11 +192,25 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
       `⌘2 and ⌘4 selected "${firstName}" and "${thirdName}" while their lane stayed collapsed`,
     );
 
+    // ⌘1 is a native-menu accelerator (Navigate ▸ Supervisor), which a
+    // synthetic renderer key event never reaches, so it is driven through the
+    // real menu item the accelerator fires.
+    const home = await handle.app.evaluate(({ BrowserWindow, Menu }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('global.home');
+      if (item == null) throw new Error('menu item global.home missing');
+      item.click(undefined, BrowserWindow.getAllWindows()[0], undefined);
+      return { label: item.label, accelerator: item.accelerator ?? null };
+    });
+    expect(home).toEqual({ label: 'Supervisor', accelerator: 'CommandOrControl+1' });
+    await expect(supervisorRow).toHaveAttribute('aria-selected', 'true', { timeout: 15_000 });
+    await expect(supervisorPage).toBeVisible({ timeout: 15_000 });
+    await expect(handle.page.getByLabel(`Feature ${thirdName}`)).toHaveCount(0);
+    transcript.step('⌘1 (Navigate ▸ Supervisor) went home to the Supervisor page');
+
     await handle.page.locator('summary.sidebar__lane-summary', { hasText: 'At rest' }).click();
     await expect(atRestGroup).toBeVisible();
 
     transcript.section('The toolbar sidebar-toggle button collapses and persists the choice');
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
     // A raw CSS locator, not getByRole: `.sidebar[data-collapsed='true']` sets
     // `display: none` (app.css), which removes the element from the
     // accessibility tree entirely — a role-based locator would stop

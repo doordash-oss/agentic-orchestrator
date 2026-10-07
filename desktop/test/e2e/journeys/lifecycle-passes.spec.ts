@@ -87,9 +87,9 @@ test('lifecycle passes: resume, retry, restart, rebase, refactor child', async (
     transcript.step('seeded feature to Published status so pass actions are enabled');
 
     handle = await launchApp(world, testInfo, { traceName: 'lifecycle-passes-seeded' });
-    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
-    await overviewOption.click();
+    const supervisorOption = handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+    await expect(supervisorOption).toBeVisible({ timeout: 60_000 });
+    await supervisorOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });

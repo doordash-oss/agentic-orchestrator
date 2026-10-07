@@ -183,7 +183,7 @@ export const ServerHelpQueueSchema = z.object({
   feature_id: AttentionIDSchema,
   session_id: AttentionIDSchema.optional(),
   question: AttentionTextSchema,
-  /** 'question' for real help requests, 'input' for a synthetic idle-session entry. */
+  /** 'question' for real help requests, 'coordinating' for a synthetic idle-session entry. */
   kind: z.string().max(100).optional(),
   pending: z.boolean(),
   time: z.string().max(100).optional(),

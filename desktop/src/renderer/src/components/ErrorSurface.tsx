@@ -90,10 +90,11 @@ export interface ErrorSurfaceProps {
   /** Forwarded to the root div when a host focuses it programmatically. */
   rootTabIndex?: number;
   /**
-   * Explain-in-chat wiring: the durable home of the error (as a chat context
-   * reference the server resolves) and the feature name the question names.
-   * Both are optional — response-only cards pass neither and the question
-   * stands on the card's own title and code. A card that carries a reference
+   * Explain-in-chat wiring: the durable home of the error (as an error
+   * reference the server resolves into the supervisor's hidden context) and
+   * the feature name the question names. Both are optional — response-only
+   * cards pass neither and the question stands on the card's own title and
+   * code. A card that carries a reference
    * is a durable error: its root registers in the owner-card registry and
    * stays programmatically focusable, so presence surfaces can link to it.
    */
@@ -378,11 +379,12 @@ export function ErrorSurface({
           className="error-surface__explain"
           onClick={() => {
             const featureClause = explain?.featureName != null ? ` on ${explain.featureName}` : '';
+            // Drafts into the Supervisor composer unsent: the person reads,
+            // edits, and sends it; the reference rides hidden with the send.
             explainRequest({
-              target: 'ama',
+              target: 'supervisor',
               draft: `Explain the "${error.title}" error (${error.code})${featureClause} and what I should do next.`,
-              autoSubmit: true,
-              ...(explain?.reference != null ? { chatContext: explain.reference } : {}),
+              ...(explain?.reference != null ? { errorReference: explain.reference } : {}),
             });
           }}
         >

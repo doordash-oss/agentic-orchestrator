@@ -27,13 +27,15 @@ import (
 )
 
 // fakeSession is a concurrency-safe session double: it records delivered
-// messages and interrupts and exits on Stop.
+// messages, the hidden context each carried, and interrupts, and exits on
+// Stop.
 type fakeSession struct {
 	*mocks.MockSessionView
 	observer ports.SessionObserver
 
 	mu         sync.Mutex
 	sent       []string
+	hidden     []string
 	interrupts int
 	stops      int
 	status     ports.SessionStatus
@@ -53,6 +55,10 @@ func newFakeSession(id string, observer ports.SessionObserver) *fakeSession {
 }
 
 func (f *fakeSession) SendUserMessage(text string) error {
+	return f.SendUserMessageWithHiddenContext(text, "")
+}
+
+func (f *fakeSession) SendUserMessageWithHiddenContext(visible, hiddenContext string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	select {
@@ -60,7 +66,8 @@ func (f *fakeSession) SendUserMessage(text string) error {
 		return errors.New("session stdin is closed")
 	default:
 	}
-	f.sent = append(f.sent, text)
+	f.sent = append(f.sent, visible)
+	f.hidden = append(f.hidden, hiddenContext)
 	return nil
 }
 
@@ -114,6 +121,14 @@ func (f *fakeSession) Sent() []string {
 	return append([]string(nil), f.sent...)
 }
 
+// Hidden returns the hidden context each delivered message carried, in
+// delivery order; plain sends carry "".
+func (f *fakeSession) Hidden() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.hidden...)
+}
+
 func (f *fakeSession) Interrupts() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -149,7 +164,12 @@ type fakeLauncher struct {
 	silent bool
 	// exitBeforeHandshake sessions exit without answering the handshake.
 	exitBeforeHandshake bool
+	// plain sessions cannot carry hidden context.
+	plain bool
 }
+
+// plainSession hides the fake's hidden-context capability.
+type plainSession struct{ ports.SessionView }
 
 func (l *fakeLauncher) Launch(_ context.Context, req LaunchRequest) (ports.SessionView, error) {
 	l.mu.Lock()
@@ -159,7 +179,7 @@ func (l *fakeLauncher) Launch(_ context.Context, req LaunchRequest) (ports.Sessi
 	if fail {
 		l.failNext--
 	}
-	silent, exitEarly := l.silent, l.exitBeforeHandshake
+	silent, exitEarly, plain := l.silent, l.exitBeforeHandshake, l.plain
 	l.mu.Unlock()
 	if gate != nil {
 		<-gate
@@ -180,6 +200,9 @@ func (l *fakeLauncher) Launch(_ context.Context, req LaunchRequest) (ports.Sessi
 	case !silent:
 		sess.emit(llm.SDKMessage{Type: "control_response"})
 		sess.emit(llm.SDKMessage{Type: "system", Subtype: "init", Init: &llm.SystemInitMessage{Model: "haiku-effective"}})
+	}
+	if plain {
+		return plainSession{sess}, nil
 	}
 	return sess, nil
 }

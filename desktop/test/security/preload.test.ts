@@ -240,38 +240,39 @@ describe('preload surface', () => {
       ([channel]) => channel === 'agentico:route:requested',
     )?.[1] as (event: unknown, payload: unknown) => void;
 
-    listener({}, { target: 'ama' });
-    expect(cb).toHaveBeenCalledWith({ target: 'ama' });
+    listener({}, { target: 'supervisor' });
+    expect(cb).toHaveBeenCalledWith({ target: 'supervisor' });
 
     cb.mockClear();
     listener({}, { target: 'settings', settingsSection: 'updates' });
     expect(cb).toHaveBeenCalledWith({ target: 'settings', settingsSection: 'updates' });
 
     cb.mockClear();
-    // The routed chat draft rides the ama target only and crosses intact.
-    const amaRoute = {
-      target: 'ama',
+    // The explain draft rides the supervisor target only and crosses intact.
+    const supervisorRoute = {
+      target: 'supervisor',
       draft: 'Explain the "Run failed" error (run_failed) on add-login.',
-      autoSubmit: true,
-      chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+      errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
     };
-    listener({}, amaRoute);
-    expect(cb).toHaveBeenCalledWith(amaRoute);
+    listener({}, supervisorRoute);
+    expect(cb).toHaveBeenCalledWith(supervisorRoute);
 
     cb.mockClear();
     listener({}, { target: 'shell' });
     listener({}, { target: 'settings', settingsSection: 'secrets' });
     listener({}, { target: 'attention', token: 'tok-leak' });
-    // A non-ama route cannot smuggle any of the chat draft fields through.
+    // A non-supervisor route cannot smuggle a draft or a reference through,
+    // and the retired chat target and auto-submit flag fail closed.
     listener({}, { target: 'home', draft: 'smuggled draft' });
-    listener({}, { target: 'home', autoSubmit: true });
     listener(
       {},
       {
         target: 'settings',
-        chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+        errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
       },
     );
+    listener({}, { target: 'ama', draft: 'smuggled draft' });
+    listener({}, { target: 'supervisor', draft: 'auto', autoSubmit: true });
     listener({}, JSON.parse('{"__proto__": {}, "target": "home"}'));
     expect(cb).not.toHaveBeenCalled();
 
@@ -313,7 +314,10 @@ describe('preload surface', () => {
   it('routes supervisor calls over fixed channels with only renderer-owned fields', async () => {
     const api = exposeInMainWorld.mock.calls[0]![1] as {
       getSupervisorState(): Promise<unknown>;
-      sendSupervisorMessage(request: { text: string }): Promise<unknown>;
+      sendSupervisorMessage(request: {
+        text: string;
+        errorReference?: Record<string, string>;
+      }): Promise<unknown>;
       getSupervisorTranscript(request: { before?: number; limit?: number }): Promise<unknown>;
       interruptSupervisor(): Promise<unknown>;
       endSupervisor(): Promise<unknown>;
@@ -322,6 +326,10 @@ describe('preload surface', () => {
 
     await api.getSupervisorState();
     await api.sendSupervisorMessage({ text: 'hello' });
+    await api.sendSupervisorMessage({
+      text: 'explain',
+      errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    });
     await api.getSupervisorTranscript({ before: 9, limit: 20 });
     await api.interruptSupervisor();
     await api.endSupervisor();
@@ -329,6 +337,13 @@ describe('preload surface', () => {
     expect(invoke.mock.calls).toEqual([
       ['agentico:supervisor:state-get'],
       ['agentico:supervisor:message-send', { text: 'hello' }],
+      [
+        'agentico:supervisor:message-send',
+        {
+          text: 'explain',
+          errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+        },
+      ],
       ['agentico:supervisor:transcript-get', { before: 9, limit: 20 }],
       ['agentico:supervisor:interrupt'],
       ['agentico:supervisor:end'],

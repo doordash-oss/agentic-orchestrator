@@ -244,8 +244,6 @@ function makeServices(): IpcServices {
       Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
     ),
     getTestingContract: vi.fn(() => Promise.resolve({ available: false as const })),
-    startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
-    endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
     listSessions: vi.fn(() => Promise.resolve([])),
     getSession: vi.fn(() => Promise.reject(new Error('unused'))),
     getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -794,6 +792,16 @@ describe('registerIpcHandlers', () => {
       text: 'Summarize the open features.',
     });
 
+    const explained = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+      text: 'Explain the run failure.',
+      errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    })) as { ok: boolean };
+    expect(explained.ok).toBe(true);
+    expect(services.sendSupervisorMessage).toHaveBeenLastCalledWith({
+      text: 'Explain the run failure.',
+      errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    });
+
     await expect(handlers.get(IPC_CHANNELS.supervisorInterrupt)!(goodEvent)).resolves.toMatchObject(
       { ok: true, value: { result: 'accepted' } },
     );
@@ -810,6 +818,16 @@ describe('registerIpcHandlers', () => {
       [IPC_CHANNELS.supervisorMessageSend, { text: 'hi', client_message_id: 'forged' }],
       [IPC_CHANNELS.supervisorMessageSend, { text: '   ' }],
       [IPC_CHANNELS.supervisorMessageSend, { text: 'x'.repeat(100_001) }],
+      // The reference crosses camelCase and disciplined, never wire-shaped.
+      [
+        IPC_CHANNELS.supervisorMessageSend,
+        { text: 'hi', error_reference: { scope: 'run', code: 'run_failed', feature_id: 'f' } },
+      ],
+      [IPC_CHANNELS.supervisorMessageSend, { text: 'hi', errorReference: { scope: 'run' } }],
+      [
+        IPC_CHANNELS.supervisorMessageSend,
+        { text: 'hi', errorReference: { scope: 'recovery', code: 'x', featureId: 'f' } },
+      ],
       [IPC_CHANNELS.supervisorTranscriptGet, { before: 5, after: 2 }],
       [IPC_CHANNELS.supervisorTranscriptGet, { limit: 501 }],
       [IPC_CHANNELS.supervisorTranscriptGet, { before: 0 }],

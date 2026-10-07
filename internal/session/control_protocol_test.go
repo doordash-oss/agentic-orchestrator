@@ -888,7 +888,7 @@ func TestManagerOnMessage_InteractiveTurnMode_ResultSetsWaitingHelp(t *testing.T
 }
 
 func TestManagerOnMessage_TerminalErrorDoesNotRequestPhaseInput(t *testing.T) {
-	for _, kind := range []ports.SessionKind{ports.KindPhase, ports.KindChat} {
+	for _, kind := range []ports.SessionKind{ports.KindPhase, ports.KindSupervisor} {
 		t.Run(kind.String(), func(t *testing.T) {
 			mgr := NewManager(make(chan interface{}, 100))
 			sess := NewSession("terminal-error", "feat-1", feature.PhaseImplement)
@@ -899,8 +899,8 @@ func TestManagerOnMessage_TerminalErrorDoesNotRequestPhaseInput(t *testing.T) {
 				Result: &llm.ResultMessage{Subtype: "error", IsError: true, Result: "unsupported image input"},
 			})
 			want := SessionFailed
-			if kind == ports.KindChat {
-				want = SessionWaitingHelp // Chat remains available for the next message.
+			if kind == ports.KindSupervisor {
+				want = SessionWaitingHelp // The supervisor remains available for the next message.
 			}
 			if got := sess.Status(); got != want {
 				t.Fatalf("status = %v, want %v", got, want)

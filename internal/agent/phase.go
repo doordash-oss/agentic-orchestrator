@@ -1449,7 +1449,7 @@ type BuildSessionOpts struct {
 	// protocol setup so each provider resumes via its own supported path.
 	ResumeSessionID string
 	// Interactive marks a session where a human answers every AskUserQuestion
-	// turn in real time (e.g. AMA chat). Forwarded to llm.ProtocolOpts.Interactive;
+	// turn in real time (a conversation). Forwarded to llm.ProtocolOpts.Interactive;
 	// see its doc comment for why this changes text-parsed AskUserQuestion
 	// providers' behavior.
 	Interactive bool
@@ -1800,12 +1800,4 @@ func currentAgenticoBinPath() string {
 // by external callers (e.g. desktop app).
 func (pr *PhaseRunner) AskingClauseForModel(model string) string {
 	return pr.askingQuestionsClauseForModel(model)
-}
-
-// ModelForRole resolves the effective model for a phase role. If configured is
-// non-empty it is returned as-is; otherwise the catalog default for the role is
-// returned. Exported so external callers can perform the same resolution that
-// PhaseRunner uses internally.
-func (pr *PhaseRunner) ModelForRole(configured string, role llm.PhaseRole) string {
-	return pr.modelForRole(configured, role)
 }

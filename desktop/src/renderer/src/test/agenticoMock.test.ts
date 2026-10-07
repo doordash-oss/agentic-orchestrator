@@ -55,6 +55,25 @@ describe('installAgenticoMock supervisor surface', () => {
     });
   });
 
+  it('commits only the visible text of a referenced send and rejects a malformed reference', async () => {
+    const mock = installAgenticoMock();
+
+    const sent = await window.agentico.sendSupervisorMessage({
+      text: 'Explain this',
+      errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    });
+    expect(sent.record.messages).toEqual([
+      { index: 1, role: 'user', type: 'text', text: 'Explain this' },
+    ]);
+    await expect(
+      window.agentico.sendSupervisorMessage({
+        text: 'Explain this',
+        errorReference: { scope: 'run', code: 'run_failed' },
+      }),
+    ).rejects.toThrow();
+    expect(mock.supervisorState().headSeq).toBe(1);
+  });
+
   it('pushes supervisor events through a registry with exact unsubscribe', () => {
     const mock = installAgenticoMock();
     const listener = vi.fn();

@@ -1769,36 +1769,6 @@ func (e AnswerAskUserPromptParamsXAgenticoClient) Valid() bool {
 	}
 }
 
-// Defines values for EndChatPromptParamsXAgenticoClient.
-const (
-	EndChatPromptParamsXAgenticoClientLocal EndChatPromptParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the EndChatPromptParamsXAgenticoClient enum.
-func (e EndChatPromptParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case EndChatPromptParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for StartChatPromptParamsXAgenticoClient.
-const (
-	StartChatPromptParamsXAgenticoClientLocal StartChatPromptParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the StartChatPromptParamsXAgenticoClient enum.
-func (e StartChatPromptParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case StartChatPromptParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for SendHelpPromptParamsXAgenticoClient.
 const (
 	SendHelpPromptParamsXAgenticoClientLocal SendHelpPromptParamsXAgenticoClient = "local"
@@ -2207,8 +2177,6 @@ type ActionInput struct {
 type ActionResponse struct {
 	APIVersion                  string                      `json:"api_version"`
 	AskUserAnswerResponse       AskUserAnswerResponse       `json:"ask_user_answer_response,omitempty"`
-	ChatEndResponse             ChatEndResponse             `json:"chat_end_response,omitempty"`
-	ChatStartResponse           ChatStartResponse           `json:"chat_start_response,omitempty"`
 	CleanupFeatureResponse      CleanupFeatureResponse      `json:"cleanup_feature_response,omitempty"`
 	CreateFeatureResponse       CreateFeatureResponse       `json:"create_feature_response,omitempty"`
 	DeleteFeatureResponse       DeleteFeatureResponse       `json:"delete_feature_response,omitempty"`
@@ -2316,30 +2284,6 @@ type BuildIdentity struct {
 
 // CascadeDiagnostic defines model for CascadeDiagnostic.
 type CascadeDiagnostic = feature.CascadeDiagnostic
-
-// ChatEndResponse defines model for ChatEndResponse.
-type ChatEndResponse struct {
-	APIVersion string       `json:"api_version"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-	SessionID  string       `json:"session_id"`
-}
-
-// ChatStartRequest defines model for ChatStartRequest.
-type ChatStartRequest struct {
-	Context      ErrorReference `json:"context,omitempty"`
-	ImageUploads []string       `json:"image_uploads,omitempty"`
-	Images       []string       `json:"images,omitempty"`
-	Message      string         `json:"message"`
-}
-
-// ChatStartResponse defines model for ChatStartResponse.
-type ChatStartResponse struct {
-	APIVersion string       `json:"api_version"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-	SessionID  string       `json:"session_id"`
-}
 
 // Checkpoints defines model for Checkpoints.
 type Checkpoints struct {
@@ -4629,8 +4573,9 @@ type SupervisorLifecycle string
 
 // SupervisorMessageRequest defines model for SupervisorMessageRequest.
 type SupervisorMessageRequest struct {
-	ClientMessageID string `json:"client_message_id"`
-	Text            string `json:"text"`
+	ClientMessageID string         `json:"client_message_id"`
+	ErrorReference  ErrorReference `json:"error_reference,omitempty"`
+	Text            string         `json:"text"`
 }
 
 // SupervisorMessageResponse defines model for SupervisorMessageResponse.
@@ -4932,9 +4877,6 @@ type TranscriptResponse struct {
 
 // UpdateActiveWorkSummary Truthful current activity counts that gate an immediate install. Counts are advisory reads of live work, never reservations.
 type UpdateActiveWorkSummary struct {
-	// ChatActive Whether any feature chat turn is active.
-	ChatActive bool `json:"chat_active"`
-
 	// CloneCount Number of in-flight repository clone operations.
 	CloneCount int `json:"clone_count"`
 
@@ -4956,6 +4898,9 @@ type UpdateActiveWorkSummary struct {
 	// QuiescingSince When the runtime began quiescing work for an accepted install; never set in this phase.
 	QuiescingSince *time.Time `json:"quiescing_since,omitempty"`
 
+	// SupervisorActive Whether the supervisor is active work: its lifecycle is starting, running, waiting_permission or waiting_question.
+	SupervisorActive bool `json:"supervisor_active"`
+
 	// UploadCount Number of in-flight staged uploads.
 	UploadCount int `json:"upload_count"`
 }
@@ -4965,7 +4910,7 @@ type UpdateInstallRequest struct {
 	// Consent Explicit user consent to install a release. Must be true; any other value is refused with update_consent_required.
 	Consent bool `json:"consent"`
 
-	// StopActiveWork Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the singleton chat through the existing pause-stop and chat-end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted.
+	// StopActiveWork Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the supervisor through the existing pause-stop and supervisor end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted.
 	StopActiveWork *bool `json:"stop_active_work,omitempty"`
 
 	// Version Explicit target version selector. Must name the currently discovered latest stable version; any other version is refused.
@@ -5454,27 +5399,6 @@ type AnswerAskUserPromptParams struct {
 // AnswerAskUserPromptParamsXAgenticoClient defines parameters for AnswerAskUserPrompt.
 type AnswerAskUserPromptParamsXAgenticoClient string
 
-// EndChatPromptJSONBody defines parameters for EndChatPrompt.
-type EndChatPromptJSONBody map[string]interface{}
-
-// EndChatPromptParams defines parameters for EndChatPrompt.
-type EndChatPromptParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient EndChatPromptParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// EndChatPromptParamsXAgenticoClient defines parameters for EndChatPrompt.
-type EndChatPromptParamsXAgenticoClient string
-
-// StartChatPromptParams defines parameters for StartChatPrompt.
-type StartChatPromptParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient StartChatPromptParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// StartChatPromptParamsXAgenticoClient defines parameters for StartChatPrompt.
-type StartChatPromptParamsXAgenticoClient string
-
 // SendHelpPromptJSONBody defines parameters for SendHelpPrompt.
 type SendHelpPromptJSONBody map[string]interface{}
 
@@ -5810,12 +5734,6 @@ type AnswerPermissionJSONRequestBody = PermissionAnswerSchema
 
 // AnswerAskUserPromptJSONRequestBody defines body for AnswerAskUserPrompt for application/json ContentType.
 type AnswerAskUserPromptJSONRequestBody AnswerAskUserPromptJSONBody
-
-// EndChatPromptJSONRequestBody defines body for EndChatPrompt for application/json ContentType.
-type EndChatPromptJSONRequestBody EndChatPromptJSONBody
-
-// StartChatPromptJSONRequestBody defines body for StartChatPrompt for application/json ContentType.
-type StartChatPromptJSONRequestBody = ChatStartRequest
 
 // SendHelpPromptJSONRequestBody defines body for SendHelpPrompt for application/json ContentType.
 type SendHelpPromptJSONRequestBody SendHelpPromptJSONBody

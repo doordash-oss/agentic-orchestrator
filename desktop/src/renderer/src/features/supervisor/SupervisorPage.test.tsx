@@ -34,7 +34,7 @@ import {
   supervisorTranscriptPage,
 } from '../../test/agenticoMock';
 import { emptyAttentionDrafts, type AttentionDrafts } from '../AttentionInbox';
-import { SupervisorPage } from './SupervisorPage';
+import { SupervisorPage, type SupervisorComposeRequest } from './SupervisorPage';
 
 afterEach(cleanup);
 
@@ -127,13 +127,23 @@ function requestRecord(
   });
 }
 
-function Harness({ refreshAttention }: { refreshAttention?: () => Promise<AttentionItem[]> }) {
+function Harness({
+  refreshAttention,
+  composeRequest = null,
+  onComposeRequestHandled,
+}: {
+  refreshAttention?: () => Promise<AttentionItem[]>;
+  composeRequest?: SupervisorComposeRequest | null;
+  onComposeRequestHandled?: () => void;
+}) {
   const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
   return (
     <SupervisorPage
       attentionDrafts={drafts}
       setAttentionDrafts={setDrafts}
       refreshAttention={refreshAttention ?? (async () => [])}
+      composeRequest={composeRequest}
+      onComposeRequestHandled={onComposeRequestHandled}
     />
   );
 }
@@ -150,15 +160,21 @@ function status(): HTMLElement {
   return screen.getByTestId('supervisor-status');
 }
 
-async function renderPage(
-  overrides: Parameters<typeof installAgenticoMock>[0] = {},
-): Promise<ReturnType<typeof installAgenticoMock>> {
+async function renderPage(overrides: Parameters<typeof installAgenticoMock>[0] = {}): Promise<
+  ReturnType<typeof installAgenticoMock> & {
+    compose(request: SupervisorComposeRequest): void;
+    handled: ReturnType<typeof vi.fn>;
+  }
+> {
   const mock = installAgenticoMock(overrides);
   mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
-  render(<Harness />);
+  const handled = vi.fn();
+  const { rerender } = render(<Harness onComposeRequestHandled={handled} />);
   await screen.findByTestId('supervisor-model-chip');
   await waitFor(() => expect(screen.queryByText('Loading the supervisor…')).toBeNull());
-  return mock;
+  const compose = (request: SupervisorComposeRequest): void =>
+    rerender(<Harness composeRequest={request} onComposeRequestHandled={handled} />);
+  return Object.assign(mock, { compose, handled });
 }
 
 function emit(mock: ReturnType<typeof installAgenticoMock>, event: SupervisorEvent): void {
@@ -555,5 +571,157 @@ describe('SupervisorPage pending requests', () => {
       record: requestRecord(5, 'question', questionRequest.id, 'resolved', 'answered'),
     });
     expect(within(transcript()).getByText('Answered the question')).toBeVisible();
+  });
+});
+
+const EXPLAIN_DRAFT =
+  'Explain the "Run failed" error (run_failed) on Search revamp and what I should do next.';
+const RUN_REFERENCE = { scope: 'run', code: 'run_failed', featureId: 'abcd1234' } as const;
+const SETUP_REFERENCE = {
+  scope: 'setup',
+  code: 'worktree_setup_failed',
+  featureId: 'abcd1234',
+  taskKey: 'web',
+} as const;
+
+describe('SupervisorPage explain drafts', () => {
+  it('sets an empty composer to the routed draft, focuses it, and sends nothing', async () => {
+    const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
+
+    mock.compose({ id: 1, draft: EXPLAIN_DRAFT, errorReference: RUN_REFERENCE });
+
+    await waitFor(() => expect(composer()).toHaveValue(EXPLAIN_DRAFT));
+    expect(composer()).toHaveFocus();
+    expect(mock.handled).toHaveBeenCalledTimes(1);
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+  it('appends the routed draft after a blank line, keeping what the person typed', async () => {
+    const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
+    const user = userEvent.setup();
+    await user.type(composer(), 'My own note');
+
+    mock.compose({ id: 1, draft: EXPLAIN_DRAFT, errorReference: RUN_REFERENCE });
+
+    await waitFor(() => expect(composer()).toHaveValue(`My own note\n\n${EXPLAIN_DRAFT}`));
+    expect(composer()).toHaveFocus();
+  });
+
+  it('handles each request once and focuses without touching the text when no draft rides it', async () => {
+    const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
+    const user = userEvent.setup();
+
+    mock.compose({ id: 1, draft: EXPLAIN_DRAFT });
+    await waitFor(() => expect(composer()).toHaveValue(EXPLAIN_DRAFT));
+    // A re-render carrying the same request never replays its draft.
+    mock.compose({ id: 1, draft: EXPLAIN_DRAFT });
+    expect(composer()).toHaveValue(EXPLAIN_DRAFT);
+
+    await user.click(screen.getByTestId('supervisor-status'));
+    expect(composer()).not.toHaveFocus();
+    mock.compose({ id: 2 });
+    await waitFor(() => expect(composer()).toHaveFocus());
+    expect(composer()).toHaveValue(EXPLAIN_DRAFT);
+    expect(mock.handled).toHaveBeenCalledTimes(2);
+  });
+
+  it('sends the attached reference with the drafted text, then clears it after the send', async () => {
+    const state = supervisorState({ settings: CHOSEN });
+    const mock = await renderPage({ supervisorState: state });
+    const user = userEvent.setup();
+
+    mock.compose({ id: 1, draft: EXPLAIN_DRAFT, errorReference: RUN_REFERENCE });
+    await waitFor(() => expect(composer()).toHaveValue(EXPLAIN_DRAFT));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({
+      text: EXPLAIN_DRAFT,
+      errorReference: RUN_REFERENCE,
+    });
+
+    // Once the turn settles, the next message carries no reference.
+    await screen.findByRole('button', { name: 'Stop' });
+    await waitFor(() => expect(mock.api.getSupervisorState).toHaveBeenCalledTimes(2));
+    emit(mock, { type: 'state', ...envelope(state), state: { ...state, lifecycle: 'idle' } });
+    await user.type(composer(), 'And then?{Enter}');
+    expect(mock.api.sendSupervisorMessage).toHaveBeenLastCalledWith({ text: 'And then?' });
+  });
+
+  it('replaces the attached reference with a later explain', async () => {
+    const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
+    const user = userEvent.setup();
+
+    mock.compose({ id: 1, draft: 'First explain', errorReference: RUN_REFERENCE });
+    await waitFor(() => expect(composer()).toHaveValue('First explain'));
+    mock.compose({ id: 2, draft: 'Second explain', errorReference: SETUP_REFERENCE });
+    await waitFor(() => expect(composer()).toHaveValue('First explain\n\nSecond explain'));
+
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({
+      text: 'First explain\n\nSecond explain',
+      errorReference: SETUP_REFERENCE,
+    });
+  });
+
+  it('drops the attached reference when the person empties the composer', async () => {
+    const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
+    const user = userEvent.setup();
+
+    mock.compose({ id: 1, draft: EXPLAIN_DRAFT, errorReference: RUN_REFERENCE });
+    await waitFor(() => expect(composer()).toHaveValue(EXPLAIN_DRAFT));
+    await user.clear(composer());
+    await user.type(composer(), 'Something else{Enter}');
+
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({ text: 'Something else' });
+  });
+
+  it('keeps the reference attached when a send fails and the draft is restored', async () => {
+    const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
+    mock.api.sendSupervisorMessage.mockRejectedValueOnce(
+      ipcError('supervisor_launch_failed', 'The supervisor process could not start.', {
+        title: 'Supervisor launch failed',
+      }),
+    );
+    const user = userEvent.setup();
+
+    mock.compose({ id: 1, draft: EXPLAIN_DRAFT, errorReference: RUN_REFERENCE });
+    await waitFor(() => expect(composer()).toHaveValue(EXPLAIN_DRAFT));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('Supervisor launch failed')).toBeVisible();
+    expect(composer()).toHaveValue(EXPLAIN_DRAFT);
+
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenLastCalledWith({
+      text: EXPLAIN_DRAFT,
+      errorReference: RUN_REFERENCE,
+    });
+  });
+
+  it('retains the draft with Send disabled until a harness and model are chosen', async () => {
+    const mock = await renderPage();
+    const user = userEvent.setup();
+
+    mock.compose({ id: 1, draft: EXPLAIN_DRAFT, errorReference: RUN_REFERENCE });
+    await waitFor(() => expect(composer()).toHaveValue(EXPLAIN_DRAFT));
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await user.keyboard('{Enter}');
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('supervisor-model-chip'));
+    const popover = screen.getByRole('region', { name: 'Harness and model' });
+    await user.click(
+      within(within(popover).getByRole('group', { name: 'Claude' })).getByRole('radio', {
+        name: 'Opus',
+      }),
+    );
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    expect(composer()).toHaveValue(EXPLAIN_DRAFT);
+
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({
+      text: EXPLAIN_DRAFT,
+      errorReference: RUN_REFERENCE,
+    });
   });
 });

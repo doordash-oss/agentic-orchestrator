@@ -22,10 +22,17 @@ Tests fail if the committed generated code drifts from `api/openapi.yaml`.
   fields as errors.
 
 `/api/v1/health` carries the same optional top-level `name` field. Both
-surfaces are strictly additive: the compatibility declaration
-(`loopback-bearer-v1`, schema 1) and the discovery schema version are
-unchanged, so older consumers keep working against named servers and newer
-consumers tolerate name-less servers.
+surfaces are strictly additive: neither the compatibility declaration nor
+the discovery schema version changes for it, so older consumers keep working
+against named servers and newer consumers tolerate name-less servers.
+
+The compatibility declaration on `/api/v1/health` reports schema series 2
+and minimum client series 2 under the `loopback-bearer-v1` runtime policy
+(`network-bearer-v1` for non-loopback listeners). Series 2 removed the chat
+prompt routes (`/api/v1/prompts/chat/start` and `/api/v1/prompts/chat/end`,
+now `404`) and renamed the update summary's `chat_active` to
+`supervisor_active`. Routes stay under `/api/v1`; a client and server from
+different series refuse each other.
 
 The server's bind address is selected with `--listen [host:]port` (loopback
 hosts only: `127.0.0.1`, `localhost`, `[::1]`; a bare port binds
@@ -79,7 +86,7 @@ Snapshot highlights:
 - `current_version`, `latest_version`, and `latest_release_url` describe the discovered release. A release that rolled back stays visible as `latest_version` with `failed` and `update_rolled_back` until a newer one appears.
 - `last_check_at`, `last_success_at`, `next_check_at`, and `retry_not_before` describe check timing. A failed refresh keeps the last successful metadata.
 - `receipt` is the sanitized outcome of the last install, when one exists.
-- `active_work_summary` reports current features, chat, clones, uploads, origin checks, and pending admissions. `detection_failed` means an immediate install will be refused.
+- `active_work_summary` reports current features, the supervisor (`supervisor_active`), clones, uploads, origin checks, and pending admissions. `detection_failed` means an immediate install will be refused.
 - While an install is active: `method`, `stop_active_work`, `target_version`, `scheduled_for`, `signature`, and `target_contract`. `signature` is `verified` only after the pinned candidate was verified. `scheduled_for` is the next window opening an automatic install waits for, otherwise `null`.
 
 ### POST /api/v1/update/check
@@ -104,7 +111,7 @@ Body: `UpdateInstallRequest`. Returns `202` with the current snapshot.
 
 - `consent` must be `true`.
 - `when` is `idle` or `now`. `idle` stages the release and waits for work to finish without interrupting it. `now` installs immediately if nothing is active.
-- `stop_active_work: true` with `now` authorizes stopping feature sessions and the chat. Stop dispatch and confirmation share a ten-second budget. Any stop failure or timeout aborts the install and keeps the current build serving. Already-stopped work stays stopped.
+- `stop_active_work: true` with `now` authorizes stopping feature sessions and ending the supervisor. Stop dispatch and confirmation share a ten-second budget. Any stop failure or timeout aborts the install and keeps the current build serving. Already-stopped work stays stopped.
 - `version`, when set, must equal the discovered latest stable release.
 
 Repository work such as clones, uploads, and origin checks is never
@@ -140,8 +147,8 @@ after cleanup. Cancelling when nothing is active succeeds.
 ### Stopping and draining
 
 Once an install starts stopping work or draining, new work is refused with
-`503` `update_in_progress` and a `Retry-After` header. This covers chat
-turns, prompt and permission replies, and reads that start background work.
+`503` `update_in_progress` and a `Retry-After` header. This covers supervisor
+messages, prompt and permission replies, and reads that start background work.
 Existing stop and completion paths keep settling.
 
 ### Event
@@ -253,6 +260,25 @@ a mismatch returns 409 `conflict` so a selection never applies to a later
 phase or revision. The response
 (`TestingContractWaiveResponse`) carries the new `contract_revision` and the
 `waived_items`.
+
+## Supervisor Messages
+
+### POST /api/v1/supervisor/messages
+
+Body: `SupervisorMessageRequest`:
+`{ "text": "<visible text>", "client_message_id": "<id>", "error_reference": { ... } }`.
+`error_reference` is optional and uses the shared `ErrorReference` schema
+(`scope` and `code`, plus the keys the scope requires: `feature_id`,
+`repository`, `task_key`, or `snapshot_id` and `key`). The server resolves
+it against durable state into a hidden context bundle: the error's catalog
+rendering, full stored diagnostics, and known log locations. The harness
+receives the bundle, a blank line, then `text`; the committed user record,
+the transcript, the event stream, and the response carry only `text`.
+
+A malformed reference returns 400 `chat_context_invalid`; a reference whose
+error is no longer present returns 404 `chat_context_not_found`. Both are
+refused before anything is sent or appended. A repeated `client_message_id`
+returns the already-committed record and does not resend.
 
 ## Session Output
 

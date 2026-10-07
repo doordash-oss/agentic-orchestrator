@@ -163,7 +163,6 @@ test('packaged security posture: no token in the renderer, locked-down window, c
     const settingsRaw = fs.readFileSync(settingsPath, 'utf8');
     const settings = JSON.parse(settingsRaw) as Record<string, unknown>;
     expect(Object.keys(settings).sort()).toEqual([
-      'ama',
       'notifications',
       'runtime',
       'schemaVersion',

@@ -38,9 +38,9 @@ const updateStopWorkBudget = 10 * time.Second
 // admitted work settles.
 const installStopConfirmPoll = 200 * time.Millisecond
 
-// InstallStopper performs the authorized interruption of feature and chat
-// work for an immediate install. The handler implements it over the same
-// mutation surface the REST pause-stop and chat-end actions use; tests
+// InstallStopper performs the authorized interruption of feature and
+// supervisor work for an immediate install. The handler implements it over
+// the same surfaces the REST pause-stop and supervisor end actions use; tests
 // inject deterministic fakes through UpdateOptions.Stopper.
 type InstallStopper interface {
 	// StoppableFeatures lists feature identities matching the enabled
@@ -48,16 +48,10 @@ type InstallStopper interface {
 	// children), deepest children first so parent/child relationship guards
 	// pass. A listing error means detection failed.
 	StoppableFeatures(ctx context.Context) ([]string, error)
-	// ChatActive reports whether the singleton chat session is active under
-	// the current active-chat semantics.
-	ChatActive() bool
 	// StopFeature interrupts one feature through the guarded mutation,
 	// preserving the usual interrupted-state and pending-question/permission
 	// cleanup. An error aborts the installation.
 	StopFeature(ctx context.Context, featureID string) error
-	// EndChat ends the singleton chat session; idempotent when it is not
-	// active. An error aborts the installation.
-	EndChat(ctx context.Context) error
 	// SupervisorProcess reports whether a supervisor provider process
 	// exists (any lifecycle other than stopped or failed).
 	SupervisorProcess() bool
@@ -68,8 +62,8 @@ type InstallStopper interface {
 }
 
 // handlerInstallStopper is the production InstallStopper: the pause-stop
-// projection over the feature store, current active-chat semantics over the
-// session manager, and dispatch through the trusted mutation surface.
+// projection over the feature store, the supervisor lifecycle, and dispatch
+// through the trusted mutation surface.
 type handlerInstallStopper struct {
 	handler *apiHandler
 }
@@ -130,17 +124,6 @@ func (s handlerInstallStopper) StoppableFeatures(context.Context) ([]string, err
 	return ids, nil
 }
 
-// ChatActive mirrors the chat activity detector: the singleton session is
-// active from launch through registration and while it parks between turns.
-func (s handlerInstallStopper) ChatActive() bool {
-	h := s.handler
-	if h.sessions == nil {
-		return false
-	}
-	sess := h.sessions.GetSession(ChatSessionID)
-	return sess != nil && sess.IsActive()
-}
-
 // StopFeature dispatches the same guarded interruption the REST pause-stop
 // action performs.
 func (s handlerInstallStopper) StopFeature(_ context.Context, featureID string) error {
@@ -148,17 +131,6 @@ func (s handlerInstallStopper) StopFeature(_ context.Context, featureID string) 
 		return fmt.Errorf("no stop surface available for feature %s", featureID)
 	}
 	_, err := s.handler.mutations.StopFeature(featureID)
-	return err
-}
-
-// EndChat dispatches the same singleton chat-end mutation the REST action
-// performs. The stopper only dispatches while it owns closed admission, so
-// no newly created chat session can reuse the identity underneath it.
-func (s handlerInstallStopper) EndChat(_ context.Context) error {
-	if s.handler.mutations == nil {
-		return fmt.Errorf("no stop surface available for the chat session")
-	}
-	_, err := s.handler.mutations.EndChat()
 	return err
 }
 
@@ -227,10 +199,8 @@ func admissionRaceBlockers() []errcat.Option {
 // update_blocked_active_work params snapshot.
 func activeWorkParams(activity workadmission.Activity, pending int) errcat.UpdateBlockedActiveWorkParams {
 	return errcat.UpdateBlockedActiveWorkParams{
-		Features: activity.Features,
-		// The supervisor is a conversational session; the public summary
-		// reports it with chat until the summary gains its own field.
-		ChatActive:        activity.ChatActive || activity.SupervisorActive,
+		Features:          activity.Features,
+		SupervisorActive:  activity.SupervisorActive,
 		Clones:            activity.Clones,
 		Uploads:           activity.Uploads,
 		OriginChecks:      activity.OriginChecks,
@@ -244,9 +214,9 @@ func activeWorkParams(activity workadmission.Activity, pending int) errcat.Updat
 // does not block. Without stop permission any observed activity or held
 // reservation blocks with the full activity snapshot. With stop permission
 // only protected repository activity blocks with the activity snapshot, and
-// held reservations outside the stoppable feature/chat categories block
-// with the pending-admission count and the protected category names;
-// feature and chat activity alone never blocks — the accepted permission
+// held reservations outside the stoppable feature/supervisor categories
+// block with the pending-admission count and the protected category names;
+// feature and supervisor activity alone never blocks — the accepted permission
 // authorizes stopping exactly that work.
 func blockedActiveWorkOptions(activity workadmission.Activity, held int, perCategory map[workadmission.Category]int, stopPermitted bool) []errcat.Option {
 	if !stopPermitted {
@@ -271,9 +241,10 @@ func blockedActiveWorkOptions(activity workadmission.Activity, held int, perCate
 
 // installStopBlockers reports the blockers an explicit-stop immediate
 // install refuses on: repository activity (clones, uploads, origin checks,
-// other repository work), reservations outside the stoppable feature/chat
-// categories — known protected categories and unknown categories alike —
-// and failed or incomplete detection. Feature and chat activity alone
+// other repository work), reservations outside the stoppable
+// feature/supervisor categories — known protected categories and unknown
+// categories alike — and failed or incomplete detection. Feature and
+// supervisor activity alone
 // never blocks: the accepted permission authorizes stopping it.
 func (c *updateCoordinator) installStopBlockers(admission InstallAdmission) []errcat.Option {
 	activity, held, perCategory, ok := detectAdmissionActivity(admission)
@@ -289,7 +260,6 @@ func (c *updateCoordinator) installStopBlockers(admission InstallAdmission) []er
 // while admission is closed.
 var stoppableAdmissionCategories = []workadmission.Category{
 	workadmission.CategoryFeature,
-	workadmission.CategoryChat,
 	workadmission.CategorySupervisor,
 }
 
@@ -359,7 +329,6 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 	defer cancel()
 
 	stoppedFeatures := make(map[string]bool)
-	chatStopped := false
 	supervisorStopped := false
 	for {
 		if err := ctx.Err(); err != nil {
@@ -400,19 +369,6 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 			}
 			stoppedFeatures[id] = true
 		}
-		if stopper.ChatActive() && !chatStopped {
-			if ctx.Err() != nil {
-				return c.stopTimeoutFailure(admission)
-			}
-			if err := stopper.EndChat(ctx); err != nil {
-				return &installStopFailure{
-					result: "install_stop_failed:stop",
-					opts: append(c.stopBlockersNow(admission),
-						errcat.WithDiagnostics("ending the chat session failed: "+selfupdate.SanitizeError(err.Error()))),
-				}
-			}
-			chatStopped = true
-		}
 		if stopper.SupervisorProcess() && !supervisorStopped {
 			if ctx.Err() != nil {
 				return c.stopTimeoutFailure(admission)
@@ -442,7 +398,7 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 		if held > 0 {
 			if cats := protectedHeldCategories(perCategory); cats != "" {
 				// Work that cannot be identified as stoppable feature or
-				// chat work blocks installation even though a stop may
+				// supervisor work blocks installation even though a stop may
 				// already have succeeded.
 				return &installStopFailure{
 					result: "install_stop_failed:unidentified_work",

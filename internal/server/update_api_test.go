@@ -41,15 +41,11 @@ type nopMutationTarget struct {
 	MutationTarget
 }
 
-// StopFeature and EndChat keep the nop target safe for the handler-owned
+// StopFeature keeps the nop target safe for the handler-owned
 // install stopper: fixtures without a full mutation surface never panic
 // when an explicit-stop install dispatches through them.
 func (nopMutationTarget) StopFeature(featureID string) (FeatureStopResponse, error) {
 	return FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
-}
-
-func (nopMutationTarget) EndChat() (ChatEndResponse, error) {
-	return ChatEndResponse{SessionID: ChatSessionID, Result: "ended"}, nil
 }
 
 func newUpdateAPIFixture(t *testing.T, opts UpdateOptions) *updateAPIFixture {

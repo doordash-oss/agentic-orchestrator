@@ -131,7 +131,7 @@ describe('creation drafts across readiness flips (App-level)', () => {
     // the whole ready tree — and with it the sheet — unmounts.
     emitConnection(mock, offlineConnection());
     emitConnection(mock, readyConnection('server-b'));
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
     // Server B has no draft: nothing steals focus or reopens the sheet.
     expect(screen.queryByRole('form', { name: /create a feature/i })).not.toBeInTheDocument();
 
@@ -204,7 +204,7 @@ describe('creation drafts across readiness flips (App-level)', () => {
     mock.api.createFeature.mockImplementationOnce(
       () => new Promise<{ featureId: string }>(() => {}),
     );
-    // Scoped to the sheet: the Overview empty-state CTA also matches /Create/.
+    // Scoped to the sheet, so no other control matching /Create/ can win.
     await user.click(within(sheet).getByRole('button', { name: /Create/ }));
     await waitFor(() => expect(mock.api.createFeature).toHaveBeenCalled());
     emitConnection(mock, offlineConnection());
@@ -239,7 +239,7 @@ describe('creation drafts across readiness flips (App-level)', () => {
     // A relaunch is a brand-new app session: no draft anywhere.
     installReady('server-a');
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
     expect(screen.queryByRole('form', { name: /create a feature/i })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'New feature' }));
     const sheet = await screen.findByRole('form', { name: /create a feature/i });
@@ -333,7 +333,7 @@ describe('clone completion reconciles into only the owning server\u2019s draft',
       // Server B opens its own draft and starts its own clone.
       emitConnection(mock, offlineConnection());
       emitConnection(mock, readyConnection('server-b'));
-      await screen.findByRole('option', { name: 'Overview' });
+      await screen.findByRole('option', { name: 'Supervisor' });
       await openSheet(user);
       await user.click(screen.getByRole('button', { name: /clone a repository/i }));
       await screen.findByRole('dialog', { name: 'Clone a repository' });

@@ -722,43 +722,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/prompts/chat/start": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Start a chat prompt session.
-         * @description Sends one user turn to the singleton AMA chat session, starting the session when none is live. An optional `context` reference points at the durable home of an error the question is about; the server resolves it into a hidden context bundle the provider sees but the transcript never echoes. Failure machine codes: 400 `chat_context_invalid` (malformed reference) and 404 `chat_context_not_found` (referenced error no longer present); both are rejected before any chat turn is sent.
-         */
-        post: operations["startChatPrompt"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/prompts/chat/end": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** End the active singleton chat prompt session. */
-        post: operations["endChatPrompt"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/permissions": {
         parameters: {
             query?: never;
@@ -1207,7 +1170,7 @@ export interface paths {
         put?: never;
         /**
          * Accept one consented install request for the discovered release.
-         * @description Requires consent true plus a when selection. With when idle the operation is staged and waits for active work to finish without interrupting it. With when now and no stop_active_work the install proceeds only when no work is active. With when now and stop_active_work true the install may interrupt feature sessions and the singleton chat through the existing pause-stop and chat-end semantics — repository work (clones, uploads, origin checks, other repository activity), protected or unknown admission reservations, and failed activity detection still refuse before staging, again after staging, and again under the closed admission gate, with 409 update_blocked_active_work and nothing stopped. Stop dispatch and completion confirmation share one ten-second deadline; any stop failure, timeout, or unresolved work aborts the installation, leaves the current build serving with already-stopped work interrupted, and requires fresh consent. An equivalent request for the active operation returns the existing operation; changing the target, when, or stop-work permission requires canceling and resubmitting. Refused with 403 forbidden and the disabled-policy remediation while the effective policy is off and with 409 update_unsupported_install for ineligible installations or a conflicting active operation or target.
+         * @description Requires consent true plus a when selection. With when idle the operation is staged and waits for active work to finish without interrupting it. With when now and no stop_active_work the install proceeds only when no work is active. With when now and stop_active_work true the install may interrupt feature sessions and the supervisor through the existing pause-stop and supervisor end semantics — repository work (clones, uploads, origin checks, other repository activity), protected or unknown admission reservations, and failed activity detection still refuse before staging, again after staging, and again under the closed admission gate, with 409 update_blocked_active_work and nothing stopped. Stop dispatch and completion confirmation share one ten-second deadline; any stop failure, timeout, or unresolved work aborts the installation, leaves the current build serving with already-stopped work interrupted, and requires fresh consent. An equivalent request for the active operation returns the existing operation; changing the target, when, or stop-work permission requires canceling and resubmitting. Refused with 403 forbidden and the disabled-policy remediation while the effective policy is off and with 409 update_unsupported_install for ineligible installations or a conflicting active operation or target.
          */
         post: operations["installUpdate"];
         /**
@@ -1311,7 +1274,7 @@ export interface paths {
         put?: never;
         /**
          * Send one user message to the supervisor.
-         * @description Launches the supervisor process when the conversation is `stopped` or `failed`; sends arriving while a launch is in flight join it and are delivered in arrival order. A repeated `client_message_id` returns the already-committed record without appending. Failure machine codes: 409 `settings_required` when no harness or model is chosen, 409 `turn_active` while a turn is running, 502 `supervisor_launch_failed` when the launch or handshake fails (no user record is committed), and 503 `update_in_progress` while work admission is closed.
+         * @description Launches the supervisor process when the conversation is `stopped` or `failed`; sends arriving while a launch is in flight join it and are delivered in arrival order. A repeated `client_message_id` returns the already-committed record without appending. An optional `error_reference` points at the durable home of an error the message is about; the server resolves it into a hidden context bundle the harness receives ahead of the visible text, while the committed user record holds only `text`. Failure machine codes: 400 `chat_context_invalid` when the reference is malformed, 404 `chat_context_not_found` when the referenced error is no longer present (both rejected before anything is sent or appended), 409 `settings_required` when no harness or model is chosen, 409 `turn_active` while a turn is running, 502 `supervisor_launch_failed` when the launch or handshake fails (no user record is committed), and 503 `update_in_progress` while work admission is closed.
          */
         post: operations["sendSupervisorMessage"];
         delete?: never;
@@ -1391,7 +1354,7 @@ export interface paths {
         put?: never;
         /**
          * Stage one image or attachment upload server-side.
-         * @description Accepts one file per request as a raw application/octet-stream body with metadata in the query string. Accepted bytes land in a staging directory under the server's state dir, keyed by an opaque, unguessable, single-use reference; the client-supplied name is kept as metadata only and never becomes an on-disk name. Image uploads require a png, jpg, jpeg, gif, or webp file name extension and are capped at 10 MiB; attachment uploads accept any bytes and are capped at 25 MiB. References are consumed by the image_uploads / attachment_uploads fields of the feature-creation, refactor-launch, and chat-start mutations (chat resolves image references only) and expire 24 hours after staging.
+         * @description Accepts one file per request as a raw application/octet-stream body with metadata in the query string. Accepted bytes land in a staging directory under the server's state dir, keyed by an opaque, unguessable, single-use reference; the client-supplied name is kept as metadata only and never becomes an on-disk name. Image uploads require a png, jpg, jpeg, gif, or webp file name extension and are capped at 10 MiB; attachment uploads accept any bytes and are capped at 25 MiB. References are consumed by the image_uploads / attachment_uploads fields of the feature-creation and refactor-launch mutations and expire 24 hours after staging.
          */
         post: operations["stageUpload"];
         delete?: never;
@@ -2168,8 +2131,6 @@ export interface components {
             permission_answer_response?: components["schemas"]["PermissionAnswerResponse"];
             ask_user_answer_response?: components["schemas"]["AskUserAnswerResponse"];
             help_send_response?: components["schemas"]["HelpSendResponse"];
-            chat_start_response?: components["schemas"]["ChatStartResponse"];
-            chat_end_response?: components["schemas"]["ChatEndResponse"];
             runtime_config_update_response?: components["schemas"]["RuntimeConfigUpdateResponse"];
             publish_feature_response?: components["schemas"]["PublishFeatureResponse"];
             publish_description_response?: components["schemas"]["PublishDescriptionResponse"];
@@ -2266,20 +2227,6 @@ export interface components {
         OwnedError: {
             ref: components["schemas"]["ErrorReference"];
             error: components["schemas"]["Error"];
-        };
-        ChatStartRequest: {
-            message: string;
-            images?: string[];
-            image_uploads?: string[];
-            context?: components["schemas"]["ErrorReference"];
-        };
-        ChatStartResponse: components["schemas"]["ActionBaseResponse"] & {
-            session_id: string;
-            result: string;
-        };
-        ChatEndResponse: components["schemas"]["ActionBaseResponse"] & {
-            session_id: string;
-            result: string;
         };
         RuntimeConfigUpdateResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["ActionResult"];
         PublishFeatureResponse: components["schemas"]["ActionBaseResponse"] & components["schemas"]["FeatureActionResult"];
@@ -2852,6 +2799,7 @@ export interface components {
         SupervisorMessageRequest: {
             text: string;
             client_message_id: string;
+            error_reference?: components["schemas"]["ErrorReference"];
         };
         SupervisorMessageResponse: {
             api_version: string;
@@ -3449,8 +3397,8 @@ export interface components {
         UpdateActiveWorkSummary: {
             /** @description Number of features with live activity. */
             feature_count: number;
-            /** @description Whether any feature chat turn is active. */
-            chat_active: boolean;
+            /** @description Whether the supervisor is active work: its lifecycle is starting, running, waiting_permission or waiting_question. */
+            supervisor_active: boolean;
             /** @description Number of in-flight repository clone operations. */
             clone_count: number;
             /** @description Number of in-flight staged uploads. */
@@ -3478,7 +3426,7 @@ export interface components {
              * @enum {string}
              */
             when: "now" | "idle";
-            /** @description Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the singleton chat through the existing pause-stop and chat-end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted. */
+            /** @description Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the supervisor through the existing pause-stop and supervisor end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted. */
             stop_active_work?: boolean;
             /** @description Explicit target version selector. Must name the currently discovered latest stable version; any other version is refused. */
             version?: string;
@@ -4869,42 +4817,6 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
-    startChatPrompt: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
-                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ChatStartRequest"];
-            };
-        };
-        responses: {
-            200: components["responses"]["ActionResponse"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    endChatPrompt: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
-                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: components["requestBodies"]["JSONMutation"];
-        responses: {
-            200: components["responses"]["ActionResponse"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
     listPermissions: {
         parameters: {
             query?: never;
@@ -5489,6 +5401,7 @@ export interface operations {
             200: components["responses"]["SupervisorMessageResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["ErrorResponse"];
             409: components["responses"]["ErrorResponse"];
             502: components["responses"]["ErrorResponse"];
             503: components["responses"]["ErrorResponse"];

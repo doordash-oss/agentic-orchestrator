@@ -18,9 +18,9 @@
 // a deterministic invariant holds: either work owns a reservation, or
 // installation owns closed admission — never both — except during an
 // install operation's explicitly consented stopping interval, where
-// already-admitted feature/chat reservations persist under a closed boundary
-// and settle through their own completion and stop paths while every new
-// reservation is refused. Closed admission alone therefore never proves
+// already-admitted feature/supervisor reservations persist under a closed
+// boundary and settle through their own completion and stop paths while
+// every new reservation is refused. Closed admission alone therefore never proves
 // inactivity. Reservations must be acquired before the underlying work
 // launches and released only after that work settles, so no window exists
 // where running work is invisible both to the reservation count and to the
@@ -44,9 +44,6 @@ const (
 	// CategoryFeature covers feature phases, setup, child workflows, and
 	// their finalization and continuation tails.
 	CategoryFeature Category = "feature"
-	// CategoryChat covers the singleton chat session from launch through
-	// registration.
-	CategoryChat Category = "chat"
 	// CategorySupervisor covers a supervisor process launch from admission
 	// through registration, after which the supervisor detector reports it.
 	CategorySupervisor Category = "supervisor"
@@ -91,8 +88,7 @@ func AsClosed(err error) (*ClosedError, bool) {
 // state. Detection failure must never be reported as zero activity — the
 // caller treats a detection error as blocking.
 type Activity struct {
-	Features   int
-	ChatActive bool
+	Features int
 	// SupervisorActive reports a supervisor that is starting or in a turn.
 	SupervisorActive bool
 	Clones           int
@@ -103,13 +99,13 @@ type Activity struct {
 
 // Busy reports whether any observed activity exists.
 func (a Activity) Busy() bool {
-	return a.Features > 0 || a.ChatActive || a.SupervisorActive || a.Clones > 0 ||
+	return a.Features > 0 || a.SupervisorActive || a.Clones > 0 ||
 		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
 
 // ProtectedBusy reports whether activity exists that an authorized stop may
 // not interrupt: repository work of every class — clones, uploads, origin
-// checks, and other repository work. Feature, chat and supervisor activity
+// checks, and other repository work. Feature and supervisor activity
 // alone never counts: an explicit-stop install's accepted permission
 // authorizes interrupting exactly that work.
 func (a Activity) ProtectedBusy() bool {
@@ -256,7 +252,7 @@ func (c *Coordinator) CloseIfQuiesced() bool {
 // the stoppable categories keeps its reservations and can still settle
 // through its normal completion and stop paths. The closure is refused —
 // with admission left open — when any reservation outside the stoppable
-// categories is held: that work won the race, no feature or chat work may
+// categories is held: that work won the race, no feature or supervisor work may
 // be stopped, and the operation must abort.
 func (c *Coordinator) CloseForStopping(stoppable ...Category) bool {
 	c.mu.Lock()
@@ -302,7 +298,6 @@ func (c *Coordinator) Detect(ctx context.Context) (Activity, error) {
 				return Activity{}, fmt.Errorf("activity detection failed: %w", err)
 			}
 			merged.Features += activity.Features
-			merged.ChatActive = merged.ChatActive || activity.ChatActive
 			merged.SupervisorActive = merged.SupervisorActive || activity.SupervisorActive
 			merged.Clones += activity.Clones
 			merged.Uploads += activity.Uploads

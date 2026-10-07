@@ -17,6 +17,7 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import {
   SessionSummarySchema,
+  SupervisorMessageRequestSchema,
   SupervisorStateSchema,
   SupervisorTranscriptRequestSchema,
   isSupervisorSessionId,
@@ -48,15 +49,10 @@ import {
   type AttentionItem,
   FeatureSnapshotSchema,
   GateResumeRequestSchema,
-  ChatStartRequestSchema,
   SessionIdSchema,
   SessionTranscriptRequestSchema,
   SessionOutputEventSchema,
   SetupTaskViewSchema,
-  isActiveChatSession,
-  isTerminalChatStatus,
-  defaultAmaGeometry,
-  defaultAmaPrefs,
   defaultServersPrefs,
   defaultSettings,
   defaultSettingsWindowPrefs,
@@ -842,22 +838,7 @@ describe('operational IPC schemas', () => {
     expect(SessionIdSchema.safeParse('session/a-1').success).toBe(false);
   });
 
-  it('bounds singleton AMA chat start requests', () => {
-    expect(ChatStartRequestSchema.parse({ message: 'What is running?' })).toStrictEqual({
-      message: 'What is running?',
-    });
-    expect(ChatStartRequestSchema.safeParse({ message: '   ' }).success).toBe(false);
-    expect(ChatStartRequestSchema.safeParse({ message: 'hello', sessionId: 'other' }).success).toBe(
-      false,
-    );
-  });
-
-  it('accepts a run chat context reference and rejects undisciplined ones', () => {
-    const request = {
-      message: 'Explain this error',
-      context: { scope: 'run', code: 'iteration_budget_exhausted', featureId: 'abcd1234' },
-    };
-    expect(ChatStartRequestSchema.parse(request)).toStrictEqual(request);
+  it('rejects undisciplined error references before they reach the wire', () => {
     // Unknown scopes, extra keys, and keys missing for or foreign to the
     // scope never reach the wire.
     for (const context of [
@@ -870,7 +851,10 @@ describe('operational IPC schemas', () => {
       { scope: 'recovery', code: 'x' },
     ]) {
       expect(
-        ChatStartRequestSchema.safeParse({ message: 'Explain this error', context }).success,
+        SupervisorMessageRequestSchema.safeParse({
+          text: 'Explain this error',
+          errorReference: context,
+        }).success,
         JSON.stringify(context),
       ).toBe(false);
     }
@@ -913,51 +897,6 @@ describe('operational IPC schemas', () => {
         ...event,
         error: { code: 'E_SESSION_STREAM', message: 'stream broke' },
       }).success,
-    ).toBe(false);
-  });
-});
-
-describe('singleton AMA session helpers', () => {
-  it('uses one terminal status vocabulary for active-chat decisions', () => {
-    for (const status of [
-      'complete',
-      'completed',
-      'done',
-      'ended',
-      'failed',
-      'cancelled',
-      'canceled',
-      'stopped',
-      'not_active',
-    ]) {
-      expect(isTerminalChatStatus(status), status).toBe(true);
-      expect(isTerminalChatStatus(status.toLocaleUpperCase()), status).toBe(true);
-      expect(
-        isActiveChatSession({
-          id: '__chat__',
-          featureId: '__chat__',
-          kind: 'chat',
-          status,
-        }),
-        status,
-      ).toBe(false);
-    }
-
-    expect(
-      isActiveChatSession({
-        id: '__chat__',
-        featureId: '__chat__',
-        kind: 'chat',
-        status: 'running',
-      }),
-    ).toBe(true);
-    expect(
-      isActiveChatSession({
-        id: 'feature-session',
-        featureId: 'feature1',
-        kind: 'agent',
-        status: 'running',
-      }),
     ).toBe(false);
   });
 });
@@ -1264,19 +1203,28 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 4 }).success).toBe(
       false,
     );
-    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 6 }).success).toBe(
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 5 }).success).toBe(
+      false,
+    );
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 6 }).success).toBe(true);
+    expect(SettingsSchema.safeParse({ ...defaultSettings(), schemaVersion: 7 }).success).toBe(
       false,
     );
   });
 
+  it('rejects the retired ama section fail-closed', () => {
+    expect(
+      SettingsSchema.safeParse({ ...defaultSettings(), ama: { drawer: 'compact' } }).success,
+    ).toBe(false);
+  });
+
   it('accepts a full settings document with window bounds and theme', () => {
     const doc = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: true },
-      ama: { drawer: 'expanded', geometry: { right: 40, bottom: 60, width: 480, height: 620 } },
       notifications: { previewEnabled: true },
       shell: {
         featureByServer: { ['a'.repeat(64)]: 'abcd1234ef567890' },
@@ -1305,7 +1253,7 @@ describe('SettingsSchema', () => {
 
   it('fills wizard presentation prefs with defaults for pre-wizard documents', () => {
     const doc = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       runtime: { selection: null },
       window: {},
       theme: 'system',
@@ -1313,7 +1261,6 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.parse(doc)).toEqual({
       ...doc,
       wizard: defaultWizardPrefs(),
-      ama: defaultAmaPrefs(),
       notifications: { previewEnabled: false },
       shell: defaultShellPrefs(),
       settingsWindow: defaultSettingsWindowPrefs(),
@@ -1323,12 +1270,11 @@ describe('SettingsSchema', () => {
 
   it('fills the Settings window prefs with defaults for pre-Settings-window documents', () => {
     const doc = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       runtime: { selection: 'claude' },
       window: {},
       theme: 'dark',
       wizard: { collapsedHelp: true },
-      ama: defaultAmaPrefs(),
       notifications: { previewEnabled: true },
       shell: defaultShellPrefs(),
     };
@@ -1361,9 +1307,6 @@ describe('SettingsPatchSchema', () => {
     expect(SettingsPatchSchema.parse({ runtime: { selection: null } })).toEqual({
       runtime: { selection: null },
     });
-    expect(SettingsPatchSchema.parse({ ama: { drawer: 'expanded' } })).toEqual({
-      ama: { drawer: 'expanded', geometry: defaultAmaGeometry() },
-    });
     expect(SettingsPatchSchema.parse({ notifications: { previewEnabled: true } })).toEqual({
       notifications: { previewEnabled: true },
     });
@@ -1387,6 +1330,7 @@ describe('SettingsPatchSchema', () => {
   it('rejects schemaVersion tampering and unknown keys', () => {
     expect(SettingsPatchSchema.safeParse({ schemaVersion: 9 }).success).toBe(false);
     expect(SettingsPatchSchema.safeParse({ apiToken: 'x' }).success).toBe(false);
+    expect(SettingsPatchSchema.safeParse({ ama: { drawer: 'expanded' } }).success).toBe(false);
   });
 
   it('accepts a servers patch that upserts an entry and/or sets last-used', () => {
@@ -1449,26 +1393,34 @@ describe('Servers pane IPC contracts', () => {
     ).toBe(false);
   });
 
-  it('AppRouteEvent: draft, autoSubmit, and chatContext ride the ama target only', () => {
-    const amaRoute = {
-      target: 'ama',
+  it('AppRouteEvent: the recovery target opens the recovery sheet and carries no extras', () => {
+    expect(AppRouteEventSchema.parse({ target: 'recovery' })).toEqual({ target: 'recovery' });
+    expect(AppRouteEventSchema.safeParse({ target: 'recovery', draft: 'x' }).success).toBe(false);
+  });
+
+  it('AppRouteEvent: draft and errorReference ride the supervisor target only', () => {
+    const supervisorRoute = {
+      target: 'supervisor',
       draft: 'Explain the "Run failed" error (run_failed) on add-login.',
-      autoSubmit: true,
-      chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+      errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
     };
-    expect(AppRouteEventSchema.parse(amaRoute)).toEqual(amaRoute);
-    expect(AppRouteEventSchema.parse({ target: 'ama' })).toEqual({ target: 'ama' });
-    // A non-ama route carrying any chat field — or an undisciplined
-    // reference — fails closed.
+    expect(AppRouteEventSchema.parse(supervisorRoute)).toEqual(supervisorRoute);
+    expect(AppRouteEventSchema.parse({ target: 'supervisor' })).toEqual({ target: 'supervisor' });
+    // A non-supervisor route carrying a draft field, an undisciplined
+    // reference, the retired ama target, or the retired autoSubmit flag
+    // fails closed.
     for (const bad of [
       { target: 'home', draft: 'hello' },
-      { target: 'home', autoSubmit: true },
-      { target: 'settings', chatContext: { scope: 'run', code: 'x', featureId: 'abcd1234' } },
+      { target: 'settings', errorReference: { scope: 'run', code: 'x', featureId: 'abcd1234' } },
       {
-        target: 'ama',
+        target: 'supervisor',
         draft: 'hello',
-        chatContext: { scope: 'run', code: 'x', featureId: 'abcd1234', taskKey: 't' },
+        errorReference: { scope: 'run', code: 'x', featureId: 'abcd1234', taskKey: 't' },
       },
+      { target: 'supervisor', draft: 'hello', autoSubmit: true },
+      { target: 'supervisor', draft: 'hello', chatContext: { scope: 'run', code: 'x' } },
+      { target: 'ama' },
+      { target: 'ama', draft: 'hello' },
     ]) {
       expect(AppRouteEventSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
     }
@@ -2059,7 +2011,6 @@ describe('supervisor IPC schemas', () => {
       usage: {},
     };
     expect(SessionSummarySchema.parse(summary)).toEqual(summary);
-    expect(isActiveChatSession(summary)).toBe(false);
     expect(isSupervisorSessionId(supervisorSessionId)).toBe(true);
     expect(isSupervisorSessionId('__supervisor__')).toBe(false);
     expect(isSupervisorSessionId('__chat__')).toBe(false);
@@ -2082,6 +2033,22 @@ describe('supervisor IPC schemas', () => {
       { cursor: 3 },
     ]) {
       expect(SupervisorTranscriptRequestSchema.safeParse(request).success).toBe(false);
+    }
+  });
+
+  it('message requests carry text and an optional disciplined error reference', () => {
+    const reference = { scope: 'run', code: 'run_failed', featureId: 'abcd1234' } as const;
+    expect(SupervisorMessageRequestSchema.parse({ text: 'hi' })).toEqual({ text: 'hi' });
+    expect(SupervisorMessageRequestSchema.parse({ text: 'hi', errorReference: reference })).toEqual(
+      { text: 'hi', errorReference: reference },
+    );
+    for (const request of [
+      { text: 'hi', errorReference: { scope: 'run', code: 'run_failed' } },
+      { text: 'hi', errorReference: { ...reference, taskKey: 't' } },
+      { text: 'hi', error_reference: reference },
+      { text: 'hi', errorReference: { ...reference, extra: 1 } },
+    ]) {
+      expect(SupervisorMessageRequestSchema.safeParse(request).success).toBe(false);
     }
   });
 

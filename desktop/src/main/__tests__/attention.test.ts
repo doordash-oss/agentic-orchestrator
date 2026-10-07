@@ -21,7 +21,6 @@ import { CanonicalErrorException } from '../../shared/errors';
 import {
   actionableAttentionCount,
   attentionOwnerFeatureId,
-  CHAT_SESSION_ID,
   isSupervisorAttentionItem,
 } from '../../shared/ipc';
 
@@ -388,9 +387,11 @@ describe('AttentionService waiting sessions', () => {
       expect.objectContaining({ kind: 'help', waitingKind: 'coordinating' }),
     ]);
 
-    const chat = new AttentionService(transport('Coordinating next steps', sessionsBody, 'input'));
-    expect((await chat.getSnapshot()).items).toEqual([
-      expect.objectContaining({ kind: 'help', waitingKind: 'input' }),
+    // An unrecognized kind (such as the retired chat 'input') falls back to
+    // the prompt text.
+    const retired = new AttentionService(transport('Agent has a question', sessionsBody, 'input'));
+    expect((await retired.getSnapshot()).items).toEqual([
+      expect.objectContaining({ kind: 'help', waitingKind: 'coordinating' }),
     ]);
 
     const question = new AttentionService(
@@ -561,7 +562,8 @@ describe('AttentionService review items', () => {
                     pending: true,
                   },
                   {
-                    feature_id: CHAT_SESSION_ID,
+                    // A retired chat idle-wait is as unlisted as any orphan.
+                    feature_id: '__chat__',
                     question: 'chat help',
                     pending: true,
                   },
@@ -643,25 +645,20 @@ describe('AttentionService review items', () => {
     expect(ids).toEqual(
       expect.arrayContaining([
         'ask-runtime',
-        `${CHAT_SESSION_ID}:`,
         'feature-1:',
         'feature-1:session-2',
         'perm-active',
         'perm-runtime',
       ]),
     );
-    expect(ids).toHaveLength(6);
+    expect(ids).toHaveLength(5);
+    expect(ids).not.toContain('__chat__:');
     expect(ids).not.toContain('ask-orphan');
     expect(ids).not.toContain('missing-feature::');
     expect(ids).not.toContain('missing-feature:session-1');
     expect(ids).not.toContain('perm-orphan');
     expect(snapshot.items).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          kind: 'help',
-          id: `${CHAT_SESSION_ID}:`,
-          sessionId: CHAT_SESSION_ID,
-        }),
         expect.objectContaining({
           kind: 'gate',
           id: 'feature-1:',
@@ -682,9 +679,6 @@ describe('AttentionService review items', () => {
           },
         }),
       ]),
-    );
-    expect(snapshot.items.find((item) => item.id === `${CHAT_SESSION_ID}:`)).not.toHaveProperty(
-      'featureId',
     );
   });
 
@@ -1053,14 +1047,7 @@ describe('AttentionService supervisor items', () => {
                       questions: [{ question: 'Feature question?' }],
                     },
                   ],
-                  help_queue: [
-                    {
-                      feature_id: CHAT_SESSION_ID,
-                      question: 'Agent has a question',
-                      kind: 'input',
-                      pending: true,
-                    },
-                  ],
+                  help_queue: [],
                   need_user_inputs: [],
                 }
               : path === '/api/v1/permissions'
@@ -1172,7 +1159,7 @@ describe('AttentionService supervisor items', () => {
     expect(byId.has('perm-orphan')).toBe(false);
   });
 
-  it('leaves feature and chat items exactly as before', async () => {
+  it('leaves feature items exactly as before', async () => {
     const snapshot = await new AttentionService(supervisorTransport()).getSnapshot();
     const byId = new Map(snapshot.items.map((item) => [item.id, item]));
 
@@ -1186,12 +1173,6 @@ describe('AttentionService supervisor items', () => {
     });
     expect(byId.get('ask-feature')).toMatchObject({ kind: 'questions', featureId: 'feature-1' });
     expect(byId.get('ask-feature')).not.toHaveProperty('target');
-    expect(byId.get(`${CHAT_SESSION_ID}:`)).toMatchObject({
-      kind: 'help',
-      sessionId: CHAT_SESSION_ID,
-      waitingKind: 'input',
-    });
-    expect(byId.get(`${CHAT_SESSION_ID}:`)).not.toHaveProperty('target');
     for (const item of snapshot.items) {
       if (item.kind === 'permission' || item.kind === 'questions') {
         expect(isSupervisorAttentionItem(item)).toBe(item.id.includes('-sup'));
@@ -1204,8 +1185,7 @@ describe('AttentionService supervisor items', () => {
     const supervisorItems = snapshot.items.filter(isSupervisorAttentionItem);
     expect(supervisorItems).toHaveLength(3);
     expect(actionableAttentionCount(supervisorItems)).toBe(3);
-    // Feature permission + feature question + three supervisor items; the
-    // synthetic chat input item never counts.
+    // Feature permission + feature question + three supervisor items.
     expect(actionableAttentionCount(snapshot.items)).toBe(5);
   });
 

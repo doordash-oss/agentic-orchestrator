@@ -105,8 +105,6 @@ import {
   type TestingContractWaiveRequest,
   type TestingContractWaiveResult,
   type AttentionActionResult,
-  type ChatActionResult,
-  type ChatStartRequest,
   type LocalReviewDraft,
   type LocalReviewDraftSaveRequest,
   type LocalReviewDraftLookupRequest,
@@ -261,8 +259,6 @@ export interface IpcServices {
   resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
   waiveTestingContract(request: TestingContractWaiveRequest): Promise<TestingContractWaiveResult>;
   getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot>;
-  startChat(request: ChatStartRequest): Promise<ChatActionResult>;
-  endChat(): Promise<ChatActionResult>;
   loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): LocalReviewDraft | null;
   saveLocalReviewDraft(request: LocalReviewDraftSaveRequest): LocalReviewDraft;
   discardLocalReviewDraft(request: LocalReviewDraftDiscardRequest): boolean;
@@ -448,8 +444,6 @@ export function registerIpcHandlers(
       services.waiveTestingContract(request),
     [IPC_CHANNELS.attentionGetTestingContract]: (_event, request: TestingContractRequest) =>
       services.getTestingContract(request),
-    [IPC_CHANNELS.chatStart]: (_event, request: ChatStartRequest) => services.startChat(request),
-    [IPC_CHANNELS.chatEnd]: () => services.endChat(),
     [IPC_CHANNELS.sessionsList]: () => services.listSessions(),
     [IPC_CHANNELS.sessionsGet]: (_event, sessionId: string) => services.getSession(sessionId),
     [IPC_CHANNELS.sessionsTranscript]: (_event, request: SessionTranscriptRequest) =>

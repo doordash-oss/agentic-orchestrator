@@ -23,178 +23,10 @@ import {
   persistAppLogs,
   type AppHandle,
 } from '../helpers/app';
-import {
-  createRepo,
-  createWorld,
-  destroyWorld,
-  providerInvocationCount,
-  waitFor,
-} from '../helpers/world';
-
-test('packaged AMA panel floats, toggles, drags, persists, and ends the session', async ({}, testInfo) => {
-  const world = createWorld('background-ama-notifications', {
-    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
-    presetWorkspaceRoot: true,
-    workflowProvider: true,
-  });
-  createRepo(world, 'ama-lab', { commit: true });
-  let handle: AppHandle | null = null;
-
-  try {
-    handle = await launchApp(world, testInfo, { traceName: 'background-ama-notifications' });
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
-      timeout: 60_000,
-    });
-
-    // Closed by default, with no docked remnant anywhere in the frame.
-    const panel = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await expect(panel).toHaveCount(0);
-    await expect(handle.page.locator('.ama-panel')).toHaveCount(0);
-
-    // ⌘⇧M (the native menu item the accelerator drives): open, focus composer.
-    await clickNativeMenu(handle, 'global.ama');
-    await expect(panel).toBeVisible();
-    const composer = panel.getByRole('textbox', { name: 'Ask Agentico' });
-    await expect(composer).toBeFocused();
-    // A second route never closes an open panel.
-    await clickNativeMenu(handle, 'global.ama');
-    await expect(panel).toBeVisible();
-
-    // ⌥Space toggles from a focused composer and types no character.
-    const toggleDraft = 'Draft that survives the toggle';
-    await composer.pressSequentially(toggleDraft);
-    await expect(composer).toHaveValue(toggleDraft);
-    await composer.click();
-    await handle.page.keyboard.press('Alt+Space');
-    await expect(panel).toHaveCount(0);
-    await handle.page.keyboard.press('Alt+Space');
-    await expect(panel).toBeVisible();
-    await expect(composer).toHaveValue(toggleDraft);
-
-    await composer.fill('Summarize the current workspace state.');
-    await panel.getByRole('button', { name: 'Send' }).click();
-    await expect(panel.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
-      timeout: 60_000,
-    });
-    const startedChat = await handle.page.evaluate(() => window.agentico.getSession('__chat__'));
-    expect(startedChat.id).toBe('__chat__');
-    const firstTranscript = await handle.page.evaluate(() =>
-      window.agentico.getSessionTranscript({ sessionId: '__chat__', limit: 200 }),
-    );
-    expect(firstTranscript.messages.length).toBeGreaterThan(0);
-
-    const followUp = await handle.page.evaluate(() =>
-      window.agentico.startChat({ message: 'Follow up in the active AMA session.' }),
-    );
-    expect(followUp).toMatchObject({ sessionId: '__chat__', result: 'sent' });
-    // AMA activity never displaces the footer's connection identity or its
-    // switcher; the Ask control remains the session's single entry point.
-    await expect(handle.page.getByRole('button', { name: / — switch server$/ })).toBeVisible();
-    await expect(handle.page.getByRole('button', { name: 'Ask ⌥Space' })).toBeVisible();
-    await expect(handle.page.getByText('Ask Agentico is active')).toHaveCount(0);
-    const chatSessions = await handle.page.evaluate(() =>
-      window.agentico
-        .listSessions()
-        .then((sessions) => sessions.filter((session) => session.id === '__chat__')),
-    );
-    expect(chatSessions).toHaveLength(1);
-    expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
-
-    const settings = await handle.page.evaluate(() => window.agentico.getSettings());
-    expect(settings.notifications.previewEnabled).toBe(false);
-    expect(settings.ama.drawer).toBe('expanded');
-    expect(settings.ama.geometry).toEqual({ right: 20, bottom: 20, width: 404, height: 560 });
-
-    // Drag by the header, then resize from the leading edge.
-    await dragBy(handle, '.ama-panel__header', -120, -80);
-    await dragBy(handle, '.ama-panel__grip[data-edge="w"]', -60, 0);
-    const moved = (await handle.page.evaluate(() => window.agentico.getSettings())).ama.geometry;
-    expect(moved.right).toBeGreaterThan(20);
-    expect(moved.bottom).toBeGreaterThan(20);
-    expect(moved.width).toBeGreaterThan(404);
-    const movedBox = await panel.boundingBox();
-    expect(Math.round(movedBox?.width ?? 0)).toBe(moved.width);
-
-    // End session, from the composer actions row, behind its confirmation.
-    const end = panel.getByRole('button', { name: 'End session', exact: true });
-    await expect(end).toBeVisible();
-    await end.click();
-    const endConfirm = panel.getByRole('group', { name: 'End session confirmation' });
-    await expect(endConfirm).toContainText('transcript stays read-only');
-    await endConfirm.getByRole('button', { name: 'End session', exact: true }).click();
-    await expect(panel).toContainText('AMA ended.');
-    await expect(panel).toContainText('Read-only transcript');
-    const endedChat = await handle.page.evaluate(() => window.agentico.getSession('__chat__'));
-    expect(endedChat.status.toLowerCase()).toMatch(/ended|stopped|complete|done|cancel/);
-    const endedTranscript = await handle.page.evaluate(() =>
-      window.agentico.getSessionTranscript({ sessionId: '__chat__', limit: 200 }),
-    );
-    expect(endedTranscript.messages.length).toBeGreaterThanOrEqual(firstTranscript.messages.length);
-    expect(endedTranscript.messages.map((message) => message.text ?? '').join('\n')).toContain(
-      firstTranscript.messages[0]?.text ?? '',
-    );
-
-    // Geometry and the open state survive a real relaunch. The chat session
-    // itself does not: this world's server is app-owned, so quitting reaps it
-    // — the panel's own restored state is what this step asserts.
-    persistAppLogs(handle, 'background-ama-notifications-app-server');
-    await closeApp(handle);
-    handle = await launchApp(world, testInfo, {
-      traceName: 'background-ama-notifications-relaunch',
-    });
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
-      timeout: 60_000,
-    });
-    const restored = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await expect(restored).toBeVisible();
-    const restoredGeometry = (await handle.page.evaluate(() => window.agentico.getSettings())).ama
-      .geometry;
-    expect(restoredGeometry).toEqual(moved);
-    const restoredBox = await restored.boundingBox();
-    expect(Math.round(restoredBox?.width ?? 0)).toBe(moved.width);
-    expect(Math.round(restoredBox?.height ?? 0)).toBe(moved.height);
-
-    // ✕ closes the panel outright and persists that state with the geometry.
-    await restored.getByRole('button', { name: 'Close Ask Agentico' }).click();
-    await expect(restored).toHaveCount(0);
-    const closed = await handle.page.evaluate(() => window.agentico.getSettings());
-    expect(closed.ama.drawer).toBe('compact');
-    expect(closed.ama.geometry).toEqual(moved);
-
-    persistAppLogs(handle, 'background-ama-notifications-relaunch-app-server');
-  } finally {
-    if (handle !== null) {
-      await handle.page.evaluate(() => window.agentico.endChat()).catch(() => {});
-      await closeApp(handle).catch(() => {});
-    }
-    await assertNoLeakedProcesses(world);
-    destroyWorld(world);
-  }
-});
-
-/** Clicks a native menu item by id, the same dispatch path its accelerator uses. */
-async function clickNativeMenu(handle: AppHandle, id: string): Promise<void> {
-  await handle.app.evaluate(({ BrowserWindow, Menu }, itemId) => {
-    const item = Menu.getApplicationMenu()?.getMenuItemById(itemId);
-    if (item == null) throw new Error(`menu item ${itemId} missing`);
-    item.click(undefined, BrowserWindow.getAllWindows()[0], undefined);
-  }, id);
-}
-
-/** A real pointer drag across `selector`, from its centre by (dx, dy). */
-async function dragBy(handle: AppHandle, selector: string, dx: number, dy: number): Promise<void> {
-  const box = await handle.page.locator(selector).boundingBox();
-  if (box === null) throw new Error(`${selector} has no box to drag`);
-  const fromX = box.x + box.width / 2;
-  const fromY = box.y + box.height / 2;
-  await handle.page.mouse.move(fromX, fromY);
-  await handle.page.mouse.down();
-  await handle.page.mouse.move(fromX + dx, fromY + dy, { steps: 8 });
-  await handle.page.mouse.up();
-}
+import { createRepo, createWorld, destroyWorld, waitFor } from '../helpers/world';
 
 test('packaged attention notifications are private, deduplicated, bounded, passive, and do not steal focus', async ({}, testInfo) => {
-  const world = createWorld('background-ama-notifications-attention', {
+  const world = createWorld('background-attention-notifications', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
     attentionProvider: true,
@@ -251,8 +83,8 @@ test('packaged attention notifications are private, deduplicated, bounded, passi
     const inbox = handle.page.getByRole('complementary', { name: 'Attention inbox' });
     await expect(inbox).not.toBeVisible();
     // Notification click only focuses the window (main/notifications.ts just
-    // calls show(), no routing) — it stays on the feature's own cockpit, not
-    // Overview. The sidebar's waiting-lane sub-line is this shell's per-row
+    // calls show(), no routing) — it stays on the feature's own cockpit. The
+    // sidebar's waiting-lane sub-line is this shell's per-row
     // equivalent of the old tab-strip's "Blocking input for X: N pending"
     // badge, worded per WorkspaceShell.tsx's laneSubline (permission-kind
     // attention -> "Approve N request(s)").

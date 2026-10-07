@@ -89,12 +89,10 @@ import { CreationFilesService } from './creationFiles';
 import { ThemeController } from './theme';
 import {
   actionableAttentionCount,
-  CHAT_SESSION_ID,
   DEFAULT_RUNTIME_ID,
   disabledMainWindowUiState,
   CREATION_IMAGE_FORMATS,
   IPC_EVENTS,
-  isActiveChatSession,
   SETTINGS_WINDOW_DEFAULT_HEIGHT,
   SETTINGS_WINDOW_DEFAULT_WIDTH,
   SETTINGS_WINDOW_MIN_HEIGHT,
@@ -103,7 +101,6 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type ConnectionState,
-  type FeatureSnapshot,
   type FeaturesListResult,
   type RemoteServerAddRequest,
   type RemoteServerAddResult,
@@ -145,10 +142,14 @@ import {
 } from './updateInstaller';
 import {
   QuitCoordinator,
+  SUPERVISOR_UNRESOLVED_ID,
+  SUPERVISOR_UNRESOLVED_LABEL,
   activeWorkDialog,
-  hasActiveWork,
+  detectActiveWork as detectActiveWorkFrom,
+  isSupervisorBusy,
   quitAnywayDialog,
   shouldRequestQuitOnMainWindowClose,
+  stopActiveWork as stopActiveWorkWith,
   stopFailureDialog,
   type ActiveWorkCheck,
   type ActiveWorkDecision,
@@ -650,7 +651,7 @@ if (!hasSingleInstanceLock) {
     });
     const recovery = new RecoveryService(gateway);
     const bulk = new BulkService(features);
-    const sessions = new SessionService(gateway, randomUUID, () => gateway.connectedLocality);
+    const sessions = new SessionService(gateway);
     // The supervisor conversation is fenced by server identity and connection
     // generation like the other per-server services: a reply crossing a
     // switch is discarded rather than shown against the new server.
@@ -1123,35 +1124,15 @@ if (!hasSingleInstanceLock) {
       if (forced !== null) {
         return forced;
       }
-      const featureIds: string[] = [];
-      let detectionFailed = false;
-      try {
-        const list = await features.listFeatures();
-        featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
-        const snapshots = await Promise.allSettled(
-          list.features.map((summary) => features.getFeature(summary.id)),
-        );
-        for (const result of snapshots) {
-          if (result.status === 'rejected') {
-            detectionFailed = true;
-            continue;
-          }
-          if (stoppableFeature(result.value)) {
-            featureIds.push(result.value.id);
-          }
-        }
-      } catch {
-        detectionFailed = true;
-      }
-
-      let chatActive = false;
-      try {
-        chatActive = (await sessions.list()).some(isActiveChatSession);
-      } catch {
-        detectionFailed = true;
-      }
-
-      return { featureIds: [...new Set(featureIds)], chatActive, detectionFailed };
+      return detectActiveWorkFrom({
+        listFeatures: async () => {
+          const list = await features.listFeatures();
+          featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
+          return list;
+        },
+        getFeature: (featureId) => features.getFeature(featureId),
+        getSupervisorState: () => supervisor.getState(),
+      });
     }
 
     function handleWindowClose(event: ElectronEvent, window: BrowserWindow): void {
@@ -1170,67 +1151,17 @@ if (!hasSingleInstanceLock) {
       if (forcedFailure !== null) {
         return forcedFailure;
       }
-
-      const stopFailures = new Map<string, string>();
-      const stops = active.featureIds.map(async (featureId) => {
-        try {
+      return stopActiveWorkWith(active, {
+        stopFeature: async (featureId) => {
           await features.dispatchAction({ featureId, action: 'pause-stop' });
-        } catch (error) {
-          stopFailures.set(`feature:${featureId}`, safeStopReason(error));
-        }
+        },
+        endSupervisor: async () => {
+          await supervisor.end();
+        },
+        detectActiveWork,
+        featureLabel: (featureId) => featureLabels.get(featureId) ?? `Feature ${featureId}`,
+        describeStopFailure: safeStopReason,
       });
-      if (active.chatActive) {
-        stops.push(
-          sessions
-            .endChat()
-            .then(() => undefined)
-            .catch((error: unknown) => {
-              stopFailures.set('ama', safeStopReason(error));
-            }),
-        );
-      }
-      await Promise.all(stops);
-
-      const deadline = Date.now() + 10_000;
-      let latest = await detectActiveWork();
-      while (!latest.detectionFailed && hasActiveWork(latest) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        latest = await detectActiveWork();
-      }
-      if (!hasActiveWork(latest)) {
-        return { unresolved: [] };
-      }
-
-      const unresolved: UnresolvedWorkItem[] = [];
-      if (latest.detectionFailed) {
-        unresolved.push({
-          kind: 'detection',
-          id: 'active-work-detection',
-          label: 'Active work check',
-          reason: 'Agentico could not verify whether all work stopped.',
-        });
-      }
-      for (const featureId of latest.featureIds) {
-        unresolved.push({
-          kind: 'feature',
-          id: featureId,
-          label: featureLabels.get(featureId) ?? `Feature ${featureId}`,
-          reason:
-            stopFailures.get(`feature:${featureId}`) ??
-            'The server did not report a terminal state before the timeout.',
-        });
-      }
-      if (latest.chatActive) {
-        unresolved.push({
-          kind: 'ama',
-          id: CHAT_SESSION_ID,
-          label: 'AMA session',
-          reason:
-            stopFailures.get('ama') ??
-            'The server did not report that AMA ended before the timeout.',
-        });
-      }
-      return { unresolved };
     }
 
     const updatePackageFormat = detectPackageFormat(process.platform, process.env, runtimeExecPath);
@@ -1265,7 +1196,7 @@ if (!hasSingleInstanceLock) {
         const active = await detectActiveWork();
         return {
           featureCount: active.featureIds.length,
-          amaActive: active.chatActive,
+          supervisorActive: active.supervisorActive,
           detectionFailed: active.detectionFailed,
         };
       },
@@ -1320,17 +1251,20 @@ if (!hasSingleInstanceLock) {
 
     async function refreshBackgroundState(): Promise<void> {
       if (gateway.getState().status !== 'ready') {
-        nativeCommands?.update({ attentionCount: 0, amaActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorActive: false });
         publishNativeCommandTestState(nativeCommands);
         return;
       }
       try {
-        const [snapshot, list, sessionList] = await Promise.all([
+        const [snapshot, list, supervisorActive] = await Promise.all([
           attention.getSnapshot(),
           features
             .listFeatures()
             .catch(() => ({ features: [], warnings: [] }) as FeaturesListResult),
-          sessions.list().catch(() => []),
+          supervisor
+            .getState()
+            .then((state) => isSupervisorBusy(state.lifecycle))
+            .catch(() => false),
         ]);
         featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
         notifications.update(snapshot, {
@@ -1339,12 +1273,12 @@ if (!hasSingleInstanceLock) {
         });
         nativeCommands?.update({
           attentionCount: actionableAttentionCount(snapshot.items),
-          amaActive: sessionList.some(isActiveChatSession),
+          supervisorActive,
         });
         publishNativeCommandTestState(nativeCommands);
         await updates.reconcileScheduledInstall();
       } catch {
-        nativeCommands?.update({ attentionCount: 0, amaActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorActive: false });
         publishNativeCommandTestState(nativeCommands);
       }
     }
@@ -1406,8 +1340,9 @@ if (!hasSingleInstanceLock) {
             window.webContents.send(IPC_EVENTS.supervisorEvent, event);
           }
         }
-        // A new supervisor permission or question changes the badge counts.
-        if (event.type === 'request') void refreshBackgroundState();
+        // A new supervisor permission or question changes the badge counts,
+        // and a lifecycle change moves the tray and a waiting install.
+        if (event.type === 'request' || event.type === 'state') void refreshBackgroundState();
       },
     });
     stopStreams = () => {
@@ -1451,7 +1386,7 @@ if (!hasSingleInstanceLock) {
         eventSupervisor.stop();
         supervisorStream.stop();
         sessions.cancelAll();
-        nativeCommands?.update({ attentionCount: 0, amaActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorActive: false });
         publishNativeCommandTestState(nativeCommands);
       }
       if (state.status === 'launch-failed' || state.status === 'crashed') {
@@ -1562,16 +1497,6 @@ if (!hasSingleInstanceLock) {
       resolveGate: (request) => attention.resolveGate(request),
       waiveTestingContract: (request) => attention.waiveTestingContract(request),
       getTestingContract: (request) => attention.getTestingContract(request),
-      startChat: async (request) => {
-        const result = await sessions.startChat(request);
-        void updates.refreshActiveWorkSummary();
-        return result;
-      },
-      endChat: async () => {
-        const result = await sessions.endChat();
-        void updates.reconcileScheduledInstall();
-        return result;
-      },
       listSessions: () => sessions.list(),
       getSession: (sessionId) => sessions.get(sessionId),
       getSessionTranscript: (request) => sessions.transcript(request),
@@ -1717,10 +1642,6 @@ app.on('window-all-closed', () => {
   }
 });
 
-function stoppableFeature(snapshot: FeatureSnapshot): boolean {
-  return snapshot.actions.some((action) => action.id === 'pause-stop' && action.enabled);
-}
-
 function publishNativeCommandTestState(nativeCommands: NativeCommandController | null): void {
   if (testUserData === null) {
     return;
@@ -1730,7 +1651,7 @@ function publishNativeCommandTestState(nativeCommands: NativeCommandController |
   };
   global.__agenticoNativeCommandState = nativeCommands?.snapshot() ?? {
     attentionCount: 0,
-    amaActive: false,
+    supervisorActive: false,
     trayInstalled: false,
     trayFallbackActive: true,
     platform: process.platform,
@@ -1770,11 +1691,11 @@ function consumeForcedStopFailure(
     label: featureLabels.get(featureId) ?? `Feature ${featureId}`,
     reason: 'Packaged E2E forced one unresolved stop outcome.',
   }));
-  if (active.chatActive) {
+  if (active.supervisorActive) {
     unresolved.push({
-      kind: 'ama',
-      id: CHAT_SESSION_ID,
-      label: 'AMA session',
+      kind: 'supervisor',
+      id: SUPERVISOR_UNRESOLVED_ID,
+      label: SUPERVISOR_UNRESOLVED_LABEL,
       reason: 'Packaged E2E forced one unresolved stop outcome.',
     });
   }
@@ -1797,7 +1718,7 @@ function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkC
     __agenticoForcedActiveWork?: {
       featureIds?: string[];
       featureLabels?: Record<string, string>;
-      chatActive?: boolean;
+      supervisorActive?: boolean;
       detectionFailed?: boolean;
     };
   };
@@ -1810,7 +1731,7 @@ function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkC
   }
   return {
     featureIds: forced.featureIds ?? [],
-    chatActive: forced.chatActive ?? false,
+    supervisorActive: forced.supervisorActive ?? false,
     detectionFailed: forced.detectionFailed ?? false,
   };
 }

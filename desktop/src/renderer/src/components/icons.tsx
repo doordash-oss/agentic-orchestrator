@@ -52,23 +52,10 @@ export function MaximizeIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 /**
- * The pinned Overview row's leading mark, shaped after SF Symbols' `house`.
- * Overview is the one row that is a place rather than a feature, so it carries
- * a glyph where feature rows carry a status dot.
- */
-export function HouseIcon(props: SVGProps<SVGSVGElement>) {
-  return (
-    <Icon {...props}>
-      <path d="M3 10.5 12 4l9 6.5" />
-      <path d="M5.5 12.5V20h13v-7.5" />
-    </Icon>
-  );
-}
-
-/**
  * The pinned Supervisor row's leading mark, shaped after SF Symbols'
- * `text.bubble`: like Overview it is a place rather than a feature, and the
- * place is a conversation.
+ * `text.bubble`: the one row that is a place rather than a feature carries a
+ * glyph where feature rows carry a status dot, and the place is a
+ * conversation.
  */
 export function SupervisorIcon(props: SVGProps<SVGSVGElement>) {
   return (
@@ -115,6 +102,20 @@ export function BellIcon(props: SVGProps<SVGSVGElement>) {
     <Icon {...props}>
       <path d="M18 8a6 6 0 0 0-12 0c0 4.5-1.5 6-2 6.5h16c-.5-.5-2-2-2-6.5" />
       <path d="M10.3 18.5a2 2 0 0 0 3.4 0" />
+    </Icon>
+  );
+}
+
+/** The toolbar Recovery trigger, shaped after SF Symbols' `lifepreserver`. */
+export function RecoveryIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="3.5" />
+      <path d="m5.6 5.6 3.9 3.9" />
+      <path d="m14.5 9.5 3.9-3.9" />
+      <path d="m14.5 14.5 3.9 3.9" />
+      <path d="m9.5 14.5-3.9 3.9" />
     </Icon>
   );
 }

@@ -22,17 +22,20 @@ limitations under the License.
  * Conversational hosts (the Supervisor page) reuse it through the optional
  * props: an Enter-to-send submit handler with its own blocked state, a
  * placeholder override, a hidden label, uploads switched off, and a footer
- * slot for the host's own controls. Every optional prop defaults to the
+ * slot for the host's own controls, and a focus handle so a routed draft
+ * can land the caret in the textarea. Every optional prop defaults to the
  * wizard behaviour, so the creation and refactor flows are unchanged.
  */
 import {
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
+  type Ref,
 } from 'react';
 import {
   CREATION_ATTACHMENT_LIMIT,
@@ -95,6 +98,12 @@ function isResolvedReference(
   );
 }
 
+/** The programmatic handle a host holds through `composerRef`. */
+export interface DescriptionComposerHandle {
+  /** Focuses the textarea with the caret after its last character. */
+  focus(): void;
+}
+
 export interface DescriptionComposerProps {
   id: string;
   label: string;
@@ -147,6 +156,8 @@ export interface DescriptionComposerProps {
   footer?: ReactNode;
   rows?: number;
   maxLength?: number;
+  /** Receives the focus handle (e.g. for a host routing a draft in). */
+  composerRef?: Ref<DescriptionComposerHandle>;
 }
 
 export function DescriptionComposer({
@@ -176,6 +187,7 @@ export function DescriptionComposer({
   footer,
   rows = 6,
   maxLength = 10000,
+  composerRef,
 }: DescriptionComposerProps) {
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionResults, setMentionResults] = useState<readonly RepositoryFileRef[]>([]);
@@ -184,9 +196,22 @@ export function DescriptionComposer({
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
+  useImperativeHandle(
+    composerRef,
+    () => ({
+      focus() {
+        const element = textareaRef.current;
+        if (element === null) return;
+        element.focus();
+        const end = element.value.length;
+        element.setSelectionRange(end, end);
+      },
+    }),
+    [],
+  );
   // Locality follows the live connection: remote connections stage files
   // through the upload channel; only the @-mention repository search stays
-  // local-only (its copy is shared with the AMA panel via localServerCopy).
+  // local-only (its copy lives in localServerCopy).
   const connection = useConnectionState();
   const remote = connection.status === 'ready' && connection.kind === 'remote';
   const serverKey = connection.status === 'ready' ? (connection.serverKey ?? null) : null;

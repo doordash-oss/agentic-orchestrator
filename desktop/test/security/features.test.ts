@@ -195,8 +195,6 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
       Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
     ),
     getTestingContract: vi.fn(() => Promise.resolve({ available: false as const })),
-    startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
-    endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
     listSessions: vi.fn(() => Promise.resolve([])),
     getSession: vi.fn(() => Promise.reject(new Error('unused'))),
     getSessionTranscript: vi.fn(() => Promise.reject(new Error('unused'))),

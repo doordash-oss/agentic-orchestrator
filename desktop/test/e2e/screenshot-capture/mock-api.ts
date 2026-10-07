@@ -57,8 +57,6 @@ import type {
 import {
   applyServersPatch,
   applyShellPatch,
-  CHAT_SESSION_ID,
-  defaultAmaPrefs,
   defaultSettings,
   defaultSettingsWindowPrefs,
   type SettingsPaneId,
@@ -316,21 +314,6 @@ const SESSIONS: SessionSummary[] = [
     usage: { inputTokens: 22000, outputTokens: 8000, costUsd: 0.33 },
   },
 ];
-
-const CHAT_SESSION: SessionSummary = {
-  id: CHAT_SESSION_ID,
-  featureId: CHAT_SESSION_ID,
-  runNumber: 0,
-  phase: 'AMA',
-  kind: 'chat',
-  label: 'Ask Agentico',
-  provider: 'claude',
-  status: 'running',
-  startedAt: '2026-07-19T14:20:00Z',
-  taskActivities: [],
-  runningTaskCount: 0,
-  usage: { inputTokens: 3200, outputTokens: 900, costUsd: 0.08 },
-};
 
 const FEATURE_SUMMARY: FeatureSummaryView[] = [
   {
@@ -1332,40 +1315,6 @@ const CONNECTION_STATE_MID_CONNECT: ConnectionState = {
   ownership: 'none',
 };
 
-/** The image the AMA panel scene attaches, matching the mock's chip. */
-const AMA_ATTACHMENT_PATH = '/Users/you/Desktop/cockpit-poll.png';
-
-const AMA_TRANSCRIPT: SessionTranscript = {
-  sessionId: CHAT_SESSION_ID,
-  cursor: { total: 4, start: 0, end: 4 },
-  messages: [
-    {
-      index: 0,
-      role: 'user',
-      type: 'text',
-      text: 'Which features still touch the old polled preview?',
-    },
-    {
-      index: 1,
-      role: 'assistant',
-      type: 'text',
-      text: 'Two, both in agentic-orchestrator: ArchiveMode.tsx reads usePolledPreview for sealed runs, and RefactorPassWorkspace.tsx uses the same hook for live passes. The run you have open is replacing the shared hook, so both will need the new subscription. Neither is in its plan.',
-    },
-    {
-      index: 2,
-      role: 'user',
-      type: 'text',
-      text: "Add that to the current run's plan?",
-    },
-    {
-      index: 3,
-      role: 'assistant',
-      type: 'text',
-      text: "I can't change a plan mid-phase. Two routes: answer the next phase-plan checkpoint with these two files, or start a refactor pass after publish.",
-    },
-  ],
-};
-
 /** Live run transcript with tool activity and bounded file-change diffs. */
 const RUN_SESSION_TRANSCRIPT: SessionTranscript['messages'] = [
   {
@@ -1411,11 +1360,6 @@ const RUN_SESSION_TRANSCRIPT: SessionTranscript['messages'] = [
 
 function isBackgroundScene(scene: string): boolean {
   return scene.startsWith('background-');
-}
-
-/** Scenes that need the singleton AMA chat session to exist. */
-function hasChatSession(scene: string): boolean {
-  return isBackgroundScene(scene) || scene === 'ama-panel';
 }
 
 export const FEATURE_QUESTION_ITEM = {
@@ -1512,27 +1456,11 @@ function sceneQuestion(scene: string): typeof FEATURE_QUESTION | typeof FEATURE_
   return scene === 'feature-question-bench' ? FEATURE_QUESTION_BENCH : FEATURE_QUESTION;
 }
 
-function backgroundAttentionItems(scene: string): AttentionSnapshot['items'] {
-  if (scene === 'background-ama-compact') {
-    return [
-      {
-        kind: 'permission',
-        id: 'perm-background-preview',
-        featureId: 'abcd1234ef567890',
-        sessionId: 'sess-impl-03',
-        phase: 'Implement',
-        toolName: 'Bash',
-        summary: 'Run the bounded verification command.',
-        input: { command: 'npm run check' },
-        waitingSince: '2026-07-19T14:18:00Z',
-      },
-    ];
-  }
+function backgroundAttentionItems(): AttentionSnapshot['items'] {
   return [
     {
       kind: 'questions',
-      id: 'ask-ama-exact-target',
-      sessionId: CHAT_SESSION_ID,
+      id: 'ask-runtime-exact-target',
       waitingSince: '2026-07-19T14:19:00Z',
       questions: [
         {
@@ -1677,9 +1605,6 @@ function makeMockApi(
   let currentSettings: Settings = {
     ...defaultSettings(),
     theme: requestedTheme,
-    // The AMA scenes open the panel from the persisted preference, exactly as
-    // the app does, rather than routing it open from the scene.
-    ama: { ...defaultAmaPrefs(), drawer: scene === 'ama-panel' ? 'expanded' : 'compact' },
     // The settings scenes open on their pane through the same persisted
     // preference the app restores on open, rather than being routed there.
     settingsWindow: { ...defaultSettingsWindowPrefs(), pane: settingsScenePane(scene) },
@@ -2006,7 +1931,7 @@ function makeMockApi(
     getAttention: () =>
       Promise.resolve({
         items: isBackgroundScene(scene)
-          ? backgroundAttentionItems(scene)
+          ? backgroundAttentionItems()
           : scene === 'attention-popover'
             ? ATTENTION_POPOVER_ITEMS
             : scene === 'update-popover'
@@ -2029,14 +1954,9 @@ function makeMockApi(
     saveGateDraft: () => Promise.resolve({ result: 'drafted' } as AttentionActionResult),
     resolveGate: () => Promise.resolve({ result: 'resolved' } as AttentionActionResult),
     ...testingContractFixture(),
-    startChat: () => Promise.resolve({ sessionId: '__chat__', result: 'started' }),
-    endChat: () => Promise.resolve({ sessionId: '__chat__', result: 'ended' }),
-    listSessions: () =>
-      Promise.resolve(hasChatSession(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS),
+    listSessions: () => Promise.resolve(SESSIONS),
     getSession: (sessionId) => {
-      const summary = (hasChatSession(scene) ? [CHAT_SESSION, ...SESSIONS] : SESSIONS).find(
-        (s) => s.id === sessionId,
-      );
+      const summary = SESSIONS.find((s) => s.id === sessionId);
       if (!summary) return Promise.reject(new Error('not_found: session not found'));
       return Promise.resolve({
         ...summary,
@@ -2048,42 +1968,40 @@ function makeMockApi(
     },
     getSessionTranscript: ({ sessionId }) =>
       Promise.resolve(
-        sessionId === CHAT_SESSION_ID
-          ? AMA_TRANSCRIPT
-          : scene.startsWith('feature-question')
-            ? ({
-                sessionId,
-                cursor: {
-                  total: RUN_SESSION_TRANSCRIPT.length + 1,
-                  start: 0,
-                  end: RUN_SESSION_TRANSCRIPT.length + 1,
+        scene.startsWith('feature-question')
+          ? ({
+              sessionId,
+              cursor: {
+                total: RUN_SESSION_TRANSCRIPT.length + 1,
+                start: 0,
+                end: RUN_SESSION_TRANSCRIPT.length + 1,
+              },
+              messages: [
+                ...RUN_SESSION_TRANSCRIPT,
+                {
+                  index: RUN_SESSION_TRANSCRIPT.length,
+                  role: 'assistant',
+                  type: 'text',
+                  text: [
+                    sceneQuestion(scene).key,
+                    '',
+                    ...sceneQuestion(scene).options.map(
+                      (option, index) =>
+                        `${index + 1}. ${option.label}${index === 0 && !/\(Recommended\)$/i.test(option.label) ? ' (Recommended)' : ''} [confidence: ${option.confidence?.toFixed(2)}]`,
+                    ),
+                  ].join('\n'),
                 },
-                messages: [
-                  ...RUN_SESSION_TRANSCRIPT,
-                  {
-                    index: RUN_SESSION_TRANSCRIPT.length,
-                    role: 'assistant',
-                    type: 'text',
-                    text: [
-                      sceneQuestion(scene).key,
-                      '',
-                      ...sceneQuestion(scene).options.map(
-                        (option, index) =>
-                          `${index + 1}. ${option.label}${index === 0 && !/\(Recommended\)$/i.test(option.label) ? ' (Recommended)' : ''} [confidence: ${option.confidence?.toFixed(2)}]`,
-                      ),
-                    ].join('\n'),
-                  },
-                ],
-              } as SessionTranscript)
-            : ({
-                sessionId,
-                cursor: {
-                  total: RUN_SESSION_TRANSCRIPT.length,
-                  start: 0,
-                  end: RUN_SESSION_TRANSCRIPT.length,
-                },
-                messages: RUN_SESSION_TRANSCRIPT,
-              } as SessionTranscript),
+              ],
+            } as SessionTranscript)
+          : ({
+              sessionId,
+              cursor: {
+                total: RUN_SESSION_TRANSCRIPT.length,
+                start: 0,
+                end: RUN_SESSION_TRANSCRIPT.length,
+              },
+              messages: RUN_SESSION_TRANSCRIPT,
+            } as SessionTranscript),
       ),
     openSessionOutput: () =>
       Promise.resolve({ subscriptionId: 'subscription-1' } as SessionOutputOpenResult),
@@ -2177,11 +2095,8 @@ function makeMockApi(
             : ['/work/space/brief/acceptance-notes.md']
           : [],
       }),
-    readClipboardImage: () =>
-      Promise.resolve({ paths: scene === 'ama-panel' ? [AMA_ATTACHMENT_PATH] : [] }),
-    importDroppedCreationFiles: () => ({
-      paths: scene === 'ama-panel' ? [AMA_ATTACHMENT_PATH] : [],
-    }),
+    readClipboardImage: () => Promise.resolve({ paths: [] }),
+    importDroppedCreationFiles: () => ({ paths: [] }),
     // Screenshot scenes never exercise the remote upload path; keep it inert.
     uploadCreationFiles: () => Promise.resolve({ results: [] }),
     searchCreationFiles: (request) =>
@@ -2837,7 +2752,7 @@ function updateStateForScene(scene: string): UpdateState {
   if (scene === 'update-popover' || scene === 'settings-install-now-confirm') {
     return {
       ...readyUpdateState(),
-      activeWorkSummary: '1 workflow and AMA session are active.',
+      activeWorkSummary: '1 workflow and the supervisor are active.',
     };
   }
   return readyUpdateState();

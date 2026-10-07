@@ -242,7 +242,7 @@ export function FileChangeCard({ change }: { change: FileChange }): React.ReactE
   );
 }
 
-/** Shared conversational renderer for AMA and the current-run live preview. */
+/** Shared conversational renderer for the supervisor and the current-run live preview. */
 export function ConversationTranscript({
   items,
   waiting,

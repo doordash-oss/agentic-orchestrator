@@ -375,7 +375,7 @@ func (UpdateInProgressParams) params() {}
 // refused an immediate install.
 type UpdateBlockedActiveWorkParams struct {
 	Features          int  `json:"features"`
-	ChatActive        bool `json:"chat_active"`
+	SupervisorActive  bool `json:"supervisor_active"`
 	Clones            int  `json:"clones"`
 	Uploads           int  `json:"uploads"`
 	OriginChecks      int  `json:"origin_checks"`
@@ -1252,9 +1252,15 @@ var catalog = map[Code]Entry{
 		Remediation: "Wait for the update operation to finish or cancel it before retrying.",
 	},
 	UpdateBlockedActiveWork: {
-		Class:       ClassBlocking,
-		Title:       "Update blocked by active work",
-		Summary:     "Active work prevents installing a release right now.",
+		Class:   ClassBlocking,
+		Title:   "Update blocked by active work",
+		Summary: "Active work prevents installing a release right now.",
+		summaryParams: func(p Params) string {
+			if params, ok := p.(UpdateBlockedActiveWorkParams); ok && params.SupervisorActive {
+				return "Active work, including the supervisor, prevents installing a release right now."
+			}
+			return ""
+		},
 		Remediation: "Let the reported work finish, then request the install again.",
 	},
 	UpdateDownloadFailed: {

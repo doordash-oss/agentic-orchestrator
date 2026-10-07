@@ -117,13 +117,6 @@ type MutationTarget interface {
 	AnswerPermission(req PermissionAnswerRequest) (PermissionAnswerResponse, error)
 	AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error)
 	SendHelp(req HelpAnswerRequest) (HelpSendResponse, error)
-	// StartChat sends one user turn to the singleton chat session, starting
-	// it when none is live. hiddenContext is the server-resolved bundle for
-	// the request's context reference: it reaches the provider but never
-	// the transcript echo, and is empty when the request carries no
-	// reference.
-	StartChat(req ChatStartRequest, hiddenContext string) (ChatStartResponse, error)
-	EndChat() (ChatEndResponse, error)
 	RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error)
 	GeneratePublishDescription(featureID string, req PublishDescriptionRequest) (PublishDescriptionResponse, error)
 	PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error)
@@ -728,7 +721,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 		return []string{http.MethodPost}, true
 	case apiPathUploads:
 		return []string{http.MethodPost}, true
-	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send", "/api/v1/prompts/chat/start", "/api/v1/prompts/chat/end":
+	case "/api/v1/prompts/ask-user/answer", "/api/v1/prompts/help/send":
 		return []string{http.MethodPost}, true
 	}
 	if methods, ok := supervisorMutationMethods(path); ok {
@@ -1479,80 +1472,6 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 			return
 		}
 		defaultActionFields(&resp, "", "sent")
-		writeActionJSON(w, http.StatusOK, &resp)
-	case "chat/start":
-		// Both a fresh chat launch and a reply to the active session can
-		// launch work: a closed admission boundary refuses the whole route
-		// with the canonical 503, so no new chat work escapes the stopping
-		// gate while an authorized install settles. The chat/end settle
-		// path stays available.
-		if h.refuseAdmissionClosed(w) {
-			return
-		}
-		var req ChatStartRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return
-		}
-		if strings.TrimSpace(req.Message) == "" {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("message is required"))
-			return
-		}
-		// A malformed context reference is rejected before uploads are
-		// consumed, so nothing is staged for a turn that never starts.
-		if field := validateChatContextReference(req.Context); field != "" {
-			writeChatContextInvalid(w, req.Context, field)
-			return
-		}
-		// The reference resolves against durable state before the mutation
-		// target runs; a stale or mismatched home rejects the turn the same
-		// way. The bundle crosses to the target separately from the visible
-		// message and never enters the response body.
-		hiddenContext := ""
-		if !chatContextAbsent(req.Context) {
-			bundle, rejection := h.resolveChatContext(req.Context)
-			if rejection != nil {
-				rejection.write(w, req.Context)
-				return
-			}
-			hiddenContext = bundle
-		}
-		if !validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), 0, 0) {
-			return
-		}
-		// Chat resolves staged image references by copying them into the chat
-		// session directory; the copied paths are what the prompt embeds.
-		chatDir := ""
-		if h.uploads != nil {
-			chatDir = filepath.Join(h.runtime.StateDir, uploadChatDirName)
-		}
-		consumed, err := h.consumeUploadRefs(req.ImageUploads, nil, chatDir)
-		if err != nil {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(err.Error()))
-			return
-		}
-		if consumed != nil {
-			req.Images = append(req.Images, consumed.imagePaths...)
-		}
-		resp, err := h.mutations.StartChat(req, hiddenContext)
-		if err != nil {
-			consumed.rollback() // nil-safe: nothing to roll back without refs
-			writeMutationError(w, err)
-			return
-		}
-		consumed.commit()
-		defaultActionFields(&resp, "", resultStarted)
-		writeActionJSON(w, http.StatusOK, &resp)
-	case "chat/end":
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return
-		}
-		resp, err := h.mutations.EndChat()
-		if err != nil {
-			writeMutationError(w, err)
-			return
-		}
-		defaultActionFields(&resp, "", "ended")
 		writeActionJSON(w, http.StatusOK, &resp)
 	default:
 		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))

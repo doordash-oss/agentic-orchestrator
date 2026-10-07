@@ -50,7 +50,7 @@ const WireSnapshotSchema = z
     active_work_summary: z
       .object({
         feature_count: z.number().int().nonnegative(),
-        chat_active: z.boolean(),
+        supervisor_active: z.boolean(),
         clone_count: z.number().int().nonnegative(),
         upload_count: z.number().int().nonnegative(),
         origin_check_count: z.number().int().nonnegative(),
@@ -73,15 +73,13 @@ export function describeActiveWork(
   const parts: string[] = [];
   const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
   if (summary.feature_count > 0) parts.push(plural(summary.feature_count, 'feature'));
-  if (summary.chat_active) parts.push('chat');
+  if (summary.supervisor_active) parts.push('the supervisor');
   const repository = summary.clone_count + summary.upload_count + summary.origin_check_count;
   if (repository > 0) parts.push(plural(repository, 'repository operation'));
-  if (parts.length === 0) return undefined;
-  const list =
-    parts.length === 1
-      ? parts[0]
-      : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
-  return `${list} active on the server.`;
+  const last = parts.pop();
+  if (last === undefined) return undefined;
+  const list = parts.length === 0 ? last : `${parts.join(', ')} and ${last}`;
+  return `${list.charAt(0).toUpperCase()}${list.slice(1)} active on the server.`;
 }
 
 export function projectServerUpdate(raw: unknown): ServerUpdateState {

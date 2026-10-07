@@ -27,7 +27,6 @@ import {
   buildCanonicalError,
   CanonicalErrorException,
   redactText,
-  requiresLocalServerError,
   toCanonicalError,
 } from '../shared/errors';
 import {
@@ -43,8 +42,6 @@ import {
   type ServerTranscriptMessage,
 } from '../shared/api/parse';
 import {
-  ChatActionResultSchema,
-  ChatStartRequestSchema,
   SessionDetailSchema,
   SessionIdSchema,
   SessionOutputEventSchema,
@@ -59,14 +56,11 @@ import {
   type SessionTranscript,
   type SessionTranscriptRequest,
   type TranscriptMessage,
-  type ChatActionResult,
-  type ChatStartRequest,
 } from '../shared/ipc';
 import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import { SseBlockAssembler, type SseBlock, type SseStream } from './gateway/events';
 import type { ApiRequestInit, HttpResult } from './gateway/runtimeGateway';
-import { alwaysLocal, type LocalitySource } from './locality';
 
 /** The authenticated transport surface the runtime gateway provides. */
 export interface ServerTransport {
@@ -114,12 +108,6 @@ export class SessionService {
   constructor(
     private readonly transport: ServerTransport,
     private readonly makeSubscriptionId: () => string = randomUUID,
-    /**
-     * Gateway-owned locality of the active connection. While remote, chat
-     * start refuses any local image path outright (a stale draft must fail,
-     * never leak one) and forwards staged upload references instead.
-     */
-    private readonly locality: LocalitySource = alwaysLocal,
   ) {}
 
   async list(): Promise<SessionSummary[]> {
@@ -156,64 +144,6 @@ export class SessionService {
         messages: response.messages.map(toTranscriptMessage),
       },
       SessionTranscriptSchema,
-    );
-  }
-
-  async startChat(request: ChatStartRequest): Promise<ChatActionResult> {
-    const input = validateWithSchema(request, ChatStartRequestSchema);
-    const remote = this.locality() === 'remote';
-    if (remote && (input.images?.length ?? 0) > 0) {
-      // A locally shaped path remotely is a stale draft: fail, never leak.
-      throw new CanonicalErrorException(requiresLocalServerError());
-    }
-    const { context } = input;
-    const response = await serverRequest(this.transport, '/api/v1/prompts/chat/start', {
-      method: 'POST',
-      body: {
-        message: input.message,
-        images: input.images ?? [],
-        ...(remote && (input.imageUploads?.length ?? 0) > 0
-          ? { image_uploads: input.imageUploads }
-          : {}),
-        // The server rejects unknown fields and empty-string keys, so only
-        // the fields the reference actually carries cross the wire.
-        ...(context === undefined
-          ? {}
-          : {
-              context: {
-                scope: context.scope,
-                code: context.code,
-                ...(context.featureId === undefined ? {} : { feature_id: context.featureId }),
-                ...(context.repository === undefined ? {} : { repository: context.repository }),
-                ...(context.taskKey === undefined ? {} : { task_key: context.taskKey }),
-                ...(context.snapshotId === undefined ? {} : { snapshot_id: context.snapshotId }),
-                ...(context.key === undefined ? {} : { key: context.key }),
-              },
-            }),
-      },
-    } as ApiRequestInit);
-    const raw = response as { session_id?: unknown; result?: unknown };
-    return validateWithSchema(
-      {
-        sessionId: raw.session_id,
-        result: raw.result,
-      },
-      ChatActionResultSchema,
-    );
-  }
-
-  async endChat(): Promise<ChatActionResult> {
-    const response = await serverRequest(this.transport, '/api/v1/prompts/chat/end', {
-      method: 'POST',
-      body: {},
-    } as ApiRequestInit);
-    const raw = response as { session_id?: unknown; result?: unknown };
-    return validateWithSchema(
-      {
-        sessionId: raw.session_id,
-        result: raw.result,
-      },
-      ChatActionResultSchema,
     );
   }
 

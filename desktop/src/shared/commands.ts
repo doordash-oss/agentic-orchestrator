@@ -26,7 +26,8 @@ export type GlobalCommandId =
   | 'global.home'
   | 'global.settings'
   | 'global.attention'
-  | 'global.ama'
+  | 'global.message-supervisor'
+  | 'global.recovery'
   | 'global.bulk'
   | 'global.quit'
   | 'global.new-feature'
@@ -126,11 +127,10 @@ export const COMMAND_CATALOGUE: readonly CommandDescriptor[] = [
   },
   {
     id: 'global.home',
-    // Renamed from "Home" now that the Bench sidebar's pinned row (and every
-    // other surface pointing at it) calls this destination Overview; the id
+    // Home is the Supervisor page, the sidebar's pinned first row; the id
     // and route target are untouched so every existing dispatch path (menu,
     // palette, ⌘1) keeps working unchanged.
-    label: 'Overview',
+    label: 'Supervisor',
     group: 'navigation',
     accelerator: 'CommandOrControl+1',
     target: 'home',
@@ -178,11 +178,22 @@ export const COMMAND_CATALOGUE: readonly CommandDescriptor[] = [
     paletteVisible: true,
   },
   {
-    id: 'global.ama',
-    label: 'AMA',
+    // Selects the Supervisor page and focuses its composer.
+    id: 'global.message-supervisor',
+    label: 'Message the supervisor',
     group: 'assistant',
     accelerator: 'CommandOrControl+Shift+M',
-    target: 'ama',
+    target: 'supervisor',
+    paletteVisible: true,
+  },
+  {
+    // Opens the Recovery sheet: the recovery workspace stacked above the bulk
+    // resume/retry panel. No accelerator — ⌘⇧B below opens the same sheet with
+    // the bulk preview already loading.
+    id: 'global.recovery',
+    label: 'Recovery',
+    group: 'navigation',
+    target: 'recovery',
     paletteVisible: true,
   },
   {

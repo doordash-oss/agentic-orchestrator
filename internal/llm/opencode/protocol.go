@@ -346,8 +346,8 @@ func (p *Protocol) sendPrompt(text string) error {
 	// next turn's question detection (and streamed partial) reflects only that
 	// turn, not text carried over from a prior answered question. Also reset
 	// the terminal-result latch: markTerminal exists to seal a session's FINAL
-	// outcome against a late duplicate, but a multi-turn session (e.g. AMA
-	// chat, where one Protocol instance serves many user messages over its
+	// outcome against a late duplicate, but a multi-turn session (e.g. a
+	// conversation, where one Protocol instance serves many user messages over its
 	// lifetime) must still produce a fresh terminal result for every turn, or
 	// the caller is left waiting forever after the first reply.
 	p.assistantBuf.Reset()
@@ -1411,7 +1411,7 @@ func (p *Protocol) resultCost() float64 {
 // later duplicate, and trailing output can never undo a clean completion.
 // Callers that observe false must suppress their terminal message so only the
 // first terminal result reaches the session. sendPrompt resets this latch for
-// the next turn, so a multi-turn session (e.g. AMA chat) still gets a fresh
+// the next turn, so a multi-turn session (e.g. a conversation) still gets a fresh
 // terminal result every time the user sends a new message.
 func (p *Protocol) markTerminal() bool {
 	p.mu.Lock()

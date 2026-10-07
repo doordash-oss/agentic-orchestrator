@@ -43,11 +43,6 @@ func RoleSystemPrompt(in RoleSystemInput) string {
 	return MustRender("system", in)
 }
 
-// ChatSystemPrompt renders the persistent AMA chat system prompt.
-func ChatSystemPrompt(in ChatSystemInput) string {
-	return MustRender("chat.system", in)
-}
-
 // AutoReviewUserPrompt renders the hidden automatic Bash safety-review prompt.
 func AutoReviewUserPrompt(in AutoReviewUserInput) string {
 	return MustRender("autoreview.user", in)

@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
+	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
@@ -39,6 +41,7 @@ type recordingSupervisor struct {
 	queries   []supervisor.PageQuery
 	settings  []supervisor.Settings
 	sends     []string
+	hidden    []string
 	interrupt int
 	ends      int
 	err       error
@@ -51,7 +54,11 @@ func (s *recordingSupervisor) State() supervisor.State {
 	return s.state
 }
 
-func (s *recordingSupervisor) Busy() bool { return s.busy }
+func (s *recordingSupervisor) Busy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.busy
+}
 
 func (s *recordingSupervisor) Transcript(q supervisor.PageQuery) (supervisor.Page, error) {
 	s.mu.Lock()
@@ -71,10 +78,11 @@ func (s *recordingSupervisor) UpdateSettings(st supervisor.Settings) (supervisor
 	return s.state, nil
 }
 
-func (s *recordingSupervisor) Send(_ context.Context, text, cmid string) (supervisor.SendResult, error) {
+func (s *recordingSupervisor) Send(_ context.Context, text, hiddenContext, cmid string) (supervisor.SendResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sends = append(s.sends, cmid+":"+text)
+	s.hidden = append(s.hidden, hiddenContext)
 	if s.err != nil {
 		return supervisor.SendResult{}, s.err
 	}
@@ -262,6 +270,74 @@ func TestSupervisorRoutes_MessagesTranscriptInterruptEnd(t *testing.T) {
 	}
 }
 
+// newSupervisorErrorReferenceHandler serves the supervisor routes over a
+// feature store holding one run failure an error reference can address.
+func newSupervisorErrorReferenceHandler(t *testing.T, svc SupervisorService) http.Handler {
+	t.Helper()
+	store := feature.NewStore(t.TempDir())
+	chatContextSeedRunFailure(t, store)
+	return NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true, Supervisor: svc, FeatureStore: store, Features: store})
+}
+
+func TestSupervisorRoutes_MessageErrorReferenceResolvesIntoHiddenContext(t *testing.T) {
+	svc := &recordingSupervisor{state: supervisor.State{ConversationID: "conv-1"}}
+	h := newSupervisorErrorReferenceHandler(t, svc)
+
+	body := `{"text":"Explain this error","client_message_id":"cm-1","error_reference":{"scope":"run","code":"iteration_budget_exhausted","feature_id":"feat-run-failed"}}`
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, supervisorRequest(http.MethodPost, apiPathSupervisorMessages, body))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body %s", w.Code, w.Body.String())
+	}
+	if len(svc.sends) != 1 || svc.sends[0] != "cm-1:Explain this error" {
+		t.Fatalf("sends = %v; want only the visible text", svc.sends)
+	}
+	hidden := svc.hidden[0]
+	if !strings.Contains(hidden, "error[iteration_budget_exhausted]") || !strings.Contains(hidden, "end run") ||
+		!strings.Contains(hidden, "/tmp/chat-context-run.log") || !strings.Contains(hidden, "feat-run-failed") {
+		t.Fatalf("hidden context = %q; want the resolved run-failure bundle", hidden)
+	}
+	if strings.Contains(w.Body.String(), "raw failure detail") {
+		t.Fatalf("response leaked the hidden bundle: %s", w.Body.String())
+	}
+
+	serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorMessages, `{"text":"plain","client_message_id":"cm-2"}`), http.StatusOK, nil)
+	if len(svc.hidden) != 2 || svc.hidden[1] != "" {
+		t.Fatalf("message without a reference carried hidden context %q", svc.hidden)
+	}
+}
+
+func TestSupervisorRoutes_MessageMalformedOrStaleErrorReferenceSendsNothing(t *testing.T) {
+	cases := []struct {
+		name   string
+		ref    string
+		status int
+		code   errcat.Code
+	}{
+		{"unknown scope", `{"scope":"galaxy","code":"iteration_budget_exhausted","feature_id":"feat-run-failed"}`, http.StatusBadRequest, errcat.ChatContextInvalid},
+		{"missing feature", `{"scope":"run","code":"iteration_budget_exhausted"}`, http.StatusBadRequest, errcat.ChatContextInvalid},
+		{"foreign key", `{"scope":"run","code":"iteration_budget_exhausted","feature_id":"feat-run-failed","task_key":"t"}`, http.StatusBadRequest, errcat.ChatContextInvalid},
+		{"unknown feature", `{"scope":"run","code":"iteration_budget_exhausted","feature_id":"feat-gone"}`, http.StatusBadRequest, errcat.ChatContextInvalid},
+		{"stale code", `{"scope":"run","code":"worktree_setup_failed","feature_id":"feat-run-failed"}`, http.StatusNotFound, errcat.ChatContextNotFound},
+		{"stale home", `{"scope":"repository","code":"publish_pull_request_failed","feature_id":"feat-run-failed","repository":"repo-a"}`, http.StatusNotFound, errcat.ChatContextNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &recordingSupervisor{state: supervisor.State{ConversationID: "conv-1"}}
+			h := newSupervisorErrorReferenceHandler(t, svc)
+			body := `{"text":"Explain this error","client_message_id":"cm-1","error_reference":` + tc.ref + `}`
+			var resp ErrorResponse
+			serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorMessages, body), tc.status, &resp)
+			if string(resp.Error.Code) != string(tc.code) || resp.Error.Title == "" {
+				t.Fatalf("error = %+v, want code %s", resp.Error, tc.code)
+			}
+			if len(svc.sends) != 0 {
+				t.Fatalf("refused reference reached the coordinator: %v", svc.sends)
+			}
+		})
+	}
+}
+
 func TestSupervisorRoutes_ClosedAdmissionRefusesMessagesButNotEnd(t *testing.T) {
 	admission := workadmission.New(workadmission.Options{})
 	svc := &recordingSupervisor{state: supervisor.State{ConversationID: "conv-1"}}
@@ -319,5 +395,93 @@ func TestSupervisorActivityDetectorTracksBusy(t *testing.T) {
 	activity, _ = admission.Detect(context.Background())
 	if !activity.SupervisorActive || !activity.Busy() || activity.ProtectedBusy() {
 		t.Fatalf("busy supervisor activity = %+v", activity)
+	}
+}
+
+// TestUpdateReportsSupervisorActivity pins the update surface's supervisor
+// naming: GET /api/v1/update reports supervisor_active from the supervisor
+// lifecycle alone, and an immediate install without stop permission is
+// refused with a 409 blocker that names the supervisor.
+func TestUpdateReportsSupervisorActivity(t *testing.T) {
+	t.Parallel()
+	svc := &recordingSupervisor{}
+	stager, lifecycle, admission, _ := newInstallFakes()
+	opts := eligibleUpdateOptions()
+	opts.Feed = &fakeUpdateFeed{selection: selfupdate.ReleaseSelection{Version: "2.0.0", TagName: "v2.0.0"}}
+	opts.Stager = stager
+	opts.Install = lifecycle
+	opts.Admission = admission
+	h := newAPIHandler(HandlerOptions{
+		DisableHostValidation: true,
+		AuthToken:             "test-token",
+		Mutations:             nopMutationTarget{},
+		Updates:               opts,
+		Admission:             workadmission.New(workadmission.Options{}),
+		Supervisor:            svc,
+	})
+	h.updates.performCheck(context.Background(), "explicit")
+	summary := func() UpdateActiveWorkSummary {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET update status = %d body=%s", w.Code, w.Body.String())
+		}
+		return decodeUpdateSnapshot(t, w.Result()).ActiveWorkSummary
+	}
+
+	if got := summary(); got.SupervisorActive {
+		t.Fatalf("idle supervisor summary = %+v, want supervisor_active false", got)
+	}
+	svc.mu.Lock()
+	svc.busy = true
+	svc.mu.Unlock()
+	if got := summary(); !got.SupervisorActive || got.FeatureCount != 0 {
+		t.Fatalf("busy supervisor summary = %+v, want supervisor_active true and no features", got)
+	}
+
+	w := httptest.NewRecorder()
+	h.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("install status = %d body=%s, want 409", w.Code, w.Body.String())
+	}
+	var body ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode install refusal: %v", err)
+	}
+	if body.Error.Code != string(errcat.UpdateBlockedActiveWork) || !strings.Contains(body.Error.Summary, "supervisor") {
+		t.Fatalf("install refusal = %+v, want update_blocked_active_work naming the supervisor", body.Error)
+	}
+	if strings.Contains(strings.ToLower(w.Body.String()), "chat") {
+		t.Fatalf("install refusal mentions chat: %s", w.Body.String())
+	}
+}
+
+// TestSupervisorMessageOperationDocumentsErrorReference pins the message
+// route's optional error reference on the shared schema and the declared
+// chat-context refusals.
+func TestSupervisorMessageOperationDocumentsErrorReference(t *testing.T) {
+	spec := loadOpenAPISpec(t)
+	op := lookupOpenAPIOperation(t, spec, http.MethodPost, apiPathSupervisorMessages)
+	declaredOpenAPIResponse(t, op, "400")
+	declaredOpenAPIResponse(t, op, "404")
+	schema, ok := spec.Components.Schemas["SupervisorMessageRequest"].(map[string]any)
+	if !ok {
+		t.Fatal("components.schemas.SupervisorMessageRequest missing")
+	}
+	props, _ := schema["properties"].(map[string]any)
+	ref, _ := props["error_reference"].(map[string]any)
+	if got := nestedYAMLRef(t, ref); got != "#/components/schemas/ErrorReference" {
+		t.Fatalf("error_reference $ref = %q, want ErrorReference", got)
+	}
+	for _, required := range schema["required"].([]any) {
+		if required == "error_reference" {
+			t.Fatal("error_reference must stay optional")
+		}
+	}
+	for _, code := range []errcat.Code{errcat.ChatContextInvalid, errcat.ChatContextNotFound} {
+		if !strings.Contains(op.Description, string(code)) {
+			t.Fatalf("sendSupervisorMessage description does not document %s", code)
+		}
 	}
 }

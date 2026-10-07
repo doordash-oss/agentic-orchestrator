@@ -15,25 +15,33 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
+import type { SupervisorLifecycle } from '../../shared/ipc';
 import {
   QuitCoordinator,
+  SUPERVISOR_BUSY_LIFECYCLES,
   activeWorkDialog,
+  detectActiveWork,
+  hasActiveWork,
+  isSupervisorBusy,
   quitAnywayDialog,
   shouldRequestQuitOnMainWindowClose,
+  stopActiveWork,
   stopFailureDialog,
   type ActiveWorkCheck,
   type ActiveWorkDecision,
+  type ActiveWorkSources,
   type QuitCoordinatorDeps,
+  type StopActiveWorkDeps,
   type StopWorkResult,
   type UnresolvedWorkItem,
 } from '../quitCoordinator';
 
 function active(
   featureIds: string[] = ['feature-1'],
-  chatActive = false,
+  supervisorActive = false,
   detectionFailed = false,
 ): ActiveWorkCheck {
-  return { featureIds, chatActive, detectionFailed };
+  return { featureIds, supervisorActive, detectionFailed };
 }
 
 const unresolvedFeature: UnresolvedWorkItem = {
@@ -174,6 +182,22 @@ describe('QuitCoordinator', () => {
     expect(deps.shutdown).toHaveBeenCalledTimes(1);
     expect(deps.quitApplication).toHaveBeenCalledTimes(1);
     expect(log).toContain('hard exit guard failed to arm: worker threads unavailable');
+  });
+
+  it('shows the active-work dialog naming the supervisor when only the supervisor is busy', async () => {
+    const deps = makeDeps({
+      detectActiveWork: vi.fn().mockResolvedValue(active([], true, false)),
+    });
+    const coordinator = new QuitCoordinator(deps);
+
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(false);
+
+    expect(deps.showActiveWorkDialog).toHaveBeenCalledWith(active([], true, false), 'window');
+    expect(activeWorkDialog(active([], true, false))).toMatchObject({
+      title: 'Work is still running',
+      detail: expect.stringContaining('The supervisor is working.'),
+    });
+    expect(deps.shutdown).not.toHaveBeenCalled();
   });
 
   it('quits immediately when authoritative activity is idle', async () => {
@@ -399,13 +423,235 @@ describe('QuitCoordinator', () => {
 describe('quit dialog copy', () => {
   it('describes active-work choices and ownership-specific Quit Anyway consequences', () => {
     expect(activeWorkDialog(active(['a', 'b'], true, true)).detail).toContain(
-      'AMA session is active',
+      'The supervisor is working.',
     );
+    expect(activeWorkDialog(active(['a'], false, false)).detail).not.toContain('supervisor');
     expect(stopFailureDialog({ unresolved: [unresolvedFeature] }, 'external').detail).toContain(
       'external runtime and any remaining work will survive',
     );
     expect(quitAnywayDialog({ unresolved: [unresolvedFeature] }, 'app-owned').detail).toContain(
       'forces the app-owned runtime to terminate',
     );
+  });
+});
+
+// --- active-work detection --------------------------------------------------
+
+function sources({
+  lifecycle = 'idle',
+  features = {},
+  overrides = {},
+}: {
+  lifecycle?: SupervisorLifecycle;
+  /** Feature id → whether its pause-stop action is enabled. */
+  features?: Record<string, boolean>;
+  overrides?: Partial<ActiveWorkSources>;
+} = {}): ActiveWorkSources {
+  return {
+    listFeatures: vi
+      .fn()
+      .mockResolvedValue({ features: Object.keys(features).map((id) => ({ id })) }),
+    getFeature: vi.fn((id: string) =>
+      Promise.resolve({
+        id,
+        actions: [{ id: 'pause-stop', enabled: features[id] ?? false }],
+      }),
+    ),
+    getSupervisorState: vi.fn().mockResolvedValue({ lifecycle }),
+    ...overrides,
+  };
+}
+
+describe('detectActiveWork', () => {
+  it('reports active work while the supervisor is running and none while it is idle', async () => {
+    const running = await detectActiveWork(sources({ lifecycle: 'running' }));
+    expect(running).toEqual({ featureIds: [], supervisorActive: true, detectionFailed: false });
+    expect(hasActiveWork(running)).toBe(true);
+
+    const idle = await detectActiveWork(sources({ lifecycle: 'idle' }));
+    expect(idle).toEqual({ featureIds: [], supervisorActive: false, detectionFailed: false });
+    expect(hasActiveWork(idle)).toBe(false);
+  });
+
+  it.each(['starting', 'running', 'waiting_permission', 'waiting_question'] as const)(
+    'treats the supervisor as active while %s',
+    async (lifecycle) => {
+      expect(isSupervisorBusy(lifecycle)).toBe(true);
+      await expect(detectActiveWork(sources({ lifecycle }))).resolves.toMatchObject({
+        supervisorActive: true,
+        detectionFailed: false,
+      });
+    },
+  );
+
+  it.each(['stopped', 'idle', 'failed'] as const)(
+    'treats the supervisor as inactive while %s',
+    async (lifecycle) => {
+      expect(isSupervisorBusy(lifecycle)).toBe(false);
+      await expect(detectActiveWork(sources({ lifecycle }))).resolves.toMatchObject({
+        supervisorActive: false,
+        detectionFailed: false,
+      });
+    },
+  );
+
+  it('uses exactly the four busy lifecycles', () => {
+    expect([...SUPERVISOR_BUSY_LIFECYCLES].sort()).toEqual([
+      'running',
+      'starting',
+      'waiting_permission',
+      'waiting_question',
+    ]);
+  });
+
+  it('marks detection failed when the supervisor state cannot be fetched', async () => {
+    const result = await detectActiveWork(
+      sources({
+        features: { 'feature-1': true },
+        overrides: { getSupervisorState: vi.fn().mockRejectedValue(new Error('offline')) },
+      }),
+    );
+    expect(result).toEqual({
+      featureIds: ['feature-1'],
+      supervisorActive: false,
+      detectionFailed: true,
+    });
+    expect(hasActiveWork(result)).toBe(true);
+  });
+
+  it('reports only stoppable features alongside the supervisor state', async () => {
+    const deps = sources({
+      lifecycle: 'waiting_question',
+      features: { 'feature-1': true, 'feature-2': false },
+    });
+    await expect(detectActiveWork(deps)).resolves.toEqual({
+      featureIds: ['feature-1'],
+      supervisorActive: true,
+      detectionFailed: false,
+    });
+    expect(deps.getSupervisorState).toHaveBeenCalledOnce();
+  });
+
+  it('marks detection failed when the feature list or a snapshot cannot be fetched', async () => {
+    await expect(
+      detectActiveWork(
+        sources({ overrides: { listFeatures: vi.fn().mockRejectedValue(new Error('down')) } }),
+      ),
+    ).resolves.toEqual({ featureIds: [], supervisorActive: false, detectionFailed: true });
+
+    await expect(
+      detectActiveWork(
+        sources({
+          features: { 'feature-1': true },
+          overrides: { getFeature: vi.fn().mockRejectedValue(new Error('gone')) },
+        }),
+      ),
+    ).resolves.toEqual({ featureIds: [], supervisorActive: false, detectionFailed: true });
+  });
+});
+
+// --- stop path --------------------------------------------------------------
+
+function stopDeps(overrides: Partial<StopActiveWorkDeps> = {}): StopActiveWorkDeps {
+  let clock = 0;
+  return {
+    stopFeature: vi.fn().mockResolvedValue(undefined),
+    endSupervisor: vi.fn().mockResolvedValue(undefined),
+    detectActiveWork: vi.fn().mockResolvedValue(active([], false, false)),
+    featureLabel: (featureId) => `Label ${featureId}`,
+    describeStopFailure: (error) => (error instanceof Error ? error.message : String(error)),
+    timeoutMs: 1_000,
+    pollIntervalMs: 250,
+    sleep: vi.fn((ms: number) => {
+      clock += ms;
+      return Promise.resolve();
+    }),
+    now: () => clock,
+    ...overrides,
+  };
+}
+
+describe('stopActiveWork', () => {
+  it('ends an active supervisor through the end route and re-polls until it is idle', async () => {
+    const deps = stopDeps({
+      detectActiveWork: vi
+        .fn()
+        .mockResolvedValueOnce(active([], true, false))
+        .mockResolvedValueOnce(active([], false, false)),
+    });
+
+    await expect(stopActiveWork(active([], true, false), deps)).resolves.toEqual({
+      unresolved: [],
+    });
+
+    expect(deps.endSupervisor).toHaveBeenCalledOnce();
+    expect(deps.stopFeature).not.toHaveBeenCalled();
+    expect(deps.detectActiveWork).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves an idle supervisor alone and stops only the active features', async () => {
+    const deps = stopDeps();
+
+    await expect(stopActiveWork(active(['feature-1'], false, false), deps)).resolves.toEqual({
+      unresolved: [],
+    });
+
+    expect(deps.stopFeature).toHaveBeenCalledWith('feature-1');
+    expect(deps.endSupervisor).not.toHaveBeenCalled();
+  });
+
+  it('reports an unresolved supervisor item when the supervisor stays active', async () => {
+    const deps = stopDeps({
+      detectActiveWork: vi.fn().mockResolvedValue(active([], true, false)),
+    });
+
+    const result = await stopActiveWork(active([], true, false), deps);
+
+    expect(result.unresolved).toEqual([
+      {
+        kind: 'supervisor',
+        id: 'supervisor',
+        label: 'Supervisor',
+        reason: 'The server did not report that the supervisor stopped before the timeout.',
+      },
+    ]);
+    expect(deps.endSupervisor).toHaveBeenCalledOnce();
+  });
+
+  it('carries the end-route failure as the unresolved supervisor reason', async () => {
+    const deps = stopDeps({
+      endSupervisor: vi.fn().mockRejectedValue(new Error('end refused')),
+      detectActiveWork: vi.fn().mockResolvedValue(active(['feature-1'], true, false)),
+    });
+
+    const result = await stopActiveWork(active(['feature-1'], true, false), deps);
+
+    expect(result.unresolved).toEqual([
+      {
+        kind: 'feature',
+        id: 'feature-1',
+        label: 'Label feature-1',
+        reason: 'The server did not report a terminal state before the timeout.',
+      },
+      { kind: 'supervisor', id: 'supervisor', label: 'Supervisor', reason: 'end refused' },
+    ]);
+  });
+
+  it('reports a detection item when the re-poll cannot verify the outcome', async () => {
+    const deps = stopDeps({
+      detectActiveWork: vi.fn().mockResolvedValue(active([], false, true)),
+    });
+
+    await expect(stopActiveWork(active([], true, false), deps)).resolves.toEqual({
+      unresolved: [
+        {
+          kind: 'detection',
+          id: 'active-work-detection',
+          label: 'Active work check',
+          reason: 'Agentico could not verify whether all work stopped.',
+        },
+      ],
+    });
+    expect(deps.detectActiveWork).toHaveBeenCalledOnce();
   });
 });

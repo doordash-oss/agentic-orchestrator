@@ -42,11 +42,17 @@ const (
 // fake interactive Claude launch appends one line to.
 const FakeSupervisorInvocationsFile = "invocations"
 
+// FakeSupervisorUserInputsFile is the file, next to the script, that the
+// fake interactive Claude appends each user stdin line to verbatim, so a
+// test can inspect exactly what reached the harness.
+const FakeSupervisorUserInputsFile = "user_inputs"
+
 // FakeClaudeInteractiveScriptBody returns a long-lived stream-json harness:
 // it answers the initialize handshake, then serves one turn per user
 // message (stream deltas, one assistant message with a message id, and a
 // result) and stays alive reading stdin between turns. Markers in the user
-// text script permission requests, questions and interrupt handling.
+// text script permission requests, questions and interrupt handling. Every
+// user line is recorded in FakeSupervisorUserInputsFile.
 func FakeClaudeInteractiveScriptBody() string {
 	return `printf 'x\n' >> "$(dirname "$0")/` + FakeSupervisorInvocationsFile + `"
 turn=0
@@ -81,6 +87,7 @@ while IFS= read -r line; do
       ;;
     *'"type":"user"'*)
       turn=$((turn+1))
+      printf '%s\n' "$line" >> "$(dirname "$0")/` + FakeSupervisorUserInputsFile + `"
       case "$line" in
         *` + FakeSupervisorHold + `*) mode=hold ;;
         *` + FakeSupervisorStubborn + `*) mode=stubborn ;;

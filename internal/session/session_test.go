@@ -1410,11 +1410,11 @@ func TestSessionSendUserMessage(t *testing.T) {
 	}
 }
 
-func TestSessionSendUserMessageRecordsChatTurn(t *testing.T) {
+func TestSessionSendUserMessageRecordsConversationalTurn(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol double with per-test session state.
-	s := NewSession("chat-user-test", "__chat__", feature.PhaseResearch)
-	s.SetKind(ports.KindChat)
+	s := NewSession("supervisor-user-test", "__supervisor__", feature.PhaseResearch)
+	s.SetKind(ports.KindSupervisor)
 	s.protocol = &interruptTrackingProtocol{}
 	s.transcriptPath = filepath.Join(t.TempDir(), "transcript.jsonl")
 
@@ -1467,14 +1467,14 @@ func (p *wireRecordingProtocol) TranscriptPath() string { return "" }
 func (p *wireRecordingProtocol) Close() error           { return nil }
 
 // TestSessionSendUserMessageWithHiddenContextSplitsWireFromEcho pins the
-// chat-turn split: the provider receives the hidden text, a blank line,
+// conversational-turn split: the provider receives the hidden text, a blank line,
 // then the visible message, while the echoed and persisted transcript user
 // record carries only the visible message.
 func TestSessionSendUserMessageWithHiddenContextSplitsWireFromEcho(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol double with per-test session state.
-	s := NewSession("chat-hidden-test", "__chat__", feature.PhaseResearch)
-	s.SetKind(ports.KindChat)
+	s := NewSession("supervisor-hidden-test", "__supervisor__", feature.PhaseResearch)
+	s.SetKind(ports.KindSupervisor)
 	proto := &wireRecordingProtocol{}
 	s.protocol = proto
 	s.transcriptPath = filepath.Join(t.TempDir(), "transcript.jsonl")

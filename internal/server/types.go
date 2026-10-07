@@ -33,9 +33,6 @@ const APIVersion = "v1"
 
 const discoveryFilename = ".agentico-server.json"
 
-// ChatSessionID is the stable utility-session identity used by the AMA chat.
-const ChatSessionID = "__chat__"
-
 type Options struct {
 	Runtime      RuntimeIdentity
 	LaunchPolicy LaunchPolicy

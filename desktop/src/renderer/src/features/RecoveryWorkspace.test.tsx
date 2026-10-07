@@ -263,11 +263,10 @@ describe('RecoveryWorkspace', () => {
     await user.click(within(card).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledTimes(1);
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft:
         'Explain the "Orphaned session running" error (orphan_session_live) on Recovery target and what I should do next.',
-      autoSubmit: true,
-      chatContext: {
+      errorReference: {
         scope: 'recovery',
         code: 'orphan_session_live',
         snapshotId: 'recovery-1',

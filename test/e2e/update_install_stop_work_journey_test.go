@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
@@ -82,7 +83,7 @@ printf '%s\n' '{"type":"system","subtype":"init","session_id":"fake","model":"cl
 
 // installStopEnv isolates the subprocess like selfupdateDriverEnv but puts
 // the scripted provider directory first on PATH so the runtime boots with a
-// ready provider and can launch real feature and chat sessions.
+// ready provider and can launch real feature and supervisor sessions.
 func installStopEnv(home, fakeBinDir string) []string {
 	return []string{
 		"HOME=" + home,
@@ -209,14 +210,49 @@ func stopJourneyFeatureStatus(t *testing.T, baseURL, token, featureID string) st
 	return strings.ToLower(parsed.Feature.Status)
 }
 
-// startStopJourneyChat sends one chat turn, launching the singleton chat
-// session.
-func startStopJourneyChat(t *testing.T, baseURL, token string) {
+// startStopJourneySupervisor chooses the supervisor's harness and model,
+// then sends one message, launching the supervisor's provider process. The
+// scripted provider never finishes the turn, so the supervisor stays
+// running — active work an explicit-stop install must end.
+func startStopJourneySupervisor(t *testing.T, baseURL, token string) {
 	t.Helper()
-	status, body, err := installStopMutation(http.MethodPost, baseURL, token, "/api/v1/prompts/chat/start", `{"message":"hello"}`)
+	model := stopJourneySupervisorModel(t, baseURL, token)
+	status, body, err := installStopMutation(http.MethodPatch, baseURL, token, "/api/v1/supervisor/settings", `{"harness":"claude","model":"`+model+`"}`)
 	if err != nil || status != http.StatusOK {
-		t.Fatalf("chat start: status %d err %v body %s", status, err, body)
+		t.Fatalf("supervisor settings: status %d err %v body %s", status, err, body)
 	}
+	status, body, err = installStopMutation(http.MethodPost, baseURL, token, "/api/v1/supervisor/messages", `{"text":"hello","client_message_id":"stop-work-1"}`)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("supervisor message: status %d err %v body %s", status, err, body)
+	}
+}
+
+// stopJourneySupervisorModel reads the first supervisor-eligible model the
+// scripted provider's catalog offers through the public model catalog.
+func stopJourneySupervisorModel(t *testing.T, baseURL, token string) string {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, baseURL+"/api/v1/catalog/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := installStopHTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("get model catalog: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("model catalog status = %d", resp.StatusCode)
+	}
+	var catalog server.ModelCatalogResponse
+	if err := json.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		t.Fatal(err)
+	}
+	models := catalog.PhaseProviderModels[string(llm.PhaseChat)]["claude"]
+	if len(models) == 0 {
+		t.Fatalf("scripted provider offers no supervisor-eligible model: %+v", catalog.PhaseProviderModels)
+	}
+	return models[0]
 }
 
 // installStopServerFixture prepares one serving runtime on a free port: the
@@ -240,11 +276,11 @@ func installStopServerFixture(t *testing.T, stubborn bool, extraDriverFlags ...s
 }
 
 // waitStopWorkActive polls the update snapshot until the active-work
-// summary reports at least the wanted feature count and chat state.
-func waitStopWorkActive(t *testing.T, baseURL, token string, wantFeatures int, wantChat bool) {
+// summary reports at least the wanted feature count and supervisor state.
+func waitStopWorkActive(t *testing.T, baseURL, token string, wantFeatures int, wantSupervisor bool) {
 	t.Helper()
 	waitUpdateSnapshot(t, baseURL, token, func(s server.UpdateSnapshot) bool {
-		return s.ActiveWorkSummary.FeatureCount >= wantFeatures && s.ActiveWorkSummary.ChatActive == wantChat
+		return s.ActiveWorkSummary.FeatureCount >= wantFeatures && s.ActiveWorkSummary.SupervisorActive == wantSupervisor
 	}, 45*time.Second)
 }
 
@@ -295,7 +331,7 @@ func trickleUpload(baseURL, token string, chunks int, delay time.Duration) <-cha
 
 // TestInstallStopWorkJourneySuccessStopsAndReplaces proves a consented
 // explicit-stop install interrupts the running feature session and the
-// singleton chat, confirms their completion before replacement, and hands
+// running supervisor, confirms their completion before replacement, and hands
 // the same process identity to the target build.
 func TestInstallStopWorkJourneySuccessStopsAndReplaces(t *testing.T) {
 	selfupdateJourneyGuard(t)
@@ -305,7 +341,7 @@ func TestInstallStopWorkJourneySuccessStopsAndReplaces(t *testing.T) {
 	postInstallStopCheck(t, baseURL, token)
 	featureID := createStopJourneyFeature(t, baseURL, token, "stop-work-success")
 	startStopJourneyFeature(t, baseURL, token, featureID)
-	startStopJourneyChat(t, baseURL, token)
+	startStopJourneySupervisor(t, baseURL, token)
 	waitStopWorkActive(t, baseURL, token, 1, true)
 	pre, err := j.getHealth(baseURL)
 	if err != nil {
@@ -386,19 +422,19 @@ func TestInstallStopWorkJourneySuccessStopsAndReplaces(t *testing.T) {
 		t.Fatalf("installed permissions changed: %v %o", err, info.Mode().Perm())
 	}
 
-	// The stopped work stays interrupted and the chat stays ended on the
-	// replacement runtime: nothing resumes automatically.
+	// The stopped work stays interrupted and the supervisor stays ended on
+	// the replacement runtime: nothing resumes automatically.
 	if got := stopJourneyFeatureStatus(t, baseURL, token, featureID); got != "interrupted" {
 		t.Fatalf("feature status after interruption = %q, want interrupted", got)
 	}
 	waitUpdateSnapshot(t, baseURL, token, func(s server.UpdateSnapshot) bool {
-		return !s.ActiveWorkSummary.ChatActive && s.ActiveWorkSummary.FeatureCount == 0
+		return !s.ActiveWorkSummary.SupervisorActive && s.ActiveWorkSummary.FeatureCount == 0
 	}, 20*time.Second)
 }
 
 // TestInstallStopWorkJourneyRollbackAfterConsentedStop exercises the
 // existing rollback coverage through a consented interruption: the accepted
-// install stops the active feature and chat, confirms their completion, and
+// install stops the active feature and supervisor, confirms their completion, and
 // replaces the binary, but the target fails its startup; recovery restores
 // the previous build on the same process identity, and the interrupted work
 // stays interrupted after recovery with no automatic resumption.
@@ -410,7 +446,7 @@ func TestInstallStopWorkJourneyRollbackAfterConsentedStop(t *testing.T) {
 	postInstallStopCheck(t, baseURL, token)
 	featureID := createStopJourneyFeature(t, baseURL, token, "rollback-after-stop")
 	startStopJourneyFeature(t, baseURL, token, featureID)
-	startStopJourneyChat(t, baseURL, token)
+	startStopJourneySupervisor(t, baseURL, token)
 	waitStopWorkActive(t, baseURL, token, 1, true)
 	pre, err := j.getHealth(baseURL)
 	if err != nil {
@@ -441,12 +477,12 @@ func TestInstallStopWorkJourneyRollbackAfterConsentedStop(t *testing.T) {
 	requireSuppressedTarget(t, j, r)
 
 	// The interrupted work stays interrupted after recovery: nothing
-	// resumes automatically and the ended chat stays ended.
+	// resumes automatically and the ended supervisor stays ended.
 	if got := stopJourneyFeatureStatus(t, baseURL, token, featureID); got != "interrupted" {
 		t.Fatalf("feature status after recovery = %q, want interrupted", got)
 	}
 	waitUpdateSnapshot(t, baseURL, token, func(s server.UpdateSnapshot) bool {
-		return !s.ActiveWorkSummary.ChatActive && s.ActiveWorkSummary.FeatureCount == 0
+		return !s.ActiveWorkSummary.SupervisorActive && s.ActiveWorkSummary.FeatureCount == 0
 	}, 30*time.Second)
 	if code := p.terminate(); code != 0 {
 		t.Fatalf("SIGTERM exit code = %d (stderr tail:\n%s)", code, p.stderrTail())

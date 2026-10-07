@@ -27,24 +27,19 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 // fakeInstallStopper is the deterministic InstallStopper seam: a mutable
-// stop set and chat state, per-call error injection, optional parking for
+// stop set and supervisor state, per-call error injection, optional parking for
 // each dispatch, and an observation hook after every recorded dispatch.
 type fakeInstallStopper struct {
-	mu           sync.Mutex
-	features     []string
-	chatActive   bool
-	stopErrs     map[string]error
-	endChatErr   error
-	stopCalls    []string
-	endChatCalls int
-	stopBlock    chan struct{}
-	endChatBlock chan struct{}
-	onDispatch   func()
+	mu         sync.Mutex
+	features   []string
+	stopErrs   map[string]error
+	stopCalls  []string
+	stopBlock  chan struct{}
+	onDispatch func()
 	// supervisorProcess and endSupervisorCalls model the supervisor stop.
 	supervisorProcess  bool
 	endSupervisorCalls int
@@ -80,12 +75,6 @@ func (s *fakeInstallStopper) setFeatures(ids ...string) {
 	s.mu.Unlock()
 }
 
-func (s *fakeInstallStopper) setChatActive(active bool) {
-	s.mu.Lock()
-	s.chatActive = active
-	s.mu.Unlock()
-}
-
 func (s *fakeInstallStopper) setStopErr(id string, err error) {
 	s.mu.Lock()
 	if s.stopErrs == nil {
@@ -113,22 +102,10 @@ func (s *fakeInstallStopper) stopCallsSnapshot() []string {
 	return append([]string(nil), s.stopCalls...)
 }
 
-func (s *fakeInstallStopper) endChatCallsN() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.endChatCalls
-}
-
 func (s *fakeInstallStopper) StoppableFeatures(context.Context) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.features...), nil
-}
-
-func (s *fakeInstallStopper) ChatActive() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.chatActive
 }
 
 func (s *fakeInstallStopper) StopFeature(_ context.Context, featureID string) error {
@@ -147,31 +124,13 @@ func (s *fakeInstallStopper) StopFeature(_ context.Context, featureID string) er
 	return err
 }
 
-func (s *fakeInstallStopper) EndChat(_ context.Context) error {
-	s.mu.Lock()
-	block := s.endChatBlock
-	err := s.endChatErr
-	s.endChatCalls++
-	hook := s.onDispatch
-	s.mu.Unlock()
-	if block != nil {
-		<-block
-	}
-	if hook != nil {
-		hook()
-	}
-	return err
-}
-
 // stopMutationTarget records stop dispatches through the real mutation
 // surface; every other mutation keeps the nop behavior.
 type stopMutationTarget struct {
 	nopMutationTarget
-	mu       sync.Mutex
-	stopped  []string
-	endChats int
-	stopErr  func(featureID string) error
-	endErr   error
+	mu      sync.Mutex
+	stopped []string
+	stopErr func(featureID string) error
 }
 
 func (m *stopMutationTarget) StopFeature(featureID string) (FeatureStopResponse, error) {
@@ -185,23 +144,6 @@ func (m *stopMutationTarget) StopFeature(featureID string) (FeatureStopResponse,
 		}
 	}
 	return FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
-}
-
-func (m *stopMutationTarget) EndChat() (ChatEndResponse, error) {
-	m.mu.Lock()
-	m.endChats++
-	endErr := m.endErr
-	m.mu.Unlock()
-	if endErr != nil {
-		return ChatEndResponse{}, endErr
-	}
-	return ChatEndResponse{SessionID: ChatSessionID, Result: "ended"}, nil
-}
-
-func (m *stopMutationTarget) endChatsN() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.endChats
 }
 
 // setAdmissionActivity mutates the fake admission's observed activity.
@@ -298,7 +240,7 @@ func findObserved(observed []observedUpdate, want observedUpdate) bool {
 // --- Task 1: consent, protected work, and staging-time rechecks ---
 
 // TestUpdateInstallStopPermissionRequestRefusals proves the request-time
-// boundary for both permission values: feature and chat activity refuses a
+// boundary for both permission values: feature and supervisor activity refuses a
 // no-permission immediate install but proceeds with stop permission, while
 // repository reservations, unknown reservation categories, and failed
 // detection refuse either way.
@@ -493,7 +435,7 @@ func findObservedSnapshot(recorder *transitionRecorder, resultPart string) bool 
 
 // TestUpdateInstallStopClosureRaceAbortsBeforeStopping proves a repository
 // reservation that wins the closure race aborts the operation before any
-// feature or chat work is stopped, with admission left open.
+// feature or supervisor work is stopped, with admission left open.
 func TestUpdateInstallStopClosureRaceAbortsBeforeStopping(t *testing.T) {
 	t.Parallel()
 	stopper := &fakeInstallStopper{features: []string{"feat-1"}}
@@ -553,11 +495,11 @@ func TestUpdateInstallStopClosedRecheckBlockerAborts(t *testing.T) {
 
 // --- Task 2: authorized stopping before guarded replacement ---
 
-// TestUpdateInstallStopFeaturesAloneAndChatAlone proves the stop scope for
-// features alone, chat alone, and both together: children stop before
+// TestUpdateInstallStopFeaturesAndSupervisorScope proves the stop scope for
+// features alone, the supervisor alone, and both together: children stop before
 // parents, each authorized target is dispatched exactly once, confirmation
 // waits for actual completion, and replacement happens only afterwards.
-func TestUpdateInstallStopFeaturesAndChatScope(t *testing.T) {
+func TestUpdateInstallStopFeaturesAndSupervisorScope(t *testing.T) {
 	t.Run("features_alone_children_first", func(t *testing.T) {
 		t.Parallel()
 		stopper := &fakeInstallStopper{features: []string{"parent-1", "child-1", "child-2"}}
@@ -591,8 +533,8 @@ func TestUpdateInstallStopFeaturesAndChatScope(t *testing.T) {
 				t.Fatalf("feature %s dispatched %d times, want exactly once", id, count)
 			}
 		}
-		if got := stopper.endChatCallsN(); got != 0 {
-			t.Fatalf("end-chat calls = %d, want none without active chat", got)
+		if got := stopper.endSupervisorCallsN(); got != 0 {
+			t.Fatalf("end-supervisor calls = %d, want none without a supervisor process", got)
 		}
 		// No replacement before confirmed completion: the held
 		// finalization reservation keeps the drain out for at least one
@@ -609,28 +551,6 @@ func TestUpdateInstallStopFeaturesAndChatScope(t *testing.T) {
 			t.Fatalf("observed = %v, want draining at stop entry", recorderObserved(recorder))
 		}
 	})
-	t.Run("chat_alone", func(t *testing.T) {
-		t.Parallel()
-		stopper := &fakeInstallStopper{chatActive: true}
-		coordinator, _, lifecycle, admission, _ := newStopTestCoordinator(t, stopper)
-		// Chat activity settles only after the end-chat dispatch is
-		// observed: confirmation must see it disappear.
-		stopper.setOnDispatch(func() {
-			admission.setAdmissionActivity(workadmission.Activity{})
-			stopper.setChatActive(false)
-		})
-		admission.setAdmissionActivity(workadmission.Activity{ChatActive: true})
-		if refusal := requestStopInstall(t, coordinator, true); refusal != nil {
-			t.Fatalf("stop install refused: %v", refusal)
-		}
-		waitStopEntered(t, coordinator)
-		waitInstallCond(t, 5*time.Second, func() bool { return stopper.endChatCallsN() == 1 }, "chat was never ended")
-		if got := len(stopper.stopCallsSnapshot()); got != 0 {
-			t.Fatalf("stop dispatches = %d, want none without stoppable features", got)
-		}
-		waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.replaceCallsN() == 1 }, "replacement never ran")
-		waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "operation never settled")
-	})
 	t.Run("supervisor_alone", func(t *testing.T) {
 		t.Parallel()
 		stopper := &fakeInstallStopper{supervisorProcess: true}
@@ -643,23 +563,23 @@ func TestUpdateInstallStopFeaturesAndChatScope(t *testing.T) {
 		}
 		waitStopEntered(t, coordinator)
 		waitInstallCond(t, 5*time.Second, func() bool { return stopper.endSupervisorCallsN() == 1 }, "supervisor was never ended")
-		if got := stopper.endChatCallsN(); got != 0 {
-			t.Fatalf("end-chat calls = %d, want none", got)
+		if got := len(stopper.stopCallsSnapshot()); got != 0 {
+			t.Fatalf("stop dispatches = %d, want none without stoppable features", got)
 		}
 		waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.replaceCallsN() == 1 }, "replacement never ran")
 		waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "operation never settled")
 	})
-	t.Run("features_and_chat_together", func(t *testing.T) {
+	t.Run("features_and_supervisor_together", func(t *testing.T) {
 		t.Parallel()
-		stopper := &fakeInstallStopper{features: []string{"feat-1"}, chatActive: true}
+		stopper := &fakeInstallStopper{features: []string{"feat-1"}, supervisorProcess: true}
 		coordinator, _, lifecycle, _, _ := newStopTestCoordinator(t, stopper)
 		if refusal := requestStopInstall(t, coordinator, true); refusal != nil {
 			t.Fatalf("stop install refused: %v", refusal)
 		}
 		waitStopEntered(t, coordinator)
 		waitInstallCond(t, 5*time.Second, func() bool {
-			return len(stopper.stopCallsSnapshot()) == 1 && stopper.endChatCallsN() == 1
-		}, "feature stop and chat end never both ran")
+			return len(stopper.stopCallsSnapshot()) == 1 && stopper.endSupervisorCallsN() == 1
+		}, "feature stop and supervisor end never both ran")
 		waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.replaceCallsN() == 1 }, "replacement never ran")
 	})
 }
@@ -697,7 +617,7 @@ func TestUpdateInstallStopAccountsForNewlyVisibleWork(t *testing.T) {
 }
 
 // TestUpdateInstallStopUnidentifiableWorkBlocks proves reservations that
-// cannot be identified as stoppable feature or chat work block the
+// cannot be identified as stoppable feature or supervisor work block the
 // installation during confirmation, even after successful stops.
 func TestUpdateInstallStopUnidentifiableWorkBlocks(t *testing.T) {
 	t.Parallel()
@@ -1034,10 +954,9 @@ func TestUpdateInstallNoPermissionRepeatsFullCheckAfterStaging(t *testing.T) {
 
 // --- 503 refusals for new work during closed admission ---
 
-// TestPromptRepliesRefusedDuringClosedAdmission proves replies and chat
-// turns that could launch new work receive the canonical 503
-// update_in_progress with Retry-After while admission is closed, while the
-// chat-end settle path stays available.
+// TestPromptRepliesRefusedDuringClosedAdmission proves replies that could
+// launch new work receive the canonical 503 update_in_progress with
+// Retry-After while admission is closed.
 func TestPromptRepliesRefusedDuringClosedAdmission(t *testing.T) {
 	t.Parallel()
 	mutations := &stopMutationTarget{}
@@ -1064,12 +983,6 @@ func TestPromptRepliesRefusedDuringClosedAdmission(t *testing.T) {
 		resp.Body.Close()
 		return resp
 	}
-	// Sanity: with admission open the reply routes are not refused as
-	// update_in_progress (they may fail validation differently).
-	open := post("/api/v1/prompts/chat/end", `{}`)
-	if open.StatusCode == http.StatusServiceUnavailable {
-		t.Fatal("chat/end must stay available with admission open")
-	}
 	if !boundary.CloseIfQuiesced() {
 		t.Fatal("test boundary must close while quiesced")
 	}
@@ -1078,7 +991,6 @@ func TestPromptRepliesRefusedDuringClosedAdmission(t *testing.T) {
 		path string
 		body string
 	}{
-		{"chat_start", "/api/v1/prompts/chat/start", `{"message":"hello"}`},
 		{"ask_user_answer", "/api/v1/prompts/ask-user/answer", `{"request_id":"r1","answers":{"q":"a"}}`},
 		{"help_send", "/api/v1/prompts/help/send", `{"message":"more info","session_id":"s1"}`},
 		{"permissions_answer", "/api/v1/permissions/answer", `{"request_id":"r1","decision":"allow_once"}`},
@@ -1091,21 +1003,14 @@ func TestPromptRepliesRefusedDuringClosedAdmission(t *testing.T) {
 			t.Fatalf("%s response missing Retry-After", tt.name)
 		}
 	}
-	// The chat-end settle path never needs new-work permission.
-	resp := post("/api/v1/prompts/chat/end", `{}`)
-	if resp.StatusCode == http.StatusServiceUnavailable {
-		t.Fatal("chat/end must settle without acquiring new-work permission")
-	}
-	if got := mutations.endChatsN(); got != 2 {
-		t.Fatalf("end-chat dispatches = %d, want the open sanity call plus the closed settle call", got)
-	}
+
 }
 
-// TestChatRestartAfterStopFailureIsNotStoppedByStaleWork proves a chat
-// session newly created after a stop failure and gate release is never
+// TestRestartAfterStopFailureIsNotStoppedByStaleWork proves a supervisor
+// process newly started after a stop failure and gate release is never
 // stopped by leftover install work: the stopper surface sees no dispatch
 // after the operation settles.
-func TestChatRestartAfterStopFailureIsNotStoppedByStaleWork(t *testing.T) {
+func TestRestartAfterStopFailureIsNotStoppedByStaleWork(t *testing.T) {
 	t.Parallel()
 	stopper := &fakeInstallStopper{features: []string{"feat-1"}}
 	stopper.setStopErr("feat-1", errors.New("stop rejected"))
@@ -1118,11 +1023,15 @@ func TestChatRestartAfterStopFailureIsNotStoppedByStaleWork(t *testing.T) {
 	if got := admission.openCallsN(); got < 1 {
 		t.Fatalf("open calls = %d, want the gate released after the failure", got)
 	}
-	// No stop pass may exist anymore: the settled worker made its last
-	// dispatch before failing, and nothing dispatches afterwards.
+	// A supervisor started after the gate release must not be ended: the
+	// settled worker made its last dispatch before failing, and nothing
+	// dispatches afterwards.
+	stopper.mu.Lock()
+	stopper.supervisorProcess = true
+	stopper.mu.Unlock()
 	time.Sleep(50 * time.Millisecond)
-	if got := stopper.endChatCallsN(); got != 0 {
-		t.Fatalf("end-chat dispatches = %d, want none from settled install work", got)
+	if got := stopper.endSupervisorCallsN(); got != 0 {
+		t.Fatalf("end-supervisor dispatches = %d, want none from settled install work", got)
 	}
 	if calls := stopper.stopCallsSnapshot(); len(calls) != 1 {
 		t.Fatalf("stop dispatches = %v, want exactly the pre-failure pass", calls)
@@ -1208,15 +1117,4 @@ func TestHandlerStopperProjectionAndOrdering(t *testing.T) {
 		t.Fatal("listing failure must surface as an error")
 	}
 
-	// Chat activity mirrors the detector's active-chat semantics.
-	active := &fakeSessionView{id: ChatSessionID, status: ports.SessionRunning}
-	h = &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{active}}}
-	if !(handlerInstallStopper{handler: h}).ChatActive() {
-		t.Fatal("active chat session must report chat activity")
-	}
-	finished := &fakeSessionView{id: ChatSessionID, status: ports.SessionDone}
-	h = &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{finished}}}
-	if (handlerInstallStopper{handler: h}).ChatActive() {
-		t.Fatal("finished chat session must not report chat activity")
-	}
 }

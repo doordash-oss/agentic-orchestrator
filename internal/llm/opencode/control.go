@@ -444,7 +444,7 @@ const maxQuestionFormatRetries = 2
 // This entire text-parsed AskUserQuestion pipeline exists only to imitate
 // Claude's native AskUserQuestion tool call for a provider whose questions are
 // otherwise just plain text. Interactive sessions (a human answers every turn
-// directly, e.g. AMA chat) get no benefit from that imitation — the human can
+// directly, e.g. a conversation) get no benefit from that imitation — the human can
 // read the model's question and reply with an ordinary chat message exactly as
 // they would with bare OpenCode — so this always reports a clean completion
 // for them and never synthesizes a picker.

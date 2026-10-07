@@ -27,6 +27,10 @@ limitations under the License.
  * permissions and questions sit at the bottom of the transcript in the
  * shared attention card and question turn, and are answered through the
  * existing attention submit path.
+ *
+ * A routed compose request ("Explain in chat", ⌘⇧M) focuses the composer
+ * and may draft text into it unsent, carrying an error reference that rides
+ * hidden with the next send.
  */
 import {
   useCallback,
@@ -40,6 +44,7 @@ import {
 import type {
   AttentionItem,
   CanonicalError,
+  ErrorReference,
   SupervisorPendingRequest,
   SupervisorRecord,
   SupervisorSettingsRequest,
@@ -58,7 +63,7 @@ import {
   type AttentionSubmitOptions,
 } from '../AttentionInbox';
 import { useModelCatalogue } from '../ConfigEditor';
-import { DescriptionComposer } from '../DescriptionComposer';
+import { DescriptionComposer, type DescriptionComposerHandle } from '../DescriptionComposer';
 import {
   QuestionComposer,
   QuestionConversationTurn,
@@ -82,11 +87,29 @@ const NO_REPOSITORIES: readonly never[] = [];
 const NO_FILES: readonly never[] = [];
 const ignoreUpdate = (): void => {};
 
+/**
+ * A routed ask to focus the composer, optionally drafting `draft` into it
+ * with the error reference the drafted message carries. Handled once per id.
+ */
+export interface SupervisorComposeRequest {
+  id: number;
+  draft?: string;
+  errorReference?: ErrorReference;
+}
+
 export interface SupervisorPageProps {
   attentionDrafts: AttentionDrafts;
   setAttentionDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
   /** Refreshes the shell-wide attention snapshot after an answer. */
   refreshAttention(): Promise<AttentionItem[]>;
+  /** Owned by the shell: the newest routed compose request, until handled. */
+  composeRequest?: SupervisorComposeRequest | null;
+  onComposeRequestHandled?(): void;
+}
+
+/** Sets an empty composer to the draft; otherwise appends it after a blank line. */
+function appendDraft(current: string, draft: string): string {
+  return current.trim() === '' ? draft : `${current.trimEnd()}\n\n${draft}`;
 }
 
 function userRecordText(record: SupervisorRecord): string | undefined {
@@ -101,6 +124,8 @@ export function SupervisorPage({
   attentionDrafts,
   setAttentionDrafts,
   refreshAttention,
+  composeRequest = null,
+  onComposeRequestHandled,
 }: SupervisorPageProps) {
   const catalogue = useModelCatalogue();
   const [state, setState] = useState<SupervisorState | null>(null);
@@ -111,6 +136,13 @@ export function SupervisorPage({
     () => new Map(),
   );
   const [draft, setDraft] = useState('');
+  // The hidden error reference attached to the pending draft: set by a
+  // routed explain (a later one replaces it), cleared by a successful send
+  // or by the person emptying the composer.
+  const [errorReference, setErrorReference] = useState<ErrorReference | null>(null);
+  const [focusToken, setFocusToken] = useState(0);
+  const composerRef = useRef<DescriptionComposerHandle | null>(null);
+  const handledComposeRequest = useRef<number | null>(null);
   const [optimistic, setOptimistic] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -229,6 +261,24 @@ export function SupervisorPage({
     };
   }, [load]);
 
+  // Each routed compose request is handled once by its id, so a re-render
+  // carrying the same request never replays its draft.
+  useEffect(() => {
+    if (composeRequest === null || handledComposeRequest.current === composeRequest.id) return;
+    handledComposeRequest.current = composeRequest.id;
+    const { draft: routedDraft, errorReference: routedReference } = composeRequest;
+    if (routedDraft !== undefined) setDraft((current) => appendDraft(current, routedDraft));
+    if (routedReference !== undefined) setErrorReference(routedReference);
+    setFocusToken((token) => token + 1);
+    onComposeRequestHandled?.();
+  }, [composeRequest, onComposeRequestHandled]);
+
+  // Focus lands after the drafted text commits, so the caret sits at its end.
+  useEffect(() => {
+    if (focusToken === 0) return;
+    composerRef.current?.focus();
+  }, [focusToken]);
+
   const conversation = useMemo(
     () =>
       buildSupervisorConversation(records, {
@@ -261,15 +311,21 @@ export function SupervisorPage({
   const send = async (): Promise<void> => {
     const text = draft.trim();
     if (!canSend) return;
+    const reference = errorReference;
     setOptimistic(text);
     setDraft('');
     setInlineError(null);
     setSending(true);
     setPinToBottom((token) => token + 1);
     try {
-      const result = await window.agentico.sendSupervisorMessage({ text });
+      const result = await window.agentico.sendSupervisorMessage({
+        text,
+        ...(reference === null ? {} : { errorReference: reference }),
+      });
       setRecords((current) => mergeRecords(current, [result.record]));
       setOptimistic(null);
+      // A newer explain routed in while the send was in flight keeps its own.
+      setErrorReference((current) => (current === reference ? null : current));
     } catch (error) {
       setOptimistic(null);
       // Nothing was committed: the text goes back where it came from, unless
@@ -425,6 +481,7 @@ export function SupervisorPage({
             value={draft}
             rows={2}
             maxLength={SUPERVISOR_MESSAGE_MAX_CHARS}
+            composerRef={composerRef}
             allowUploads={false}
             searchRepositories={NO_REPOSITORIES}
             images={NO_FILES}
@@ -432,7 +489,10 @@ export function SupervisorPage({
             imageUploads={NO_FILES}
             attachmentUploads={NO_FILES}
             repositoryFiles={NO_FILES}
-            onValueChange={setDraft}
+            onValueChange={(value) => {
+              setDraft(value);
+              if (value.trim() === '') setErrorReference(null);
+            }}
             onImagesChange={ignoreUpdate}
             onAttachmentsChange={ignoreUpdate}
             onImageUploadsChange={ignoreUpdate}

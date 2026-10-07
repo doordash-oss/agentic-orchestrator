@@ -121,7 +121,7 @@ func (h *apiHandler) admissionPendingCount() int {
 }
 
 // admissionPendingCounts returns the held admission reservations with their
-// per-category breakdown. Categories outside feature and chat are protected
+// per-category breakdown. Categories outside feature and supervisor are protected
 // or unknown work an explicit-stop install must refuse on.
 func (h *apiHandler) admissionPendingCounts() (int, map[workadmission.Category]int) {
 	if h.admission == nil {
@@ -140,7 +140,6 @@ func (h *apiHandler) registerAdmissionDetectors(coordinator *workadmission.Coord
 	}
 	coordinator.SetDetectors([]workadmission.Detector{
 		h.detectFeatureActivity,
-		h.detectChatActivity,
 		h.detectSupervisorActivity,
 		h.detectCloneActivity,
 		h.detectUploadActivity,
@@ -182,19 +181,6 @@ func (h *apiHandler) detectFeatureActivity(context.Context) (workadmission.Activ
 		if f.Status.IsRunning() || f.Status == feature.StatusNeedUserInput {
 			activity.Features++
 		}
-	}
-	return activity, nil
-}
-
-// detectChatActivity reports whether the singleton chat session is active,
-// using the existing active-chat semantics.
-func (h *apiHandler) detectChatActivity(context.Context) (workadmission.Activity, error) {
-	activity := workadmission.Activity{}
-	if h.sessions == nil {
-		return activity, nil
-	}
-	if sess := h.sessions.GetSession(ChatSessionID); sess != nil && sess.IsActive() {
-		activity.ChatActive = true
 	}
 	return activity, nil
 }

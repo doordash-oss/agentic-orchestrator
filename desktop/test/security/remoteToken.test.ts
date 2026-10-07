@@ -83,8 +83,8 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     runtime: { state_dir: '/srv/remote/features' },
     compatibility: {
       api_version: 'v1',
-      schema_version: 1,
-      min_client_schema: 1,
+      schema_version: 2,
+      min_client_schema: 2,
       runtime_policy: 'network-bearer-v1',
       server_build: { version: 'v9.9.9-remote' },
     },

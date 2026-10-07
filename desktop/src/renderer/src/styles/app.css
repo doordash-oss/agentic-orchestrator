@@ -206,7 +206,7 @@ body {
   color: var(--accent);
 }
 
-/* Overview's sole "New feature" entry point: the one accent-filled control
+/* The "New feature" entry point on every page: the one accent-filled control
  * in an otherwise quiet toolbar. */
 .toolbar__new-feature {
   flex: 0 0 auto;
@@ -221,6 +221,30 @@ body {
 
 .toolbar__new-feature:hover {
   opacity: 0.9;
+}
+
+/* The Recovery sheet's entry point, on every page beside the bell: the same
+ * quiet icon button, tinted amber only while the server reports orphaned
+ * sessions (which the bell's count deliberately leaves out). */
+.toolbar__recovery {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toolbar__recovery:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.toolbar__recovery[data-attention='true'] {
+  color: var(--attention);
 }
 
 /* The content column: the toolbar and the scrollable content pane, stacked —
@@ -535,458 +559,7 @@ body {
   color: var(--accent);
 }
 
-/* --- The floating Ask Agentico panel ---------------------------------------
- * A panel inside the main window, not a bar docked to its bottom edge: the
- * sidebar's vibrant material, a window-radius corner, the material-edge
- * hairline ring, and the deep panel shadow. It floats above the content layer
- * and below every popover-dialog, sheet, and the command palette. Dragging
- * lives on the header, resizing on the eight grips; both write the geometry
- * the panel restores on the next launch.
- *
- * Platform note: `backdrop-filter` over native window vibrancy has documented
- * double-render bugs on macOS. If that artifact shows up on real hardware, the
- * fallback is an opaque `--raised` background with the blur dropped — a
- * visual-only change, made here and nowhere else.
- */
-.ama-panel__modal-layer {
-  display: contents;
-}
-
-.ama-panel__modal-layer[data-open='true'] {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: clamp(var(--space-4), 4vw, var(--space-6));
-  background: var(--color-scrim);
-}
-
-.ama-panel {
-  position: fixed;
-  z-index: 35;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  border-radius: var(--bench-radius-window);
-  background: var(--material);
-  backdrop-filter: blur(46px) saturate(170%);
-  box-shadow:
-    0 0 0 var(--bench-hairline-width) var(--material-edge),
-    var(--shadow);
-  color: var(--text);
-  font: 13px var(--bench-font-text);
-}
-
-/* The panel can float over the toolbar, which is a window drag region on
- * macOS — without this, dragging its header would move the window. */
-:root[data-platform='darwin'] .ama-panel {
-  -webkit-app-region: no-drag;
-}
-
-/* Expanded: the same panel as a whole-window presentation on the raised
- * surface, where the material has nothing behind it to sample. */
-.ama-panel[data-maximized='true'] {
-  position: relative;
-  inset: auto;
-  width: min(1180px, 100%);
-  height: min(88vh, 920px);
-  max-height: 100%;
-  background: var(--content);
-  backdrop-filter: none;
-  box-shadow:
-    0 0 0 var(--bench-hairline-width) var(--material-edge),
-    var(--sheet-shadow);
-}
-
-.ama-panel[data-maximized='true']:focus-visible {
-  outline: none;
-}
-
-.ama-panel__header {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 34px;
-  /* 12px of clearance on both sides keeps the header's own buttons clear of
-     the 10px corner resize grips below. */
-  padding: 0 var(--space-3);
-  border-bottom: var(--bench-hairline-width) solid var(--material-edge);
-  user-select: none;
-}
-
-.ama-panel:not([data-maximized='true']) .ama-panel__header {
-  cursor: grab;
-}
-
-.ama-panel[data-dragging='true']:not([data-maximized='true']) .ama-panel__header {
-  cursor: grabbing;
-}
-
-.ama-panel__title {
-  flex: none;
-  margin: 0;
-  color: var(--text);
-  font: 600 12.5px var(--bench-font-text);
-}
-
-.ama-panel__status {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin: 0;
-  color: var(--faint);
-  font: 11px var(--bench-font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ama-panel__icon-button {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: var(--bench-radius-control);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.ama-panel__icon-button:hover {
-  background: var(--raised);
-  color: var(--text);
-}
-
-.ama-panel__icon-button svg {
-  width: 13px;
-  height: 13px;
-}
-
-.ama-panel__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* A pending AMA question stacks above the transcript rather than beside it —
- * the panel is 404px wide, not a full-width drawer. */
-.ama-panel__attention {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 55%;
-  overflow: auto;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: var(--bench-hairline-width) solid var(--material-edge);
-}
-
-.ama-panel__attention-item + .ama-panel__attention-item {
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: var(--bench-hairline-width) solid var(--hairline);
-}
-
-.ama-panel .ama-panel__transcript {
-  flex: 1 1 auto;
-  min-height: 0;
-  gap: var(--space-3);
-  padding: var(--space-3);
-}
-
-/* Expanded, the panel is a reading surface: generous side margins and a
- * capped measure, so a whole-window transcript never runs 1100px per line. */
-.ama-panel[data-maximized='true'] .ama-panel__transcript {
-  padding: var(--space-5) clamp(var(--space-5), 6vw, 96px);
-}
-
-.ama-panel[data-maximized='true'] .conversation__message {
-  max-width: 78ch;
-}
-
-/* Your turns carry the 2px accent left rule; Agentico's stay plain, so the
- * dialogue scans without bubbles. */
-.ama-panel .conversation__message[data-role='user'] {
-  border-left: 2px solid var(--accent);
-  padding-left: 10px;
-}
-
-.ama-panel .conversation__message-role {
-  color: var(--faint);
-  font: 600 11px var(--bench-font-text);
-}
-
-.ama-panel .conversation__message p {
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.ama-panel__notice {
-  flex: none;
-  min-width: 0;
-  margin: 0;
-  padding: 0 var(--space-3) var(--space-2);
-  color: var(--muted);
-  font: 11px var(--bench-font-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ama-panel__confirm {
-  flex: none;
-  display: grid;
-  gap: var(--space-2);
-  margin: 0 var(--space-3) var(--space-2);
-  border: var(--bench-hairline-width) solid var(--bad);
-  border-radius: var(--bench-radius-card);
-  padding: var(--space-2) var(--space-3);
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-}
-
-.ama-panel__confirm-text {
-  margin: 0;
-  color: var(--text);
-  font: 12px var(--bench-font-text);
-}
-
-.ama-panel__confirm-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-}
-
-.ama-panel__composer {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border-top: var(--bench-hairline-width) solid var(--material-edge);
-}
-
-.ama-panel__composer textarea {
-  width: 100%;
-  min-height: 32px;
-  max-height: 120px;
-  resize: none;
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  background: var(--content);
-  color: var(--text);
-  padding: 7px var(--space-2);
-  font: 12.5px var(--bench-font-text);
-}
-
-.ama-panel__composer textarea::placeholder {
-  color: var(--faint);
-}
-
-/* End session sits with the composer, per the mock: the destructive verb
- * belongs to the session you are typing into, not to the panel's chrome. */
-.ama-panel__composer-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.ama-panel__secondary {
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  padding: 4px var(--space-2);
-  background: var(--content);
-  color: var(--text);
-  font: 600 11.5px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.ama-panel__secondary:hover:not(:disabled) {
-  background: var(--raised);
-}
-
-.ama-panel__danger {
-  border: var(--bench-hairline-width) solid var(--bad);
-  border-radius: var(--bench-radius-control);
-  padding: 4px var(--space-2);
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-  color: var(--bad);
-  font: 600 11.5px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.ama-panel__danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bad) 18%, transparent);
-}
-
-.ama-panel__send {
-  margin-left: auto;
-  border: 0;
-  border-radius: var(--bench-radius-control);
-  padding: 4px var(--space-3);
-  background: var(--accent);
-  color: #fff;
-  font: 600 11.5px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.ama-panel__send:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.ama-panel__send:disabled,
-.ama-panel__secondary:disabled,
-.ama-panel__danger:disabled,
-.ama-panel__icon-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.ama-panel__attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.ama-panel__attachment {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 4px;
-  padding: 3px 6px;
-  background: var(--raised);
-  color: var(--muted);
-  font: 11px var(--bench-font-mono);
-}
-
-.ama-panel__attachment-glyph {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  background: var(--accent);
-}
-
-.ama-panel__attachment button {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--faint);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.ama-panel__attachment button:hover {
-  color: var(--text);
-}
-
-/* Upload lifecycle affordances (remote connections): same chip language. */
-.ama-panel__attachment[data-state='uploading'] {
-  opacity: 0.7;
-}
-
-.ama-panel__attachment[data-state='failed'] {
-  border: 1px solid var(--bad);
-  flex-wrap: wrap;
-}
-
-.ama-panel__attachment-state,
-.ama-panel__attachment-badge {
-  font: 10px var(--bench-font-text);
-  color: var(--faint);
-}
-
-/* Failure remediation is actionable copy: wrap it onto its own row so the
-   full message stays readable instead of being ellipsized mid-sentence. */
-.ama-panel__attachment-message {
-  flex-basis: 100%;
-  max-width: 22rem;
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
-  color: var(--bad);
-}
-
-/* Resize from every edge and corner, like a real macOS panel. The grips sit
- * just inside the edge — the panel clips its own overflow, so a straddling
- * target would lose half its hit area to the clip. */
-.ama-panel__grip {
-  position: absolute;
-  z-index: 1;
-}
-
-.ama-panel__grip[data-edge='n'],
-.ama-panel__grip[data-edge='s'] {
-  left: 10px;
-  right: 10px;
-  height: 5px;
-  cursor: ns-resize;
-}
-
-.ama-panel__grip[data-edge='e'],
-.ama-panel__grip[data-edge='w'] {
-  top: 10px;
-  bottom: 10px;
-  width: 5px;
-  cursor: ew-resize;
-}
-
-.ama-panel__grip[data-edge='n'] {
-  top: 0;
-}
-
-.ama-panel__grip[data-edge='s'] {
-  bottom: 0;
-}
-
-.ama-panel__grip[data-edge='e'] {
-  right: 0;
-}
-
-.ama-panel__grip[data-edge='w'] {
-  left: 0;
-}
-
-.ama-panel__grip[data-edge='ne'],
-.ama-panel__grip[data-edge='nw'],
-.ama-panel__grip[data-edge='se'],
-.ama-panel__grip[data-edge='sw'] {
-  width: 10px;
-  height: 10px;
-}
-
-.ama-panel__grip[data-edge='ne'] {
-  top: 0;
-  right: 0;
-  cursor: nesw-resize;
-}
-
-.ama-panel__grip[data-edge='nw'] {
-  top: 0;
-  left: 0;
-  cursor: nwse-resize;
-}
-
-.ama-panel__grip[data-edge='se'] {
-  bottom: 0;
-  right: 0;
-  cursor: nwse-resize;
-}
-
-.ama-panel__grip[data-edge='sw'] {
-  bottom: 0;
-  left: 0;
-  cursor: nesw-resize;
-}
-
-/* Shared conversational transcript (AMA + current-run live preview). */
+/* Shared conversational transcript (supervisor + current-run live preview). */
 .conversation__scroll {
   display: flex;
   flex-direction: column;
@@ -1078,30 +651,6 @@ body {
 
 .conversation__verification-tick[data-tone='running'] {
   color: var(--accent);
-}
-
-.ama-panel__empty {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-1);
-  min-height: 120px;
-  margin: 0;
-  color: var(--muted);
-  font: 12px var(--bench-font-text);
-  text-align: center;
-}
-
-.ama-panel__empty strong {
-  color: var(--text);
-  font: 500 14px var(--bench-font-serif);
-}
-
-.ama-panel__empty span {
-  max-width: 300px;
-  line-height: 1.45;
 }
 
 .conversation__activity {
@@ -2105,8 +1654,7 @@ body {
   gap: var(--space-3);
 }
 
-/* The grouped inset list, shared shape with Overview's lanes and the
- * receipt below: a hairlined card whose rows are separated by hairlines. */
+/* The grouped inset list, shared shape with the receipt below: a hairlined card whose rows are separated by hairlines. */
 .aftercare-workspace__group,
 .aftercare-shipped__group {
   border: var(--bench-hairline-width) solid var(--hairline);
@@ -2733,7 +2281,7 @@ body {
   outline-offset: 2px;
 }
 
-/* Grouped inset lists, the Bench shape shared with Overview and Aftercare:
+/* Grouped inset lists, the Bench shape shared with Aftercare:
  * a quiet label above a hairlined card whose rows are hairline-separated. */
 
 .creation-sheet__group {
@@ -3069,6 +2617,50 @@ body {
   .creation-sheet__profiles[data-variant='full'] .creation-sheet__profile {
     min-height: 0;
   }
+}
+
+/* ─── The Recovery sheet ──────────────────────────────────────────────────
+ * The two operational panels in one do-and-dismiss sheet: Recovery stacked
+ * above Bulk resume/retry, each keeping its own raised card, with the title
+ * and its Close pinned above the scrolling body.
+ */
+.recovery-sheet {
+  width: min(760px, calc(100% - var(--space-6)));
+  max-height: min(88vh, 900px);
+}
+
+.recovery-sheet__header {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border-bottom: var(--bench-hairline-width) solid var(--hairline);
+  padding: var(--space-4) var(--space-5);
+}
+
+.recovery-sheet__title {
+  margin: 0;
+  color: var(--text);
+  font: 500 22px/1.25 var(--bench-font-serif);
+}
+
+.recovery-sheet__lede {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font: 13px/1.5 var(--bench-font-text);
+}
+
+.recovery-sheet__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* The kill confirmation scopes itself to the sheet, as the creation sheet's
+ * nested dialogs do: the sheet's transform is already its containing block. */
+.recovery-sheet .impact-dialog__backdrop {
+  position: absolute;
 }
 
 /* ─── The cycle gate, in the sheet ───────────────────────────────────────── */
@@ -4808,7 +4400,7 @@ body {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* The translucent Bench source list: a pinned Overview row above five
+/* The translucent Bench source list: the pinned Supervisor row above five
  * disclosable lane sections. Built on the Bench material/hairline token set. */
 .sidebar {
   position: relative;
@@ -4853,6 +4445,12 @@ body {
   padding: var(--space-2);
 }
 
+/* A failed feature-list load: one compact surface pinned above the footer. */
+.sidebar__list-error {
+  flex: 0 0 auto;
+  padding: 0 var(--space-2) var(--space-2);
+}
+
 .sidebar__footer {
   flex: 0 0 auto;
   display: flex;
@@ -4888,31 +4486,6 @@ body {
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
-  background: var(--accent);
-}
-
-.sidebar__ama {
-  margin-left: auto;
-  padding: 0;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font: 11px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.sidebar__ama:hover {
-  color: var(--text);
-}
-
-/* Ambient only, like the update dot: an AMA reply landed while the panel was
- * closed. The Ask button itself is the target that clears it. */
-.sidebar__ama-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-left: 6px;
   border-radius: 999px;
   background: var(--accent);
 }
@@ -5185,9 +4758,9 @@ body {
   background: rgb(255 255 255 / 78%);
 }
 
-/* The house is a glyph, not a dot: no fill of its own, and it inherits the
- * selected row's ink like the label beside it. */
-.sidebar__row[aria-selected='true'] .sidebar__row-glyph--house {
+/* The Supervisor mark is a glyph, not a dot: no fill of its own, and it
+ * inherits the selected row's ink like the label beside it. */
+.sidebar__row[aria-selected='true'] .sidebar__row-glyph--supervisor {
   background: none;
   color: rgb(255 255 255 / 88%);
 }
@@ -5224,9 +4797,10 @@ body {
   background: var(--ok);
 }
 
-/* Overview's leading mark: a caption-weight outline house on the dot's grid,
- * so the row's text still starts on the same optical line as every other. */
-.sidebar__row-glyph--house {
+/* The Supervisor row's leading mark: a caption-weight outline text bubble on
+ * the dot's grid, so the row's text still starts on the same optical line as
+ * every other. */
+.sidebar__row-glyph--supervisor {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5238,7 +4812,7 @@ body {
   color: var(--muted);
 }
 
-.sidebar__row-glyph--house svg {
+.sidebar__row-glyph--supervisor svg {
   width: 14px;
   height: 14px;
   stroke-width: 1.7;
@@ -5330,45 +4904,6 @@ body {
   letter-spacing: 0.02em;
 }
 
-.overview-surface {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  min-height: 0;
-}
-
-.overview-surface__header {
-  width: min(1440px, 100%);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding-bottom: var(--space-3);
-}
-.overview-surface__headline {
-  margin: 0;
-  font: 500 26px var(--bench-font-serif);
-  color: var(--text);
-}
-.overview-surface__subline {
-  margin: 0;
-  color: var(--muted);
-  font: 13px var(--bench-font-text);
-}
-.overview-surface__cta {
-  align-self: flex-start;
-  margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  border: none;
-  border-radius: var(--bench-radius-control);
-  background: var(--accent);
-  color: #fff;
-  font: 600 13px var(--bench-font-text);
-  cursor: pointer;
-}
-.overview-surface__cta:hover {
-  opacity: 0.9;
-}
 .creation-wizard {
   max-width: 72rem;
   margin: 0 auto;
@@ -5819,198 +5354,6 @@ body {
   .pipeline-grid {
     grid-template-columns: 1fr;
   }
-}
-
-/* --- Overview lanes ------------------------------------------------------- */
-
-/* Every non-empty lane renders as its own grouped inset list, in sidebar
- * order — the same grouped-list vocabulary the sidebar itself uses. */
-.overview-lanes {
-  width: min(1440px, 100%);
-  margin: 0 auto;
-}
-
-.overview-lanes__groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.overview-lane {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.overview-lane__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-1);
-}
-
-.overview-lane__title {
-  margin: 0;
-  color: var(--text);
-  font: 600 15px var(--bench-font-text);
-}
-
-.overview-lane__count {
-  color: var(--muted);
-  font: 600 11px var(--bench-font-text);
-  background: var(--raised);
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: 999px;
-  padding: 1px 8px;
-  line-height: 1.5;
-}
-
-.overview-lane__group {
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-card);
-  background: var(--raised);
-  padding: var(--space-3);
-}
-
-.overview-lane__rows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.overview-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  border-top: var(--bench-hairline-width) solid var(--hairline);
-  padding: 2px;
-}
-
-.overview-lane__rows li.overview-row:first-child {
-  border-top: none;
-}
-
-.overview-row[data-lane='waiting'] {
-  background: color-mix(in srgb, var(--attention) 9%, transparent);
-  border-radius: var(--bench-radius-control);
-}
-
-.overview-row__hit {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-2);
-  background: transparent;
-  border: none;
-  border-radius: var(--bench-radius-control);
-  cursor: pointer;
-  text-align: left;
-}
-
-.overview-row__hit:hover {
-  background: var(--content);
-}
-
-.overview-row__body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.overview-row__name {
-  font: 500 13px var(--bench-font-text);
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overview-row__subline {
-  font: 11px var(--bench-font-mono);
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overview-row__state-col {
-  flex: 0 0 auto;
-  width: clamp(140px, 22vw, 260px);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.overview-row__state {
-  flex: 0 1 auto;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font: 11px var(--bench-font-text);
-}
-
-.overview-row__state[data-tone='attention'] {
-  color: var(--attention);
-}
-
-.overview-row__state[data-tone='danger'] {
-  color: var(--bad);
-}
-
-.overview-row__state-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overview-row__state-dot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--faint);
-}
-
-.overview-row__state-dot[data-tone='attention'] {
-  background: var(--attention);
-}
-
-.overview-row__state-dot[data-tone='danger'] {
-  background: var(--bad);
-}
-
-.overview-row__state-dot[data-tone='progress'] {
-  background: var(--accent);
-}
-
-.overview-row__state-dot[data-tone='ok'] {
-  background: var(--ok);
-}
-
-.overview-row__action {
-  flex: 0 0 auto;
-  padding: 6px var(--space-3);
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  background: transparent;
-  color: var(--text);
-  font: 600 12px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.overview-row__action:hover {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* --- Feature cockpit ------------------------------------------------------------ */
@@ -14278,7 +13621,7 @@ body {
 }
 
 /* ─── Supervisor ──────────────────────────────────────────────────────────
- * One conversation, read like the AMA transcript but given the whole
+ * One conversation, read like a transcript but given the whole
  * content pane: a centered reading column that scrolls on its own, with the
  * composer docked beneath it. The one signal it adds is the status lamp
  * beside the harness chip — the conversation's "on" light — so everything

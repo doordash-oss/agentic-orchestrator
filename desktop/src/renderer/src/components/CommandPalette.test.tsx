@@ -107,7 +107,7 @@ describe('CommandPalette feature group', () => {
     expect(within(group).getByRole('option', { name: /^Merge/ })).toBeDisabled();
   });
 
-  it('disables the whole group with the no-active-feature reason on Overview', async () => {
+  it('disables the whole group with the no-active-feature reason on Supervisor', async () => {
     installAgenticoMock({
       settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
     });
@@ -372,7 +372,7 @@ describe('CommandPalette global entries', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
     expect(within(dialog).getByRole('option', { name: /^New Feature/ })).toBeEnabled();
     expect(within(dialog).getByRole('option', { name: /^Show\/Hide Sidebar/ })).toBeEnabled();
-    // Overview has no inspector to show or hide.
+    // The Supervisor page has no inspector to show or hide.
     expect(within(dialog).getByRole('option', { name: /^Show\/Hide Inspector/ })).toBeDisabled();
     expect(within(dialog).queryByText('Close Window')).toBeNull();
     expect(within(dialog).queryByText('Quit Agentico')).toBeNull();

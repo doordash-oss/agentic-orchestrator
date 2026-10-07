@@ -38,7 +38,6 @@ import {
   TestingContractWaiveResultSchema,
   VerificationGateActionSchema,
   ATTENTION_ALREADY_RESOLVED_NOTICE,
-  CHAT_SESSION_ID,
   SUPERVISOR_FEATURE_ID,
   isPendingReviewStatus,
   isSupervisorSessionId,
@@ -69,18 +68,14 @@ const fallbackTime = '1970-01-01T00:00:00.000Z';
 // help text (internal/server/read_model.go, agentQuestionPrompt).
 const syntheticHelpPrompt = 'Agent has a question';
 
-function helpWaitingKind(help: {
-  kind?: string;
-  question: string;
-  feature_id: string;
-}): 'question' | 'input' | 'coordinating' {
-  if (help.kind === 'input' || help.kind === 'question' || help.kind === 'coordinating') {
+function helpWaitingKind(help: { kind?: string; question: string }): 'question' | 'coordinating' {
+  if (help.kind === 'question' || help.kind === 'coordinating') {
     return help.kind;
   }
-  // Legacy servers send only the placeholder prose. A chat session is always
-  // awaiting the user; anything else in that state is phase coordination.
+  // Legacy servers send only the placeholder prose, which marks phase
+  // coordination rather than a question.
   if (help.question.trim() === '' || help.question === syntheticHelpPrompt) {
-    return help.feature_id === CHAT_SESSION_ID ? 'input' : 'coordinating';
+    return 'coordinating';
   }
   return 'question';
 }
@@ -362,21 +357,16 @@ export class AttentionService {
           return item === null ? [] : [item];
         }),
       ...promptsRaw.help_queue
-        .filter(
-          (help) =>
-            help.pending &&
-            (help.feature_id === CHAT_SESSION_ID || hasRequiredListedFeature(help.feature_id)),
-        )
+        .filter((help) => help.pending && hasRequiredListedFeature(help.feature_id))
         .map((help) => {
-          const chat = help.feature_id === CHAT_SESSION_ID;
-          const session = chat ? undefined : waitingSessionFor(sessions, help);
-          const sessionId = chat ? CHAT_SESSION_ID : (help.session_id ?? session?.id);
+          const session = waitingSessionFor(sessions, help);
+          const sessionId = help.session_id ?? session?.id;
           const runningTasks = runningTaskDescriptions(session);
           return {
             kind: 'help' as const,
             id: `${help.feature_id}:${help.session_id ?? ''}`,
-            ...(chat ? {} : { featureId: help.feature_id }),
-            ...(chat ? {} : parentOf(help.feature_id)),
+            featureId: help.feature_id,
+            ...parentOf(help.feature_id),
             ...(sessionId === undefined ? {} : { sessionId }),
             ...(session?.phase === undefined ? {} : { phase: session.phase }),
             waitingSince: help.time ?? fallbackTime,

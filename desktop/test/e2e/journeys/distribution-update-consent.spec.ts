@@ -231,7 +231,7 @@ async function setForcedActiveWork(handle: AppHandle, active: boolean): Promise<
       __agenticoForcedActiveWork?: {
         featureIds?: string[];
         featureLabels?: Record<string, string>;
-        chatActive?: boolean;
+        supervisorActive?: boolean;
         detectionFailed?: boolean;
       };
       __agenticoRefreshBackgroundState?: () => void;

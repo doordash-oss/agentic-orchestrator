@@ -106,13 +106,12 @@ describe('computeCohort', () => {
     expect(cohort.iteration).toBeUndefined();
   });
 
-  it('starts with every active non-chat session and ignores chat', () => {
+  it('starts with every active session', () => {
     const cohort = computeCohort(
       EMPTY_COHORT,
       [
         session({ id: 'impl', kind: 'repo-impl' }),
         session({ id: 'val', kind: 'validator', label: 'Craft' }),
-        session({ id: '__chat__', kind: 'chat' }),
       ],
       'implement',
     );

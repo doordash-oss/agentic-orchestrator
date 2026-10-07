@@ -99,8 +99,6 @@ export const IPC_CHANNELS = {
   attentionResolveGate: 'agentico:attention:resolve-gate',
   attentionWaiveTestingContract: 'agentico:attention:waive-testing-contract',
   attentionGetTestingContract: 'agentico:attention:get-testing-contract',
-  chatStart: 'agentico:chat:start',
-  chatEnd: 'agentico:chat:end',
   sessionsList: 'agentico:sessions:list',
   sessionsGet: 'agentico:sessions:get',
   sessionsTranscript: 'agentico:sessions:transcript',
@@ -973,7 +971,12 @@ export const AppRouteEventSchema = z
       'home',
       'settings',
       'attention',
-      'ama',
+      // Selects the Supervisor page and focuses its composer, optionally
+      // drafting `draft` (with its `errorReference`) into it unsent.
+      'supervisor',
+      // Opens the Recovery sheet; 'bulk' opens the same sheet with its bulk
+      // preview loading.
+      'recovery',
       'bulk',
       'new-feature',
       'toggle-sidebar',
@@ -993,23 +996,21 @@ export const AppRouteEventSchema = z
     settingsFocus: SettingsFocusSchema.optional(),
     /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
     command: z.string().min(1).max(64).optional(),
-    /** Pre-filled AMA composer text; accepted only on an 'ama' route. */
+    /** Text drafted into the Supervisor composer unsent; 'supervisor' routes only. */
     draft: z.string().min(1).max(2000).optional(),
-    /** Submits `draft` directly with its own optimistic bubble; 'ama' routes only. */
-    autoSubmit: z.boolean().optional(),
-    /** Error-home reference the routed draft's turn carries; 'ama' routes only. */
-    chatContext: ErrorReferenceSchema.optional(),
+    /** Error-home reference the drafted message carries hidden; 'supervisor' routes only. */
+    errorReference: ErrorReferenceSchema.optional(),
   })
   .superRefine((event, ctx) => {
-    // The chat-draft fields are ama-target-only: any other route smuggling one
-    // fails closed at the preload boundary, exactly like a foreign field.
-    if (event.target === 'ama') return;
-    for (const field of ['draft', 'autoSubmit', 'chatContext'] as const) {
+    // The draft fields are supervisor-target-only: any other route smuggling
+    // one fails closed at the preload boundary, exactly like a foreign field.
+    if (event.target === 'supervisor') return;
+    for (const field of ['draft', 'errorReference'] as const) {
       if (event[field] !== undefined) {
         ctx.addIssue({
           code: 'custom',
           path: [field],
-          message: 'Chat draft fields are only valid on an ama route.',
+          message: 'Draft fields are only valid on a supervisor route.',
         });
       }
     }
@@ -2336,12 +2337,8 @@ export const AttentionHelpSchema = z.strictObject({
   phase: z.string().max(200).optional(),
   waitingSince: z.string().max(100),
   prompt: AttentionTextSchema,
-  /**
-   * 'input': the turn ended with no readable question and the user's message is
-   * what continues it (chat). 'coordinating': a phase session parked between
-   * turns — a harness wait no human answers.
-   */
-  waitingKind: z.enum(['question', 'input', 'coordinating']).optional(),
+  /** 'coordinating': a phase session parked between turns — a harness wait no human answers. */
+  waitingKind: z.enum(['question', 'coordinating']).optional(),
   /** Descriptions of the session's still-running background tasks. */
   runningTasks: z.array(z.string().max(500)).max(100).optional(),
 });
@@ -2455,16 +2452,12 @@ export function isSupervisorAttentionItem(item: AttentionItem): boolean {
   return (item.kind === 'permission' || item.kind === 'questions') && item.target === 'supervisor';
 }
 /**
- * A synthetic help item: a session idling between turns. 'coordinating' is a
- * phase session parked mid-coordination; 'input' is the chat session resting
- * after a reply, which the AMA panel surfaces (an idle chat is its normal
- * state, not a request). Neither is blocking input — synthetic items never
- * badge, notify, appear as inbox rows, or hold the phase rail.
+ * A synthetic help item: a phase session parked mid-coordination between
+ * turns. It is not blocking input — synthetic items never badge, notify,
+ * appear as inbox rows, or hold the phase rail.
  */
 export function isSyntheticHelpItem(item: AttentionItem): boolean {
-  return (
-    item.kind === 'help' && (item.waitingKind === 'coordinating' || item.waitingKind === 'input')
-  );
+  return item.kind === 'help' && item.waitingKind === 'coordinating';
 }
 
 /**
@@ -2589,22 +2582,10 @@ export const TestingContractSnapshotSchema = z.discriminatedUnion('available', [
 ]);
 export type TestingContractSnapshot = z.output<typeof TestingContractSnapshotSchema>;
 
-// --- Singleton AMA chat -----------------------------------------------------
+// --- Staged uploads ---------------------------------------------------------
 
 /** An opaque, single-use staged-upload handle the server returned. */
 export const UploadReferenceSchema = z.string().min(1).max(128);
-
-export const CHAT_SESSION_ID = '__chat__';
-
-export const ChatStartRequestSchema = z.strictObject({
-  message: AttentionTextSchema.refine((value) => value.trim() !== ''),
-  images: z.array(AbsolutePathSchema).max(12).optional(),
-  /** Server-staged image upload references (remote connections; images only). */
-  imageUploads: z.array(UploadReferenceSchema).max(12).optional(),
-  /** Error-home reference the server resolves into hidden turn context. */
-  context: ErrorReferenceSchema.optional(),
-});
-export type ChatStartRequest = z.output<typeof ChatStartRequestSchema>;
 
 // --- Sessions and bounded transcript/output operations ---------------------
 
@@ -2613,12 +2594,6 @@ export const SESSION_ID_SEGMENT_PATTERN = '[a-z0-9._-]{1,200}';
 
 export const SessionIdSchema = z.string().regex(new RegExp(`^${SESSION_ID_SEGMENT_PATTERN}$`, 'i'));
 export type SessionId = z.output<typeof SessionIdSchema>;
-
-export const ChatActionResultSchema = z.strictObject({
-  sessionId: SessionIdSchema,
-  result: z.string().max(500),
-});
-export type ChatActionResult = z.output<typeof ChatActionResultSchema>;
 
 const BoundedTextSchema = z.string().max(1024 * 1024);
 const OptionalBoundedTextSchema = BoundedTextSchema.optional();
@@ -2669,34 +2644,6 @@ export const SessionSummarySchema = z.strictObject({
   usage: SessionUsageSchema,
 });
 export type SessionSummary = z.output<typeof SessionSummarySchema>;
-
-export const TERMINAL_CHAT_STATUSES = [
-  'complete',
-  'completed',
-  'done',
-  'ended',
-  'failed',
-  'cancelled',
-  'canceled',
-  'stopped',
-  'not_active',
-] as const;
-
-const TERMINAL_CHAT_STATUS_SET = new Set<string>(TERMINAL_CHAT_STATUSES);
-
-export function isTerminalChatStatus(status: string): boolean {
-  return TERMINAL_CHAT_STATUS_SET.has(status.toLocaleLowerCase());
-}
-
-export function isActiveChatSession(
-  session: Pick<SessionSummary, 'id' | 'featureId' | 'kind' | 'status'>,
-): boolean {
-  const isChat =
-    session.id === CHAT_SESSION_ID ||
-    session.featureId === CHAT_SESSION_ID ||
-    session.kind.toLocaleLowerCase() === 'chat';
-  return isChat && !isTerminalChatStatus(session.status);
-}
 
 export const RunSessionsListResultSchema = z.strictObject({
   runNumber: z.number().int().positive(),
@@ -2997,13 +2944,18 @@ export const SupervisorSettingsRequestSchema = z.strictObject({
 });
 export type SupervisorSettingsRequest = z.output<typeof SupervisorSettingsRequestSchema>;
 
-/** The renderer supplies only the text; the main process mints `client_message_id`. */
+/**
+ * The renderer supplies the text and, for an explain draft, the error-home
+ * reference whose context reaches the harness hidden; the main process mints
+ * `client_message_id`.
+ */
 export const SupervisorMessageRequestSchema = z.strictObject({
   text: z
     .string()
     .min(1)
     .max(SUPERVISOR_MESSAGE_MAX_CHARS)
     .refine((value) => value.trim() !== ''),
+  errorReference: ErrorReferenceSchema.optional(),
 });
 export type SupervisorMessageRequest = z.output<typeof SupervisorMessageRequestSchema>;
 
@@ -3544,7 +3496,7 @@ export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultS
 // attachment metadata only (identity key, name, base URL, runtime
 // dir, last-seen) — never a token.
 
-export const SETTINGS_SCHEMA_VERSION = 5;
+export const SETTINGS_SCHEMA_VERSION = 6;
 
 /**
  * Hard bound on the persisted known-servers list. The list is ordered
@@ -3749,58 +3701,6 @@ export function defaultWizardPrefs(): WizardPrefs {
   return { collapsedHelp: false };
 }
 
-/** The floating AMA panel's default footprint and its inset from the corner. */
-export const AMA_PANEL_DEFAULT_WIDTH = 404;
-export const AMA_PANEL_DEFAULT_HEIGHT = 560;
-export const AMA_PANEL_DEFAULT_INSET = 20;
-/** Header + one turn + composer: the smallest panel that is still usable. */
-export const AMA_PANEL_MIN_WIDTH = 320;
-export const AMA_PANEL_MIN_HEIGHT = 240;
-
-/**
- * The floating AMA panel's placement, stored as offsets from the main
- * window's bottom-right corner plus its size, so the panel keeps its distance
- * to that corner as the window resizes. Values are bounded but not
- * window-relative here: the renderer clamps them into the current window on
- * restore, so a document written on a larger display degrades to a visible
- * panel instead of resetting the preference.
- */
-export const AmaGeometrySchema = z.strictObject({
-  right: z.number().int().min(0).max(100000),
-  bottom: z.number().int().min(0).max(100000),
-  width: z.number().int().min(1).max(100000),
-  height: z.number().int().min(1).max(100000),
-});
-
-export type AmaGeometry = z.output<typeof AmaGeometrySchema>;
-
-export function defaultAmaGeometry(): AmaGeometry {
-  return {
-    right: AMA_PANEL_DEFAULT_INSET,
-    bottom: AMA_PANEL_DEFAULT_INSET,
-    width: AMA_PANEL_DEFAULT_WIDTH,
-    height: AMA_PANEL_DEFAULT_HEIGHT,
-  };
-}
-
-/**
- * AMA presentation preferences ONLY. Transcript rows and chat archive live on
- * the server; the app stores only whether the panel is closed (`compact`) or
- * open (`expanded`) and where the user left it. `geometry` is defaulted, so a
- * settings document written before the floating panel existed loads without
- * resetting any preference.
- */
-export const AmaPrefsSchema = z.strictObject({
-  drawer: z.enum(['compact', 'expanded']),
-  geometry: AmaGeometrySchema.default(defaultAmaGeometry()),
-});
-
-export type AmaPrefs = z.output<typeof AmaPrefsSchema>;
-
-export function defaultAmaPrefs(): AmaPrefs {
-  return { drawer: 'compact', geometry: defaultAmaGeometry() };
-}
-
 /**
  * Native notification presentation preference ONLY. Preview is off by default
  * so OS notifications contain no domain content unless explicitly enabled.
@@ -3919,7 +3819,7 @@ export const MainWindowUiStateSchema = z.strictObject({
   runtimeReady: z.boolean(),
   sidebarCollapsed: z.boolean(),
   inspectorOpen: z.boolean(),
-  /** False with Overview selected: there is no inspector to show or hide. */
+  /** False with Supervisor selected: there is no inspector to show or hide. */
   inspectorAvailable: z.boolean(),
   /** `feature.*` command id → enabled, from the same catalogue the palette reads. */
   featureCommands: z.record(z.string().min(1).max(64), z.boolean()),
@@ -4046,7 +3946,6 @@ export const SettingsSchema = z.strictObject({
   }),
   theme: ThemePreferenceSchema,
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
-  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   shell: ShellPrefsSchema.default(defaultShellPrefs()),
   settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
@@ -4060,7 +3959,6 @@ export const SettingsPatchSchema = z.strictObject({
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }).optional(),
   theme: ThemePreferenceSchema.optional(),
   wizard: WizardPrefsSchema.optional(),
-  ama: AmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.optional(),
   shell: ShellPatchSchema.optional(),
   settingsWindow: SettingsWindowPrefsSchema.optional(),
@@ -4076,7 +3974,6 @@ export function defaultSettings(): Settings {
     window: {},
     theme: 'system',
     wizard: defaultWizardPrefs(),
-    ama: defaultAmaPrefs(),
     notifications: defaultNotificationPrefs(),
     shell: defaultShellPrefs(),
     settingsWindow: defaultSettingsWindowPrefs(),
@@ -4530,14 +4427,6 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([TestingContractRequestSchema]),
     response: TestingContractSnapshotSchema,
   },
-  [IPC_CHANNELS.chatStart]: {
-    request: z.tuple([ChatStartRequestSchema]),
-    response: ChatActionResultSchema,
-  },
-  [IPC_CHANNELS.chatEnd]: {
-    request: z.tuple([]),
-    response: ChatActionResultSchema,
-  },
   [IPC_CHANNELS.sessionsList]: {
     request: z.tuple([]),
     response: z.array(SessionSummarySchema).max(1000),
@@ -4963,8 +4852,6 @@ export interface AgenticoApi {
   resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
   waiveTestingContract(request: TestingContractWaiveRequest): Promise<TestingContractWaiveResult>;
   getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot>;
-  startChat(request: ChatStartRequest): Promise<ChatActionResult>;
-  endChat(): Promise<ChatActionResult>;
   listSessions(): Promise<SessionSummary[]>;
   getSession(sessionId: string): Promise<SessionDetail>;
   getSessionTranscript(request: SessionTranscriptRequest): Promise<SessionTranscript>;

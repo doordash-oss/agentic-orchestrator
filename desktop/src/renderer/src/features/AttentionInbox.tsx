@@ -30,7 +30,6 @@ import {
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   ATTENTION_SUBMITTED_NOTICE,
   attentionOwnerFeatureId,
-  CHAT_SESSION_ID,
   ERROR_CLASS_LABELS,
   isSupervisorAttentionItem,
   isSupervisorSessionId,
@@ -83,7 +82,8 @@ export function OwnerAwareAttention({
 
 /**
  * The shell route sentinel a supervisor item jumps through, like the
- * recovery jump's `__recovery__`: the shell resolves it to the Supervisor page.
+ * recovery jump's `__recovery__` (which the shell resolves to the Recovery
+ * sheet): the shell resolves this one to the Supervisor page.
  */
 export const SUPERVISOR_ATTENTION_ROUTE = SUPERVISOR_FEATURE_ID;
 
@@ -171,9 +171,9 @@ export function AttentionInbox({
   open: controlledOpen,
   onOpenChange,
 }: AttentionInboxProps) {
-  // Synthetic help items (a session idling between turns — phase coordination
-  // or the chat resting after a reply) are never inbox rows. Memoized: effects
-  // key on the list's identity, so a fresh array every render would loop them.
+  // Synthetic help items (a phase session idling between turns) are never
+  // inbox rows. Memoized: effects key on the list's identity, so a fresh array
+  // every render would loop them.
   const items = useMemo(() => allItems.filter((item) => !isSyntheticHelpItem(item)), [allItems]);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
@@ -819,7 +819,7 @@ export function AttentionDetail({
   if (item.kind === 'help') {
     // A harness wait is not a question: the turn ended and the runtime is
     // coordinating. The reply box stays — a message is a legitimate unblock.
-    const waiting = item.waitingKind === 'input' || item.waitingKind === 'coordinating';
+    const waiting = item.waitingKind === 'coordinating';
     return (
       <div className="attention-detail">
         <AttentionContextMeta item={item} />
@@ -1051,12 +1051,11 @@ export function AttentionDetail({
 function AttentionContextMeta({ item }: { item: AttentionItem }) {
   if (item.kind === 'recovery') return null;
   const entries: string[] = [];
-  // The chat and the supervisor are singletons: their session ids name a
-  // generation, not anything a person tells apart.
+  // The supervisor is a singleton: its session ids name a generation, not
+  // anything a person tells apart.
   if (
     'sessionId' in item &&
     item.sessionId !== undefined &&
-    item.sessionId !== CHAT_SESSION_ID &&
     !isSupervisorSessionId(item.sessionId)
   ) {
     entries.push(`session ${shortSessionId(item.sessionId)}`);

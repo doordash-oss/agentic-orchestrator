@@ -17,7 +17,7 @@ limitations under the License.
 import type { SessionTaskActivity, TranscriptMessage } from '../../../../shared/ipc';
 import type { VerificationTone } from '../verificationModel';
 
-/** Upper bound on retained rows; keeps the live preview and AMA memory-safe. */
+/** Upper bound on retained rows; keeps the live preview memory-safe. */
 export const MAX_TRANSCRIPT_MESSAGES = 200;
 
 /** Row types that are machinery, never shown as conversation. */

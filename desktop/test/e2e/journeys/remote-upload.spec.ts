@@ -31,9 +31,6 @@ limitations under the License.
  *       server's own state dir (images/, attachments/), the staged sources
  *       are deleted after consumption (single-use), and the create request
  *       carried server references only — never a client local path
- *   (4) an AMA chat message with a pasted image resolves to a server-side
- *       copy under the remote state's chat/ dir, and the chat session's
- *       initial prompt references exactly that server-readable path
  *
  * Drag-and-drop is NOT exercised: webUtils.getPathForFile resolves no path
  * for a synthetic DataTransfer File (the packaged-window limitation
@@ -300,15 +297,6 @@ function noteCapabilitySkip(testInfo: TestInfo, transcript: Transcript): void {
   testInfo.annotations.push({ type: 'capability', description: note });
 }
 
-/** Clicks a native menu item by id, the same dispatch path its accelerator uses. */
-async function clickNativeMenu(handle: AppHandle, id: string): Promise<void> {
-  await handle.app.evaluate(({ BrowserWindow, Menu }, itemId) => {
-    const item = Menu.getApplicationMenu()?.getMenuItemById(itemId);
-    if (item == null) throw new Error(`menu item ${itemId} missing`);
-    item.click(undefined, BrowserWindow.getAllWindows()[0], undefined);
-  }, id);
-}
-
 // --- the journey ----------------------------------------------------------------
 
 test('remote upload: picker/paste staging, server materialization, cleanup, rejection, no local path leaks', async ({}, testInfo) => {
@@ -442,60 +430,21 @@ test('remote upload: picker/paste staging, server materialization, cleanup, reje
     expect(liveStagedRefs(remote.stateDir)).toEqual([]);
     transcript.step('feature images/attachments landed; staged uploads cleaned after consumption');
 
-    transcript.section('AMA chat with a pasted image resolves to a server-readable file');
-    await clickNativeMenu(handle, 'global.ama');
-    const panel = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await expect(panel).toBeVisible();
-    await writeClipboardPng(handle);
-    await pasteClipboardImage(panel.getByRole('textbox', { name: 'Ask Agentico' }));
-    await expectChip(panel.getByLabel('Attached images'), /clipboard-.*\.png/, 'ready');
-    await panel.getByRole('textbox', { name: 'Ask Agentico' }).fill('Describe the uploaded image.');
-    await panel.getByRole('button', { name: 'Send' }).click();
-    await expect(panel.getByLabel('AMA transcript')).toContainText(/Backfill ready|Live semantic/, {
-      timeout: 60_000,
-    });
-
-    // The chat copy is durable in the REMOTE state's chat dir, and the
-    // session's initial prompt quotes exactly that server-side path.
-    const chatDir = path.join(remote.stateDir, 'chat');
-    const chatCopies = fs
-      .readdirSync(chatDir)
-      .filter((entry) => /^consumed-[0-9a-f]{32}-[0-9a-f]{32}\.png$/.test(entry));
-    expect(chatCopies).toHaveLength(1);
-    const chatImagePath = path.join(chatDir, chatCopies[0]!);
-    expect(fs.statSync(chatImagePath).size).toBeGreaterThan(0);
-    const chat = await handle.page.evaluate(() => window.agentico.getSession('__chat__'));
-    expect(chat.initialPrompt ?? '').toContain(chatImagePath);
-    expect(liveStagedRefs(remote.stateDir)).toEqual([]);
-    transcript.step('chat prompt references the server-side image copy; staging stays clean');
-
-    // End the chat so the fixture provider exits through its real interrupt
-    // path (no leaked stub against this world).
-    const end = panel.getByRole('button', { name: 'End session', exact: true });
-    await expect(end).toBeVisible();
-    await end.click();
-    await panel
-      .getByRole('group', { name: 'End session confirmation' })
-      .getByRole('button', { name: 'End session', exact: true })
-      .click();
-    await expect(panel).toContainText('AMA ended.');
-
     transcript.section('Wire invariants: byte uploads only, zero client local paths');
     const requests = proxy.requests;
     const uploads = requests.filter(
       (request) => request.method === 'POST' && request.url.startsWith('/api/v1/uploads?'),
     );
-    // Picker image, picker attachment, composer paste, AMA paste. The .svg
-    // was rejected client-side and never became a request.
+    // Picker image, picker attachment, composer paste. The .svg was rejected
+    // client-side and never became a request.
     expect(uploads.map((request) => request.url)).toEqual([
       expect.stringContaining('kind=image&name=upload-diagram.png'),
       expect.stringContaining('kind=attachment&name=upload-spec.pdf'),
       expect.stringMatching(/kind=image&name=clipboard-.*\.png/),
-      expect.stringMatching(/kind=image&name=clipboard-.*\.png/),
     ]);
     expect(uploads.map((request) => request.url).join('\n')).not.toContain(FIXTURE_SENTINEL);
 
-    // The create and chat mutations carry server references, never paths.
+    // The create mutation carries server references, never paths.
     const create = requests.find(
       (request) => request.method === 'POST' && request.url === '/api/v1/features',
     );
@@ -507,13 +456,6 @@ test('remote upload: picker/paste staging, server materialization, cleanup, reje
     // carry every byte.
     expect(createBody['images']).toEqual([]);
     expect(createBody['attachments']).toEqual([]);
-    const chatStart = requests.find(
-      (request) => request.method === 'POST' && request.url === '/api/v1/prompts/chat/start',
-    );
-    expect(chatStart).toBeDefined();
-    const chatBody = JSON.parse(chatStart!.body) as Record<string, unknown>;
-    expect(chatBody['image_uploads']).toHaveLength(1);
-    expect(chatBody['images']).toEqual([]);
 
     // The negative invariant across EVERY mutation: no client fixture path
     // and no file:// URL ever left the app.

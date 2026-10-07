@@ -34,12 +34,10 @@ const rendererPort = process.env.AGENTICO_PERFORMANCE_PORT ?? '19871';
 const rendererOrigin = `http://localhost:${rendererPort}`;
 const KiB = 1024;
 const MiB = 1024 * KiB;
-const MAX_TRANSCRIPT_MESSAGES = 200;
 
 export const WORKLOAD_NAMES = Object.freeze([
   'cold-shell-readiness',
   'authoritative-dashboard-render',
-  'maximum-bounded-transcript-append-render',
   'repeated-tab-and-session-changes',
   'reconnect-storms',
   'first-monaco-lazy-load',
@@ -417,56 +415,6 @@ async function renderScene(browser, scene, waitFor, viewport = { width: 1440, he
   }
 }
 
-async function boundedTranscriptAppendRender(browser) {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
-  try {
-    await page.goto(`${rendererOrigin}/?scene=background-ama-expanded&theme=dark`, {
-      waitUntil: 'domcontentloaded',
-    });
-    await page.locator('.ama-dock[data-mode="expanded"]').waitFor({
-      state: 'visible',
-      timeout: 15_000,
-    });
-    await page.waitForFunction(
-      () => window.__agenticoMock?.sessionOutputListenerCount() > 0,
-      undefined,
-      { timeout: 15_000 },
-    );
-    const started = await page.evaluate(() => performance.now());
-    await page.evaluate((maxMessages) => {
-      const controls = window.__agenticoMock;
-      if (controls === undefined) throw new Error('mock controls are not installed');
-      for (let index = 4; index < maxMessages + 80; index += 1) {
-        controls.emitSessionOutput({
-          subscriptionId: 'subscription-1',
-          type: 'record',
-          sessionId: '__chat__',
-          index,
-          message: {
-            index,
-            role: 'assistant',
-            type: 'text',
-            text: `Bounded transcript append ${index}`,
-          },
-        });
-      }
-    }, MAX_TRANSCRIPT_MESSAGES);
-    await page.getByText(`Bounded transcript append ${MAX_TRANSCRIPT_MESSAGES + 79}`).waitFor({
-      state: 'visible',
-      timeout: 15_000,
-    });
-    const messageCount = await page.locator('.ama-dock__message').count();
-    if (messageCount > MAX_TRANSCRIPT_MESSAGES) {
-      throw new Error(
-        `bounded transcript render kept ${messageCount} messages; expected <= ${MAX_TRANSCRIPT_MESSAGES}`,
-      );
-    }
-    return (await page.evaluate(() => performance.now())) - started;
-  } finally {
-    await page.close();
-  }
-}
-
 async function repeatedTabAndSessionChanges(browser) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   try {
@@ -550,7 +498,6 @@ async function postStressProcessMemory() {
         ]);
         await window.agentico.setThemePreference(cycle % 2 === 0 ? 'dark' : 'light');
         await window.agentico.updateSettings({
-          ama: { drawer: cycle % 2 === 0 ? 'expanded' : 'compact' },
           notifications: { previewEnabled: cycle % 2 === 0 },
         });
         await window.agentico.getThemePreference();
@@ -662,11 +609,6 @@ async function main() {
         // gone with the old home surface; `overview-lanes` is the same
         // authoritative dashboard render on the surface that replaced it.
         renderScene(browser, 'overview-lanes', '.overview-surface__header'),
-      ),
-    );
-    checks.push(
-      await sample('maximum-bounded-transcript-append-render', () =>
-        boundedTranscriptAppendRender(browser),
       ),
     );
     checks.push(

@@ -25,7 +25,7 @@ afterEach(cleanup);
 
 function baseProps() {
   return {
-    title: 'Overview',
+    title: 'Supervisor',
   };
 }
 
@@ -154,12 +154,49 @@ describe('Toolbar trailing notices', () => {
   });
 });
 
-describe('Toolbar new-feature button', () => {
-  it('renders as a real button when Overview is selected and showNewFeature is true', async () => {
-    const onNewFeature = vi.fn();
+describe('Toolbar Recovery button', () => {
+  it('sits immediately before the attention bell, closes any popover, and opens the sheet', async () => {
+    const onOpen = vi.fn();
     render(
-      <Toolbar {...baseProps()} showTrailing={false} showNewFeature onNewFeature={onNewFeature} />,
+      <Toolbar
+        {...baseProps()}
+        showTrailing={false}
+        attention={attentionProps()}
+        recovery={{ attention: false, onOpen }}
+      />,
     );
+    const user = userEvent.setup();
+    const recovery = screen.getByRole('button', { name: 'Recovery' });
+    const bell = screen.getByRole('button', { name: 'Attention inbox, 1 pending' });
+    expect(recovery).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(recovery).toHaveAttribute('data-attention', 'false');
+    expect(recovery.compareDocumentPosition(bell) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(recovery.nextElementSibling?.contains(bell)).toBe(true);
+
+    await user.click(bell);
+    expect(screen.getByRole('complementary', { name: 'Attention inbox' })).toBeVisible();
+    await user.click(recovery);
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole('complementary', { name: 'Attention inbox' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('marks itself while the server reports orphaned sessions', () => {
+    render(
+      <Toolbar {...baseProps()} showTrailing recovery={{ attention: true, onOpen: vi.fn() }} />,
+    );
+    expect(screen.getByRole('button', { name: 'Recovery' })).toHaveAttribute(
+      'data-attention',
+      'true',
+    );
+  });
+});
+
+describe('Toolbar new-feature button', () => {
+  it('renders as a real button on the Supervisor page', async () => {
+    const onNewFeature = vi.fn();
+    render(<Toolbar {...baseProps()} showTrailing={false} onNewFeature={onNewFeature} />);
 
     const button = screen.getByRole('button', { name: 'New feature' });
     expect(button.tagName).toBe('BUTTON');
@@ -168,29 +205,21 @@ describe('Toolbar new-feature button', () => {
     expect(onNewFeature).toHaveBeenCalledTimes(1);
   });
 
-  it('is absent when a feature is selected', () => {
-    render(
-      <Toolbar
-        {...baseProps()}
-        title="Search revamp"
-        showTrailing
-        showNewFeature={false}
-        onNewFeature={vi.fn()}
-      />,
+  it('stays on a feature page, after the feature-only cockpit slots', async () => {
+    const onNewFeature = vi.fn();
+    const { container } = render(
+      <Toolbar {...baseProps()} title="Search revamp" showTrailing onNewFeature={onNewFeature} />,
     );
-    expect(screen.queryByRole('button', { name: 'New feature' })).not.toBeInTheDocument();
+
+    const button = screen.getByRole('button', { name: 'New feature' });
+    const slot = container.querySelector('.toolbar__inspector-slot')!;
+    expect(slot.compareDocumentPosition(button)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    await userEvent.click(button);
+    expect(onNewFeature).toHaveBeenCalledTimes(1);
   });
 
-  it('is absent for Settings', () => {
-    render(
-      <Toolbar
-        {...baseProps()}
-        title="Settings"
-        showTrailing={false}
-        showNewFeature={false}
-        onNewFeature={vi.fn()}
-      />,
-    );
+  it('is absent when the shell offers no creation handler', () => {
+    render(<Toolbar {...baseProps()} showTrailing={false} />);
     expect(screen.queryByRole('button', { name: 'New feature' })).not.toBeInTheDocument();
   });
 });

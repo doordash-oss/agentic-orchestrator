@@ -1756,29 +1756,6 @@ func TestIntegrationDefaultOffLiveOptInTakesEffect(t *testing.T) {
 	}
 }
 
-func TestIntegrationEnabledAskChatRoutesBashThroughAutomaticReview(t *testing.T) {
-	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
-	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
-	if !ok {
-		t.Fatal("ResolveReviewer = false, want true")
-	}
-	original := &permission.AMAHandler{}
-	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
-	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
-
-	for name, input := range map[string]string{
-		"fast path":  `{"command":"git status --short"}`,
-		"model path": `{"command":"ps -p 16846 -o pid,stat,etime,command 2>/dev/null; echo \"---exit:$?\""}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, err := handler.CanUseTool(bashReq(input))
-			if err != nil || got.Behavior != permission.DecisionAllow {
-				t.Fatalf("enabled Ask chat %s = %+v err %v, want allow", name, got, err)
-			}
-		})
-	}
-}
-
 func TestIntegrationEnabledSupervisorRoutesBashThroughAutomaticReview(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
 	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")

@@ -33,8 +33,8 @@ const STATE_DIR = '/srv/remote/features';
 
 const COMPATIBILITY = {
   api_version: 'v1',
-  schema_version: 1,
-  min_client_schema: 1,
+  schema_version: 2,
+  min_client_schema: 2,
   runtime_policy: 'network-bearer-v1',
   server_build: { version: 'v1.2.3' },
 };

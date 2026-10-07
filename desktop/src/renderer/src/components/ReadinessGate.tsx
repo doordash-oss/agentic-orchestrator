@@ -45,9 +45,7 @@ export function ReadinessGate({
   onDismissUpdate = () => {},
   onOpenUpdatesSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
-  onOpenAma = () => {},
   onOpenPalette = () => {},
-  amaUnread = false,
 }: {
   attentionDrafts?: AttentionDrafts;
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
@@ -68,10 +66,8 @@ export function ReadinessGate({
   onDismissUpdate?(version: string): void;
   onOpenUpdatesSettings?(): void;
   onInstallUpdateWhenIdle?(): Promise<void>;
-  onOpenAma?(): void;
   /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
   onOpenPalette?(): void;
-  amaUnread?: boolean;
 }) {
   const load = useCallback(() => window.agentico.getRuntimeReadiness(), []);
   const { state, reload, replace } = useIpcLoad(load, []);
@@ -116,9 +112,7 @@ export function ReadinessGate({
         onDismissUpdate={onDismissUpdate}
         onOpenUpdatesSettings={onOpenUpdatesSettings}
         onInstallUpdateWhenIdle={onInstallUpdateWhenIdle}
-        onOpenAma={onOpenAma}
         onOpenPalette={onOpenPalette}
-        amaUnread={amaUnread}
       />
     );
   }

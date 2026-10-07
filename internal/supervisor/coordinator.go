@@ -123,6 +123,7 @@ type launchAttempt struct {
 
 type joiner struct {
 	text      string
+	hidden    string
 	cmid      string
 	initiator bool
 	done      chan joinResult
@@ -283,8 +284,10 @@ func (c *Coordinator) UpdateSettings(s Settings) (State, error) {
 
 // Send commits one user message and delivers it to the harness, launching
 // the process when none exists. Sends arriving while a launch is in flight
-// join it and are delivered in arrival order after the handshake.
-func (c *Coordinator) Send(ctx context.Context, text, clientMessageID string) (SendResult, error) {
+// join it and are delivered in arrival order after the handshake. Hidden
+// context, when present, reaches the harness ahead of the visible text; the
+// committed user record holds only the visible text.
+func (c *Coordinator) Send(ctx context.Context, text, hiddenContext, clientMessageID string) (SendResult, error) {
 	c.opMu.Lock()
 	c.mu.Lock()
 	if c.closed {
@@ -304,13 +307,17 @@ func (c *Coordinator) Send(ctx context.Context, text, clientMessageID string) (S
 	}
 	switch {
 	case c.lifecycle == LifecycleStarting && c.launch != nil:
-		j := newJoiner(text, clientMessageID, false)
+		j := newJoiner(text, hiddenContext, clientMessageID, false)
 		c.launch.joiners = append(c.launch.joiners, j)
 		c.mu.Unlock()
 		c.opMu.Unlock()
 		return j.wait(ctx)
 	case c.lifecycle == LifecycleIdle && c.session != nil:
 		defer c.opMu.Unlock()
+		if !canDeliver(c.session, hiddenContext) {
+			c.mu.Unlock()
+			return SendResult{}, ErrHiddenContextUnsupported
+		}
 		rec, _, err := c.appendUserLocked(text, clientMessageID)
 		if err != nil {
 			c.mu.Unlock()
@@ -320,7 +327,7 @@ func (c *Coordinator) Send(ctx context.Context, text, clientMessageID string) (S
 		c.publishStateLocked()
 		sess := c.session
 		c.mu.Unlock()
-		if err := sess.SendUserMessage(text); err != nil {
+		if err := deliver(sess, text, hiddenContext); err != nil {
 			return SendResult{}, fmt.Errorf("deliver supervisor message: %w", err)
 		}
 		return SendResult{Record: rec}, nil
@@ -335,7 +342,7 @@ func (c *Coordinator) Send(ctx context.Context, text, clientMessageID string) (S
 		c.opMu.Unlock()
 		return SendResult{}, err
 	}
-	j := newJoiner(text, clientMessageID, true)
+	j := newJoiner(text, hiddenContext, clientMessageID, true)
 	attempt.joiners = append(attempt.joiners, j)
 	c.mu.Unlock()
 	c.opMu.Unlock()
@@ -345,8 +352,28 @@ func (c *Coordinator) Send(ctx context.Context, text, clientMessageID string) (S
 	return j.wait(ctx)
 }
 
-func newJoiner(text, cmid string, initiator bool) *joiner {
-	return &joiner{text: text, cmid: cmid, initiator: initiator, done: make(chan joinResult, 1)}
+func newJoiner(text, hidden, cmid string, initiator bool) *joiner {
+	return &joiner{text: text, hidden: hidden, cmid: cmid, initiator: initiator, done: make(chan joinResult, 1)}
+}
+
+// canDeliver reports whether the session can carry the message's hidden
+// context; a message without any is always deliverable.
+func canDeliver(sess ports.SessionView, hiddenContext string) bool {
+	if hiddenContext == "" {
+		return true
+	}
+	_, ok := sess.(ports.HiddenContextSender)
+	return ok
+}
+
+// deliver sends one user message, routing hidden context through the
+// session's hidden-context send so the provider sees it ahead of the
+// visible text.
+func deliver(sess ports.SessionView, text, hiddenContext string) error {
+	if sender, ok := sess.(ports.HiddenContextSender); ok && hiddenContext != "" {
+		return sender.SendUserMessageWithHiddenContext(text, hiddenContext)
+	}
+	return sess.SendUserMessage(text)
 }
 
 func (j *joiner) wait(ctx context.Context) (SendResult, error) {
@@ -480,15 +507,19 @@ func (c *Coordinator) completeLaunch(attempt *launchAttempt, sess ports.SessionV
 	c.launch = nil
 	c.step = ""
 	results := make([]joinResult, len(attempt.joiners))
-	var deliveries []string
+	var deliveries []*joiner
 	for i, j := range attempt.joiners {
+		if _, ok := c.store.lookupClientMessage(j.cmid); !ok && !canDeliver(sess, j.hidden) {
+			results[i] = joinResult{err: ErrHiddenContextUnsupported}
+			continue
+		}
 		rec, existing, err := c.appendUserLocked(j.text, j.cmid)
 		if err != nil {
 			results[i] = joinResult{err: err}
 			continue
 		}
 		if !existing {
-			deliveries = append(deliveries, j.text)
+			deliveries = append(deliveries, j)
 		}
 		results[i] = joinResult{res: SendResult{Record: rec, Launched: j.initiator}}
 	}
@@ -504,8 +535,8 @@ func (c *Coordinator) completeLaunch(attempt *launchAttempt, sess ports.SessionV
 	// so the launch reservation can settle.
 	attempt.reservation.Release()
 	go c.watchExit(sess, sessionID)
-	for _, text := range deliveries {
-		if err := sess.SendUserMessage(text); err != nil {
+	for _, j := range deliveries {
+		if err := deliver(sess, j.text, j.hidden); err != nil {
 			// The exit watcher reports the dead process.
 			log.Printf("supervisor: deliver message to %s: %v", sessionID, err)
 			break

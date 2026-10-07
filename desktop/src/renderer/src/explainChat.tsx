@@ -18,7 +18,7 @@ limitations under the License.
  * The renderer's explain-in-chat context. The route requester lives at the
  * app root — App owns the routed-request state every panel consumes — and
  * roughly twenty ErrorSurface call sites need it to route an
- * "Explain in chat" question into the AMA panel. Prop drilling the requester
+ * "Explain in chat" question into the Supervisor composer. Prop drilling the requester
  * through all of them would thread an app-root concern through every
  * intermediate surface, so the provider mounts once in App and any
  * ErrorSurface asks for it here. While disconnected, or with no provider

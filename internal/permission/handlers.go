@@ -327,19 +327,17 @@ func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
 
 // IsAutomaticReviewHandler reports whether h uses a permission policy whose
 // undecided Bash requests may be sent through automatic review. In addition to
-// the general phase handlers, Ask Me Anything chat and the supervisor
-// deliberately defer Bash to the same user-facing permission UI and therefore
-// participate in review.
+// the general phase handlers, the supervisor deliberately defers Bash to the
+// same user-facing permission UI and therefore participates in review.
 //
-// Keep this separate from IsGeneralPhaseHandler: AMA chat and the supervisor
-// must not inherit unrelated general-phase exceptions such as safe-create
-// approval.
+// Keep this separate from IsGeneralPhaseHandler: the supervisor must not
+// inherit unrelated general-phase exceptions such as safe-create approval.
 func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
 	if guard, ok := h.(*SessionGuardHandler); ok {
 		h = guard.Inner
 	}
 	switch h.(type) {
-	case *AMAHandler, *SupervisorHandler:
+	case *SupervisorHandler:
 		return true
 	}
 	return IsGeneralPhaseHandler(h)
@@ -368,29 +366,10 @@ func (h *ReadOnlyHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.Per
 	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
 }
 
-// AMAHandler is used by the Ask Me Anything chat. It auto-approves read-only
-// inspection, disables delegation, and leaves other top-level tools for the
-// user-facing permission UI.
-type AMAHandler struct{}
-
-// CanUseTool approves safe reads, denies subagent delegation, and defers
-// diagnostics or mutations such as Bash/Edit/Write to the caller.
-func (h *AMAHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	if isReadOnlyTool(req.ToolName) {
-		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
-	}
-	switch req.ToolName {
-	case "Agent", "Task":
-		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "AMA chat does not support sub-agents"}, nil
-	default:
-		return ports.PermissionDecision{}, nil
-	}
-}
-
 // SupervisorHandler is the supervisor conversation's harness-normal policy:
 // read-only inspection and web tools run without a prompt, and everything
 // else — shell, edits, writes, sub-agent spawn — is deferred to the user.
-// Unlike AMAHandler it never denies sub-agents. It is deliberately not a
+// It never denies sub-agents. It is deliberately not a
 // general-phase handler, so phase guards and the safe-create exception
 // never attach to it.
 type SupervisorHandler struct{}

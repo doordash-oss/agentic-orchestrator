@@ -57,7 +57,7 @@ type InstallAdmission interface {
 	WaitForIdle(ctx context.Context) error
 	CloseIfQuiesced() bool
 	// CloseForStopping closes the boundary for the stopping interval while
-	// stoppable feature/chat reservations persist; it refuses the closure
+	// stoppable feature/supervisor reservations persist; it refuses the closure
 	// when any reservation outside the stoppable categories is held.
 	CloseForStopping(stoppable ...workadmission.Category) bool
 	Open()
@@ -765,10 +765,10 @@ func (c *updateCoordinator) enterStopInterval(op *installOperation, ctx context.
 	c.mu.Unlock()
 	// Gate closure synchronizes with reservation acquisition: new work
 	// of every category is refused from the single critical section,
-	// while already-admitted feature/chat work keeps its reservations.
+	// while already-admitted feature/supervisor work keeps its reservations.
 	// A repository reservation that won the race refuses the closure
 	// with admission left open and aborts the operation before any
-	// feature or chat work is stopped.
+	// feature or supervisor work is stopped.
 	if !admission.CloseForStopping(stoppableAdmissionCategories...) {
 		blockers := c.installStopBlockers(admission)
 		if blockers == nil {
@@ -1161,9 +1161,7 @@ func (c *updateCoordinator) activeWorkSummary() UpdateActiveWorkSummary {
 	}
 	activity, detectionFailed, pending := c.opts.Activity(context.Background())
 	summary.FeatureCount = activity.Features
-	// The supervisor is a conversational session; the summary reports it
-	// with chat until it gains its own field.
-	summary.ChatActive = activity.ChatActive || activity.SupervisorActive
+	summary.SupervisorActive = activity.SupervisorActive
 	summary.CloneCount = activity.Clones
 	summary.UploadCount = activity.Uploads
 	summary.OriginCheckCount = activity.OriginChecks
@@ -1294,7 +1292,7 @@ func (h *apiHandler) handleUpdateInstallPost(w http.ResponseWriter, r *http.Requ
 	// An immediate install refuses work before staging. Without stop
 	// permission any active work or pending reservation refuses; with stop
 	// permission only repository work, protected or unknown reservations,
-	// and failed or incomplete detection refuse — feature and chat activity
+	// and failed or incomplete detection refuse — feature and supervisor activity
 	// is exactly what the permission authorizes stopping. An already active
 	// operation owns the retry decision: a retry must not mistake the
 	// operation's own closed stopping gate for a new request's blocker, so
@@ -1337,7 +1335,7 @@ func (c *updateCoordinator) installActive() bool {
 // install, or nil when the request may proceed to staging. Without stop
 // permission any active work or pending reservation blocks; with stop
 // permission only repository activity, reservations outside the stoppable
-// feature/chat categories, and failed or incomplete detection block.
+// feature/supervisor categories, and failed or incomplete detection block.
 func (c *updateCoordinator) installRequestBlockers(ctx context.Context, admission InstallAdmission, stopPermitted bool) []errcat.Option {
 	activity, err := admission.Detect(ctx)
 	if err != nil {

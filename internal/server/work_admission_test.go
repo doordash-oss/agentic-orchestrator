@@ -26,7 +26,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
@@ -96,7 +95,7 @@ func TestWorkAdmissionWriteAdmissionRefusalMapping(t *testing.T) {
 	}
 
 	w = httptest.NewRecorder()
-	if !h.writeAdmissionRefusal(w, &workadmission.ClosedError{Category: workadmission.CategoryChat}) {
+	if !h.writeAdmissionRefusal(w, &workadmission.ClosedError{Category: workadmission.CategorySupervisor}) {
 		t.Fatal("closed error must write the refusal")
 	}
 	resp := w.Result()
@@ -111,7 +110,7 @@ func TestWorkAdmissionWriteAdmissionRefusalMapping(t *testing.T) {
 	if body.Error.Code != string(errcat.UpdateInProgress) {
 		t.Fatalf("code = %q, want update_in_progress", body.Error.Code)
 	}
-	if !strings.Contains(body.Error.Diagnostics, "admission closed for chat work") {
+	if !strings.Contains(body.Error.Diagnostics, "admission closed for supervisor work") {
 		t.Fatalf("diagnostics = %q", body.Error.Diagnostics)
 	}
 }
@@ -193,42 +192,6 @@ func TestWorkAdmissionFeatureDetectorProjection(t *testing.T) {
 	activity, err = bare.detectFeatureActivity(context.Background())
 	if err != nil || activity.Features != 0 {
 		t.Fatalf("nil lister activity = %+v, err = %v, want zero counts", activity, err)
-	}
-}
-
-func TestWorkAdmissionChatDetector(t *testing.T) {
-	t.Parallel()
-	active := &fakeSessionView{id: ChatSessionID, status: ports.SessionRunning}
-	h := &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{active}}}
-	activity, err := h.detectChatActivity(context.Background())
-	if err != nil {
-		t.Fatalf("detection error: %v", err)
-	}
-	if !activity.ChatActive {
-		t.Fatal("active chat session must report chat_active")
-	}
-
-	finished := &fakeSessionView{id: ChatSessionID, status: ports.SessionDone}
-	h = &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{finished}}}
-	activity, err = h.detectChatActivity(context.Background())
-	if err != nil {
-		t.Fatalf("detection error: %v", err)
-	}
-	if activity.ChatActive {
-		t.Fatal("finished chat session must not report chat_active")
-	}
-
-	// Only the singleton chat identity counts.
-	other := &fakeSessionView{id: "session-1", status: ports.SessionRunning}
-	h = &apiHandler{sessions: fakeSessionManager{views: []ports.SessionView{other}}}
-	activity, _ = h.detectChatActivity(context.Background())
-	if activity.ChatActive {
-		t.Fatal("a non-chat session must not report chat_active")
-	}
-
-	bare := &apiHandler{}
-	if activity, err := bare.detectChatActivity(context.Background()); err != nil || activity.ChatActive {
-		t.Fatalf("nil sessions activity = %+v, err = %v", activity, err)
 	}
 }
 

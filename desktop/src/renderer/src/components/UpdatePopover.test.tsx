@@ -123,13 +123,13 @@ describe('UpdatePopover', () => {
     const onInstallWhenIdle = vi.fn(async () => {});
     const activeWork: UpdateState = {
       ...readyUpdate,
-      activeWorkSummary: '1 workflow and AMA session are active.',
+      activeWorkSummary: '1 workflow and the supervisor',
     };
     const view = render(<Harness update={activeWork} onInstallWhenIdle={onInstallWhenIdle} />);
     const user = userEvent.setup();
 
     await user.click(trigger());
-    expect(popover()).toHaveTextContent('1 workflow and AMA session are active.');
+    expect(popover()).toHaveTextContent('1 workflow and the supervisor');
     const install = screen.getByRole('button', { name: 'Install When Idle' });
     await user.click(install);
     expect(onInstallWhenIdle).toHaveBeenCalledTimes(1);

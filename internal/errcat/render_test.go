@@ -302,4 +302,10 @@ func TestCLICodeClassesAndTemplates(t *testing.T) {
 	if got := New(ProviderUnavailable, WithParams(ProviderUnavailableParams{SetupCapable: true})).Summary; !strings.Contains(got, "setup-capable") {
 		t.Errorf("provider_unavailable setup-capable summary = %q; want it to name setup-capable mode", got)
 	}
+	if got := New(UpdateBlockedActiveWork, WithParams(UpdateBlockedActiveWorkParams{Features: 1, SupervisorActive: true})).Summary; !strings.Contains(got, "supervisor") {
+		t.Errorf("update_blocked_active_work supervisor summary = %q; want it to name the supervisor", got)
+	}
+	if got := New(UpdateBlockedActiveWork, WithParams(UpdateBlockedActiveWorkParams{Features: 1})).Summary; got != "Active work prevents installing a release right now." {
+		t.Errorf("update_blocked_active_work feature summary = %q; want the authored fallback", got)
+	}
 }

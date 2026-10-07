@@ -31,7 +31,6 @@ describe('performance-check workload contract', () => {
     expect(WORKLOAD_NAMES).toEqual([
       'cold-shell-readiness',
       'authoritative-dashboard-render',
-      'maximum-bounded-transcript-append-render',
       'repeated-tab-and-session-changes',
       'reconnect-storms',
       'first-monaco-lazy-load',

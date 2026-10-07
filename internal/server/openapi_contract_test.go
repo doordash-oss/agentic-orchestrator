@@ -60,6 +60,7 @@ type openAPISpec struct {
 
 type openAPIOperation struct {
 	OperationID string                     `yaml:"operationId"`
+	Description string                     `yaml:"description"`
 	Security    []map[string][]string      `yaml:"security"`
 	Parameters  []openAPIParameter         `yaml:"parameters"`
 	RequestBody map[string]any             `yaml:"requestBody"`
@@ -649,8 +650,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathPrompts},
 		{method: httpMethodPost, path: "/api/v1/prompts/ask-user/answer", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/prompts/help/send", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/prompts/chat/start", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/prompts/chat/end", mutation: true},
 		{method: httpMethodGet, path: apiPathPermissions},
 		{method: httpMethodPost, path: apiPathPermissionsAnswer, mutation: true},
 		{method: httpMethodGet, path: apiPathSessions},

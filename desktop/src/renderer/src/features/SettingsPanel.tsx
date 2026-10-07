@@ -984,12 +984,12 @@ export function SettingsPanel({
             <h2 className="restart-prompt__title">Stop Work and Install Now?</h2>
             <p className="restart-prompt__summary">
               Agentico will send stop requests before restarting to update to{' '}
-              <code>{updateState.targetVersion}</code>. Workflows and AMA may be interrupted if they
-              do not stop cleanly.
+              <code>{updateState.targetVersion}</code>. Workflows and the supervisor may be
+              interrupted if they do not stop cleanly.
             </p>
             <p className="restart-prompt__summary">
               {updateState.activeWorkSummary ??
-                'Fresh workflow and AMA state will be checked before stopping anything.'}
+                'Fresh workflow and supervisor state will be checked before stopping anything.'}
             </p>
             <div className="restart-prompt__actions">
               <button

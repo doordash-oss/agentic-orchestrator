@@ -227,6 +227,56 @@ describe('SupervisorService', () => {
     expect(result.record.seq).toBe(10);
   });
 
+  it('sends an attached error reference in snake_case with only the fields it carries', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: { api_version: 'v1', record: wireRecord(10), launched: false },
+    }));
+    const service = new SupervisorService({
+      transport: api,
+      makeClientMessageId: () => 'minted-1',
+    });
+
+    await service.sendMessage({
+      text: 'explain',
+      errorReference: { scope: 'setup', code: 'setup_failed', featureId: 'f-1', taskKey: 'repo' },
+    });
+    await service.sendMessage({
+      text: 'explain',
+      errorReference: { scope: 'recovery', code: 'orphan', snapshotId: 's-1', key: 'k-1' },
+    });
+
+    expect(api.apiRequest.mock.calls.map(([, init]) => (init as ApiRequestInit).body)).toEqual([
+      {
+        text: 'explain',
+        client_message_id: 'minted-1',
+        error_reference: {
+          scope: 'setup',
+          code: 'setup_failed',
+          feature_id: 'f-1',
+          task_key: 'repo',
+        },
+      },
+      {
+        text: 'explain',
+        client_message_id: 'minted-1',
+        error_reference: { scope: 'recovery', code: 'orphan', snapshot_id: 's-1', key: 'k-1' },
+      },
+    ]);
+  });
+
+  it('refuses a malformed error reference without sending', async () => {
+    const api = transport(() => ({ status: 200, body: {} }));
+    const service = new SupervisorService({ transport: api });
+    await expect(
+      service.sendMessage({
+        text: 'hi',
+        errorReference: { scope: 'run', code: 'x' } as never,
+      }),
+    ).rejects.toThrow();
+    expect(api.apiRequest).not.toHaveBeenCalled();
+  });
+
   it('defaults to a UUID idempotency key that satisfies the server syntax', async () => {
     const api = transport(() => ({
       status: 200,

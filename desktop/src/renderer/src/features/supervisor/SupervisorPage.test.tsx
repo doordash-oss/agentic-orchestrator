@@ -351,6 +351,48 @@ describe('SupervisorPage settings', () => {
 });
 
 describe('SupervisorPage conversation', () => {
+  it('renders multiple completed file diffs during a running turn without duplicating replay', async () => {
+    const state = supervisorState({
+      settings: CHOSEN,
+      lifecycle: 'running',
+      sessionId: SESSION_ID,
+    });
+    const mock = await renderPage({ supervisorState: state });
+    const record = supervisorRecord({
+      seq: 2,
+      kind: 'tool_result',
+      messages: [
+        { index: 2, blockIndex: 0, role: 'user', type: 'tool_result', redacted: true },
+        {
+          index: 2,
+          blockIndex: 1,
+          role: 'system',
+          type: 'tool_progress',
+          fileChange: {
+            path: 'a.ts',
+            operation: 'update',
+            detail: '-old\n+new',
+            hasDiffPatch: true,
+          },
+        },
+        {
+          index: 2,
+          blockIndex: 2,
+          role: 'system',
+          type: 'tool_progress',
+          fileChange: { path: 'b.ts', operation: 'write', detail: '+created', hasDiffPatch: true },
+        },
+      ],
+    });
+    emit(mock, { type: 'record', ...envelope(state), record });
+    emit(mock, { type: 'record', ...envelope(state), record });
+    expect(within(transcript()).getAllByRole('region', { name: 'Diff for a.ts' })).toHaveLength(1);
+    expect(within(transcript()).getByRole('region', { name: 'Diff for b.ts' })).toHaveTextContent(
+      'created',
+    );
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+  });
+
   it('sends with an optimistic row, clears the draft, and keeps the committed record', async () => {
     const mock = await renderPage({ supervisorState: supervisorState({ settings: CHOSEN }) });
     let release: () => void = () => undefined;
@@ -425,7 +467,7 @@ describe('SupervisorPage conversation', () => {
 
     expect(within(transcript()).getAllByText('Hello, I am ready.')).toHaveLength(1);
     expect(within(transcript()).queryByText('Hello,')).toBeNull();
-    expect(within(transcript()).getByText('Supervisor')).toBeVisible();
+    expect(within(transcript()).getByRole('article', { name: 'Supervisor' })).toBeVisible();
   });
 
   it('runs the status line from Starting through Working to the resting label', async () => {

@@ -24,6 +24,7 @@ import {
   type RefObject,
 } from 'react';
 import type { TranscriptMessage } from '../../../../shared/ipc';
+import { CopyIcon } from '../../components/icons';
 import { renderSanitizedMarkdown } from '../sanitizedMarkdown';
 import {
   friendlyToolName,
@@ -86,6 +87,33 @@ function Notice({ item }: { item: Extract<ConversationItem, { kind: 'notice' }> 
   );
 }
 
+/** A quiet, hover-revealed control under each reply to copy its source text. */
+function CopyMessageButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="conversation__message-copy"
+      aria-label={copied ? 'Copied' : 'Copy message'}
+      title="Copy message"
+      onClick={() => {
+        const clipboard = (navigator as Partial<Navigator>).clipboard;
+        if (clipboard === undefined) return;
+        void clipboard.writeText(text).then(
+          () => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1600);
+          },
+          () => undefined,
+        );
+      }}
+    >
+      <CopyIcon />
+      <span>{copied ? 'Copied' : 'Copy'}</span>
+    </button>
+  );
+}
+
 export function ActivityIndicator({
   labels,
   active,
@@ -102,14 +130,20 @@ export function ActivityIndicator({
       data-active={active}
       role={active ? 'status' : undefined}
     >
-      <span className="conversation__thinking" aria-hidden="true">
-        {Array.from({ length: 8 }, (_, index) => (
-          <span key={index} />
-        ))}
-      </span>
+      {active ? (
+        <span className="conversation__thinking" aria-hidden="true">
+          {Array.from({ length: 8 }, (_, index) => (
+            <span key={index} />
+          ))}
+        </span>
+      ) : (
+        <span className="conversation__activity-mark" aria-hidden="true">
+          ✓
+        </span>
+      )}
       <div className="conversation__activity-copy">
         <strong>{active ? 'Working' : 'Worked'}</strong>
-        {shownLabels.length > 0 ? <span>{shownLabels.join(' · ')}</span> : <span>{idleLabel}</span>}
+        <span>{shownLabels.length > 0 ? shownLabels.join(' · ') : idleLabel}</span>
       </div>
     </div>
   );
@@ -446,11 +480,23 @@ export function ConversationTranscript({
       {anchorPrepend ? <span ref={rowsStartRef} hidden /> : null}
       {items.map((item, index) =>
         item.kind === 'message' ? (
-          <article key={item.key} className="conversation__message" data-role={item.role}>
-            <span className="conversation__message-role">
-              {item.role === 'user' ? 'You' : assistantName}
-            </span>
-            {item.text !== '' ? <p>{item.text}</p> : null}
+          <article
+            key={item.key}
+            className="conversation__message"
+            data-role={item.role}
+            aria-label={item.role === 'user' ? 'You' : assistantName}
+          >
+            {item.role === 'assistant' ? (
+              <>
+                <div
+                  className="conversation__markdown"
+                  dangerouslySetInnerHTML={{ __html: renderSanitizedMarkdown(item.text) }}
+                />
+                <CopyMessageButton text={item.text} />
+              </>
+            ) : item.text !== '' ? (
+              <p>{item.text}</p>
+            ) : null}
             {item.attachments !== undefined && item.attachments.length > 0 ? (
               <ol className="composer__chips conversation__attachments" aria-label="Attachments">
                 {item.attachments.map((attachment, index) => (

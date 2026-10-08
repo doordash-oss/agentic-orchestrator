@@ -53,6 +53,8 @@ type UserData struct {
 // records: the provider's content blocks with reasoning removed.
 type ContentData struct {
 	Content []llm.ContentBlock `json:"content"`
+	// Display metadata survives replay without changing provider tool history.
+	FileChanges []llm.FileChangeEvent `json:"file_changes,omitempty"`
 }
 
 // Request stages and outcomes carried by permission and question records.
@@ -1897,7 +1899,7 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 			}
 		}
 		if len(results) > 0 {
-			c.failWriteLocked(c.appendProviderLocked(gen, KindToolResult, ContentData{Content: results}, blockIDs(results, func(b llm.ContentBlock) string { return b.ToolUseID }), ""))
+			c.failWriteLocked(c.appendProviderLocked(gen, KindToolResult, ContentData{Content: results, FileChanges: msg.FileChanges}, blockIDs(results, func(b llm.ContentBlock) string { return b.ToolUseID }), ""))
 		}
 	case msg.ControlRequest != nil && current:
 		c.surfaceRequestLocked(gen, msg.ControlRequest)

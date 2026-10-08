@@ -142,7 +142,7 @@ test('explain in chat drafts the templated question into the Supervisor composer
     transcript.step('the Supervisor page shows the templated question in its focused composer');
 
     // Nothing was sent: no provider session, an empty conversation.
-    await expect(conversation(page)).toContainText('Start a conversation with the supervisor.');
+    await expect(conversation(page)).toContainText(/Good (?:morning|afternoon|evening)\./);
     const unsent = await page.evaluate(() => window.agentico.getSupervisorTranscript({}));
     expect(unsent.items).toHaveLength(0);
     expect((await page.evaluate(() => window.agentico.getSupervisorState())).lifecycle).toBe(

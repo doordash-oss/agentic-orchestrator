@@ -130,8 +130,13 @@ func toolResultMessage(item ItemUnion, paths []string) llm.SDKMessage {
 		}
 	}
 	content, _ := json.Marshal(text)
+	var changes []llm.FileChangeEvent
+	if item.Type == codexItemTypeFileChange && !failed {
+		changes = fileChangeEventsForItem(item)
+	}
 	return llm.SDKMessage{
-		Type: "user",
+		FileChanges: changes,
+		Type:        "user",
 		User: &llm.UserMessage{
 			Type: "user",
 			Message: llm.ConversationMsg{

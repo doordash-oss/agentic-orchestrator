@@ -492,6 +492,10 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 		var data supervisor.ContentData
 		_ = json.Unmarshal(rec.Data, &data)
 		dto.Messages = conversationDTOs(index, roleUser, data.Content, workDir, false, false, "", 0)
+		for _, row := range fileChangeDTOsFromSDKFileChanges(index, "Write", data.FileChanges, workDir) {
+			row.BlockIndex = len(dto.Messages)
+			dto.Messages = append(dto.Messages, row)
+		}
 	case supervisor.KindPermission, supervisor.KindQuestion:
 		var data supervisor.RequestData
 		_ = json.Unmarshal(rec.Data, &data)

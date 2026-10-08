@@ -102,6 +102,57 @@ describe('FileChangeCard', () => {
   });
 });
 
+describe('conversation turns', () => {
+  it('renders assistant replies as markdown and user messages verbatim', () => {
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        assistantName="Supervisor"
+        items={[
+          { kind: 'message', key: 'u', role: 'user', text: 'Run **everything**' },
+          {
+            kind: 'message',
+            key: 'a',
+            role: 'assistant',
+            text: '**Done.** Two files changed:\n\n- `a.ts`\n- `b.ts`\n\n<script>alert(1)</script>',
+          },
+        ]}
+      />,
+    );
+
+    const user = screen.getByRole('article', { name: 'You' });
+    expect(user).toHaveTextContent('Run **everything**');
+    expect(user.querySelector('strong')).toBeNull();
+
+    const reply = screen.getByRole('article', { name: 'Supervisor' });
+    expect(reply.querySelector('strong')).toHaveTextContent('Done.');
+    expect(reply.querySelectorAll('li')).toHaveLength(2);
+    expect(reply.querySelector('code')).toHaveTextContent('a.ts');
+    expect(reply.querySelector('script')).toBeNull();
+    expect(reply).toHaveTextContent('<script>alert(1)</script>');
+    expect(screen.getByRole('button', { name: 'Copy message' })).toBeInTheDocument();
+  });
+
+  it('folds tool activity into one quiet line', () => {
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        items={[{ kind: 'activity', key: 'act', labels: ['Using bash', 'Using read'] }]}
+      />,
+    );
+
+    const line = screen.getByText('Worked').closest('.conversation__activity')!;
+    expect(line).toHaveTextContent('Worked');
+    expect(line).toHaveTextContent('Using bash · Using read');
+    expect(line.querySelector('.conversation__thinking')).toBeNull();
+    expect(line.querySelector('.conversation__activity-mark')).not.toBeNull();
+  });
+});
+
 function rows(from: number, to: number): ConversationItem[] {
   return Array.from({ length: to - from + 1 }, (_, offset) => ({
     kind: 'message' as const,

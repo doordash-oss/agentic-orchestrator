@@ -69,7 +69,7 @@ import type {
   SupervisorState,
 } from '../../../../shared/ipc';
 import { ErrorSurface } from '../../components/ErrorSurface';
-import { StopIcon } from '../../components/icons';
+import { AgenticoMonogram, StopIcon } from '../../components/icons';
 import { retryAction, useConnectionState } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import {
@@ -94,6 +94,7 @@ import {
 } from '../QuestionTurn';
 import { ConversationTranscript } from '../transcript/ConversationTranscript';
 import type { ConversationAttachment } from '../transcript/conversation';
+import { greetingFor, inspirationFor } from './supervisorWelcome';
 import {
   isBlockingStagedItem,
   STAGED_ITEMS_BLOCK_SUBMIT,
@@ -592,6 +593,14 @@ export function SupervisorPage({
     () => supervisorConversationBuilder.committed(records),
     [records],
   );
+  // Welcome copy is fixed when the page mounts so the greeting never flips
+  // while the empty conversation is on screen; it is recomputed on the next
+  // mount.
+  const [welcome] = useState(() => {
+    const now = new Date();
+    return { greeting: greetingFor(now), inspiration: inspirationFor(now) };
+  });
+
   const conversation = useMemo(
     () =>
       supervisorConversationTail(committedConversation, {
@@ -1155,9 +1164,12 @@ export function SupervisorPage({
         }
         emptyState={
           state === null ? null : (
-            <div className="supervisor-page__empty">
-              <strong>{SUPERVISOR_COPY.emptyHeading}</strong>
-              <span>{SUPERVISOR_COPY.emptyBody}</span>
+            <div className="supervisor-page__welcome">
+              <div className="supervisor-page__welcome-heading">
+                <AgenticoMonogram className="supervisor-page__welcome-mark" />
+                <h2 className="supervisor-page__welcome-greeting">{welcome.greeting}</h2>
+              </div>
+              <p className="supervisor-page__welcome-line">{welcome.inspiration}</p>
             </div>
           )
         }

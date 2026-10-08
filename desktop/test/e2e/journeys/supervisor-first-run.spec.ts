@@ -104,7 +104,7 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     await expect(supervisorPage(page)).toBeVisible();
     await expect(page.locator('.toolbar__title-name')).toHaveText('Supervisor');
     await expect(page.getByRole('button', { name: 'New feature' })).toBeVisible();
-    await expect(conversation(page)).toContainText('Start a conversation with the supervisor.');
+    await expect(conversation(page)).toContainText(/Good (?:morning|afternoon|evening)\./);
     await expect(status(page)).toHaveAttribute('data-lifecycle', 'stopped');
     transcript.step('Supervisor row is first and selected, and shows the empty conversation');
 

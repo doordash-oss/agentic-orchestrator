@@ -882,3 +882,31 @@ func TestSupervisorRequestOriginProjectsOnStateAndRecords(t *testing.T) {
 		t.Fatalf("legacy record = %+v", got)
 	}
 }
+
+func TestSupervisorRecordProjectsMultipleCompletedDiffs(t *testing.T) {
+	data, err := json.Marshal(supervisor.ContentData{
+		Content: []llm.ContentBlock{{Type: "tool_result", ToolUseID: "edit-1"}},
+		FileChanges: []llm.FileChangeEvent{
+			{Path: "/work/a.go", Operation: "update", Detail: "-old\n+new", HasDiffPatch: true},
+			{Path: "/work/b.go", Operation: "write", Detail: "+created", HasDiffPatch: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto := supervisorRecordDTO(supervisor.Record{Seq: 42, Kind: supervisor.KindToolResult, Data: data}, "/work")
+	if len(dto.Messages) != 3 {
+		t.Fatalf("rows: %+v", dto.Messages)
+	}
+	for i, row := range dto.Messages {
+		if row.Index != 42 || row.BlockIndex != i {
+			t.Fatalf("colliding identity: %+v", row)
+		}
+	}
+	if dto.Messages[1].FileChange.Path != "a.go" || dto.Messages[2].FileChange.Path != "b.go" {
+		t.Fatal("missing paths")
+	}
+	if dto.Messages[1].FileChange.Detail != "-old\n+new" {
+		t.Fatal("lost diff")
+	}
+}

@@ -72,9 +72,6 @@ export const SUPERVISOR_COPY = {
   errorMarker: 'Supervisor error',
   send: 'Send',
   stop: 'Stop',
-  emptyHeading: 'Start a conversation with the supervisor.',
-  emptyBody:
-    'It runs on the harness and model you choose below and keeps this conversation across restarts.',
 } as const;
 
 /** "Rebuilding history for <Harness>…" while a launch rebuilds the native session. */

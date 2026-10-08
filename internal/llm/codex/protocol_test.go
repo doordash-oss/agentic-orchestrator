@@ -1250,3 +1250,23 @@ func TestNativeReviewFailureDiagnosticsAreSanitizedAndTerminal(t *testing.T) {
 		})
 	}
 }
+
+func TestInteractiveFileResultCarriesOnlySuccessfulDiffs(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "declined"} {
+		t.Run(status, func(t *testing.T) {
+			var item ItemUnion
+			if err := json.Unmarshal([]byte(`{"id":"edit-1","type":"fileChange","changes":[{"path":"src/a.go","kind":{"type":"update"},"diff":"-old\n+new"}]}`), &item); err != nil {
+				t.Fatal(err)
+			}
+			item.Status = status
+			msg := toolResultMessage(item, []string{"src/a.go"})
+			if status == "completed" {
+				if len(msg.FileChanges) != 1 || msg.FileChanges[0].Detail != "-old\n+new" {
+					t.Fatalf("missing diff: %+v", msg.FileChanges)
+				}
+			} else if len(msg.FileChanges) != 0 {
+				t.Fatal("failed edit reported a diff")
+			}
+		})
+	}
+}

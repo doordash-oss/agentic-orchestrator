@@ -59,6 +59,7 @@ func TestCoordinator_RepeatedProviderItemCommitsOnceUnderItsDeterministicID(t *t
 	results := llm.SDKMessage{Type: "user", User: &llm.UserMessage{Message: llm.ConversationMsg{
 		Role: "user", Content: []llm.ContentBlock{{Type: "tool_result", ToolUseID: "item-1-2"}},
 	}}}
+	results.FileChanges = []llm.FileChangeEvent{{Path: "src/a.go", Detail: "-old\n+new", HasDiffPatch: true}}
 	sess.emit(tools)
 	sess.emit(results)
 	sess.emit(tools)
@@ -70,6 +71,13 @@ func TestCoordinator_RepeatedProviderItemCommitsOnceUnderItsDeterministicID(t *t
 		t.Fatalf("kinds = %s", got)
 	}
 	page, _ := c.Transcript(PageQuery{})
+	var saved ContentData
+	if err := json.Unmarshal(page.Items[3].Data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.FileChanges) != 1 || saved.FileChanges[0].Detail != "-old\n+new" {
+		t.Fatalf("lost durable diff: %+v", saved)
+	}
 	st := c.State()
 	want := map[RecordKind]string{
 		KindAssistant:  ProviderRecordID(st.ConversationID, st.Generation, KindAssistant, "msg_1"),

@@ -657,19 +657,39 @@ body {
   scroll-behavior: smooth;
 }
 
-/* Caption-labelled turns, not bubbles: a small muted caption above plain
- * flowing text, reading like one column rather than a chat log. */
+/* Turns read as a conversation, not a log. Your messages sit to the right
+ * in a soft bubble; the supervisor's replies are flowing prose in the
+ * reading column, rendered from its Markdown. Neither carries a caption:
+ * side and voice tell them apart, and the article's label names the speaker
+ * for assistive tech. */
 .conversation__message {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
 }
 
-.conversation__message-role {
-  color: var(--muted);
-  font: 600 11px var(--bench-font-text);
+.conversation__message[data-role='user'] {
+  align-items: flex-end;
+}
+
+.conversation__message[data-role='user'] p {
+  max-width: min(78%, 620px);
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 18px 18px 4px 18px;
+  background: var(--raised);
+  color: var(--text);
+  font: 14px/1.5 var(--bench-font-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conversation__message[data-role='assistant'] {
+  max-width: 72ch;
+  padding-block: var(--space-1);
 }
 
 .conversation__message-footer {
@@ -684,17 +704,149 @@ body {
   font-weight: 700;
 }
 
-.conversation__message p {
-  min-width: 0;
+/* The reply as prose: a serif measure with ordinary paragraph rhythm, code
+ * and tables in the bench's mono. The renderer is the sanitized subset, so
+ * only these elements ever appear. */
+.conversation__markdown {
   width: 100%;
-  margin: 0;
-  border: none;
-  background: none;
-  padding: 0;
-  font-size: 13.5px;
-  line-height: 1.55;
-  white-space: pre-wrap;
+  color: var(--text);
+  font: 15px/1.6 var(--bench-font-serif);
   overflow-wrap: anywhere;
+}
+
+.conversation__markdown > :first-child {
+  margin-top: 0;
+}
+
+.conversation__markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.conversation__markdown p {
+  margin: 0 0 var(--space-3);
+}
+
+.conversation__markdown h1,
+.conversation__markdown h2,
+.conversation__markdown h3,
+.conversation__markdown h4,
+.conversation__markdown h5,
+.conversation__markdown h6 {
+  margin: var(--space-4) 0 var(--space-2);
+  font: 600 15px/1.35 var(--bench-font-serif);
+  letter-spacing: -0.005em;
+}
+
+.conversation__markdown h1 {
+  font-size: 19px;
+}
+
+.conversation__markdown h2 {
+  font-size: 17px;
+}
+
+.conversation__markdown ul,
+.conversation__markdown ol {
+  margin: 0 0 var(--space-3);
+  padding-left: 1.4em;
+}
+
+.conversation__markdown li {
+  margin: 3px 0;
+}
+
+.conversation__markdown li::marker {
+  color: var(--muted);
+}
+
+.conversation__markdown strong {
+  font-weight: 600;
+}
+
+.conversation__markdown code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--raised) 86%, var(--text));
+  font: 12.5px var(--bench-font-mono);
+}
+
+.conversation__markdown pre {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  overflow-x: auto;
+  font: 12.5px/1.55 var(--bench-font-mono);
+}
+
+.conversation__markdown pre code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+}
+
+.conversation__markdown table {
+  margin: 0 0 var(--space-3);
+  border-collapse: collapse;
+  font: 13px/1.45 var(--bench-font-text);
+}
+
+.conversation__markdown th,
+.conversation__markdown td {
+  padding: 4px 10px 4px 0;
+  border-bottom: var(--bench-hairline-width) solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+
+.conversation__markdown th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.conversation__markdown .md-link {
+  color: var(--accent);
+}
+
+/* The copy control under a reply: invisible until the turn is hovered or
+ * focused, so the column stays prose until you reach for it. */
+.conversation__message-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  padding: 3px 6px;
+  color: var(--muted);
+  font: 500 11px var(--bench-font-text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.conversation__message:hover .conversation__message-copy,
+.conversation__message:focus-within .conversation__message-copy,
+.conversation__message-copy:focus-visible {
+  opacity: 1;
+}
+
+.conversation__message-copy:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.conversation__message-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.conversation__message-copy svg {
+  width: 13px;
+  height: 13px;
 }
 
 /* A sent message's attachments: the composer's chips, read-only. */
@@ -757,32 +909,54 @@ body {
   color: var(--accent);
 }
 
+/* Tool activity is one quiet trace line between turns: the dots while the
+ * supervisor is still working, a tick once it is done, then what it used. */
 .conversation__activity {
   display: flex;
   align-items: center;
   align-self: flex-start;
-  gap: 10px;
-  max-width: min(78%, 760px);
+  gap: 8px;
+  max-width: min(100%, 760px);
+  min-height: 22px;
   color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.conversation__activity-mark {
+  flex: none;
+  width: 16px;
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .conversation__activity-copy {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
-  font-size: 12px;
 }
 
 .conversation__activity-copy strong {
+  flex: none;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.conversation__activity[data-active='true'] .conversation__activity-copy strong {
   color: var(--text);
-  font-size: 12px;
 }
 
 .conversation__activity-copy span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation__activity-copy span::before {
+  content: '·';
+  margin-right: 6px;
 }
 
 /* Delegated sub-agents: one instrument lamp per task, folded live from
@@ -906,8 +1080,8 @@ body {
      column never collapses diff cards into empty slivers. */
   flex-shrink: 0;
   width: min(100%, 880px);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
   background: color-mix(in srgb, var(--raised) 92%, var(--content));
   overflow: hidden;
 }
@@ -13849,18 +14023,43 @@ body {
   scroll-behavior: auto;
 }
 
-.supervisor-page__empty {
-  margin-top: auto;
-  display: grid;
-  gap: var(--space-1);
-  color: var(--muted);
-  font: 13px var(--bench-font-text);
-  line-height: 1.5;
+/* The welcome before the first message: the monogram beside a serif
+ * greeting with one short line underneath, centred in the empty column. */
+.supervisor-page__welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin: auto 0;
+  padding: var(--space-5) 0;
+  text-align: center;
 }
 
-.supervisor-page__empty strong {
+.supervisor-page__welcome-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.supervisor-page__welcome-mark {
+  flex: none;
+  width: 44px;
+  height: 44px;
   color: var(--text);
-  font: 500 20px var(--bench-font-serif);
+}
+
+.supervisor-page__welcome-greeting {
+  margin: 0;
+  color: var(--text);
+  font: 500 34px/1.1 var(--bench-font-serif);
+  letter-spacing: -0.015em;
+}
+
+.supervisor-page__welcome-line {
+  max-width: 44ch;
+  margin: 0;
+  color: var(--muted);
+  font: 15px/1.5 var(--bench-font-text);
 }
 
 .supervisor-page__failure {

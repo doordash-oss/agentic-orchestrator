@@ -518,8 +518,8 @@ func recordKindList(items []server.SupervisorRecord) string {
 }
 
 // requireRedactedToolRecords asserts every wire tool_use and tool_result
-// record carries only redacted, text-free tool rows, as the Phase 1
-// projection does: the command, its input and its output stay server-side.
+// record carries only redacted, text-free tool rows: the supervisor
+// projection keeps the command, its input and its output server-side.
 func requireRedactedToolRecords(t *testing.T, items []server.SupervisorRecord) {
 	t.Helper()
 	for _, rec := range items {

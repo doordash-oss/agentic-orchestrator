@@ -85,7 +85,7 @@ import { CreateFeatureForm } from './CreateFeatureForm';
 import { useCreationDrafts, useCreationDraftEntry } from './creationDrafts';
 import { FeatureCockpit } from './FeatureCockpit';
 import { PipRail } from '../components/Pip';
-import { SupervisorIcon } from '../components/icons';
+import { NewConversationIcon, SupervisorIcon } from '../components/icons';
 import { updateNoticePending } from '../components/UpdatePopover';
 import {
   emptyAttentionDrafts,
@@ -1053,12 +1053,16 @@ export function WorkspaceShell({
           }}
           pageActions={
             selection.kind === 'supervisor' ? (
+              // Narrow windows collapse this to its icon (app.css); the label
+              // stays in the accessibility tree, so the name never changes.
               <button
                 type="button"
                 className="toolbar__page-action"
+                title="New conversation"
                 onClick={requestNewConversation}
               >
-                New conversation
+                <NewConversationIcon className="toolbar__page-action-icon" />
+                <span className="toolbar__page-action-label">New conversation</span>
               </button>
             ) : undefined
           }

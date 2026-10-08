@@ -44,8 +44,12 @@ describe('supervisorModel', () => {
     );
   });
 
-  it('orders the status line Rebuilding over Starting over Working over Failed over Paused over Ready', () => {
-    const line = (overrides: Partial<SupervisorStatusInput>, sending = false): string =>
+  it('orders the status line Rebuilding over Starting over Waiting over Working over Failed over Paused over Ready', () => {
+    const line = (
+      overrides: Partial<SupervisorStatusInput>,
+      sending = false,
+      requestPending = false,
+    ): string =>
       supervisorStatusLine(
         {
           lifecycle: 'stopped',
@@ -55,6 +59,7 @@ describe('supervisorModel', () => {
           ...overrides,
         },
         sending,
+        requestPending,
       );
     expect(line({ lifecycle: 'starting', startingStep: 'rebuilding' })).toBe(
       'Rebuilding history for Claude…',
@@ -67,7 +72,12 @@ describe('supervisorModel', () => {
     expect(line({ lifecycle: 'stopped' }, true)).toBe('Starting supervisor…');
     expect(line({ lifecycle: 'failed' }, true)).toBe('Starting supervisor…');
     expect(line({ lifecycle: 'running' })).toBe('Working…');
-    expect(line({ lifecycle: 'waiting_permission' })).toBe('Working…');
+    // A pending question or permission hides Working (Stop stays live).
+    expect(line({ lifecycle: 'waiting_permission' })).toBe('Waiting for your response…');
+    expect(line({ lifecycle: 'waiting_question' })).toBe('Waiting for your response…');
+    expect(line({ lifecycle: 'running' }, false, true)).toBe('Waiting for your response…');
+    expect(line({ lifecycle: 'starting' }, false, true)).toBe('Starting supervisor…');
+    expect(line({ lifecycle: 'idle' }, false, true)).toBe('Ready');
     expect(line({ lifecycle: 'idle' }, true)).toBe('Working…');
     expect(line({ lifecycle: 'idle' })).toBe('Ready');
     expect(line({ lifecycle: 'failed' })).toBe('Supervisor failed — Retry');

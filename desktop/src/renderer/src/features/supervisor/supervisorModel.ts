@@ -57,6 +57,7 @@ export const SUPERVISOR_COPY = {
   effortDefault: 'Default',
   starting: 'Starting supervisor…',
   working: 'Working…',
+  waiting: 'Waiting for your response…',
   idle: 'Ready',
   paused: 'Paused — interrupted before restart. Send a message to continue.',
   failed: 'Supervisor failed — Retry',
@@ -193,19 +194,32 @@ export function isPausedByRestart(status: SupervisorStatusInput): boolean {
   );
 }
 
+/** The turn is blocked on the person: a question or permission awaits an answer. */
+export function isWaitingOnRequest(lifecycle: SupervisorLifecycle): boolean {
+  return lifecycle === 'waiting_permission' || lifecycle === 'waiting_question';
+}
+
 /**
  * The status line: rebuilding history outranks starting, which outranks
- * working, then a failed launch, then a restart-paused conversation, then
- * the resting label. An in-flight send on a conversation with no process is
- * a launch.
+ * waiting on a pending question or permission (which hides "Working…" while
+ * Stop stays live), then working, then a failed launch, then a
+ * restart-paused conversation, then the resting label. An in-flight send on
+ * a conversation with no process is a launch.
  */
-export function supervisorStatusLine(status: SupervisorStatusInput, sending: boolean): string {
+export function supervisorStatusLine(
+  status: SupervisorStatusInput,
+  sending: boolean,
+  requestPending = false,
+): string {
   const { lifecycle } = status;
   if (lifecycle === 'starting' && status.startingStep === 'rebuilding') {
     return rebuildingStatus(status.harness);
   }
   if (lifecycle === 'starting' || (sending && !processExists(lifecycle))) {
     return SUPERVISOR_COPY.starting;
+  }
+  if (isWaitingOnRequest(lifecycle) || (requestPending && isTurnActive(lifecycle))) {
+    return SUPERVISOR_COPY.waiting;
   }
   if (isTurnActive(lifecycle) || sending) return SUPERVISOR_COPY.working;
   if (lifecycle === 'failed') return SUPERVISOR_COPY.failed;

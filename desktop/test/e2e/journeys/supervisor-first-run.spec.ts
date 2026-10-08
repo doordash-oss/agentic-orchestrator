@@ -177,6 +177,8 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     await expect(card).toBeVisible({ timeout: 30_000 });
     await expect(conversation(page)).toContainText(SUPERVISOR_E2E_PERMISSION_COMMAND);
     await expect(status(page)).toHaveAttribute('data-lifecycle', 'waiting_permission');
+    // A pending request hides Working; Stop stays live.
+    await expect(status(page)).toHaveText('Waiting for your response…');
     await expect(composer(page)).toHaveAttribute(
       'placeholder',
       'Respond to the pending request above to continue',

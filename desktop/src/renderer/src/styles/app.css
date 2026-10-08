@@ -139,6 +139,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0;
+  /* Lets the title hide itself once the trailing actions leave it too
+   * little room to show more than a stray glyph (the minimum window). */
+  container: toolbar-title / inline-size;
+}
+
+@container toolbar-title (max-width: 48px) {
+  .toolbar__title-name,
+  .toolbar__title-subline {
+    visibility: hidden;
+  }
 }
 
 .toolbar__title-name {
@@ -190,6 +200,55 @@ body {
 .toolbar__page-action:hover {
   background: var(--raised);
   color: var(--text);
+}
+
+/* The page action's glyph only shows once the label collapses (below). */
+.toolbar__page-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar__page-action-icon {
+  display: none;
+  flex: none;
+}
+
+/*
+ * The minimum window (400 CSS px, collapsed sidebar, macOS traffic-light
+ * clearance): the toolbar tightens its gaps and the page's secondary text
+ * action collapses to an icon button — its label stays in the accessibility
+ * tree (and as the tooltip), so its name is unchanged — keeping "New
+ * feature" fully inside the window.
+ */
+@media (max-width: 520px) {
+  .toolbar {
+    gap: var(--space-2);
+  }
+
+  .toolbar__trailing {
+    gap: var(--space-1);
+  }
+
+  .toolbar__page-action {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+  }
+
+  .toolbar__page-action-icon {
+    display: block;
+  }
+
+  .toolbar__page-action-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
 }
 
 /* The cockpit portals its status chip, contextual primary verbs, and
@@ -13846,6 +13905,8 @@ body {
   flex: none;
   display: grid;
   gap: var(--space-2);
+  /* minmax(0, …): the composer never grows past the dock to fit its footer. */
+  grid-template-columns: minmax(0, 1fr);
   width: min(760px, calc(100% - 2 * var(--space-5)));
   margin: 0 auto;
   padding-bottom: var(--space-4);
@@ -13977,6 +14038,9 @@ body {
 }
 
 .supervisor-composer .composer {
+  /* minmax(0, …): a long status line ellipsizes instead of widening the
+   * column (and pushing Send/Stop past the frame). */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
 }
 
@@ -14006,6 +14070,37 @@ body {
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+}
+
+/* The model chip is the footer's one elastic item: it gives way (its label
+ * ellipsizes) before Send/Stop is ever pushed out of the composer. */
+.supervisor-composer__footer .supervisor-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/*
+ * Narrow windows: the chip, context ring and Send/Stop keep the first row,
+ * and the live status (with any staged-uploads notice) wraps onto its own
+ * row beneath, so a long status never competes with Stop for width.
+ */
+@media (max-width: 520px) {
+  .supervisor-composer__footer {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+    column-gap: var(--space-2);
+  }
+
+  .supervisor-composer__send,
+  .supervisor-composer__stop {
+    margin-inline-start: auto;
+  }
+
+  .supervisor-composer__footer .supervisor-status,
+  .supervisor-composer__footer .supervisor-composer__blocked {
+    order: 1;
+    flex: 1 0 100%;
+  }
 }
 
 .supervisor-context-ring {
@@ -14046,6 +14141,15 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* The status text ellipsizes on its own: text-overflow does not reach a
+ * flex container's bare text. */
+.supervisor-status__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .supervisor-status__lamp {
@@ -14152,7 +14256,8 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 320px;
+  min-width: 0;
+  max-width: min(320px, 100%);
   padding: 3px var(--space-2);
   border: var(--bench-hairline-width) solid var(--hairline);
   border-radius: 999px;

@@ -116,6 +116,7 @@ import {
   harnessLabel,
   isPausedByRestart,
   isTurnActive,
+  isWaitingOnRequest,
   mergeRecords,
   mergeSnapshotRecords,
   settingsChosen,
@@ -622,7 +623,7 @@ export function SupervisorPage({
     : state !== null && !chosen
       ? SUPERVISOR_COPY.unsetPlaceholder
       : undefined;
-  const waitingOnRequest = lifecycle === 'waiting_permission' || lifecycle === 'waiting_question';
+  const waitingOnRequest = isWaitingOnRequest(lifecycle);
   const transcriptWaiting =
     sending || (turnActive && !waitingOnRequest && !requestPending && provisional.size === 0);
   const statusInput = {
@@ -632,7 +633,7 @@ export function SupervisorPage({
     interruptedBy: state?.interruptedBy ?? 'none',
     harness: settings.harness,
   } as const;
-  const statusLine = supervisorStatusLine(statusInput, sending);
+  const statusLine = supervisorStatusLine(statusInput, sending, requestPending);
   const paused = !sending && isPausedByRestart(statusInput);
   // The launch failure lives in the read model, so its card survives a
   // reload and leaves with the `failed` lifecycle. The sender got the same
@@ -1244,6 +1245,7 @@ export function SupervisorPage({
             maxLength={SUPERVISOR_MESSAGE_MAX_CHARS}
             composerRef={composerRef}
             allowUploads
+            attachmentTargetNoun="message"
             searchRepositories={NO_REPOSITORIES}
             images={draftItems.images}
             attachments={draftItems.attachments}
@@ -1283,7 +1285,7 @@ export function SupervisorPage({
                   data-tone={paused ? 'paused' : undefined}
                 >
                   <span className="supervisor-status__lamp" aria-hidden="true" />
-                  {statusLine}
+                  <span className="supervisor-status__text">{statusLine}</span>
                 </p>
                 {uploadsBlocking ? (
                   <p className="supervisor-composer__blocked" role="status">

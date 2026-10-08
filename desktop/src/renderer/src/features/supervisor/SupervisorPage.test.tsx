@@ -264,8 +264,12 @@ describe('SupervisorPage settings', () => {
     await user.type(composer(), 'Hello');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     expect(status()).toHaveTextContent('Ready');
-    // The shared attachment flow is offered from Phase 11 on.
+    // The shared attachment flow is always offered, with conversation copy.
     expect(screen.getByRole('button', { name: 'Attach files or photos' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Paste or drop images and documents anywhere in the message.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/anywhere in the description/)).toBeNull();
   });
 
   it('commits a harness and model through the chip, shows the committed values, and enables Send', async () => {
@@ -507,7 +511,7 @@ describe('SupervisorPage Send and Stop', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
   });
 
-  it('keeps Stop live while a request is pending', async () => {
+  it('hides Working but keeps Stop live while a request is pending', async () => {
     const mock = await renderPage({
       supervisorState: supervisorState({
         settings: CHOSEN,
@@ -518,6 +522,12 @@ describe('SupervisorPage Send and Stop', () => {
     });
     const user = userEvent.setup();
 
+    expect(status()).toHaveTextContent('Waiting for your response…');
+    expect(status()).not.toHaveTextContent('Working…');
+    expect(composer()).toHaveAttribute(
+      'placeholder',
+      'Respond to the pending request above to continue',
+    );
     const stop = screen.getByRole('button', { name: 'Stop' });
     expect(stop).toBeEnabled();
     await user.click(stop);

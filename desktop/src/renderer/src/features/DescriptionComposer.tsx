@@ -174,6 +174,12 @@ export interface DescriptionComposerProps {
   hideLabel?: boolean;
   /** False hides the attach affordances and ignores pasted or dropped files. */
   allowUploads?: boolean;
+  /**
+   * What the attach hint calls the drop target ("anywhere in the …"): the
+   * feature-description surfaces keep the default, a conversation host says
+   * "message".
+   */
+  attachmentTargetNoun?: string;
   /** Host-owned controls rendered beneath the textarea (e.g. a Send button). */
   footer?: ReactNode;
   rows?: number;
@@ -207,6 +213,7 @@ export function DescriptionComposer({
   placeholderOverride,
   hideLabel = false,
   allowUploads = true,
+  attachmentTargetNoun = 'description',
   footer,
   rows = 6,
   maxLength = 10000,
@@ -615,8 +622,8 @@ export function DescriptionComposer({
           </div>
           <span className="composer__hint">
             {remote
-              ? 'Paste or drop images and documents anywhere in the description; files upload to the server.'
-              : 'Paste or drop images and documents anywhere in the description.'}
+              ? `Paste or drop images and documents anywhere in the ${attachmentTargetNoun}; files upload to the server.`
+              : `Paste or drop images and documents anywhere in the ${attachmentTargetNoun}.`}
           </span>
         </div>
       ) : null}

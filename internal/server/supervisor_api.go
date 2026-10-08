@@ -503,7 +503,7 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 		summary, truncated := boundedSummary(data.Summary)
 		dto.Marker = &SupervisorMarkerRecord{
 			Marker:      SupervisorMarkerRecordMarker(data.Marker),
-			Text:        SafeDisplayText(data.Text, 400),
+			Text:        SafeDisplayText(data.Text, markerTextLimit(data.Marker)),
 			Code:        data.Code,
 			FromHarness: data.FromHarness,
 			ToHarness:   data.ToHarness,
@@ -524,6 +524,16 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 		dto.Messages = []TranscriptMessage{}
 	}
 	return dto
+}
+
+// markerTextLimit bounds marker prose for display. The transcript-recovery
+// marker ends with the preserved transcript's path, which users copy to find
+// the backup, so its bound leaves room for a full filesystem path.
+func markerTextLimit(marker string) int {
+	if marker == supervisor.MarkerTranscriptRecovered {
+		return 400 + 4096
+	}
+	return 400
 }
 
 func boundedSummary(input string) (string, bool) {

@@ -120,6 +120,19 @@ export function RecoveryIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/**
+ * The Supervisor's "New conversation" toolbar action once narrow windows
+ * collapse it to an icon, shaped after SF Symbols' `square.and.pencil`.
+ */
+export function NewConversationIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6" />
+      <path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L12 14.8l-4 1 1-4Z" />
+    </Icon>
+  );
+}
+
 /** The transient toolbar update trigger, shaped after SF Symbols' `arrow.down.circle`. */
 export function UpdateIcon(props: SVGProps<SVGSVGElement>) {
   return (

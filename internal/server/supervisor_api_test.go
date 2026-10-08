@@ -751,6 +751,27 @@ func TestSupervisorMarkerRecordProjectsMarkerTextAndCode(t *testing.T) {
 	}
 }
 
+func TestSupervisorRecoveryMarkerKeepsPreservedPath(t *testing.T) {
+	preserved := "/" + strings.Repeat("deep-scratch-root/", 30) + "supervisor/transcript.jsonl.corrupt-20261007T101500Z"
+	text := "3 transcript records after #12 could not be read and are not shown. The original transcript is preserved at " + preserved + "."
+	data, err := json.Marshal(supervisor.MarkerData{Marker: supervisor.MarkerTranscriptRecovered, Text: text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto := supervisorRecordDTO(supervisor.Record{Seq: 1, Kind: supervisor.KindMarker, Visibility: supervisor.VisibilityDisplayOnly, Data: data}, "")
+	if dto.Marker == nil || !strings.HasSuffix(dto.Marker.Text, preserved+".") {
+		t.Fatalf("recovery marker text = %+v, want the full preserved path", dto.Marker)
+	}
+
+	long, err := json.Marshal(supervisor.MarkerData{Marker: supervisor.MarkerError, Text: strings.Repeat("e", 600)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := supervisorRecordDTO(supervisor.Record{Seq: 2, Kind: supervisor.KindMarker, Data: long}, "").Marker.Text; len(got) != 403 {
+		t.Fatalf("error marker text length = %d, want the 400-character display bound", len(got))
+	}
+}
+
 func TestSupervisorCheckpointProjectionHidesBaselineAndBoundsSummary(t *testing.T) {
 	summary := strings.Repeat("s", 20*1024)
 	data, err := json.Marshal(supervisor.CheckpointData{CoversThroughSeq: 17, Summary: summary, NativeBaseline: &supervisor.NativeBaseline{Harness: "codex", Payload: json.RawMessage(`{"encrypted_content":"secret-baseline"}`)}, Reason: "native_auto", Model: "gpt-5"})

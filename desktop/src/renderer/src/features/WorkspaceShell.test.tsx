@@ -2335,6 +2335,16 @@ describe('WorkspaceShell Supervisor row', () => {
     const button = await within(toolbar).findByRole('button', { name: 'New conversation' });
     expect(button).toHaveClass('toolbar__page-action');
     expect(button).toHaveTextContent('New conversation');
+    // Narrow windows collapse it to the icon (app.css): the label stays a
+    // separate, collapsible text node and the tooltip carries the name.
+    expect(button.querySelector('svg.toolbar__page-action-icon')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+    expect(button.querySelector('.toolbar__page-action-label')).toHaveTextContent(
+      'New conversation',
+    );
+    expect(button).toHaveAttribute('title', 'New conversation');
   });
 
   it('routes a new-conversation request onto the Supervisor page from a feature', async () => {

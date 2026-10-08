@@ -156,6 +156,22 @@ func (e *ChangePendingError) Error() string { return "supervisor change pending:
 
 var ErrPendingChangeNotFound = errors.New("supervisor pending change not found")
 
+// PersistError reports an authoritative write the coordinator could not
+// commit. TurnID is empty for writes outside a turn.
+type PersistError struct {
+	Op             string
+	ConversationID string
+	Generation     int64
+	TurnID         string
+	Err            error
+}
+
+func (e *PersistError) Error() string {
+	return fmt.Sprintf("supervisor %s (conversation %s, generation %d, turn %q): %v", e.Op, e.ConversationID, e.Generation, e.TurnID, e.Err)
+}
+
+func (e *PersistError) Unwrap() error { return e.Err }
+
 // Complete reports whether a harness and model are chosen.
 func (s Settings) Complete() bool { return s.Harness != "" && s.Model != "" }
 
@@ -178,6 +194,9 @@ type State struct {
 	// Failure is the most recent launch failure; set only while the
 	// lifecycle is failed.
 	Failure *LaunchFailedError
+	// PersistFailure is the most recent authoritative write failure; a
+	// later cleanly completed turn clears it.
+	PersistFailure *PersistError
 	// PendingRequests are the surfaced control requests awaiting an answer,
 	// in arrival order. Session is the session they belong to.
 	PendingRequests []*llm.ControlRequestMessage

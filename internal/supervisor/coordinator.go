@@ -188,6 +188,11 @@ type Coordinator struct {
 	sessionID        string
 	effectiveModel   string
 	launch           *launchAttempt
+	// persistFailure is the latest authoritative write failure; failedTurns
+	// holds the current process's turns that lost a write, so their result
+	// cannot report completed.
+	persistFailure *PersistError
+	failedTurns    map[string]bool
 	// turns holds the delivered turns still awaiting a result, oldest first.
 	turns     []string
 	turnCount int
@@ -580,6 +585,7 @@ func (c *Coordinator) stateLocked() State {
 		PendingChange:   c.pendingChange,
 		EffectiveModel:  c.effectiveModel,
 		PermissionMode:  c.permMode,
+		PersistFailure:  c.persistFailure,
 		PendingRequests: append([]*llm.ControlRequestMessage(nil), c.pending...),
 		Session:         c.session,
 		HeadSeq:         c.store.head(),
@@ -1158,6 +1164,7 @@ func (c *Coordinator) resetProcessLocked() {
 	c.effectiveModel = ""
 	c.turns = nil
 	c.turnCount = 0
+	c.failedTurns = nil
 	c.pending = nil
 	c.unresolved = nil
 	c.streamID = ""
@@ -1220,10 +1227,38 @@ func (c *Coordinator) setOutcomeLocked(outcome TurnOutcome, by InterruptedBy) {
 }
 
 // persistTurnsLocked rewrites the turn-in-flight record from the turns
-// still awaiting a result.
-func (c *Coordinator) persistTurnsLocked() {
+// still awaiting a result; turnID is the turn the rewrite is for.
+func (c *Coordinator) persistTurnsLocked(turnID string) error {
 	if err := saveTurns(c.dir, c.conv.Generation, c.turns); err != nil {
-		log.Printf("supervisor: persist turn-in-flight record: %v", err)
+		return &PersistError{Op: "persist turn-in-flight record", ConversationID: c.conv.ConversationID, Generation: c.conv.Generation, TurnID: turnID, Err: err}
+	}
+	return nil
+}
+
+// changeErrorLocked wraps a failure to apply or persist a queued settings
+// change.
+func (c *Coordinator) changeErrorLocked(change *PendingChange, err error) error {
+	return &PersistError{Op: "apply " + change.Kind + " change " + change.RequestID, ConversationID: c.conv.ConversationID, Generation: c.conv.Generation, Err: err}
+}
+
+// failWriteLocked records an authoritative write failure: it is logged,
+// surfaced in the read model and, for a turn of the current generation,
+// fails that turn's outcome.
+func (c *Coordinator) failWriteLocked(err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("%v", err)
+	var perr *PersistError
+	if !errors.As(err, &perr) {
+		perr = &PersistError{Op: "write", ConversationID: c.conv.ConversationID, Generation: c.conv.Generation, Err: err}
+	}
+	c.persistFailure = perr
+	if perr.TurnID != "" && perr.Generation == c.conv.Generation {
+		if c.failedTurns == nil {
+			c.failedTurns = map[string]bool{}
+		}
+		c.failedTurns[perr.TurnID] = true
 	}
 }
 
@@ -1489,7 +1524,7 @@ func (c *Coordinator) failLaunch(attempt *launchAttempt, cause error) {
 				}
 			}
 			if err != nil {
-				log.Printf("supervisor: apply change after failed launch: %v", err)
+				c.failWriteLocked(c.changeErrorLocked(change, err))
 			}
 		}
 		c.lifecycle = LifecycleFailed
@@ -1542,7 +1577,7 @@ func (c *Coordinator) appendUserLocked(text, hidden, cmid string, attachments []
 		return rec, existing, err
 	}
 	c.turns = append(c.turns, turnID)
-	c.persistTurnsLocked()
+	c.failWriteLocked(c.persistTurnsLocked(turnID))
 	c.publishLocked(Event{Kind: EventRecord, Generation: rec.Generation, Record: &rec})
 	return rec, false, nil
 }
@@ -1580,7 +1615,7 @@ func (c *Coordinator) applyExitLocked(clean bool) {
 	keep := c.keepTurns
 	c.resetProcessLocked()
 	if !keep {
-		c.persistTurnsLocked()
+		c.failWriteLocked(c.persistTurnsLocked(""))
 	}
 	c.lifecycle = LifecycleStopped
 	if c.pendingChange != nil {
@@ -1598,7 +1633,7 @@ func (c *Coordinator) applyExitLocked(clean bool) {
 			}
 		}
 		if err != nil {
-			log.Printf("supervisor: apply change after exit: %v", err)
+			c.failWriteLocked(c.changeErrorLocked(change, err))
 		}
 	}
 	if !c.applyingChange {
@@ -1803,13 +1838,13 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 			if streamID == "" && current {
 				streamID = c.streamID
 			}
-			c.appendProviderLocked(gen, KindAssistant, ContentData{Content: text}, msg.Assistant.Message.ID, streamID)
+			c.failWriteLocked(c.appendProviderLocked(gen, KindAssistant, ContentData{Content: text}, msg.Assistant.Message.ID, streamID))
 			if current {
 				c.streamID, c.streamChunks = "", 0
 			}
 		}
 		if len(tools) > 0 {
-			c.appendProviderLocked(gen, KindToolUse, ContentData{Content: tools}, blockIDs(tools, func(b llm.ContentBlock) string { return b.ID }), "")
+			c.failWriteLocked(c.appendProviderLocked(gen, KindToolUse, ContentData{Content: tools}, blockIDs(tools, func(b llm.ContentBlock) string { return b.ID }), ""))
 		}
 	case msg.User != nil && !msg.LocallyAppended:
 		var results []llm.ContentBlock
@@ -1819,7 +1854,7 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 			}
 		}
 		if len(results) > 0 {
-			c.appendProviderLocked(gen, KindToolResult, ContentData{Content: results}, blockIDs(results, func(b llm.ContentBlock) string { return b.ToolUseID }), "")
+			c.failWriteLocked(c.appendProviderLocked(gen, KindToolResult, ContentData{Content: results}, blockIDs(results, func(b llm.ContentBlock) string { return b.ToolUseID }), ""))
 		}
 	case msg.ControlRequest != nil && current:
 		c.surfaceRequestLocked(gen, msg.ControlRequest)
@@ -2075,21 +2110,21 @@ func (c *Coordinator) providerIDLocked(gen int64, kind RecordKind, turnID, provi
 }
 
 // appendProviderLocked commits provider output tagged with its generation
-// under its deterministic id; the store rejects output from a retired
-// generation and returns the committed record for a repeated item.
-func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload any, providerID, streamID string) {
+// under its deterministic id; the store returns the committed record for a
+// repeated item. Output from a retired generation is expected and dropped
+// without error; any other failure to commit is returned.
+func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload any, providerID, streamID string) error {
+	turnID := ""
+	if gen == c.conv.Generation {
+		turnID = c.currentTurnLocked()
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("supervisor: encode %s record: %v", kind, err)
-		return
+		return &PersistError{Op: "encode " + string(kind) + " record", ConversationID: c.conv.ConversationID, Generation: gen, TurnID: turnID, Err: err}
 	}
 	visibility := VisibilityContent
 	if kind == KindPermission || kind == KindQuestion {
 		visibility = VisibilityDisplayOnly
-	}
-	turnID := ""
-	if gen == c.conv.Generation {
-		turnID = c.currentTurnLocked()
 	}
 	rec, existing, err := c.store.appendRecord(Record{
 		ID:              c.providerIDLocked(gen, kind, turnID, providerID),
@@ -2101,13 +2136,13 @@ func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload a
 		Data:            data,
 	})
 	if errors.Is(err, ErrRetiredGeneration) || existing {
-		return
+		return nil
 	}
 	if err != nil {
-		log.Printf("supervisor: append %s record: %v", kind, err)
-		return
+		return &PersistError{Op: "append " + string(kind) + " record", ConversationID: c.conv.ConversationID, Generation: gen, TurnID: turnID, Err: err}
 	}
 	c.publishLocked(Event{Kind: EventRecord, Generation: gen, Record: &rec})
+	return nil
 }
 
 func (c *Coordinator) surfaceRequestLocked(gen int64, req *llm.ControlRequestMessage) {
@@ -2131,7 +2166,7 @@ func (c *Coordinator) surfaceRequestLocked(gen int64, req *llm.ControlRequestMes
 		Origin:         origin,
 		ChildSessionID: child,
 	}
-	c.appendProviderLocked(gen, kind, data, req.RequestID+"/"+StageRequested, "")
+	c.failWriteLocked(c.appendProviderLocked(gen, kind, data, req.RequestID+"/"+StageRequested, ""))
 	if gen == c.conv.Generation && !c.hasUnresolvedLocked(req.RequestID) {
 		data.Input = nil
 		c.unresolved = append(c.unresolved, openRequest{rec: Record{TurnID: c.currentTurnLocked(), Kind: kind}, data: data})
@@ -2249,7 +2284,7 @@ func (c *Coordinator) observeAnswer(gen int64, sessionID string, answer ports.Co
 	case answer.Allowed:
 		outcome = RequestAllowed
 	}
-	c.appendProviderLocked(gen, kind, RequestData{
+	c.failWriteLocked(c.appendProviderLocked(gen, kind, RequestData{
 		RequestID:      answer.RequestID,
 		ToolName:       toolName,
 		Stage:          StageResolved,
@@ -2258,7 +2293,7 @@ func (c *Coordinator) observeAnswer(gen int64, sessionID string, answer ports.Co
 		Answers:        answer.Answers,
 		Origin:         origin,
 		ChildSessionID: child,
-	}, answer.RequestID+"/"+StageResolved, "")
+	}, answer.RequestID+"/"+StageResolved, ""))
 	if current && (c.lifecycle == LifecycleWaitingPermission || c.lifecycle == LifecycleWaitingQuestion) {
 		c.lifecycle = c.waitingLifecycleLocked()
 	}
@@ -2269,10 +2304,13 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 	if c.relaunchPrevious != nil && !result.IsError && result.Subtype != "error" {
 		c.relaunchPrevious = nil
 	}
+	turnID := c.currentTurnLocked()
 	if len(c.turns) > 0 {
 		c.turns = c.turns[1:]
-		c.persistTurnsLocked()
+		c.failWriteLocked(c.persistTurnsLocked(turnID))
 	}
+	writeFailed := c.failedTurns[turnID]
+	delete(c.failedTurns, turnID)
 	// Turn end clears any request the harness left unanswered. Its record
 	// stays requested: the turn was not cut, so a stop leaves it to boot.
 	c.pending = nil
@@ -2283,10 +2321,16 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 		c.setOutcomeLocked(OutcomeInterrupted, InterruptedByUser)
 		close(c.interrupt.done)
 		c.interrupt = nil
-	case result.IsError || result.Subtype == "error":
+	case result.IsError || result.Subtype == "error" || writeFailed:
 		c.setOutcomeLocked(OutcomeFailed, InterruptedByNone)
 	default:
 		c.setOutcomeLocked(OutcomeCompleted, InterruptedByNone)
+		c.persistFailure = nil
+	}
+	if writeFailed {
+		// The turn's history is incomplete on disk; the marker is its
+		// durable trace once the store accepts writes again.
+		c.appendMarkerLocked(c.conv.Generation, turnID, MarkerData{Marker: MarkerError, Text: "Couldn't save part of this turn: " + c.persistFailure.Err.Error()})
 	}
 	if len(c.turns) == 0 {
 		if c.pendingChange != nil {
@@ -2301,15 +2345,38 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 	c.publishStateLocked()
 }
 
+// applyPendingChange applies the queued change once the last turn ends. A
+// failure keeps the change queued, on disk and in the read model, so a later
+// turn end, exit or boot retries it.
 func (c *Coordinator) applyPendingChange() {
 	c.opMu.Lock()
 	defer c.opMu.Unlock()
 	c.mu.Lock()
 	change := c.pendingChange
 	c.mu.Unlock()
-	if change != nil {
-		_ = c.applyChange(change)
+	if change == nil {
+		return
 	}
+	err := c.applyChange(change)
+	if err == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.failWriteLocked(c.changeErrorLocked(change, err))
+	if c.pendingChange == nil {
+		c.pendingChange = change
+		if err := savePendingChange(c.dir, change); err != nil {
+			log.Printf("supervisor: restore pending %s change %s: %v", change.Kind, change.RequestID, err)
+		}
+	}
+	c.applyingChange = false
+	c.lifecycle = LifecycleIdle
+	if c.session == nil {
+		c.lifecycle = LifecycleStopped
+	}
+	c.appendMarkerLocked(c.conv.Generation, "", MarkerData{Marker: MarkerError, Text: "Couldn't apply settings change: " + err.Error()})
+	c.publishStateLocked()
 }
 
 // Subscription is one live event consumer. Replay holds the committed

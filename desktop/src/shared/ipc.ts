@@ -191,6 +191,7 @@ export const IPC_EVENTS = {
   sessionOutput: 'agentico:sessions:output',
   supervisorEvent: 'agentico:supervisor:event',
   routeRequested: 'agentico:route:requested',
+  windowFocusChanged: 'agentico:window:focus-changed',
 } as const;
 
 // --- Error shapes crossing the boundary -------------------------------------
@@ -855,6 +856,18 @@ export const AppEventSchema = z.discriminatedUnion('type', [
 export type AppEvent = z.output<typeof AppEventSchema>;
 
 /**
+ * The main window's effective focus (main → renderer on
+ * `IPC_EVENTS.windowFocusChanged`): visible and focused, with the
+ * packaged-test override applied — the same value the notification gate
+ * reads. Pushed on every focus, blur, show, hide and override change, on
+ * load and on gateway ready.
+ */
+export const WindowFocusEventSchema = z.strictObject({
+  focused: z.boolean(),
+});
+export type WindowFocusEvent = z.output<typeof WindowFocusEventSchema>;
+
+/**
  * The deep-linkable Settings destinations. Every value is also a Settings
  * pane id (`SETTINGS_PANES`), so a section name selects a pane directly.
  */
@@ -983,6 +996,8 @@ export const AppRouteEventSchema = z
       // preview loading.
       'recovery',
       'bulk',
+      // Opens the setup wizard sheet while the runtime is partially ready.
+      'setup',
       'new-feature',
       'toggle-sidebar',
       'toggle-inspector',
@@ -4018,6 +4033,11 @@ export const MainWindowUiStateSchema = z.strictObject({
   inspectorOpen: z.boolean(),
   /** False with Supervisor selected: there is no inspector to show or hide. */
   inspectorAvailable: z.boolean(),
+  /**
+   * True while the shell is mounted over a runtime with a ready provider but
+   * incomplete setup — the only time the Navigate menu's Setup… item is live.
+   */
+  setupIncomplete: z.boolean(),
   /** `feature.*` command id → enabled, from the same catalogue the palette reads. */
   featureCommands: z.record(z.string().min(1).max(64), z.boolean()),
 });
@@ -4035,7 +4055,8 @@ export function sameMainWindowUiState(a: MainWindowUiState, b: MainWindowUiState
     a.runtimeReady !== b.runtimeReady ||
     a.sidebarCollapsed !== b.sidebarCollapsed ||
     a.inspectorOpen !== b.inspectorOpen ||
-    a.inspectorAvailable !== b.inspectorAvailable
+    a.inspectorAvailable !== b.inspectorAvailable ||
+    a.setupIncomplete !== b.setupIncomplete
   ) {
     return false;
   }
@@ -4057,6 +4078,7 @@ export function disabledMainWindowUiState(): MainWindowUiState {
     sidebarCollapsed: false,
     inspectorOpen: false,
     inspectorAvailable: false,
+    setupIncomplete: false,
     featureCommands: {},
   };
 }
@@ -5095,6 +5117,8 @@ export interface AgenticoApi {
   resetSupervisor(): Promise<SupervisorResetResult>;
   /** Schema-validated supervisor stream pushes; returns the exact unsubscribe. */
   onSupervisorEvent(listener: (event: SupervisorEvent) => void): () => void;
+  /** Schema-validated main-window focus pushes; returns the exact unsubscribe. */
+  onWindowFocusChanged(listener: (event: WindowFocusEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
   inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
   checkRepositoryOriginStatus(

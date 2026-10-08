@@ -31,6 +31,7 @@ import {
   AppRouteEventSchema,
   SessionOutputEventSchema,
   SupervisorEventSchema,
+  WindowFocusEventSchema,
   ServerListSnapshotSchema,
   ConnectionStateSchema,
   CREATION_ATTACHMENT_LIMIT,
@@ -64,6 +65,7 @@ import {
   type SessionOutputOpenResult,
   type SessionOutputEvent,
   type SupervisorEvent,
+  type WindowFocusEvent,
   type SupervisorMessageRequest,
   type SupervisorSettingsRequest,
   type SupervisorPendingChangeCancelRequest,
@@ -293,6 +295,21 @@ const api: AgenticoApi = {
     ipcRenderer.on(IPC_EVENTS.supervisorEvent, wrapped);
     return () => {
       ipcRenderer.removeListener(IPC_EVENTS.supervisorEvent, wrapped);
+    };
+  },
+  onWindowFocusChanged: (listener: (event: WindowFocusEvent) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return; // drop unsafe events silently — fail closed
+      }
+      const event = WindowFocusEventSchema.safeParse(payload);
+      if (event.success) listener(event.data);
+    };
+    ipcRenderer.on(IPC_EVENTS.windowFocusChanged, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.windowFocusChanged, wrapped);
     };
   },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),

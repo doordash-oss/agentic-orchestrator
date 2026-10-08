@@ -5250,6 +5250,9 @@ type UpdateActiveWorkSummary struct {
 	// SupervisorActive Whether the supervisor is active work: its lifecycle is starting, running, waiting_permission or waiting_question.
 	SupervisorActive bool `json:"supervisor_active"`
 
+	// SupervisorWaiting Whether the active supervisor is waiting on the user: its lifecycle is waiting_permission or waiting_question. A waiting supervisor still counts in supervisor_active, but it does not hold up an install-when-idle; the install's own shutdown ends it and resolves the open request as interrupted.
+	SupervisorWaiting bool `json:"supervisor_waiting"`
+
 	// UploadCount Number of in-flight staged uploads.
 	UploadCount int `json:"upload_count"`
 }

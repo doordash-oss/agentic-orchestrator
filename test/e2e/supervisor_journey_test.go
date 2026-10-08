@@ -114,6 +114,14 @@ type supervisorHarness struct {
 	codexHome string
 	// abandoned holds coordinators a simulated crash left open.
 	abandoned []*supervisor.Coordinator
+	// updates, when set, serves the next start through the runtime server
+	// with these update options, so the update scheduler runs checks and
+	// installs as on a real server; nil serves the bare handler.
+	updates *server.UpdateOptions
+	// runtime is the runtime server serving an updates-armed start.
+	runtime *server.RuntimeServer
+	// baseURL is the current server's URL.
+	baseURL string
 }
 
 func newSupervisorHarness(t *testing.T, body string, mutate ...func(*supervisor.Options)) *supervisorHarness {
@@ -208,6 +216,27 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 		h.t.Fatalf("supervisor.New: %v", err)
 	}
 	h.coord = coord
+	runtime := server.RuntimeIdentity{RuntimeDir: h.runtimeDir, StateDir: h.stateDir, Config: filepath.Join(h.runtimeDir, "config.yaml")}
+	if h.updates != nil {
+		rs, err := server.Start(context.Background(), server.Options{
+			AuthToken:    supervisorTestToken,
+			ListenAddr:   fmt.Sprintf("127.0.0.1:%d", selfupdateFreePort(h.t, "127.0.0.1")),
+			Registry:     h.registry,
+			FeatureStore: h.store,
+			Features:     h.store,
+			Sessions:     h.sessions,
+			Mutations:    supervisorAnswerTarget{sessions: h.sessions},
+			Supervisor:   coord,
+			Admission:    h.admission,
+			Updates:      *h.updates,
+			Runtime:      runtime,
+		})
+		if err != nil {
+			h.t.Fatalf("server.Start: %v", err)
+		}
+		h.runtime, h.srv, h.baseURL = rs, nil, rs.BaseURL()
+		return
+	}
 	h.srv = httptest.NewServer(server.NewHandler(server.HandlerOptions{
 		AuthToken:             supervisorTestToken,
 		DisableHostValidation: true,
@@ -220,8 +249,9 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 		Admission:             h.admission,
 		// The runtime state directory backs the uploads route, so staged
 		// attachment references resolve as on a real server.
-		Runtime: server.RuntimeIdentity{RuntimeDir: h.runtimeDir, StateDir: h.stateDir, Config: filepath.Join(h.runtimeDir, "config.yaml")},
+		Runtime: runtime,
 	}))
+	h.baseURL = h.srv.URL
 }
 
 // restart simulates a server restart over the same state directory.
@@ -246,8 +276,16 @@ func (h *supervisorHarness) crash(mutate ...func(*supervisor.Options)) {
 // stopServer drops open event streams first: Close waits for active
 // requests, and an SSE request only ends when its client goes away.
 func (h *supervisorHarness) stopServer() {
-	h.srv.CloseClientConnections()
-	h.srv.Close()
+	if h.runtime != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = h.runtime.Close(ctx)
+		h.runtime = nil
+	}
+	if h.srv != nil {
+		h.srv.CloseClientConnections()
+		h.srv.Close()
+	}
 }
 
 func (h *supervisorHarness) do(method, path string, body any, wantStatus int, out any) {
@@ -257,7 +295,7 @@ func (h *supervisorHarness) do(method, path string, body any, wantStatus int, ou
 		raw, _ := json.Marshal(body)
 		reader = bytes.NewReader(raw)
 	}
-	req, _ := http.NewRequest(method, h.srv.URL+path, reader)
+	req, _ := http.NewRequest(method, h.baseURL+path, reader)
 	req.Header.Set("Authorization", "Bearer "+supervisorTestToken)
 	if method != http.MethodGet {
 		req.Header.Set("X-Agentico-Client", "local")
@@ -405,7 +443,7 @@ func (h *supervisorHarness) openStream(query string) *supervisorStream {
 	if query != "" {
 		sep = "&"
 	}
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.srv.URL+"/api/v1/supervisor/events"+query+sep+"access_token="+supervisorTestToken+"&heartbeat_ms=200", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, h.baseURL+"/api/v1/supervisor/events"+query+sep+"access_token="+supervisorTestToken+"&heartbeat_ms=200", nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		cancel()

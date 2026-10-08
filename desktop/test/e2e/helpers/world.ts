@@ -59,6 +59,13 @@ export interface JourneyWorld {
    * handshake (supervisorProvider worlds only).
    */
   supervisorLaunchFailurePath: string;
+  /**
+   * Prefix of the gate files a `gatedPermission` supervisor turn waits on:
+   * the stub raises its permission request once `<prefix>.1` exists and
+   * finishes the turn once `<prefix>.2` exists (supervisorProvider worlds
+   * only). Open a gate with openSupervisorGate.
+   */
+  supervisorGatePath: string;
   codexInvocationLog: string;
 }
 
@@ -86,12 +93,26 @@ export interface WorldOptions {
   supervisorProvider?: boolean;
   /** Include a detectable Codex CLI whose app-server launch always fails. */
   unlaunchableCodex?: boolean;
+  /**
+   * Write a `defaults.pipeline` the server rejects, so readiness reports an
+   * invalid configuration while the provider itself can still be ready.
+   */
+  invalidPipelineProfile?: boolean;
 }
 
 /** Prompt markers the supervisorProvider stub reacts to. */
 export const SUPERVISOR_E2E_MARKERS = {
   /** Blocks the turn on a Bash permission request until it is answered. */
   permission: 'SUPERVISOR_E2E_PERMISSION',
+  /**
+   * A turn the journey paces through two gate files (see
+   * JourneyWorld.supervisorGatePath): it holds as running until gate 1
+   * opens, then blocks on the same Bash permission request as `permission`,
+   * then, once answered, holds as running again until gate 2 opens before
+   * committing its reply. Logs `gated:<turn>`, `pending:supervisor-perm-<turn>`
+   * and `response:supervisor-perm-<turn>:...` like `permission`.
+   */
+  gatedPermission: 'SUPERVISOR_E2E_GATED_PERMISSION',
   /**
    * Holds the turn until an interrupt arrives, then reports an interrupted
    * result; a held turn that ends with stdin closing (End, New conversation)
@@ -182,6 +203,11 @@ export function supervisorStubAttachmentLogLines(
     `attachment:${turn}:${attachmentPath}`,
     `attachment-line:${turn}:${attachmentPath}:${firstLine}`,
   ];
+}
+
+/** Opens gate `gate` (1 or 2) of a `gatedPermission` supervisor turn. */
+export function openSupervisorGate(world: JourneyWorld, gate: 1 | 2): void {
+  fs.writeFileSync(`${world.supervisorGatePath}.${gate}`, '');
 }
 
 /** The deterministic reply the supervisorProvider stub commits for a turn (1-based). */
@@ -289,6 +315,7 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
   const authDelayPath = path.join(stubDir, 'claude-auth-delay');
   const providerInvocationLog = path.join(stubDir, 'workflow-invocations.log');
   const supervisorLaunchFailurePath = path.join(stubDir, 'supervisor-launch-failure');
+  const supervisorGatePath = path.join(stubDir, 'supervisor-gate');
   const delaySeconds = options.authDelaySeconds ?? 0;
   writeStubCli(
     claudeStub,
@@ -300,7 +327,7 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     options.attentionProvider === true,
     options.rebaseProvider === true,
     options.supervisorProvider === true,
-    { home, launchFailurePath: supervisorLaunchFailurePath },
+    { home, launchFailurePath: supervisorLaunchFailurePath, gatePath: supervisorGatePath },
   );
   writeAuthState(authStatePath, options.auth ?? { loggedIn: false });
   if (delaySeconds > 0) {
@@ -325,11 +352,13 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     authDelayPath,
     providerInvocationLog,
     supervisorLaunchFailurePath,
+    supervisorGatePath,
   };
   writeRuntimeConfig(
     world,
     options.presetWorkspaceRoot === true,
     options.unlaunchableCodex === true,
+    options.invalidPipelineProfile === true,
   );
   return world;
 }
@@ -351,7 +380,7 @@ function writeStubCli(
   attentionProvider: boolean,
   rebaseProvider: boolean,
   supervisorProvider: boolean,
-  supervisorPaths: { home: string; launchFailurePath: string },
+  supervisorPaths: { home: string; launchFailurePath: string; gatePath: string },
 ): void {
   const script = [
     '#!/bin/sh',
@@ -413,7 +442,11 @@ function writeStubCli(
     // Discovery stops here; only real sessions send a user prompt.
     'IFS= read -r _agentico_prompt || exit 1',
     ...(supervisorProvider
-      ? ['if [ "$is_supervisor" = 1 ]; then', ...supervisorStubLines(providerInvocationLog), 'fi']
+      ? [
+          'if [ "$is_supervisor" = 1 ]; then',
+          ...supervisorStubLines(providerInvocationLog, supervisorPaths.gatePath),
+          'fi',
+        ]
       : []),
     ...(rebaseProvider
       ? [
@@ -781,9 +814,17 @@ function supervisorResumeLines(providerInvocationLog: string, home: string): str
  * before serving the turn. The process keeps reading stdin and exits cleanly
  * on EOF.
  */
-function supervisorStubLines(providerInvocationLog: string): string[] {
-  const { permission, hold, partialHold, operateCreate, operateStart, compact, usageHigh } =
-    SUPERVISOR_E2E_MARKERS;
+function supervisorStubLines(providerInvocationLog: string, gatePath: string): string[] {
+  const {
+    permission,
+    gatedPermission,
+    hold,
+    partialHold,
+    operateCreate,
+    operateStart,
+    compact,
+    usageHigh,
+  } = SUPERVISOR_E2E_MARKERS;
   const permissionInput = JSON.stringify({ command: SUPERVISOR_E2E_PERMISSION_COMMAND });
   // Single-quoted inside the sh command text, so it must carry no single quote.
   const operateConfig = JSON.stringify(SUPERVISOR_E2E_OPERATE_CONFIG);
@@ -885,6 +926,24 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     '    fi',
     '  done',
     '}',
+    // Raises the Bash permission request and blocks until it is answered;
+    // stdin closing first (End, shutdown) logs `permission-ended:<turn>`.
+    'permission_request() {',
+    `  printf '{"type":"control_request","request_id":"supervisor-perm-%s","request":{"subtype":"can_use_tool","tool_name":"Bash","input":${permissionInput}}}\\n' "$turn"`,
+    `  printf 'pending:supervisor-perm-%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '  _answered=0',
+    '  while IFS= read -r _line; do',
+    '    case "$_line" in',
+    `      *'"control_response"'*) _answered=1; break ;;`,
+    '    esac',
+    '  done',
+    `  [ "$_answered" = 1 ] || { printf 'permission-ended:%s\\n' "$turn" >> "${providerInvocationLog}"; exit 0; }`,
+    `  printf 'response:supervisor-perm-%s:%s\\n' "$turn" "$_line" >> "${providerInvocationLog}"`,
+    '}',
+    // Sleeps until the journey creates the gate file; stdin stays unread.
+    'wait_gate() {',
+    '  while [ ! -e "$1" ]; do sleep 0.2; done',
+    '}',
     'supervisor_turn() {',
     '  turn=$((turn + 1))',
     '  _usage_high=0',
@@ -905,17 +964,15 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     `    *'Attached Images:'*|*'Attached Files:'*) attachment_log "$1" ;;`,
     '  esac',
     '  case "$1" in',
+    `    *${gatedPermission}*)`,
+    `      printf 'gated:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    `      wait_gate '${gatePath}.1'`,
+    '      permission_request',
+    `      wait_gate '${gatePath}.2'`,
+    '      supervisor_reply',
+    '      ;;',
     `    *${permission}*)`,
-    `      printf '{"type":"control_request","request_id":"supervisor-perm-%s","request":{"subtype":"can_use_tool","tool_name":"Bash","input":${permissionInput}}}\\n' "$turn"`,
-    `      printf 'pending:supervisor-perm-%s\\n' "$turn" >> "${providerInvocationLog}"`,
-    '      _answered=0',
-    '      while IFS= read -r _line; do',
-    '        case "$_line" in',
-    `          *'"control_response"'*) _answered=1; break ;;`,
-    '        esac',
-    '      done',
-    '      [ "$_answered" = 1 ] || exit 0',
-    `      printf 'response:supervisor-perm-%s:%s\\n' "$turn" "$_line" >> "${providerInvocationLog}"`,
+    '      permission_request',
     '      supervisor_reply',
     '      ;;',
     `    *${partialHold}*)`,
@@ -974,6 +1031,7 @@ function writeRuntimeConfig(
   world: JourneyWorld,
   presetWorkspaceRoot: boolean,
   unlaunchableCodex: boolean,
+  invalidPipelineProfile: boolean,
 ): void {
   const missing = path.join(world.stubDir, 'missing');
   fs.writeFileSync(
@@ -987,6 +1045,7 @@ function writeRuntimeConfig(
       '  opencode:',
       `    cli: ${path.join(missing, 'opencode')}`,
       ...(presetWorkspaceRoot ? ['workspace_roots:', `  - ${world.workspaceRoot}`] : []),
+      ...(invalidPipelineProfile ? ['defaults:', '  pipeline: bogus-profile'] : []),
       '',
     ].join('\n'),
   );

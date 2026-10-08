@@ -24,32 +24,66 @@ vi.mock('electron', () => ({
   nativeImage: {},
 }));
 
-const { buildTrayMenuTemplate, trayToolTip } = await import('../nativeCommands');
+const { buildTrayMenuTemplate, supervisorGradeLabel, trayToolTip } =
+  await import('../nativeCommands');
+const { supervisorGrade } = await import('../quitCoordinator');
 
 function handlers() {
   return { showWindow: vi.fn(), route: vi.fn(), quit: vi.fn() };
 }
 
 describe('tray', () => {
-  it('names the supervisor lifecycle in the tooltip', () => {
-    expect(trayToolTip({ attentionCount: 2, supervisorActive: true })).toBe(
+  it('names the supervisor lifecycle grade in the tooltip', () => {
+    expect(trayToolTip({ attentionCount: 2, supervisorGrade: 'working' })).toBe(
       'Agentico - 2 attention - Supervisor working',
     );
-    expect(trayToolTip({ attentionCount: 0, supervisorActive: false })).toBe(
+    expect(trayToolTip({ attentionCount: 1, supervisorGrade: 'waiting' })).toBe(
+      'Agentico - 1 attention - Supervisor waiting for you',
+    );
+    expect(trayToolTip({ attentionCount: 0, supervisorGrade: 'idle' })).toBe(
       'Agentico - 0 attention - Supervisor idle',
     );
   });
 
-  it('offers a Supervisor item that reflects the lifecycle and routes home', () => {
-    const deps = handlers();
-    const idle = buildTrayMenuTemplate({ attentionCount: 0, supervisorActive: false }, deps);
-    const working = buildTrayMenuTemplate({ attentionCount: 0, supervisorActive: true }, deps);
+  it('maps each lifecycle onto its tray grade', () => {
+    const grades = Object.fromEntries(
+      (
+        [
+          'stopped',
+          'starting',
+          'idle',
+          'running',
+          'waiting_permission',
+          'waiting_question',
+          'failed',
+        ] as const
+      ).map((lifecycle) => [lifecycle, supervisorGradeLabel(supervisorGrade(lifecycle))]),
+    );
+    expect(grades).toEqual({
+      stopped: 'Supervisor idle',
+      starting: 'Supervisor working',
+      idle: 'Supervisor idle',
+      running: 'Supervisor working',
+      waiting_permission: 'Supervisor waiting for you',
+      waiting_question: 'Supervisor waiting for you',
+      failed: 'Supervisor idle',
+    });
+  });
 
-    expect(idle.map((item) => item.label)).toContain('Supervisor');
-    const item = working.find((entry) => entry.label === 'Supervisor (working)');
+  it('offers a Supervisor item that reads the grade and routes home', () => {
+    const deps = handlers();
+    const labels = (['working', 'waiting', 'idle'] as const).map((supervisorGrade) =>
+      buildTrayMenuTemplate({ attentionCount: 0, supervisorGrade }, deps).map((item) => item.label),
+    );
+    expect(labels[0]).toContain('Supervisor working');
+    expect(labels[1]).toContain('Supervisor waiting for you');
+    expect(labels[2]).toContain('Supervisor idle');
+
+    const waiting = buildTrayMenuTemplate({ attentionCount: 0, supervisorGrade: 'waiting' }, deps);
+    const item = waiting.find((entry) => entry.label === 'Supervisor waiting for you');
     expect(item).toBeDefined();
     item?.click?.({} as never, undefined, {} as never);
     expect(deps.route).toHaveBeenCalledWith({ target: 'home' });
-    expect(JSON.stringify([...idle, ...working].map((entry) => entry.label))).not.toMatch(/AMA/);
+    expect(JSON.stringify(labels)).not.toMatch(/AMA/);
   });
 });

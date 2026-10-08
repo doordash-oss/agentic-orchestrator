@@ -106,6 +106,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'onServersChanged',
   'onSessionOutput',
   'onSupervisorEvent',
+  'onWindowFocusChanged',
   'openExternal',
   'openReview',
   'openSessionOutput',

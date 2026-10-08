@@ -874,7 +874,15 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 		// Recovery may release this same lock before Replace returns.
 		// Exactly-once release keeps the caller's failure cleanup safe.
 		release = sync.OnceFunc(release)
-		blockers := c.installBlockers(admission)
+		// The lock-held recheck reads the same predicate the idle wait
+		// did: an idle operation proceeds past a supervisor waiting on
+		// the user, an immediate one never does.
+		var blockers []errcat.Option
+		if op.when == updateInstallWhenIdle {
+			blockers = c.idleInstallBlockers(admission)
+		} else {
+			blockers = c.installBlockers(admission)
+		}
 		if blockers != nil || !c.installHeldNone(admission) {
 			release()
 			c.admissionOpen()
@@ -1039,9 +1047,10 @@ func waitResponseDone(responseDone <-chan struct{}) {
 }
 
 // awaitIdleForInstall closes the admission boundary once the runtime is
-// observed idle: activity events and the bounded fallback poll drive
-// reevaluation, and the atomic closure re-checks the reservation count
-// under the boundary's own mutex. When work races in first, the caller
+// observed idle for an unattended install (a supervisor waiting on the
+// user counts as idle here): activity events and the bounded fallback poll
+// drive reevaluation, and the atomic closure re-checks the reservation
+// count under the boundary's own mutex. When work races in first, the caller
 // keeps waiting. An already-closed boundary is idle by construction.
 func (c *updateCoordinator) awaitIdleForInstall(ctx context.Context, op *installOperation, admission InstallAdmission) error {
 	for {
@@ -1076,6 +1085,23 @@ func (c *updateCoordinator) installBlockers(admission InstallAdmission) []errcat
 		return detectionFailedBlockers()
 	}
 	return blockedActiveWorkOptions(activity, held, nil, false)
+}
+
+// idleInstallBlockers reports the canonical active-work blockers for an
+// unattended install's lock-held recheck, or nil when nothing observed
+// blocks it. It narrows installBlockers exactly as the idle wait does: a
+// supervisor waiting on the user does not block, since the install's own
+// shutdown ends it and resolves the open request as interrupted. Failed or
+// incomplete detection always blocks.
+func (c *updateCoordinator) idleInstallBlockers(admission InstallAdmission) []errcat.Option {
+	activity, held, _, ok := detectAdmissionActivity(admission)
+	if !ok {
+		return detectionFailedBlockers()
+	}
+	if held > 0 || activity.BlocksIdleInstall() {
+		return []errcat.Option{errcat.WithParams(activeWorkParams(activity, held))}
+	}
+	return nil
 }
 
 // installHeldNone reports whether no admission reservations are held.
@@ -1162,6 +1188,7 @@ func (c *updateCoordinator) activeWorkSummary() UpdateActiveWorkSummary {
 	activity, detectionFailed, pending := c.opts.Activity(context.Background())
 	summary.FeatureCount = activity.Features
 	summary.SupervisorActive = activity.SupervisorActive
+	summary.SupervisorWaiting = activity.SupervisorActive && activity.SupervisorWaiting
 	summary.CloneCount = activity.Clones
 	summary.UploadCount = activity.Uploads
 	summary.OriginCheckCount = activity.OriginChecks

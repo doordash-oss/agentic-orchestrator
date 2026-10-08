@@ -3552,6 +3552,8 @@ export interface components {
             feature_count: number;
             /** @description Whether the supervisor is active work: its lifecycle is starting, running, waiting_permission or waiting_question. */
             supervisor_active: boolean;
+            /** @description Whether the active supervisor is waiting on the user: its lifecycle is waiting_permission or waiting_question. A waiting supervisor still counts in supervisor_active, but it does not hold up an install-when-idle; the install's own shutdown ends it and resolves the open request as interrupted. */
+            supervisor_waiting: boolean;
             /** @description Number of in-flight repository clone operations. */
             clone_count: number;
             /** @description Number of in-flight staged uploads. */

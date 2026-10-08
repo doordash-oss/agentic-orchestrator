@@ -35,7 +35,7 @@ import (
 func (h *supervisorHarness) stageUpload(kind, name string, content []byte) string {
 	h.t.Helper()
 	q := url.Values{"kind": {kind}, "name": {name}}
-	req, _ := http.NewRequest(http.MethodPost, h.srv.URL+"/api/v1/uploads?"+q.Encode(), bytes.NewReader(content))
+	req, _ := http.NewRequest(http.MethodPost, h.baseURL+"/api/v1/uploads?"+q.Encode(), bytes.NewReader(content))
 	req.Header.Set("Authorization", "Bearer "+supervisorTestToken)
 	req.Header.Set("X-Agentico-Client", "local")
 	req.Header.Set("Content-Type", "application/octet-stream")

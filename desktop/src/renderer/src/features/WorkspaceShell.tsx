@@ -27,6 +27,12 @@ limitations under the License.
  * recovery workspace above bulk resume/retry and is reached from the
  * toolbar, the Recovery and Bulk Resume / Retry commands, and the attention
  * inbox's recovery jump.
+ * Partial readiness — a runtime with a ready provider whose setup is still
+ * incomplete — adds a compact banner between the toolbar and the pane that
+ * names the first blocking issue, and the setup wizard as a sheet that
+ * descends like Recovery: from the banner's "Open setup", the Setup…
+ * command and the `setup` route, never on its own. A snapshot that becomes
+ * complete takes both away.
  * Settings is not a state of this shell at all: it lives in its own window,
  * so every settings entry path is handled in the main process and nothing
  * here has a settings special case.
@@ -55,6 +61,7 @@ import type {
   FeatureSummaryView,
   MainWindowUiState,
   RoutedRequest,
+  RuntimeReadinessSnapshot,
   ShellPrefs,
   UpdateState,
 } from '../../../shared/ipc';
@@ -90,6 +97,11 @@ import {
   type SupervisorComposeRequest,
   type SupervisorNewConversationRequest,
 } from './supervisor/SupervisorPage';
+import {
+  useReportSupervisorPageSelected,
+  useSupervisorStatus,
+  type SupervisorStatus,
+} from './supervisor/supervisorStatus';
 import { SidebarChromeControls } from './SidebarChromeControls';
 import { ServerSwitcher } from '../components/ServerSwitcher';
 import { Toolbar } from './Toolbar';
@@ -111,6 +123,8 @@ import {
   type Lane,
 } from './laneClassification';
 import { RecoverySheet } from './RecoverySheet';
+import { SetupWizard } from '../components/wizard/SetupWizard';
+import { setupBannerIssue } from '../wizard/deriveWizardState';
 import { retryAction, useConnectionState, useMediaQuery, type LoadState } from '../hooks';
 
 type ListState = LoadState<{ phase: 'loaded'; features: FeatureSnapshot[] }>;
@@ -201,6 +215,7 @@ export function WorkspaceShell({
   onOpenUpdatesSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
   onOpenPalette = () => {},
+  setupReadiness = null,
 }: {
   attentionItems?: AttentionItem[];
   refreshAttention?: () => Promise<AttentionItem[]>;
@@ -223,6 +238,16 @@ export function WorkspaceShell({
   onInstallUpdateWhenIdle?(): Promise<void>;
   /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
   onOpenPalette?(): void;
+  /**
+   * Owned by ReadinessGate: non-null while the runtime has a ready provider
+   * but setup is incomplete. The latest snapshot drives the banner and the
+   * wizard sheet; `onSnapshot` replaces the gate's own copy, so a recheck
+   * inside the sheet updates the banner, the sheet and the gate together.
+   */
+  setupReadiness?: {
+    snapshot: RuntimeReadinessSnapshot;
+    onSnapshot(next: RuntimeReadinessSnapshot): void;
+  } | null;
 }) {
   // null while the local shell prefs are being restored.
   const [sidebarPreviewWidth, setSidebarPreviewWidth] = useState<number | null>(null);
@@ -338,6 +363,17 @@ export function WorkspaceShell({
     );
   }, []);
   const closeRecoverySheet = useCallback(() => setRecoverySheet(null), []);
+  // The setup wizard sheet: opened only by an explicit ask, and only while
+  // setup is incomplete. A complete snapshot unmounts it (which hands focus
+  // back to the opener) and resets the flag, so a later regression to
+  // partial readiness never reopens it on its own.
+  const setupIncomplete = setupReadiness !== null;
+  const [setupSheetOpen, setSetupSheetOpen] = useState(false);
+  const openSetupSheet = useCallback(() => setSetupSheetOpen(true), []);
+  const closeSetupSheet = useCallback(() => setSetupSheetOpen(false), []);
+  useEffect(() => {
+    if (!setupIncomplete) setSetupSheetOpen(false);
+  }, [setupIncomplete]);
   const [selectedRuns, setSelectedRuns] = useState<Record<string, number | null>>({});
   const [creationWarnings, setCreationWarnings] = useState<
     Record<string, readonly CanonicalError[]>
@@ -673,11 +709,12 @@ export function WorkspaceShell({
       inspectorOpen: cockpitMatches ? cockpitUi.inspectorOpen : false,
       // The Supervisor page has nothing to inspect, so there is no toggle to offer.
       inspectorAvailable: activeFeatureId !== null,
+      setupIncomplete,
       featureCommands: featureCommandEnablement(cockpitMatches ? cockpitUi.actions : null, {
         hasSelection: activeFeatureId !== null,
       }),
     };
-  }, [cockpitUi, effectiveSidebarCollapsed, runtimeReady, scopeKey, shell]);
+  }, [cockpitUi, effectiveSidebarCollapsed, runtimeReady, scopeKey, setupIncomplete, shell]);
 
   // Push on change only: an identical summary — an unchanged snapshot refresh,
   // a re-render, a repeated readiness event — never reaches the main process.
@@ -714,6 +751,9 @@ export function WorkspaceShell({
       openRecoverySheet(null);
     } else if (routeRequest.event.target === 'bulk') {
       openRecoverySheet(routeRequest.id);
+    } else if (routeRequest.event.target === 'setup') {
+      // A complete runtime has nothing to set up: the route is a no-op.
+      if (setupIncomplete) openSetupSheet();
     } else if (routeRequest.event.target === 'new-feature') {
       openCreation();
     } else if (routeRequest.event.target === 'toggle-sidebar') {
@@ -738,12 +778,20 @@ export function WorkspaceShell({
     }
   }, [
     openRecoverySheet,
+    openSetupSheet,
     requestNewConversation,
     routeRequest,
     selectFeature,
     selectSupervisor,
+    setupIncomplete,
     shell,
   ]);
+
+  // The supervisor status store decides read-ness from the selected page:
+  // the Supervisor page is "no feature selected" once the shell restored.
+  useReportSupervisorPageSelected(
+    shell !== null && (shell.featureByServer[scopeKey] ?? null) === null,
+  );
 
   if (shell === null) {
     return (
@@ -890,10 +938,7 @@ export function WorkspaceShell({
           aria-label="Features"
           onKeyDown={onSidebarListKeyDown}
         >
-          <SidebarRow
-            id="sidebar-supervisor"
-            label="Supervisor"
-            glyph="supervisor"
+          <SidebarSupervisorRow
             selected={selection.kind === 'supervisor'}
             onSelect={selectSupervisor}
           />
@@ -1021,6 +1066,17 @@ export function WorkspaceShell({
           overflowSlotRef={setOverflowSlot}
           inspectorSlotRef={setInspectorSlot}
         />
+        {setupReadiness !== null ? (
+          <section className="setup-banner" aria-label="Setup incomplete">
+            {/* The compact canonical surface takes its role from the issue's
+             * class, like every other compact error surface. */}
+            <ErrorSurface
+              error={setupBannerIssue(setupReadiness.snapshot)}
+              variant="compact"
+              localAction={{ label: 'Open setup', onAction: openSetupSheet }}
+            />
+          </section>
+        ) : null}
         <div
           className={
             selection.kind === 'feature'
@@ -1088,6 +1144,15 @@ export function WorkspaceShell({
         />
       ) : null}
 
+      {setupSheetOpen && setupReadiness !== null ? (
+        <SetupWizard
+          host="sheet"
+          snapshot={setupReadiness.snapshot}
+          onSnapshot={setupReadiness.onSnapshot}
+          onClose={closeSetupSheet}
+        />
+      ) : null}
+
       {creationOpen ? (
         <CreateFeatureForm
           key={scopeKey}
@@ -1126,13 +1191,108 @@ function repoBranchSubline(feature: FeatureSnapshot | undefined): string | undef
   return restRepos.length > 0 ? `${base} +${restRepos.length}` : base;
 }
 
-/** A single row in the Bench sidebar's listbox: the pinned Supervisor row or a lane member. */
+type SupervisorRowMarker = 'needs-response' | 'working' | 'error' | 'none';
+
+/** What the pinned Supervisor row shows for the current server's status. */
+interface SupervisorRowView {
+  marker: SupervisorRowMarker;
+  tone?: 'attention' | 'progress' | 'danger';
+  subline?: string;
+  /** The unread dot: only at rest, never beside another marker. */
+  unread: boolean;
+}
+
+/**
+ * The Supervisor row by priority: needs response (a pending permission or
+ * question), working, error, then unread. Idle, stopped and paused rest
+ * show nothing.
+ */
+export function supervisorRowView(status: SupervisorStatus): SupervisorRowView {
+  const { state } = status;
+  const plural = (count: number) => (count === 1 ? '' : 's');
+  const pending = (kind: 'permission' | 'questions') =>
+    Math.max(1, state?.pendingRequests.filter((request) => request.kind === kind).length ?? 0);
+  switch (state?.lifecycle) {
+    case 'waiting_permission': {
+      const count = pending('permission');
+      return {
+        marker: 'needs-response',
+        tone: 'attention',
+        subline: `Approve ${count} request${plural(count)}`,
+        unread: false,
+      };
+    }
+    case 'waiting_question': {
+      const count = pending('questions');
+      return {
+        marker: 'needs-response',
+        tone: 'attention',
+        subline: `Answer ${count} question${plural(count)}`,
+        unread: false,
+      };
+    }
+    case 'starting':
+    case 'running':
+      return { marker: 'working', tone: 'progress', subline: 'Working', unread: false };
+    case 'failed':
+      return {
+        marker: 'error',
+        tone: 'danger',
+        ...(state.failure === undefined ? {} : { subline: state.failure.title }),
+        unread: false,
+      };
+    default:
+      return { marker: 'none', unread: status.unread };
+  }
+}
+
+/**
+ * The pinned Supervisor row. Its accessible name stays exactly
+ * "Supervisor" whatever the state; the sub-line is its description, and the
+ * state rides data attributes for tests and journeys.
+ */
+function SidebarSupervisorRow({ selected, onSelect }: { selected: boolean; onSelect(): void }) {
+  const view = supervisorRowView(useSupervisorStatus());
+  return (
+    <div
+      id="sidebar-supervisor"
+      role="option"
+      aria-label="Supervisor"
+      aria-describedby={view.subline !== undefined ? 'sidebar-supervisor-subline' : undefined}
+      aria-selected={selected}
+      tabIndex={selected ? 0 : -1}
+      className="sidebar__row"
+      data-selected={selected}
+      data-supervisor-state={view.marker}
+      data-unread={view.unread}
+      onClick={onSelect}
+    >
+      <span
+        className="sidebar__row-glyph sidebar__row-glyph--supervisor"
+        data-tone={view.tone}
+        aria-hidden="true"
+      >
+        <SupervisorIcon />
+        {view.unread ? <span className="sidebar__row-unread" /> : null}
+      </span>
+      <span className="sidebar__row-body">
+        <span className="sidebar__row-name">Supervisor</span>
+        {view.subline !== undefined ? (
+          <span id="sidebar-supervisor-subline" className="sidebar__row-subline">
+            {view.subline}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+/** A single row in the Bench sidebar's listbox: a lane member. */
 function SidebarRow({
   id,
   label,
   subline,
   glyphTone,
-  glyph = 'dot',
   pip,
   selected,
   onSelect,
@@ -1140,13 +1300,8 @@ function SidebarRow({
   id: string;
   label: string;
   subline?: string;
+  /** The status dot's tone; decorative — the row's name is the label and sub-line. */
   glyphTone?: 'danger' | 'attention' | 'progress' | 'ok' | 'quiet';
-  /**
-   * Feature rows show a status dot; the pinned Supervisor row shows a text
-   * bubble instead, since it is a place with no status to report.
-   * Decorative either way — the row's accessible name is the label alone.
-   */
-  glyph?: 'dot' | 'supervisor';
   pip?: {
     stageCount: number;
     activeIndex: number;
@@ -1166,13 +1321,7 @@ function SidebarRow({
       data-selected={selected}
       onClick={onSelect}
     >
-      {glyph === 'supervisor' ? (
-        <span className="sidebar__row-glyph sidebar__row-glyph--supervisor" aria-hidden="true">
-          <SupervisorIcon />
-        </span>
-      ) : (
-        <span className="sidebar__row-glyph" data-tone={glyphTone ?? 'quiet'} aria-hidden="true" />
-      )}
+      <span className="sidebar__row-glyph" data-tone={glyphTone ?? 'quiet'} aria-hidden="true" />
       <span className="sidebar__row-body">
         <span className="sidebar__row-name">{label}</span>
         {subline !== undefined ? <span className="sidebar__row-subline">{subline}</span> : null}

@@ -53,6 +53,20 @@ func (l Lifecycle) Active() bool {
 	}
 }
 
+// Waiting reports a turn waiting on the user: a permission or question
+// answer. A waiting supervisor is active work, but it does not block an
+// unattended install.
+func (l Lifecycle) Waiting() bool {
+	return l == LifecycleWaitingPermission || l == LifecycleWaitingQuestion
+}
+
+// BlocksIdleInstall reports whether the lifecycle holds up an unattended
+// (install-when-idle) install: a process is launching or a turn is running.
+// Explicit stop-and-install still ends a waiting supervisor through Active.
+func (l Lifecycle) BlocksIdleInstall() bool {
+	return l == LifecycleStarting || l == LifecycleRunning
+}
+
 // inTurn reports whether a delivered message is still awaiting its result.
 func (l Lifecycle) inTurn() bool {
 	switch l {

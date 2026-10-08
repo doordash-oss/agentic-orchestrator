@@ -30,6 +30,7 @@ import {
   type MainWindowUiState,
 } from '../shared/ipc';
 import { buildApplicationMenuTemplate } from './menuTemplate';
+import type { SupervisorGrade } from './quitCoordinator';
 
 export interface NativeCommandControllerDeps {
   app: App;
@@ -42,8 +43,8 @@ export interface NativeCommandControllerDeps {
 
 export interface BackgroundStatus {
   attentionCount: number;
-  /** The supervisor lifecycle is starting, running, or waiting on the user. */
-  supervisorActive: boolean;
+  /** The supervisor lifecycle in three grades: working, waiting on the user, or idle. */
+  supervisorGrade: SupervisorGrade;
 }
 
 export interface NativeCommandSnapshot extends BackgroundStatus {
@@ -59,7 +60,7 @@ export interface NativeCommandSnapshot extends BackgroundStatus {
 export class NativeCommandController {
   private tray: Tray | null = null;
   private trayFallbackActive = false;
-  private status: BackgroundStatus = { attentionCount: 0, supervisorActive: false };
+  private status: BackgroundStatus = { attentionCount: 0, supervisorGrade: 'idle' };
   /** Everything-disabled until the main window's renderer pushes its first summary. */
   private uiState: MainWindowUiState = disabledMainWindowUiState();
   private menuRevision = 0;
@@ -168,8 +169,15 @@ export function trayToolTip(status: BackgroundStatus): string {
   return [
     'Agentico',
     `${status.attentionCount} attention`,
-    status.supervisorActive ? 'Supervisor working' : 'Supervisor idle',
+    supervisorGradeLabel(status.supervisorGrade),
   ].join(' - ');
+}
+
+/** The tooltip segment and tray item label for a supervisor grade. */
+export function supervisorGradeLabel(grade: SupervisorGrade): string {
+  if (grade === 'working') return 'Supervisor working';
+  if (grade === 'waiting') return 'Supervisor waiting for you';
+  return 'Supervisor idle';
 }
 
 export interface TrayMenuHandlers {
@@ -200,7 +208,7 @@ export function buildTrayMenuTemplate(
       click: () => handlers.route({ target: 'attention' }),
     },
     {
-      label: status.supervisorActive ? 'Supervisor (working)' : 'Supervisor',
+      label: supervisorGradeLabel(status.supervisorGrade),
       click: () => handlers.route({ target: 'home' }),
     },
     {

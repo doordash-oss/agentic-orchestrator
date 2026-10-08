@@ -48,6 +48,7 @@ import type {
   SupervisorActionResult,
   SupervisorResetResult,
   SupervisorEvent,
+  WindowFocusEvent,
   SupervisorMessageRequest,
   SupervisorMessageResult,
   SupervisorPendingRequest,
@@ -458,6 +459,7 @@ export interface AgenticoMock {
     endSupervisor: ReturnType<typeof vi.fn>;
     resetSupervisor: ReturnType<typeof vi.fn>;
     onSupervisorEvent: ReturnType<typeof vi.fn>;
+    onWindowFocusChanged: ReturnType<typeof vi.fn>;
     getFeatureConfig: ReturnType<typeof vi.fn>;
     updateFeatureConfig: ReturnType<typeof vi.fn>;
     getWorkspaceDefaults: ReturnType<typeof vi.fn>;
@@ -517,6 +519,8 @@ export interface AgenticoMock {
   /** Push one supervisor stream event to every `onSupervisorEvent` listener. */
   emitSupervisorEvent(event: SupervisorEvent): void;
   supervisorEventListenerCount(): number;
+  /** Push one main-window focus change to every `onWindowFocusChanged` listener. */
+  emitWindowFocus(event: WindowFocusEvent): void;
   /** The mock's current supervisor read model (updated by settings/send/end). */
   supervisorState(): SupervisorState;
   emitServersChanged(snapshot: ServerListSnapshot): void;
@@ -758,6 +762,7 @@ export function installAgenticoMock(
   const appEventListeners = new Set<(event: AppEvent) => void>();
   const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
   const supervisorEventListeners = new Set<(event: SupervisorEvent) => void>();
+  const windowFocusListeners = new Set<(event: WindowFocusEvent) => void>();
   let supervisorCurrent: SupervisorState = overrides.supervisorState ?? supervisorState();
   const supervisorTranscript =
     overrides.supervisorTranscript ??
@@ -979,6 +984,12 @@ export function installAgenticoMock(
       supervisorEventListeners.add(listener);
       return () => {
         supervisorEventListeners.delete(listener);
+      };
+    }),
+    onWindowFocusChanged: vi.fn((listener: (event: WindowFocusEvent) => void) => {
+      windowFocusListeners.add(listener);
+      return () => {
+        windowFocusListeners.delete(listener);
       };
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
@@ -1207,6 +1218,9 @@ export function installAgenticoMock(
       for (const listener of supervisorEventListeners) listener(event);
     },
     supervisorEventListenerCount: () => supervisorEventListeners.size,
+    emitWindowFocus: (event) => {
+      for (const listener of windowFocusListeners) listener(event);
+    },
     supervisorState: () => supervisorCurrent,
     emitServersChanged: (snapshot) => {
       for (const listener of serversChangedListeners) listener(snapshot);

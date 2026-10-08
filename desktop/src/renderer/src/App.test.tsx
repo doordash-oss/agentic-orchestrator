@@ -487,6 +487,61 @@ describe('App settings-window routing', () => {
   });
 });
 
+describe('App partial-readiness setup command', () => {
+  const partialMock = () =>
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'app-owned' }),
+      readiness: readySnapshot({
+        ready: false,
+        models: { available: false },
+        issues: [
+          {
+            code: 'models_unavailable',
+            class: 'blocking',
+            title: 'Models unavailable',
+            summary: 'No usable provider exposes any model.',
+          },
+        ],
+      }),
+    });
+
+  it("opens the wizard sheet from the palette's Setup… entry", async () => {
+    const user = userEvent.setup();
+    const mock = partialMock();
+    render(<App />);
+    await screen.findByRole('button', { name: 'Open setup' });
+
+    act(() => mock.emitRouteRequest({ target: 'palette' }));
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    await user.click(within(palette).getByRole('option', { name: /^Setup…/ }));
+
+    const sheet = await screen.findByRole('dialog', { name: 'Set up Agentico' });
+    expect(within(sheet).getByRole('heading', { name: /model availability/i })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
+  });
+
+  it('opens the wizard sheet from a native setup route', async () => {
+    const mock = partialMock();
+    render(<App />);
+    await screen.findByRole('button', { name: 'Open setup' });
+    act(() => mock.emitRouteRequest({ target: 'setup' }));
+    expect(await screen.findByRole('dialog', { name: 'Set up Agentico' })).toBeInTheDocument();
+  });
+
+  it('omits Setup… from the palette when the runtime is complete', async () => {
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
+    render(<App />);
+    await screen.findByRole('option', { name: 'Supervisor' });
+    act(() => mock.emitRouteRequest({ target: 'palette' }));
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    expect(within(palette).getByRole('option', { name: /^New Feature/ })).toBeInTheDocument();
+    expect(within(palette).queryByRole('option', { name: /^Setup…/ })).toBeNull();
+  });
+});
+
 describe('App per-server attention drafts', () => {
   const helpItem: AttentionItem = {
     kind: 'help',

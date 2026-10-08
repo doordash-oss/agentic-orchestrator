@@ -268,9 +268,10 @@ body {
 }
 
 /* The content column: the toolbar and the scrollable content pane, stacked —
- * everything to the right of the sidebar. Nothing sits between the two: both
- * ambient notices hang off the toolbar as popovers, so no notice can shift the
- * content down when it appears. */
+ * everything to the right of the sidebar. Both ambient notices hang off the
+ * toolbar as popovers, so no notice shifts the content down when it appears;
+ * the one exception is the partial-readiness setup banner, which persists for
+ * as long as the runtime is incomplete rather than appearing transiently. */
 .content-column {
   flex: 1;
   min-width: 0;
@@ -279,6 +280,13 @@ body {
   flex-direction: column;
   /* Anchor for .server-switcher-dock (out-of-flow children only). */
   position: relative;
+}
+
+/* Partial readiness: one compact surface between the toolbar and the pane,
+ * naming the first blocking setup issue with its "Open setup" action. */
+.setup-banner {
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-4) 0;
 }
 
 /* ─── Toolbar popovers ────────────────────────────────────────────────────
@@ -2666,7 +2674,8 @@ body {
   max-height: min(88vh, 900px);
 }
 
-.recovery-sheet__header {
+.recovery-sheet__header,
+.setup-sheet__header {
   flex: none;
   display: flex;
   align-items: flex-start;
@@ -2676,7 +2685,8 @@ body {
   padding: var(--space-4) var(--space-5);
 }
 
-.recovery-sheet__title {
+.recovery-sheet__title,
+.setup-sheet__title {
   margin: 0;
   color: var(--text);
   font: 500 22px/1.25 var(--bench-font-serif);
@@ -2698,6 +2708,32 @@ body {
  * nested dialogs do: the sheet's transform is already its containing block. */
 .recovery-sheet .impact-dialog__backdrop {
   position: absolute;
+}
+
+/* ─── The setup wizard, in the sheet ─────────────────────────────────────
+ * The same wizard the full page shows, opened on demand while a runtime with
+ * a ready provider is still incomplete. It borrows the Recovery sheet's
+ * header (title, then the help toggle beside Close) and the wizard card's
+ * vertical rhythm for its body.
+ */
+.setup-sheet {
+  width: min(640px, calc(100% - var(--space-6)));
+}
+
+.setup-sheet__header {
+  align-items: center;
+}
+
+.setup-sheet__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.setup-sheet__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
 }
 
 /* ─── The cycle gate, in the sheet ───────────────────────────────────────── */
@@ -4366,7 +4402,8 @@ body {
   }
 }
 
-.setup-wizard[data-narrow='true'] .provider-row__head {
+.setup-wizard[data-narrow='true'] .provider-row__head,
+.setup-sheet[data-narrow='true'] .provider-row__head {
   flex-direction: column;
   align-items: flex-start;
 }
@@ -4877,6 +4914,48 @@ body {
   width: 14px;
   height: 14px;
   stroke-width: 1.7;
+}
+
+/* The Supervisor row's status marker is its glyph's ink, in the feature
+ * dots' tones; the bubble itself never gains a fill. */
+.sidebar__row-glyph--supervisor[data-tone] {
+  background: none;
+}
+
+.sidebar__row-glyph--supervisor[data-tone='attention'] {
+  color: var(--attention);
+}
+
+.sidebar__row-glyph--supervisor[data-tone='danger'] {
+  color: var(--bad);
+}
+
+.sidebar__row-glyph--supervisor[data-tone='progress'] {
+  color: var(--accent);
+}
+
+/* Unread: a finished turn nobody has seen. A quiet accent dot just off the
+ * bubble's shoulder, in the sidebar update dot's metrics. */
+.sidebar__row-glyph--supervisor {
+  position: relative;
+}
+
+.sidebar__row-unread {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.sidebar__row[aria-selected='true'] .sidebar__row-glyph--supervisor[data-tone] {
+  color: rgb(255 255 255 / 88%);
+}
+
+.sidebar__row[aria-selected='true'] .sidebar__row-unread {
+  background: #fff;
 }
 
 .sidebar__row-body {

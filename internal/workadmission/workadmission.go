@@ -89,17 +89,40 @@ func AsClosed(err error) (*ClosedError, bool) {
 // caller treats a detection error as blocking.
 type Activity struct {
 	Features int
-	// SupervisorActive reports a supervisor that is starting or in a turn.
+	// SupervisorActive reports a supervisor that is active work: starting,
+	// running, or waiting on a permission or question answer. Explicit
+	// stop, active-work summaries and Busy read it.
 	SupervisorActive bool
-	Clones           int
-	Uploads          int
-	OriginChecks     int
-	RepositoryWork   int
+	// SupervisorWaiting refines SupervisorActive: the supervisor's turn is
+	// waiting on the user. A waiting supervisor still counts as active
+	// work, but it does not hold up an unattended install. Meaningful only
+	// with SupervisorActive set.
+	SupervisorWaiting bool
+	Clones            int
+	Uploads           int
+	OriginChecks      int
+	RepositoryWork    int
 }
 
 // Busy reports whether any observed activity exists.
 func (a Activity) Busy() bool {
 	return a.Features > 0 || a.SupervisorActive || a.Clones > 0 ||
+		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
+}
+
+// SupervisorWorking reports a supervisor that is starting or running: the
+// supervisor activity that blocks an unattended install.
+func (a Activity) SupervisorWorking() bool {
+	return a.SupervisorActive && !a.SupervisorWaiting
+}
+
+// BlocksIdleInstall reports whether observed activity holds up an
+// unattended (install-when-idle) install. It is Busy except that a
+// supervisor waiting on the user does not count: nobody is there to
+// answer, and the install's own shutdown ends the supervisor and resolves
+// the open request as interrupted.
+func (a Activity) BlocksIdleInstall() bool {
+	return a.Features > 0 || a.SupervisorWorking() || a.Clones > 0 ||
 		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
 
@@ -288,6 +311,9 @@ func (c *Coordinator) Open() {
 // activity as unknown and block installation.
 func (c *Coordinator) Detect(ctx context.Context) (Activity, error) {
 	var merged Activity
+	// A supervisor any detector reports working is working in the merged
+	// observation; it reads as waiting only when every active report waits.
+	working := false
 	if dp := c.detectors.Load(); dp != nil {
 		for _, detect := range *dp {
 			if detect == nil {
@@ -299,12 +325,14 @@ func (c *Coordinator) Detect(ctx context.Context) (Activity, error) {
 			}
 			merged.Features += activity.Features
 			merged.SupervisorActive = merged.SupervisorActive || activity.SupervisorActive
+			working = working || activity.SupervisorWorking()
 			merged.Clones += activity.Clones
 			merged.Uploads += activity.Uploads
 			merged.OriginChecks += activity.OriginChecks
 			merged.RepositoryWork += activity.RepositoryWork
 		}
 	}
+	merged.SupervisorWaiting = merged.SupervisorActive && !working
 	return merged, nil
 }
 
@@ -319,11 +347,13 @@ func (c *Coordinator) IdleSnapshot(ctx context.Context) (Activity, int, error) {
 	return activity, total, nil
 }
 
-// WaitForIdle blocks until one observation shows no detected activity and no
-// held reservations, or the context ends. Activity-change signals and a
-// bounded fallback poll both trigger reevaluation, so a missed event only
-// delays the decision by one poll interval. Detection errors return
-// immediately: uncertainty never counts as idle.
+// WaitForIdle blocks until one observation shows no activity that blocks an
+// unattended install (see Activity.BlocksIdleInstall: a supervisor waiting
+// on the user does not) and no held reservations, or the context ends.
+// Activity-change signals and a bounded fallback poll both trigger
+// reevaluation, so a missed event only delays the decision by one poll
+// interval. Detection errors return immediately: uncertainty never counts
+// as idle.
 func (c *Coordinator) WaitForIdle(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -336,7 +366,7 @@ func (c *Coordinator) WaitForIdle(ctx context.Context) error {
 		c.mu.Lock()
 		total := c.total
 		c.mu.Unlock()
-		if !activity.Busy() && total == 0 {
+		if !activity.BlocksIdleInstall() && total == 0 {
 			return nil
 		}
 		timer := c.after(c.poll)

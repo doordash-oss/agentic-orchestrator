@@ -30,14 +30,19 @@ limitations under the License.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SettingsPaneId } from '../../shared/ipc';
-import { defaultSettingsWindowPrefs } from '../../shared/ipc';
+import { DEFAULT_RUNTIME_ID, defaultSettingsWindowPrefs } from '../../shared/ipc';
 import { SettingsPanel } from './features/SettingsPanel';
 import {
   SETTINGS_PANE_CATALOGUE,
   settingsPaneLabel,
   type PaneFocusIntent,
 } from './features/settingsPanes';
-import { useSystemAccentMirror, useTheme } from './hooks';
+import {
+  SupervisorStatusProvider,
+  createSupervisorStatusStore,
+  type SupervisorStatusStore,
+} from './features/supervisor/supervisorStatus';
+import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
 
 export default function SettingsWindow() {
   // Mirrors the resolved theme onto <html data-theme> in this window too, and
@@ -45,6 +50,13 @@ export default function SettingsWindow() {
   // Appearance radiogroup owns a second instance of the same hook.
   useTheme();
   useSystemAccentMirror();
+  // The update panes word their copy from the supervisor lifecycle, so this
+  // window keeps its own status store fed for the ready server.
+  const connection = useConnectionState();
+  const supervisorStatusStore = useRef<SupervisorStatusStore | null>(null);
+  if (supervisorStatusStore.current === null) {
+    supervisorStatusStore.current = createSupervisorStatusStore();
+  }
 
   // null until the persisted pane is restored, so the window never paints one
   // pane and then jumps to another.
@@ -192,7 +204,14 @@ export default function SettingsWindow() {
         </div>
       </nav>
       <div className="settings-window__pane">
-        <SettingsPanel pane={pane} focusIntent={focusIntent} />
+        <SupervisorStatusProvider
+          store={supervisorStatusStore.current}
+          serverKey={
+            connection.status === 'ready' ? (connection.serverKey ?? DEFAULT_RUNTIME_ID) : null
+          }
+        >
+          <SettingsPanel pane={pane} focusIntent={focusIntent} />
+        </SupervisorStatusProvider>
       </div>
     </div>
   );

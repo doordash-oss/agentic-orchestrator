@@ -52,6 +52,7 @@ import {
   type ExternalRoute,
 } from './externalRoutes';
 import { AccentController, type AccentColorSource } from './accent';
+import { WindowFocusSignal } from './windowFocus';
 import {
   resolveTestOutputFile,
   resolveTestPackagedResourcesDir,
@@ -122,6 +123,10 @@ import {
   installRendererProtocol,
 } from './rendererProtocol';
 import { AttentionNotificationCoordinator, electronNotificationSink } from './notifications';
+import {
+  forwardSupervisorEvent,
+  SupervisorNotificationCoordinator,
+} from './supervisorNotifications';
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
 import { DiagnosticsService } from './diagnostics';
 import { armHardExitGuard } from './exitGuard';
@@ -146,11 +151,12 @@ import {
   SUPERVISOR_UNRESOLVED_LABEL,
   activeWorkDialog,
   detectActiveWork as detectActiveWorkFrom,
-  isSupervisorBusy,
+  endWaitingSupervisor as endWaitingSupervisorWith,
   quitAnywayDialog,
   shouldRequestQuitOnMainWindowClose,
   stopActiveWork as stopActiveWorkWith,
   stopFailureDialog,
+  supervisorGrade,
   type ActiveWorkCheck,
   type ActiveWorkDecision,
   type QuitDialogOptions,
@@ -670,8 +676,6 @@ if (!hasSingleInstanceLock) {
     const runHistory = new RunHistoryService(gateway);
     let nativeCommands: NativeCommandController | null = null;
     let featureLabels = new Map<string, string>();
-    let mainWindowAttentionFocused = false;
-    let mainWindowAttentionFocusOverride: boolean | undefined;
     let stopStreams = (): void => {};
 
     // The main window's ready-to-show normally enters the gateway's standard
@@ -762,6 +766,24 @@ if (!hasSingleInstanceLock) {
     const mainWindowOrNull = (): BrowserWindow | null => {
       const window = windows.peek('main');
       return window !== null && !window.isDestroyed() ? window : null;
+    };
+
+    // The main window's effective focus — visible and focused, with the
+    // packaged-test override applied. The notification gate reads it and
+    // every change is pushed to the main window, so one hook drives both
+    // notifications and the renderer's supervisor unread rules.
+    const mainWindowFocus = new WindowFocusSignal({
+      isVisible: () => mainWindowOrNull()?.isVisible() ?? false,
+      publish: (focused) => {
+        const window = mainWindowOrNull();
+        if (window !== null) {
+          window.webContents.send(IPC_EVENTS.windowFocusChanged, { focused });
+        }
+      },
+    });
+    const setMainWindowFocused = (focused: boolean): void => {
+      mainWindowFocus.setFocused(focused);
+      publishMainWindowFocusTestState(focused);
     };
 
     // The switcher popover's server list: union of registry scan and
@@ -925,46 +947,42 @@ if (!hasSingleInstanceLock) {
           });
           crashRecovery.crashed(details.reason);
         });
+        window.webContents.on('did-finish-load', () => mainWindowFocus.emit());
         window.on('closed', () => {
-          mainWindowAttentionFocused = false;
-          publishMainWindowFocusTestState(mainWindowAttentionFocused);
+          setMainWindowFocused(false);
           // No main window, no renderer to own the menu's state: every
           // window- and feature-scoped verb goes back to disabled.
           nativeCommands?.resetUiState();
           publishNativeCommandTestState(nativeCommands);
         });
-        window.on('focus', () => {
-          mainWindowAttentionFocused = true;
-          publishMainWindowFocusTestState(mainWindowAttentionFocused);
-        });
-        window.on('blur', () => {
-          mainWindowAttentionFocused = false;
-          publishMainWindowFocusTestState(mainWindowAttentionFocused);
-        });
-        window.on('hide', () => {
-          mainWindowAttentionFocused = false;
-          publishMainWindowFocusTestState(mainWindowAttentionFocused);
-        });
+        window.on('focus', () => setMainWindowFocused(true));
+        window.on('blur', () => setMainWindowFocused(false));
+        window.on('hide', () => setMainWindowFocused(false));
+        window.on('show', () => mainWindowFocus.emit());
       }
-      mainWindowAttentionFocused = true;
-      publishMainWindowFocusTestState(mainWindowAttentionFocused);
+      setMainWindowFocused(true);
       return window;
     };
 
     const notifications = new AttentionNotificationCoordinator({
       sink: electronNotificationSink,
-      shouldNotify: () => {
-        const window = mainWindowOrNull();
-        return (
-          window === null ||
-          !window.isVisible() ||
-          !(mainWindowAttentionFocusOverride ?? mainWindowAttentionFocused)
-        );
-      },
+      shouldNotify: () => !mainWindowFocus.effective(),
       show: () => {
         showMainWindow();
       },
     });
+    // Turn-end notifications share the attention sink, focus gate and preview
+    // setting; focusing the main window drops a pending settle.
+    const supervisorNotifications = new SupervisorNotificationCoordinator({
+      sink: electronNotificationSink,
+      shouldNotify: () => !mainWindowFocus.effective(),
+      previewEnabled: () => settings.get().notifications.previewEnabled,
+      show: () => {
+        showMainWindow();
+      },
+      route,
+    });
+    mainWindowFocus.subscribe((focused) => supervisorNotifications.focusChanged(focused));
 
     const quitLog = (line: string): void => {
       console.warn(`[agentico-quit] ${line}`);
@@ -1198,6 +1216,7 @@ if (!hasSingleInstanceLock) {
         return {
           featureCount: active.featureIds.length,
           supervisorActive: active.supervisorActive,
+          supervisorWaiting: active.supervisorWaiting,
           detectionFailed: active.detectionFailed,
         };
       },
@@ -1214,6 +1233,16 @@ if (!hasSingleInstanceLock) {
                   .join('\n'),
               }),
         };
+      },
+      endWaitingSupervisor: async () => {
+        const result = await endWaitingSupervisorWith({
+          endSupervisor: async () => {
+            await supervisor.end();
+          },
+          detectActiveWork,
+          describeStopFailure: safeStopReason,
+        });
+        return result.ended ? { ended: true } : { ended: false, message: result.reason };
       },
       restart: async (update) => {
         // Ask for quit consent BEFORE touching disk. requestQuitDecision may
@@ -1252,20 +1281,20 @@ if (!hasSingleInstanceLock) {
 
     async function refreshBackgroundState(): Promise<void> {
       if (gateway.getState().status !== 'ready') {
-        nativeCommands?.update({ attentionCount: 0, supervisorActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorGrade: 'idle' });
         publishNativeCommandTestState(nativeCommands);
         return;
       }
       try {
-        const [snapshot, list, supervisorActive] = await Promise.all([
+        const [snapshot, list, supervisorStatusGrade] = await Promise.all([
           attention.getSnapshot(),
           features
             .listFeatures()
             .catch(() => ({ features: [], warnings: [] }) as FeaturesListResult),
           supervisor
             .getState()
-            .then((state) => isSupervisorBusy(state.lifecycle))
-            .catch(() => false),
+            .then((state) => supervisorGrade(state.lifecycle))
+            .catch(() => 'idle' as const),
         ]);
         featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
         notifications.update(snapshot, {
@@ -1274,12 +1303,12 @@ if (!hasSingleInstanceLock) {
         });
         nativeCommands?.update({
           attentionCount: actionableAttentionCount(snapshot.items),
-          supervisorActive,
+          supervisorGrade: supervisorStatusGrade,
         });
         publishNativeCommandTestState(nativeCommands);
         await updates.reconcileScheduledInstall();
       } catch {
-        nativeCommands?.update({ attentionCount: 0, supervisorActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorGrade: 'idle' });
         publishNativeCommandTestState(nativeCommands);
       }
     }
@@ -1290,19 +1319,20 @@ if (!hasSingleInstanceLock) {
         __agenticoSetMainWindowAttentionFocusOverride?: (focused: boolean) => void;
       };
       global.__agenticoRefreshBackgroundState = () => {
-        mainWindowAttentionFocused = false;
+        mainWindowFocus.setFocused(false);
         void refreshBackgroundState();
       };
       // Packaged journeys share one Linux display across workers. Let tests
       // pin the notification-facing focus signal so another app window's
       // ambient focus event cannot rewrite the scenario under assertion.
       global.__agenticoSetMainWindowAttentionFocusOverride = (focused) => {
-        mainWindowAttentionFocusOverride = focused;
+        mainWindowFocus.setOverride(focused);
       };
       // A seeded item may be observed before a journey installs its capture
       // sink. Clearing the snapshot resets delivery memory without exposing
       // mutable coordinator internals or affecting production startup.
       global.__agenticoResetAttentionNotificationDelivery = () => {
+        supervisorNotifications.reset();
         notifications.update(
           { items: [] },
           {
@@ -1341,9 +1371,14 @@ if (!hasSingleInstanceLock) {
             window.webContents.send(IPC_EVENTS.supervisorEvent, event);
           }
         }
-        // A new supervisor permission or question changes the badge counts,
-        // and a lifecycle change moves the tray and a waiting install.
-        if (event.type === 'request' || event.type === 'state') void refreshBackgroundState();
+        // A new supervisor permission or question changes the badge counts
+        // (and notifies at once through the attention path), a lifecycle
+        // change moves the tray and a waiting install, and a completed turn
+        // arms the turn-end settle.
+        forwardSupervisorEvent(event, {
+          turnEnd: supervisorNotifications,
+          refreshAttention: () => void refreshBackgroundState(),
+        });
       },
     });
     stopStreams = () => {
@@ -1361,12 +1396,21 @@ if (!hasSingleInstanceLock) {
     // re-keys them to the connecting server's identity. Drafts belonging to a
     // different identity are never touched.
     let legacyDraftsRekeyed = false;
+    // The renderer's focus flag is re-sent once per entry into ready, so a
+    // shell mounting against a freshly attached server starts from the
+    // current value rather than whatever it last heard.
+    let focusPublishedForReady = false;
     gateway.subscribe((state) => {
       if (state.status === 'ready') {
+        if (!focusPublishedForReady) {
+          focusPublishedForReady = true;
+          mainWindowFocus.emit();
+        }
         const key = state.serverKey ?? null;
         if (key !== streamServerKey) {
           eventSupervisor.resetCursor();
           supervisorStream.resetCursor();
+          supervisorNotifications.reset();
           streamServerKey = key;
         }
         if (!legacyDraftsRekeyed && key !== null) {
@@ -1384,10 +1428,12 @@ if (!hasSingleInstanceLock) {
         updates.startAutomaticChecks();
         void refreshBackgroundState();
       } else {
+        focusPublishedForReady = false;
+        supervisorNotifications.reset();
         eventSupervisor.stop();
         supervisorStream.stop();
         sessions.cancelAll();
-        nativeCommands?.update({ attentionCount: 0, supervisorActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorGrade: 'idle' });
         publishNativeCommandTestState(nativeCommands);
       }
       if (state.status === 'launch-failed' || state.status === 'crashed') {
@@ -1658,7 +1704,7 @@ function publishNativeCommandTestState(nativeCommands: NativeCommandController |
   };
   global.__agenticoNativeCommandState = nativeCommands?.snapshot() ?? {
     attentionCount: 0,
-    supervisorActive: false,
+    supervisorGrade: 'idle',
     trayInstalled: false,
     trayFallbackActive: true,
     platform: process.platform,
@@ -1726,6 +1772,7 @@ function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkC
       featureIds?: string[];
       featureLabels?: Record<string, string>;
       supervisorActive?: boolean;
+      supervisorWaiting?: boolean;
       detectionFailed?: boolean;
     };
   };
@@ -1738,7 +1785,8 @@ function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkC
   }
   return {
     featureIds: forced.featureIds ?? [],
-    supervisorActive: forced.supervisorActive ?? false,
+    supervisorActive: (forced.supervisorActive ?? false) || (forced.supervisorWaiting ?? false),
+    supervisorWaiting: forced.supervisorWaiting ?? false,
     detectionFailed: forced.detectionFailed ?? false,
   };
 }

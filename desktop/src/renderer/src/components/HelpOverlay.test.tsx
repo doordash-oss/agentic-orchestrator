@@ -29,6 +29,7 @@ describe('HelpOverlay', () => {
     }
     // Commands with no accelerator (New conversation) are not shortcuts.
     expect(dialog).not.toHaveTextContent('New conversation');
+    expect(dialog).not.toHaveTextContent('Setup…');
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
   });

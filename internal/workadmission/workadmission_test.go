@@ -301,6 +301,92 @@ func TestActivityProtectedBusy(t *testing.T) {
 	}
 }
 
+// TestActivityBlocksIdleInstall pins the unattended-install predicate
+// beside Busy: a supervisor waiting on the user is still active work, but
+// it no longer holds up an idle install, while a working supervisor and
+// every other class of activity still does.
+func TestActivityBlocksIdleInstall(t *testing.T) {
+	t.Parallel()
+	waiting := Activity{SupervisorActive: true, SupervisorWaiting: true}
+	if !waiting.Busy() || waiting.BlocksIdleInstall() || waiting.SupervisorWorking() {
+		t.Fatalf("waiting supervisor %+v: busy=%v blocks=%v working=%v, want busy only",
+			waiting, waiting.Busy(), waiting.BlocksIdleInstall(), waiting.SupervisorWorking())
+	}
+	for _, activity := range []Activity{
+		{SupervisorActive: true},
+		{Features: 1},
+		{Features: 1, SupervisorActive: true, SupervisorWaiting: true},
+		{SupervisorActive: true, SupervisorWaiting: true, Clones: 1},
+		{Uploads: 1},
+		{OriginChecks: 1},
+		{RepositoryWork: 1},
+	} {
+		if !activity.BlocksIdleInstall() || !activity.Busy() {
+			t.Fatalf("activity %+v must block an idle install and be busy", activity)
+		}
+	}
+	if (Activity{}).BlocksIdleInstall() {
+		t.Fatal("no activity must not block an idle install")
+	}
+}
+
+// TestDetectMergesSupervisorWaiting proves a merged observation reads the
+// supervisor as waiting only when no detector reports it working.
+func TestDetectMergesSupervisorWaiting(t *testing.T) {
+	t.Parallel()
+	waiting := func(context.Context) (Activity, error) {
+		return Activity{SupervisorActive: true, SupervisorWaiting: true}, nil
+	}
+	working := func(context.Context) (Activity, error) { return Activity{SupervisorActive: true}, nil }
+	idle := func(context.Context) (Activity, error) { return Activity{}, nil }
+	for _, tc := range []struct {
+		name        string
+		detectors   []Detector
+		wantWaiting bool
+	}{
+		{"waiting alone", []Detector{idle, waiting}, true},
+		{"working wins", []Detector{waiting, working}, false},
+		{"working alone", []Detector{working}, false},
+	} {
+		activity, err := New(Options{Detectors: tc.detectors}).Detect(context.Background())
+		if err != nil {
+			t.Fatalf("%s: detect: %v", tc.name, err)
+		}
+		if !activity.SupervisorActive || activity.SupervisorWaiting != tc.wantWaiting {
+			t.Fatalf("%s: merged %+v, want active and waiting=%v", tc.name, activity, tc.wantWaiting)
+		}
+	}
+}
+
+// TestWaitForIdleIgnoresWaitingSupervisor proves the idle wait returns while
+// the only activity is a supervisor waiting on the user, and keeps waiting
+// while the supervisor works.
+func TestWaitForIdleIgnoresWaitingSupervisor(t *testing.T) {
+	var current atomic.Value
+	current.Store(Activity{SupervisorActive: true})
+	c := New(Options{
+		Detectors:    []Detector{func(context.Context) (Activity, error) { return current.Load().(Activity), nil }},
+		FallbackPoll: time.Hour,
+	})
+	done := make(chan error, 1)
+	go func() { done <- c.WaitForIdle(context.Background()) }()
+	select {
+	case err := <-done:
+		t.Fatalf("waiter returned while the supervisor works: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	current.Store(Activity{SupervisorActive: true, SupervisorWaiting: true})
+	c.NotifyChanged()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("wait for idle: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a waiting supervisor held up the idle wait")
+	}
+}
+
 // TestDetectRunsOutsideMutex proves slow discovery does not block
 // acquisition: a detector blocked mid-discovery cannot stall Acquire.
 func TestDetectRunsOutsideMutex(t *testing.T) {

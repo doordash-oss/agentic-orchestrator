@@ -22,6 +22,7 @@ import { ServerUpdateService, describeActiveWork, projectServerUpdate } from '..
 const IDLE_SUMMARY = {
   feature_count: 0,
   supervisor_active: false,
+  supervisor_waiting: false,
   clone_count: 0,
   upload_count: 0,
   origin_check_count: 0,
@@ -84,9 +85,31 @@ describe('projectServerUpdate', () => {
       method: 'idle',
       stopActiveWork: false,
       scheduledFor: '2026-09-17T01:00:00Z',
-      activeWorkSummary: '2 features and the supervisor active on the server.',
+      activeWorkSummary: '2 features active on the server. The supervisor is working.',
     });
     expect(projectServerUpdate(snapshot())).not.toHaveProperty('scheduledFor');
+  });
+
+  it('maps supervisor_waiting onto the waiting sentence', () => {
+    expect(
+      projectServerUpdate(
+        snapshot({
+          active_work_summary: {
+            ...IDLE_SUMMARY,
+            supervisor_active: true,
+            supervisor_waiting: true,
+          },
+        }),
+      ).activeWorkSummary,
+    ).toBe('The supervisor is waiting for your answer.');
+  });
+
+  it('reads a server that predates supervisor_waiting as working', () => {
+    const { supervisor_waiting: _omitted, ...legacy } = IDLE_SUMMARY;
+    expect(
+      projectServerUpdate(snapshot({ active_work_summary: { ...legacy, supervisor_active: true } }))
+        .activeWorkSummary,
+    ).toBe('The supervisor is working.');
   });
 
   it('keeps a canonical server error and ignores anything else', () => {
@@ -110,8 +133,19 @@ describe('describeActiveWork', () => {
       '1 feature active on the server.',
     );
     expect(describeActiveWork({ ...IDLE_SUMMARY, supervisor_active: true })).toBe(
-      'The supervisor active on the server.',
+      'The supervisor is working.',
     );
+    expect(
+      describeActiveWork({ ...IDLE_SUMMARY, supervisor_active: true, supervisor_waiting: true }),
+    ).toBe('The supervisor is waiting for your answer.');
+    expect(
+      describeActiveWork({
+        ...IDLE_SUMMARY,
+        feature_count: 1,
+        clone_count: 1,
+        supervisor_active: true,
+      }),
+    ).toBe('1 feature and 1 repository operation active on the server. The supervisor is working.');
     expect(describeActiveWork({ ...IDLE_SUMMARY, clone_count: 1, upload_count: 2 })).toBe(
       '3 repository operations active on the server.',
     );

@@ -43,7 +43,7 @@ The first-launch setup is a gated desktop flow backed by fresh server readiness 
 3. **Workspace** — select **Choose workspace folder…**. The runtime stores the workspace root and discovers repositories beneath it.
 4. **Repository** — select an existing repository. If you choose a plain directory, the app asks for explicit consent before initializing it as a git repository.
 
-When every readiness gate passes, the app opens the **Home** workspace. Agentico creates runtime data under `~/.agentic-orchestrator/`.
+When every readiness gate passes, the app opens the **Home** workspace. If at least one provider is ready but setup is incomplete, the app opens the Supervisor page with a setup banner instead; see [Finishing setup later](supervisor-conversation.md#finishing-setup-later). Agentico creates runtime data under `~/.agentic-orchestrator/`.
 
 ## Create a Feature
 

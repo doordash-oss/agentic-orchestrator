@@ -31,6 +31,7 @@ import {
 import { ErrorSurface } from '../components/ErrorSurface';
 import { parseIpcError } from '../wizard/ipcError';
 import { SettingsConfirmationDialog } from './SettingsConfirmationDialog';
+import { SupervisorUpdateCopy } from './supervisor/SupervisorUpdateCopy';
 
 const MANAGED_SUMMARY =
   'This server ships with the desktop app and is replaced when the app updates. Its update state is the app card above.';
@@ -164,6 +165,9 @@ export function ServerUpdateCard({
       {state?.activeWorkSummary !== undefined && (
         <p className="settings-panel__update-work">{state.activeWorkSummary}</p>
       )}
+      {(verbs?.installWhenIdle === true || verbs?.installNow === true) && (
+        <SupervisorUpdateCopy className="settings-panel__section-desc" />
+      )}
       <div className="settings-panel__button-row">
         {managed && (
           <button
@@ -246,10 +250,10 @@ export function ServerUpdateCard({
             <h2 className="restart-prompt__title">Stop work and install now?</h2>
             <p className="restart-prompt__summary">
               The server sends stop requests before restarting into{' '}
-              <code>{state.targetVersion ?? state.latestVersion}</code>. Workflows and the
-              supervisor may be interrupted if they do not stop cleanly; repository work blocks the
-              install.
+              <code>{state.targetVersion ?? state.latestVersion}</code>. Workflows may be
+              interrupted if they do not stop cleanly; repository work blocks the install.
             </p>
+            <SupervisorUpdateCopy className="restart-prompt__summary" />
             <p className="restart-prompt__summary">
               {state.activeWorkSummary ?? 'Live work is rechecked before anything is stopped.'}
             </p>

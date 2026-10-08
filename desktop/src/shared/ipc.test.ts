@@ -32,6 +32,7 @@ import {
   FeatureSummaryViewSchema,
   IPC_CHANNELS,
   IPC_EVENTS,
+  WindowFocusEventSchema,
   InitRepositoryRequestSchema,
   IpcEnvelopeSchema,
   AbsolutePathSchema,
@@ -50,6 +51,8 @@ import {
   AttentionItemSchema,
   UpdateStateSchema,
   actionableAttentionCount,
+  attentionOwnerFeatureId,
+  isSupervisorAttentionItem,
   type AttentionItem,
   FeatureSnapshotSchema,
   GateResumeRequestSchema,
@@ -707,6 +710,19 @@ describe('IPC channel registry', () => {
   it('namespaces all channels to avoid collisions with generic channels', () => {
     for (const channel of [...Object.values(IPC_CHANNELS), ...Object.values(IPC_EVENTS)]) {
       expect(channel.startsWith('agentico:')).toBe(true);
+    }
+  });
+
+  it('registers the window focus push with a strict boolean-only contract', () => {
+    expect(IPC_EVENTS.windowFocusChanged).toBe('agentico:window:focus-changed');
+    expect(WindowFocusEventSchema.parse({ focused: false })).toStrictEqual({ focused: false });
+    for (const payload of [
+      {},
+      { focused: 'true' },
+      { focused: true, token: 'tok-leak' },
+      { focused: true, serverKey: 'default-runtime' },
+    ]) {
+      expect(WindowFocusEventSchema.safeParse(payload).success).toBe(false);
     }
   });
 });
@@ -1402,6 +1418,12 @@ describe('Servers pane IPC contracts', () => {
     expect(AppRouteEventSchema.safeParse({ target: 'recovery', draft: 'x' }).success).toBe(false);
   });
 
+  it('AppRouteEvent: the setup target opens the setup sheet and carries no extras', () => {
+    expect(AppRouteEventSchema.parse({ target: 'setup' })).toEqual({ target: 'setup' });
+    expect(AppRouteEventSchema.safeParse({ target: 'setup', draft: 'x' }).success).toBe(false);
+    expect(AppRouteEventSchema.safeParse({ target: 'setup', token: 'x' }).success).toBe(false);
+  });
+
   it('AppRouteEvent: draft and errorReference ride the supervisor target only', () => {
     const supervisorRoute = {
       target: 'supervisor',
@@ -1999,6 +2021,54 @@ describe('sidebar width preferences', () => {
 
 describe('supervisor IPC schemas', () => {
   const supervisorSessionId = '__supervisor__.0b9c6f2e-1d2a-4c55-9e1f-2a3b4c5d6e7f.12';
+
+  it('counts dotted-prefix supervisor requests as actionable and keeps them out of per-feature attention', () => {
+    const items: AttentionItem[] = [
+      AttentionItemSchema.parse({
+        kind: 'permission',
+        id: 'perm-supervisor',
+        target: 'supervisor',
+        sessionId: supervisorSessionId,
+        toolName: 'Bash',
+        waitingSince: '2026-10-06T10:00:00Z',
+      }),
+      AttentionItemSchema.parse({
+        kind: 'questions',
+        id: 'ask-supervisor',
+        target: 'supervisor',
+        sessionId: supervisorSessionId,
+        waitingSince: '2026-10-06T10:00:00Z',
+        questions: [{ key: 'Which?', header: 'Which?', multiSelect: false, options: [] }],
+      }),
+      AttentionItemSchema.parse({
+        kind: 'permission',
+        id: 'perm-feature',
+        featureId: 'abcd1234',
+        sessionId: 'abcd1234-run-1-implement',
+        toolName: 'Bash',
+        waitingSince: '2026-10-06T10:00:00Z',
+      }),
+    ];
+    expect(isSupervisorSessionId(supervisorSessionId)).toBe(true);
+    expect(items.filter(isSupervisorAttentionItem).map((item) => item.id)).toEqual([
+      'perm-supervisor',
+      'ask-supervisor',
+    ]);
+    // The toolbar bell and the tray count every one of them.
+    expect(actionableAttentionCount(items)).toBe(3);
+    // The per-feature maps (sidebar badges and sub-lines, cockpit filters)
+    // key by owner: a supervisor request has none, so it lands in no feature.
+    const perFeature = new Map<string, string[]>();
+    for (const item of items) {
+      const owner = attentionOwnerFeatureId(item);
+      if (owner === undefined) continue;
+      perFeature.set(owner, [...(perFeature.get(owner) ?? []), item.id]);
+    }
+    expect([...perFeature.entries()]).toEqual([['abcd1234', ['perm-feature']]]);
+    for (const item of items.filter(isSupervisorAttentionItem)) {
+      expect(attentionOwnerFeatureId(item)).toBeUndefined();
+    }
+  });
 
   it('pending requests, verdicts and the pushed request event accept a request origin', () => {
     const permission = {

@@ -2044,6 +2044,7 @@ function makeMockApi(
         state: SUPERVISOR_STATE,
       }),
     onSupervisorEvent: () => () => undefined,
+    onWindowFocusChanged: () => () => undefined,
     getCreationDefaults: () =>
       Promise.resolve({
         repositories: READY_SNAPSHOT.repositories!.map((r) => ({ ...r, valid: true })),
@@ -2766,7 +2767,7 @@ function updateStateForScene(scene: string): UpdateState {
   if (scene === 'update-popover' || scene === 'settings-install-now-confirm') {
     return {
       ...readyUpdateState(),
-      activeWorkSummary: '1 workflow and the supervisor are active.',
+      activeWorkSummary: '1 workflow. The supervisor is working.',
     };
   }
   return readyUpdateState();

@@ -65,6 +65,13 @@ test('workspace sidebar: pointer, keyboard, ⌘2-9, and collapse against the pac
     await expect(supervisorRow).toHaveAttribute('aria-selected', 'true');
     await expect(supervisorPage).toBeVisible();
     await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveCount(0);
+    // At rest (never started) the row carries no state marker, no unread
+    // dot and no sub-line: just the glyph and its name.
+    await expect(supervisorRow).toHaveAttribute('data-supervisor-state', 'none');
+    await expect(supervisorRow).toHaveAttribute('data-unread', 'false');
+    await expect(supervisorRow.locator('.sidebar__row-subline')).toHaveCount(0);
+    await expect(supervisorRow.locator('.sidebar__row-unread')).toHaveCount(0);
+    await expect(supervisorRow).toHaveText('Supervisor');
     transcript.step('Supervisor is the only pinned row, first and selected, its page mounted');
 
     transcript.section('Resize the sidebar with pointer and keyboard');

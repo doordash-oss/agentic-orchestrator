@@ -20,6 +20,12 @@ export interface ActiveWorkCheck {
   featureIds: string[];
   /** The supervisor lifecycle is one of {@link SUPERVISOR_BUSY_LIFECYCLES}. */
   supervisorActive: boolean;
+  /**
+   * The supervisor is parked on the user (`waiting_permission` or
+   * `waiting_question`); implies supervisorActive. Such a supervisor still
+   * counts for quit and install-now, but no longer holds up an idle install.
+   */
+  supervisorWaiting: boolean;
   detectionFailed: boolean;
 }
 
@@ -290,9 +296,10 @@ export function hasActiveWork(active: ActiveWorkCheck): boolean {
 }
 
 /**
- * The supervisor lifecycles that count as live work for quit, install and the
- * tray: a process is launching, a turn is running, or a turn is parked on the
- * user. `stopped`, `idle` and `failed` have nothing to interrupt.
+ * The supervisor lifecycles that count as live work for quit, install now and
+ * restart-to-update on demand: a process is launching, a turn is running, or
+ * a turn is parked on the user. `stopped`, `idle` and `failed` have nothing to
+ * interrupt. Install when idle reads {@link supervisorBlocksIdleInstall}.
  */
 export const SUPERVISOR_BUSY_LIFECYCLES: ReadonlySet<SupervisorLifecycle> = new Set([
   'starting',
@@ -303,6 +310,52 @@ export const SUPERVISOR_BUSY_LIFECYCLES: ReadonlySet<SupervisorLifecycle> = new 
 
 export function isSupervisorBusy(lifecycle: SupervisorLifecycle): boolean {
   return SUPERVISOR_BUSY_LIFECYCLES.has(lifecycle);
+}
+
+/** The busy lifecycles in which the supervisor is waiting on the user's answer. */
+export function isSupervisorWaiting(lifecycle: SupervisorLifecycle): boolean {
+  return lifecycle === 'waiting_permission' || lifecycle === 'waiting_question';
+}
+
+/**
+ * The supervisor lifecycles that hold up an unattended (install-when-idle)
+ * install: a process is launching or a turn is running. A supervisor waiting
+ * on the user does not block it; the scheduled install ends it instead.
+ */
+export function supervisorBlocksIdleInstall(lifecycle: SupervisorLifecycle): boolean {
+  return lifecycle === 'starting' || lifecycle === 'running';
+}
+
+/** The three grades tray, quit and install surfaces read the lifecycle in. */
+export type SupervisorGrade = 'working' | 'waiting' | 'idle';
+
+export function supervisorGrade(lifecycle: SupervisorLifecycle): SupervisorGrade {
+  if (supervisorBlocksIdleInstall(lifecycle)) return 'working';
+  if (isSupervisorWaiting(lifecycle)) return 'waiting';
+  return 'idle';
+}
+
+/** The grade an active-work check implies. */
+export function supervisorGradeOf(active: {
+  supervisorActive: boolean;
+  supervisorWaiting: boolean;
+}): SupervisorGrade {
+  if (active.supervisorWaiting) return 'waiting';
+  return active.supervisorActive ? 'working' : 'idle';
+}
+
+/**
+ * The one sentence active-work summaries use for the supervisor, or null when
+ * it has nothing to interrupt.
+ */
+export function supervisorActivitySentence(active: {
+  supervisorActive: boolean;
+  supervisorWaiting: boolean;
+}): string | null {
+  const grade = supervisorGradeOf(active);
+  if (grade === 'working') return 'The supervisor is working.';
+  if (grade === 'waiting') return 'The supervisor is waiting for your answer.';
+  return null;
 }
 
 /** The reads active-work detection needs; structurally satisfied by the main-process services. */
@@ -323,13 +376,18 @@ export async function detectActiveWork(sources: ActiveWorkSources): Promise<Acti
   const [featureResult, supervisorResult] = await Promise.all([
     detectStoppableFeatures(sources),
     sources.getSupervisorState().then(
-      (state) => ({ supervisorActive: isSupervisorBusy(state.lifecycle), failed: false }),
-      () => ({ supervisorActive: false, failed: true }),
+      (state) => ({
+        supervisorActive: isSupervisorBusy(state.lifecycle),
+        supervisorWaiting: isSupervisorWaiting(state.lifecycle),
+        failed: false,
+      }),
+      () => ({ supervisorActive: false, supervisorWaiting: false, failed: true }),
     ),
   ]);
   return {
     featureIds: featureResult.featureIds,
     supervisorActive: supervisorResult.supervisorActive,
+    supervisorWaiting: supervisorResult.supervisorWaiting,
     detectionFailed: featureResult.failed || supervisorResult.failed,
   };
 }
@@ -449,6 +507,49 @@ export async function stopActiveWork(
   return { unresolved };
 }
 
+export interface EndWaitingSupervisorDeps {
+  /** Ends the supervisor through its existing end route. */
+  endSupervisor(): Promise<void>;
+  detectActiveWork(): Promise<ActiveWorkCheck>;
+  /** A user-safe one-line reason for a failed end request. */
+  describeStopFailure(error: unknown): string;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  sleep?(ms: number): Promise<void>;
+  now?(): number;
+}
+
+/**
+ * Ends a supervisor that is waiting on the user so a scheduled install can
+ * restart without a dialog: one end request, then a re-poll, bounded like
+ * {@link stopActiveWork}, until the lifecycle leaves the busy set. Reports
+ * why when the end request fails or the supervisor never reports stopped.
+ */
+export async function endWaitingSupervisor(
+  deps: EndWaitingSupervisorDeps,
+): Promise<{ ended: true } | { ended: false; reason: string }> {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now ?? Date.now;
+  try {
+    await deps.endSupervisor();
+  } catch (error) {
+    return { ended: false, reason: deps.describeStopFailure(error) };
+  }
+  const deadline = now() + (deps.timeoutMs ?? DEFAULT_STOP_TIMEOUT_MS);
+  let latest = await deps.detectActiveWork();
+  while ((latest.detectionFailed || latest.supervisorActive) && now() < deadline) {
+    await sleep(deps.pollIntervalMs ?? DEFAULT_STOP_POLL_INTERVAL_MS);
+    latest = await deps.detectActiveWork();
+  }
+  if (latest.detectionFailed || latest.supervisorActive) {
+    return {
+      ended: false,
+      reason: 'The server did not report that the supervisor stopped before the timeout.',
+    };
+  }
+  return { ended: true };
+}
+
 export function shouldRequestQuitOnMainWindowClose(platform: NodeJS.Platform): boolean {
   return platform !== 'darwin';
 }
@@ -461,7 +562,7 @@ export function activeWorkDialog(active: ActiveWorkCheck): QuitDialogOptions {
     active.featureIds.length > 0
       ? `${active.featureIds.length} feature ${active.featureIds.length === 1 ? 'run is' : 'runs are'} stoppable.`
       : '',
-    active.supervisorActive ? 'The supervisor is working.' : '',
+    supervisorActivitySentence(active) ?? '',
     'Keep Running hides the window and leaves work attached. Stop Work and Quit sends stop requests before shutdown.',
   ].filter((line) => line !== '');
 

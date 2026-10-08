@@ -21,15 +21,19 @@ import {
   SUPERVISOR_BUSY_LIFECYCLES,
   activeWorkDialog,
   detectActiveWork,
+  endWaitingSupervisor,
   hasActiveWork,
   isSupervisorBusy,
   quitAnywayDialog,
   shouldRequestQuitOnMainWindowClose,
   stopActiveWork,
   stopFailureDialog,
+  supervisorBlocksIdleInstall,
+  supervisorGrade,
   type ActiveWorkCheck,
   type ActiveWorkDecision,
   type ActiveWorkSources,
+  type EndWaitingSupervisorDeps,
   type QuitCoordinatorDeps,
   type StopActiveWorkDeps,
   type StopWorkResult,
@@ -40,8 +44,14 @@ function active(
   featureIds: string[] = ['feature-1'],
   supervisorActive = false,
   detectionFailed = false,
+  supervisorWaiting = false,
 ): ActiveWorkCheck {
-  return { featureIds, supervisorActive, detectionFailed };
+  return { featureIds, supervisorActive, supervisorWaiting, detectionFailed };
+}
+
+/** A supervisor parked on a permission or question, alongside the given features. */
+function waiting(featureIds: string[] = []): ActiveWorkCheck {
+  return active(featureIds, true, false, true);
 }
 
 const unresolvedFeature: UnresolvedWorkItem = {
@@ -420,6 +430,22 @@ describe('QuitCoordinator', () => {
   });
 });
 
+describe('quit decision for a waiting supervisor', () => {
+  it('still shows "Work is still running", naming the wait', async () => {
+    const deps = makeDeps({ detectActiveWork: vi.fn().mockResolvedValue(waiting()) });
+    const coordinator = new QuitCoordinator(deps);
+
+    await expect(coordinator.requestQuitDecision('window')).resolves.toBe(false);
+
+    expect(deps.showActiveWorkDialog).toHaveBeenCalledWith(waiting(), 'window');
+    const dialog = activeWorkDialog(waiting());
+    expect(dialog.title).toBe('Work is still running');
+    expect(dialog.detail).toContain('The supervisor is waiting for your answer.');
+    expect(dialog.detail).not.toContain('The supervisor is working.');
+    expect(deps.shutdown).not.toHaveBeenCalled();
+  });
+});
+
 describe('quit dialog copy', () => {
   it('describes active-work choices and ownership-specific Quit Anyway consequences', () => {
     expect(activeWorkDialog(active(['a', 'b'], true, true)).detail).toContain(
@@ -465,11 +491,21 @@ function sources({
 describe('detectActiveWork', () => {
   it('reports active work while the supervisor is running and none while it is idle', async () => {
     const running = await detectActiveWork(sources({ lifecycle: 'running' }));
-    expect(running).toEqual({ featureIds: [], supervisorActive: true, detectionFailed: false });
+    expect(running).toEqual({
+      featureIds: [],
+      supervisorActive: true,
+      supervisorWaiting: false,
+      detectionFailed: false,
+    });
     expect(hasActiveWork(running)).toBe(true);
 
     const idle = await detectActiveWork(sources({ lifecycle: 'idle' }));
-    expect(idle).toEqual({ featureIds: [], supervisorActive: false, detectionFailed: false });
+    expect(idle).toEqual({
+      featureIds: [],
+      supervisorActive: false,
+      supervisorWaiting: false,
+      detectionFailed: false,
+    });
     expect(hasActiveWork(idle)).toBe(false);
   });
 
@@ -504,6 +540,25 @@ describe('detectActiveWork', () => {
     ]);
   });
 
+  it.each([
+    ['stopped', false, false, 'idle'],
+    ['starting', false, true, 'working'],
+    ['idle', false, false, 'idle'],
+    ['running', false, true, 'working'],
+    ['waiting_permission', true, false, 'waiting'],
+    ['waiting_question', true, false, 'waiting'],
+    ['failed', false, false, 'idle'],
+  ] as const)(
+    'reads %s as waiting=%s, blocks-idle-install=%s, grade %s',
+    async (lifecycle, waitingOnUser, blocksIdle, grade) => {
+      expect(supervisorBlocksIdleInstall(lifecycle)).toBe(blocksIdle);
+      expect(supervisorGrade(lifecycle)).toBe(grade);
+      await expect(detectActiveWork(sources({ lifecycle }))).resolves.toMatchObject({
+        supervisorWaiting: waitingOnUser,
+      });
+    },
+  );
+
   it('marks detection failed when the supervisor state cannot be fetched', async () => {
     const result = await detectActiveWork(
       sources({
@@ -514,6 +569,7 @@ describe('detectActiveWork', () => {
     expect(result).toEqual({
       featureIds: ['feature-1'],
       supervisorActive: false,
+      supervisorWaiting: false,
       detectionFailed: true,
     });
     expect(hasActiveWork(result)).toBe(true);
@@ -527,6 +583,7 @@ describe('detectActiveWork', () => {
     await expect(detectActiveWork(deps)).resolves.toEqual({
       featureIds: ['feature-1'],
       supervisorActive: true,
+      supervisorWaiting: true,
       detectionFailed: false,
     });
     expect(deps.getSupervisorState).toHaveBeenCalledOnce();
@@ -537,7 +594,12 @@ describe('detectActiveWork', () => {
       detectActiveWork(
         sources({ overrides: { listFeatures: vi.fn().mockRejectedValue(new Error('down')) } }),
       ),
-    ).resolves.toEqual({ featureIds: [], supervisorActive: false, detectionFailed: true });
+    ).resolves.toEqual({
+      featureIds: [],
+      supervisorActive: false,
+      supervisorWaiting: false,
+      detectionFailed: true,
+    });
 
     await expect(
       detectActiveWork(
@@ -546,7 +608,12 @@ describe('detectActiveWork', () => {
           overrides: { getFeature: vi.fn().mockRejectedValue(new Error('gone')) },
         }),
       ),
-    ).resolves.toEqual({ featureIds: [], supervisorActive: false, detectionFailed: true });
+    ).resolves.toEqual({
+      featureIds: [],
+      supervisorActive: false,
+      supervisorWaiting: false,
+      detectionFailed: true,
+    });
   });
 });
 
@@ -653,5 +720,77 @@ describe('stopActiveWork', () => {
       ],
     });
     expect(deps.detectActiveWork).toHaveBeenCalledOnce();
+  });
+});
+
+// --- ending a waiting supervisor for a scheduled install ----------------------
+
+function endDeps(overrides: Partial<EndWaitingSupervisorDeps> = {}): EndWaitingSupervisorDeps {
+  let clock = 0;
+  return {
+    endSupervisor: vi.fn().mockResolvedValue(undefined),
+    detectActiveWork: vi.fn().mockResolvedValue(active([], false, false)),
+    describeStopFailure: (error) => (error instanceof Error ? error.message : String(error)),
+    timeoutMs: 1_000,
+    pollIntervalMs: 250,
+    sleep: vi.fn((ms: number) => {
+      clock += ms;
+      return Promise.resolve();
+    }),
+    now: () => clock,
+    ...overrides,
+  };
+}
+
+describe('endWaitingSupervisor', () => {
+  it('ends once and re-polls until the lifecycle leaves the busy set', async () => {
+    const deps = endDeps({
+      detectActiveWork: vi
+        .fn()
+        .mockResolvedValueOnce(waiting())
+        .mockResolvedValueOnce(active([], true, false))
+        .mockResolvedValueOnce(active([], false, false)),
+    });
+
+    await expect(endWaitingSupervisor(deps)).resolves.toEqual({ ended: true });
+
+    expect(deps.endSupervisor).toHaveBeenCalledOnce();
+    expect(deps.detectActiveWork).toHaveBeenCalledTimes(3);
+  });
+
+  it('reports the end-route failure without polling', async () => {
+    const deps = endDeps({ endSupervisor: vi.fn().mockRejectedValue(new Error('end refused')) });
+
+    await expect(endWaitingSupervisor(deps)).resolves.toEqual({
+      ended: false,
+      reason: 'end refused',
+    });
+    expect(deps.detectActiveWork).not.toHaveBeenCalled();
+  });
+
+  it('gives up once the bound passes with the supervisor still busy', async () => {
+    const deps = endDeps({ detectActiveWork: vi.fn().mockResolvedValue(waiting()) });
+
+    await expect(endWaitingSupervisor(deps)).resolves.toEqual({
+      ended: false,
+      reason: 'The server did not report that the supervisor stopped before the timeout.',
+    });
+    expect(deps.endSupervisor).toHaveBeenCalledOnce();
+    expect(deps.detectActiveWork).toHaveBeenCalledTimes(5);
+  });
+
+  it('lets the following quit decision restart without the active-work dialog', async () => {
+    const detect = vi
+      .fn<() => Promise<ActiveWorkCheck>>()
+      .mockResolvedValueOnce(waiting())
+      .mockResolvedValue(active([], false, false));
+    const ended = await endWaitingSupervisor(endDeps({ detectActiveWork: detect }));
+    expect(ended).toEqual({ ended: true });
+
+    const deps = makeDeps({ detectActiveWork: detect });
+    await expect(new QuitCoordinator(deps).requestQuitDecision()).resolves.toBe(true);
+
+    expect(deps.showActiveWorkDialog).not.toHaveBeenCalled();
+    expect(deps.shutdown).toHaveBeenCalledWith({ quitAnyway: false });
   });
 });

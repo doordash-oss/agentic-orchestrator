@@ -17,6 +17,7 @@ limitations under the License.
 import { useRef } from 'react';
 import type { UpdateState } from '../../../shared/ipc';
 import { canInstallInApp, hasActiveWork, installWhenIdleLabel } from '../../../shared/updateState';
+import { SupervisorUpdateCopy } from '../features/supervisor/SupervisorUpdateCopy';
 import { UpdateIcon } from './icons';
 import { ToolbarPopover, ToolbarPopoverAnchor } from './ToolbarPopover';
 
@@ -104,6 +105,7 @@ export function UpdatePopover({
         {updateHasActiveWork ? (
           <p className="update-popover__active-work">{update.activeWorkSummary}</p>
         ) : null}
+        <SupervisorUpdateCopy className="update-popover__message" />
         <div className="update-popover__actions">
           <button type="button" className="update-popover__action" onClick={onOpenSettings}>
             Updates

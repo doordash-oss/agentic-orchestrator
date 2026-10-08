@@ -338,7 +338,7 @@ describe('SettingsPanel updates pane', () => {
     const trigger = await screen.findByRole('button', { name: 'Stop Work and Install Now' });
     await user.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'Install update confirmation' });
-    expect(dialog).toHaveTextContent('Workflows and the supervisor may be interrupted');
+    expect(dialog).toHaveTextContent('Workflows may be interrupted');
     expect(dialog).not.toHaveTextContent(/AMA/);
     const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
     const confirm = within(dialog).getByRole('button', { name: 'Stop Work and Install Now' });
@@ -416,7 +416,7 @@ describe('SettingsPanel server update card', () => {
       name: 'Install server update confirmation',
     });
     expect(dialog).toHaveTextContent('1 feature and the supervisor active on the server.');
-    expect(dialog).toHaveTextContent('Workflows and the supervisor may be interrupted');
+    expect(dialog).toHaveTextContent('Workflows may be interrupted');
     expect(dialog).not.toHaveTextContent(/chat/i);
     await user.click(within(dialog).getByRole('button', { name: 'Stop work and install now' }));
     await waitFor(() =>

@@ -163,6 +163,12 @@ export function buildApplicationMenuTemplate(deps: MenuTemplateDeps): MenuItemCo
           label: 'Updates',
           click: () => deps.route({ target: 'settings', settingsSection: 'updates' }),
         },
+        // Live only while the renderer reports a partially ready runtime: a
+        // complete one has nothing to set up, and the full-page wizard is
+        // already the whole window.
+        routedItem('global.setup', deps, {
+          enabled: uiState.runtimeReady && uiState.setupIncomplete,
+        }),
         routedItem('global.switch-server', deps, { enabled: uiState.runtimeReady }),
         {
           // Always enabled: this is the escape hatch back to the local

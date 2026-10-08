@@ -55,7 +55,9 @@ var supervisorClientMessageID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 // recording doubles.
 type SupervisorService interface {
 	State() supervisor.State
-	Busy() bool
+	// Lifecycle reports the current lifecycle alone, cheaply, for the
+	// work-admission detector.
+	Lifecycle() supervisor.Lifecycle
 	Transcript(supervisor.PageQuery) (supervisor.Page, error)
 	UpdateSettings(supervisor.Settings) (supervisor.State, error)
 	ChangeSettings(supervisor.SettingsChange) (supervisor.State, error)
@@ -712,10 +714,13 @@ func writeSupervisorSSE(w http.ResponseWriter, ev SupervisorStreamEvent) error {
 }
 
 // detectSupervisorActivity reports the supervisor as active work while it
-// is starting, running, or waiting on a permission or question.
+// is starting, running, or waiting on a permission or question, and as
+// waiting in the two waiting states: a waiting supervisor does not hold up
+// an unattended install. Both facts come from one lifecycle read.
 func (h *apiHandler) detectSupervisorActivity(context.Context) (workadmission.Activity, error) {
 	if h.supervisor == nil {
 		return workadmission.Activity{}, nil
 	}
-	return workadmission.Activity{SupervisorActive: h.supervisor.Busy()}, nil
+	lifecycle := h.supervisor.Lifecycle()
+	return workadmission.Activity{SupervisorActive: lifecycle.Active(), SupervisorWaiting: lifecycle.Waiting()}, nil
 }

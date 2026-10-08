@@ -189,9 +189,14 @@ type Coordinator struct {
 	effectiveModel   string
 	launch           *launchAttempt
 	// turns holds the delivered turns still awaiting a result, oldest first.
-	turns        []string
-	turnCount    int
-	pending      []*llm.ControlRequestMessage
+	turns     []string
+	turnCount int
+	pending   []*llm.ControlRequestMessage
+	// unresolved holds the current process's requests committed at the
+	// requested stage and not yet resolved in the transcript, oldest first.
+	// pending is the answerable subset an interrupt or turn end clears;
+	// unresolved is what a deliberate stop resolves as interrupted.
+	unresolved   []openRequest
 	streamID     string
 	streamChunks int
 	streamCount  int
@@ -593,9 +598,14 @@ func (c *Coordinator) stateLocked() State {
 
 // Busy reports whether the supervisor counts as active work.
 func (c *Coordinator) Busy() bool {
+	return c.Lifecycle().Active()
+}
+
+// Lifecycle reports the current lifecycle without building the read model.
+func (c *Coordinator) Lifecycle() Lifecycle {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.lifecycle.Active()
+	return c.lifecycle
 }
 
 // Transcript reads one page of the durable transcript.
@@ -1149,6 +1159,7 @@ func (c *Coordinator) resetProcessLocked() {
 	c.turns = nil
 	c.turnCount = 0
 	c.pending = nil
+	c.unresolved = nil
 	c.streamID = ""
 	c.streamChunks = 0
 	c.streamCount = 0
@@ -1556,6 +1567,12 @@ func (c *Coordinator) applyExitLocked(clean bool) {
 		c.setOutcomeLocked(OutcomeInterrupted, InterruptedByUser)
 	case !clean || c.lifecycle.inTurn():
 		c.setOutcomeLocked(OutcomeFailed, InterruptedByNone)
+	}
+	if c.ending {
+		// A deliberate stop cuts the turn: its open requests can no longer
+		// be answered, so they resolve now, ahead of stopped, rather than
+		// at the next boot or reset.
+		c.resolveCutRequestsLocked()
 	}
 	if c.interrupt != nil {
 		close(c.interrupt.done)
@@ -2105,7 +2122,7 @@ func (c *Coordinator) surfaceRequestLocked(gen int64, req *llm.ControlRequestMes
 		kind = KindQuestion
 	}
 	origin, child := RequestOrigin(req.Origin)
-	c.appendProviderLocked(gen, kind, RequestData{
+	data := RequestData{
 		RequestID:      req.RequestID,
 		ToolName:       req.Request.ToolName,
 		Stage:          StageRequested,
@@ -2113,12 +2130,87 @@ func (c *Coordinator) surfaceRequestLocked(gen int64, req *llm.ControlRequestMes
 		Input:          req.Request.Input,
 		Origin:         origin,
 		ChildSessionID: child,
-	}, req.RequestID+"/"+StageRequested, "")
+	}
+	c.appendProviderLocked(gen, kind, data, req.RequestID+"/"+StageRequested, "")
+	if gen == c.conv.Generation && !c.hasUnresolvedLocked(req.RequestID) {
+		data.Input = nil
+		c.unresolved = append(c.unresolved, openRequest{rec: Record{TurnID: c.currentTurnLocked(), Kind: kind}, data: data})
+	}
 	c.publishLocked(Event{Kind: EventRequest, Generation: gen, Request: req, Session: c.session})
 	if c.lifecycle.inTurn() {
 		c.lifecycle = c.waitingLifecycleLocked()
 	}
 	c.publishStateLocked()
+}
+
+// hasUnresolvedLocked reports whether the request is already tracked as
+// unresolved.
+func (c *Coordinator) hasUnresolvedLocked(requestID string) bool {
+	for _, req := range c.unresolved {
+		if req.data.RequestID == requestID {
+			return true
+		}
+	}
+	return false
+}
+
+// dropUnresolvedLocked forgets a request whose resolution the transcript
+// now holds.
+func (c *Coordinator) dropUnresolvedLocked(requestID string) {
+	for i, req := range c.unresolved {
+		if req.data.RequestID == requestID {
+			c.unresolved = append(c.unresolved[:i:i], c.unresolved[i+1:]...)
+			return
+		}
+	}
+}
+
+// resolveCutRequestsLocked appends an interrupted resolution for every
+// request of a turn still in flight that the transcript holds at the
+// requested stage, under the same deterministic id an answer would use.
+// Boot recovery and reset read open requests from the transcript, so a
+// request resolved here is never resolved again.
+func (c *Coordinator) resolveCutRequestsLocked() {
+	cut := make(map[string]bool, len(c.turns))
+	for _, turn := range c.turns {
+		cut[turn] = true
+	}
+	gen := c.conv.Generation
+	for _, req := range c.unresolved {
+		if !cut[req.rec.TurnID] {
+			continue
+		}
+		data := req.data
+		data.Stage, data.Outcome = StageResolved, RequestInterrupted
+		c.appendResolutionLocked(gen, req.rec.TurnID, req.rec.Kind, data)
+	}
+	c.unresolved = nil
+}
+
+// appendResolutionLocked commits one display-only request resolution on the
+// request's own turn and publishes it.
+func (c *Coordinator) appendResolutionLocked(gen int64, turnID string, kind RecordKind, data RequestData) {
+	payload, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("supervisor: encode %s resolution: %v", kind, err)
+		return
+	}
+	rec, existing, err := c.store.appendRecord(Record{
+		ID:         ProviderRecordID(c.conv.ConversationID, gen, kind, data.RequestID+"/"+StageResolved),
+		Generation: gen,
+		TurnID:     turnID,
+		Kind:       kind,
+		Visibility: VisibilityDisplayOnly,
+		Data:       payload,
+	})
+	if errors.Is(err, ErrRetiredGeneration) || existing {
+		return
+	}
+	if err != nil {
+		log.Printf("supervisor: append %s resolution: %v", kind, err)
+		return
+	}
+	c.publishLocked(Event{Kind: EventRecord, Generation: gen, Record: &rec})
 }
 
 // waitingLifecycleLocked derives the waiting state from the newest pending
@@ -2146,6 +2238,9 @@ func (c *Coordinator) observeAnswer(gen int64, sessionID string, answer ports.Co
 			c.pending = append(c.pending[:i:i], c.pending[i+1:]...)
 			break
 		}
+	}
+	if current {
+		c.dropUnresolvedLocked(answer.RequestID)
 	}
 	kind, outcome := KindPermission, RequestDenied
 	switch {
@@ -2178,8 +2273,10 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 		c.turns = c.turns[1:]
 		c.persistTurnsLocked()
 	}
-	// Turn end clears any request the harness left unanswered.
+	// Turn end clears any request the harness left unanswered. Its record
+	// stays requested: the turn was not cut, so a stop leaves it to boot.
 	c.pending = nil
+	c.unresolved = nil
 	c.streamID, c.streamChunks = "", 0
 	switch {
 	case c.interrupt != nil:

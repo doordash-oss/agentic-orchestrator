@@ -49,6 +49,11 @@ type recordingSupervisor struct {
 	resets    int
 	err       error
 	busy      bool
+	// waiting reports the supervisor waiting on a permission answer; it
+	// takes precedence over busy.
+	waiting bool
+	// lifecycle, when set, overrides busy and waiting.
+	lifecycle supervisor.Lifecycle
 	dedup     bool
 }
 
@@ -58,10 +63,19 @@ func (s *recordingSupervisor) State() supervisor.State {
 	return s.state
 }
 
-func (s *recordingSupervisor) Busy() bool {
+func (s *recordingSupervisor) Lifecycle() supervisor.Lifecycle {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.busy
+	switch {
+	case s.lifecycle != "":
+		return s.lifecycle
+	case s.waiting:
+		return supervisor.LifecycleWaitingPermission
+	case s.busy:
+		return supervisor.LifecycleRunning
+	default:
+		return supervisor.LifecycleIdle
+	}
 }
 
 func (s *recordingSupervisor) Transcript(q supervisor.PageQuery) (supervisor.Page, error) {
@@ -492,14 +506,21 @@ func TestSupervisorActivityDetectorTracksBusy(t *testing.T) {
 	}
 	svc.busy = true
 	activity, _ = admission.Detect(context.Background())
-	if !activity.SupervisorActive || !activity.Busy() || activity.ProtectedBusy() {
+	if !activity.SupervisorActive || activity.SupervisorWaiting || !activity.Busy() || !activity.BlocksIdleInstall() || activity.ProtectedBusy() {
 		t.Fatalf("busy supervisor activity = %+v", activity)
+	}
+	// A supervisor waiting on the user is still active work, but it no
+	// longer blocks an unattended install.
+	svc.waiting = true
+	activity, _ = admission.Detect(context.Background())
+	if !activity.SupervisorActive || !activity.SupervisorWaiting || !activity.Busy() || activity.BlocksIdleInstall() {
+		t.Fatalf("waiting supervisor activity = %+v", activity)
 	}
 }
 
 // TestUpdateReportsSupervisorActivity pins the update surface's supervisor
-// naming: GET /api/v1/update reports supervisor_active from the supervisor
-// lifecycle alone, and an immediate install without stop permission is
+// naming: GET /api/v1/update reports supervisor_active and
+// supervisor_waiting from the supervisor lifecycle alone, and an immediate install without stop permission is
 // refused with a 409 blocker that names the supervisor.
 func TestUpdateReportsSupervisorActivity(t *testing.T) {
 	t.Parallel()
@@ -535,9 +556,18 @@ func TestUpdateReportsSupervisorActivity(t *testing.T) {
 	svc.mu.Lock()
 	svc.busy = true
 	svc.mu.Unlock()
-	if got := summary(); !got.SupervisorActive || got.FeatureCount != 0 {
-		t.Fatalf("busy supervisor summary = %+v, want supervisor_active true and no features", got)
+	if got := summary(); !got.SupervisorActive || got.SupervisorWaiting || got.FeatureCount != 0 {
+		t.Fatalf("busy supervisor summary = %+v, want supervisor_active true, not waiting, and no features", got)
 	}
+	svc.mu.Lock()
+	svc.waiting = true
+	svc.mu.Unlock()
+	if got := summary(); !got.SupervisorActive || !got.SupervisorWaiting {
+		t.Fatalf("waiting supervisor summary = %+v, want supervisor_active and supervisor_waiting true", got)
+	}
+	svc.mu.Lock()
+	svc.waiting = false
+	svc.mu.Unlock()
 
 	w := httptest.NewRecorder()
 	h.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
@@ -553,6 +583,77 @@ func TestUpdateReportsSupervisorActivity(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(w.Body.String()), "chat") {
 		t.Fatalf("install refusal mentions chat: %s", w.Body.String())
+	}
+}
+
+// TestUpdateIdleInstallProceedsPastWaitingSupervisor drives an
+// install-when-idle through the real admission boundary and the handler's
+// supervisor detector: a supervisor waiting on a permission or question
+// with no other work lets the install begin at once, while a running
+// supervisor holds it scheduled until the turn ends.
+func TestUpdateIdleInstallProceedsPastWaitingSupervisor(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		lifecycle supervisor.Lifecycle
+		waits     bool
+	}{
+		{supervisor.LifecycleWaitingPermission, false},
+		{supervisor.LifecycleWaitingQuestion, false},
+		{supervisor.LifecycleRunning, true},
+		{supervisor.LifecycleStarting, true},
+	} {
+		t.Run(string(tc.lifecycle), func(t *testing.T) {
+			t.Parallel()
+			svc := &recordingSupervisor{lifecycle: tc.lifecycle}
+			stager, lifecycle, _, _ := newInstallFakes()
+			replaceBlock := make(chan struct{})
+			t.Cleanup(func() { close(replaceBlock) })
+			lifecycle.setReplaceBlock(replaceBlock)
+			boundary := workadmission.New(workadmission.Options{FallbackPoll: 10 * time.Millisecond})
+			opts := eligibleUpdateOptions()
+			opts.Feed = &fakeUpdateFeed{selection: selfupdate.ReleaseSelection{Version: "2.0.0", TagName: "v2.0.0"}}
+			opts.Stager = stager
+			opts.Install = lifecycle
+			opts.Admission = boundary
+			h := newAPIHandler(HandlerOptions{
+				DisableHostValidation: true,
+				AuthToken:             "test-token",
+				Mutations:             nopMutationTarget{},
+				Updates:               opts,
+				Admission:             boundary,
+				Supervisor:            svc,
+			})
+			t.Cleanup(func() { h.updates.shutdownInstall(context.Background()) })
+			h.updates.performCheck(context.Background(), "explicit")
+
+			w := httptest.NewRecorder()
+			h.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+			summary := decodeUpdateSnapshot(t, w.Result()).ActiveWorkSummary
+			if !summary.SupervisorActive || summary.SupervisorWaiting != !tc.waits {
+				t.Fatalf("summary = %+v, want supervisor_active and supervisor_waiting=%v", summary, !tc.waits)
+			}
+
+			w = httptest.NewRecorder()
+			h.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("idle install status = %d body=%s", w.Code, w.Body.String())
+			}
+			if tc.waits {
+				waitStatus(t, h.updates, updateStatusScheduled)
+				time.Sleep(200 * time.Millisecond)
+				if got := lifecycle.beginCallsN(); got != 0 {
+					t.Fatalf("Begin calls = %d while the supervisor is %s, want the install held", got, tc.lifecycle)
+				}
+				svc.mu.Lock()
+				svc.lifecycle = supervisor.LifecycleIdle
+				svc.mu.Unlock()
+				boundary.NotifyChanged()
+			}
+			waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.beginCallsN() >= 1 }, "the idle install never began")
+			if !boundary.Closed() {
+				t.Fatal("the committing install must hold admission closed")
+			}
+		})
 	}
 }
 

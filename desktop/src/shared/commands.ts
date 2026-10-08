@@ -29,6 +29,7 @@ export type GlobalCommandId =
   | 'global.message-supervisor'
   | 'global.new-conversation'
   | 'global.recovery'
+  | 'global.setup'
   | 'global.bulk'
   | 'global.quit'
   | 'global.new-feature'
@@ -205,6 +206,17 @@ export const COMMAND_CATALOGUE: readonly CommandDescriptor[] = [
     label: 'Recovery',
     group: 'navigation',
     target: 'recovery',
+    paletteVisible: true,
+  },
+  {
+    // Opens the setup wizard as a sheet over the shell. Only meaningful while
+    // a runtime with a ready provider is still incomplete: the palette lists
+    // it and the Navigate menu enables it only then. No accelerator, so the
+    // help overlay never lists it.
+    id: 'global.setup',
+    label: 'Setup…',
+    group: 'navigation',
+    target: 'setup',
     paletteVisible: true,
   },
   {

@@ -40,6 +40,7 @@ import { BUNDLED_RUNTIME_LABEL } from '../components/ServerSwitcher';
 import { FieldError } from '../components/FieldError';
 import { SettingsConfirmationDialog } from './SettingsConfirmationDialog';
 import { ServerUpdateCard } from './ServerUpdateCard';
+import { SupervisorUpdateCopy } from './supervisor/SupervisorUpdateCopy';
 import type { PaneFocusIntent } from './settingsPanes';
 import type {
   CanonicalError,
@@ -746,6 +747,9 @@ export function SettingsPanel({
               )}
             </>
           )}
+          {updateCanInstallInApp && (
+            <SupervisorUpdateCopy className="settings-panel__section-desc" />
+          )}
           {updateCopyNotice && (
             <p className="settings-panel__copy-notice" role="status">
               {updateCopyNotice}
@@ -984,9 +988,10 @@ export function SettingsPanel({
             <h2 className="restart-prompt__title">Stop Work and Install Now?</h2>
             <p className="restart-prompt__summary">
               Agentico will send stop requests before restarting to update to{' '}
-              <code>{updateState.targetVersion}</code>. Workflows and the supervisor may be
-              interrupted if they do not stop cleanly.
+              <code>{updateState.targetVersion}</code>. Workflows may be interrupted if they do not
+              stop cleanly.
             </p>
+            <SupervisorUpdateCopy className="restart-prompt__summary" />
             <p className="restart-prompt__summary">
               {updateState.activeWorkSummary ??
                 'Fresh workflow and supervisor state will be checked before stopping anything.'}

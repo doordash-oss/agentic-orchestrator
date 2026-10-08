@@ -14,7 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import type { SessionSummary } from '../../../shared/ipc';
+import {
+  isSupervisorSessionId,
+  SUPERVISOR_SESSION_KIND,
+  type SessionSummary,
+} from '../../../shared/ipc';
 import { orderRunSessions, sessionDisplayLabel, sessionGroup } from './reviewModel';
 
 export type CohortTabStatus = 'running' | 'completed' | 'failed';
@@ -61,11 +65,16 @@ export const EMPTY_COHORT: CohortMembership = { sessionIds: [], phase: '' };
  */
 export function computeCohort(
   previous: CohortMembership,
-  runSessions: readonly SessionSummary[],
+  listedSessions: readonly SessionSummary[],
   currentPhase: string,
   currentIteration?: number,
   currentReviewAxes?: readonly string[],
 ): CohortMembership {
+  // A run's own session list never holds the supervisor conversation; one
+  // that strays in (defensively) is never a cohort member.
+  const runSessions = listedSessions.filter(
+    (session) => session.kind !== SUPERVISOR_SESSION_KIND && !isSupervisorSessionId(session.id),
+  );
   const byId = new Map(runSessions.map((session) => [session.id, session]));
   const activeIds = runSessions
     .filter((session) => !isTerminalSessionStatus(session.status))

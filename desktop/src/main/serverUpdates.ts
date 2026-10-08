@@ -28,6 +28,7 @@ import {
   type ServerUpdateInstallRequest,
   type ServerUpdateState,
 } from '../shared/ipc';
+import { supervisorActivitySentence } from './quitCoordinator';
 import { mapServerError, type ServerTransport } from './serverClient';
 
 const WireSnapshotSchema = z
@@ -51,6 +52,8 @@ const WireSnapshotSchema = z
       .object({
         feature_count: z.number().int().nonnegative(),
         supervisor_active: z.boolean(),
+        // Absent from servers that predate the waiting split.
+        supervisor_waiting: z.boolean().optional(),
         clone_count: z.number().int().nonnegative(),
         upload_count: z.number().int().nonnegative(),
         origin_check_count: z.number().int().nonnegative(),
@@ -73,13 +76,20 @@ export function describeActiveWork(
   const parts: string[] = [];
   const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
   if (summary.feature_count > 0) parts.push(plural(summary.feature_count, 'feature'));
-  if (summary.supervisor_active) parts.push('the supervisor');
   const repository = summary.clone_count + summary.upload_count + summary.origin_check_count;
   if (repository > 0) parts.push(plural(repository, 'repository operation'));
+  const supervisor = supervisorActivitySentence({
+    supervisorActive: summary.supervisor_active,
+    supervisorWaiting: summary.supervisor_waiting === true,
+  });
   const last = parts.pop();
-  if (last === undefined) return undefined;
-  const list = parts.length === 0 ? last : `${parts.join(', ')} and ${last}`;
-  return `${list.charAt(0).toUpperCase()}${list.slice(1)} active on the server.`;
+  const list =
+    last === undefined ? null : parts.length === 0 ? last : `${parts.join(', ')} and ${last}`;
+  const sentences = [
+    list === null ? null : `${list.charAt(0).toUpperCase()}${list.slice(1)} active on the server.`,
+    supervisor,
+  ].filter((sentence): sentence is string => sentence !== null);
+  return sentences.length === 0 ? undefined : sentences.join(' ');
 }
 
 export function projectServerUpdate(raw: unknown): ServerUpdateState {

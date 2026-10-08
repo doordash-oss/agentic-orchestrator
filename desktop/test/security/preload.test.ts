@@ -248,6 +248,11 @@ describe('preload surface', () => {
     expect(cb).toHaveBeenCalledWith({ target: 'settings', settingsSection: 'updates' });
 
     cb.mockClear();
+    // The setup sheet's route carries nothing but its target.
+    listener({}, { target: 'setup' });
+    expect(cb).toHaveBeenCalledWith({ target: 'setup' });
+
+    cb.mockClear();
     // The explain draft rides the supervisor target only and crosses intact.
     const supervisorRoute = {
       target: 'supervisor',
@@ -272,6 +277,8 @@ describe('preload surface', () => {
       },
     );
     listener({}, { target: 'ama', draft: 'smuggled draft' });
+    listener({}, { target: 'setup', draft: 'smuggled draft' });
+    listener({}, { target: 'setup', token: 'tok-leak' });
     listener({}, { target: 'supervisor', draft: 'auto', autoSubmit: true });
     listener({}, JSON.parse('{"__proto__": {}, "target": "home"}'));
     expect(cb).not.toHaveBeenCalled();
@@ -437,5 +444,35 @@ describe('preload surface', () => {
 
     unsubscribe();
     expect(removeListener).toHaveBeenCalledWith('agentico:supervisor:event', listener);
+  });
+
+  it('validates pushed window focus events fail-closed and removes the exact listener', () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      onWindowFocusChanged(cb: (event: unknown) => void): () => void;
+    };
+    const cb = vi.fn();
+    const unsubscribe = api.onWindowFocusChanged(cb);
+    expect(on).toHaveBeenCalledWith('agentico:window:focus-changed', expect.any(Function));
+    const listener = on.mock.calls.find(
+      ([channel]) => channel === 'agentico:window:focus-changed',
+    )?.[1] as (event: unknown, payload: unknown) => void;
+
+    listener({}, { focused: true });
+    expect(cb).toHaveBeenLastCalledWith({ focused: true });
+    listener({}, { focused: false });
+    expect(cb).toHaveBeenLastCalledWith({ focused: false });
+
+    cb.mockClear();
+    // Only the boolean crosses: token-shaped fields, foreign shapes and
+    // polluted objects are dropped.
+    listener({}, { focused: true, bearerToken: 'tok-leak' });
+    listener({}, { focused: 'yes' });
+    listener({}, true);
+    listener({}, {});
+    listener({}, JSON.parse('{"focused":true,"__proto__":{"polluted":true}}'));
+    expect(cb).not.toHaveBeenCalled();
+
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('agentico:window:focus-changed', listener);
   });
 });

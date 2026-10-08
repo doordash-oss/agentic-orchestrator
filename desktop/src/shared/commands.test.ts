@@ -129,6 +129,17 @@ describe('command catalogue parity', () => {
     expect(paletteEntryIds()).toContain('global.new-conversation');
   });
 
+  it('offers Setup… as a palette-visible navigation command with no accelerator', () => {
+    expect(commandById('global.setup')).toEqual({
+      id: 'global.setup',
+      label: 'Setup…',
+      group: 'navigation',
+      target: 'setup',
+      paletteVisible: true,
+    });
+    expect(paletteEntryIds()).toContain('global.setup');
+  });
+
   it('maps every feature command onto its server action, except the local editor', () => {
     expect(featureActionId('feature.pause-stop')).toBe('pause-stop');
     expect(featureActionId('feature.review-feedback')).toBe('review-feedback');

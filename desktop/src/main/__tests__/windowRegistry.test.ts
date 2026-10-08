@@ -330,6 +330,7 @@ describe('routeWindowPurpose', () => {
       'supervisor',
       'bulk',
       'recovery',
+      'setup',
       'palette',
       'help',
     ] as const;
@@ -358,6 +359,7 @@ describe('routeSettingsPane', () => {
       'supervisor',
       'bulk',
       'recovery',
+      'setup',
       'palette',
       'help',
     ] as const;

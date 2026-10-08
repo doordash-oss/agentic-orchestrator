@@ -67,10 +67,13 @@ const GROUP_LABELS: Record<PaletteGroup, string> = {
 
 export function CommandPalette({
   ready,
+  setupIncomplete = false,
   routeRequest,
   onRoute,
 }: {
   ready: boolean;
+  /** True while the shell is in partial-readiness mode: the only time Setup… is listed. */
+  setupIncomplete?: boolean;
   routeRequest: RoutedRequest | null;
   onRoute(event: AppRouteEvent): void;
 }) {
@@ -170,8 +173,8 @@ export function CommandPalette({
   }, [open, connection.serverKey]);
 
   const entries = useMemo(
-    () => buildEntries({ ready, activeFeatureId, activeActions, onRoute, close }),
-    [activeFeatureId, activeActions, close, onRoute, ready],
+    () => buildEntries({ ready, setupIncomplete, activeFeatureId, activeActions, onRoute, close }),
+    [activeFeatureId, activeActions, close, onRoute, ready, setupIncomplete],
   );
 
   const featureEntries = useMemo(
@@ -351,19 +354,25 @@ function featureNavEntry(
 
 function buildEntries({
   ready,
+  setupIncomplete,
   activeActions,
   activeFeatureId,
   onRoute,
   close,
 }: {
   ready: boolean;
+  setupIncomplete: boolean;
   activeActions: readonly FeatureActionLike[] | null;
   activeFeatureId: string | null;
   onRoute(event: AppRouteEvent): void;
   close(): void;
 }): PaletteEntry[] {
   const globalEntries = COMMAND_CATALOGUE.filter(
-    (command) => command.group !== 'feature' && command.paletteVisible === true,
+    (command) =>
+      command.group !== 'feature' &&
+      command.paletteVisible === true &&
+      // Setup… exists only while there is setup left to do.
+      (command.id !== 'global.setup' || setupIncomplete),
   ).map((command) => globalEntry(command, { ready, activeFeatureId }, onRoute, close));
 
   const featureEntries = FEATURE_COMMANDS.map((command) =>
@@ -392,8 +401,10 @@ function globalEntry(
     throw new Error(`Global command ${command.id} has no route target.`);
   }
   // Settings is its own window and stays reachable while the runtime is down;
+  // Setup… is listed only while setup is incomplete and is exactly the way out
+  // of an unready runtime, so it never greys out with the runtime-gated rest;
   // the inspector additionally needs a feature to inspect.
-  const needsRuntime = target !== 'settings';
+  const needsRuntime = target !== 'settings' && target !== 'setup';
   const needsSelection = command.id === 'global.toggle-inspector';
   const disabled =
     (needsRuntime && !context.ready) || (needsSelection && context.activeFeatureId === null);

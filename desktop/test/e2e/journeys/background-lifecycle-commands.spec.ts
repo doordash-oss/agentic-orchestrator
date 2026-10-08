@@ -413,12 +413,16 @@ async function assertTrayState(handle: AppHandle): Promise<void> {
   expect(state).not.toBeNull();
   expect(state!.trayInstalled || state!.trayFallbackActive).toBe(true);
   expect(state!.attentionCount).toBeGreaterThanOrEqual(0);
-  expect(typeof state!.supervisorActive).toBe('boolean');
+  // The tray reads the supervisor lifecycle in three grades; this journey
+  // never starts the supervisor, so it rests at idle.
+  expect(['working', 'waiting', 'idle']).toContain(state!.supervisorGrade);
+  expect(state!.supervisorGrade).toBe('idle');
+  expect(state).not.toHaveProperty('supervisorActive');
 }
 
 async function nativeCommandState(handle: AppHandle): Promise<{
   attentionCount: number;
-  supervisorActive: boolean;
+  supervisorGrade: 'working' | 'waiting' | 'idle';
   trayInstalled: boolean;
   trayFallbackActive: boolean;
   platform: NodeJS.Platform;
@@ -427,7 +431,7 @@ async function nativeCommandState(handle: AppHandle): Promise<{
     const global = globalThis as typeof globalThis & {
       __agenticoNativeCommandState?: {
         attentionCount: number;
-        supervisorActive: boolean;
+        supervisorGrade: 'working' | 'waiting' | 'idle';
         trayInstalled: boolean;
         trayFallbackActive: boolean;
         platform: NodeJS.Platform;

@@ -41,6 +41,28 @@ function session(overrides: Partial<SessionSummary> & Pick<SessionSummary, 'id'>
 }
 
 describe('computeCohort', () => {
+  it('never admits a supervisor session that strays into a run session list', () => {
+    const supervisor = session({
+      id: '__supervisor__.0b9c6f2e-1d2a-4c55-9e1f-2a3b4c5d6e7f.3',
+      featureId: '__supervisor__',
+      kind: 'supervisor',
+      phase: '',
+      status: 'running',
+    });
+    const implementer = session({ id: 'implementer', kind: 'repo-impl', status: 'running' });
+    const fresh = computeCohort(EMPTY_COHORT, [supervisor, implementer], 'implement');
+    expect(fresh.sessionIds).toEqual(['implementer']);
+
+    // Alone, or retained from a previous capture, it still never joins.
+    expect(computeCohort(EMPTY_COHORT, [supervisor], 'implement').sessionIds).toEqual([]);
+    const retained = computeCohort(
+      { sessionIds: [supervisor.id, 'implementer'], phase: 'implement' },
+      [supervisor, { ...implementer, status: 'completed' }],
+      'implement',
+    );
+    expect(retained.sessionIds).toEqual(['implementer']);
+  });
+
   it('hydrates terminal and active sessions from only the current iteration', () => {
     const cohort = computeCohort(
       EMPTY_COHORT,

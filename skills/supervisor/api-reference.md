@@ -195,11 +195,11 @@ Recovery lists sessions orphaned by a previous server process.
 
 ## Update
 
-- `GET /api/v1/update` — release availability: `status`, `policy`, `current_version`, `latest_version`, active install state, `active_work_summary`.
+- `GET /api/v1/update` — release availability: `status`, `policy`, `current_version`, `latest_version`, active install state, `active_work_summary` (`supervisor_active` while this conversation is starting, running or waiting; `supervisor_waiting` while it waits on a permission or question).
   Example: `"$AGENTICO_BIN" api GET /api/v1/update`
 - `POST /api/v1/update/check` — run one release check now. Body `{}`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/update/check '{}'`
-- `POST /api/v1/update/install` — install the discovered release, only when the user explicitly asks. Required: `consent` (`true`), `when` (`idle` waits for work to finish; `now` installs immediately). Optional: `stop_active_work` (with `now`; stops feature sessions and ends this conversation), `version`.
+- `POST /api/v1/update/install` — install the discovered release, only when the user explicitly asks. Required: `consent` (`true`), `when` (`idle` waits for work to finish, but not for this conversation waiting on the user: the install ends it and its open request reads as interrupted; `now` installs immediately). Optional: `stop_active_work` (with `now`; stops feature sessions and ends this conversation), `version`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/update/install '{"consent":true,"when":"idle"}'`
 - `DELETE /api/v1/update/install` — cancel the active install. Body `{}`.
   Example: `"$AGENTICO_BIN" api DELETE /api/v1/update/install '{}'`

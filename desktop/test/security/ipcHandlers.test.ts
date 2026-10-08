@@ -484,6 +484,7 @@ describe('registerIpcHandlers', () => {
       sidebarCollapsed: false,
       inspectorOpen: true,
       inspectorAvailable: true,
+      setupIncomplete: true,
       featureCommands: { 'feature.start': true, 'feature.delete': false },
     };
 

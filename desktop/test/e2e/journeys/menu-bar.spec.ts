@@ -235,6 +235,18 @@ test(
       await expect(recoverySheet).toHaveCount(0);
       transcript.step('Navigate ▸ Recovery opened the sheet and Escape put it away');
 
+      transcript.section('Navigate ▸ Setup… follows Updates and is disabled on a ready runtime');
+      // Only a partially ready runtime has anything to set up; this world is
+      // fully ready, so the item is listed but disabled and has no accelerator.
+      expect(initial.navigate.find((item) => item.id === 'global.setup')).toEqual({
+        id: 'global.setup',
+        label: 'Setup…',
+        enabled: false,
+        accelerator: undefined,
+      });
+      expect(navigateIds.indexOf('global.setup')).toBe(navigateIds.indexOf('global.updates') + 1);
+      transcript.step('Navigate ▸ Setup… sits after Updates, disabled while setup is complete');
+
       transcript.section(
         'On the Supervisor page the whole Feature menu is disabled — visible, never hidden',
       );

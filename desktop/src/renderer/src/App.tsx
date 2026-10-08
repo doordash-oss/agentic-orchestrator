@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { disabledMainWindowUiState } from '../../shared/ipc';
+import { DEFAULT_RUNTIME_ID, disabledMainWindowUiState } from '../../shared/ipc';
 import type { AppRouteEvent, AttentionItem, RoutedRequest, UpdateState } from '../../shared/ipc';
 import { ConnectionShell } from './components/ConnectionShell';
 import { CommandPalette } from './components/CommandPalette';
@@ -36,6 +36,11 @@ import {
   SupervisorDraftsContext,
   SupervisorDraftsStore,
 } from './features/supervisor/supervisorDrafts';
+import {
+  createSupervisorStatusStore,
+  SupervisorStatusProvider,
+  type SupervisorStatusStore,
+} from './features/supervisor/supervisorStatus';
 
 export default function App() {
   // Called purely for its side effect (mirroring the resolved theme onto
@@ -86,6 +91,9 @@ export default function App() {
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
   const [updateDismissedVersion, setUpdateDismissedVersion] = useState<string | null>(null);
   const [schedulingUpdate, setSchedulingUpdate] = useState(false);
+  // Reported by the readiness gate: the shell is mounted over a runtime whose
+  // setup is incomplete, so the palette offers Setup….
+  const [setupIncomplete, setSetupIncomplete] = useState(false);
   const routeSequence = useRef(0);
   /**
    * Creation drafts are scoped per server exactly like attention drafts, but
@@ -105,6 +113,15 @@ export default function App() {
   const supervisorDraftsStore = useRef<SupervisorDraftsStore | null>(null);
   if (supervisorDraftsStore.current === null) {
     supervisorDraftsStore.current = new SupervisorDraftsStore();
+  }
+  /**
+   * The supervisor's lifecycle, the window's focus and the Supervisor row's
+   * unread flag per server, beside the drafts and just as in-memory: the
+   * sidebar row, update surfaces and setup banner read it from any page.
+   */
+  const supervisorStatusStore = useRef<SupervisorStatusStore | null>(null);
+  if (supervisorStatusStore.current === null) {
+    supervisorStatusStore.current = createSupervisorStatusStore();
   }
 
   /**
@@ -228,52 +245,59 @@ export default function App() {
     <ExplainChatProvider requestRoute={runtimeReady ? requestRoute : null}>
       <CreationDraftsContext.Provider value={creationDraftsStore.current}>
         <SupervisorDraftsContext.Provider value={supervisorDraftsStore.current}>
-          <div className="app-frame">
-            {runtimeReady ? (
-              <ReadinessGate
-                key={serverKey}
-                attentionItems={attentionItems}
-                refreshAttention={refreshAttention}
-                attentionDrafts={attentionDrafts}
-                setAttentionDrafts={setAttentionDrafts}
-                attentionJump={attentionJump}
-                onAttentionJumpHandled={() => setAttentionJump(null)}
-                routeRequest={routeRequest}
-                onAttentionJump={(featureId, attentionId) => {
-                  routeSequence.current += 1;
-                  setAttentionJump({
-                    requestId: routeSequence.current,
-                    featureId,
-                    ...(attentionId === undefined ? {} : { attentionId }),
-                  });
-                }}
-                updateState={updateState}
-                updateDismissedVersion={updateDismissedVersion}
-                schedulingUpdate={schedulingUpdate}
-                onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
-                onOpenUpdatesSettings={() =>
-                  requestRoute({ target: 'settings', settingsSection: 'updates' })
-                }
-                onOpenPalette={() => requestRoute({ target: 'palette' })}
-                onInstallUpdateWhenIdle={async () => {
-                  try {
-                    setSchedulingUpdate(true);
-                    setUpdateState(await window.agentico.installUpdateWhenIdle());
-                  } finally {
-                    setSchedulingUpdate(false);
+          <SupervisorStatusProvider
+            store={supervisorStatusStore.current}
+            serverKey={runtimeReady ? (serverKey ?? DEFAULT_RUNTIME_ID) : null}
+          >
+            <div className="app-frame">
+              {runtimeReady ? (
+                <ReadinessGate
+                  key={serverKey}
+                  attentionItems={attentionItems}
+                  refreshAttention={refreshAttention}
+                  attentionDrafts={attentionDrafts}
+                  setAttentionDrafts={setAttentionDrafts}
+                  attentionJump={attentionJump}
+                  onAttentionJumpHandled={() => setAttentionJump(null)}
+                  routeRequest={routeRequest}
+                  onAttentionJump={(featureId, attentionId) => {
+                    routeSequence.current += 1;
+                    setAttentionJump({
+                      requestId: routeSequence.current,
+                      featureId,
+                      ...(attentionId === undefined ? {} : { attentionId }),
+                    });
+                  }}
+                  updateState={updateState}
+                  updateDismissedVersion={updateDismissedVersion}
+                  schedulingUpdate={schedulingUpdate}
+                  onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
+                  onOpenUpdatesSettings={() =>
+                    requestRoute({ target: 'settings', settingsSection: 'updates' })
                   }
-                }}
+                  onOpenPalette={() => requestRoute({ target: 'palette' })}
+                  onSetupIncompleteChange={setSetupIncomplete}
+                  onInstallUpdateWhenIdle={async () => {
+                    try {
+                      setSchedulingUpdate(true);
+                      setUpdateState(await window.agentico.installUpdateWhenIdle());
+                    } finally {
+                      setSchedulingUpdate(false);
+                    }
+                  }}
+                />
+              ) : (
+                <ConnectionShell />
+              )}
+              <CommandPalette
+                ready={runtimeReady}
+                setupIncomplete={runtimeReady && setupIncomplete}
+                routeRequest={routeRequest}
+                onRoute={requestRoute}
               />
-            ) : (
-              <ConnectionShell />
-            )}
-            <CommandPalette
-              ready={runtimeReady}
-              routeRequest={routeRequest}
-              onRoute={requestRoute}
-            />
-            <HelpOverlay routeRequest={routeRequest} />
-          </div>
+              <HelpOverlay routeRequest={routeRequest} />
+            </div>
+          </SupervisorStatusProvider>
         </SupervisorDraftsContext.Provider>
       </CreationDraftsContext.Provider>
     </ExplainChatProvider>

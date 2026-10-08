@@ -103,7 +103,7 @@ Snapshot highlights:
 - `current_version`, `latest_version`, and `latest_release_url` describe the discovered release. A release that rolled back stays visible as `latest_version` with `failed` and `update_rolled_back` until a newer one appears.
 - `last_check_at`, `last_success_at`, `next_check_at`, and `retry_not_before` describe check timing. A failed refresh keeps the last successful metadata.
 - `receipt` is the sanitized outcome of the last install, when one exists.
-- `active_work_summary` reports current features, the supervisor (`supervisor_active`), clones, uploads, origin checks, and pending admissions. `detection_failed` means an immediate install will be refused.
+- `active_work_summary` reports current features, the supervisor (`supervisor_active`, with `supervisor_waiting` while it waits on a permission or question), clones, uploads, origin checks, and pending admissions. `detection_failed` means an immediate install will be refused.
 - While an install is active: `method`, `stop_active_work`, `target_version`, `scheduled_for`, `signature`, and `target_contract`. `signature` is `verified` only after the pinned candidate was verified. `scheduled_for` is the next window opening an automatic install waits for, otherwise `null`.
 
 ### POST /api/v1/update/check
@@ -127,7 +127,7 @@ files, probes candidates, or writes receipts.
 Body: `UpdateInstallRequest`. Returns `202` with the current snapshot.
 
 - `consent` must be `true`.
-- `when` is `idle` or `now`. `idle` stages the release and waits for work to finish without interrupting it. `now` installs immediately if nothing is active.
+- `when` is `idle` or `now`. `idle` stages the release and waits for work to finish without interrupting it. A supervisor waiting on a permission or question does not hold it up: the install's restart ends the supervisor and resolves the open request as `interrupted`. `now` installs immediately if nothing is active.
 - `stop_active_work: true` with `now` authorizes stopping feature sessions and ending the supervisor. Stop dispatch and confirmation share a ten-second budget. Any stop failure or timeout aborts the install and keeps the current build serving. Already-stopped work stays stopped.
 - `version`, when set, must equal the discovered latest stable release.
 

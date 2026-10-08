@@ -93,7 +93,7 @@ test('Stop Work and Install Now confirms impact, cancels partial stops, then suc
     await expect(updatePopover).toHaveCount(0);
     await settings.getByRole('button', { name: 'Stop Work and Install Now' }).click();
     const dialog = settings.getByRole('dialog', { name: 'Install update confirmation' });
-    await expect(dialog).toContainText(/Workflows and the supervisor may be interrupted/);
+    await expect(dialog).toContainText(/Workflows may be interrupted/);
     transcript.step('Stop Work and Install Now showed explicit workflow and supervisor impact');
 
     await forcePartialStop(handle, 1);

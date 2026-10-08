@@ -910,3 +910,10 @@ func TestSupervisorRecordProjectsMultipleCompletedDiffs(t *testing.T) {
 		t.Fatal("lost diff")
 	}
 }
+
+func TestSupervisorPendingWriteDoesNotClaimCreation(t *testing.T) {
+	rows := conversationDTOs(1, roleAssistant, []llm.ContentBlock{{Type: "tool_use", Name: "Write", Input: json.RawMessage(`{"file_path":"src/a.go","paths":["src/a.go"]}`)}}, "/work", false, false, "", 0)
+	if len(rows) != 1 || rows[0].FileChange != nil || rows[0].Tool != "Write" {
+		t.Fatalf("pending edit should be activity: %+v", rows)
+	}
+}

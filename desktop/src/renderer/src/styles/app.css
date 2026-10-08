@@ -1132,7 +1132,7 @@ body {
   max-height: 360px;
   overflow: auto;
   padding: var(--space-1) 0;
-  background: color-mix(in srgb, var(--content) 78%, black);
+  background: var(--content);
   font: 12px/1.55 var(--bench-font-mono);
 }
 

@@ -614,6 +614,16 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 		return nil
 	}
 	input := transcriptJSONFields(block.Input)
+	// Codex announces paths before an edit completes, without file content.
+	// Keep that announcement as activity; the completed result owns its diff.
+	if block.Name == toolNameWrite {
+		_, content := input["content"]
+		_, newString := input["new_string"]
+		_, newText := input["newText"]
+		if !content && !newString && !newText {
+			return nil
+		}
+	}
 	switch block.Name {
 	case toolNameEdit, toolNameMultiEdit, toolNameWrite:
 		path := firstTranscriptString(input, "file_path", "path", "target_file")

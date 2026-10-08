@@ -21,7 +21,7 @@ import type { VerificationTone } from '../verificationModel';
 export const MAX_TRANSCRIPT_MESSAGES = 200;
 
 /** Row types that are machinery, never shown as conversation. */
-const SUPPRESSED_TYPES = ['usage_update', 'success', 'result', 'system', 'prompt'];
+const SUPPRESSED_TYPES = ['usage_update', 'success', 'result', 'system', 'prompt', 'tool_result'];
 
 export type ConversationMode = 'chat' | 'assistant-only';
 

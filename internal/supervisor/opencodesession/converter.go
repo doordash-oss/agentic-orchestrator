@@ -170,9 +170,18 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 // system. It returns nil when the selection is empty. Unrepresentable
 // records are *supervisor.ConversionError.
 func Render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
+	selection, err := supervisor.SelectCheckpoint(in.Records, Harness)
+	if err != nil {
+		return nil, err
+	}
+	in.Records = selection.Records
 	entries, err := selectEntries(in.Records)
 	if err != nil {
 		return nil, err
+	}
+	if selection.Checkpoint != nil {
+		note := supervisor.CheckpointNote(selection.Data)
+		entries = append([]entry{{rec: selection.Checkpoint, role: roleUser, lines: []line{{kind: lineMessage, text: labelled("User", clip(note, maxTextChars))}}}}, entries...)
 	}
 	if len(entries) == 0 {
 		return nil, nil
@@ -606,7 +615,21 @@ func applyBudget(entries []entry, budget int) ([]entry, int) {
 	}
 	keep := map[string]bool{}
 	used := 0
+	// A readable checkpoint is the only representation of the history it
+	// covers. Reserve its cost before choosing recent turns.
+	for _, k := range order {
+		for _, e := range entries {
+			if keyOf(e) == k && e.rec.Kind == supervisor.KindCheckpoint {
+				keep[k] = true
+				used += turns[k].cost
+				break
+			}
+		}
+	}
 	for i := len(order) - 1; i >= 0; i-- {
+		if keep[order[i]] {
+			continue
+		}
 		t := turns[order[i]]
 		if used+t.cost > budget {
 			break

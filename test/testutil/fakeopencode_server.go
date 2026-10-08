@@ -695,12 +695,13 @@ type fakeOpenCodeTurn struct {
 	cancel  chan struct{}
 	toolSeq int
 	msgID   string
+	text    string
 }
 
 func (s *fakeOpenCode) prompt(id json.RawMessage, text string) {
 	s.mu.Lock()
 	s.turns++
-	t := &fakeOpenCodeTurn{s: s, id: id, root: s.rootID, n: s.turns, cancel: make(chan struct{}, 1)}
+	t := &fakeOpenCodeTurn{s: s, id: id, root: s.rootID, n: s.turns, cancel: make(chan struct{}, 1), text: text}
 	t.msgID = fmt.Sprintf("msg_fake%d_%d", s.launch, s.turns)
 	s.cancel = t.cancel
 	s.stubborn = strings.Contains(text, FakeOpenCodeStubborn)
@@ -731,7 +732,11 @@ func (t *fakeOpenCodeTurn) message(text string, chunks ...string) {
 }
 
 func (t *fakeOpenCodeTurn) complete(stopReason string) {
-	t.s.update(t.root, map[string]any{"sessionUpdate": "usage_update", "used": 1000 * t.n, "size": 200000, "cost": map[string]any{"amount": 0, "currency": "USD"}})
+	used := 1000 * t.n
+	if strings.Contains(t.text, FakeOpenCodeUsageHigh) {
+		used = 170000
+	}
+	t.s.update(t.root, map[string]any{"sessionUpdate": "usage_update", "used": used, "size": 200000, "cost": map[string]any{"amount": 0, "currency": "USD"}})
 	t.s.mu.Lock()
 	if t.s.cancel == t.cancel {
 		t.s.cancel, t.s.stubborn = nil, false

@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,6 +72,7 @@ const (
 	MarkerSettingsChanged      = "settings_changed"
 	MarkerSettingsReverted     = "settings_reverted"
 	MarkerHarnessChange        = "harness_change"
+	MarkerCompacted            = "compacted"
 )
 
 // MarkerData is the payload of a display-only marker record. Code is the
@@ -81,6 +83,24 @@ type MarkerData struct {
 	Code        string `json:"code,omitempty"`
 	FromHarness string `json:"from_harness,omitempty"`
 	ToHarness   string `json:"to_harness,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+}
+
+// NativeBaseline preserves the harness's own compacted session representation.
+type NativeBaseline struct {
+	Harness string          `json:"harness"`
+	Payload json.RawMessage `json:"payload"`
+}
+
+// CheckpointData records the native context cut and its rebuild material.
+type CheckpointData struct {
+	CoversThroughSeq int64           `json:"covers_through_seq"`
+	Summary          string          `json:"summary"`
+	NativeBaseline   *NativeBaseline `json:"native_baseline,omitempty"`
+	Reason           string          `json:"reason"`
+	Model            string          `json:"model"`
+	Trigger          string          `json:"trigger,omitempty"`
+	PreTokens        int             `json:"pre_tokens,omitempty"`
 }
 
 // NoteData is model-only context inserted at a settings boundary.
@@ -181,9 +201,19 @@ type Coordinator struct {
 	// fallbackMarked records that this process already reported a failed
 	// resume, so the marker appears once per generation.
 	fallbackMarked bool
+	contextUsage   *ContextUsage
+	pendingCompact *pendingCompaction
 	interrupt      *interruptAttempt
 	closed         bool
 	subs           map[*Subscription]struct{}
+}
+
+type pendingCompaction struct {
+	generation int64
+	coversSeq  int64
+	turnID     string
+	trigger    string
+	preTokens  int
 }
 
 type relaunchSettings struct {
@@ -239,6 +269,9 @@ func New(opts Options) (*Coordinator, error) {
 	}
 	if opts.SettingsUpdateTimeout <= 0 {
 		opts.SettingsUpdateTimeout = DefaultSettingsUpdateTimeout
+	}
+	if opts.CompactionCaptureTimeout <= 0 {
+		opts.CompactionCaptureTimeout = 5 * time.Second
 	}
 	if opts.WorkDir == "" {
 		opts.WorkDir = opts.StateDir
@@ -499,6 +532,7 @@ func (c *Coordinator) stateLocked() State {
 		PendingRequests: append([]*llm.ControlRequestMessage(nil), c.pending...),
 		Session:         c.session,
 		HeadSeq:         c.store.head(),
+		ContextUsage:    c.contextUsage,
 		StreamEpoch:     c.conv.StreamEpoch,
 		WorkDir:         c.opts.WorkDir,
 	}
@@ -1020,6 +1054,8 @@ func (c *Coordinator) resetProcessLocked() {
 	c.keepTurns = false
 	c.resumeID = ""
 	c.fallbackMarked = false
+	c.contextUsage = nil
+	c.pendingCompact = nil
 	c.interrupt = nil
 	c.step = ""
 	c.permMode = PermissionMode{Requested: RequestedPermissionMode}
@@ -1392,6 +1428,7 @@ func (c *Coordinator) watchExit(sess ports.SessionView, sessionID string) {
 
 // applyExitLocked records the current process's exit and reports stopped.
 func (c *Coordinator) applyExitLocked(clean bool) {
+	c.unavailableCompactLocked()
 	switch {
 	case c.ending:
 		// End, shutdown and interrupt termination set the outcome themselves.
@@ -1597,6 +1634,22 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 		// only the permissions and questions it raises reach the user.
 		return
 	}
+	if !current {
+		return
+	}
+	if msg.Compact != nil {
+		c.observeCompactionLocked(gen, sessionID, msg.Compact)
+		return
+	}
+	if c.pendingCompact != nil {
+		if msg.User != nil && msg.User.IsCompactSummary {
+			c.completeClaudeCompactionLocked(gen, msg.User)
+			return
+		}
+		if msg.Assistant != nil || msg.Result != nil {
+			c.unavailableCompactLocked()
+		}
+	}
 	switch {
 	case msg.Assistant != nil && msg.Subtype != "partial":
 		var text, tools []llm.ContentBlock
@@ -1634,7 +1687,137 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 	case msg.ControlRequest != nil && current:
 		c.surfaceRequestLocked(gen, msg.ControlRequest)
 	case msg.Result != nil && current:
+		c.refreshContextUsageLocked(false)
 		c.observeResultLocked(msg.Result)
+		return
+	}
+	if msg.UsageUpdate != nil || (msg.Assistant != nil && msg.Assistant.Message.Usage != nil) {
+		c.updateContextUsageLocked()
+	}
+}
+
+func (c *Coordinator) updateContextUsageLocked() {
+	c.refreshContextUsageLocked(true)
+}
+
+func (c *Coordinator) refreshContextUsageLocked(publish bool) {
+	var next *ContextUsage
+	if c.session != nil {
+		pct := c.session.ContextPercentage()
+		u := c.session.LatestUsage()
+		if pct >= 0 && u != nil {
+			used := u.ContextTotalTokens
+			if used == 0 {
+				used = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+			}
+			used -= u.ContextBaseline
+			if used < 0 {
+				used = 0
+			}
+			window := u.ContextWindow - u.ContextBaseline
+			if window > 0 {
+				next = &ContextUsage{Percent: pct, UsedTokens: used, WindowTokens: window}
+			}
+		}
+	}
+	if (c.contextUsage == nil) != (next == nil) || (next != nil && *c.contextUsage != *next) {
+		c.contextUsage = next
+		if publish {
+			c.publishStateLocked()
+		}
+	}
+}
+
+func (c *Coordinator) observeCompactionLocked(gen int64, sessionID string, boundary *llm.CompactBoundaryMessage) {
+	if c.settings.Harness == "opencode" {
+		return
+	}
+	c.unavailableCompactLocked()
+	pending := &pendingCompaction{generation: gen, coversSeq: c.store.head(), turnID: c.currentTurnLocked(), trigger: boundary.Trigger, preTokens: boundary.PreTokens}
+	if c.settings.Harness == "claude" {
+		c.pendingCompact = pending
+		return
+	}
+	capture, ok := c.converterLocked().(NativeCompactionCapture)
+	if !ok {
+		c.appendUnavailableCompactLocked(gen, pending.turnID)
+		return
+	}
+	nativeID := c.conv.NativeSessionID
+	if nativeID == "" {
+		c.appendUnavailableCompactLocked(gen, pending.turnID)
+		return
+	}
+	timeout := c.opts.CompactionCaptureTimeout
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		payload, err := capture.CaptureCompaction(ctx, nativeID)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.conv.Generation != gen || c.sessionID != sessionID {
+			return
+		}
+		if err != nil || len(payload) == 0 {
+			c.appendUnavailableCompactLocked(gen, pending.turnID)
+			return
+		}
+		c.appendCheckpointLocked(gen, pending, "", &NativeBaseline{Harness: "codex", Payload: payload})
+	}()
+}
+
+func (c *Coordinator) completeClaudeCompactionLocked(gen int64, user *llm.UserMessage) {
+	pending := c.pendingCompact
+	c.pendingCompact = nil
+	if pending == nil || pending.generation != gen {
+		return
+	}
+	var parts []string
+	for _, block := range user.Message.Content {
+		if block.IsText() {
+			parts = append(parts, block.Text)
+		}
+	}
+	summary := strings.Join(parts, "\n")
+	if summary == "" {
+		c.appendUnavailableCompactLocked(gen, pending.turnID)
+		return
+	}
+	payload, err := json.Marshal(struct {
+		Content   []llm.ContentBlock `json:"content"`
+		Trigger   string             `json:"trigger"`
+		PreTokens int                `json:"pre_tokens"`
+	}{user.Message.Content, pending.trigger, pending.preTokens})
+	if err != nil {
+		c.appendUnavailableCompactLocked(gen, pending.turnID)
+		return
+	}
+	c.appendCheckpointLocked(gen, pending, summary, &NativeBaseline{Harness: "claude", Payload: payload})
+}
+
+func (c *Coordinator) appendCheckpointLocked(gen int64, pending *pendingCompaction, summary string, baseline *NativeBaseline) {
+	data, err := json.Marshal(CheckpointData{CoversThroughSeq: pending.coversSeq, Summary: summary, NativeBaseline: baseline, Reason: "native_auto", Model: c.settings.Model, Trigger: pending.trigger, PreTokens: pending.preTokens})
+	if err != nil {
+		c.appendUnavailableCompactLocked(gen, pending.turnID)
+		return
+	}
+	rec, _, err := c.store.appendRecord(Record{Generation: gen, TurnID: pending.turnID, Kind: KindCheckpoint, Visibility: VisibilityModelOnly, Data: data})
+	if err != nil {
+		c.appendUnavailableCompactLocked(gen, pending.turnID)
+		return
+	}
+	c.publishLocked(Event{Kind: EventRecord, Generation: gen, Record: &rec})
+	c.appendMarkerLocked(gen, pending.turnID, MarkerData{Marker: MarkerCompacted, Text: "Conversation compacted", Summary: summary})
+}
+
+func (c *Coordinator) appendUnavailableCompactLocked(gen int64, turnID string) {
+	c.appendMarkerLocked(gen, turnID, MarkerData{Marker: MarkerCompacted, Text: "Conversation compacted", Code: "checkpoint_unavailable"})
+}
+
+func (c *Coordinator) unavailableCompactLocked() {
+	if pending := c.pendingCompact; pending != nil {
+		c.pendingCompact = nil
+		c.appendUnavailableCompactLocked(pending.generation, pending.turnID)
 	}
 }
 

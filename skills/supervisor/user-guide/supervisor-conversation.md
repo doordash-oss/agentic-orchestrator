@@ -2,6 +2,10 @@
 
 The **Supervisor** page keeps one conversation across process restarts. Choose a harness and model from the chip beside the composer, then send a message. The chip always shows the settings in force.
 
+The ring beside the chip shows how much of the current harness's context window is in use. It warns at 80% or above. The empty ring means the current process has not reported usage yet; after you end the process it returns to this state.
+
+When Claude or Codex compacts its conversation, a **Conversation compacted** notice appears in the transcript. On Claude, open **Show summary** to read the condensed history. Codex keeps an opaque native checkpoint, so its notice has no summary to expand. Agentico saves the checkpoint for later relaunches and uses a readable Claude summary when moving to another harness. Agentico never starts a compaction itself.
+
 You can change the model or effort while the supervisor is idle or working. Claude restarts its process for either change; OpenCode restarts for an effort change. The next message relaunches with the conversation history. Codex applies either change to its current thread, and OpenCode applies a model change to its current session.
 
 To move this conversation to another harness, open the chip and choose **Switch to Claude…**, **Switch to Codex…**, or **Switch to OpenCode…**. Choosing a model under another harness opens the same dialog with that model selected. The dialog explains that the conversation is rebuilt for the new harness on the next message. While a process is active, its sub-agents and background shells do not carry over. Previous messages and tool history do carry over. Leave model and effort untouched to use the destination's defaults, or choose them in the dialog. Confirm with **Switch**.

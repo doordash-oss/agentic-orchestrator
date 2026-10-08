@@ -30,6 +30,8 @@ import {
   installAgenticoMock,
   ipcError,
   supervisorLaunchFailure,
+  supervisorCheckpointRecord,
+  supervisorCompactedMarkerRecord,
   supervisorMarkerRecord,
   supervisorPendingPermission,
   supervisorPendingQuestion,
@@ -887,6 +889,107 @@ describe('SupervisorPage restart and launch failure', () => {
     expect(
       conversation.getByText('The supervisor runs in plan mode because a policy restricts it.'),
     ).toBeVisible();
+  });
+
+  it('shows a sanitized compaction summary only when opened', async () => {
+    await renderPage({
+      supervisorState: supervisorState({ settings: CHOSEN }),
+      supervisorTranscript: supervisorTranscriptPage({
+        items: [
+          supervisorCompactedMarkerRecord('**A fact** <img src=x onerror=alert(1)>', {
+            seq: 1,
+            marker: {
+              marker: 'compacted',
+              text: 'Conversation compacted',
+              summary: '**A fact** <img src=x onerror=alert(1)>',
+              truncated: true,
+            },
+          }),
+          supervisorCompactedMarkerRecord(undefined, { seq: 2 }),
+          supervisorCompactedMarkerRecord(undefined, {
+            seq: 3,
+            marker: {
+              marker: 'compacted',
+              text: 'Conversation compacted',
+              code: 'checkpoint_unavailable',
+            },
+          }),
+        ],
+        firstSeq: 1,
+        lastSeq: 3,
+        headSeq: 3,
+      }),
+    });
+    expect(screen.getAllByText('Conversation compacted')).toHaveLength(2);
+    expect(
+      screen.getByText('Conversation compacted · history checkpoint unavailable'),
+    ).toBeVisible();
+    const toggle = screen.getByRole('button', { name: 'Show summary' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('A fact')).toBeNull();
+    await userEvent.setup().click(toggle);
+    expect(screen.getByRole('button', { name: 'Hide summary' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+    expect(screen.getByText('A fact')).toBeVisible();
+    expect(screen.getByText('Summary truncated')).toBeVisible();
+    expect(transcript().querySelector('img')).toBeNull();
+  });
+
+  it('keeps assistant folding intact around a checkpoint', async () => {
+    await renderPage({
+      supervisorState: supervisorState({ settings: CHOSEN }),
+      supervisorTranscript: supervisorTranscriptPage({
+        items: [
+          supervisorRecord({
+            seq: 1,
+            kind: 'assistant',
+            turnId: 'same',
+            messages: [{ index: 1, role: 'assistant', type: 'text', text: 'Before' }],
+          }),
+          supervisorCheckpointRecord({ seq: 2, turnId: 'same' }),
+          supervisorRecord({
+            seq: 3,
+            kind: 'assistant',
+            turnId: 'same',
+            messages: [{ index: 3, role: 'assistant', type: 'text', text: 'After' }],
+          }),
+        ],
+        firstSeq: 1,
+        lastSeq: 3,
+        headSeq: 3,
+      }),
+    });
+    expect(within(transcript()).getByText('Before')).toBeVisible();
+    expect(within(transcript()).getByText('After')).toBeVisible();
+    expect(transcript().querySelectorAll('.conversation__notice')).toHaveLength(0);
+  });
+
+  it('shows live context fill and switches to warning at 80 percent', async () => {
+    const initial = supervisorState({ settings: CHOSEN, contextUsage: null });
+    const mock = await renderPage({ supervisorState: initial });
+    const ring = screen.getByTestId('supervisor-context-ring');
+    const chip = screen.getByTestId('supervisor-model-chip');
+    const chipLabel = chip.textContent;
+    expect(ring).toHaveAccessibleName('Context usage unknown');
+    const update = (percent: number) =>
+      emit(mock, {
+        type: 'state',
+        ...envelope(initial),
+        state: supervisorState({
+          ...initial,
+          contextUsage: { percent, usedTokens: percent * 2_000, windowTokens: 200_000 },
+        }),
+      });
+    update(79);
+    expect(ring).toHaveAccessibleName('Context usage 79%');
+    expect(ring).toHaveAttribute('data-tone', 'neutral');
+    expect(ring).toHaveAttribute('title', '158,000 of 200,000 context tokens used');
+    update(80);
+    expect(ring).toHaveAccessibleName('Context usage 80%, near the limit');
+    expect(ring).toHaveAttribute('data-tone', 'warning');
+    expect(chip.textContent).toBe(chipLabel);
   });
 
   const failedState = supervisorState({

@@ -114,6 +114,7 @@ function supervisorState(overrides: Partial<SupervisorState> = {}): SupervisorSt
     effectiveModel: '',
     permissionMode: { requested: 'default', effective: '', restrictedByPolicy: false },
     pendingRequests: [],
+    contextUsage: null,
     headSeq: 0,
     streamEpoch: 'epoch-1',
     ...overrides,
@@ -974,5 +975,85 @@ describe('registerIpcHandlers', () => {
       ok: boolean;
     };
     expect(unknown.ok).toBe(false);
+  });
+
+  it('validates context usage and checkpoint records without widening the IPC surface', async () => {
+    const services = makeServices();
+    services.getSupervisorState = vi
+      .fn()
+      .mockResolvedValueOnce(
+        supervisorState({
+          contextUsage: { percent: 80, usedTokens: 160000, windowTokens: 200000 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        supervisorState({
+          contextUsage: {
+            percent: 80,
+            usedTokens: 160000,
+            windowTokens: 200000,
+            bearer: 'secret',
+          } as SupervisorState['contextUsage'],
+        }),
+      );
+    const checkpoint = {
+      ...supervisorRecord(''),
+      kind: 'checkpoint',
+      visibility: 'model_only',
+      messages: [],
+      checkpoint: {
+        coversThroughSeq: 1,
+        reason: 'native_auto',
+        model: 'claude-opus',
+        summary: 'Fact',
+        truncated: false,
+        hasNativeBaseline: true,
+      },
+    };
+    const compacted = {
+      ...supervisorRecord(''),
+      seq: 2,
+      kind: 'marker',
+      visibility: 'display_only',
+      messages: [],
+      marker: {
+        marker: 'compacted',
+        text: 'Conversation compacted',
+        summary: 'Fact',
+        truncated: false,
+      },
+    };
+    const page = (items: unknown[]) => ({
+      conversationId: 'conv-1',
+      items,
+      firstSeq: 1,
+      lastSeq: 2,
+      hasMoreBefore: false,
+      hasMoreAfter: false,
+      headSeq: 2,
+    });
+    services.getSupervisorTranscript = vi
+      .fn()
+      .mockResolvedValueOnce(page([checkpoint, compacted]))
+      .mockResolvedValueOnce(
+        page([{ ...checkpoint, checkpoint: { ...checkpoint.checkpoint, bearer: 'secret' } }]),
+      );
+    const { handlers } = register(services);
+    await expect(handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)).resolves.toMatchObject({
+      ok: true,
+      value: { contextUsage: { percent: 80 } },
+    });
+    await expect(handlers.get(IPC_CHANNELS.supervisorStateGet)!(goodEvent)).resolves.toMatchObject({
+      ok: false,
+    });
+    await expect(
+      handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, {}),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { items: [{ kind: 'checkpoint' }, { marker: { marker: 'compacted' } }] },
+    });
+    await expect(
+      handlers.get(IPC_CHANNELS.supervisorTranscriptGet)!(goodEvent, {}),
+    ).resolves.toMatchObject({ ok: false });
   });
 });

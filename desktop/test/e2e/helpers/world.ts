@@ -109,6 +109,8 @@ export const SUPERVISOR_E2E_MARKERS = {
   operateCreate: 'SUPERVISOR_E2E_OPERATE_CREATE',
   /** Starts the feature the last operate-create turn created, through the helper. */
   operateStart: 'SUPERVISOR_E2E_OPERATE_START',
+  compact: 'SUPERVISOR_E2E_COMPACT',
+  usageHigh: 'SUPERVISOR_E2E_USAGE_HIGH',
 } as const;
 
 /** Feature names an operate-create marker may carry (kept sh- and JSON-safe). */
@@ -723,6 +725,12 @@ function supervisorResumeLines(providerInvocationLog: string, home: string): str
     '    fi',
     `    printf 'history:%s\\n' "$_history" >> "${providerInvocationLog}"`,
     '    _resume_reply="Resumed with $_history prior messages"',
+    '    if [ -f "$_session_file" ] && grep -q compact_boundary "$_session_file"; then',
+    String.raw`      _history=$(awk '/compact_boundary/ { n=0; next } /"type":"user"/ { n++ } END { print n+0 }' "$_session_file")`,
+    String.raw`      _summary=$(grep 'isCompactSummary' "$_session_file" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | tail -n 1 | cut -c 1-80)`,
+    String.raw`      printf 'resume-compacted:%s\n' "$_history" >> "${providerInvocationLog}"`,
+    '      _resume_reply="Resumed after compaction with $_history prior messages: $_summary"',
+    '    fi',
     '  fi',
   ];
 }
@@ -747,7 +755,8 @@ function supervisorResumeLines(providerInvocationLog: string, home: string): str
  * on EOF.
  */
 function supervisorStubLines(providerInvocationLog: string): string[] {
-  const { permission, hold, partialHold, operateCreate, operateStart } = SUPERVISOR_E2E_MARKERS;
+  const { permission, hold, partialHold, operateCreate, operateStart, compact, usageHigh } =
+    SUPERVISOR_E2E_MARKERS;
   const permissionInput = JSON.stringify({ command: SUPERVISOR_E2E_PERMISSION_COMMAND });
   // Single-quoted inside the sh command text, so it must carry no single quote.
   const operateConfig = JSON.stringify(SUPERVISOR_E2E_OPERATE_CONFIG);
@@ -798,11 +807,14 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     'supervisor_reply() {',
     '  _reply="Supervisor reply $turn"',
     '  if [ -n "$_resume_reply" ]; then _reply="$_resume_reply"; _resume_reply=""; fi',
+    '  _input_tokens=$((10000 + turn * 1000))',
+    '  if [ "$_usage_high" = 1 ]; then _input_tokens=170000; fi',
+    '  if [ "$_compacted" = 1 ]; then _input_tokens=10000; fi',
     `  printf '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-e2e-supervisor-%s"}}}\\n' "$turn"`,
     `  printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"%s "}}}\\n' "\${_reply%% *}"`,
     `  printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"%s"}}}\\n' "\${_reply#* }"`,
-    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-%s","role":"assistant","content":[{"type":"text","text":"%s"}]}}\\n' "$turn" "$_reply"`,
-    `  printf '%s\\n' '{"type":"result","subtype":"success","session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-%s","role":"assistant","content":[{"type":"text","text":"%s"}],"usage":{"input_tokens":%s,"output_tokens":100}}}\\n' "$turn" "$(json_escape "$_reply")" "$_input_tokens"`,
+    `  printf '%s\\n' '{"type":"result","subtype":"success","session_id":"e2e-supervisor-session","total_cost_usd":0,"modelUsage":{"claude-haiku-4-5":{"contextWindow":200000}}}'`,
     '}',
     // Blocks until the interrupt control request; EOF ends the process.
     'hold_turn() {',
@@ -818,6 +830,14 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     '}',
     'supervisor_turn() {',
     '  turn=$((turn + 1))',
+    '  _usage_high=0',
+    '  _compacted=0',
+    `  case "$1" in *${usageHigh}*) _usage_high=1 ;; esac`,
+    `  case "$1" in *${compact}*) _compacted=1 ;; esac`,
+    '  if [ "$_compacted" = 1 ]; then',
+    String.raw`    printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":170000}}'`,
+    String.raw`    printf '{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary: %s"}}\n' "$(json_escape "$1")"`,
+    '  fi',
     `  printf 'turn:%s\\n' "$turn" >> "${providerInvocationLog}"`,
     '  case "$1" in',
     `    *'${SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING}'*)`,

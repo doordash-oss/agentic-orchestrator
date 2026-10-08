@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -352,7 +353,15 @@ func readFakeRollout(threadID string) FakeCodexResume {
 				} `json:"content"`
 			} `json:"payload"`
 		}
-		if json.Unmarshal([]byte(line), &item) != nil || item.Type != "response_item" ||
+		if json.Unmarshal([]byte(line), &item) != nil {
+			continue
+		}
+		if item.Type == "compacted" {
+			res.Compacted = true
+			res.UserItems, res.FirstPrompt, res.LastPrompt, res.LastReply = 0, "", "", ""
+			continue
+		}
+		if item.Type != "response_item" ||
 			item.Payload.Type != "message" || len(item.Payload.Content) == 0 {
 			continue
 		}
@@ -425,6 +434,7 @@ type fakeTurn struct {
 	n         int
 	items     int
 	interrupt chan int64
+	text      string
 }
 
 func (s *fakeCodexServer) turnStart(id int64, raw json.RawMessage) {
@@ -440,7 +450,7 @@ func (s *fakeCodexServer) turnStart(id int64, raw json.RawMessage) {
 	}
 	s.effort = settings.Effort
 	s.turns++
-	t := &fakeTurn{s: s, threadID: s.threadID, n: s.turns, interrupt: make(chan int64, 4)}
+	t := &fakeTurn{s: s, threadID: s.threadID, n: s.turns, interrupt: make(chan int64, 4), text: text}
 	t.turnID = fmt.Sprintf("turn-%d-%d", s.launch, s.turns)
 	s.turnID = t.turnID
 	s.interrupt = t.interrupt
@@ -490,8 +500,15 @@ func (t *fakeTurn) message(text string, deltas ...string) {
 
 func (t *fakeTurn) usage() {
 	breakdown := map[string]int{"inputTokens": 100 * t.n, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": 10 * t.n, "reasoningOutputTokens": 0, "totalTokens": 110 * t.n}
+	last := maps.Clone(breakdown)
+	if strings.Contains(t.text, FakeCodexUsageHigh) {
+		last["inputTokens"], last["totalTokens"] = 172000, 172000
+	}
+	if strings.Contains(t.text, FakeCodexCompact) {
+		last["inputTokens"], last["totalTokens"] = 1000, 1000
+	}
 	t.s.notify("thread/tokenUsage/updated", map[string]any{"threadId": t.threadID, "turnId": t.turnID,
-		"tokenUsage": map[string]any{"total": breakdown, "last": breakdown, "modelContextWindow": 200000}})
+		"tokenUsage": map[string]any{"total": breakdown, "last": last, "modelContextWindow": 200000}})
 }
 
 func (t *fakeTurn) complete(status string) {
@@ -538,6 +555,9 @@ func (t *fakeTurn) run(text string, sayResumed bool, resume *FakeCodexResume) {
 		reply := "Not resumed"
 		if resume != nil {
 			reply = fmt.Sprintf("Resumed with %d prior messages: %s", resume.UserItems, resume.FirstPrompt)
+			if resume.Compacted {
+				reply = fmt.Sprintf("Resumed after compaction with %d prior messages: %s", resume.UserItems, resume.FirstPrompt)
+			}
 		}
 		t.message(reply, reply)
 	case strings.Contains(text, FakeCodexHold), strings.Contains(text, FakeCodexStubborn):
@@ -599,6 +619,13 @@ func (t *fakeTurn) run(text string, sayResumed bool, resume *FakeCodexResume) {
 	if strings.Contains(text, FakeCodexCompact) {
 		id := t.itemID()
 		t.item("item/started", map[string]any{"id": id, "type": "contextCompaction"})
+		t.s.appendRollout("compacted", map[string]any{
+			"message": "", "window_id": fmt.Sprintf("window-%d", t.n),
+			"replacement_history": []map[string]any{
+				{"type": "message", "role": "user", "content": []map[string]string{{"type": "input_text", "text": "Compacted context"}}},
+				{"type": "compaction", "encrypted_content": "opaque-fake-compaction"},
+			},
+		})
 		t.item("item/completed", map[string]any{"id": id, "type": "contextCompaction"})
 	}
 	t.complete("completed")

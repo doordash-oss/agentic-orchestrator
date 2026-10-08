@@ -298,6 +298,7 @@ const NOTICE_TONES: Readonly<Record<SupervisorMarker['marker'], ConversationNoti
   settings_changed: 'neutral',
   harness_change: 'neutral',
   settings_reverted: 'caveat',
+  compacted: 'neutral',
 };
 
 /** The one-line copy of a marker; the interrupted notice reads the same whatever the server wrote. */
@@ -310,6 +311,10 @@ export function markerNoticeText(marker: SupervisorMarker): string {
       return text === ''
         ? SUPERVISOR_COPY.launchFailedMarker
         : `${SUPERVISOR_COPY.launchFailedMarker} · ${text}`;
+    case 'compacted':
+      return marker.code === 'checkpoint_unavailable'
+        ? 'Conversation compacted · history checkpoint unavailable'
+        : 'Conversation compacted';
     default:
       return text;
   }
@@ -338,7 +343,7 @@ export function buildSupervisorConversation(
 ): ConversationItem[] {
   const requestedSummaries = new Map<string, string>();
   for (const record of records) {
-    if (record.kind === 'note') continue;
+    if (record.kind === 'note' || record.kind === 'checkpoint') continue;
     const summary = record.request?.summary;
     if (record.request?.stage === 'requested' && summary !== undefined) {
       requestedSummaries.set(record.request.requestId, summary);
@@ -370,7 +375,7 @@ export function buildSupervisorConversation(
     }
   };
   for (const record of records) {
-    if (record.kind === 'note') continue;
+    if (record.kind === 'note' || record.kind === 'checkpoint') continue;
     if (record.kind === 'marker') {
       flush();
       const marker = record.marker;
@@ -379,7 +384,15 @@ export function buildSupervisorConversation(
       const text = markerNoticeText(marker);
       if (text === '') continue;
       push(record.turnId, [
-        { kind: 'notice', key: `notice-${record.seq}`, tone: NOTICE_TONES[marker.marker], text },
+        {
+          kind: 'notice',
+          key: `notice-${record.seq}`,
+          tone: marker.code === 'checkpoint_unavailable' ? 'caveat' : NOTICE_TONES[marker.marker],
+          text,
+          ...(marker.marker === 'compacted' && marker.summary !== undefined && marker.summary !== ''
+            ? { summary: marker.summary, summaryTruncated: marker.truncated }
+            : {}),
+        },
       ]);
       continue;
     }

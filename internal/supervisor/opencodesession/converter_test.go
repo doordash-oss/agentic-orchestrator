@@ -81,6 +81,62 @@ func input(dir string, recs []supervisor.Record) supervisor.RebuildInput {
 	}
 }
 
+func TestReadableCheckpointSeedsSummaryAndCutsHistory(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	checkpoint := supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[1].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":2,"summary":"Earlier summary","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto","model":"claude"}`)}
+	recs = append(recs, checkpoint)
+	got, err := Render(input(t.TempDir(), recs), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got, []byte("Agentico note: Summary of the earlier conversation, compacted on claude: Earlier summary")) || bytes.Contains(got, []byte("Hello, what is in this repo?")) || !bytes.Contains(got, []byte("Run the tests")) {
+		t.Fatalf("seed checkpoint wrong: %s", got)
+	}
+	opaque := checkpoint
+	opaque.Data = json.RawMessage(`{"covers_through_seq":2,"native_baseline":{"harness":"codex","payload":{}},"reason":"native_auto","model":"gpt"}`)
+	recs[len(recs)-1] = opaque
+	got, err = Render(input(t.TempDir(), recs), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got, []byte("Hello, what is in this repo?")) {
+		t.Fatalf("opaque checkpoint cut history: %s", got)
+	}
+}
+
+func TestLatestAndLastOpenCodeCheckpoint(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	first := supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[0].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":1,"summary":"first summary","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto"}`)}
+	last := supervisor.Record{Seq: 101, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[2].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":100,"summary":"latest summary","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto"}`)}
+	got, err := Render(input(t.TempDir(), []supervisor.Record{recs[0], first, recs[2], last}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte("first summary")) || !bytes.Contains(got, []byte("latest summary")) || bytes.Contains(got, []byte("Run the tests")) {
+		t.Fatalf("latest checkpoint: %s", got)
+	}
+	result, err := New(Options{}).Rebuild(context.Background(), input(t.TempDir(), []supervisor.Record{last}))
+	if err != nil || !result.Resume {
+		t.Fatalf("checkpoint only seed = %#v, %v", result, err)
+	}
+}
+
+func TestCheckpointDropsStraddlingOpenCodeToolResult(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	cut := supervisor.Record{Seq: 6, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[5].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":5,"summary":"tool condensed","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto"}`)}
+	got, err := Render(input(t.TempDir(), []supervisor.Record{recs[4], cut, recs[7]}), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte("Tool (")) || bytes.Contains(got, []byte("result:")) {
+		t.Fatalf("straddling pair leaked: %s", got)
+	}
+}
+
 // windowFor reports window tokens for testModel and 0 (unknown) otherwise.
 func windowFor(window int) func(string) int {
 	return func(model string) int {

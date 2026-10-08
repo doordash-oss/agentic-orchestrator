@@ -88,6 +88,103 @@ func converterAt(home string) *Converter {
 	return New(testOptions(func() (string, error) { return home, nil }))
 }
 
+func TestCheckpointRendersNativeCompactedLine(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	checkpoint := supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[1].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":2,"summary":"","native_baseline":{"harness":"codex","payload":{"message":"","window_id":"w1","replacement_history":[{"type":"compaction","encrypted_content":"opaque"}]}},"reason":"native_auto","model":"gpt-5.2-codex"}`)}
+	recs = append(recs, checkpoint)
+	got, err := Render(input(recs), testOptions(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(got), []byte{'\n'})
+	if len(lines) < 3 || !bytes.Contains(lines[1], []byte(`"type":"compacted"`)) || !bytes.Contains(lines[1], []byte(`"window_id":"w1"`)) {
+		t.Fatalf("native prefix: %s", got)
+	}
+	if bytes.Contains(got, []byte("Hello, what is in this repo?")) || !bytes.Contains(got, []byte("Run the tests")) {
+		t.Fatalf("cut is wrong: %s", got)
+	}
+}
+
+func TestReadableForeignCheckpointRendersNote(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	recs = append(recs, supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[1].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":2,"summary":"Earlier summary","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto","model":"claude"}`)})
+	got, err := Render(input(recs), testOptions(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(got, []byte("Agentico note: Summary of the earlier conversation, compacted on claude: Earlier summary")) || bytes.Contains(got, []byte("Hello, what is in this repo?")) || !bytes.Contains(got, []byte("Run the tests")) {
+		t.Fatalf("foreign checkpoint: %s", got)
+	}
+}
+
+func TestLatestAndLastCodexCheckpoint(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	first := supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[0].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":1,"native_baseline":{"harness":"codex","payload":{"window_id":"first"}},"reason":"native_auto"}`)}
+	last := supervisor.Record{Seq: 101, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[2].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":100,"native_baseline":{"harness":"codex","payload":{"window_id":"latest"}},"reason":"native_auto"}`)}
+	got, err := Render(input([]supervisor.Record{recs[0], first, recs[2], last}), testOptions(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte(`"window_id":"first"`)) || !bytes.Contains(got, []byte(`"window_id":"latest"`)) || len(bytes.Split(bytes.TrimSpace(got), []byte{'\n'})) != 2 {
+		t.Fatalf("latest checkpoint: %s", got)
+	}
+	result, err := converterAt(t.TempDir()).Rebuild(context.Background(), input([]supervisor.Record{last}))
+	if err != nil || !result.Resume {
+		t.Fatalf("checkpoint only resume = %#v, %v", result, err)
+	}
+}
+
+func TestCheckpointDropsStraddlingCodexToolResult(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	cut := supervisor.Record{Seq: 6, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[5].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":5,"native_baseline":{"harness":"codex","payload":{"window_id":"cut"}},"reason":"native_auto"}`)}
+	got, err := Render(input([]supervisor.Record{recs[4], cut, recs[7]}), testOptions(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte(`"type":"function_call_output"`)) || bytes.Contains(got, []byte(`"type":"function_call"`)) {
+		t.Fatalf("straddling pair leaked: %s", got)
+	}
+}
+
+func TestCaptureCompactionSkipsRebuiltBaseline(t *testing.T) {
+	home := t.TempDir()
+	c := converterAt(home)
+	recs := loadRecords(t, "transcript.jsonl")
+	recs = append(recs, supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[1].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":2,"native_baseline":{"harness":"codex","payload":{"window_id":"old"}},"reason":"native_auto","model":"gpt"}`)})
+	result, err := c.Rebuild(context.Background(), input(recs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if _, err := c.CaptureCompaction(ctx, testThreadID); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("old baseline captured: %v", err)
+	}
+	f, err := os.OpenFile(result.Path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString("{\"timestamp\":\"2026-10-07T00:00:00Z\",\"type\":\"compacted\",\"payload\":{\"window_id\":\"new\"}}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel2()
+	payload, err := c.CaptureCompaction(ctx2, testThreadID)
+	if err != nil || string(payload) != `{"window_id":"new"}` {
+		t.Fatalf("capture = %s, %v", payload, err)
+	}
+}
+
 // firstRecordTime is the CreatedAt of the fixture's first selected record,
 // which names a new rollout's date partition.
 func firstRecordTime(t *testing.T) time.Time {

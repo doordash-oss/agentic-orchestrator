@@ -380,6 +380,9 @@ func supervisorStateDTO(st supervisor.State) SupervisorState {
 		HeadSeq:         st.HeadSeq,
 		StreamEpoch:     st.StreamEpoch,
 	}
+	if st.ContextUsage != nil {
+		dto.ContextUsage = &SupervisorContextUsage{Percent: st.ContextUsage.Percent, UsedTokens: st.ContextUsage.UsedTokens, WindowTokens: st.ContextUsage.WindowTokens}
+	}
 	if st.PendingChange != nil {
 		dto.PendingChange = &SupervisorPendingChange{RequestID: st.PendingChange.RequestID, Kind: SupervisorPendingChangeKind(st.PendingChange.Kind), Target: SupervisorSettings{Harness: st.PendingChange.Target.Harness, Model: st.PendingChange.Target.Model, Effort: st.PendingChange.Target.Effort}, RequestedAt: st.PendingChange.RequestedAt}
 	}
@@ -445,13 +448,21 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 	case supervisor.KindMarker:
 		var data supervisor.MarkerData
 		_ = json.Unmarshal(rec.Data, &data)
+		summary, truncated := boundedSummary(data.Summary)
 		dto.Marker = &SupervisorMarkerRecord{
 			Marker:      SupervisorMarkerRecordMarker(data.Marker),
 			Text:        SafeDisplayText(data.Text, 400),
 			Code:        data.Code,
 			FromHarness: data.FromHarness,
 			ToHarness:   data.ToHarness,
+			Summary:     summary,
+			Truncated:   truncated,
 		}
+	case supervisor.KindCheckpoint:
+		var data supervisor.CheckpointData
+		_ = json.Unmarshal(rec.Data, &data)
+		summary, truncated := boundedSummary(data.Summary)
+		dto.Checkpoint = &SupervisorCheckpointRecord{CoversThroughSeq: data.CoversThroughSeq, Reason: SupervisorCheckpointRecordReason(data.Reason), Model: data.Model, Summary: summary, Truncated: truncated, HasNativeBaseline: data.NativeBaseline != nil}
 	case supervisor.KindNote:
 		var data supervisor.NoteData
 		_ = json.Unmarshal(rec.Data, &data)
@@ -461,6 +472,19 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 		dto.Messages = []TranscriptMessage{}
 	}
 	return dto
+}
+
+func boundedSummary(input string) (string, bool) {
+	const limit = 16 * 1024
+	value := SafeDisplayText(input, 0)
+	if len(value) <= limit {
+		return value, false
+	}
+	end := limit - len("...")
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end] + "...", true
 }
 
 // safeDeltaText applies the display redactions without trimming, so

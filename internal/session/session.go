@@ -1664,6 +1664,19 @@ func (s *Session) ApplySettings(ctx context.Context, model, effort string) error
 	return updater.ApplySettings(ctx, model, effort)
 }
 
+// ForceCompactionForTest invokes a provider's native compaction in opt-in
+// integration tests. Normal supervisor operation never calls this method.
+func (s *Session) ForceCompactionForTest(ctx context.Context) error {
+	s.mu.Lock()
+	p := s.protocol
+	s.mu.Unlock()
+	compactor, ok := p.(interface{ ForceCompactionForTest(context.Context) error })
+	if !ok {
+		return llm.ErrNotSupported
+	}
+	return compactor.ForceCompactionForTest(ctx)
+}
+
 // SendUserMessageWithHiddenContext sends a user turn whose provider-bound
 // text is the hidden context, a blank line, then the visible message, while
 // the locally appended chat transcript record carries only the visible

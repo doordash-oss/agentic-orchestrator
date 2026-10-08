@@ -1580,6 +1580,7 @@ const UPDATE_POPOVER_ITEMS: AttentionSnapshot['items'] = [
 
 /** A never-launched supervisor conversation; capture scenes do not stream it. */
 const SUPERVISOR_STATE: SupervisorState = {
+  contextUsage: null,
   conversationId: 'supervisor-conversation-1',
   generation: 0,
   sessionId: '',

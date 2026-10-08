@@ -13815,6 +13815,32 @@ body {
   min-width: 0;
 }
 
+.supervisor-context-ring {
+  --context-ink: var(--accent);
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: conic-gradient(var(--context-ink) var(--context-fill, 0%), var(--hairline) 0);
+  position: relative;
+}
+
+.supervisor-context-ring::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--raised);
+}
+
+.supervisor-context-ring[data-known='false'] {
+  --context-ink: var(--hairline);
+}
+
+.supervisor-context-ring[data-tone='warning'] {
+  --context-ink: var(--attention);
+}
+
 .supervisor-status {
   flex: 1;
   min-width: 0;
@@ -14190,6 +14216,47 @@ body {
   margin: 0;
   color: var(--muted);
   font: 12px var(--bench-font-text);
+}
+
+.conversation__notice-container {
+  min-width: 0;
+}
+
+.conversation__notice-toggle {
+  flex: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.conversation__notice-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.conversation__notice-summary {
+  max-width: 66ch;
+  margin: var(--space-2) 0 var(--space-3) var(--space-4);
+  padding-left: var(--space-3);
+  border-left: var(--bench-hairline-width) solid var(--hairline);
+  color: var(--text);
+  font: 13px/1.55 var(--bench-font-text);
+  overflow-wrap: anywhere;
+}
+
+.conversation__notice-summary > div > :first-child {
+  margin-top: 0;
+}
+.conversation__notice-summary > div > :last-child {
+  margin-bottom: 0;
+}
+.conversation__notice-truncated {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .conversation__notice::after {

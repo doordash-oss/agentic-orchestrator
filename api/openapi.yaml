@@ -5792,6 +5792,7 @@ components:
         - pending_requests
         - head_seq
         - stream_epoch
+        - context_usage
       properties:
         conversation_id:
           type: string
@@ -5843,6 +5844,25 @@ components:
         stream_epoch:
           type: string
           description: Resume epoch for the supervisor event stream.
+        context_usage:
+          description: Live context fill; null until the current process reports usage.
+          $ref: "#/components/schemas/SupervisorContextUsage"
+          nullable: true
+          x-go-type-skip-optional-pointer: false
+    SupervisorContextUsage:
+      type: object
+      required: [percent, used_tokens, window_tokens]
+      properties:
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        used_tokens:
+          type: integer
+          minimum: 0
+        window_tokens:
+          type: integer
+          minimum: 1
     SupervisorStateResponse:
       type: object
       required: [api_version, state]
@@ -5867,7 +5887,7 @@ components:
           format: date-time
     SupervisorRecordKind:
       type: string
-      enum: [user, assistant, tool_use, tool_result, permission, question, marker, note]
+      enum: [user, assistant, tool_use, tool_result, permission, question, marker, note, checkpoint]
       x-enum-varnames:
         - SupervisorRecordKindUser
         - SupervisorRecordKindAssistant
@@ -5877,6 +5897,7 @@ components:
         - SupervisorRecordKindQuestion
         - SupervisorRecordKindMarker
         - SupervisorRecordKindNote
+        - SupervisorRecordKindCheckpoint
     SupervisorRecordVisibility:
       type: string
       enum: [content, model_only, display_only]
@@ -5933,7 +5954,7 @@ components:
       properties:
         marker:
           type: string
-          enum: [interrupted, error, history_not_restored, permission_restricted, settings_changed, settings_reverted, harness_change]
+          enum: [interrupted, error, history_not_restored, permission_restricted, settings_changed, settings_reverted, harness_change, compacted]
           x-enum-varnames:
             - SupervisorMarkerInterrupted
             - SupervisorMarkerError
@@ -5942,6 +5963,7 @@ components:
             - SupervisorMarkerSettingsChanged
             - SupervisorMarkerSettingsReverted
             - SupervisorMarkerHarnessChange
+            - SupervisorMarkerCompacted
         text:
           type: string
         code:
@@ -5952,6 +5974,32 @@ components:
         to_harness:
           type: string
           description: Destination harness for a harness_change marker.
+        summary:
+          type: string
+          description: Display-bounded readable compaction summary, when available.
+        truncated:
+          type: boolean
+          description: Whether the display summary was truncated at 16 KiB.
+    SupervisorCheckpointRecord:
+      type: object
+      description: Model-only checkpoint projection; native baseline is never sent to clients.
+      required: [covers_through_seq, reason, model, summary, truncated, has_native_baseline]
+      properties:
+        covers_through_seq:
+          type: integer
+          format: int64
+          minimum: 0
+        reason:
+          type: string
+          enum: [native_auto]
+        model:
+          type: string
+        summary:
+          type: string
+        truncated:
+          type: boolean
+        has_native_baseline:
+          type: boolean
     SupervisorRecord:
       type: object
       description: >-
@@ -6005,6 +6053,9 @@ components:
           x-go-type-skip-optional-pointer: false
         marker:
           $ref: "#/components/schemas/SupervisorMarkerRecord"
+          x-go-type-skip-optional-pointer: false
+        checkpoint:
+          $ref: "#/components/schemas/SupervisorCheckpointRecord"
           x-go-type-skip-optional-pointer: false
     SupervisorTranscriptResponse:
       type: object

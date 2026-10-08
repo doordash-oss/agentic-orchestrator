@@ -538,6 +538,7 @@ export function supervisorState(overrides: Partial<SupervisorState> = {}): Super
     effectiveModel: '',
     permissionMode: { requested: 'default', effective: '', restrictedByPolicy: false },
     pendingRequests: [],
+    contextUsage: null,
     headSeq: 0,
     streamEpoch: 'supervisor-epoch-1',
     ...overrides,
@@ -642,6 +643,39 @@ export function supervisorMarkerRecord(
     marker,
     ...overrides,
   });
+}
+
+export function supervisorCheckpointRecord(
+  overrides: Partial<SupervisorRecord> = {},
+): SupervisorRecord {
+  return supervisorRecord({
+    kind: 'checkpoint',
+    visibility: 'model_only',
+    messages: [],
+    checkpoint: {
+      coversThroughSeq: 1,
+      reason: 'native_auto',
+      model: 'claude-opus',
+      summary: 'Earlier context',
+      truncated: false,
+      hasNativeBaseline: true,
+    },
+    ...overrides,
+  });
+}
+
+export function supervisorCompactedMarkerRecord(
+  summary?: string,
+  overrides: Partial<SupervisorRecord> = {},
+): SupervisorRecord {
+  return supervisorMarkerRecord(
+    {
+      marker: 'compacted',
+      text: 'Conversation compacted',
+      ...(summary === undefined ? {} : { summary, truncated: false }),
+    },
+    overrides,
+  );
 }
 
 /** One transcript page; empty (all cursors 0, nothing more) by default. */

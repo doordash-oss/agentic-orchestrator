@@ -91,6 +91,8 @@ export type ConversationItem =
       key: string;
       tone: ConversationNoticeTone;
       text: string;
+      summary?: string;
+      summaryTruncated?: boolean;
     };
 
 /** Stable identity for a row, unique across multi-block responses. */

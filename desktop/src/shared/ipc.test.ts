@@ -2132,6 +2132,7 @@ describe('supervisor IPC schemas', () => {
       effectiveModel: '',
       permissionMode: { requested: 'default', effective: '', restrictedByPolicy: false },
       pendingRequests: [],
+      contextUsage: null,
       headSeq: 0,
       streamEpoch: '',
     };

@@ -599,6 +599,33 @@ func TestSupervisorMarkerRecordProjectsMarkerTextAndCode(t *testing.T) {
 	}
 }
 
+func TestSupervisorCheckpointProjectionHidesBaselineAndBoundsSummary(t *testing.T) {
+	summary := strings.Repeat("s", 20*1024)
+	data, err := json.Marshal(supervisor.CheckpointData{CoversThroughSeq: 17, Summary: summary, NativeBaseline: &supervisor.NativeBaseline{Harness: "codex", Payload: json.RawMessage(`{"encrypted_content":"secret-baseline"}`)}, Reason: "native_auto", Model: "gpt-5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto := supervisorRecordDTO(supervisor.Record{Seq: 18, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, Data: data}, "")
+	if dto.Checkpoint == nil || dto.Checkpoint.CoversThroughSeq != 17 || !dto.Checkpoint.HasNativeBaseline || !dto.Checkpoint.Truncated || len(dto.Checkpoint.Summary) > 16*1024 {
+		t.Fatalf("checkpoint projection = %+v", dto.Checkpoint)
+	}
+	encoded, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "secret-baseline") {
+		t.Fatalf("native baseline leaked: %s", encoded)
+	}
+	markerData, err := json.Marshal(supervisor.MarkerData{Marker: supervisor.MarkerCompacted, Text: "Conversation compacted", Summary: summary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := supervisorRecordDTO(supervisor.Record{Seq: 19, Kind: supervisor.KindMarker, Visibility: supervisor.VisibilityDisplayOnly, Data: markerData}, "")
+	if marker.Marker == nil || !marker.Marker.Truncated || len(marker.Marker.Summary) > 16*1024 {
+		t.Fatalf("marker projection = %+v", marker.Marker)
+	}
+}
+
 func TestSupervisorRequestOriginProjectsOnStateAndRecords(t *testing.T) {
 	sess := &fakeSessionView{id: supervisor.SessionID("c1", 1), featureID: supervisor.FeatureID, status: ports.SessionWaitingPermission}
 	child := &llm.ControlRequestMessage{

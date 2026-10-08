@@ -324,6 +324,26 @@ func (p *Protocol) SendUserMessage(text string) error {
 	return p.sendFollowUpTurn(text)
 }
 
+// ForceCompactionForTest asks an idle interactive Codex thread to compact.
+// The live compatibility test uses this to exercise Codex's native path;
+// normal supervisor operation never calls it.
+func (p *Protocol) ForceCompactionForTest(ctx context.Context) error {
+	if !p.opts.Interactive || p.opts.NativeToollessReview {
+		return llm.ErrNotSupported
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	threadID, active := p.threadID, p.turnActive
+	p.mu.Unlock()
+	if threadID == "" || active {
+		return fmt.Errorf("codex compaction test requires an idle interactive thread")
+	}
+	return p.writeJSON(Request{JSONRPC: "2.0", Method: "thread/compact/start", ID: int(nextID.Add(1)),
+		Params: map[string]string{"threadId": threadID}})
+}
+
 // ApplySettings changes an idle interactive thread after Codex confirms the
 // update. The caller provides a bounded context for the response wait.
 func (p *Protocol) ApplySettings(ctx context.Context, model, effort string) error {
@@ -1530,6 +1550,13 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 
 		switch completed.Item.Type {
+		case "contextCompaction":
+			if p.opts.NativeToollessReview {
+				return p.nativeToollessViolation("unexpected item activity: contextCompaction"), true
+			}
+			return llm.SDKMessage{Type: "system", Subtype: "compact_boundary", Compact: &llm.CompactBoundaryMessage{
+				Type: "system", Subtype: "compact_boundary", ItemID: completed.Item.ID,
+			}}, true
 		case "agentMessage":
 			if strings.TrimSpace(completed.Item.Text) == "" {
 				p.mu.Lock()

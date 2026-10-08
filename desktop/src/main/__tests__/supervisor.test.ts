@@ -51,6 +51,7 @@ function wireState(overrides: Record<string, unknown> = {}): Record<string, unkn
       },
     ],
     head_seq: 9,
+    context_usage: null,
     stream_epoch: 'a1b2c3',
     ...overrides,
   };
@@ -642,6 +643,76 @@ describe('SupervisorService', () => {
     });
     expect(page.items[0]).not.toHaveProperty('request');
     expect(page.items[1]?.request).toMatchObject({ outcome: 'interrupted', toolName: 'Bash' });
+  });
+
+  it('maps context usage, compaction summaries and projected checkpoints', async () => {
+    const stateApi = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        state: wireState({
+          context_usage: { percent: 42, used_tokens: 84000, window_tokens: 200000 },
+        }),
+      },
+    }));
+    await expect(new SupervisorService({ transport: stateApi }).getState()).resolves.toMatchObject({
+      contextUsage: { percent: 42, usedTokens: 84000, windowTokens: 200000 },
+    });
+    const transcriptApi = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        conversation_id: 'conv-1',
+        items: [
+          {
+            ...wireRecord(10),
+            kind: 'checkpoint',
+            visibility: 'model_only',
+            messages: [],
+            checkpoint: {
+              covers_through_seq: 9,
+              reason: 'native_auto',
+              model: 'claude-sonnet-4-5',
+              summary: 'Earlier work',
+              truncated: false,
+              has_native_baseline: true,
+            },
+          },
+          {
+            ...wireRecord(11),
+            kind: 'marker',
+            visibility: 'display_only',
+            messages: [],
+            marker: {
+              marker: 'compacted',
+              text: 'Conversation compacted',
+              summary: 'Earlier work',
+              truncated: false,
+            },
+          },
+        ],
+        first_seq: 10,
+        last_seq: 11,
+        has_more_before: false,
+        has_more_after: false,
+        head_seq: 11,
+      },
+    }));
+    const page = await new SupervisorService({ transport: transcriptApi }).getTranscript({});
+    expect(page.items[0]?.checkpoint).toEqual({
+      coversThroughSeq: 9,
+      reason: 'native_auto',
+      model: 'claude-sonnet-4-5',
+      summary: 'Earlier work',
+      truncated: false,
+      hasNativeBaseline: true,
+    });
+    expect(page.items[1]?.marker).toEqual({
+      marker: 'compacted',
+      text: 'Conversation compacted',
+      summary: 'Earlier work',
+      truncated: false,
+    });
   });
 
   it('fails closed on malformed server payloads', async () => {

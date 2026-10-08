@@ -39,6 +39,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -88,16 +89,19 @@ func (o Options) withDefaults() Options {
 // Converter implements supervisor.Converter for the Codex CLI.
 type Converter struct {
 	opts Options
+	mu   sync.Mutex
+	seen map[string]int
 }
 
 var (
-	_ supervisor.Converter          = (*Converter)(nil)
-	_ supervisor.HarnessAssignedIDs = (*Converter)(nil)
+	_ supervisor.Converter               = (*Converter)(nil)
+	_ supervisor.HarnessAssignedIDs      = (*Converter)(nil)
+	_ supervisor.NativeCompactionCapture = (*Converter)(nil)
 )
 
 // New returns a Codex rollout converter.
 func New(opts Options) *Converter {
-	return &Converter{opts: opts.withDefaults()}
+	return &Converter{opts: opts.withDefaults(), seen: make(map[string]int)}
 }
 
 // Harness reports "codex".
@@ -187,8 +191,71 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if err := writeFileAtomic(path, data); err != nil {
 		return supervisor.RebuildResult{}, fmt.Errorf("write codex rollout %s: %w", path, err)
 	}
+	c.mu.Lock()
+	c.seen[in.NativeSessionID] = countCompacted(data)
+	c.mu.Unlock()
 	return supervisor.RebuildResult{Resume: true, SessionID: in.NativeSessionID, Path: path}, nil
 }
+
+// CaptureCompaction waits for the next native compacted rollout line and
+// returns its payload unchanged. Rebuild establishes the cursor for resumed
+// threads, so their already-restored baseline is never captured again.
+func (c *Converter) CaptureCompaction(ctx context.Context, nativeSessionID string) (json.RawMessage, error) {
+	if nativeSessionID == "" {
+		return nil, errors.New("capture codex compaction: empty session id")
+	}
+	home, err := c.opts.Home()
+	if err != nil {
+		return nil, fmt.Errorf("resolve codex home: %w", err)
+	}
+	if home == "" {
+		return nil, errors.New("resolve codex home: empty path")
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		path, ok, err := FindRollout(home, nativeSessionID)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			payloads := compactedPayloads(content)
+			c.mu.Lock()
+			seen := c.seen[nativeSessionID]
+			if seen < len(payloads) {
+				c.seen[nativeSessionID] = len(payloads)
+				c.mu.Unlock()
+				return payloads[len(payloads)-1], nil
+			}
+			c.mu.Unlock()
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func compactedPayloads(content []byte) []json.RawMessage {
+	var payloads []json.RawMessage
+	for _, line := range bytes.Split(content, []byte{'\n'}) {
+		var entry struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if json.Unmarshal(line, &entry) == nil && entry.Type == "compacted" && json.Valid(entry.Payload) {
+			payloads = append(payloads, append(json.RawMessage(nil), entry.Payload...))
+		}
+	}
+	return payloads
+}
+
+func countCompacted(content []byte) int { return len(compactedPayloads(content)) }
 
 // Render converts in.Records to the bytes of a Codex rollout file without
 // touching the file system. It returns nil when the selection is empty.
@@ -203,11 +270,16 @@ func render(in supervisor.RebuildInput, opts Options) ([]byte, time.Time, error)
 	if err := validateInput(in); err != nil {
 		return nil, time.Time{}, err
 	}
+	selection, err := supervisor.SelectCheckpoint(in.Records, Harness)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	in.Records = selection.Records
 	entries, err := selectEntries(in.Records, in.WorkDir)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	return encodeLines(in, opts, entries)
+	return encodeLines(in, opts, entries, selection)
 }
 
 func validateInput(in supervisor.RebuildInput) error {
@@ -702,14 +774,20 @@ type sandboxPolicy struct {
 
 // encodeLines writes the rollout and reports the time of its first record,
 // which names a new file's date partition.
-func encodeLines(in supervisor.RebuildInput, opts Options, entries []entry) ([]byte, time.Time, error) {
-	if len(entries) == 0 {
+func encodeLines(in supervisor.RebuildInput, opts Options, entries []entry, selection supervisor.CheckpointSelection) ([]byte, time.Time, error) {
+	if len(entries) == 0 && selection.Checkpoint == nil {
 		return nil, time.Time{}, nil
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	started := entries[0].rec.CreatedAt
+	started := time.Time{}
+	foreignNote := false
+	if selection.Checkpoint != nil {
+		started = selection.Checkpoint.CreatedAt
+	} else {
+		started = entries[0].rec.CreatedAt
+	}
 	write := func(rec *supervisor.Record, ts, typ string, payload any) error {
 		if err := enc.Encode(rolloutLine{Timestamp: ts, Type: typ, Payload: payload}); err != nil {
 			return conversionError(rec, "encode %s line: %v", typ, err)
@@ -727,8 +805,29 @@ func encodeLines(in supervisor.RebuildInput, opts Options, entries []entry) ([]b
 		Source:        "vscode",
 		ModelProvider: opts.ModelProvider,
 	}
-	if err := write(entries[0].rec, startTS, "session_meta", meta); err != nil {
+	first := selection.Checkpoint
+	if first == nil {
+		first = entries[0].rec
+	}
+	if err := write(first, startTS, "session_meta", meta); err != nil {
 		return nil, time.Time{}, err
+	}
+	if selection.Checkpoint != nil {
+		data := selection.Data
+		if data.NativeBaseline != nil && data.NativeBaseline.Harness == Harness {
+			if err := write(first, startTS, "compacted", data.NativeBaseline.Payload); err != nil {
+				return nil, time.Time{}, err
+			}
+		} else {
+			foreignNote = true
+			note := messageItem{Type: itemMessage, Role: roleUser, Content: []contentPart{{Type: "input_text", Text: supervisor.CheckpointNote(data)}}}
+			if err := write(first, startTS, "turn_context", turnContext{CWD: in.WorkDir, ApprovalPolicy: "on-request", SandboxPolicy: sandboxPolicy{Type: "workspace-write", WritableRoots: []string{in.WorkDir}, NetworkAccess: true}, Model: in.Model, Effort: in.Effort, Summary: "auto"}); err != nil {
+				return nil, time.Time{}, err
+			}
+			if err := write(first, startTS, "response_item", note); err != nil {
+				return nil, time.Time{}, err
+			}
+		}
 	}
 
 	ctxLine := turnContext{
@@ -746,6 +845,10 @@ func encodeLines(in supervisor.RebuildInput, opts Options, entries []entry) ([]b
 	prevItem := ""
 	prevTurn := ""
 	emitted := false
+	if foreignNote && len(entries) > 0 {
+		emitted = true
+		prevTurn = entries[0].rec.TurnID
+	}
 	for _, e := range entries {
 		ts := stamp(e.rec.CreatedAt)
 		for _, it := range e.items {

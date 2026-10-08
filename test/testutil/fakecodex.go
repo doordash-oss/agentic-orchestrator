@@ -61,7 +61,8 @@ const (
 	// at resume time.
 	FakeCodexResumed = "CODEX_RESUMED"
 	// FakeCodexCompact additionally completes a contextCompaction item.
-	FakeCodexCompact = "CODEX_COMPACT"
+	FakeCodexCompact   = "CODEX_COMPACT"
+	FakeCodexUsageHigh = "CODEX_USAGE_HIGH"
 )
 
 // Command and output the scripted command items carry.
@@ -133,6 +134,7 @@ type FakeCodexResume struct {
 	ThreadID    string `json:"thread_id"`
 	RolloutPath string `json:"rollout_path,omitempty"`
 	Found       bool   `json:"found"`
+	Compacted   bool   `json:"compacted"`
 	UserItems   int    `json:"user_items"`
 	FirstPrompt string `json:"first_prompt,omitempty"`
 	LastPrompt  string `json:"last_prompt,omitempty"`

@@ -80,6 +80,86 @@ func converterAt(dir string) *Converter {
 	return New(Options{ConfigDir: func() (string, error) { return dir, nil }})
 }
 
+func TestCheckpointRendersNativePrefixAndCutsCoveredHistory(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	checkpoint := supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[1].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":2,"summary":"Earlier summary","native_baseline":{"harness":"claude","payload":{"content":[{"type":"text","text":"Earlier summary"}]}},"reason":"native_auto","model":"claude","trigger":"auto","pre_tokens":123}`)}
+	recs = append(recs, checkpoint)
+	got, err := Render(input(recs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Split(bytes.TrimSpace(got), []byte{'\n'})
+	if len(lines) < 3 {
+		t.Fatalf("got %d lines", len(lines))
+	}
+	var boundary, summary map[string]any
+	if err := json.Unmarshal(lines[0], &boundary); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(lines[1], &summary); err != nil {
+		t.Fatal(err)
+	}
+	if boundary["type"] != "system" || boundary["subtype"] != "compact_boundary" || summary["isCompactSummary"] != true {
+		t.Fatalf("checkpoint prefix: %s\n%s", lines[0], lines[1])
+	}
+	if strings.Contains(string(got), "Hello, what is in this repo?") || !strings.Contains(string(got), "Run the tests") {
+		t.Fatalf("cut is wrong: %s", got)
+	}
+	if summary["parentUuid"] != boundary["uuid"] {
+		t.Fatal("checkpoint lines are not chained")
+	}
+}
+
+func TestOpaqueForeignCheckpointKeepsFullHistory(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	full, err := Render(input(recs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs = append(recs, supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[1].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":2,"native_baseline":{"harness":"codex","payload":{}},"reason":"native_auto","model":"gpt"}`)})
+	got, err := Render(input(recs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, full) {
+		t.Fatal("opaque foreign checkpoint changed Claude history")
+	}
+}
+
+func TestLatestAndLastClaudeCheckpoint(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	first := supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[0].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":1,"summary":"first summary","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto"}`)}
+	last := supervisor.Record{Seq: 101, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[2].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":100,"summary":"latest summary","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto"}`)}
+	got, err := Render(input([]supervisor.Record{recs[0], first, recs[2], last}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte("first summary")) || !bytes.Contains(got, []byte("latest summary")) || len(bytes.Split(bytes.TrimSpace(got), []byte{'\n'})) != 2 {
+		t.Fatalf("latest checkpoint: %s", got)
+	}
+	result, err := converterAt(t.TempDir()).Rebuild(context.Background(), input([]supervisor.Record{last}))
+	if err != nil || !result.Resume {
+		t.Fatalf("checkpoint only resume = %#v, %v", result, err)
+	}
+}
+
+func TestCheckpointDropsStraddlingClaudeToolResult(t *testing.T) {
+	recs := loadRecords(t, "transcript.jsonl")
+	cut := supervisor.Record{Seq: 6, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[5].CreatedAt,
+		Data: json.RawMessage(`{"covers_through_seq":5,"summary":"tool condensed","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto"}`)}
+	got, err := Render(input([]supervisor.Record{recs[4], cut, recs[7]}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte("tool_result")) || bytes.Contains(got, []byte("tool_use")) {
+		t.Fatalf("straddling pair leaked: %s", got)
+	}
+}
+
 // snapshot lists every path beneath root with its content, so a test can
 // assert exactly what a rebuild created.
 func snapshot(t *testing.T, root string) map[string]string {

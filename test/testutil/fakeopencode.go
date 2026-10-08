@@ -76,7 +76,8 @@ const (
 	// FakeOpenCodeSeeded replies "Seeded with <n> prior messages: <first
 	// prior user text>" from the last noReply prompt; the first prompt after
 	// any seed replies the same way without the marker.
-	FakeOpenCodeSeeded = "OPENCODE_SEEDED"
+	FakeOpenCodeSeeded    = "OPENCODE_SEEDED"
+	FakeOpenCodeUsageHigh = "OPENCODE_USAGE_HIGH"
 )
 
 // Details the scripted requests carry.

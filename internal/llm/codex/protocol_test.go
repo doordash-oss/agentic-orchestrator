@@ -16,6 +16,7 @@ package codex
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -286,6 +287,36 @@ func TestCodexProtocol_NativeToollessReviewFailsClosed(t *testing.T) {
 				t.Fatalf("ParseLine() = %+v, want result/error or parse error", msgs)
 			}
 		})
+	}
+}
+
+func TestCodexProtocol_ContextCompactionBecomesBoundary(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		p := NewProtocol(llm.ProtocolOpts{Interactive: interactive})
+		p.SetThreadIDForTest("thread-main")
+		msgs, err := p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-main","turnId":"turn-1","item":{"id":"compact-1","type":"contextCompaction"}}}`))
+		if err != nil || len(msgs) != 1 || msgs[0].Compact == nil || msgs[0].Compact.ItemID != "compact-1" {
+			t.Fatalf("interactive=%t messages = %+v, err = %v", interactive, msgs, err)
+		}
+	}
+}
+
+func TestCodexProtocol_ForceCompactionForTestRequiresIdleInteractiveThread(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{Interactive: true})
+	var sent bytes.Buffer
+	p.SetStdin(&sent)
+	if err := p.ForceCompactionForTest(context.Background()); err == nil {
+		t.Fatal("compacted without a thread")
+	}
+	p.SetThreadIDForTest("thread-main")
+	if err := p.ForceCompactionForTest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sent.String(), `"method":"thread/compact/start"`) || !strings.Contains(sent.String(), `"threadId":"thread-main"`) {
+		t.Fatalf("request = %s", sent.String())
+	}
+	if err := NewProtocol(llm.ProtocolOpts{}).ForceCompactionForTest(context.Background()); !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("noninteractive err = %v", err)
 	}
 }
 

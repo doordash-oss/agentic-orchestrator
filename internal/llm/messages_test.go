@@ -342,6 +342,22 @@ func TestSDKMessage_UnmarshalJSON_CompactBoundary(t *testing.T) {
 	}
 }
 
+func TestSDKMessage_UnmarshalJSON_CompactionMetadataAndStringSummary(t *testing.T) {
+	var boundary, summary SDKMessage
+	if err := json.Unmarshal([]byte(`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":123456}}`), &boundary); err != nil {
+		t.Fatal(err)
+	}
+	if boundary.Compact == nil || boundary.Compact.Trigger != "auto" || boundary.Compact.PreTokens != 123456 {
+		t.Fatalf("boundary = %+v", boundary.Compact)
+	}
+	if err := json.Unmarshal([]byte(`{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Earlier discussion summary"}}`), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.User == nil || !summary.User.IsCompactSummary || len(summary.User.Message.Content) != 1 || summary.User.Message.Content[0].Text != "Earlier discussion summary" {
+		t.Fatalf("summary = %+v", summary.User)
+	}
+}
+
 func TestSDKMessage_UnmarshalJSON_TaskStarted(t *testing.T) {
 	data := `{
         "type": "system",

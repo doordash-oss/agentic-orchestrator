@@ -1001,6 +1001,21 @@ func (e SupervisorActionResponseResult) Valid() bool {
 	}
 }
 
+// Defines values for SupervisorCheckpointRecordReason.
+const (
+	NativeAuto SupervisorCheckpointRecordReason = "native_auto"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorCheckpointRecordReason enum.
+func (e SupervisorCheckpointRecordReason) Valid() bool {
+	switch e {
+	case NativeAuto:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupervisorInterruptedBy.
 const (
 	SupervisorInterruptedByNone     SupervisorInterruptedBy = "none"
@@ -1057,6 +1072,7 @@ func (e SupervisorLifecycle) Valid() bool {
 
 // Defines values for SupervisorMarkerRecordMarker.
 const (
+	SupervisorMarkerCompacted            SupervisorMarkerRecordMarker = "compacted"
 	SupervisorMarkerError                SupervisorMarkerRecordMarker = "error"
 	SupervisorMarkerHarnessChange        SupervisorMarkerRecordMarker = "harness_change"
 	SupervisorMarkerHistoryNotRestored   SupervisorMarkerRecordMarker = "history_not_restored"
@@ -1069,6 +1085,8 @@ const (
 // Valid indicates whether the value is a known member of the SupervisorMarkerRecordMarker enum.
 func (e SupervisorMarkerRecordMarker) Valid() bool {
 	switch e {
+	case SupervisorMarkerCompacted:
+		return true
 	case SupervisorMarkerError:
 		return true
 	case SupervisorMarkerHarnessChange:
@@ -1112,6 +1130,7 @@ func (e SupervisorPendingChangeKind) Valid() bool {
 // Defines values for SupervisorRecordKind.
 const (
 	SupervisorRecordKindAssistant  SupervisorRecordKind = "assistant"
+	SupervisorRecordKindCheckpoint SupervisorRecordKind = "checkpoint"
 	SupervisorRecordKindMarker     SupervisorRecordKind = "marker"
 	SupervisorRecordKindNote       SupervisorRecordKind = "note"
 	SupervisorRecordKindPermission SupervisorRecordKind = "permission"
@@ -1125,6 +1144,8 @@ const (
 func (e SupervisorRecordKind) Valid() bool {
 	switch e {
 	case SupervisorRecordKindAssistant:
+		return true
+	case SupervisorRecordKindCheckpoint:
 		return true
 	case SupervisorRecordKindMarker:
 		return true
@@ -4693,6 +4714,26 @@ type SupervisorActionResponse struct {
 // SupervisorActionResponseResult defines model for SupervisorActionResponse.Result.
 type SupervisorActionResponseResult string
 
+// SupervisorCheckpointRecord Model-only checkpoint projection; native baseline is never sent to clients.
+type SupervisorCheckpointRecord struct {
+	CoversThroughSeq  int64                            `json:"covers_through_seq"`
+	HasNativeBaseline bool                             `json:"has_native_baseline"`
+	Model             string                           `json:"model"`
+	Reason            SupervisorCheckpointRecordReason `json:"reason"`
+	Summary           string                           `json:"summary"`
+	Truncated         bool                             `json:"truncated"`
+}
+
+// SupervisorCheckpointRecordReason defines model for SupervisorCheckpointRecord.Reason.
+type SupervisorCheckpointRecordReason string
+
+// SupervisorContextUsage defines model for SupervisorContextUsage.
+type SupervisorContextUsage struct {
+	Percent      int `json:"percent"`
+	UsedTokens   int `json:"used_tokens"`
+	WindowTokens int `json:"window_tokens"`
+}
+
 // SupervisorDelta Non-persisted streaming text for a provisional assistant row.
 type SupervisorDelta struct {
 	ChunkIndex      int    `json:"chunk_index"`
@@ -4714,10 +4755,16 @@ type SupervisorMarkerRecord struct {
 	// FromHarness Source harness for a harness_change marker.
 	FromHarness string                       `json:"from_harness,omitempty"`
 	Marker      SupervisorMarkerRecordMarker `json:"marker"`
-	Text        string                       `json:"text"`
+
+	// Summary Display-bounded readable compaction summary, when available.
+	Summary string `json:"summary,omitempty"`
+	Text    string `json:"text"`
 
 	// ToHarness Destination harness for a harness_change marker.
 	ToHarness string `json:"to_harness,omitempty"`
+
+	// Truncated Whether the display summary was truncated at 16 KiB.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // SupervisorMarkerRecordMarker defines model for SupervisorMarkerRecord.Marker.
@@ -4765,12 +4812,14 @@ type SupervisorPermissionMode struct {
 
 // SupervisorRecord One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
 type SupervisorRecord struct {
-	ClientMessageID string               `json:"client_message_id,omitempty"`
-	ConversationID  string               `json:"conversation_id"`
-	CreatedAt       time.Time            `json:"created_at"`
-	Generation      int64                `json:"generation"`
-	ID              string               `json:"id"`
-	Kind            SupervisorRecordKind `json:"kind"`
+	// Checkpoint Model-only checkpoint projection; native baseline is never sent to clients.
+	Checkpoint      *SupervisorCheckpointRecord `json:"checkpoint,omitempty"`
+	ClientMessageID string                      `json:"client_message_id,omitempty"`
+	ConversationID  string                      `json:"conversation_id"`
+	CreatedAt       time.Time                   `json:"created_at"`
+	Generation      int64                       `json:"generation"`
+	ID              string                      `json:"id"`
+	Kind            SupervisorRecordKind        `json:"kind"`
 
 	// Marker Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker.
 	Marker   *SupervisorMarkerRecord `json:"marker,omitempty"`
@@ -4834,7 +4883,9 @@ type SupervisorStartingStep string
 
 // SupervisorState defines model for SupervisorState.
 type SupervisorState struct {
-	ConversationID string `json:"conversation_id"`
+	// ContextUsage Live context fill; null until the current process reports usage.
+	ContextUsage   *SupervisorContextUsage `json:"context_usage"`
+	ConversationID string                  `json:"conversation_id"`
 
 	// EffectiveModel Model the running harness reports; empty when no process exists.
 	EffectiveModel string `json:"effective_model"`

@@ -2918,6 +2918,13 @@ export const SupervisorStateSchema = z.strictObject({
     attemptedSettings: SupervisorSettingsSchema.optional(),
   }).optional(),
   pendingRequests: z.array(SupervisorPendingRequestSchema).max(100),
+  contextUsage: z
+    .strictObject({
+      percent: z.number().min(0).max(100),
+      usedTokens: z.number().int().nonnegative(),
+      windowTokens: z.number().int().positive(),
+    })
+    .nullable(),
   /** Seq of the newest committed transcript record; 0 when empty. */
   headSeq: SupervisorSeqSchema,
   /** Resume epoch for the supervisor event stream. */
@@ -2934,6 +2941,7 @@ export const SupervisorRecordKindSchema = z.enum([
   'question',
   'marker',
   'note',
+  'checkpoint',
 ]);
 export type SupervisorRecordKind = z.output<typeof SupervisorRecordKindSchema>;
 export const SupervisorRecordVisibilitySchema = z.enum(['content', 'model_only', 'display_only']);
@@ -2961,6 +2969,7 @@ export const SupervisorMarkerKindSchema = z.enum([
   'settings_changed',
   'harness_change',
   'settings_reverted',
+  'compacted',
 ]);
 export type SupervisorMarkerKind = z.output<typeof SupervisorMarkerKindSchema>;
 
@@ -2973,8 +2982,22 @@ export const SupervisorMarkerSchema = z.strictObject({
   marker: SupervisorMarkerKindSchema,
   text: AttentionTextSchema,
   code: z.string().max(200).optional(),
+  summary: z
+    .string()
+    .max(16 * 1024)
+    .optional(),
+  truncated: z.boolean().optional(),
 });
 export type SupervisorMarker = z.output<typeof SupervisorMarkerSchema>;
+
+export const SupervisorCheckpointSchema = z.strictObject({
+  coversThroughSeq: SupervisorSeqSchema,
+  reason: z.literal('native_auto'),
+  model: z.string().max(200),
+  summary: z.string().max(16 * 1024),
+  truncated: z.boolean(),
+  hasNativeBaseline: z.boolean(),
+});
 
 /** One committed transcript record; its `messages` rows carry `index = seq`. */
 export const SupervisorRecordSchema = z.strictObject({
@@ -2991,6 +3014,7 @@ export const SupervisorRecordSchema = z.strictObject({
   messages: z.array(TranscriptMessageSchema).max(500),
   request: SupervisorRequestVerdictSchema.optional(),
   marker: SupervisorMarkerSchema.optional(),
+  checkpoint: SupervisorCheckpointSchema.optional(),
 });
 export type SupervisorRecord = z.output<typeof SupervisorRecordSchema>;
 

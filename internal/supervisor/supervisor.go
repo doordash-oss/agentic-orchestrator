@@ -169,10 +169,18 @@ type State struct {
 	PendingRequests []*llm.ControlRequestMessage
 	Session         ports.SessionView
 	HeadSeq         int64
+	ContextUsage    *ContextUsage
 	StreamEpoch     string
 	// WorkDir is the provider working directory, used to relativize paths
 	// during projection.
 	WorkDir string
+}
+
+// ContextUsage is the live process's current context fill.
+type ContextUsage struct {
+	Percent      int `json:"percent"`
+	UsedTokens   int `json:"used_tokens"`
+	WindowTokens int `json:"window_tokens"`
 }
 
 // SessionIDPrefix marks supervisor session-manager ids:
@@ -277,8 +285,10 @@ type Options struct {
 	OrphanWait time.Duration
 	// SettingsUpdateTimeout bounds an in-place provider settings update.
 	SettingsUpdateTimeout time.Duration
-	Now                   func() time.Time
-	NewID                 func() string
+	// CompactionCaptureTimeout bounds native baseline collection after a boundary.
+	CompactionCaptureTimeout time.Duration
+	Now                      func() time.Time
+	NewID                    func() string
 }
 
 const (

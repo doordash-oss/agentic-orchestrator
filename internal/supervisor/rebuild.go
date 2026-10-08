@@ -16,6 +16,7 @@ package supervisor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 )
 
@@ -53,6 +54,13 @@ type RebuildResult struct {
 type Converter interface {
 	Harness() string
 	Rebuild(ctx context.Context, in RebuildInput) (RebuildResult, error)
+}
+
+// NativeCompactionCapture reads a harness-owned compacted baseline after a
+// compaction boundary. The caller bounds ctx and records the returned payload
+// without interpreting the native format.
+type NativeCompactionCapture interface {
+	CaptureCompaction(ctx context.Context, nativeSessionID string) (json.RawMessage, error)
 }
 
 // HarnessAssignedIDs is implemented by converters whose harness mints its

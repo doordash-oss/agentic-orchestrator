@@ -160,6 +160,55 @@ func TestFakeCodexJSONRPC(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CODEX_HOME", home)
 
+	t.Run("compaction rollout and usage reset", func(t *testing.T) {
+		r, path := startFakeRPC(t, testutil.FakeCodexScript{})
+		r.handshake()
+		thread := threadIDOf(t, r.response(r.call("thread/start", map[string]any{"model": "gpt-fake", "cwd": home})))
+		lastTokens := func(marker string) int {
+			r.call("turn/start", map[string]any{"threadId": thread, "input": []map[string]string{{"type": "text", "text": marker}}})
+			usage := r.next("token usage", method("thread/tokenUsage/updated"))
+			var body struct {
+				TokenUsage struct {
+					Last struct {
+						TotalTokens int `json:"totalTokens"`
+					} `json:"last"`
+				} `json:"tokenUsage"`
+			}
+			if err := json.Unmarshal(usage["params"], &body); err != nil {
+				t.Fatal(err)
+			}
+			r.next("turn completed", method("turn/completed"))
+			return body.TokenUsage.Last.TotalTokens
+		}
+		if high := lastTokens(testutil.FakeCodexUsageHigh); high < 170000 {
+			t.Fatalf("high usage = %d", high)
+		}
+		if low := lastTokens(testutil.FakeCodexCompact); low >= 170000 {
+			t.Fatalf("post-compaction usage = %d", low)
+		}
+		requests := testutil.FakeCodexRequests(t, path)
+		if len(requests) == 0 || requests[len(requests)-1].Method != "turn/start" {
+			t.Fatalf("requests = %+v", requests)
+		}
+		var rollout string
+		_ = filepath.WalkDir(filepath.Join(home, "sessions"), func(p string, d os.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(p, "-"+thread+".jsonl") {
+				rollout = p
+			}
+			return nil
+		})
+		if rollout == "" {
+			t.Fatal("missing rollout")
+		}
+		data, err := os.ReadFile(rollout)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(data), `"type":"compacted"`) || !strings.Contains(string(data), `"encrypted_content":"opaque-fake-compaction"`) || !strings.Contains(string(data), `"window_id":"window-2"`) {
+			t.Fatalf("rollout = %s", data)
+		}
+	})
+
 	t.Run("start, settings, usage, unknown and turn telemetry", func(t *testing.T) {
 		r, path := startFakeRPC(t, testutil.FakeCodexScript{ApprovalPolicy: "on-request"})
 		r.handshake()

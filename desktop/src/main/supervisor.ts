@@ -140,6 +140,14 @@ export function toSupervisorState(state: ServerSupervisorState): SupervisorState
             },
           }),
       pendingRequests: state.pending_requests.map(supervisorPendingRequest),
+      contextUsage:
+        state.context_usage === null
+          ? null
+          : {
+              percent: state.context_usage.percent,
+              usedTokens: state.context_usage.used_tokens,
+              windowTokens: state.context_usage.window_tokens,
+            },
       headSeq: state.head_seq,
       streamEpoch: state.stream_epoch,
     },
@@ -188,6 +196,22 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
               marker: record.marker.marker,
               text: record.marker.text,
               ...(record.marker.code === undefined ? {} : { code: record.marker.code }),
+              ...(record.marker.summary === undefined ? {} : { summary: record.marker.summary }),
+              ...(record.marker.truncated === undefined
+                ? {}
+                : { truncated: record.marker.truncated }),
+            },
+          }),
+      ...(record.checkpoint === undefined
+        ? {}
+        : {
+            checkpoint: {
+              coversThroughSeq: record.checkpoint.covers_through_seq,
+              reason: record.checkpoint.reason,
+              model: record.checkpoint.model,
+              summary: record.checkpoint.summary,
+              truncated: record.checkpoint.truncated,
+              hasNativeBaseline: record.checkpoint.has_native_baseline,
             },
           }),
     },

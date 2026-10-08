@@ -48,6 +48,9 @@ const (
 	// AskUserQuestion question tagged with its agent_id, then replies
 	// "Sub-agent answered <label>" with the chosen branch label.
 	FakeSupervisorSubagentAsk = "SUPERVISOR_SUBAGENT_ASK"
+	FakeSupervisorCompact     = "SUPERVISOR_COMPACT"
+	FakeSupervisorCompactExit = "SUPERVISOR_COMPACT_EXIT"
+	FakeSupervisorUsageHigh   = "SUPERVISOR_USAGE_HIGH"
 )
 
 // FakeSupervisorSubagentID is the agent_id the fake's sub-agent requests
@@ -114,6 +117,11 @@ if [ -n "$resume" ]; then
     count=$(grep -c '"role":"user","content":"' "$file")
     first=$(grep -m1 '"role":"user","content":"' "$file" | sed 's/.*"role":"user","content":"\([^"]*\)".*/\1/')
     resumed="Resumed with $count prior messages: $first"
+    if grep -q '"subtype":"compact_boundary"' "$file"; then
+      count=$(sed -n '/"subtype":"compact_boundary"/,$p' "$file" | grep -c '"role":"user"')
+      summary=$(sed -n '/"subtype":"compact_boundary"/,$p' "$file" | grep -m1 '"isCompactSummary":true' | sed 's/.*"text":"\([^"]*\)".*/\1/')
+      resumed="Resumed after compaction with $count prior messages: $summary"
+    fi
     history_first="$first"
     history_last_user=$(grep '"role":"user","content":"' "$file" | grep -v 'Agentico note:' | tail -1 | sed 's/.*"role":"user","content":"\([^"]*\)".*/\1/')
     history_last_assistant=$(grep '"type":"assistant"' "$file" | grep '"type":"text","text":"' | tail -1 | sed 's/.*"type":"text","text":"\([^"]*\)".*/\1/')
@@ -146,33 +154,48 @@ func FakeClaudeInteractiveScriptBodyWithPermissionMode(permissionMode string) st
 mode=""
 permission_mode="` + permissionMode + `"
 reply() {
+  used=$((1000 * turn))
+  case "$line" in
+    *` + FakeSupervisorUsageHigh + `*) used=170000 ;;
+    *` + FakeSupervisorCompact + `*) used=1000 ;;
+  esac
+  case "$line" in
+    *` + FakeSupervisorCompactExit + `*)
+      printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":170000}}'
+      exit 0
+      ;;
+    *` + FakeSupervisorCompact + `*)
+      printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":170000}}'
+      printf '%s\n' "{\"type\":\"user\",\"isCompactSummary\":true,\"message\":{\"role\":\"user\",\"content\":\"Summary of SUPERVISOR_COMPACT prompt on turn $turn\"}}"
+      ;;
+  esac
   case "$line" in
     *` + FakeSupervisorRecallFirst + `*) text="First user prompt: $history_first" ;;
     *` + FakeSupervisorRecallLast + `*) text="Last exchange: $history_last_user | $history_last_assistant" ;;
     *) text="" ;;
   esac
   if [ -n "$text" ]; then
-    printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}]}}"
-    printf '%s\n' '{"type":"result","subtype":"success"}'
+    printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+    printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
     return
   fi
   if [ -n "$resumed" ]; then
     text="$resumed"
     resumed=""
     printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"msg_$turn\"}}}"
-    printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}]}}"
-    printf '%s\n' '{"type":"result","subtype":"success"}'
+    printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+    printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
     return
   fi
   printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"msg_$turn\"}}}"
   printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello "}}}'
   printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"from turn $turn\"}}}"
-  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello from turn $turn\"}]}}"
-  printf '%s\n' '{"type":"result","subtype":"success"}'
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello from turn $turn\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+  printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
 }
 partial() {
-  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"` + FakeSupervisorPartialText + `\"}]}}"
-  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_tool_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_partial_$turn\",\"name\":\"Bash\",\"input\":{\"command\":\"sleep 600\"}}]}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"` + FakeSupervisorPartialText + `\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_tool_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_partial_$turn\",\"name\":\"Bash\",\"input\":{\"command\":\"sleep 600\"}}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
 }
 request() {
   printf '%s\n' "{\"type\":\"control_request\",\"request_id\":\"req_$turn\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"$1\",\"input\":$2}}"
@@ -183,8 +206,8 @@ subagent_request() {
 }
 subagent_reply() {
   printf '%s\n' "{\"type\":\"system\",\"subtype\":\"task_notification\",\"task_id\":\"task_$turn\",\"tool_use_id\":\"toolu_task_$turn\",\"status\":\"completed\",\"session_id\":\"$session_id\"}"
-  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$1\"}]}}"
-  printf '%s\n' '{"type":"result","subtype":"success"}'
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$1\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+  printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
 }
 while IFS= read -r line; do
   case "$line" in
@@ -195,7 +218,7 @@ while IFS= read -r line; do
     *'"subtype":"interrupt"'*)
       if [ "$mode" = hold ]; then
         mode=""
-        printf '%s\n' '{"type":"result","subtype":"error_during_execution","is_error":true}'
+        printf '%s\n' "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
       fi
       ;;
     *'"control_response"'*)
@@ -214,6 +237,7 @@ while IFS= read -r line; do
       ;;
     *'"type":"user"'*)
       turn=$((turn+1))
+      used=$((1000 * turn))
       printf '%s\n' "$line" >> "$(dirname "$0")/` + FakeSupervisorUserInputsFile + `"
       case "$line" in
         *` + FakeSupervisorSubagentPermBash + `*) mode=subwait; subagent_request Bash '{"command":"echo codeword"}' ;;

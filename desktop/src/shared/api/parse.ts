@@ -1557,6 +1557,13 @@ export const ServerSupervisorStateSchema = z.object({
     attempted_settings: ServerSupervisorSettingsSchema.optional(),
   }).optional(),
   pending_requests: z.array(ServerControlRequestSchema).max(100),
+  context_usage: z
+    .object({
+      percent: z.number().min(0).max(100),
+      used_tokens: z.number().int().nonnegative(),
+      window_tokens: z.number().int().positive(),
+    })
+    .nullable(),
   head_seq: ServerSupervisorSeqSchema,
   stream_epoch: z.string().max(200),
 });
@@ -1581,9 +1588,24 @@ export const ServerSupervisorMarkerRecordSchema = z.object({
     'settings_changed',
     'harness_change',
     'settings_reverted',
+    'compacted',
   ]),
   text: AttentionTextSchema,
   code: z.string().max(200).optional(),
+  summary: z
+    .string()
+    .max(16 * 1024)
+    .optional(),
+  truncated: z.boolean().optional(),
+});
+
+export const ServerSupervisorCheckpointRecordSchema = z.object({
+  covers_through_seq: ServerSupervisorSeqSchema,
+  reason: z.literal('native_auto'),
+  model: z.string().max(200),
+  summary: z.string().max(16 * 1024),
+  truncated: z.boolean(),
+  has_native_baseline: z.boolean(),
 });
 
 export const ServerSupervisorRecordSchema = z.object({
@@ -1601,6 +1623,7 @@ export const ServerSupervisorRecordSchema = z.object({
     'question',
     'marker',
     'note',
+    'checkpoint',
   ]),
   visibility: z.enum(['content', 'model_only', 'display_only']),
   created_at: z.string().max(100),
@@ -1609,6 +1632,7 @@ export const ServerSupervisorRecordSchema = z.object({
   messages: z.array(ServerTranscriptMessageSchema).max(500),
   request: ServerSupervisorRequestRecordSchema.optional(),
   marker: ServerSupervisorMarkerRecordSchema.optional(),
+  checkpoint: ServerSupervisorCheckpointRecordSchema.optional(),
 });
 export type ServerSupervisorRecord = z.output<typeof ServerSupervisorRecordSchema>;
 

@@ -2783,6 +2783,13 @@ export interface components {
             head_seq: number;
             /** @description Resume epoch for the supervisor event stream. */
             stream_epoch: string;
+            /** @description Live context fill; null until the current process reports usage. */
+            context_usage: components["schemas"]["SupervisorContextUsage"];
+        };
+        SupervisorContextUsage: {
+            percent: number;
+            used_tokens: number;
+            window_tokens: number;
         };
         SupervisorStateResponse: {
             api_version: string;
@@ -2797,7 +2804,7 @@ export interface components {
             requested_at: string;
         };
         /** @enum {string} */
-        SupervisorRecordKind: "user" | "assistant" | "tool_use" | "tool_result" | "permission" | "question" | "marker" | "note";
+        SupervisorRecordKind: "user" | "assistant" | "tool_use" | "tool_result" | "permission" | "question" | "marker" | "note" | "checkpoint";
         /** @enum {string} */
         SupervisorRecordVisibility: "content" | "model_only" | "display_only";
         /** @description Request or verdict carried by `permission` and `question` records. */
@@ -2821,13 +2828,28 @@ export interface components {
         /** @description Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker. */
         SupervisorMarkerRecord: {
             /** @enum {string} */
-            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted" | "settings_changed" | "settings_reverted" | "harness_change";
+            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted" | "settings_changed" | "settings_reverted" | "harness_change" | "compacted";
             text: string;
             code?: string;
             /** @description Source harness for a harness_change marker. */
             from_harness?: string;
             /** @description Destination harness for a harness_change marker. */
             to_harness?: string;
+            /** @description Display-bounded readable compaction summary, when available. */
+            summary?: string;
+            /** @description Whether the display summary was truncated at 16 KiB. */
+            truncated?: boolean;
+        };
+        /** @description Model-only checkpoint projection; native baseline is never sent to clients. */
+        SupervisorCheckpointRecord: {
+            /** Format: int64 */
+            covers_through_seq: number;
+            /** @enum {string} */
+            reason: "native_auto";
+            model: string;
+            summary: string;
+            truncated: boolean;
+            has_native_baseline: boolean;
         };
         /** @description One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`. */
         SupervisorRecord: {
@@ -2849,6 +2871,7 @@ export interface components {
             messages: components["schemas"]["TranscriptMessage"][];
             request?: components["schemas"]["SupervisorRequestRecord"];
             marker?: components["schemas"]["SupervisorMarkerRecord"];
+            checkpoint?: components["schemas"]["SupervisorCheckpointRecord"];
         };
         SupervisorTranscriptResponse: {
             api_version: string;

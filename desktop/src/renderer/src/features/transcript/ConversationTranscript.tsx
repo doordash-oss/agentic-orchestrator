@@ -14,8 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { TranscriptMessage } from '../../../../shared/ipc';
+import { renderSanitizedMarkdown } from '../sanitizedMarkdown';
 import {
   friendlyToolName,
   type ConversationItem,
@@ -40,6 +41,40 @@ const NOTICE_MARKS: Readonly<Record<ConversationNoticeTone, string>> = {
   caveat: '!',
   neutral: '•',
 };
+
+function Notice({ item }: { item: Extract<ConversationItem, { kind: 'notice' }> }) {
+  const [expanded, setExpanded] = useState(false);
+  const summaryId = `${item.key}-summary`;
+  return (
+    <div className="conversation__notice-container">
+      <p className="conversation__notice" data-tone={item.tone}>
+        <span className="conversation__notice-mark" aria-hidden="true">
+          {NOTICE_MARKS[item.tone]}
+        </span>
+        <span className="conversation__notice-text">{item.text}</span>
+        {item.summary !== undefined ? (
+          <button
+            type="button"
+            className="conversation__notice-toggle"
+            aria-expanded={expanded}
+            aria-controls={summaryId}
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? 'Hide summary' : 'Show summary'}
+          </button>
+        ) : null}
+      </p>
+      {item.summary !== undefined && expanded ? (
+        <div id={summaryId} className="conversation__notice-summary">
+          <div dangerouslySetInnerHTML={{ __html: renderSanitizedMarkdown(item.summary) }} />
+          {item.summaryTruncated ? (
+            <p className="conversation__notice-truncated">Summary truncated</p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function ActivityIndicator({
   labels,
@@ -350,12 +385,7 @@ export function ConversationTranscript({
             <span className="conversation__verdict-text">{item.text}</span>
           </p>
         ) : item.kind === 'notice' ? (
-          <p key={item.key} className="conversation__notice" data-tone={item.tone}>
-            <span className="conversation__notice-mark" aria-hidden="true">
-              {NOTICE_MARKS[item.tone]}
-            </span>
-            <span className="conversation__notice-text">{item.text}</span>
-          </p>
+          <Notice key={item.key} item={item} />
         ) : (
           <ActivityIndicator
             key={item.key}

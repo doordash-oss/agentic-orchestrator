@@ -77,6 +77,7 @@ import {
 } from '../QuestionTurn';
 import { ConversationTranscript } from '../transcript/ConversationTranscript';
 import { SupervisorModelChip } from './SupervisorModelChip';
+import { SupervisorContextRing } from './SupervisorContextRing';
 import { SupervisorSwitchDialog, type SupervisorSwitchChoice } from './SupervisorSwitchDialog';
 import {
   buildSupervisorConversation,
@@ -700,6 +701,7 @@ export function SupervisorPage({
                   onSwitch={chooseSwitch}
                   openSection={openSection}
                 />
+                {state !== null ? <SupervisorContextRing usage={state.contextUsage} /> : null}
                 <p
                   className="supervisor-status"
                   role="status"

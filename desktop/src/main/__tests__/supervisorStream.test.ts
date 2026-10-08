@@ -35,6 +35,7 @@ function wireState(overrides: Record<string, unknown> = {}): Record<string, unkn
     effective_model: 'claude-sonnet-4-5',
     permission_mode: { requested: 'default', effective: 'default', restricted_by_policy: false },
     pending_requests: [],
+    context_usage: null,
     head_seq: 3,
     stream_epoch: EPOCH,
     ...overrides,

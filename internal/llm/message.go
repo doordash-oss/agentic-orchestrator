@@ -255,6 +255,38 @@ type ConversationMsg struct {
 	Usage   *Usage         `json:"usage,omitempty"`
 }
 
+// UnmarshalJSON accepts Claude's compact summary content as a plain string.
+func (m *ConversationMsg) UnmarshalJSON(data []byte) error {
+	type plain ConversationMsg
+	var raw struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var decoded plain
+	if len(raw.Content) > 0 && raw.Content[0] == '"' {
+		var value string
+		if err := json.Unmarshal(raw.Content, &value); err != nil {
+			return err
+		}
+		var withoutContent struct {
+			ID    string `json:"id"`
+			Role  string `json:"role"`
+			Model string `json:"model"`
+			Usage *Usage `json:"usage"`
+		}
+		if err := json.Unmarshal(data, &withoutContent); err != nil {
+			return err
+		}
+		decoded = plain{ID: withoutContent.ID, Role: withoutContent.Role, Model: withoutContent.Model, Usage: withoutContent.Usage, Content: []ContentBlock{{Type: "text", Text: value}}}
+	} else if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*m = ConversationMsg(decoded)
+	return nil
+}
+
 // ContentBlock is a polymorphic block within a message.
 type ContentBlock struct {
 	Type string `json:"type"`
@@ -327,10 +359,11 @@ type Usage struct {
 
 // UserMessage is an echoed user message or tool result.
 type UserMessage struct {
-	Type      string          `json:"type"`
-	Subtype   string          `json:"subtype,omitempty"`
-	Message   ConversationMsg `json:"message"`
-	SessionID string          `json:"session_id,omitempty"`
+	Type             string          `json:"type"`
+	Subtype          string          `json:"subtype,omitempty"`
+	IsCompactSummary bool            `json:"isCompactSummary,omitempty"`
+	Message          ConversationMsg `json:"message"`
+	SessionID        string          `json:"session_id,omitempty"`
 }
 
 // ModelUsageEntry holds per-model usage metadata from the result message.
@@ -682,8 +715,28 @@ type HookResponseMessage struct {
 
 // CompactBoundaryMessage indicates context compaction occurred.
 type CompactBoundaryMessage struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype"`
+	ItemID    string `json:"-"`
+	Trigger   string `json:"-"`
+	PreTokens int    `json:"-"`
+}
+
+func (m *CompactBoundaryMessage) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Type            string `json:"type"`
+		Subtype         string `json:"subtype"`
+		CompactMetadata struct {
+			Trigger   string `json:"trigger"`
+			PreTokens int    `json:"pre_tokens"`
+		} `json:"compact_metadata"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Type, m.Subtype = raw.Type, raw.Subtype
+	m.Trigger, m.PreTokens = raw.CompactMetadata.Trigger, raw.CompactMetadata.PreTokens
+	return nil
 }
 
 // TaskUsage is the per-subagent cumulative usage payload carried inside

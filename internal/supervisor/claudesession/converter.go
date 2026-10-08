@@ -140,11 +140,16 @@ func Render(in supervisor.RebuildInput) ([]byte, error) {
 	if err := validateInput(in); err != nil {
 		return nil, err
 	}
+	selection, err := supervisor.SelectCheckpoint(in.Records, Harness)
+	if err != nil {
+		return nil, err
+	}
+	in.Records = selection.Records
 	entries, err := selectEntries(in.Records)
 	if err != nil {
 		return nil, err
 	}
-	return encodeLines(in, entries)
+	return encodeLines(in, entries, selection)
 }
 
 func validateInput(in supervisor.RebuildInput) error {
@@ -554,15 +559,23 @@ func envelopeKey(e entry) string {
 }
 
 type sessionLine struct {
-	ParentUUID  *string     `json:"parentUuid"`
-	IsSidechain bool        `json:"isSidechain"`
-	Type        string      `json:"type"`
-	Message     lineMessage `json:"message"`
-	UUID        string      `json:"uuid"`
-	Timestamp   string      `json:"timestamp"`
-	UserType    string      `json:"userType"`
-	CWD         string      `json:"cwd"`
-	SessionID   string      `json:"sessionId"`
+	ParentUUID       *string          `json:"parentUuid"`
+	IsSidechain      bool             `json:"isSidechain"`
+	Type             string           `json:"type"`
+	Message          lineMessage      `json:"message"`
+	UUID             string           `json:"uuid"`
+	Timestamp        string           `json:"timestamp"`
+	UserType         string           `json:"userType"`
+	CWD              string           `json:"cwd"`
+	SessionID        string           `json:"sessionId"`
+	Subtype          string           `json:"subtype,omitempty"`
+	CompactMetadata  *compactMetadata `json:"compactMetadata,omitempty"`
+	IsCompactSummary bool             `json:"isCompactSummary,omitempty"`
+}
+
+type compactMetadata struct {
+	Trigger   string `json:"trigger,omitempty"`
+	PreTokens int    `json:"preTokens,omitempty"`
 }
 
 type lineMessage struct {
@@ -572,11 +585,47 @@ type lineMessage struct {
 	Content any    `json:"content"`
 }
 
-func encodeLines(in supervisor.RebuildInput, entries []entry) ([]byte, error) {
+func encodeLines(in supervisor.RebuildInput, entries []entry, selection supervisor.CheckpointSelection) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	var parent *string
+	if rec := selection.Checkpoint; rec != nil {
+		data := selection.Data
+		emitCheckpointLine := func(index int, role string, content any, subtype string, metadata *compactMetadata, summary bool) error {
+			id := lineID(in.ConversationID, rec.Seq, index, "checkpoint")
+			line := sessionLine{ParentUUID: parent, Type: role, Message: lineMessage{Role: role, Content: content}, UUID: id,
+				Timestamp: rec.CreatedAt.UTC().Format(timestampLayout), UserType: "external", CWD: in.WorkDir,
+				SessionID: in.NativeSessionID, Subtype: subtype, CompactMetadata: metadata, IsCompactSummary: summary}
+			if err := enc.Encode(line); err != nil {
+				return conversionError(rec, "encode checkpoint line: %v", err)
+			}
+			parent = &id
+			return nil
+		}
+		if data.NativeBaseline != nil && data.NativeBaseline.Harness == Harness {
+			if err := emitCheckpointLine(0, "system", "", "compact_boundary", &compactMetadata{Trigger: data.Trigger, PreTokens: data.PreTokens}, false); err != nil {
+				return nil, err
+			}
+			var baseline struct {
+				Content json.RawMessage `json:"content"`
+			}
+			if err := json.Unmarshal(data.NativeBaseline.Payload, &baseline); err != nil {
+				return nil, conversionError(rec, "decode Claude baseline: %v", err)
+			}
+			var content any = data.Summary
+			if len(baseline.Content) > 0 && json.Valid(baseline.Content) {
+				content = baseline.Content
+			}
+			if err := emitCheckpointLine(1, roleUser, content, "", nil, true); err != nil {
+				return nil, err
+			}
+		} else {
+			if err := emitCheckpointLine(0, roleUser, supervisor.CheckpointNote(data), "", nil, false); err != nil {
+				return nil, err
+			}
+		}
+	}
 	prevKey := ""
 	messageID := ""
 	for _, e := range entries {

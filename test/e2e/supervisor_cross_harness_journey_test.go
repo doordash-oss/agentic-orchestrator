@@ -279,6 +279,16 @@ func TestSupervisorCrossHarnessPendingAppliesAtBoot(t *testing.T) {
 	h.send("hold "+testutil.FakeSupervisorHold, "boot-hold")
 	h.waitLifecycle(server.SupervisorLifecycleRunning)
 	h.switchTo("boot-switch", "opencode", nil, nil)
+	// Reboot from an isolated crash image. The abandoned coordinator still
+	// has goroutines in this test process; when boot kills its orphan, its
+	// exit watcher can apply the pending switch to its old files. A real
+	// crashed server cannot do that. Keep those writes out of the new boot's
+	// transcript while retaining the live provider/PID for orphan recovery.
+	crashState := t.TempDir()
+	if err := os.CopyFS(crashState, os.DirFS(h.stateDir)); err != nil {
+		t.Fatal(err)
+	}
+	h.stateDir = crashState
 	h.crash()
 	st := h.waitLifecycle(server.SupervisorLifecycleStopped)
 	if st.PendingChange != nil || st.Settings.Harness != "opencode" || h.coord.State().NativeSessionID == previous {

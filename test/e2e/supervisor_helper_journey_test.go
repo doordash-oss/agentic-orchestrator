@@ -518,16 +518,21 @@ func recordKindList(items []server.SupervisorRecord) string {
 }
 
 // requireRedactedToolRecords asserts every wire tool_use and tool_result
-// record carries only redacted, text-free tool rows: the supervisor
-// projection keeps the command, its input and its output server-side.
+// record carries redacted, text-free tool rows. Display summaries are
+// allowed (including command previews), but raw row text and sub-agent
+// prompts are not.
 func requireRedactedToolRecords(t *testing.T, items []server.SupervisorRecord) {
 	t.Helper()
 	for _, rec := range items {
 		switch rec.Kind {
 		case server.SupervisorRecordKindToolUse:
 			for _, msg := range rec.Messages {
-				if msg.Type != "tool_use" || msg.Tool != "Bash" || !msg.Redacted || msg.Text != "" || msg.ToolCall != nil {
+				if msg.Type != "tool_use" || msg.Tool != "Bash" || !msg.Redacted || msg.Text != "" {
 					t.Fatalf("wire tool_use row not redacted: %+v", msg)
+				}
+				// Display text is capped at 180 bytes plus a truncation ellipsis.
+				if msg.ToolCall == nil || msg.ToolCall.Summary == "" || len(msg.ToolCall.Summary) > 183 || msg.ToolCall.Prompt != "" {
+					t.Fatalf("wire tool_use row must contain only a bounded display summary: %+v", msg.ToolCall)
 				}
 			}
 		case server.SupervisorRecordKindToolResult:
@@ -653,17 +658,15 @@ func TestSupervisorHelperOperatesFeatureWithoutLeakingToken(t *testing.T) {
 	t.Logf("global stream events for the feature: %s (resource %+v), %s (resource %+v); kinds seen for it: %v",
 		lifecycle.Kind, lifecycle.Resource, sessionEv.Kind, sessionEv.Resource, events.featureKinds(featureID))
 
-	// The wire transcript holds the tool records, redacted; the helper
-	// commands and outputs never reach it.
+	// The wire transcript holds text-free tool records and bounded command
+	// summaries. The raw helper outputs remain server-side.
 	page, pageRaw := h.transcript()
 	if got := recordKindList(page.Items); got != "user,tool_use,tool_result,tool_use,tool_result,tool_use,tool_result,assistant" {
 		t.Fatalf("operate transcript = %s", got)
 	}
 	requireRedactedToolRecords(t, page.Items)
-	for _, leak := range []string{featureID, "/api/v1/features", "AGENTICO_BIN"} {
-		if strings.Contains(string(pageRaw), leak) {
-			t.Fatalf("wire transcript carries helper detail %q:\n%s", leak, pageRaw)
-		}
+	if summary := page.Items[1].Messages[0].ToolCall.Summary; summary != wantCommands[0] {
+		t.Fatalf("create command display summary = %q, want %q", summary, wantCommands[0])
 	}
 
 	// The phase worker asks its question; the supervisor answers it through
@@ -706,9 +709,6 @@ func TestSupervisorHelperOperatesFeatureWithoutLeakingToken(t *testing.T) {
 		t.Fatalf("transcript after answer = %s", got)
 	}
 	requireRedactedToolRecords(t, page.Items)
-	if strings.Contains(string(pageRaw), ask.RequestID) {
-		t.Fatalf("wire transcript carries the answered request id")
-	}
 
 	// Every helper call was a bare invocation the supervisor handler allowed
 	// without surfacing a permission request.

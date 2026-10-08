@@ -163,10 +163,16 @@ test('supervisor helper sidebar: helper-created feature appears At rest, then mo
       'Bash',
       'Bash',
     ]);
-    // Each operate turn folds its helper calls behind one activity line.
-    const activity = conversation(page).locator('.conversation__activity');
-    await expect(activity).toHaveCount(2);
-    for (const line of await activity.all()) await expect(line).toContainText(/bash/i);
+    // Each operate turn folds its helper calls into an expandable history.
+    // The separate live indicator can also show the latest completed turn.
+    const history = conversation(page).locator('.conversation__activity-history');
+    await expect(history.locator('summary')).toHaveText(['4 activity steps', '1 activity step']);
+    for (const group of await history.all()) await group.locator('summary').click();
+    await expect(history.getByRole('listitem')).toHaveCount(5);
+    for (const step of await history.getByRole('listitem').all()) {
+      await expect(step).toBeVisible();
+      await expect(step).toContainText(/bash/i);
+    }
     transcript.json(
       'supervisor transcript kinds',
       page1.items.map((record) => record.kind),

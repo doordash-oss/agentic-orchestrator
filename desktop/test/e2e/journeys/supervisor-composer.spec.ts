@@ -156,7 +156,9 @@ test('supervisor composer: attachments, the queue, Escape, Send now and New conv
       const tokens = [...list.children].map((item) => item.getBoundingClientRect());
       return {
         tops: tokens.map((token) => token.top),
-        height: list.getBoundingClientRect().height,
+        // Linux reserves space for the horizontal scrollbar; macOS overlays
+        // it. Assert the content row's height separately from that OS chrome.
+        height: list.clientHeight,
       };
     });
     expect(Math.max(...geometry.tops) - Math.min(...geometry.tops)).toBeLessThan(2);

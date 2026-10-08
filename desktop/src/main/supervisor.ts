@@ -303,7 +303,11 @@ export class SupervisorService {
     });
     const response = validateWithSchema(body, SupervisorMessageResponseSchema);
     return validateWithSchema(
-      { record: toSupervisorRecord(response.record), launched: response.launched },
+      {
+        record: toSupervisorRecord(response.record),
+        launched: response.launched,
+        deduplicated: response.deduplicated,
+      },
       SupervisorMessageResultSchema,
     );
   }

@@ -21,9 +21,17 @@ limitations under the License.
  *
  * The page snapshots the read model and the newest transcript page, then
  * follows the supervisor stream: committed `record`s merge by seq, `delta`s
- * build a provisional assistant row keyed by stream message id until the
- * matching record commits, `state` replaces the read model, `request` adds a
- * pending card ahead of its state change, and `reset` re-snapshots. Pending
+ * build a provisional assistant row keyed by generation and stream message
+ * id until the matching record commits, `state` replaces the read model,
+ * `request` adds a pending card ahead of its state change, and `reset`
+ * re-snapshots, keeping records streamed during the reload above the
+ * fetched page's head. Deltas and requests from a retired generation, and
+ * deltas for a stream message that already committed, are dropped.
+ *
+ * Older history loads a page at a time as the person scrolls near the top,
+ * with the previously first visible row held in place. Each page request is
+ * stamped with the reset epoch and server epoch it started in; a page that
+ * lands after a reset or a server switch is discarded. Pending
  * permissions and questions sit at the bottom of the transcript in the
  * shared attention card and question turn, and are answered through the
  * existing attention submit path.
@@ -44,6 +52,7 @@ import {
 import type {
   AttentionItem,
   CanonicalError,
+  ConnectionState,
   ErrorReference,
   SupervisorPendingRequest,
   SupervisorRecord,
@@ -80,14 +89,17 @@ import { SupervisorModelChip } from './SupervisorModelChip';
 import { SupervisorContextRing } from './SupervisorContextRing';
 import { SupervisorSwitchDialog, type SupervisorSwitchChoice } from './SupervisorSwitchDialog';
 import {
-  buildSupervisorConversation,
   findCatalogueModel,
   harnessLabel,
   isPausedByRestart,
   isTurnActive,
   mergeRecords,
+  mergeSnapshotRecords,
   settingsChosen,
+  streamKey,
   SUPERVISOR_COPY,
+  supervisorConversationBuilder,
+  supervisorConversationTail,
   supervisorStatusLine,
   type ProvisionalReply,
 } from './supervisorModel';
@@ -121,6 +133,24 @@ export interface SupervisorPageProps {
 function appendDraft(current: string, draft: string): string {
   return current.trim() === '' ? draft : `${current.trimEnd()}\n\n${draft}`;
 }
+
+/** Where loading the page before the oldest loaded record stands. */
+type EarlierPageStatus = 'idle' | 'loading' | 'failed';
+
+/** The epochs a page request started in; a mismatch on arrival discards it. */
+interface PageStamp {
+  resetEpoch: number;
+  serverEpoch: number;
+}
+
+/** The stream ids committed in one generation; replaced when the generation changes. */
+interface CommittedStreams {
+  generation: number;
+  ids: Set<string>;
+}
+
+/** The server's machine code for a transcript cursor beyond the head. */
+const CURSOR_OUT_OF_RANGE = 'cursor_out_of_range';
 
 function userRecordText(record: SupervisorRecord): string | undefined {
   if (record.kind !== 'user') return undefined;
@@ -168,9 +198,24 @@ export function SupervisorPage({
   // next state confirms they are gone.
   const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set());
   const [pinToBottom, setPinToBottom] = useState(0);
+  const [hasMoreBefore, setHasMoreBefore] = useState(false);
+  const [earlierStatus, setEarlierStatus] = useState<EarlierPageStatus>('idle');
   const loadRequest = useRef(0);
   const conversationIdRef = useRef<string | null>(null);
   conversationIdRef.current = state?.conversationId ?? null;
+  // The current read model's generation: deltas and requests below it belong
+  // to a retired process. Also set by stream state events directly, so an
+  // event in the same tick as the state change is already judged by it.
+  const generationRef = useRef(0);
+  generationRef.current = state?.generation ?? 0;
+  // Bumped by every snapshot reload (stream reset or out-of-range cursor) and
+  // by every server switch; an earlier-page request compares its stamp.
+  const resetEpoch = useRef(0);
+  const serverEpoch = useRef(0);
+  const earlierRequest = useRef<PageStamp | null>(null);
+  // Records the stream delivered while a snapshot reload was in flight.
+  const reloadStreamed = useRef<SupervisorRecord[] | null>(null);
+  const committedStreams = useRef<CommittedStreams>({ generation: -1, ids: new Set() });
   // Counts the stream's state events. A fetched read model is applied only
   // if no stream state arrived while it was in flight: the stream's is newer,
   // and a stale "running" snapshot landing after the turn's idle event would
@@ -189,32 +234,139 @@ export function SupervisorPage({
     }
   }, []);
 
+  /** Remembers committed stream ids, starting a fresh set for a newer generation. */
+  const rememberCommitted = useCallback((committed: readonly SupervisorRecord[]) => {
+    for (const record of committed) {
+      if (record.streamMessageId === undefined) continue;
+      if (record.generation > committedStreams.current.generation) {
+        committedStreams.current = { generation: record.generation, ids: new Set() };
+      }
+      if (record.generation === committedStreams.current.generation) {
+        committedStreams.current.ids.add(record.streamMessageId);
+      }
+    }
+  }, []);
+
   /**
    * Snapshots the read model and the newest transcript page. `replace`
-   * (after a stream reset) discards what the page held; the first load
-   * merges, so records that streamed in while it was in flight survive.
+   * (after a stream reset) discards what the page held except records the
+   * stream delivered meanwhile above the fetched head, and abandons any
+   * earlier page in flight; the first load merges, so records that streamed
+   * in while it was in flight survive.
    */
-  const load = useCallback(async (replace: boolean) => {
-    const request = ++loadRequest.current;
-    const tick = streamStateTick.current;
-    const [stateResult, pageResult] = await Promise.allSettled([
-      window.agentico.getSupervisorState(),
-      window.agentico.getSupervisorTranscript({}),
-    ]);
-    if (request !== loadRequest.current) return;
-    if (stateResult.status === 'fulfilled') {
-      if (tick === streamStateTick.current) setState(stateResult.value);
-      setStateError(null);
-    } else {
-      setStateError(parseIpcError(stateResult.reason));
-    }
-    if (pageResult.status === 'fulfilled') {
-      setRecords((current) => mergeRecords(replace ? [] : current, pageResult.value.items));
-      setTranscriptError(null);
-      if (replace) setProvisional(new Map());
-    } else {
-      setTranscriptError(parseIpcError(pageResult.reason));
-    }
+  const load = useCallback(
+    async (replace: boolean) => {
+      const request = ++loadRequest.current;
+      const tick = streamStateTick.current;
+      if (replace) {
+        resetEpoch.current += 1;
+        earlierRequest.current = null;
+        reloadStreamed.current = [];
+        setEarlierStatus('idle');
+      }
+      const [stateResult, pageResult] = await Promise.allSettled([
+        window.agentico.getSupervisorState(),
+        window.agentico.getSupervisorTranscript({}),
+      ]);
+      if (request !== loadRequest.current) return;
+      const streamed = reloadStreamed.current ?? [];
+      reloadStreamed.current = null;
+      if (stateResult.status === 'fulfilled') {
+        if (tick === streamStateTick.current) setState(stateResult.value);
+        setStateError(null);
+      } else {
+        setStateError(parseIpcError(stateResult.reason));
+      }
+      if (pageResult.status === 'fulfilled') {
+        const fetched = pageResult.value;
+        if (replace) {
+          const kept = mergeSnapshotRecords(fetched.items, fetched.headSeq, streamed);
+          committedStreams.current = { generation: -1, ids: new Set() };
+          rememberCommitted(kept);
+          setRecords(kept);
+          setProvisional(new Map());
+        } else {
+          rememberCommitted(fetched.items);
+          setRecords((current) => mergeRecords(current, fetched.items));
+        }
+        setHasMoreBefore(fetched.hasMoreBefore);
+        setTranscriptError(null);
+      } else {
+        setTranscriptError(parseIpcError(pageResult.reason));
+      }
+    },
+    [rememberCommitted],
+  );
+
+  const oldestSeq = records[0]?.seq;
+
+  /**
+   * Requests the page before the oldest loaded record. A page that lands
+   * after a reset or a server switch is discarded; an out-of-range cursor
+   * (the transcript moved under it) re-snapshots silently; any other failure
+   * leaves the Retry row in place of the loading row.
+   */
+  const loadEarlier = useCallback(
+    async (retry: boolean) => {
+      if (earlierRequest.current !== null || oldestSeq === undefined || !hasMoreBefore) return;
+      if (earlierStatus === 'failed' && !retry) return;
+      const stamp: PageStamp = {
+        resetEpoch: resetEpoch.current,
+        serverEpoch: serverEpoch.current,
+      };
+      const current = (): boolean =>
+        earlierRequest.current === stamp &&
+        stamp.resetEpoch === resetEpoch.current &&
+        stamp.serverEpoch === serverEpoch.current;
+      earlierRequest.current = stamp;
+      setEarlierStatus('loading');
+      try {
+        const earlier = await window.agentico.getSupervisorTranscript({ before: oldestSeq });
+        if (!current()) return;
+        earlierRequest.current = null;
+        rememberCommitted(earlier.items);
+        setRecords((loaded) => mergeRecords(loaded, earlier.items));
+        setHasMoreBefore(earlier.hasMoreBefore);
+        setEarlierStatus('idle');
+      } catch (error) {
+        if (!current()) return;
+        earlierRequest.current = null;
+        if (parseIpcError(error).code === CURSOR_OUT_OF_RANGE) {
+          setEarlierStatus('idle');
+          void load(true);
+          return;
+        }
+        setEarlierStatus('failed');
+      }
+    },
+    [earlierStatus, hasMoreBefore, load, oldestSeq, rememberCommitted],
+  );
+
+  // A server switch abandons any earlier page in flight; the stream's reset
+  // that follows the switch re-snapshots the newest page.
+  useEffect(() => {
+    let serverKey: string | null | undefined;
+    const observe = (connection: ConnectionState): void => {
+      const next = connection.serverKey ?? null;
+      if (next === null) return;
+      if (serverKey !== undefined && serverKey !== null && next !== serverKey) {
+        serverEpoch.current += 1;
+        earlierRequest.current = null;
+        committedStreams.current = { generation: -1, ids: new Set() };
+        setEarlierStatus('idle');
+      }
+      serverKey = next;
+    };
+    const unsubscribe = window.agentico.onConnectionChanged(observe);
+    void window.agentico
+      .getConnectionStatus()
+      .then((connection) => {
+        if (serverKey === undefined) observe(connection);
+      })
+      .catch(() => {
+        // The shell surfaces connection failures; paging simply keeps its epoch.
+      });
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
@@ -228,9 +380,11 @@ export function SupervisorPage({
       if (conversationId !== null && event.conversationId !== conversationId) return;
       if (event.type === 'record') {
         const { record } = event;
+        reloadStreamed.current?.push(record);
+        rememberCommitted([record]);
         setRecords((current) => mergeRecords(current, [record]));
         if (record.streamMessageId !== undefined) {
-          const committed = record.streamMessageId;
+          const committed = streamKey(record.generation, record.streamMessageId);
           setProvisional((current) => {
             if (!current.has(committed)) return current;
             const next = new Map(current);
@@ -242,12 +396,22 @@ export function SupervisorPage({
         if (text !== undefined) setOptimistic((current) => (current === text ? null : current));
       } else if (event.type === 'delta') {
         const { delta } = event;
+        // A retired generation's text, or a chunk of a message that already
+        // committed (a replay or a late chunk), never becomes a row.
+        if (event.generation < generationRef.current) return;
+        if (
+          event.generation === committedStreams.current.generation &&
+          committedStreams.current.ids.has(delta.streamMessageId)
+        ) {
+          return;
+        }
+        const key = streamKey(event.generation, delta.streamMessageId);
         setProvisional((current) => {
-          const known = current.get(delta.streamMessageId);
+          const known = current.get(key);
           const chunks = new Map(known?.chunks ?? []);
           chunks.set(delta.chunkIndex, delta.text);
           const next = new Map(current);
-          next.set(delta.streamMessageId, {
+          next.set(key, {
             streamMessageId: delta.streamMessageId,
             generation: event.generation,
             chunks,
@@ -256,6 +420,10 @@ export function SupervisorPage({
         });
       } else if (event.type === 'state') {
         streamStateTick.current += 1;
+        generationRef.current = event.state.generation;
+        if (event.state.generation !== committedStreams.current.generation) {
+          committedStreams.current = { generation: event.state.generation, ids: new Set() };
+        }
         setState(event.state);
         setStateError(null);
         // A turn that ended without committing its streamed text (an
@@ -263,6 +431,7 @@ export function SupervisorPage({
         if (!isTurnActive(event.state.lifecycle)) setProvisional(new Map());
       } else {
         const { request } = event;
+        if (event.generation < generationRef.current) return;
         setState((current) =>
           current === null || current.pendingRequests.some((item) => item.id === request.id)
             ? current
@@ -275,7 +444,7 @@ export function SupervisorPage({
       loadRequest.current += 1;
       unsubscribe();
     };
-  }, [load]);
+  }, [load, rememberCommitted]);
 
   // Each routed compose request is handled once by its id, so a re-render
   // carrying the same request never replays its draft.
@@ -295,13 +464,19 @@ export function SupervisorPage({
     composerRef.current?.focus();
   }, [focusToken]);
 
+  // The folded committed history rebuilds only when the records change; a
+  // delta recomputes just the provisional tail.
+  const committedConversation = useMemo(
+    () => supervisorConversationBuilder.committed(records),
+    [records],
+  );
   const conversation = useMemo(
     () =>
-      buildSupervisorConversation(records, {
+      supervisorConversationTail(committedConversation, {
         optimistic,
         provisional: [...provisional.values()],
       }),
-    [optimistic, provisional, records],
+    [committedConversation, optimistic, provisional],
   );
 
   const lifecycle = state?.lifecycle ?? 'stopped';
@@ -358,6 +533,7 @@ export function SupervisorPage({
         text,
         ...(reference === null ? {} : { errorReference: reference }),
       });
+      rememberCommitted([result.record]);
       setRecords((current) => mergeRecords(current, [result.record]));
       setOptimistic(null);
       // A newer explain routed in while the send was in flight keeps its own.
@@ -576,6 +752,42 @@ export function SupervisorPage({
         idleLabel="Working through your message"
         pinToBottomToken={pinToBottom}
         trailing={trailing}
+        anchorPrepend
+        onNearTop={hasMoreBefore ? () => void loadEarlier(false) : undefined}
+        top={
+          earlierStatus === 'loading' ? (
+            <p
+              className="conversation__notice conversation__earlier"
+              data-tone="neutral"
+              data-state="loading"
+              role="status"
+            >
+              <span className="conversation__notice-mark" aria-hidden="true">
+                •
+              </span>
+              <span className="conversation__notice-text">{SUPERVISOR_COPY.loadingEarlier}</span>
+            </p>
+          ) : earlierStatus === 'failed' ? (
+            <p
+              className="conversation__notice conversation__earlier"
+              data-tone="failed"
+              data-state="failed"
+              role="status"
+            >
+              <span className="conversation__notice-mark" aria-hidden="true">
+                ✕
+              </span>
+              <span className="conversation__notice-text">{SUPERVISOR_COPY.earlierFailed}</span>
+              <button
+                type="button"
+                className="conversation__notice-toggle"
+                onClick={() => void loadEarlier(true)}
+              >
+                {SUPERVISOR_COPY.retry}
+              </button>
+            </p>
+          ) : null
+        }
         status={
           <>
             {state === null ? <p role="status">Loading the supervisor…</p> : null}

@@ -2970,6 +2970,7 @@ export const SupervisorMarkerKindSchema = z.enum([
   'harness_change',
   'settings_reverted',
   'compacted',
+  'transcript_recovered',
 ]);
 export type SupervisorMarkerKind = z.output<typeof SupervisorMarkerKindSchema>;
 
@@ -3087,6 +3088,8 @@ export const SupervisorMessageResultSchema = z.strictObject({
   record: SupervisorRecordSchema,
   /** True when this send launched the supervisor process. */
   launched: z.boolean(),
+  /** True when the send matched an already-committed message; nothing was appended. */
+  deduplicated: z.boolean(),
 });
 export type SupervisorMessageResult = z.output<typeof SupervisorMessageResultSchema>;
 

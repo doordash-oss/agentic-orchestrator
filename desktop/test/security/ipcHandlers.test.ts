@@ -277,7 +277,11 @@ function makeServices(): IpcServices {
       }),
     ),
     sendSupervisorMessage: vi.fn((request) =>
-      Promise.resolve({ record: supervisorRecord(request.text), launched: true }),
+      Promise.resolve({
+        record: supervisorRecord(request.text),
+        launched: true,
+        deduplicated: false,
+      }),
     ),
     interruptSupervisor: vi.fn(() =>
       Promise.resolve({ result: 'accepted' as const, state: supervisorState() }),

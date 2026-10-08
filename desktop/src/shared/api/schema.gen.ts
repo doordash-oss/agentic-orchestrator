@@ -1269,7 +1269,7 @@ export interface paths {
         };
         /**
          * Read one page of the durable supervisor transcript.
-         * @description Records are ordered by their per-conversation `seq`. With neither cursor the newest page is returned; `before` pages backwards and `after` pages forwards. A cursor outside the stored range returns an empty page.
+         * @description Records are ordered by their per-conversation `seq`. With neither cursor the newest page is returned; `before` pages backwards and `after` pages forwards. `before=1`, `after=<head>` and `before=<head+1>` return an empty page; an `after` beyond the head or a `before` beyond the head plus one is refused with 409 `cursor_out_of_range`, whose diagnostics carry `head_seq=<n>`.
          */
         get: operations["getSupervisorTranscript"];
         put?: never;
@@ -1291,7 +1291,7 @@ export interface paths {
         put?: never;
         /**
          * Send one user message to the supervisor.
-         * @description Launches the supervisor process when the conversation is `stopped` or `failed`; sends arriving while a launch is in flight join it and are delivered in arrival order. A repeated `client_message_id` returns the already-committed record without appending. An optional `error_reference` points at the durable home of an error the message is about; the server resolves it into a hidden context bundle the harness receives ahead of the visible text, while the committed user record holds only `text`. Failure machine codes: 400 `chat_context_invalid` when the reference is malformed, 404 `chat_context_not_found` when the referenced error is no longer present (both rejected before anything is sent or appended), 409 `settings_required` when no harness or model is chosen, 409 `turn_active` while a turn is running, 502 `supervisor_launch_failed` when the launch or handshake fails (no user record is committed), and 503 `update_in_progress` while work admission is closed.
+         * @description Launches the supervisor process when the conversation is `stopped` or `failed`; sends arriving while a launch is in flight join it and are delivered in arrival order. A repeated `client_message_id` with the same text and error reference returns the already-committed record with `deduplicated` set, without appending or delivering anything; a repeated `client_message_id` whose text or error reference differs is refused with 409 `client_message_conflict`, whose diagnostics carry the committed record's `committed_seq=<n>`. An optional `error_reference` points at the durable home of an error the message is about; the server resolves it into a hidden context bundle the harness receives ahead of the visible text, while the committed user record holds only `text`. Failure machine codes: 400 `chat_context_invalid` when the reference is malformed, 404 `chat_context_not_found` when the referenced error is no longer present (both rejected before anything is sent or appended), 409 `settings_required` when no harness or model is chosen, 409 `turn_active` while a turn is running, 502 `supervisor_launch_failed` when the launch or handshake fails (no user record is committed), and 503 `update_in_progress` while work admission is closed.
          */
         post: operations["sendSupervisorMessage"];
         delete?: never;
@@ -1349,7 +1349,7 @@ export interface paths {
         };
         /**
          * Stream the supervisor conversation as SSE.
-         * @description The stream opens with a `state` event. Committed transcript records are `record` events whose SSE id is the record `seq`; non-persisted `delta`, `state` and `request` events carry no id. Every event carries `conversation_id`, `generation` and `stream_epoch`. Resume with `Last-Event-ID` or `after`: committed records after the cursor replay from the durable store before live events follow. A cursor beyond the head, a stale `epoch`, or a consumer that falls behind yields one `stream.reset` event with `snapshot_required`, after which the stream continues live from the head.
+         * @description The stream opens with a `state` event. Committed transcript records are `record` events whose SSE id is the record `seq`; non-persisted `delta`, `state` and `request` events carry no id. Every event carries `conversation_id`, `generation` and `stream_epoch`. Resume with `Last-Event-ID` or `after`: committed records after the cursor replay from the durable store before live events follow, at most 500 of them. A cursor more than 500 records behind the head (a range gap), a cursor beyond the head, a stale `epoch`, or a consumer that falls behind yields one `stream.reset` event with `snapshot_required`, after which the stream continues live from the head and the client reloads through the paged transcript endpoint.
          */
         get: operations["streamSupervisorEvents"];
         put?: never;
@@ -2825,10 +2825,10 @@ export interface components {
          * @enum {string}
          */
         RequestOrigin: "root" | "child";
-        /** @description Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker. */
+        /** @description Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, a permission mode restricted by policy, or a transcript recovered from a corrupt line (`transcript_recovered`, whose text names the unread record count and the preserved original). `code` is the catalog code of an `error` marker. */
         SupervisorMarkerRecord: {
             /** @enum {string} */
-            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted" | "settings_changed" | "settings_reverted" | "harness_change" | "compacted";
+            marker: "interrupted" | "error" | "history_not_restored" | "permission_restricted" | "settings_changed" | "settings_reverted" | "harness_change" | "compacted" | "transcript_recovered";
             text: string;
             code?: string;
             /** @description Source harness for a harness_change marker. */
@@ -2902,6 +2902,8 @@ export interface components {
             record: components["schemas"]["SupervisorRecord"];
             /** @description True when this send launched the supervisor process. */
             launched: boolean;
+            /** @description True when the `client_message_id` was already committed with the same text and error reference; nothing was appended or delivered. */
+            deduplicated: boolean;
         };
         SupervisorActionResponse: {
             api_version: string;
@@ -5500,6 +5502,7 @@ export interface operations {
             200: components["responses"]["SupervisorTranscriptResponse"];
             400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
+            409: components["responses"]["ErrorResponse"];
         };
     };
     sendSupervisorMessage: {

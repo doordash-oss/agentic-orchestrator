@@ -1617,11 +1617,14 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			p.lastAssistantDraft = completed.Item.Text
 			p.mu.Unlock()
 
+			// The item id identifies the message the way Claude's message
+			// id does, so a consumer can commit it idempotently.
 			return llm.SDKMessage{
 				Type: codexRoleAssistant,
 				Assistant: &llm.AssistantMessage{
 					Type: codexRoleAssistant,
 					Message: llm.ConversationMsg{
+						ID:   completed.Item.ID,
 						Role: codexRoleAssistant,
 						Content: []llm.ContentBlock{
 							{Type: "text", Text: completed.Item.Text},

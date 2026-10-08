@@ -17,12 +17,16 @@ package supervisor
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,8 +60,14 @@ const (
 	defaultPageLimit = 100
 	maxPageLimit     = 500
 
+	// maxReplay bounds a stream resume; a cursor further behind the head
+	// must re-snapshot through the paged endpoint.
+	maxReplay = maxPageLimit
+
 	transcriptFileName = "transcript.jsonl"
 	indexFileName      = "transcript.idx"
+	corruptCopyInfix   = ".corrupt-"
+	indexSizePrefix    = "size "
 )
 
 // Record is one committed transcript record. Data holds the kind-specific
@@ -106,6 +116,33 @@ var ErrRetiredGeneration = errors.New("supervisor transcript: append from a reti
 // out-of-range limit.
 var ErrInvalidPageQuery = errors.New("supervisor transcript: invalid page query")
 
+// CursorOutOfRangeError refuses a page cursor beyond the stored range: an
+// after past the head or a before past the head plus one.
+type CursorOutOfRangeError struct {
+	HeadSeq int64
+}
+
+func (e *CursorOutOfRangeError) Error() string {
+	return fmt.Sprintf("supervisor transcript: cursor out of range (head %d)", e.HeadSeq)
+}
+
+// RecoveryNote describes records an open could not read: a complete line
+// that failed to parse or broke the seq sequence ended the valid prefix, and
+// the untouched original was preserved at PreservedPath.
+type RecoveryNote struct {
+	AfterSeq      int64
+	Unread        int
+	PreservedPath string
+}
+
+// ProviderRecordID derives the deterministic id of a provider-originated
+// record, so a provider item appended twice commits once. Kind is part of
+// the key, so one provider item yielding several kinds gets distinct ids.
+func ProviderRecordID(conversationID string, generation int64, kind RecordKind, providerID string) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{conversationID, strconv.FormatInt(generation, 10), string(kind), providerID}, "\x00")))
+	return "prov-" + hex.EncodeToString(sum[:16])
+}
+
 // transcriptStore is the append-only system of record for one conversation.
 // Seq allocation, the generation fence, and the append itself share one
 // mutex, so seq order is append order and a retired generation can never
@@ -116,10 +153,18 @@ type transcriptStore struct {
 	conversationID string
 	generation     int64
 	file           *os.File
+	// index is the sidecar holding one offset line per record and a final
+	// size line; indexBody is the byte length of the offset lines.
+	index     *os.File
+	indexBody int64
 	// offsets[i] is the byte offset of the record with seq i+1.
 	offsets []int64
 	size    int64
 	byCMID  map[string]int64
+	byID    map[string]int64
+	// recovery is set when open preserved a corrupt transcript; the
+	// coordinator turns it into a marker once.
+	recovery *RecoveryNote
 	// content reports whether any record carries history a harness would
 	// see on rebuild.
 	content bool
@@ -143,11 +188,15 @@ func openTranscriptStore(dir, conversationID string, newID func() string, now fu
 		conversationID: conversationID,
 		file:           f,
 		byCMID:         map[string]int64{},
+		byID:           map[string]int64{},
 		newID:          newID,
 		now:            now,
 	}
 	if err := s.load(); err != nil {
 		_ = f.Close()
+		if s.index != nil {
+			_ = s.index.Close()
+		}
 		return nil, err
 	}
 	return s, nil
@@ -158,22 +207,37 @@ func (s *transcriptStore) load() error {
 	if err != nil {
 		return fmt.Errorf("stat transcript: %w", err)
 	}
-	offsets, size, records, err := scanTranscript(s.file, info.Size())
+	scan, err := scanTranscript(s.file, info.Size())
 	if err != nil {
 		return err
 	}
-	if size != info.Size() {
-		// Drop a torn trailing line so the next append starts on a record
-		// boundary.
-		if err := s.file.Truncate(size); err != nil {
-			return fmt.Errorf("truncate torn transcript tail: %w", err)
+	if scan.unread > 0 {
+		// A damaged complete line is not an interrupted append: keep the
+		// original intact beside the transcript before cutting it back.
+		path, err := s.preserveCorrupt()
+		if err != nil {
+			return err
+		}
+		s.recovery = &RecoveryNote{AfterSeq: int64(len(scan.offsets)), Unread: scan.unread, PreservedPath: path}
+	}
+	if scan.size != info.Size() {
+		// Drop a torn trailing line (or the unreadable suffix) so the next
+		// append starts on a record boundary.
+		if err := s.file.Truncate(scan.size); err != nil {
+			return fmt.Errorf("truncate transcript tail: %w", err)
+		}
+		if err := s.file.Sync(); err != nil {
+			return fmt.Errorf("sync transcript: %w", err)
 		}
 	}
-	s.offsets = offsets
-	s.size = size
-	for _, rec := range records {
+	s.offsets = scan.offsets
+	s.size = scan.size
+	for _, rec := range scan.records {
 		if rec.Kind == KindUser && rec.ClientMessageID != "" {
 			s.byCMID[rec.ClientMessageID] = rec.Seq
+		}
+		if rec.ID != "" {
+			s.byID[rec.ID] = rec.Seq
 		}
 		if rec.Generation > s.generation {
 			s.generation = rec.Generation
@@ -183,72 +247,145 @@ func (s *transcriptStore) load() error {
 		}
 	}
 	if !s.indexMatches() {
-		return s.writeIndex()
+		if err := s.writeIndex(); err != nil {
+			return err
+		}
 	}
+	index, err := os.OpenFile(s.indexPath(), os.O_RDWR, 0o644)
+	if err != nil {
+		return fmt.Errorf("open transcript index: %w", err)
+	}
+	s.index = index
 	return nil
 }
 
+// transcriptScan is the valid prefix of a transcript: its record offsets,
+// byte length and decoded records, plus how many complete lines after it
+// could not be read.
+type transcriptScan struct {
+	offsets []int64
+	size    int64
+	records []Record
+	unread  int
+}
+
 // scanTranscript reads every complete record line, verifying that seq runs
-// 1..n. It returns the offsets, the byte length of the valid prefix, and the
-// decoded records.
-func scanTranscript(f *os.File, size int64) ([]int64, int64, []Record, error) {
+// 1..n. A complete line that fails to parse or breaks the sequence ends the
+// valid prefix; every complete line from there on counts as unread. A
+// trailing line without a newline is a torn append and is not counted.
+func scanTranscript(f *os.File, size int64) (transcriptScan, error) {
 	reader := bufio.NewReaderSize(io.NewSectionReader(f, 0, size), 64*1024)
 	var (
-		offsets []int64
-		records []Record
-		offset  int64
+		scan   transcriptScan
+		offset int64
 	)
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 && line[len(line)-1] == '\n' {
-			var rec Record
-			if jsonErr := json.Unmarshal(bytes.TrimSpace(line), &rec); jsonErr != nil || rec.Seq != int64(len(offsets)+1) {
-				// A corrupt or out-of-order record ends the valid prefix.
-				return offsets, offset, records, nil
+			if scan.unread > 0 {
+				scan.unread++
+			} else {
+				var rec Record
+				if jsonErr := json.Unmarshal(bytes.TrimSpace(line), &rec); jsonErr != nil || rec.Seq != int64(len(scan.offsets)+1) {
+					scan.unread = 1
+				} else {
+					scan.offsets = append(scan.offsets, offset)
+					scan.records = append(scan.records, rec)
+					offset += int64(len(line))
+				}
 			}
-			offsets = append(offsets, offset)
-			records = append(records, rec)
-			offset += int64(len(line))
 		}
 		if err == io.EOF {
-			return offsets, offset, records, nil
+			scan.size = offset
+			return scan, nil
 		}
 		if err != nil {
-			return nil, 0, nil, fmt.Errorf("read transcript: %w", err)
+			return transcriptScan{}, fmt.Errorf("read transcript: %w", err)
 		}
 	}
 }
 
-type transcriptIndex struct {
-	Size    int64   `json:"size"`
-	Offsets []int64 `json:"offsets"`
+// preserveCorrupt copies the untouched transcript to a timestamped sibling
+// and returns its path.
+func (s *transcriptStore) preserveCorrupt() (string, error) {
+	path := filepath.Join(s.dir, transcriptFileName+corruptCopyInfix+s.now().UTC().Format("20060102T150405.000000000Z"))
+	dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return "", fmt.Errorf("preserve corrupt transcript: %w", err)
+	}
+	if _, err := io.Copy(dst, io.NewSectionReader(s.file, 0, 1<<62)); err != nil {
+		_ = dst.Close()
+		return "", fmt.Errorf("preserve corrupt transcript: %w", err)
+	}
+	if err := dst.Sync(); err != nil {
+		_ = dst.Close()
+		return "", fmt.Errorf("preserve corrupt transcript: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		return "", fmt.Errorf("preserve corrupt transcript: %w", err)
+	}
+	return path, nil
+}
+
+// takeRecovery returns the pending recovery note once.
+func (s *transcriptStore) takeRecovery() *RecoveryNote {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	note := s.recovery
+	s.recovery = nil
+	return note
 }
 
 func (s *transcriptStore) indexPath() string { return filepath.Join(s.dir, indexFileName) }
 
+// indexMatches reports whether the sidecar names exactly the scanned
+// offsets followed by the scanned size, and records the offset lines'
+// length for the next append.
 func (s *transcriptStore) indexMatches() bool {
 	data, err := os.ReadFile(s.indexPath())
-	if err != nil {
+	if err != nil || len(data) == 0 || data[len(data)-1] != '\n' {
 		return false
 	}
-	var idx transcriptIndex
-	if json.Unmarshal(data, &idx) != nil || idx.Size != s.size || len(idx.Offsets) != len(s.offsets) {
+	lines := strings.Split(string(data[:len(data)-1]), "\n")
+	if len(lines) != len(s.offsets)+1 {
 		return false
 	}
-	for i, off := range idx.Offsets {
-		if off != s.offsets[i] {
+	for i, off := range s.offsets {
+		if lines[i] != strconv.FormatInt(off, 10) {
 			return false
 		}
 	}
+	if lines[len(lines)-1] != indexSizePrefix+strconv.FormatInt(s.size, 10) {
+		return false
+	}
+	s.indexBody = int64(len(data) - len(lines[len(lines)-1]) - 1)
 	return true
 }
 
+// writeIndex rewrites the whole sidecar atomically; it runs only on open
+// when the sidecar disagrees with the scan.
 func (s *transcriptStore) writeIndex() error {
-	data, err := json.Marshal(transcriptIndex{Size: s.size, Offsets: s.offsets})
-	if err != nil {
+	var b strings.Builder
+	for _, off := range s.offsets {
+		b.WriteString(strconv.FormatInt(off, 10))
+		b.WriteByte('\n')
+	}
+	s.indexBody = int64(b.Len())
+	b.WriteString(indexSizePrefix)
+	b.WriteString(strconv.FormatInt(s.size, 10))
+	b.WriteByte('\n')
+	return writeFileAtomic(s.indexPath(), []byte(b.String()))
+}
+
+// appendIndexLocked replaces the size line with the new record's offset and
+// the new size, leaving every earlier offset line untouched.
+func (s *transcriptStore) appendIndexLocked(offset int64) error {
+	tail := strconv.FormatInt(offset, 10) + "\n" + indexSizePrefix + strconv.FormatInt(s.size, 10) + "\n"
+	if _, err := s.index.WriteAt([]byte(tail), s.indexBody); err != nil {
 		return err
 	}
-	return writeFileAtomic(s.indexPath(), data)
+	s.indexBody += int64(len(strconv.FormatInt(offset, 10)) + 1)
+	return s.index.Truncate(s.indexBody + int64(len(indexSizePrefix)+len(strconv.FormatInt(s.size, 10))+1))
 }
 
 func (s *transcriptStore) close() error {
@@ -259,6 +396,10 @@ func (s *transcriptStore) close() error {
 	}
 	err := s.file.Close()
 	s.file = nil
+	if s.index != nil {
+		_ = s.index.Close()
+		s.index = nil
+	}
 	return err
 }
 
@@ -297,8 +438,9 @@ func (s *transcriptStore) head() int64 {
 }
 
 // appendRecord commits rec, allocating its seq, id and timestamp. A user
-// record whose client message id is already committed returns the existing
-// record with existing=true and appends nothing.
+// record whose client message id is already committed, or a record whose
+// (deterministic) id is already committed, returns the existing record with
+// existing=true and appends nothing.
 func (s *transcriptStore) appendRecord(rec Record) (Record, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -307,6 +449,12 @@ func (s *transcriptStore) appendRecord(rec Record) (Record, bool, error) {
 	}
 	if rec.Kind == KindUser && rec.ClientMessageID != "" {
 		if seq, ok := s.byCMID[rec.ClientMessageID]; ok {
+			existing, err := s.readLocked(seq)
+			return existing, true, err
+		}
+	}
+	if rec.ID != "" {
+		if seq, ok := s.byID[rec.ID]; ok {
 			existing, err := s.readLocked(seq)
 			return existing, true, err
 		}
@@ -336,17 +484,19 @@ func (s *transcriptStore) appendRecord(rec Record) (Record, bool, error) {
 	if err := s.file.Sync(); err != nil {
 		return Record{}, false, fmt.Errorf("sync transcript: %w", err)
 	}
-	s.offsets = append(s.offsets, s.size)
+	offset := s.size
+	s.offsets = append(s.offsets, offset)
 	s.size += int64(len(line))
 	if rec.Kind == KindUser && rec.ClientMessageID != "" {
 		s.byCMID[rec.ClientMessageID] = rec.Seq
 	}
+	s.byID[rec.ID] = rec.Seq
 	if isHistoryContent(rec) {
 		s.content = true
 	}
-	// The JSONL is the system of record; a failed index rewrite is repaired
+	// The JSONL is the system of record; a failed index append is repaired
 	// by the rebuild on the next open.
-	_ = s.writeIndex()
+	_ = s.appendIndexLocked(offset)
 	return rec, false, nil
 }
 
@@ -383,8 +533,19 @@ func (s *transcriptStore) readLocked(seq int64) (Record, error) {
 	return rec, nil
 }
 
+// rangedPage reads one page, refusing a cursor beyond the stored range with
+// a CursorOutOfRangeError: an after past the head or a before past the head
+// plus one. before=1, after=head and before=head+1 stay valid.
+func (s *transcriptStore) rangedPage(q PageQuery) (Page, error) {
+	return s.readPage(q, true)
+}
+
 // page reads one page. Out-of-range cursors return an empty page.
 func (s *transcriptStore) page(q PageQuery) (Page, error) {
+	return s.readPage(q, false)
+}
+
+func (s *transcriptStore) readPage(q PageQuery, strict bool) (Page, error) {
 	if q.HasBefore && q.HasAfter {
 		return Page{}, ErrInvalidPageQuery
 	}
@@ -398,6 +559,9 @@ func (s *transcriptStore) page(q PageQuery) (Page, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	head := int64(len(s.offsets))
+	if strict && ((q.HasAfter && q.After > head) || (q.HasBefore && q.Before > head+1)) {
+		return Page{}, &CursorOutOfRangeError{HeadSeq: head}
+	}
 	var from, to int64 // inclusive seq bounds
 	switch {
 	case q.HasAfter:
@@ -430,10 +594,26 @@ func (s *transcriptStore) page(q PageQuery) (Page, error) {
 	return page, nil
 }
 
+// replayAfter returns the records after seq for a stream resume, or ok=false
+// when more than maxReplay records follow the cursor.
+func (s *transcriptStore) replayAfter(seq int64) ([]Record, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if int64(len(s.offsets))-seq > maxReplay {
+		return nil, false, nil
+	}
+	recs, err := s.afterLocked(seq)
+	return recs, err == nil, err
+}
+
 // after returns every record with seq greater than seq, in order.
 func (s *transcriptStore) after(seq int64) ([]Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.afterLocked(seq)
+}
+
+func (s *transcriptStore) afterLocked(seq int64) ([]Record, error) {
 	head := int64(len(s.offsets))
 	var out []Record
 	for next := seq + 1; next <= head; next++ {

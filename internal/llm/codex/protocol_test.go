@@ -320,6 +320,18 @@ func TestCodexProtocol_ForceCompactionForTestRequiresIdleInteractiveThread(t *te
 	}
 }
 
+func TestCodexProtocol_AssistantMessageCarriesTheCompletedItemID(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+	p.SetThreadIDForTest("thread-root")
+	msgs, err := p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-root","turnId":"turn-1","item":{"id":"item-1-3","type":"agentMessage","text":"done"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Assistant == nil || msgs[0].Assistant.Message.ID != "item-1-3" {
+		t.Fatalf("assistant messages = %+v, want message id item-1-3", msgs)
+	}
+}
+
 func TestCodexProtocol_NormalizesRootAndDelegatedTaskActivity(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{})
 	p.SetThreadIDForTest("thread-root")

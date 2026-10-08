@@ -14,13 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { supervisorMarkerRecord, supervisorRecord } from '../../test/agenticoMock';
 import type { SupervisorStatusInput } from './supervisorModel';
 import {
   buildSupervisorConversation,
   harnessLabel,
   mergeRecords,
+  mergeSnapshotRecords,
+  supervisorConversationBuilder,
+  supervisorConversationTail,
   supervisorChipLabel,
   supervisorStatusLine,
 } from './supervisorModel';
@@ -226,10 +229,142 @@ describe('supervisorModel', () => {
       messages: [{ index: 2, role: 'assistant', type: 'text', text: 'Final' }],
     });
     expect(buildSupervisorConversation([], { provisional }).map((item) => item.key)).toEqual([
-      'provisional-stream-1',
+      'provisional-1-stream-1',
     ]);
     const items = buildSupervisorConversation([committed], { provisional });
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ kind: 'message', role: 'assistant', text: 'Final' });
+  });
+
+  it('keys provisional rows by generation, so a reused stream id from a new generation still renders', () => {
+    const committedOld = supervisorRecord({
+      seq: 2,
+      generation: 1,
+      kind: 'assistant',
+      streamMessageId: 'stream-1',
+      messages: [{ index: 2, role: 'assistant', type: 'text', text: 'Old generation reply' }],
+    });
+    const items = buildSupervisorConversation([committedOld], {
+      provisional: [
+        // The retired generation's stream is committed: no row.
+        { streamMessageId: 'stream-1', generation: 1, chunks: new Map([[0, 'Old draft']]) },
+        // The new generation reused the id: it renders.
+        { streamMessageId: 'stream-1', generation: 2, chunks: new Map([[0, 'New draft']]) },
+      ],
+    });
+    expect(items.map((item) => item.key)).toEqual(['message-2:0', 'provisional-2-stream-1']);
+    expect(items[1]).toMatchObject({ role: 'assistant', text: 'New draft' });
+  });
+
+  it('keeps row keys unique when records from two generations are loaded', () => {
+    const records = [
+      supervisorRecord({ seq: 1, generation: 1, turnId: 'turn-a' }),
+      supervisorRecord({
+        seq: 2,
+        generation: 1,
+        turnId: 'turn-a',
+        kind: 'assistant',
+        streamMessageId: 'stream-1',
+        messages: [{ index: 2, role: 'assistant', type: 'text', text: 'First' }],
+      }),
+      supervisorMarkerRecord(
+        { marker: 'harness_change', text: 'Switched to Codex' },
+        { seq: 3, generation: 2, turnId: 'turn-b' },
+      ),
+      supervisorRecord({ seq: 4, generation: 2, turnId: 'turn-c' }),
+      supervisorRecord({
+        seq: 5,
+        generation: 2,
+        turnId: 'turn-c',
+        kind: 'assistant',
+        streamMessageId: 'stream-1',
+        messages: [{ index: 5, role: 'assistant', type: 'text', text: 'Second' }],
+      }),
+    ];
+    const keys = buildSupervisorConversation(records, {
+      provisional: [
+        { streamMessageId: 'stream-2', generation: 2, chunks: new Map([[0, 'Streaming']]) },
+      ],
+      optimistic: 'Next',
+    }).map((item) => item.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain('provisional-2-stream-2');
+  });
+
+  it('builds the committed conversation once and recomputes only the live tail', () => {
+    const records = [
+      supervisorRecord({ seq: 1 }),
+      supervisorRecord({
+        seq: 2,
+        kind: 'assistant',
+        messages: [{ index: 2, role: 'assistant', type: 'text', text: 'Committed' }],
+      }),
+    ];
+    const spy = vi.spyOn(supervisorConversationBuilder, 'committed');
+    try {
+      const committed = supervisorConversationBuilder.committed(records);
+      const tail = (text: string) =>
+        supervisorConversationTail(committed, {
+          provisional: [{ streamMessageId: 's', generation: 1, chunks: new Map([[0, text]]) }],
+        });
+      expect(tail('A').map((item) => item.key)).toEqual([
+        'message-1:0',
+        'message-2:0',
+        'provisional-1-s',
+      ]);
+      expect(tail('AB').at(-1)).toMatchObject({ text: 'AB' });
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('merges a snapshot page with streamed records above its head and replaces the rest', () => {
+    const page = [
+      supervisorRecord({
+        seq: 4,
+        messages: [{ index: 4, role: 'user', type: 'text', text: 'Fetched four' }],
+      }),
+      supervisorRecord({
+        seq: 5,
+        messages: [{ index: 5, role: 'user', type: 'text', text: 'Fetched five' }],
+      }),
+    ];
+    const streamed = [
+      supervisorRecord({
+        seq: 5,
+        messages: [{ index: 5, role: 'user', type: 'text', text: 'Streamed five' }],
+      }),
+      supervisorRecord({
+        seq: 6,
+        messages: [{ index: 6, role: 'user', type: 'text', text: 'Streamed six' }],
+      }),
+    ];
+    const merged = mergeSnapshotRecords(page, 5, streamed);
+    expect(merged.map((record) => [record.seq, record.messages[0]?.text])).toEqual([
+      [4, 'Fetched four'],
+      [5, 'Fetched five'],
+      [6, 'Streamed six'],
+    ]);
+  });
+
+  it('renders a transcript_recovered marker as a caveat notice', () => {
+    const items = buildSupervisorConversation([
+      supervisorMarkerRecord(
+        {
+          marker: 'transcript_recovered',
+          text: '3 records could not be read; the original is saved beside the transcript.',
+        },
+        { seq: 9 },
+      ),
+    ]);
+    expect(items).toEqual([
+      {
+        kind: 'notice',
+        key: 'notice-9',
+        tone: 'caveat',
+        text: '3 records could not be read; the original is saved beside the transcript.',
+      },
+    ]);
   });
 });

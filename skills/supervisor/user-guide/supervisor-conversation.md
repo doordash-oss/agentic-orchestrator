@@ -2,6 +2,10 @@
 
 The **Supervisor** page keeps one conversation across process restarts. Choose a harness and model from the chip beside the composer, then send a message. The chip always shows the settings in force.
 
+The page opens on the newest messages. Scroll toward the top to load earlier ones: **Loading earlier messages…** appears above the first row while a page loads, and the messages you were reading stay in place. If a page fails, **Couldn't load earlier messages** appears instead; choose **Retry** to load it again. After a reconnect or a server switch, the page shows only the newest messages again, and earlier ones load as you scroll.
+
+If the server finds a damaged line in the saved conversation when it starts, it keeps every message before that line and adds a notice to the transcript. The notice says how many records could not be read and where the server saved the original file. That copy, `transcript.jsonl.corrupt-<time>`, is next to the conversation transcript in the server's state directory. Nothing in it is shown or sent to the harness. Keep it if you want to inspect or recover the unread records; deleting it does not affect the conversation.
+
 The ring beside the chip shows how much of the current harness's context window is in use. It warns at 80% or above. The empty ring means the current process has not reported usage yet; after you end the process it returns to this state.
 
 When Claude or Codex compacts its conversation, a **Conversation compacted** notice appears in the transcript. On Claude, open **Show summary** to read the condensed history. Codex keeps an opaque native checkpoint, so its notice has no summary to expand. Agentico saves the checkpoint for later relaunches and uses a readable Claude summary when moving to another harness. Agentico never starts a compaction itself.

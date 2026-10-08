@@ -180,7 +180,7 @@ func (h *apiHandler) handleSupervisorPendingChange(w http.ResponseWriter, r *htt
 func (h *apiHandler) handleSupervisorTranscript(w http.ResponseWriter, r *http.Request) {
 	q, ok := supervisorPageQuery(r)
 	if !ok {
-		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("before, after and limit must be non-negative integers; before and after are exclusive"))
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("before must be a positive integer, after a non-negative integer and limit 1 to 500; before and after are exclusive"))
 		return
 	}
 	page, err := h.supervisor.Transcript(q)
@@ -220,7 +220,7 @@ func supervisorPageQuery(r *http.Request) (supervisor.PageQuery, bool) {
 		return n, true, true
 	}
 	var ok bool
-	if q.Before, q.HasBefore, ok = parse("before"); !ok {
+	if q.Before, q.HasBefore, ok = parse("before"); !ok || (q.HasBefore && q.Before < 1) {
 		return q, false
 	}
 	if q.After, q.HasAfter, ok = parse("after"); !ok {
@@ -274,9 +274,10 @@ func (h *apiHandler) handleSupervisorMessage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, SupervisorMessageResponse{
-		APIVersion: APIVersion,
-		Record:     supervisorRecordDTO(res.Record, h.supervisor.State().WorkDir),
-		Launched:   res.Launched,
+		APIVersion:   APIVersion,
+		Record:       supervisorRecordDTO(res.Record, h.supervisor.State().WorkDir),
+		Launched:     res.Launched,
+		Deduplicated: res.Deduplicated,
 	})
 }
 
@@ -308,6 +309,8 @@ func (h *apiHandler) writeSupervisorError(w http.ResponseWriter, err error) {
 	var stale *supervisor.StaleGenerationError
 	var pending *supervisor.ChangePendingError
 	var launch *supervisor.LaunchFailedError
+	var conflict *supervisor.ClientMessageConflictError
+	var outOfRange *supervisor.CursorOutOfRangeError
 	switch {
 	case errors.Is(err, supervisor.ErrSettingsLocked):
 		writeAPIError(w, http.StatusConflict, errcat.SupervisorSettingsLocked)
@@ -323,6 +326,10 @@ func (h *apiHandler) writeSupervisorError(w http.ResponseWriter, err error) {
 		writeAPIError(w, http.StatusConflict, errcat.SettingsRequired)
 	case errors.Is(err, supervisor.ErrTurnActive):
 		writeAPIError(w, http.StatusConflict, errcat.TurnActive)
+	case errors.As(err, &conflict):
+		writeAPIError(w, http.StatusConflict, errcat.ClientMessageConflict, errcat.WithDiagnostics(fmt.Sprintf("committed_seq=%d", conflict.CommittedSeq)))
+	case errors.As(err, &outOfRange):
+		writeAPIError(w, http.StatusConflict, errcat.CursorOutOfRange, errcat.WithDiagnostics(fmt.Sprintf("head_seq=%d", outOfRange.HeadSeq)))
 	case errors.As(err, &launch):
 		writeJSON(w, http.StatusBadGateway, ErrorResponse{APIVersion: APIVersion, Error: supervisorLaunchFailure(launch)})
 	case errors.Is(err, supervisor.ErrClosed):

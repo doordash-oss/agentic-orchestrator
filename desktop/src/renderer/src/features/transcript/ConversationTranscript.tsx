@@ -14,7 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import type { TranscriptMessage } from '../../../../shared/ipc';
 import { renderSanitizedMarkdown } from '../sanitizedMarkdown';
 import {
@@ -25,6 +33,8 @@ import {
 } from './conversation';
 
 const NEAR_BOTTOM_PX = 40;
+/** Scrolling within this distance of the top asks for earlier rows. */
+const NEAR_TOP_PX = 160;
 
 type VerdictOutcome = Extract<ConversationItem, { kind: 'verdict' }>['outcome'];
 
@@ -169,6 +179,74 @@ export interface ConversationTranscriptProps {
   trailing?: ReactNode;
   /** Bump to force a scroll to the newest row (e.g. after sending a message). */
   pinToBottomToken?: number;
+  /** Rows rendered directly above the first conversation row (e.g. a load-earlier status). */
+  top?: ReactNode;
+  /**
+   * Called when the viewport scrolls within a threshold of the top, or when
+   * the rows do not fill the viewport; the caller decides whether more exists.
+   */
+  onNearTop?(): void;
+  /** Holds the first visible row in place when rows are prepended above it. */
+  anchorPrepend?: boolean;
+}
+
+interface PrependAnchor {
+  row: Element;
+  offset: number;
+}
+
+/**
+ * Prepend anchoring: after every commit it remembers the first row visible
+ * in the viewport and that row's offset from the viewport top (refreshed on
+ * scroll as well). When a commit changes the first item's key and the
+ * remembered row is still mounted, rows were added above it, so the scroll
+ * position moves by exactly the distance the row was pushed down. Rows are
+ * the siblings after the `rowsStart` marker, so status and top-slot rows
+ * that come and go are never chosen as the anchor. Returns the capture
+ * function for the scroll handler.
+ */
+export function usePrependAnchor(
+  scrollRef: RefObject<HTMLElement | null>,
+  rowsStartRef: RefObject<HTMLElement | null>,
+  firstKey: string | undefined,
+  enabled: boolean,
+): () => void {
+  const anchor = useRef<PrependAnchor | null>(null);
+  const previousFirstKey = useRef(firstKey);
+
+  const capture = useCallback(() => {
+    anchor.current = null;
+    const container = scrollRef.current;
+    const start = rowsStartRef.current;
+    if (!enabled || container === null || start === null) return;
+    const viewportTop = container.getBoundingClientRect().top;
+    for (let row = start.nextElementSibling; row !== null; row = row.nextElementSibling) {
+      const bounds = row.getBoundingClientRect();
+      if (bounds.bottom > viewportTop) {
+        anchor.current = { row, offset: bounds.top - viewportTop };
+        return;
+      }
+    }
+  }, [enabled, rowsStartRef, scrollRef]);
+
+  useLayoutEffect(() => {
+    const container = scrollRef.current;
+    const held = anchor.current;
+    if (
+      enabled &&
+      container !== null &&
+      held !== null &&
+      firstKey !== previousFirstKey.current &&
+      held.row.isConnected
+    ) {
+      const offset = held.row.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      container.scrollTop += offset - held.offset;
+    }
+    previousFirstKey.current = firstKey;
+    capture();
+  });
+
+  return capture;
 }
 
 type FileChange = NonNullable<TranscriptMessage['fileChange']>;
@@ -310,11 +388,16 @@ export function ConversationTranscript({
   status,
   trailing,
   pinToBottomToken,
+  top,
+  onNearTop,
+  anchorPrepend = false,
 }: ConversationTranscriptProps) {
   const scrollRef = useRef<HTMLElement>(null);
+  const rowsStartRef = useRef<HTMLSpanElement>(null);
   const stickToBottom = useRef(true);
   const lastItem = items.at(-1);
   const hasTrailing = trailing !== undefined && trailing !== null;
+  const captureAnchor = usePrependAnchor(scrollRef, rowsStartRef, items[0]?.key, anchorPrepend);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -327,6 +410,18 @@ export function ConversationTranscript({
     const element = scrollRef.current;
     if (element !== null) element.scrollTop = element.scrollHeight;
   }, [pinToBottomToken]);
+
+  // Rows too few to scroll can never be scrolled near the top: ask at once.
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (
+      onNearTop !== undefined &&
+      element !== null &&
+      element.scrollHeight <= element.clientHeight
+    ) {
+      onNearTop();
+    }
+  });
 
   return (
     <section
@@ -341,10 +436,14 @@ export function ConversationTranscript({
         const element = event.currentTarget;
         stickToBottom.current =
           element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX;
+        captureAnchor();
+        if (onNearTop !== undefined && element.scrollTop <= NEAR_TOP_PX) onNearTop();
       }}
     >
       {status}
       {items.length === 0 && !waiting ? (emptyState ?? null) : null}
+      {top}
+      {anchorPrepend ? <span ref={rowsStartRef} hidden /> : null}
       {items.map((item, index) =>
         item.kind === 'message' ? (
           <article key={item.key} className="conversation__message" data-role={item.role}>

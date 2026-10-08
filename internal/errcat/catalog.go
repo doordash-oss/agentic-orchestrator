@@ -1764,6 +1764,18 @@ var catalog = map[Code]Entry{
 	ChangePending:         {Class: ClassNeedsAction, Title: "Settings change pending", Summary: "Another settings change is waiting to apply.", Remediation: "Cancel the pending change before choosing another setting."},
 	StaleGeneration:       {Class: ClassNeedsAction, Title: "Supervisor state changed", Summary: "The supervisor generation changed before the settings request arrived.", Remediation: "Refresh the supervisor state and try again."},
 	PendingChangeNotFound: {Class: ClassWarning, Title: "Pending change not found", Summary: "That settings change is no longer pending.", Remediation: "Refresh the supervisor state."},
+	ClientMessageConflict: {
+		Class:       ClassBlocking,
+		Title:       "Message id already used",
+		Summary:     "A different message was already sent with this message id.",
+		Remediation: "Send the message again with a new message id.",
+	},
+	CursorOutOfRange: {
+		Class:       ClassWarning,
+		Title:       "Transcript position out of range",
+		Summary:     "The requested transcript position is past the end of the conversation.",
+		Remediation: "Reload the newest page of the conversation.",
+	},
 
 	// --- Chat-context codes ---------------------------------------------------
 	// An explain-in-chat turn can attach a structured reference to the

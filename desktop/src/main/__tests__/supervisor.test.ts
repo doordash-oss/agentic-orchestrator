@@ -378,6 +378,68 @@ describe('SupervisorService', () => {
     });
   });
 
+  it('passes cursor_out_of_range and client_message_conflict rejections through as canonical errors', async () => {
+    const rejection = (code: string, diagnostics: string): HttpResult => ({
+      status: 409,
+      body: {
+        api_version: 'v1',
+        error: {
+          code,
+          class: 'needs_action',
+          title: 'Refused',
+          summary: 'The server refused the request.',
+          diagnostics,
+        },
+      },
+    });
+    const service = new SupervisorService({
+      transport: transport((path) =>
+        path.startsWith('/api/v1/supervisor/transcript')
+          ? rejection('cursor_out_of_range', 'head_seq=12')
+          : rejection('client_message_conflict', 'committed_seq=4'),
+      ),
+      makeClientMessageId: () => 'minted-1',
+    });
+
+    const pageError = await service.getTranscript({ before: 99 }).catch((e: unknown) => e);
+    const sendError = await service.sendMessage({ text: 'hello' }).catch((e: unknown) => e);
+
+    expect(pageError).toBeInstanceOf(CanonicalErrorException);
+    expect((pageError as CanonicalErrorException).canonical.code).toBe('cursor_out_of_range');
+    expect(sendError).toBeInstanceOf(CanonicalErrorException);
+    expect((sendError as CanonicalErrorException).canonical.code).toBe('client_message_conflict');
+  });
+
+  it('maps a transcript_recovered marker record', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        conversation_id: 'conv-1',
+        items: [
+          {
+            ...wireRecord(3),
+            kind: 'marker',
+            visibility: 'display_only',
+            client_message_id: undefined,
+            messages: [],
+            marker: { marker: 'transcript_recovered', text: '2 records could not be read' },
+          },
+        ],
+        first_seq: 3,
+        last_seq: 3,
+        has_more_before: false,
+        has_more_after: false,
+        head_seq: 3,
+      },
+    }));
+    const page = await new SupervisorService({ transport: api }).getTranscript({});
+    expect(page.items[0]?.marker).toEqual({
+      marker: 'transcript_recovered',
+      text: '2 records could not be read',
+    });
+  });
+
   it('builds the transcript query from the validated cursor and maps the page', async () => {
     const api = transport(() => ({
       status: 200,
@@ -428,7 +490,7 @@ describe('SupervisorService', () => {
   it('mints the client message id in main and sends only text plus that id', async () => {
     const api = transport(() => ({
       status: 200,
-      body: { api_version: 'v1', record: wireRecord(10), launched: true },
+      body: { api_version: 'v1', record: wireRecord(10), launched: true, deduplicated: false },
     }));
     const service = new SupervisorService({
       transport: api,
@@ -442,13 +504,43 @@ describe('SupervisorService', () => {
       body: { text: 'hello', client_message_id: 'minted-1' },
     });
     expect(result.launched).toBe(true);
+    expect(result.deduplicated).toBe(false);
     expect(result.record.seq).toBe(10);
+  });
+
+  it('carries the deduplicated flag of a send the server matched to a committed message', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: { api_version: 'v1', record: wireRecord(10), launched: false, deduplicated: true },
+    }));
+    const service = new SupervisorService({
+      transport: api,
+      makeClientMessageId: () => 'minted-1',
+    });
+
+    const result = await service.sendMessage({ text: 'hello' });
+
+    expect(result).toMatchObject({ deduplicated: true, launched: false });
+    expect(result.record.seq).toBe(10);
+  });
+
+  it('rejects a message response without the deduplicated flag', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: { api_version: 'v1', record: wireRecord(10), launched: false },
+    }));
+    const service = new SupervisorService({
+      transport: api,
+      makeClientMessageId: () => 'minted-1',
+    });
+
+    await expect(service.sendMessage({ text: 'hello' })).rejects.toBeDefined();
   });
 
   it('sends an attached error reference in snake_case with only the fields it carries', async () => {
     const api = transport(() => ({
       status: 200,
-      body: { api_version: 'v1', record: wireRecord(10), launched: false },
+      body: { api_version: 'v1', record: wireRecord(10), launched: false, deduplicated: false },
     }));
     const service = new SupervisorService({
       transport: api,
@@ -498,7 +590,7 @@ describe('SupervisorService', () => {
   it('defaults to a UUID idempotency key that satisfies the server syntax', async () => {
     const api = transport(() => ({
       status: 200,
-      body: { api_version: 'v1', record: wireRecord(10), launched: false },
+      body: { api_version: 'v1', record: wireRecord(10), launched: false, deduplicated: false },
     }));
     await new SupervisorService({ transport: api }).sendMessage({ text: 'hi' });
     const body = (api.apiRequest.mock.calls[0]?.[1] as { body: { client_message_id: string } })

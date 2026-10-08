@@ -204,6 +204,14 @@ var (
 	ErrClosed           = errors.New("supervisor is shut down")
 )
 
+// ClientMessageConflictError refuses a reused client message id whose text
+// or hidden-context presence differs from the committed record.
+type ClientMessageConflictError struct{ CommittedSeq int64 }
+
+func (e *ClientMessageConflictError) Error() string {
+	return fmt.Sprintf("supervisor client message id already committed at seq %d with different content", e.CommittedSeq)
+}
+
 // ErrHiddenContextUnsupported refuses a message carrying hidden context on
 // a session that cannot deliver it, rather than dropping the context.
 var ErrHiddenContextUnsupported = errors.New("supervisor session cannot carry hidden context")
@@ -302,6 +310,9 @@ const (
 type SendResult struct {
 	Record   Record
 	Launched bool
+	// Deduplicated reports an identical resend of a committed client
+	// message id; nothing was appended or delivered.
+	Deduplicated bool
 }
 
 // EventKind classifies a live event.

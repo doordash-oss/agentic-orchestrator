@@ -60,6 +60,8 @@ export const SUPERVISOR_COPY = {
   failed: 'Supervisor failed — Retry',
   retry: 'Retry',
   retryNeedsText: 'Type a message to retry.',
+  loadingEarlier: 'Loading earlier messages…',
+  earlierFailed: "Couldn't load earlier messages",
   interruptedFooter: 'Interrupted',
   interruptedMarker: 'Interrupted before restart',
   launchFailedMarker: 'Supervisor failed to start',
@@ -234,6 +236,28 @@ export function mergeRecords(
   return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
 }
 
+/**
+ * The records a snapshot reload keeps: the fetched page, plus records the
+ * stream delivered while the fetch was in flight whose seq lies above the
+ * page's head (the page could not have seen them). A streamed record at or
+ * below the head is replaced by the fetched copy.
+ */
+export function mergeSnapshotRecords(
+  page: readonly SupervisorRecord[],
+  headSeq: number,
+  streamed: readonly SupervisorRecord[],
+): SupervisorRecord[] {
+  return mergeRecords(
+    page,
+    streamed.filter((record) => record.seq > headSeq),
+  );
+}
+
+/** Generation-scoped identity of a streamed assistant message. */
+export function streamKey(generation: number, streamMessageId: string): string {
+  return `${String(generation)}:${streamMessageId}`;
+}
+
 function isRequestRecord(record: SupervisorRecord): boolean {
   return record.kind === 'permission' || record.kind === 'question';
 }
@@ -299,6 +323,7 @@ const NOTICE_TONES: Readonly<Record<SupervisorMarker['marker'], ConversationNoti
   harness_change: 'neutral',
   settings_reverted: 'caveat',
   compacted: 'neutral',
+  transcript_recovered: 'caveat',
 };
 
 /** The one-line copy of a marker; the interrupted notice reads the same whatever the server wrote. */
@@ -326,6 +351,13 @@ export interface SupervisorConversationOptions {
   provisional?: readonly ProvisionalReply[];
 }
 
+/** The folded committed history plus the stream ids it already holds. */
+export interface CommittedConversation {
+  items: readonly ConversationItem[];
+  /** `streamKey(generation, streamMessageId)` of every committed assistant record. */
+  committedStreams: ReadonlySet<string>;
+}
+
 /**
  * Projects committed records into the shared conversation items: content
  * records run through the existing builder one turn at a time (so finished
@@ -335,12 +367,8 @@ export interface SupervisorConversationOptions {
  * card below the transcript, and its verdict replaces it once answered.
  * Marker records become one-line notices; an interrupted marker also marks
  * the newest assistant message of its turn with an "Interrupted" footer.
- * Provisional replies and the optimistic user row trail the committed history.
  */
-export function buildSupervisorConversation(
-  records: readonly SupervisorRecord[],
-  options: SupervisorConversationOptions = {},
-): ConversationItem[] {
+function buildCommittedConversation(records: readonly SupervisorRecord[]): CommittedConversation {
   const requestedSummaries = new Map<string, string>();
   for (const record of records) {
     if (record.kind === 'note' || record.kind === 'checkpoint') continue;
@@ -418,16 +446,41 @@ export function buildSupervisorConversation(
 
   const committedStreams = new Set(
     records.flatMap((record) =>
-      record.streamMessageId === undefined ? [] : [record.streamMessageId],
+      record.streamMessageId === undefined
+        ? []
+        : [streamKey(record.generation, record.streamMessageId)],
     ),
   );
+  return { items, committedStreams };
+}
+
+/**
+ * The committed-history builder, called through this object so the page's
+ * memoization (rebuild only when the records array changes) is observable.
+ */
+export const supervisorConversationBuilder = {
+  committed: buildCommittedConversation,
+};
+
+/**
+ * Appends the live tail to a folded committed history: provisional replies
+ * (keyed by generation and stream id, hidden once that generation committed
+ * the stream) and the optimistic user row. Cheap: a delta recomputes only this.
+ */
+export function supervisorConversationTail(
+  committed: CommittedConversation,
+  options: SupervisorConversationOptions = {},
+): ConversationItem[] {
+  const items: ConversationItem[] = [...committed.items];
   for (const reply of options.provisional ?? []) {
-    if (committedStreams.has(reply.streamMessageId)) continue;
+    if (committed.committedStreams.has(streamKey(reply.generation, reply.streamMessageId))) {
+      continue;
+    }
     const text = provisionalText(reply);
     if (text.trim() === '') continue;
     items.push({
       kind: 'message',
-      key: `provisional-${reply.streamMessageId}`,
+      key: `provisional-${String(reply.generation)}-${reply.streamMessageId}`,
       role: 'assistant',
       text,
     });
@@ -438,4 +491,15 @@ export function buildSupervisorConversation(
     items.push({ kind: 'message', key: 'optimistic-message', role: 'user', text: optimistic });
   }
   return items;
+}
+
+/**
+ * The full conversation: the committed history followed by its live tail
+ * (provisional replies and the optimistic user row).
+ */
+export function buildSupervisorConversation(
+  records: readonly SupervisorRecord[],
+  options: SupervisorConversationOptions = {},
+): ConversationItem[] {
+  return supervisorConversationTail(supervisorConversationBuilder.committed(records), options);
 }

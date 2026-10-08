@@ -21,6 +21,7 @@ limitations under the License.
  * is deleted in teardown; the journeys never touch the real user profile.
  */
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1061,6 +1062,64 @@ export function seedRunHistory(
   featureYaml = upsertYamlScalar(featureYaml, 'active_run', String(runCount));
   featureYaml = upsertYamlScalar(featureYaml, 'run_count', String(runCount));
   fs.writeFileSync(featurePath, featureYaml);
+}
+
+/** The text of the n-th seeded supervisor user record (1-based turn). */
+export function seededSupervisorQuestion(turn: number): string {
+  return `Seeded question ${turn}`;
+}
+
+/** The text of the n-th seeded supervisor assistant record (1-based turn). */
+export function seededSupervisorAnswer(turn: number): string {
+  return `Seeded answer ${turn}`;
+}
+
+/**
+ * Seeds a generation-0 supervisor conversation of `records` records,
+ * alternating user and assistant, directly in the durable format under the
+ * server state directory, as a long-lived server would leave it (mirrors
+ * test/testutil/supervisor_seed.go). Call before launch. No settings file and
+ * no sidecar index are written; the store rebuilds the index on open.
+ * Returns the conversation id.
+ */
+export function seedSupervisorConversation(world: JourneyWorld, records: number): string {
+  const conversationId = crypto.randomUUID();
+  const dir = path.join(world.stateDir, 'supervisor');
+  const conversationDir = path.join(dir, 'conversations', conversationId);
+  fs.mkdirSync(conversationDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'conversation.json'),
+    JSON.stringify({
+      format: 1,
+      conversation_id: conversationId,
+      generation: 0,
+      stream_epoch: 'seeded-epoch',
+    }),
+  );
+  const created = Date.UTC(2026, 0, 1);
+  const lines: string[] = [];
+  for (let seq = 1; seq <= records; seq += 1) {
+    const turn = Math.floor((seq + 1) / 2);
+    const user = seq % 2 === 1;
+    lines.push(
+      JSON.stringify({
+        seq,
+        id: `seed-${seq}`,
+        conversation_id: conversationId,
+        generation: 0,
+        turn_id: `g0.t${turn}`,
+        kind: user ? 'user' : 'assistant',
+        ...(user ? { client_message_id: `seed-cm-${turn}` } : {}),
+        data: user
+          ? { text: seededSupervisorQuestion(turn) }
+          : { content: [{ type: 'text', text: seededSupervisorAnswer(turn) }] },
+        visibility: 'content',
+        created_at: new Date(created + seq * 1000).toISOString().replace('.000Z', 'Z'),
+      }),
+    );
+  }
+  fs.writeFileSync(path.join(conversationDir, 'transcript.jsonl'), `${lines.join('\n')}\n`);
+  return conversationId;
 }
 
 // --- discovery / processes -----------------------------------------------------

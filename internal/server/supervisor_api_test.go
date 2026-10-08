@@ -48,6 +48,7 @@ type recordingSupervisor struct {
 	ends      int
 	err       error
 	busy      bool
+	dedup     bool
 }
 
 func (s *recordingSupervisor) State() supervisor.State {
@@ -125,7 +126,7 @@ func (s *recordingSupervisor) Send(_ context.Context, text, hiddenContext, cmid 
 		return supervisor.SendResult{}, s.err
 	}
 	data, _ := json.Marshal(supervisor.UserData{Text: text})
-	return supervisor.SendResult{Launched: true, Record: supervisor.Record{
+	return supervisor.SendResult{Launched: !s.dedup, Deduplicated: s.dedup, Record: supervisor.Record{
 		Seq: 1, ID: "r1", ConversationID: s.state.ConversationID, Generation: 1, TurnID: "g1.t1",
 		Kind: supervisor.KindUser, Visibility: supervisor.VisibilityContent, ClientMessageID: cmid, Data: data,
 		CreatedAt: time.Date(2026, 10, 6, 0, 0, 0, 0, time.UTC),
@@ -225,6 +226,8 @@ func TestSupervisorRoutes_ErrorsRenderThroughCanonicalEnvelope(t *testing.T) {
 		{&supervisor.SettingsInvalidError{Reason: "model is not available"}, http.StatusBadRequest, errcat.SupervisorSettingsInvalid},
 		{supervisor.ErrSettingsRequired, http.StatusConflict, errcat.SettingsRequired},
 		{supervisor.ErrTurnActive, http.StatusConflict, errcat.TurnActive},
+		{&supervisor.ClientMessageConflictError{CommittedSeq: 4}, http.StatusConflict, errcat.ClientMessageConflict},
+		{&supervisor.CursorOutOfRangeError{HeadSeq: 12}, http.StatusConflict, errcat.CursorOutOfRange},
 		{&supervisor.LaunchFailedError{Err: errors.New("exec failed")}, http.StatusBadGateway, errcat.SupervisorLaunchFailed},
 		{&workadmission.ClosedError{Category: workadmission.CategorySupervisor}, http.StatusServiceUnavailable, errcat.UpdateInProgress},
 	}
@@ -245,12 +248,35 @@ func TestSupervisorRoutes_ErrorsRenderThroughCanonicalEnvelope(t *testing.T) {
 			if tc.code == errcat.PendingChangeNotFound {
 				method = http.MethodDelete
 			}
+			if tc.code == errcat.CursorOutOfRange {
+				path, body, method = apiPathSupervisorTranscript+"?after=13", "", http.MethodGet
+			}
 			var resp ErrorResponse
 			serveSupervisor(t, h, supervisorRequest(method, path, body), tc.status, &resp)
 			if string(resp.Error.Code) != string(tc.code) || resp.Error.Title == "" {
 				t.Fatalf("error = %+v, want code %s", resp.Error, tc.code)
 			}
+			wantDiagnostics := map[errcat.Code]string{errcat.ClientMessageConflict: "committed_seq=4", errcat.CursorOutOfRange: "head_seq=12"}[tc.code]
+			if wantDiagnostics != "" && resp.Error.Diagnostics != wantDiagnostics {
+				t.Fatalf("diagnostics = %q, want %q", resp.Error.Diagnostics, wantDiagnostics)
+			}
 		})
+	}
+}
+
+func TestSupervisorRoutes_MessageResponseCarriesDeduplicated(t *testing.T) {
+	svc := &recordingSupervisor{state: supervisor.State{ConversationID: "conv-1"}}
+	h := newSupervisorTestHandler(svc, nil)
+	var sent SupervisorMessageResponse
+	serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorMessages, `{"text":"hello","client_message_id":"cm-1"}`), http.StatusOK, &sent)
+	if sent.Deduplicated {
+		t.Fatalf("first send reported deduplicated: %+v", sent)
+	}
+	svc.dedup = true
+	var raw map[string]any
+	serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorMessages, `{"text":"hello","client_message_id":"cm-1"}`), http.StatusOK, &raw)
+	if raw["deduplicated"] != true || raw["launched"] != false {
+		t.Fatalf("resend response = %v, want deduplicated true", raw)
 	}
 }
 
@@ -303,7 +329,7 @@ func TestSupervisorRoutes_MessagesTranscriptInterruptEnd(t *testing.T) {
 	if strings.Contains(string(raw), `"command"`) || strings.Contains(string(raw), `"input"`) {
 		t.Fatalf("transcript projection leaked raw tool input: %s", raw)
 	}
-	for _, q := range []string{"?before=1&after=1", "?limit=501", "?limit=0", "?after=-1", "?before=x"} {
+	for _, q := range []string{"?before=1&after=1", "?limit=501", "?limit=0", "?after=-1", "?before=x", "?before=0"} {
 		serveSupervisor(t, h, supervisorRequest(http.MethodGet, apiPathSupervisorTranscript+q, ""), http.StatusBadRequest, nil)
 	}
 

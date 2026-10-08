@@ -14,17 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   AttentionItem,
+  ConnectionState,
   ModelCatalogue,
   SupervisorEvent,
   SupervisorPendingRequest,
   SupervisorRecord,
   SupervisorState,
+  SupervisorTranscriptPage,
 } from '../../../../shared/ipc';
 import {
   installAgenticoMock,
@@ -39,8 +41,10 @@ import {
   supervisorState,
   supervisorTranscriptPage,
 } from '../../test/agenticoMock';
+import { installTranscriptLayout, viewportOffset } from '../../test/transcriptLayout';
 import { emptyAttentionDrafts, type AttentionDrafts } from '../AttentionInbox';
 import { SupervisorPage, type SupervisorComposeRequest } from './SupervisorPage';
+import { supervisorConversationBuilder } from './supervisorModel';
 
 afterEach(cleanup);
 
@@ -1328,5 +1332,398 @@ describe('SupervisorPage switch recovery', () => {
     expect(mock.api.updateSupervisorSettings.mock.invocationCallOrder[0]).toBeLessThan(
       mock.api.sendSupervisorMessage.mock.invocationCallOrder[0]!,
     );
+  });
+});
+
+// --- Earlier pages and exactly-once reconciliation ---------------------------
+
+function userRecords(from: number, to: number, generation = 1): SupervisorRecord[] {
+  return Array.from({ length: to - from + 1 }, (_, offset) => {
+    const seq = from + offset;
+    return supervisorRecord({
+      seq,
+      generation,
+      messages: [{ index: seq, role: 'user', type: 'text', text: `Message ${String(seq)}` }],
+    });
+  });
+}
+
+function page(
+  records: SupervisorRecord[],
+  overrides: Partial<SupervisorTranscriptPage> = {},
+): SupervisorTranscriptPage {
+  return supervisorTranscriptPage({
+    items: records,
+    firstSeq: records[0]?.seq ?? 0,
+    lastSeq: records.at(-1)?.seq ?? 0,
+    headSeq: records.at(-1)?.seq ?? 0,
+    ...overrides,
+  });
+}
+
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve(value: T): void;
+  reject(reason: unknown): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function readyConnection(serverKey: string): ConnectionState {
+  return {
+    status: 'ready',
+    stage: 'ready',
+    detail: 'Runtime ready.',
+    ownership: 'external',
+    kind: 'local',
+    serverKey,
+    serverName: serverKey,
+  };
+}
+
+const isSupervisorTranscript = (element: Element): boolean =>
+  element.getAttribute('aria-label') === 'Supervisor conversation';
+
+function scrollTranscriptTo(top: number): void {
+  const region = transcript();
+  region.scrollTop = top;
+  fireEvent.scroll(region);
+}
+
+function messageRow(text: string): HTMLElement {
+  return within(transcript()).getByText(text).closest('article')!;
+}
+
+function shownMessages(): string[] {
+  return within(transcript())
+    .queryAllByText(/^Message \d+$/)
+    .map((node) => node.textContent ?? '');
+}
+
+const NEWEST = page(userRecords(101, 200), { hasMoreBefore: true });
+
+describe('SupervisorPage earlier pages', () => {
+  it('loads the page before the oldest seq near the top, prepends it in order, and holds the first visible row', async () => {
+    const restore = installTranscriptLayout(isSupervisorTranscript);
+    try {
+      const mock = await renderPage({
+        supervisorState: supervisorState({ settings: CHOSEN }),
+        supervisorTranscript: NEWEST,
+      });
+      await within(transcript()).findByText('Message 200');
+      const earlier = deferred<SupervisorTranscriptPage>();
+      mock.api.getSupervisorTranscript.mockReturnValueOnce(earlier.promise);
+
+      // Far from the top: nothing is requested.
+      scrollTranscriptTo(3000);
+      expect(mock.api.getSupervisorTranscript).toHaveBeenCalledTimes(1);
+
+      scrollTranscriptTo(120);
+      expect(mock.api.getSupervisorTranscript).toHaveBeenLastCalledWith({ before: 101 });
+      const loading = await within(transcript()).findByText('Loading earlier messages…');
+      // The loading row sits above the first conversation row.
+      expect(
+        loading.compareDocumentPosition(messageRow('Message 101')) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      // A second scroll while the page is in flight never doubles the request.
+      scrollTranscriptTo(60);
+      expect(mock.api.getSupervisorTranscript).toHaveBeenCalledTimes(2);
+
+      const anchorText = 'Message 103';
+      const before = viewportOffset(messageRow(anchorText));
+      await act(async () => earlier.resolve(page(userRecords(1, 100), { headSeq: 200 })));
+
+      expect(within(transcript()).queryByText('Loading earlier messages…')).toBeNull();
+      const expected = Array.from({ length: 200 }, (_, index) => `Message ${String(index + 1)}`);
+      expect(shownMessages()).toEqual(expected);
+      expect(viewportOffset(messageRow(anchorText))).toBe(before);
+
+      // has_more_before = false ends paging: the top asks for nothing more.
+      scrollTranscriptTo(0);
+      expect(mock.api.getSupervisorTranscript).toHaveBeenCalledTimes(2);
+    } finally {
+      restore();
+    }
+  });
+
+  it('shows a Retry row for a rejected page, with no alert, and Retry re-requests the same cursor', async () => {
+    const restore = installTranscriptLayout(isSupervisorTranscript);
+    try {
+      const mock = await renderPage({
+        supervisorState: supervisorState({ settings: CHOSEN }),
+        supervisorTranscript: NEWEST,
+      });
+      await within(transcript()).findByText('Message 200');
+      mock.api.getSupervisorTranscript.mockRejectedValueOnce(
+        ipcError('transcript_unavailable', 'The transcript could not be read.'),
+      );
+
+      scrollTranscriptTo(40);
+      const failure = await within(transcript()).findByText("Couldn't load earlier messages");
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText('The transcript could not be read.')).toBeNull();
+      // A failed page waits for Retry; scrolling does not hammer the server.
+      scrollTranscriptTo(10);
+      expect(mock.api.getSupervisorTranscript).toHaveBeenCalledTimes(2);
+
+      const retry = within(failure.closest('p')!).getByRole('button', { name: 'Retry' });
+      retry.focus();
+      expect(retry).toHaveFocus();
+      mock.api.getSupervisorTranscript.mockResolvedValueOnce(page(userRecords(1, 100)));
+      await userEvent.setup().click(retry);
+
+      expect(mock.api.getSupervisorTranscript).toHaveBeenCalledTimes(3);
+      expect(mock.api.getSupervisorTranscript.mock.calls[1]).toEqual([{ before: 101 }]);
+      expect(mock.api.getSupervisorTranscript.mock.calls[2]).toEqual([{ before: 101 }]);
+      await within(transcript()).findByText('Message 1');
+      expect(within(transcript()).queryByText("Couldn't load earlier messages")).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it('reloads state and the newest page silently when the cursor is out of range', async () => {
+    const restore = installTranscriptLayout(isSupervisorTranscript);
+    try {
+      const mock = await renderPage({
+        supervisorState: supervisorState({ settings: CHOSEN }),
+        supervisorTranscript: NEWEST,
+      });
+      await within(transcript()).findByText('Message 200');
+      mock.api.getSupervisorTranscript.mockRejectedValueOnce(
+        ipcError('cursor_out_of_range', 'The cursor is beyond the transcript head.'),
+      );
+      mock.api.getSupervisorTranscript.mockResolvedValueOnce(page(userRecords(1, 3)));
+
+      scrollTranscriptTo(40);
+
+      await within(transcript()).findByText('Message 3');
+      expect(mock.api.getSupervisorTranscript.mock.calls.slice(1)).toEqual([
+        [{ before: 101 }],
+        [{}],
+      ]);
+      expect(mock.api.getSupervisorState).toHaveBeenCalledTimes(2);
+      expect(shownMessages()).toEqual(['Message 1', 'Message 2', 'Message 3']);
+      expect(within(transcript()).queryByText("Couldn't load earlier messages")).toBeNull();
+      expect(screen.queryByText('The cursor is beyond the transcript head.')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it('discards a page that resolves after a reset and keeps only the newest page', async () => {
+    const restore = installTranscriptLayout(isSupervisorTranscript);
+    try {
+      const mock = await renderPage({
+        supervisorState: supervisorState({ settings: CHOSEN }),
+        supervisorTranscript: NEWEST,
+      });
+      await within(transcript()).findByText('Message 200');
+      const earlier = deferred<SupervisorTranscriptPage>();
+      mock.api.getSupervisorTranscript.mockReturnValueOnce(earlier.promise);
+      scrollTranscriptTo(40);
+      await within(transcript()).findByText('Loading earlier messages…');
+
+      mock.api.getSupervisorTranscript.mockResolvedValueOnce(page(userRecords(196, 205)));
+      emit(mock, { type: 'reset' });
+      await within(transcript()).findByText('Message 205');
+      await act(async () => earlier.resolve(page(userRecords(1, 100))));
+
+      expect(shownMessages()).toEqual(
+        Array.from({ length: 10 }, (_, index) => `Message ${String(196 + index)}`),
+      );
+      expect(within(transcript()).queryByText('Loading earlier messages…')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it('discards a page that resolves after a server switch', async () => {
+    const restore = installTranscriptLayout(isSupervisorTranscript);
+    try {
+      const mock = await renderPage({
+        connection: readyConnection('server-a'),
+        supervisorState: supervisorState({ settings: CHOSEN }),
+        supervisorTranscript: NEWEST,
+      });
+      await within(transcript()).findByText('Message 200');
+      const earlier = deferred<SupervisorTranscriptPage>();
+      mock.api.getSupervisorTranscript.mockReturnValueOnce(earlier.promise);
+      scrollTranscriptTo(40);
+      await within(transcript()).findByText('Loading earlier messages…');
+
+      act(() => mock.emitConnection(readyConnection('server-b')));
+      await act(async () => earlier.resolve(page(userRecords(1, 100))));
+
+      expect(within(transcript()).queryByText('Message 1')).toBeNull();
+      expect(shownMessages()).toHaveLength(100);
+      expect(within(transcript()).queryByText('Loading earlier messages…')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe('SupervisorPage exactly-once reconciliation', () => {
+  it('keeps records streamed during a snapshot reload above the page head and replaces the rest', async () => {
+    const state = supervisorState({ settings: CHOSEN, lifecycle: 'running', generation: 1 });
+    const mock = await renderPage({
+      supervisorState: state,
+      supervisorTranscript: page(userRecords(1, 3)),
+    });
+    await within(transcript()).findByText('Message 3');
+    const reload = deferred<SupervisorTranscriptPage>();
+    mock.api.getSupervisorTranscript.mockReturnValueOnce(reload.promise);
+
+    emit(mock, { type: 'reset' });
+    const streamed = (seq: number, text: string): SupervisorEvent => ({
+      type: 'record',
+      ...envelope(state),
+      record: supervisorRecord({
+        seq,
+        messages: [{ index: seq, role: 'user', type: 'text', text }],
+      }),
+    });
+    emit(mock, streamed(5, 'Streamed five'));
+    emit(mock, streamed(6, 'Streamed six'));
+    const fetched = [
+      ...userRecords(4, 4),
+      supervisorRecord({
+        seq: 5,
+        messages: [{ index: 5, role: 'user', type: 'text', text: 'Fetched five' }],
+      }),
+    ];
+    await act(async () => reload.resolve(page(fetched, { headSeq: 5 })));
+
+    const shown = within(transcript())
+      .queryAllByText(/^(Message \d+|Fetched five|Streamed (five|six))$/)
+      .map((node) => node.textContent);
+    expect(shown).toEqual(['Message 4', 'Fetched five', 'Streamed six']);
+  });
+
+  it('drops deltas and requests from a generation below the current state', async () => {
+    const state = supervisorState({
+      settings: CHOSEN,
+      lifecycle: 'running',
+      generation: 3,
+      sessionId: SESSION_ID,
+    });
+    const mock = await renderPage({ supervisorState: state });
+
+    emit(mock, {
+      type: 'delta',
+      ...envelope(state),
+      generation: 2,
+      delta: { turnId: 't', streamMessageId: 'old-stream', chunkIndex: 0, text: 'Retired text' },
+    });
+    emit(mock, {
+      type: 'request',
+      ...envelope(state),
+      generation: 2,
+      request: permissionRequest,
+    });
+
+    expect(within(transcript()).queryByText('Retired text')).toBeNull();
+    expect(screen.queryByRole('button', { name: /allow/i })).toBeNull();
+    expect(composer()).not.toHaveAttribute(
+      'placeholder',
+      'Respond to the pending request above to continue',
+    );
+  });
+
+  it('never recreates a provisional row for a delta that arrives after its committed record', async () => {
+    const state = supervisorState({ settings: CHOSEN, lifecycle: 'running', generation: 1 });
+    const mock = await renderPage({ supervisorState: state });
+
+    emit(mock, {
+      type: 'record',
+      ...envelope(state),
+      record: supervisorRecord({
+        seq: 2,
+        kind: 'assistant',
+        streamMessageId: 'stream-1',
+        messages: [{ index: 2, role: 'assistant', type: 'text', text: 'Final reply' }],
+      }),
+    });
+    emit(mock, {
+      type: 'delta',
+      ...envelope(state),
+      delta: { turnId: 't', streamMessageId: 'stream-1', chunkIndex: 3, text: 'Late chunk' },
+    });
+
+    expect(within(transcript()).queryByText('Late chunk')).toBeNull();
+    expect(within(transcript()).getAllByText('Final reply')).toHaveLength(1);
+  });
+
+  it("renders a new generation's delta that reuses a committed stream id", async () => {
+    const state = supervisorState({ settings: CHOSEN, lifecycle: 'running', generation: 1 });
+    const mock = await renderPage({ supervisorState: state });
+    emit(mock, {
+      type: 'record',
+      ...envelope(state),
+      record: supervisorRecord({
+        seq: 2,
+        kind: 'assistant',
+        streamMessageId: 'stream-1',
+        messages: [{ index: 2, role: 'assistant', type: 'text', text: 'First generation' }],
+      }),
+    });
+    const next = { ...state, generation: 2 };
+    emit(mock, { type: 'state', ...envelope(next), generation: 2, state: next });
+    emit(mock, {
+      type: 'delta',
+      ...envelope(next),
+      generation: 2,
+      delta: {
+        turnId: 't2',
+        streamMessageId: 'stream-1',
+        chunkIndex: 0,
+        text: 'Second generation',
+      },
+    });
+
+    expect(within(transcript()).getByText('Second generation')).toBeVisible();
+    expect(within(transcript()).getByText('First generation')).toBeVisible();
+  });
+
+  it('applies a delta without recomputing the committed conversation, and recomputes on a record', async () => {
+    const spy = vi.spyOn(supervisorConversationBuilder, 'committed');
+    try {
+      const state = supervisorState({ settings: CHOSEN, lifecycle: 'running', generation: 1 });
+      const mock = await renderPage({
+        supervisorState: state,
+        supervisorTranscript: page(userRecords(1, 3)),
+      });
+      await within(transcript()).findByText('Message 3');
+      const settled = spy.mock.calls.length;
+
+      emit(mock, {
+        type: 'delta',
+        ...envelope(state),
+        delta: { turnId: 't', streamMessageId: 'stream-9', chunkIndex: 0, text: 'Streaming…' },
+      });
+      emit(mock, {
+        type: 'delta',
+        ...envelope(state),
+        delta: { turnId: 't', streamMessageId: 'stream-9', chunkIndex: 1, text: ' more' },
+      });
+      expect(within(transcript()).getByText('Streaming… more')).toBeVisible();
+      expect(spy).toHaveBeenCalledTimes(settled);
+
+      emit(mock, { type: 'record', ...envelope(state), record: userRecords(4, 4)[0]! });
+      expect(spy.mock.calls.length).toBeGreaterThan(settled);
+      expect(spy.mock.calls.at(-1)?.[0].map((record) => record.seq)).toEqual([1, 2, 3, 4]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -382,6 +382,49 @@ describe('SupervisorStreamRunner', () => {
     expect(harness.sleeps.slice(0, 2)).toEqual([10, 20]);
   });
 
+  it('a connection dropped mid-turn resumes from its cursor and pushes each record once, in order', async () => {
+    const turnRecord = (seq: number, kind: string) =>
+      envelope('record', {
+        seq,
+        record: wireRecord(seq, { turn_id: 'turn-7', kind }),
+      });
+    const harness = makeHarness([
+      {
+        // The turn's user record commits, a delta streams, then the connection drops.
+        lines: frames([
+          envelope('state', { state: wireState({ lifecycle: 'running' }) }),
+          turnRecord(10, 'user'),
+          envelope('delta', {
+            delta: { turn_id: 'turn-7', stream_message_id: 'm-7', chunk_index: 0, text: 'Hi' },
+          }),
+        ]),
+      },
+      {
+        // The resumed connection replays the rest of the turn from the cursor,
+        // including an overlap at the cursor the runner must drop.
+        lines: frames([
+          turnRecord(10, 'user'),
+          turnRecord(11, 'tool_use'),
+          turnRecord(12, 'tool_result'),
+          turnRecord(13, 'assistant'),
+          envelope('state', { state: wireState({ lifecycle: 'idle' }) }),
+        ]),
+        stayOpen: true,
+      },
+    ]);
+    harness.runner.start();
+    await harness.settle(8);
+    harness.runner.stop();
+
+    expect(harness.openCalls.slice(0, 2)).toEqual([{}, { afterSeq: 10, epoch: EPOCH }]);
+    const recordSeqs = harness.pushes.flatMap((push) =>
+      push.type === 'record' ? [push.record.seq] : [],
+    );
+    expect(recordSeqs).toEqual([10, 11, 12, 13]);
+    expect(types(harness.pushes)).not.toContain('reset');
+    expect(harness.runner.getCursor()).toEqual({ seq: 13, epoch: EPOCH });
+  });
+
   it('non-record events never advance the resume cursor', async () => {
     const harness = makeHarness([
       {

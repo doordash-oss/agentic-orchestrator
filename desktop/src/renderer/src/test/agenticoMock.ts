@@ -921,6 +921,7 @@ export function installAgenticoMock(
             messages: [{ index: seq, role: 'user', type: 'text', text: request.text }],
           }),
           launched,
+          deduplicated: false,
         });
       },
     ),

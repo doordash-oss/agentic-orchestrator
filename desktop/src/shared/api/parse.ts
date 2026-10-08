@@ -1589,6 +1589,7 @@ export const ServerSupervisorMarkerRecordSchema = z.object({
     'harness_change',
     'settings_reverted',
     'compacted',
+    'transcript_recovered',
   ]),
   text: AttentionTextSchema,
   code: z.string().max(200).optional(),
@@ -1658,6 +1659,7 @@ export const SupervisorMessageResponseSchema = z.object({
   api_version: z.string(),
   record: ServerSupervisorRecordSchema,
   launched: z.boolean(),
+  deduplicated: z.boolean(),
 });
 export type SupervisorMessageResponse = z.output<typeof SupervisorMessageResponseSchema>;
 

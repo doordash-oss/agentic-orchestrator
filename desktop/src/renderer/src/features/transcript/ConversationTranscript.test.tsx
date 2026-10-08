@@ -14,9 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { FileChangeCard } from './ConversationTranscript';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { installTranscriptLayout, viewportOffset } from '../../test/transcriptLayout';
+import { ConversationTranscript, FileChangeCard } from './ConversationTranscript';
+import type { ConversationItem } from './conversation';
+
+afterEach(cleanup);
 
 describe('FileChangeCard', () => {
   it('renders diff lines with added and removed markers', () => {
@@ -95,5 +99,118 @@ describe('FileChangeCard', () => {
 
     expect(screen.getByLabelText('Updated src/app.ts')).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Diff for src/app.ts' })).not.toBeInTheDocument();
+  });
+});
+
+function rows(from: number, to: number): ConversationItem[] {
+  return Array.from({ length: to - from + 1 }, (_, offset) => ({
+    kind: 'message' as const,
+    key: `message-${String(from + offset)}:0`,
+    role: 'assistant' as const,
+    text: `Row ${String(from + offset)}`,
+  }));
+}
+
+function article(text: string): HTMLElement {
+  return screen.getByText(text).closest('article')!;
+}
+
+describe('ConversationTranscript', () => {
+  const isTranscript = (element: Element): boolean =>
+    element.getAttribute('aria-label') === 'Transcript';
+
+  it('renders the top slot above the first row', () => {
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        items={rows(1, 2)}
+        top={<p>Loading earlier messages…</p>}
+      />,
+    );
+    const region = screen.getByRole('region', { name: 'Transcript' });
+    const texts = [...region.querySelectorAll('p')].map((node) => node.textContent);
+    expect(texts).toEqual(['Loading earlier messages…', 'Row 1', 'Row 2']);
+  });
+
+  it('holds the first visible row at its viewport offset when rows are prepended', () => {
+    const restore = installTranscriptLayout(isTranscript);
+    try {
+      const props = { ariaLabel: 'Transcript', idleLabel: 'Idle', waiting: false } as const;
+      const { rerender } = render(
+        <ConversationTranscript {...props} items={rows(10, 30)} anchorPrepend />,
+      );
+      const region = screen.getByRole('region', { name: 'Transcript' });
+      region.scrollTop = 120;
+      fireEvent.scroll(region);
+      const before = viewportOffset(article('Row 12'));
+      expect(before).toBeLessThanOrEqual(0);
+
+      rerender(<ConversationTranscript {...props} items={rows(1, 30)} anchorPrepend />);
+
+      expect(viewportOffset(article('Row 12'))).toBe(before);
+      expect(region.scrollTop).toBe(120 + 9 * 50);
+    } finally {
+      restore();
+    }
+  });
+
+  it('leaves the scroll position alone without prepend anchoring', () => {
+    const restore = installTranscriptLayout(isTranscript);
+    try {
+      const props = { ariaLabel: 'Transcript', idleLabel: 'Idle', waiting: false } as const;
+      const { rerender } = render(<ConversationTranscript {...props} items={rows(10, 30)} />);
+      const region = screen.getByRole('region', { name: 'Transcript' });
+      region.scrollTop = 120;
+      fireEvent.scroll(region);
+
+      rerender(<ConversationTranscript {...props} items={rows(1, 30)} />);
+
+      expect(region.scrollTop).toBe(120);
+      expect(region.querySelector('[hidden]')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it('asks for earlier rows when scrolled near the top, and not further down', () => {
+    const restore = installTranscriptLayout(isTranscript);
+    try {
+      const onNearTop = vi.fn();
+      render(
+        <ConversationTranscript
+          ariaLabel="Transcript"
+          idleLabel="Idle"
+          waiting={false}
+          items={rows(1, 40)}
+          onNearTop={onNearTop}
+        />,
+      );
+      const region = screen.getByRole('region', { name: 'Transcript' });
+      onNearTop.mockClear();
+      region.scrollTop = 1200;
+      fireEvent.scroll(region);
+      expect(onNearTop).not.toHaveBeenCalled();
+      region.scrollTop = 40;
+      fireEvent.scroll(region);
+      expect(onNearTop).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('asks for earlier rows when the rows do not fill the viewport', () => {
+    const onNearTop = vi.fn();
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        items={rows(1, 2)}
+        onNearTop={onNearTop}
+      />,
+    );
+    expect(onNearTop).toHaveBeenCalled();
   });
 });

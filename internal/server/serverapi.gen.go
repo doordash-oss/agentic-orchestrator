@@ -1080,6 +1080,7 @@ const (
 	SupervisorMarkerPermissionRestricted SupervisorMarkerRecordMarker = "permission_restricted"
 	SupervisorMarkerSettingsChanged      SupervisorMarkerRecordMarker = "settings_changed"
 	SupervisorMarkerSettingsReverted     SupervisorMarkerRecordMarker = "settings_reverted"
+	SupervisorMarkerTranscriptRecovered  SupervisorMarkerRecordMarker = "transcript_recovered"
 )
 
 // Valid indicates whether the value is a known member of the SupervisorMarkerRecordMarker enum.
@@ -1100,6 +1101,8 @@ func (e SupervisorMarkerRecordMarker) Valid() bool {
 	case SupervisorMarkerSettingsChanged:
 		return true
 	case SupervisorMarkerSettingsReverted:
+		return true
+	case SupervisorMarkerTranscriptRecovered:
 		return true
 	default:
 		return false
@@ -4748,7 +4751,7 @@ type SupervisorInterruptedBy string
 // SupervisorLifecycle defines model for SupervisorLifecycle.
 type SupervisorLifecycle string
 
-// SupervisorMarkerRecord Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker.
+// SupervisorMarkerRecord Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, a permission mode restricted by policy, or a transcript recovered from a corrupt line (`transcript_recovered`, whose text names the unread record count and the preserved original). `code` is the catalog code of an `error` marker.
 type SupervisorMarkerRecord struct {
 	Code string `json:"code,omitempty"`
 
@@ -4780,6 +4783,9 @@ type SupervisorMessageRequest struct {
 // SupervisorMessageResponse defines model for SupervisorMessageResponse.
 type SupervisorMessageResponse struct {
 	APIVersion string `json:"api_version"`
+
+	// Deduplicated True when the `client_message_id` was already committed with the same text and error reference; nothing was appended or delivered.
+	Deduplicated bool `json:"deduplicated"`
 
 	// Launched True when this send launched the supervisor process.
 	Launched bool `json:"launched"`
@@ -4821,7 +4827,7 @@ type SupervisorRecord struct {
 	ID              string                      `json:"id"`
 	Kind            SupervisorRecordKind        `json:"kind"`
 
-	// Marker Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, or a permission mode restricted by policy. `code` is the catalog code of an `error` marker.
+	// Marker Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, a permission mode restricted by policy, or a transcript recovered from a corrupt line (`transcript_recovered`, whose text names the unread record count and the preserved original). `code` is the catalog code of an `error` marker.
 	Marker   *SupervisorMarkerRecord `json:"marker,omitempty"`
 	Messages []TranscriptMessage     `json:"messages"`
 

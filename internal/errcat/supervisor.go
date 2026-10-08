@@ -35,4 +35,10 @@ const (
 	ChangePending          Code = "change_pending"
 	StaleGeneration        Code = "stale_generation"
 	PendingChangeNotFound  Code = "pending_change_not_found"
+	// ClientMessageConflict refuses a reused client message id whose text
+	// or error reference differs from the committed record.
+	ClientMessageConflict Code = "client_message_conflict"
+	// CursorOutOfRange refuses a transcript page cursor beyond the stored
+	// range; the client reloads the newest page.
+	CursorOutOfRange Code = "cursor_out_of_range"
 )

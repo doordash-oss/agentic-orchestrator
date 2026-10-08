@@ -41,6 +41,9 @@ import (
 // UserData is the payload of a user record.
 type UserData struct {
 	Text string `json:"text"`
+	// HiddenContext records that the message reached the harness with a
+	// hidden context bundle, so a resend can be told apart from a reuse.
+	HiddenContext bool `json:"hidden_context,omitempty"`
 }
 
 // ContentData is the payload of assistant, tool_use and tool_result
@@ -73,6 +76,7 @@ const (
 	MarkerSettingsReverted     = "settings_reverted"
 	MarkerHarnessChange        = "harness_change"
 	MarkerCompacted            = "compacted"
+	MarkerTranscriptRecovered  = "transcript_recovered"
 )
 
 // MarkerData is the payload of a display-only marker record. Code is the
@@ -188,6 +192,9 @@ type Coordinator struct {
 	streamID     string
 	streamChunks int
 	streamCount  int
+	// ordinals counts provider records per turn and kind, keying the
+	// deterministic id of output that carries no provider id.
+	ordinals map[string]int
 	// ending marks the current process as being stopped on purpose; its
 	// exit is not a failure.
 	ending bool
@@ -327,11 +334,33 @@ func New(opts Options) (*Coordinator, error) {
 		permMode:       PermissionMode{Requested: RequestedPermissionMode},
 		subs:           map[*Subscription]struct{}{},
 	}
+	if err := c.recordRecovery(); err != nil {
+		_ = store.close()
+		return nil, err
+	}
 	if err := c.recoverBoot(); err != nil {
 		_ = store.close()
 		return nil, err
 	}
 	return c, nil
+}
+
+// recordRecovery turns the store's pending recovery note into the
+// transcript's display-only trace of the records it could not read.
+func (c *Coordinator) recordRecovery() error {
+	note := c.store.takeRecovery()
+	if note == nil {
+		return nil
+	}
+	records := "records"
+	if note.Unread == 1 {
+		records = "record"
+	}
+	return c.appendBootRecord("", KindMarker, MarkerData{
+		Marker: MarkerTranscriptRecovered,
+		Text: fmt.Sprintf("%d transcript %s after #%d could not be read and are not shown. The original transcript is preserved at %s.",
+			note.Unread, records, note.AfterSeq, note.PreservedPath),
+	})
 }
 
 // recoverBoot reconciles what the previous server process left behind. A
@@ -554,7 +583,7 @@ func (c *Coordinator) Busy() bool {
 
 // Transcript reads one page of the durable transcript.
 func (c *Coordinator) Transcript(q PageQuery) (Page, error) {
-	return c.store.page(q)
+	return c.store.rangedPage(q)
 }
 
 // UpdateSettings commits a harness choice. It is accepted only while no
@@ -910,10 +939,10 @@ func (c *Coordinator) Send(ctx context.Context, text, hiddenContext, clientMessa
 		c.opMu.Unlock()
 		return SendResult{}, ErrClosed
 	}
-	if rec, ok := c.store.lookupClientMessage(clientMessageID); ok {
+	if rec, ok, err := c.matchClientMessageLocked(clientMessageID, text, hiddenContext); ok || err != nil {
 		c.mu.Unlock()
 		c.opMu.Unlock()
-		return SendResult{Record: rec}, nil
+		return SendResult{Record: rec, Deduplicated: ok}, err
 	}
 	if !c.settings.Complete() {
 		c.mu.Unlock()
@@ -933,7 +962,7 @@ func (c *Coordinator) Send(ctx context.Context, text, hiddenContext, clientMessa
 			c.mu.Unlock()
 			return SendResult{}, ErrHiddenContextUnsupported
 		}
-		rec, _, err := c.appendUserLocked(text, clientMessageID)
+		rec, _, err := c.appendUserLocked(text, hiddenContext, clientMessageID)
 		if err != nil {
 			c.mu.Unlock()
 			return SendResult{}, err
@@ -1050,6 +1079,7 @@ func (c *Coordinator) resetProcessLocked() {
 	c.streamID = ""
 	c.streamChunks = 0
 	c.streamCount = 0
+	c.ordinals = nil
 	c.ending = false
 	c.keepTurns = false
 	c.resumeID = ""
@@ -1292,7 +1322,7 @@ func (c *Coordinator) completeLaunch(attempt *launchAttempt, sess ports.SessionV
 			results[i] = joinResult{err: ErrHiddenContextUnsupported}
 			continue
 		}
-		rec, existing, err := c.appendUserLocked(j.text, j.cmid)
+		rec, existing, err := c.appendUserLocked(j.text, j.hidden, j.cmid)
 		if err != nil {
 			results[i] = joinResult{err: err}
 			continue
@@ -1300,7 +1330,7 @@ func (c *Coordinator) completeLaunch(attempt *launchAttempt, sess ports.SessionV
 		if !existing {
 			deliveries = append(deliveries, j)
 		}
-		results[i] = joinResult{res: SendResult{Record: rec, Launched: j.initiator}}
+		results[i] = joinResult{res: SendResult{Record: rec, Launched: j.initiator, Deduplicated: existing}}
 	}
 	if len(c.turns) > 0 {
 		c.lifecycle = LifecycleRunning
@@ -1387,13 +1417,28 @@ func (c *Coordinator) failLaunch(attempt *launchAttempt, cause error) {
 	}
 }
 
+// matchClientMessageLocked compares a send against the record already
+// committed for its client message id: ok reports an identical resend, and
+// a resend whose text or hidden-context presence differs is a conflict.
+func (c *Coordinator) matchClientMessageLocked(cmid, text, hidden string) (Record, bool, error) {
+	rec, ok := c.store.lookupClientMessage(cmid)
+	if !ok {
+		return Record{}, false, nil
+	}
+	var data UserData
+	if err := json.Unmarshal(rec.Data, &data); err != nil || data.Text != text || data.HiddenContext != (hidden != "") {
+		return Record{}, false, &ClientMessageConflictError{CommittedSeq: rec.Seq}
+	}
+	return rec, true, nil
+}
+
 // appendUserLocked commits a user record on a new turn, or returns the
 // record already committed for the client message id.
-func (c *Coordinator) appendUserLocked(text, cmid string) (Record, bool, error) {
-	if rec, ok := c.store.lookupClientMessage(cmid); ok {
-		return rec, true, nil
+func (c *Coordinator) appendUserLocked(text, hidden, cmid string) (Record, bool, error) {
+	if rec, ok, err := c.matchClientMessageLocked(cmid, text, hidden); ok || err != nil {
+		return rec, ok, err
 	}
-	data, err := json.Marshal(UserData{Text: text})
+	data, err := json.Marshal(UserData{Text: text, HiddenContext: hidden != ""})
 	if err != nil {
 		return Record{}, false, err
 	}
@@ -1666,13 +1711,13 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 			if streamID == "" && current {
 				streamID = c.streamID
 			}
-			c.appendProviderLocked(gen, KindAssistant, ContentData{Content: text}, streamID)
+			c.appendProviderLocked(gen, KindAssistant, ContentData{Content: text}, msg.Assistant.Message.ID, streamID)
 			if current {
 				c.streamID, c.streamChunks = "", 0
 			}
 		}
 		if len(tools) > 0 {
-			c.appendProviderLocked(gen, KindToolUse, ContentData{Content: tools}, "")
+			c.appendProviderLocked(gen, KindToolUse, ContentData{Content: tools}, blockIDs(tools, func(b llm.ContentBlock) string { return b.ID }), "")
 		}
 	case msg.User != nil && !msg.LocallyAppended:
 		var results []llm.ContentBlock
@@ -1682,7 +1727,7 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 			}
 		}
 		if len(results) > 0 {
-			c.appendProviderLocked(gen, KindToolResult, ContentData{Content: results}, "")
+			c.appendProviderLocked(gen, KindToolResult, ContentData{Content: results}, blockIDs(results, func(b llm.ContentBlock) string { return b.ToolUseID }), "")
 		}
 	case msg.ControlRequest != nil && current:
 		c.surfaceRequestLocked(gen, msg.ControlRequest)
@@ -1909,9 +1954,38 @@ func (c *Coordinator) observeStreamLocked(gen int64, msg llm.SDKMessage) {
 	c.publishLocked(Event{Kind: EventDelta, Generation: gen, Delta: &delta})
 }
 
-// appendProviderLocked commits provider output tagged with its generation;
-// the store rejects output from a retired generation.
-func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload any, streamID string) {
+// blockIDs joins the provider ids of content blocks; empty when any block
+// lacks one, so the record falls back to its turn-ordinal key.
+func blockIDs(blocks []llm.ContentBlock, id func(llm.ContentBlock) string) string {
+	ids := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if id(b) == "" {
+			return ""
+		}
+		ids = append(ids, id(b))
+	}
+	return strings.Join(ids, ",")
+}
+
+// providerIDLocked keys a provider record's deterministic id: the provider
+// item id when there is one, else the turn, kind and ordinal within the
+// turn.
+func (c *Coordinator) providerIDLocked(gen int64, kind RecordKind, turnID, providerID string) string {
+	if providerID == "" {
+		if c.ordinals == nil {
+			c.ordinals = map[string]int{}
+		}
+		key := turnID + "\x00" + string(kind)
+		c.ordinals[key]++
+		providerID = fmt.Sprintf("turn:%s#%d", turnID, c.ordinals[key])
+	}
+	return ProviderRecordID(c.conv.ConversationID, gen, kind, providerID)
+}
+
+// appendProviderLocked commits provider output tagged with its generation
+// under its deterministic id; the store rejects output from a retired
+// generation and returns the committed record for a repeated item.
+func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload any, providerID, streamID string) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("supervisor: encode %s record: %v", kind, err)
@@ -1925,7 +1999,8 @@ func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload a
 	if gen == c.conv.Generation {
 		turnID = c.currentTurnLocked()
 	}
-	rec, _, err := c.store.appendRecord(Record{
+	rec, existing, err := c.store.appendRecord(Record{
+		ID:              c.providerIDLocked(gen, kind, turnID, providerID),
 		Generation:      gen,
 		TurnID:          turnID,
 		Kind:            kind,
@@ -1933,7 +2008,7 @@ func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload a
 		StreamMessageID: streamID,
 		Data:            data,
 	})
-	if errors.Is(err, ErrRetiredGeneration) {
+	if errors.Is(err, ErrRetiredGeneration) || existing {
 		return
 	}
 	if err != nil {
@@ -1963,7 +2038,7 @@ func (c *Coordinator) surfaceRequestLocked(gen int64, req *llm.ControlRequestMes
 		Input:          req.Request.Input,
 		Origin:         origin,
 		ChildSessionID: child,
-	}, "")
+	}, req.RequestID+"/"+StageRequested, "")
 	c.publishLocked(Event{Kind: EventRequest, Generation: gen, Request: req, Session: c.session})
 	if c.lifecycle.inTurn() {
 		c.lifecycle = c.waitingLifecycleLocked()
@@ -2013,7 +2088,7 @@ func (c *Coordinator) observeAnswer(gen int64, sessionID string, answer ports.Co
 		Answers:        answer.Answers,
 		Origin:         origin,
 		ChildSessionID: child,
-	}, "")
+	}, answer.RequestID+"/"+StageResolved, "")
 	if current && (c.lifecycle == LifecycleWaitingPermission || c.lifecycle == LifecycleWaitingQuestion) {
 		c.lifecycle = c.waitingLifecycleLocked()
 	}
@@ -2084,8 +2159,9 @@ func (s *Subscription) Events() <-chan Event { return s.ch }
 func (s *Subscription) Overflowed() bool { return s.overflow }
 
 // Subscribe registers a live consumer resuming after the given record seq.
-// A cursor beyond the head or a stale epoch returns a subscription with
-// Reset set and no live channel registration.
+// A cursor beyond the head, a cursor more than maxReplay records behind it,
+// or a stale epoch returns a subscription with Reset set and no live
+// channel registration.
 func (c *Coordinator) Subscribe(after int64, hasAfter bool, epoch string) (*Subscription, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -2097,9 +2173,16 @@ func (c *Coordinator) Subscribe(after int64, hasAfter bool, epoch string) (*Subs
 		return sub, nil
 	}
 	if hasAfter {
-		replay, err := c.store.after(after)
+		replay, ok, err := c.store.replayAfter(after)
 		if err != nil {
 			return nil, err
+		}
+		if !ok {
+			// A range gap wider than the replay bound: the client reloads
+			// through the paged endpoint instead.
+			sub.Reset = true
+			close(sub.ch)
+			return sub, nil
 		}
 		sub.Replay = replay
 	}

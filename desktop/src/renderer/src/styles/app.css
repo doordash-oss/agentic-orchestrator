@@ -13680,6 +13680,10 @@ body {
   flex: 1;
   padding-block: var(--space-5) var(--space-4);
   padding-inline: max(var(--space-5), calc((100% - 760px) / 2));
+  /* Programmatic scrolls must land at once: a smooth jump to the newest row
+   * passes the top threshold on its first frame and loads an earlier page,
+   * and a smooth prepend correction would let the anchored row drift. */
+  scroll-behavior: auto;
 }
 
 .supervisor-page__empty {
@@ -14286,6 +14290,23 @@ body {
 .conversation__notice-text {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* The load-earlier status row above the oldest loaded message: the notice's
+ * quiet seam, its mark breathing while the page is in flight. */
+.conversation__earlier {
+  padding-block: var(--space-1);
+}
+
+.conversation__earlier[data-state='loading'] .conversation__notice-mark {
+  color: var(--accent);
+  animation: supervisor-lamp 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation__earlier[data-state='loading'] .conversation__notice-mark {
+    animation: none;
+  }
 }
 
 .conversation__verdict-text {

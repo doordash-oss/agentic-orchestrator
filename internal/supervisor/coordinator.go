@@ -1849,9 +1849,9 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 		}
 		return
 	}
-	if msg.Origin.Kind == llm.EventOriginTask && msg.ControlRequest == nil {
+	if msg.Origin.Kind == llm.EventOriginTask && msg.ControlRequest == nil && msg.TaskStarted == nil && msg.TaskProgress == nil && msg.TaskNotification == nil {
 		// Sub-agent output belongs to the sub-agent, not the conversation;
-		// only the permissions and questions it raises reach the user.
+		// permissions, questions and task lifecycle metadata reach the user.
 		return
 	}
 	if !current {

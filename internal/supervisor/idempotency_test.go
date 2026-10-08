@@ -304,9 +304,9 @@ func TestCoordinatorPersistsTaskActivityWithoutPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess := launcher.session(0)
-	sess.emit(llm.SDKMessage{TaskStarted: &llm.TaskStartedMessage{TaskID: "task-a", Description: "Review tests", Prompt: "private delegated instructions"}})
-	sess.emit(llm.SDKMessage{TaskProgress: &llm.TaskProgressMessage{TaskID: "task-a", LastToolName: "Read"}})
-	sess.emit(llm.SDKMessage{TaskNotification: &llm.TaskNotificationMessage{TaskID: "task-a", Status: "completed", Summary: "Tests reviewed"}})
+	sess.emit(llm.SDKMessage{Origin: childOrigin, TaskStarted: &llm.TaskStartedMessage{TaskID: "task-a", Description: "Review tests", Prompt: "private delegated instructions"}})
+	sess.emit(llm.SDKMessage{Origin: childOrigin, TaskProgress: &llm.TaskProgressMessage{TaskID: "task-a", LastToolName: "Read"}})
+	sess.emit(llm.SDKMessage{Origin: childOrigin, TaskNotification: &llm.TaskNotificationMessage{TaskID: "task-a", Status: "completed", Summary: "Tests reviewed"}})
 	sess.emit(successResult())
 	waitLifecycle(t, c, LifecycleIdle)
 	page, err := c.Transcript(PageQuery{})

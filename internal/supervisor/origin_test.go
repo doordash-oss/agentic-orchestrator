@@ -155,7 +155,7 @@ func TestCoordinator_InterruptClearsSubagentRequest(t *testing.T) {
 	}
 }
 
-func TestCoordinator_SubagentOutputOtherThanRequestsIsIgnored(t *testing.T) {
+func TestCoordinator_SubagentProseIsIgnoredButActivityIsPreserved(t *testing.T) {
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher)
 	chooseSettings(t, c)
@@ -171,8 +171,9 @@ func TestCoordinator_SubagentOutputOtherThanRequestsIsIgnored(t *testing.T) {
 	childResult := successResult()
 	childResult.Origin = childOrigin
 	sess.emit(childResult)
-	if got := len(allRecords(t, c)); got != before {
-		t.Fatalf("sub-agent output committed %d records", got-before)
+	records := allRecords(t, c)
+	if len(records) != before+1 || records[len(records)-1].Visibility != VisibilityDisplayOnly {
+		t.Fatalf("expected only display-only task activity: %+v", records)
 	}
 	if got := c.State().Lifecycle; got != LifecycleRunning {
 		t.Fatalf("a sub-agent result ended the conversation's turn: %s", got)

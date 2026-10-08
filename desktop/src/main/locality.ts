@@ -42,3 +42,21 @@ export function assertLocalConnection(locality: LocalitySource): void {
     throw new CanonicalErrorException(requiresLocalServerError());
   }
 }
+
+/**
+ * Remote submit guard: while remotely connected, a locally shaped path
+ * payload (images/attachments/repository-file refs) fails with the locality
+ * error rather than leaking a path the server cannot read. Local payloads
+ * and staged upload references pass through untouched.
+ */
+export function assertNoLocalPathsRemotely(
+  remote: boolean,
+  ...groups: readonly (readonly string[])[]
+): void {
+  if (!remote) return;
+  for (const group of groups) {
+    if (group.length > 0) {
+      throw new CanonicalErrorException(requiresLocalServerError());
+    }
+  }
+}

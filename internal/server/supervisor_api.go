@@ -41,6 +41,7 @@ const (
 	apiPathSupervisorMessages      = apiPathSupervisor + "/messages"
 	apiPathSupervisorInterrupt     = apiPathSupervisor + "/interrupt"
 	apiPathSupervisorEnd           = apiPathSupervisor + "/end"
+	apiPathSupervisorReset         = apiPathSupervisor + "/reset"
 	apiPathSupervisorEvents        = apiPathSupervisor + "/events"
 )
 
@@ -59,9 +60,10 @@ type SupervisorService interface {
 	UpdateSettings(supervisor.Settings) (supervisor.State, error)
 	ChangeSettings(supervisor.SettingsChange) (supervisor.State, error)
 	CancelPendingChange(string) (supervisor.State, error)
-	Send(ctx context.Context, text, hiddenContext, clientMessageID string) (supervisor.SendResult, error)
+	SendMessage(ctx context.Context, msg supervisor.Message) (supervisor.SendResult, error)
 	Interrupt() (supervisor.ActionResult, supervisor.State)
 	End() (supervisor.ActionResult, supervisor.State)
+	Reset() (supervisor.ResetResult, error)
 	Subscribe(after int64, hasAfter bool, epoch string) (*supervisor.Subscription, error)
 	Unsubscribe(*supervisor.Subscription)
 }
@@ -75,7 +77,7 @@ func supervisorMutationMethods(path string) ([]string, bool) {
 	switch path {
 	case apiPathSupervisorSettings:
 		return []string{http.MethodPatch}, true
-	case apiPathSupervisorMessages, apiPathSupervisorInterrupt, apiPathSupervisorEnd:
+	case apiPathSupervisorMessages, apiPathSupervisorInterrupt, apiPathSupervisorEnd, apiPathSupervisorReset:
 		return []string{http.MethodPost}, true
 	}
 	return nil, false
@@ -120,6 +122,8 @@ func supervisorRoute(path string) (func(*apiHandler, http.ResponseWriter, *http.
 		return (*apiHandler).handleSupervisorInterrupt, http.MethodPost
 	case apiPathSupervisorEnd:
 		return (*apiHandler).handleSupervisorEnd, http.MethodPost
+	case apiPathSupervisorReset:
+		return (*apiHandler).handleSupervisorReset, http.MethodPost
 	case apiPathSupervisorEvents:
 		return (*apiHandler).handleSupervisorEvents, http.MethodGet
 	}
@@ -244,12 +248,21 @@ func (h *apiHandler) handleSupervisorMessage(w http.ResponseWriter, r *http.Requ
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
-	if strings.TrimSpace(req.Text) == "" || utf8.RuneCountInString(req.Text) > maxSupervisorMessageRunes {
-		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("text is required and must be at most 100000 characters"))
+	attachmentCount := len(req.Images) + len(req.ImageUploads) + len(req.Attachments) + len(req.AttachmentUploads)
+	if (strings.TrimSpace(req.Text) == "" && attachmentCount == 0) || utf8.RuneCountInString(req.Text) > maxSupervisorMessageRunes {
+		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("text is required unless the message has attachments and must be at most 100000 characters"))
 		return
 	}
 	if !supervisorClientMessageID.MatchString(req.ClientMessageID) {
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("client_message_id is required and must match ^[A-Za-z0-9._-]{1,128}$"))
+		return
+	}
+	// Attachments are validated (counts, paths, sizes, references) before
+	// anything is copied or sent; the copies are made by the coordinator's
+	// staging step and committed only with the user record.
+	sources, err := h.supervisorAttachmentSources(req)
+	if err != nil {
+		writeSupervisorAttachmentError(w, err)
 		return
 	}
 	// The error reference is validated and resolved against durable state
@@ -268,9 +281,18 @@ func (h *apiHandler) handleSupervisorMessage(w http.ResponseWriter, r *http.Requ
 		}
 		hiddenContext = bundle
 	}
-	res, err := h.supervisor.Send(r.Context(), req.Text, hiddenContext, req.ClientMessageID)
+	msg := supervisor.Message{Text: req.Text, HiddenContext: hiddenContext, ClientMessageID: req.ClientMessageID}
+	if len(sources) > 0 {
+		for _, src := range sources {
+			msg.Attachments = append(msg.Attachments, src.descriptor)
+		}
+		msg.Stage = h.stageSupervisorAttachments(sources)
+	}
+	res, err := h.supervisor.SendMessage(r.Context(), msg)
 	if err != nil {
-		h.writeSupervisorError(w, err)
+		if !writeSupervisorAttachmentError(w, err) {
+			h.writeSupervisorError(w, err)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, SupervisorMessageResponse{
@@ -297,6 +319,26 @@ func (h *apiHandler) handleSupervisorEnd(w http.ResponseWriter, r *http.Request)
 	}
 	result, st := h.supervisor.End()
 	writeJSON(w, http.StatusOK, SupervisorActionResponse{APIVersion: APIVersion, Result: SupervisorActionResponseResult(result), State: supervisorStateDTO(st)})
+}
+
+// handleSupervisorReset starts a new conversation. Like End it launches
+// nothing, so a closed admission boundary does not refuse it.
+func (h *apiHandler) handleSupervisorReset(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	if !decodeMutationJSON(w, r, &body) {
+		return
+	}
+	res, err := h.supervisor.Reset()
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics(err.Error()))
+		return
+	}
+	writeJSON(w, http.StatusOK, SupervisorResetResponse{
+		APIVersion:             APIVersion,
+		Result:                 SupervisorResetResponseResult(res.Result),
+		PreviousConversationID: res.PreviousConversationID,
+		State:                  supervisorStateDTO(res.State),
+	})
 }
 
 // writeSupervisorError maps the coordinator's typed refusals to their
@@ -425,6 +467,7 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 		var data supervisor.UserData
 		_ = json.Unmarshal(rec.Data, &data)
 		dto.Messages = conversationDTOs(index, roleUser, []llm.ContentBlock{{Type: blockTypeText, Text: data.Text}}, workDir, true, false, "", 0)
+		dto.Attachments = supervisorAttachmentDTOs(data.Attachments)
 	case supervisor.KindAssistant, supervisor.KindToolUse:
 		var data supervisor.ContentData
 		_ = json.Unmarshal(rec.Data, &data)
@@ -576,7 +619,9 @@ func (h *apiHandler) handleSupervisorEvents(w http.ResponseWriter, r *http.Reque
 			return
 		case ev, open := <-sub.Events():
 			if !open {
-				if !sub.Overflowed() || !reset() {
+				// A consumer that fell behind and a conversation reset both
+				// re-snapshot; any other close ends the stream.
+				if !(sub.Overflowed() || sub.ConversationReset()) || !reset() {
 					return
 				}
 				continue

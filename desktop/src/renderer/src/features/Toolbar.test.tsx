@@ -193,6 +193,34 @@ describe('Toolbar Recovery button', () => {
   });
 });
 
+describe('Toolbar page-action slot', () => {
+  it('renders the page actions before New feature and is absent when none are given', async () => {
+    const onClick = vi.fn();
+    const { container, rerender } = render(
+      <Toolbar
+        {...baseProps()}
+        showTrailing={false}
+        onNewFeature={vi.fn()}
+        pageActions={
+          <button type="button" className="toolbar__page-action" onClick={onClick}>
+            New conversation
+          </button>
+        }
+      />,
+    );
+
+    const action = screen.getByRole('button', { name: 'New conversation' });
+    const newFeature = screen.getByRole('button', { name: 'New feature' });
+    expect(action.compareDocumentPosition(newFeature)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    await userEvent.click(action);
+    expect(onClick).toHaveBeenCalledTimes(1);
+
+    rerender(<Toolbar {...baseProps()} showTrailing={false} onNewFeature={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'New conversation' })).not.toBeInTheDocument();
+    expect(container.querySelector('.toolbar__page-actions')).toBeNull();
+  });
+});
+
 describe('Toolbar new-feature button', () => {
   it('renders as a real button on the Supervisor page', async () => {
     const onNewFeature = vi.fn();

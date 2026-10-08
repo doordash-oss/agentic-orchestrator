@@ -282,6 +282,7 @@ describe('gateway API path allowlist for the supervisor namespace', () => {
       ['/api/v1/supervisor/messages', 'POST'],
       ['/api/v1/supervisor/interrupt', 'POST'],
       ['/api/v1/supervisor/end', 'POST'],
+      ['/api/v1/supervisor/reset', 'POST'],
     ] as const;
     for (const [path, method] of accepted) {
       record.urls.length = 0;
@@ -345,6 +346,15 @@ describe('gateway API path allowlist for the supervisor namespace', () => {
       ['/api/v1/supervisor/messages', 'PUT'],
       ['/api/v1/supervisor/interrupt', 'GET'],
       ['/api/v1/supervisor/end', 'DELETE'],
+      ['/api/v1/supervisor/reset', 'GET'],
+      ['/api/v1/supervisor/reset', 'PUT'],
+      ['/api/v1/supervisor/reset', 'PATCH'],
+      ['/api/v1/supervisor/reset', 'DELETE'],
+      ['/api/v1/supervisor/reset?force=1', 'POST'],
+      ['/api/v1/supervisor/reset/extra', 'POST'],
+      ['/api/v1/supervisor/./reset', 'POST'],
+      ['/api/v1/supervisor/../supervisor/reset', 'POST'],
+      ['/api/v1/supervisor/reset/..', 'POST'],
       ['/api/v1/supervisor/events', 'POST'],
       ['/api/v1/supervisor', 'GET'],
       ['/api/v1/supervisor/unknown', 'GET'],

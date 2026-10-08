@@ -72,6 +72,7 @@ const SUPERVISOR_ROUTES: Readonly<
   '/api/v1/supervisor/messages': { method: 'POST' },
   '/api/v1/supervisor/interrupt': { method: 'POST' },
   '/api/v1/supervisor/end': { method: 'POST' },
+  '/api/v1/supervisor/reset': { method: 'POST' },
   '/api/v1/supervisor/events': { method: 'GET', query: hasSupervisorEventsQuery },
 };
 

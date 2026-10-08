@@ -440,9 +440,9 @@ func decodeEntry(rec *supervisor.Record, workDir string) (entry, error) {
 			return entry{}, err
 		}
 		e := entry{rec: rec, role: roleUser}
-		if strings.TrimSpace(u.Text) != "" {
-			it, err := messageWithEvent(roleUser, "input_text", u.Text,
-				userMessageEvent{Type: "user_message", Message: u.Text, Images: []string{}})
+		if text := supervisor.RenderUserMessage(u); strings.TrimSpace(text) != "" {
+			it, err := messageWithEvent(roleUser, "input_text", text,
+				userMessageEvent{Type: "user_message", Message: text, Images: []string{}})
 			if err != nil {
 				return entry{}, conversionError(rec, "encode user message: %v", err)
 			}

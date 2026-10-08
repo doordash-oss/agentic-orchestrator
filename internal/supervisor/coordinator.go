@@ -44,6 +44,9 @@ type UserData struct {
 	// HiddenContext records that the message reached the harness with a
 	// hidden context bundle, so a resend can be told apart from a reuse.
 	HiddenContext bool `json:"hidden_context,omitempty"`
+	// Attachments lists the copies of the files attached to the message,
+	// images first; the harness sees them through RenderUserMessage.
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // ContentData is the payload of assistant, tool_use and tool_result
@@ -239,11 +242,25 @@ type launchAttempt struct {
 }
 
 type joiner struct {
-	text      string
-	hidden    string
-	cmid      string
+	text        string
+	hidden      string
+	cmid        string
+	attachments []Attachment
+	// finish commits (true) or rolls back (false) the message's staged
+	// attachments; resolve calls it before reporting the result.
+	finish    func(commit bool)
 	initiator bool
 	done      chan joinResult
+}
+
+// resolve reports the joiner's result, first committing its staged
+// attachments when its user record was appended and rolling them back
+// otherwise.
+func (j *joiner) resolve(r joinResult) {
+	if j.finish != nil {
+		j.finish(r.err == nil && r.res.Record.Seq != 0 && !r.res.Deduplicated)
+	}
+	j.done <- r
 }
 
 type joinResult struct {
@@ -583,7 +600,11 @@ func (c *Coordinator) Busy() bool {
 
 // Transcript reads one page of the durable transcript.
 func (c *Coordinator) Transcript(q PageQuery) (Page, error) {
-	return c.store.rangedPage(q)
+	// Reset swaps the store under mu.
+	c.mu.Lock()
+	store := c.store
+	c.mu.Unlock()
+	return store.rangedPage(q)
 }
 
 // UpdateSettings commits a harness choice. It is accepted only while no
@@ -932,61 +953,80 @@ func displayEffort(effort string) string {
 // context, when present, reaches the harness ahead of the visible text; the
 // committed user record holds only the visible text.
 func (c *Coordinator) Send(ctx context.Context, text, hiddenContext, clientMessageID string) (SendResult, error) {
+	return c.SendMessage(ctx, Message{Text: text, HiddenContext: hiddenContext, ClientMessageID: clientMessageID})
+}
+
+// SendMessage is Send for a message that may carry attachments. Every cheap
+// refusal (closed, dedup, settings required, turn active) happens before
+// the attachments are staged; staging then runs outside the read-model lock
+// and the refusals are checked again. The staged copies are committed only
+// when the user record is appended and rolled back on any refusal or
+// failure before that, including a failed launch or handshake.
+func (c *Coordinator) SendMessage(ctx context.Context, msg Message) (SendResult, error) {
+	if strings.TrimSpace(msg.Text) == "" && len(msg.Attachments) == 0 {
+		return SendResult{}, ErrEmptyMessage
+	}
 	c.opMu.Lock()
 	c.mu.Lock()
-	if c.closed {
+	if res, err, refused := c.refuseSendLocked(msg); refused {
 		c.mu.Unlock()
 		c.opMu.Unlock()
-		return SendResult{}, ErrClosed
+		return res, err
 	}
-	if rec, ok, err := c.matchClientMessageLocked(clientMessageID, text, hiddenContext); ok || err != nil {
+	finish := func(bool) {}
+	if msg.Stage != nil && len(msg.Attachments) > 0 {
+		dir := filepath.Join(c.dir, conversationsDir, c.conv.ConversationID, attachmentsDirName)
 		c.mu.Unlock()
-		c.opMu.Unlock()
-		return SendResult{Record: rec, Deduplicated: ok}, err
-	}
-	if !c.settings.Complete() {
-		c.mu.Unlock()
-		c.opMu.Unlock()
-		return SendResult{}, ErrSettingsRequired
+		staged, done, err := msg.Stage(dir)
+		if err != nil {
+			c.opMu.Unlock()
+			return SendResult{}, err
+		}
+		msg.Attachments = staged
+		if done != nil {
+			finish = done
+		}
+		c.mu.Lock()
+		if res, err, refused := c.refuseSendLocked(msg); refused {
+			c.mu.Unlock()
+			c.opMu.Unlock()
+			finish(false)
+			return res, err
+		}
 	}
 	switch {
 	case c.lifecycle == LifecycleStarting && c.launch != nil:
-		j := newJoiner(text, hiddenContext, clientMessageID, false)
+		j := newJoiner(msg, finish, false)
 		c.launch.joiners = append(c.launch.joiners, j)
 		c.mu.Unlock()
 		c.opMu.Unlock()
 		return j.wait(ctx)
 	case c.lifecycle == LifecycleIdle && c.session != nil:
 		defer c.opMu.Unlock()
-		if !canDeliver(c.session, hiddenContext) {
-			c.mu.Unlock()
-			return SendResult{}, ErrHiddenContextUnsupported
-		}
-		rec, _, err := c.appendUserLocked(text, hiddenContext, clientMessageID)
+		rec, _, err := c.appendUserLocked(msg.Text, msg.HiddenContext, msg.ClientMessageID, msg.Attachments)
 		if err != nil {
 			c.mu.Unlock()
+			finish(false)
 			return SendResult{}, err
 		}
 		c.lifecycle = LifecycleRunning
 		c.publishStateLocked()
 		sess := c.session
 		c.mu.Unlock()
-		if err := deliver(sess, text, hiddenContext); err != nil {
+		finish(true)
+		if err := deliver(sess, RenderUserMessage(UserData{Text: msg.Text, Attachments: msg.Attachments}), msg.HiddenContext); err != nil {
 			return SendResult{}, fmt.Errorf("deliver supervisor message: %w", err)
 		}
 		return SendResult{Record: rec}, nil
-	case c.lifecycle.inTurn():
-		c.mu.Unlock()
-		c.opMu.Unlock()
-		return SendResult{}, ErrTurnActive
 	}
 	attempt, err := c.beginLaunchLocked()
 	if err != nil {
 		c.mu.Unlock()
 		c.opMu.Unlock()
+		finish(false)
 		return SendResult{}, err
 	}
-	j := newJoiner(text, hiddenContext, clientMessageID, true)
+	j := newJoiner(msg, finish, true)
 	attempt.joiners = append(attempt.joiners, j)
 	c.mu.Unlock()
 	c.opMu.Unlock()
@@ -996,8 +1036,41 @@ func (c *Coordinator) Send(ctx context.Context, text, hiddenContext, clientMessa
 	return j.wait(ctx)
 }
 
-func newJoiner(text, hidden, cmid string, initiator bool) *joiner {
-	return &joiner{text: text, hidden: hidden, cmid: cmid, initiator: initiator, done: make(chan joinResult, 1)}
+// refuseSendLocked applies the refusals a send meets before anything is
+// staged or committed; refused reports that the send ends here with res
+// and err (a deduplicated resend ends with its committed record).
+func (c *Coordinator) refuseSendLocked(msg Message) (res SendResult, err error, refused bool) {
+	if c.closed {
+		return SendResult{}, ErrClosed, true
+	}
+	if rec, ok, err := c.matchClientMessageLocked(msg.ClientMessageID, msg.Text, msg.HiddenContext, msg.Attachments); ok || err != nil {
+		return SendResult{Record: rec, Deduplicated: ok}, err, true
+	}
+	if !c.settings.Complete() {
+		return SendResult{}, ErrSettingsRequired, true
+	}
+	switch {
+	case c.lifecycle == LifecycleStarting && c.launch != nil:
+	case c.lifecycle == LifecycleIdle && c.session != nil:
+		if !canDeliver(c.session, msg.HiddenContext) {
+			return SendResult{}, ErrHiddenContextUnsupported, true
+		}
+	case c.lifecycle.inTurn():
+		return SendResult{}, ErrTurnActive, true
+	}
+	return SendResult{}, nil, false
+}
+
+func newJoiner(msg Message, finish func(bool), initiator bool) *joiner {
+	return &joiner{
+		text:        msg.Text,
+		hidden:      msg.HiddenContext,
+		cmid:        msg.ClientMessageID,
+		attachments: msg.Attachments,
+		finish:      finish,
+		initiator:   initiator,
+		done:        make(chan joinResult, 1),
+	}
 }
 
 // canDeliver reports whether the session can carry the message's hidden
@@ -1228,8 +1301,9 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (resumeID, seedPath 
 	}
 	conversationID := c.conv.ConversationID
 	settings := c.settings
+	store := c.store
 	c.mu.Unlock()
-	records, err := c.store.after(0)
+	records, err := store.after(0)
 	if err != nil {
 		return "", "", fmt.Errorf("read transcript for rebuild: %w", err)
 	}
@@ -1237,7 +1311,7 @@ func (c *Coordinator) rebuildNative(attempt *launchAttempt) (resumeID, seedPath 
 		ConversationID:  conversationID,
 		NativeSessionID: nativeID,
 		WorkDir:         c.opts.WorkDir,
-		ConversationDir: c.store.dir,
+		ConversationDir: store.dir,
 		Model:           settings.Model,
 		Effort:          settings.Effort,
 		Records:         records,
@@ -1322,7 +1396,7 @@ func (c *Coordinator) completeLaunch(attempt *launchAttempt, sess ports.SessionV
 			results[i] = joinResult{err: ErrHiddenContextUnsupported}
 			continue
 		}
-		rec, existing, err := c.appendUserLocked(j.text, j.hidden, j.cmid)
+		rec, existing, err := c.appendUserLocked(j.text, j.hidden, j.cmid, j.attachments)
 		if err != nil {
 			results[i] = joinResult{err: err}
 			continue
@@ -1345,14 +1419,14 @@ func (c *Coordinator) completeLaunch(attempt *launchAttempt, sess ports.SessionV
 	attempt.reservation.Release()
 	go c.watchExit(sess, sessionID)
 	for _, j := range deliveries {
-		if err := deliver(sess, j.text, j.hidden); err != nil {
+		if err := deliver(sess, RenderUserMessage(UserData{Text: j.text, Attachments: j.attachments}), j.hidden); err != nil {
 			// The exit watcher reports the dead process.
 			log.Printf("supervisor: deliver message to %s: %v", sessionID, err)
 			break
 		}
 	}
 	for i, j := range attempt.joiners {
-		j.done <- results[i]
+		j.resolve(results[i])
 	}
 }
 
@@ -1413,20 +1487,21 @@ func (c *Coordinator) failLaunch(attempt *launchAttempt, cause error) {
 	c.mu.Unlock()
 	attempt.reservation.Release()
 	for _, j := range attempt.joiners {
-		j.done <- joinResult{err: &LaunchFailedError{Err: cause}}
+		j.resolve(joinResult{err: &LaunchFailedError{Err: cause}})
 	}
 }
 
 // matchClientMessageLocked compares a send against the record already
 // committed for its client message id: ok reports an identical resend, and
-// a resend whose text or hidden-context presence differs is a conflict.
-func (c *Coordinator) matchClientMessageLocked(cmid, text, hidden string) (Record, bool, error) {
+// a resend whose text, hidden-context presence or attachment list differs
+// is a conflict.
+func (c *Coordinator) matchClientMessageLocked(cmid, text, hidden string, attachments []Attachment) (Record, bool, error) {
 	rec, ok := c.store.lookupClientMessage(cmid)
 	if !ok {
 		return Record{}, false, nil
 	}
 	var data UserData
-	if err := json.Unmarshal(rec.Data, &data); err != nil || data.Text != text || data.HiddenContext != (hidden != "") {
+	if err := json.Unmarshal(rec.Data, &data); err != nil || data.Text != text || data.HiddenContext != (hidden != "") || !sameAttachments(data.Attachments, attachments) {
 		return Record{}, false, &ClientMessageConflictError{CommittedSeq: rec.Seq}
 	}
 	return rec, true, nil
@@ -1434,11 +1509,11 @@ func (c *Coordinator) matchClientMessageLocked(cmid, text, hidden string) (Recor
 
 // appendUserLocked commits a user record on a new turn, or returns the
 // record already committed for the client message id.
-func (c *Coordinator) appendUserLocked(text, hidden, cmid string) (Record, bool, error) {
-	if rec, ok, err := c.matchClientMessageLocked(cmid, text, hidden); ok || err != nil {
+func (c *Coordinator) appendUserLocked(text, hidden, cmid string, attachments []Attachment) (Record, bool, error) {
+	if rec, ok, err := c.matchClientMessageLocked(cmid, text, hidden, attachments); ok || err != nil {
 		return rec, ok, err
 	}
-	data, err := json.Marshal(UserData{Text: text, HiddenContext: hidden != ""})
+	data, err := json.Marshal(UserData{Text: text, HiddenContext: hidden != "", Attachments: attachments})
 	if err != nil {
 		return Record{}, false, err
 	}
@@ -2148,6 +2223,9 @@ type Subscription struct {
 	State    State
 	Reset    bool
 	overflow bool
+	// conversationReset marks a subscription ended because Reset retired
+	// the conversation it was bound to.
+	conversationReset bool
 }
 
 // Events returns the live event channel; it closes on unsubscribe,
@@ -2157,6 +2235,11 @@ func (s *Subscription) Events() <-chan Event { return s.ch }
 // Overflowed reports whether the subscription ended because the consumer
 // fell behind; the client must re-snapshot.
 func (s *Subscription) Overflowed() bool { return s.overflow }
+
+// ConversationReset reports whether the subscription ended because the
+// conversation was reset; the client must re-snapshot under the new
+// conversation id and stream epoch.
+func (s *Subscription) ConversationReset() bool { return s.conversationReset }
 
 // Subscribe registers a live consumer resuming after the given record seq.
 // A cursor beyond the head, a cursor more than maxReplay records behind it,

@@ -27,6 +27,7 @@ export type GlobalCommandId =
   | 'global.settings'
   | 'global.attention'
   | 'global.message-supervisor'
+  | 'global.new-conversation'
   | 'global.recovery'
   | 'global.bulk'
   | 'global.quit'
@@ -184,6 +185,16 @@ export const COMMAND_CATALOGUE: readonly CommandDescriptor[] = [
     group: 'assistant',
     accelerator: 'CommandOrControl+Shift+M',
     target: 'supervisor',
+    paletteVisible: true,
+  },
+  {
+    // Selects the Supervisor page and asks it to start a new conversation
+    // (the same handler as its toolbar button and `/new`). Deliberately no
+    // accelerator.
+    id: 'global.new-conversation',
+    label: 'New conversation',
+    group: 'assistant',
+    target: 'new-conversation',
     paletteVisible: true,
   },
   {

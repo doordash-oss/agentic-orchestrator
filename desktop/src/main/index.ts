@@ -662,6 +662,7 @@ if (!hasSingleInstanceLock) {
         generation: gateway.connectionGeneration,
       }),
       makeClientMessageId: randomUUID,
+      locality: () => gateway.connectedLocality,
     });
     const reviews = new ReviewService(gateway);
     const configService = new ConfigService(gateway);
@@ -1514,6 +1515,11 @@ if (!hasSingleInstanceLock) {
       interruptSupervisor: () => supervisor.interrupt(),
       endSupervisor: async () => {
         const result = await supervisor.end();
+        void updates.reconcileScheduledInstall();
+        return result;
+      },
+      resetSupervisor: async () => {
+        const result = await supervisor.reset();
         void updates.reconcileScheduledInstall();
         return result;
       },

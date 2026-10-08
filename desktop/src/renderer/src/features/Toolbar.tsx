@@ -24,8 +24,10 @@ limitations under the License.
  * attention bell, the
  * transient update button, the cockpit's ⋯ overflow-menu slot and an
  * inspector-toggle slot (only while a feature is selected, per the mock), and
- * the "New feature" button that closes the group on every page. Both
- * slots are chrome-owned mount points the cockpit portals its own controls
+ * the "New feature" button that closes the group on every page. A shell-owned
+ * page-action slot sits where the cockpit's actions slot would: the shell
+ * fills it for a non-feature page (the Supervisor's "New conversation").
+ * Both cockpit slots are chrome-owned mount points the cockpit portals its own controls
  * into: at wide widths the cockpit mounts a toggle button here for its
  * trailing split-view pane, and mounts nothing at narrow widths, where the
  * cockpit's own in-content "Inspector" button opens its drawer instead — so
@@ -95,6 +97,11 @@ export interface ToolbarProps {
   /** The Recovery sheet's entry point, rendered just before the bell on every page. */
   recovery?: ToolbarRecoveryProps;
   update?: ToolbarUpdateProps;
+  /**
+   * Shell-owned actions for the selected non-feature page (the Supervisor's
+   * "New conversation"), rendered where the cockpit's actions slot sits.
+   */
+  pageActions?: ReactNode;
   /** The cockpit-owned status chip, primary verbs, and completion controls portal into this node once mounted. */
   actionsSlotRef?(node: HTMLDivElement | null): void;
   /** The cockpit-owned overflow menu portals into this node once mounted. */
@@ -118,6 +125,7 @@ export function Toolbar({
   attention,
   recovery,
   update,
+  pageActions,
   actionsSlotRef,
   overflowSlotRef,
   inspectorSlotRef,
@@ -164,6 +172,9 @@ export function Toolbar({
             open={openPopover === 'update'}
             onOpenChange={(next) => setOpenPopover(next ? 'update' : null)}
           />
+        ) : null}
+        {pageActions !== undefined ? (
+          <div className="toolbar__page-actions">{pageActions}</div>
         ) : null}
         {showTrailing ? (
           <>

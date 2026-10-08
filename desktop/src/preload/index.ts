@@ -279,6 +279,7 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.supervisorMessageSend, request),
   interruptSupervisor: () => call(IPC_CHANNELS.supervisorInterrupt),
   endSupervisor: () => call(IPC_CHANNELS.supervisorEnd),
+  resetSupervisor: () => call(IPC_CHANNELS.supervisorReset),
   onSupervisorEvent: (listener: (event: SupervisorEvent) => void) => {
     const wrapped = (_event: unknown, payload: unknown): void => {
       try {

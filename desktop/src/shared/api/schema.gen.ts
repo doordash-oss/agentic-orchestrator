@@ -1340,6 +1340,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/supervisor/reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start a new supervisor conversation.
+         * @description Retires the current conversation and opens an empty one. An in-flight launch is cancelled and a live process is stopped the way `end` stops it, applying a queued settings change at exit; a cut turn is marked interrupted by the user in the old transcript and its open requests are resolved. The new conversation has a new `conversation_id`, generation 0, a fresh `stream_epoch` and no native session id; the lifecycle is `stopped` with `last_turn_outcome` `none`. Settings and the old conversation's files stay on disk untouched, and running features are never affected. Every open event stream receives `stream.reset` with `snapshot_required` under the new conversation and continues live. Returns `noop` with the current state when there is no process, no launch and the transcript is empty.
+         */
+        post: operations["resetSupervisor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/supervisor/events": {
         parameters: {
             query?: never;
@@ -1371,7 +1391,7 @@ export interface paths {
         put?: never;
         /**
          * Stage one image or attachment upload server-side.
-         * @description Accepts one file per request as a raw application/octet-stream body with metadata in the query string. Accepted bytes land in a staging directory under the server's state dir, keyed by an opaque, unguessable, single-use reference; the client-supplied name is kept as metadata only and never becomes an on-disk name. Image uploads require a png, jpg, jpeg, gif, or webp file name extension and are capped at 10 MiB; attachment uploads accept any bytes and are capped at 25 MiB. References are consumed by the image_uploads / attachment_uploads fields of the feature-creation and refactor-launch mutations and expire 24 hours after staging.
+         * @description Accepts one file per request as a raw application/octet-stream body with metadata in the query string. Accepted bytes land in a staging directory under the server's state dir, keyed by an opaque, unguessable, single-use reference; the client-supplied name is kept as metadata only and never becomes an on-disk name. Image uploads require a png, jpg, jpeg, gif, or webp file name extension and are capped at 10 MiB; attachment uploads accept any bytes and are capped at 25 MiB. References are consumed by the image_uploads / attachment_uploads fields of the feature-creation and refactor-launch mutations and of the supervisor message route (POST /api/v1/supervisor/messages), and expire 24 hours after staging.
          */
         post: operations["stageUpload"];
         delete?: never;
@@ -2805,6 +2825,16 @@ export interface components {
         };
         /** @enum {string} */
         SupervisorRecordKind: "user" | "assistant" | "tool_use" | "tool_result" | "permission" | "question" | "marker" | "note" | "checkpoint";
+        SupervisorAttachment: {
+            /** @description Absolute server-local path of the conversation copy. */
+            path: string;
+            /** @enum {string} */
+            kind: "image" | "file";
+            /** @description Original file name, for display. */
+            name: string;
+            /** Format: int64 */
+            size: number;
+        };
         /** @enum {string} */
         SupervisorRecordVisibility: "content" | "model_only" | "display_only";
         /** @description Request or verdict carried by `permission` and `question` records. */
@@ -2869,6 +2899,8 @@ export interface components {
             client_message_id?: string;
             stream_message_id?: string;
             messages: components["schemas"]["TranscriptMessage"][];
+            /** @description Files attached to a user record, in harness order (images, then files); each path names the copy under the conversation's `attachments/` directory. */
+            attachments?: components["schemas"]["SupervisorAttachment"][];
             request?: components["schemas"]["SupervisorRequestRecord"];
             marker?: components["schemas"]["SupervisorMarkerRecord"];
             checkpoint?: components["schemas"]["SupervisorCheckpointRecord"];
@@ -2892,8 +2924,17 @@ export interface components {
             /** Format: int64 */
             head_seq: number;
         };
+        /** @description One user message. `text` may be blank only when at least one attachment is present. Attachments arrive as absolute server-local paths (`images`, `attachments`) or as staged upload references (`image_uploads`, `attachment_uploads`); the combined caps are 12 images and 24 files, at most 10 MiB per image and 25 MiB per file. Every attached file is copied into the conversation's `attachments/` directory and the committed user record references only those copies; staged references are consumed only when the user record is committed, so a refused or failed send leaves them valid for a retry. */
         SupervisorMessageRequest: {
             text: string;
+            /** @description Absolute server-local image paths. */
+            images?: string[];
+            /** @description Staged image upload references. */
+            image_uploads?: string[];
+            /** @description Absolute server-local file paths. */
+            attachments?: string[];
+            /** @description Staged attachment upload references. */
+            attachment_uploads?: string[];
             client_message_id: string;
             error_reference?: components["schemas"]["ErrorReference"];
         };
@@ -2902,13 +2943,24 @@ export interface components {
             record: components["schemas"]["SupervisorRecord"];
             /** @description True when this send launched the supervisor process. */
             launched: boolean;
-            /** @description True when the `client_message_id` was already committed with the same text and error reference; nothing was appended or delivered. */
+            /** @description True when the `client_message_id` was already committed with the same text, error reference and attachments; nothing was appended or delivered. */
             deduplicated: boolean;
         };
         SupervisorActionResponse: {
             api_version: string;
             /** @enum {string} */
             result: "accepted" | "ended" | "not_active";
+            state: components["schemas"]["SupervisorState"];
+        };
+        SupervisorResetResponse: {
+            api_version: string;
+            /**
+             * @description `reset` when a new conversation was opened; `noop` when there was no process, no launch and an empty transcript.
+             * @enum {string}
+             */
+            result: "reset" | "noop";
+            /** @description The conversation current when the request arrived; equals `state.conversation_id` for `noop`. */
+            previous_conversation_id: string;
             state: components["schemas"]["SupervisorState"];
         };
         /** @description Non-persisted streaming text for a provisional assistant row. */
@@ -4010,6 +4062,15 @@ export interface components {
             };
             content: {
                 "application/json": components["schemas"]["SupervisorActionResponse"];
+            };
+        };
+        /** @description Supervisor new-conversation result. */
+        SupervisorResetResponse: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["SupervisorResetResponse"];
             };
         };
         /** @description Supervisor SSE stream carrying `SupervisorStreamEvent` JSON payloads. */
@@ -5560,6 +5621,23 @@ export interface operations {
         responses: {
             200: components["responses"]["SupervisorActionResponse"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    resetSupervisor: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: components["requestBodies"]["JSONMutation"];
+        responses: {
+            200: components["responses"]["SupervisorResetResponse"];
+            401: components["responses"]["Unauthorized"];
+            500: components["responses"]["ErrorResponse"];
         };
     };
     streamSupervisorEvents: {

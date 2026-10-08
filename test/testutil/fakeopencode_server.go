@@ -667,6 +667,31 @@ func fakeSeedSummary(text string) (int, string) {
 	return n, first
 }
 
+// fakeSeedFirstPrompt returns the whole first user entry of a seed: the
+// text after the first user label plus its continuation lines, which the
+// seed renderer indents by two spaces (a multi-line prompt, such as one
+// carrying an attachment block).
+func fakeSeedFirstPrompt(text string) string {
+	var lines []string
+	inFirst := false
+	for line := range strings.SplitSeq(text, "\n") {
+		lower := strings.ToLower(strings.TrimSpace(line))
+		if inFirst {
+			if !strings.HasPrefix(line, "  ") {
+				break
+			}
+			lines = append(lines, strings.TrimRight(line[2:], " "))
+			continue
+		}
+		if strings.HasPrefix(lower, "user:") {
+			trimmed := strings.TrimSpace(line)
+			lines = append(lines, strings.TrimSpace(trimmed[len("user:"):]))
+			inFirst = true
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 func fakeSeedLastExchange(text string) (string, string) {
 	var user, assistant string
 	for line := range strings.SplitSeq(text, "\n") {
@@ -763,7 +788,7 @@ func (t *fakeOpenCodeTurn) run(text string, seed *FakeOpenCodeSeed) {
 	case strings.Contains(text, FakeSupervisorRecallFirst):
 		first := ""
 		if history != nil {
-			_, first = fakeSeedSummary(history.Text)
+			first = fakeSeedFirstPrompt(history.Text)
 		}
 		t.message("First user prompt: " + first)
 	case strings.Contains(text, FakeSupervisorRecallLast):

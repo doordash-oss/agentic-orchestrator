@@ -88,6 +88,7 @@ import {
   type SessionOutputOpenRequest,
   type SessionOutputEvent,
   type SupervisorActionResult,
+  type SupervisorResetResult,
   type SupervisorMessageRequest,
   type SupervisorMessageResult,
   type SupervisorSettingsRequest,
@@ -236,6 +237,7 @@ export interface IpcServices {
   sendSupervisorMessage(request: SupervisorMessageRequest): Promise<SupervisorMessageResult>;
   interruptSupervisor(): Promise<SupervisorActionResult>;
   endSupervisor(): Promise<SupervisorActionResult>;
+  resetSupervisor(): Promise<SupervisorResetResult>;
   getCreationDefaults(): Promise<CreationDefaults>;
   inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
   checkRepositoryOriginStatus(
@@ -476,6 +478,7 @@ export function registerIpcHandlers(
       services.sendSupervisorMessage(request),
     [IPC_CHANNELS.supervisorInterrupt]: () => services.interruptSupervisor(),
     [IPC_CHANNELS.supervisorEnd]: () => services.endSupervisor(),
+    [IPC_CHANNELS.supervisorReset]: () => services.resetSupervisor(),
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
     [IPC_CHANNELS.creationSources]: (_event, request: RepositorySourcesRequest) =>
       services.inspectRepositorySources(request),

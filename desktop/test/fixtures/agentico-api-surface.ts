@@ -126,6 +126,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'removeServer',
   'removeWorkspaceRoot',
   'reorderWorkspaceRoots',
+  'resetSupervisor',
   'resolveGate',
   'restartConnection',
   'restartToUpdate',

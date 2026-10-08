@@ -46,6 +46,7 @@ type recordingSupervisor struct {
 	hidden    []string
 	interrupt int
 	ends      int
+	resets    int
 	err       error
 	busy      bool
 	dedup     bool
@@ -117,6 +118,10 @@ func TestSupervisorRoutes_CancelPendingChange(t *testing.T) {
 	serveSupervisor(t, h, supervisorRequest(http.MethodDelete, apiPathSupervisorPendingChange+"bad/id", ""), http.StatusNotFound, nil)
 }
 
+func (s *recordingSupervisor) SendMessage(ctx context.Context, msg supervisor.Message) (supervisor.SendResult, error) {
+	return s.Send(ctx, msg.Text, msg.HiddenContext, msg.ClientMessageID)
+}
+
 func (s *recordingSupervisor) Send(_ context.Context, text, hiddenContext, cmid string) (supervisor.SendResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,6 +151,21 @@ func (s *recordingSupervisor) End() (supervisor.ActionResult, supervisor.State) 
 	s.ends++
 	s.state.Lifecycle = supervisor.LifecycleStopped
 	return supervisor.ActionEnded, s.state
+}
+
+func (s *recordingSupervisor) Reset() (supervisor.ResetResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resets++
+	if s.err != nil {
+		return supervisor.ResetResult{}, s.err
+	}
+	previous := s.state.ConversationID
+	if s.state.HeadSeq == 0 && s.state.Lifecycle == supervisor.LifecycleStopped {
+		return supervisor.ResetResult{Result: supervisor.ResetNoop, PreviousConversationID: previous, State: s.state}, nil
+	}
+	s.state = supervisor.State{ConversationID: previous + "-next", Lifecycle: supervisor.LifecycleStopped, LastTurnOutcome: supervisor.OutcomeNone, Settings: s.state.Settings, StreamEpoch: "epoch-next"}
+	return supervisor.ResetResult{Result: supervisor.ResetDone, PreviousConversationID: previous, State: s.state}, nil
 }
 
 func (s *recordingSupervisor) Subscribe(int64, bool, string) (*supervisor.Subscription, error) {
@@ -428,6 +448,10 @@ func TestSupervisorRoutes_ClosedAdmissionRefusesMessagesButNotEnd(t *testing.T) 
 		t.Fatal("closed admission reached the coordinator")
 	}
 	serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorEnd, `{}`), http.StatusOK, nil)
+	serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorReset, `{}`), http.StatusOK, nil)
+	if svc.resets != 1 {
+		t.Fatalf("reset under closed admission reached the coordinator %d times, want 1", svc.resets)
+	}
 }
 
 func TestSupervisorRoutes_UnavailableWithoutService(t *testing.T) {
@@ -441,6 +465,7 @@ func TestSupervisorMutationPreflightListsOnlyAllowedMethods(t *testing.T) {
 		apiPathSupervisorMessages:  http.MethodPost,
 		apiPathSupervisorInterrupt: http.MethodPost,
 		apiPathSupervisorEnd:       http.MethodPost,
+		apiPathSupervisorReset:     http.MethodPost,
 	} {
 		methods, ok := mutationRouteMethods(path)
 		if !ok || len(methods) != 1 || methods[0] != want {

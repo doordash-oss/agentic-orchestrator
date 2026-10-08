@@ -180,6 +180,23 @@ describe('application menu structure', () => {
     expect(recovery?.accelerator).toBeUndefined();
   });
 
+  it('lists New conversation in Navigate after Message the supervisor, gated on readiness', () => {
+    const navigate = submenuOf(
+      buildApplicationMenuTemplate(deps(disabledMainWindowUiState())),
+      'Navigate',
+    );
+    const ids = navigate.map((item) => item.id);
+    expect(ids.indexOf('global.new-conversation')).toBe(
+      ids.indexOf('global.message-supervisor') + 1,
+    );
+    const item = navigate.find((entry) => entry.id === 'global.new-conversation');
+    expect(item?.label).toBe('New conversation');
+    expect(item?.accelerator).toBeUndefined();
+    expect(item?.enabled).toBe(false);
+    const ready = submenuOf(buildApplicationMenuTemplate(deps(selected([]))), 'Navigate');
+    expect(ready.find((entry) => entry.id === 'global.new-conversation')?.enabled).toBe(true);
+  });
+
   it('lists the fifteen feature verbs in catalogue order', () => {
     const feature = submenuOf(
       buildApplicationMenuTemplate(deps(disabledMainWindowUiState())),
@@ -279,6 +296,7 @@ describe('application menu dispatch', () => {
       ['global.home', 'home'],
       ['global.switch-server', 'switch-server'],
       ['global.attention', 'attention'],
+      ['global.new-conversation', 'new-conversation'],
       ['global.recovery', 'recovery'],
       ['global.bulk', 'bulk'],
     ] as const) {

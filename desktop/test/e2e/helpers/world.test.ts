@@ -30,6 +30,7 @@ import {
   SUPERVISOR_E2E_OPERATE_STARTED_REPLY,
   supervisorOperateCreatedReply,
   supervisorOperateCreateMarker,
+  supervisorStubAttachmentLogLines,
   supervisorStubPartialReply,
   supervisorStubReply,
   supervisorStubResumedReply,
@@ -381,6 +382,58 @@ test('supervisor stub commits partial text, then holds the turn without a result
     stub.write({ type: 'control_request', request_id: 'stop', request: { subtype: 'interrupt' } });
     const [interrupted] = await stub.next(1);
     expect(interrupted).toMatchObject({ type: 'result', is_error: true });
+  } finally {
+    stub.child.kill('SIGKILL');
+    stub.lines.close();
+    destroyWorld(world);
+  }
+});
+
+test('supervisor stub logs each attached path with its first line', async () => {
+  const world = createWorld('supervisor-attachments', { supervisorProvider: true });
+  const attachments = path.join(world.root, 'conversation', 'attachments');
+  fs.mkdirSync(attachments, { recursive: true });
+  const image = path.join(attachments, '0123456789abcdef0123456789abcdef.png');
+  const notes = path.join(attachments, 'fedcba9876543210fedcba9876543210.txt');
+  const missing = path.join(attachments, '00112233445566778899aabbccddeeff.md');
+  fs.writeFileSync(image, 'PNG header line\n\u0000binary');
+  fs.writeFileSync(notes, 'Notes first line\nsecond line\n');
+  const stub = driveStub(world.claudeStub, { PATH: '/usr/bin:/bin', HOME: world.home });
+  try {
+    stub.write({ type: 'control_request', request_id: 'init', request: { subtype: 'initialize' } });
+    await stub.next(2);
+    stub.write({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          'Review these',
+          '',
+          'Attached Images:',
+          `- [Image #1]: ${image}`,
+          '',
+          'Attached Files:',
+          `- [notes.txt]: ${notes}`,
+          `- [spec.md]: ${missing}`,
+        ].join('\n'),
+      },
+    });
+    const reply = await stub.next(5);
+    expect(JSON.stringify(reply[3])).toContain(supervisorStubReply(1));
+    // A blank-text message is only the block; block content arrays work too.
+    stub.write(userTurn(`Attached Files:\n- [notes.txt]: ${notes}`));
+    await stub.next(5);
+    stub.write(userTurn('no attachments, only a mention of Attached Files: in prose'));
+    await stub.next(5);
+    const log = fs.readFileSync(world.providerInvocationLog, 'utf8').split('\n');
+    const attachmentLines = log.filter((line) => line.startsWith('attachment'));
+    expect(attachmentLines).toEqual([
+      ...supervisorStubAttachmentLogLines(1, image, 'PNG header line'),
+      ...supervisorStubAttachmentLogLines(1, notes, 'Notes first line'),
+      `attachment:1:${missing}`,
+      `attachment-unreadable:1:${missing}`,
+      ...supervisorStubAttachmentLogLines(2, notes, 'Notes first line'),
+    ]);
   } finally {
     stub.child.kill('SIGKILL');
     stub.lines.close();

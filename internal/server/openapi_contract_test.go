@@ -672,6 +672,7 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodPost, path: apiPathSupervisorMessages, mutation: true},
 		{method: httpMethodPost, path: apiPathSupervisorInterrupt, mutation: true},
 		{method: httpMethodPost, path: apiPathSupervisorEnd, mutation: true},
+		{method: httpMethodPost, path: apiPathSupervisorReset, mutation: true},
 		{method: httpMethodGet, path: apiPathSupervisorEvents, sse: true},
 	}
 }

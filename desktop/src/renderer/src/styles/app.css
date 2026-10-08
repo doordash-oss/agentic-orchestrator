@@ -166,10 +166,30 @@ body {
   gap: var(--space-2);
 }
 
+.toolbar__page-actions,
 .toolbar__actions-slot,
 .toolbar__overflow-slot,
 .toolbar__inspector-slot {
   display: contents;
+}
+
+/* A page's own text action in the toolbar (the Supervisor's "New
+ * conversation"): the "New feature" button's metrics with the quiet
+ * treatment of the icon buttons beside it, so the accent stays unique. */
+.toolbar__page-action {
+  flex: 0 0 auto;
+  padding: 6px var(--space-3);
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.toolbar__page-action:hover {
+  background: var(--raised);
+  color: var(--text);
 }
 
 /* The cockpit portals its status chip, contextual primary verbs, and
@@ -608,6 +628,11 @@ body {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* A sent message's attachments: the composer's chips, read-only. */
+.conversation__attachments {
+  margin-top: 4px;
 }
 
 /* An automatic choice is provenance, not intervention: an inset card in the
@@ -13773,6 +13798,91 @@ body {
 }
 .supervisor-pending-tray button:focus-visible {
   outline: 2px solid var(--accent);
+}
+
+/* The queue strip: messages waiting for the turn to end, stacked like slips
+ * tucked above the composer. Quieter than the pending-change tray (no accent
+ * rule) since nothing here needs a decision; order is real, so each slip
+ * carries its delivery position, and "Next" marks a Send now. */
+.supervisor-queue {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: color-mix(in srgb, var(--raised) 70%, transparent);
+}
+
+.supervisor-queue__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.supervisor-queue__item {
+  display: grid;
+  grid-template-columns: 2.5em minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.supervisor-queue__item + .supervisor-queue__item {
+  border-top: var(--bench-hairline-width) dashed var(--hairline);
+}
+
+.supervisor-queue__order {
+  font: 600 11px var(--bench-font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.supervisor-queue__item[data-next='true'] .supervisor-queue__order {
+  color: var(--accent);
+}
+
+.supervisor-queue__text {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervisor-queue__count {
+  white-space: nowrap;
+}
+
+.supervisor-queue__actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.supervisor-queue__actions button {
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  padding: 2px 6px;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.supervisor-queue__actions button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.supervisor-queue__actions button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.supervisor-queue__error {
+  grid-column: 2 / -1;
+}
+
+.supervisor-composer__blocked {
+  margin: 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
 }
 
 .supervisor-composer {

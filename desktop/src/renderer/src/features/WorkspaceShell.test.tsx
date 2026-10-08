@@ -2318,6 +2318,44 @@ describe('WorkspaceShell Supervisor row', () => {
     expect(mock.api.updateSettings).not.toHaveBeenCalled();
   });
 
+  it('offers New conversation in the toolbar only while the Supervisor is selected', async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' });
+    installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(feature)],
+      feature,
+    });
+    render(<WorkspaceShell />);
+    const user = userEvent.setup();
+    const toolbar = await screen.findByRole('banner', { name: 'Workspace toolbar' });
+    await screen.findByRole('option', { name: /Search revamp/ });
+    expect(within(toolbar).queryByRole('button', { name: 'New conversation' })).toBeNull();
+
+    await user.click(screen.getByRole('option', { name: 'Supervisor' }));
+    const button = await within(toolbar).findByRole('button', { name: 'New conversation' });
+    expect(button).toHaveClass('toolbar__page-action');
+    expect(button).toHaveTextContent('New conversation');
+  });
+
+  it('routes a new-conversation request onto the Supervisor page from a feature', async () => {
+    const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' });
+    const mock = installAgenticoMock({
+      settings: settingsWithActive(FEATURE_ID),
+      features: [summaryOf(feature)],
+      feature,
+    });
+    const { rerender } = render(<WorkspaceShell />);
+    await screen.findByRole('option', { name: /Search revamp/ });
+
+    rerender(<WorkspaceShell routeRequest={{ id: 41, event: { target: 'new-conversation' } }} />);
+    await waitFor(() =>
+      expect(mock.api.updateSettings).toHaveBeenCalledWith({
+        shell: { setActiveFeature: { serverKey: 'default-runtime', featureId: null } },
+      }),
+    );
+    expect(await screen.findByRole('region', { name: 'Supervisor' })).toBeVisible();
+  });
+
   it('clears a persisted feature when Supervisor is chosen, so a relaunch opens on Supervisor', async () => {
     const feature = featureSnapshot({ id: FEATURE_ID, name: 'Search revamp' });
     const mock = installAgenticoMock({

@@ -327,8 +327,8 @@ func decodeEntry(rec *supervisor.Record, toolNames map[string]string) (entry, er
 			return entry{}, err
 		}
 		e := entry{rec: rec, role: roleUser}
-		if strings.TrimSpace(u.Text) != "" {
-			e.lines = append(e.lines, line{kind: lineMessage, text: labelled("User", clip(u.Text, maxTextChars))})
+		if text := supervisor.RenderUserMessage(u); strings.TrimSpace(text) != "" {
+			e.lines = append(e.lines, line{kind: lineMessage, text: labelled("User", clip(text, maxTextChars))})
 		}
 		return e, nil
 	}

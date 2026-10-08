@@ -450,7 +450,22 @@ export function ConversationTranscript({
             <span className="conversation__message-role">
               {item.role === 'user' ? 'You' : assistantName}
             </span>
-            <p>{item.text}</p>
+            {item.text !== '' ? <p>{item.text}</p> : null}
+            {item.attachments !== undefined && item.attachments.length > 0 ? (
+              <ol className="composer__chips conversation__attachments" aria-label="Attachments">
+                {item.attachments.map((attachment, index) => (
+                  <li
+                    key={`${String(index)}:${attachment.name}`}
+                    className="composer__chip"
+                    data-kind={attachment.kind === 'image' ? 'image' : 'attachment'}
+                  >
+                    <span>
+                      {attachment.kind === 'image' ? '🖼' : '📎'} {attachment.name}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
             {item.footer !== undefined ? (
               <span className="conversation__message-footer">{item.footer}</span>
             ) : null}

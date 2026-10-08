@@ -289,6 +289,13 @@ function makeServices(): IpcServices {
     endSupervisor: vi.fn(() =>
       Promise.resolve({ result: 'not_active' as const, state: supervisorState() }),
     ),
+    resetSupervisor: vi.fn(() =>
+      Promise.resolve({
+        result: 'reset' as const,
+        previousConversationId: 'conv-0',
+        state: supervisorState(),
+      }),
+    ),
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],
@@ -857,6 +864,124 @@ describe('registerIpcHandlers', () => {
       ok: true,
       value: { result: 'not_active' },
     });
+    await expect(handlers.get(IPC_CHANNELS.supervisorReset)!(goodEvent)).resolves.toMatchObject({
+      ok: true,
+      value: { result: 'reset', previousConversationId: 'conv-0' },
+    });
+  });
+
+  it('supervisor reset takes no arguments and never leaks extra response fields', async () => {
+    const { handlers, services } = register();
+    const withArgs = (await handlers.get(IPC_CHANNELS.supervisorReset)!(goodEvent, {
+      conversationId: 'conv-9',
+    })) as { ok: boolean };
+    expect(withArgs.ok).toBe(false);
+    const untrusted = (await handlers.get(IPC_CHANNELS.supervisorReset)!(foreignEvent)) as {
+      ok: boolean;
+      error?: { code: string };
+    };
+    expect(untrusted.error?.code).toBe('E_UNTRUSTED_SENDER');
+    expect(services.resetSupervisor).not.toHaveBeenCalled();
+
+    const smuggling = makeServices();
+    smuggling.resetSupervisor = vi.fn(() =>
+      Promise.resolve({
+        result: 'noop' as const,
+        previousConversationId: 'conv-1',
+        state: supervisorState(),
+        authToken: 'tok-leak',
+      } as Awaited<ReturnType<IpcServices['resetSupervisor']>>),
+    );
+    const leaked = (await register(smuggling).handlers.get(IPC_CHANNELS.supervisorReset)!(
+      goodEvent,
+    )) as { ok: boolean };
+    expect(leaked.ok).toBe(false);
+    expect(JSON.stringify(leaked)).not.toContain('tok-leak');
+  });
+
+  it('supervisor message send carries absolute attachment paths and staged refs only', async () => {
+    const { handlers, services } = register();
+    const accepted = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+      text: '',
+      images: ['/Users/me/shot.png'],
+      attachments: ['/Users/me/notes.txt'],
+    })) as { ok: boolean };
+    expect(accepted.ok).toBe(true);
+    expect(services.sendSupervisorMessage).toHaveBeenLastCalledWith({
+      text: '',
+      images: ['/Users/me/shot.png'],
+      attachments: ['/Users/me/notes.txt'],
+    });
+    const staged = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+      text: 'look',
+      imageUploads: ['0123456789abcdef0123456789abcdef'],
+      attachmentUploads: ['fedcba9876543210fedcba9876543210'],
+    })) as { ok: boolean };
+    expect(staged.ok).toBe(true);
+    expect(services.sendSupervisorMessage).toHaveBeenCalledTimes(2);
+
+    const rejected = [
+      // Blank text needs at least one attachment.
+      { text: '', images: [] },
+      // Relative, NUL-carrying or newline-carrying paths never cross.
+      { text: 'hi', images: ['shots/one.png'] },
+      { text: 'hi', attachments: ['./notes.txt'] },
+      { text: 'hi', attachments: ['/tmp/a\nb'] },
+      // Wire-shaped and unknown fields are refused, never forwarded.
+      { text: 'hi', image_uploads: ['ref'] },
+      { text: 'hi', attachment_uploads: ['ref'] },
+      { text: 'hi', files: ['/tmp/a'] },
+      // Caps hold for paths and refs combined.
+      {
+        text: 'hi',
+        images: Array.from({ length: 6 }, (_, i) => `/shots/${String(i)}.png`),
+        imageUploads: Array.from({ length: 7 }, (_, i) => `ref-${String(i)}`),
+      },
+      { text: 'hi', attachments: Array.from({ length: 25 }, (_, i) => `/f/${String(i)}`) },
+    ];
+    for (const payload of rejected) {
+      const result = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(
+        goodEvent,
+        payload,
+      )) as { ok: boolean };
+      expect(result.ok, JSON.stringify(payload)).toBe(false);
+    }
+    expect(services.sendSupervisorMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it('supervisor records carry attachments without leaking bearer material', async () => {
+    const attachment = {
+      path: '/state/conversations/conv-1/attachments/a1.png',
+      kind: 'image' as const,
+      name: 'shot.png',
+      size: 12,
+    };
+    const services = makeServices();
+    services.sendSupervisorMessage = vi
+      .fn()
+      .mockResolvedValueOnce({
+        record: { ...supervisorRecord('look'), attachments: [attachment] },
+        launched: false,
+        deduplicated: false,
+      })
+      .mockResolvedValueOnce({
+        record: {
+          ...supervisorRecord('look'),
+          attachments: [{ ...attachment, authorization: 'Bearer tok-leak' }],
+        },
+        launched: false,
+        deduplicated: false,
+      });
+    const { handlers } = register(services);
+
+    await expect(
+      handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, { text: 'look' }),
+    ).resolves.toMatchObject({ ok: true, value: { record: { attachments: [attachment] } } });
+    const leaked = (await handlers.get(IPC_CHANNELS.supervisorMessageSend)!(goodEvent, {
+      text: 'look',
+    })) as { ok: boolean };
+    expect(leaked.ok).toBe(false);
+    expect(JSON.stringify(leaked)).not.toContain('tok-leak');
   });
 
   it('supervisor handlers fail closed on malformed requests and untrusted senders', async () => {

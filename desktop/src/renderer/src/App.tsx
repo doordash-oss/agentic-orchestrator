@@ -32,6 +32,10 @@ import { emptyAttentionDrafts, type AttentionDrafts } from './features/Attention
 import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
 import { ExplainChatProvider } from './explainChat';
 import { CreationDraftsContext, CreationDraftsStore } from './features/creationDrafts';
+import {
+  SupervisorDraftsContext,
+  SupervisorDraftsStore,
+} from './features/supervisor/supervisorDrafts';
 
 export default function App() {
   // Called purely for its side effect (mirroring the resolved theme onto
@@ -92,6 +96,15 @@ export default function App() {
   const creationDraftsStore = useRef<CreationDraftsStore | null>(null);
   if (creationDraftsStore.current === null) {
     creationDraftsStore.current = new CreationDraftsStore();
+  }
+  /**
+   * Supervisor composer drafts (text, error reference, attachments, queue)
+   * per server, beside the creation drafts and just as in-memory: they
+   * survive opening a feature and switching servers, never a relaunch.
+   */
+  const supervisorDraftsStore = useRef<SupervisorDraftsStore | null>(null);
+  if (supervisorDraftsStore.current === null) {
+    supervisorDraftsStore.current = new SupervisorDraftsStore();
   }
 
   /**
@@ -214,48 +227,54 @@ export default function App() {
     // drilling the root requester through panels.
     <ExplainChatProvider requestRoute={runtimeReady ? requestRoute : null}>
       <CreationDraftsContext.Provider value={creationDraftsStore.current}>
-        <div className="app-frame">
-          {runtimeReady ? (
-            <ReadinessGate
-              key={serverKey}
-              attentionItems={attentionItems}
-              refreshAttention={refreshAttention}
-              attentionDrafts={attentionDrafts}
-              setAttentionDrafts={setAttentionDrafts}
-              attentionJump={attentionJump}
-              onAttentionJumpHandled={() => setAttentionJump(null)}
-              routeRequest={routeRequest}
-              onAttentionJump={(featureId, attentionId) => {
-                routeSequence.current += 1;
-                setAttentionJump({
-                  requestId: routeSequence.current,
-                  featureId,
-                  ...(attentionId === undefined ? {} : { attentionId }),
-                });
-              }}
-              updateState={updateState}
-              updateDismissedVersion={updateDismissedVersion}
-              schedulingUpdate={schedulingUpdate}
-              onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
-              onOpenUpdatesSettings={() =>
-                requestRoute({ target: 'settings', settingsSection: 'updates' })
-              }
-              onOpenPalette={() => requestRoute({ target: 'palette' })}
-              onInstallUpdateWhenIdle={async () => {
-                try {
-                  setSchedulingUpdate(true);
-                  setUpdateState(await window.agentico.installUpdateWhenIdle());
-                } finally {
-                  setSchedulingUpdate(false);
+        <SupervisorDraftsContext.Provider value={supervisorDraftsStore.current}>
+          <div className="app-frame">
+            {runtimeReady ? (
+              <ReadinessGate
+                key={serverKey}
+                attentionItems={attentionItems}
+                refreshAttention={refreshAttention}
+                attentionDrafts={attentionDrafts}
+                setAttentionDrafts={setAttentionDrafts}
+                attentionJump={attentionJump}
+                onAttentionJumpHandled={() => setAttentionJump(null)}
+                routeRequest={routeRequest}
+                onAttentionJump={(featureId, attentionId) => {
+                  routeSequence.current += 1;
+                  setAttentionJump({
+                    requestId: routeSequence.current,
+                    featureId,
+                    ...(attentionId === undefined ? {} : { attentionId }),
+                  });
+                }}
+                updateState={updateState}
+                updateDismissedVersion={updateDismissedVersion}
+                schedulingUpdate={schedulingUpdate}
+                onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
+                onOpenUpdatesSettings={() =>
+                  requestRoute({ target: 'settings', settingsSection: 'updates' })
                 }
-              }}
+                onOpenPalette={() => requestRoute({ target: 'palette' })}
+                onInstallUpdateWhenIdle={async () => {
+                  try {
+                    setSchedulingUpdate(true);
+                    setUpdateState(await window.agentico.installUpdateWhenIdle());
+                  } finally {
+                    setSchedulingUpdate(false);
+                  }
+                }}
+              />
+            ) : (
+              <ConnectionShell />
+            )}
+            <CommandPalette
+              ready={runtimeReady}
+              routeRequest={routeRequest}
+              onRoute={requestRoute}
             />
-          ) : (
-            <ConnectionShell />
-          )}
-          <CommandPalette ready={runtimeReady} routeRequest={routeRequest} onRoute={requestRoute} />
-          <HelpOverlay routeRequest={routeRequest} />
-        </div>
+            <HelpOverlay routeRequest={routeRequest} />
+          </div>
+        </SupervisorDraftsContext.Provider>
       </CreationDraftsContext.Provider>
     </ExplainChatProvider>
   );

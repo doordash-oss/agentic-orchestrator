@@ -35,6 +35,8 @@ import {
 import { EFFORT_LABELS } from '../ConfigEditor';
 import {
   buildConversation,
+  messageKey,
+  type ConversationAttachment,
   type ConversationItem,
   type ConversationNoticeTone,
 } from '../transcript/conversation';
@@ -345,9 +347,19 @@ export function markerNoticeText(marker: SupervisorMarker): string {
   }
 }
 
+/** A record's attachments as transcript chips (display name and kind only). */
+export function recordAttachmentChips(record: SupervisorRecord): ConversationAttachment[] {
+  return (record.attachments ?? []).map((attachment) => ({
+    kind: attachment.kind,
+    name: attachment.name,
+  }));
+}
+
 export interface SupervisorConversationOptions {
   /** The just-sent text, shown until its committed record arrives. */
   optimistic?: string | null;
+  /** The just-sent message's attachments, chips under the optimistic row. */
+  optimisticAttachments?: readonly ConversationAttachment[];
   provisional?: readonly ProvisionalReply[];
 }
 
@@ -387,9 +399,18 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
   };
   let segment: TranscriptMessage[] = [];
   let segmentTurn = '';
+  // A user message row's key -> its record's attachment chips. The record's
+  // text is the visible text only; the chips stand for the attachments.
+  const attachmentsByKey = new Map<string, readonly ConversationAttachment[]>();
   const flush = (): void => {
     if (segment.length === 0) return;
-    push(segmentTurn, buildConversation(segment, { mode: 'chat' }));
+    push(
+      segmentTurn,
+      buildConversation(segment, { mode: 'chat' }).map((item) => {
+        const attachments = item.kind === 'message' ? attachmentsByKey.get(item.key) : undefined;
+        return attachments === undefined ? item : { ...item, attachments };
+      }),
+    );
     segment = [];
   };
   const footInterrupted = (turnId: string): void => {
@@ -425,6 +446,28 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
       continue;
     }
     if (!isRequestRecord(record)) {
+      const chips = record.kind === 'user' ? recordAttachmentChips(record) : [];
+      if (chips.length > 0) {
+        const visible = record.messages.find(
+          (message) =>
+            message.role.toLocaleLowerCase() === 'user' && (message.text?.trim() ?? '') !== '',
+        );
+        if (visible === undefined) {
+          // An attachments-only message: its row is the chips alone.
+          flush();
+          push(record.turnId, [
+            {
+              kind: 'message',
+              key: `message-attachments-${String(record.seq)}`,
+              role: 'user',
+              text: '',
+              attachments: chips,
+            },
+          ]);
+          continue;
+        }
+        attachmentsByKey.set(`message-${messageKey(visible)}`, chips);
+      }
       if (record.turnId !== segmentTurn) flush();
       segmentTurn = record.turnId;
       segment.push(...record.messages);
@@ -487,8 +530,15 @@ export function supervisorConversationTail(
   }
 
   const optimistic = options.optimistic?.trim();
-  if (optimistic !== undefined && optimistic !== '') {
-    items.push({ kind: 'message', key: 'optimistic-message', role: 'user', text: optimistic });
+  const optimisticAttachments = options.optimisticAttachments ?? [];
+  if (optimistic !== undefined && (optimistic !== '' || optimisticAttachments.length > 0)) {
+    items.push({
+      kind: 'message',
+      key: 'optimistic-message',
+      role: 'user',
+      text: optimistic,
+      ...(optimisticAttachments.length === 0 ? {} : { attachments: optimisticAttachments }),
+    });
   }
   return items;
 }

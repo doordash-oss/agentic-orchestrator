@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 import {
   SupervisorActionResponseSchema,
   SupervisorMessageResponseSchema,
+  SupervisorResetResponseSchema,
   SupervisorStateResponseSchema,
   SupervisorTranscriptResponseSchema,
   validateWithSchema,
@@ -39,6 +40,7 @@ import {
   SupervisorMessageRequestSchema,
   SupervisorMessageResultSchema,
   SupervisorRecordSchema,
+  SupervisorResetResultSchema,
   SupervisorSettingsRequestSchema,
   SupervisorPendingChangeCancelRequestSchema,
   SupervisorStateSchema,
@@ -49,6 +51,7 @@ import {
   type SupervisorMessageRequest,
   type SupervisorMessageResult,
   type SupervisorRecord,
+  type SupervisorResetResult,
   type SupervisorSettingsRequest,
   type SupervisorPendingChangeCancelRequest,
   type SupervisorState,
@@ -56,6 +59,7 @@ import {
   type SupervisorTranscriptRequest,
 } from '../shared/ipc';
 import { supervisorPendingRequest } from './attention';
+import { alwaysLocal, assertNoLocalPathsRemotely, type LocalitySource } from './locality';
 import { toTranscriptMessage, type ServerTransport } from './serverClient';
 import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
 
@@ -68,6 +72,12 @@ export interface SupervisorServiceDeps {
   identity?: ServerIdentitySource;
   /** Mints the per-send idempotency key; defaults to a random UUID. */
   makeClientMessageId?: () => string;
+  /**
+   * Gateway-owned locality of the active connection. While remote, a send
+   * carrying local image or file paths is refused (E_REQUIRES_LOCAL_SERVER)
+   * and staged upload references travel instead; local sends carry paths.
+   */
+  locality?: LocalitySource;
 }
 
 /**
@@ -202,6 +212,16 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
                 : { truncated: record.marker.truncated }),
             },
           }),
+      ...(record.attachments === undefined || record.attachments.length === 0
+        ? {}
+        : {
+            attachments: record.attachments.map((attachment) => ({
+              path: attachment.path,
+              kind: attachment.kind,
+              name: attachment.name,
+              size: attachment.size,
+            })),
+          }),
       ...(record.checkpoint === undefined
         ? {}
         : {
@@ -287,6 +307,14 @@ export class SupervisorService {
 
   async sendMessage(request: SupervisorMessageRequest): Promise<SupervisorMessageResult> {
     const input = validateWithSchema(request, SupervisorMessageRequestSchema);
+    const remote = (this.deps.locality ?? alwaysLocal)() === 'remote';
+    const images = input.images ?? [];
+    const attachments = input.attachments ?? [];
+    const imageUploads = input.imageUploads ?? [];
+    const attachmentUploads = input.attachmentUploads ?? [];
+    // Remote submit boundary: a stale local-path draft must fail, never leak
+    // a path the server cannot read; staged references travel instead.
+    assertNoLocalPathsRemotely(remote, images, attachments);
     const clientMessageId = this.makeClientMessageId();
     if (!CLIENT_MESSAGE_ID_PATTERN.test(clientMessageId)) {
       throw new Error('minted client message id violates the server syntax');
@@ -295,6 +323,15 @@ export class SupervisorService {
       method: 'POST',
       body: {
         text: input.text,
+        ...(remote
+          ? {
+              ...(imageUploads.length === 0 ? {} : { image_uploads: imageUploads }),
+              ...(attachmentUploads.length === 0 ? {} : { attachment_uploads: attachmentUploads }),
+            }
+          : {
+              ...(images.length === 0 ? {} : { images }),
+              ...(attachments.length === 0 ? {} : { attachments }),
+            }),
         client_message_id: clientMessageId,
         ...(input.errorReference === undefined
           ? {}
@@ -318,6 +355,20 @@ export class SupervisorService {
 
   end(): Promise<SupervisorActionResult> {
     return this.action('/api/v1/supervisor/end');
+  }
+
+  /** Opens a new conversation; settings and the old transcript stay on the server. */
+  async reset(): Promise<SupervisorResetResult> {
+    const body = await this.request('/api/v1/supervisor/reset', { method: 'POST', body: {} });
+    const response = validateWithSchema(body, SupervisorResetResponseSchema);
+    return validateWithSchema(
+      {
+        result: response.result,
+        previousConversationId: response.previous_conversation_id,
+        state: toSupervisorState(response.state),
+      },
+      SupervisorResetResultSchema,
+    );
   }
 
   private async action(path: string): Promise<SupervisorActionResult> {

@@ -92,7 +92,11 @@ export interface WorldOptions {
 export const SUPERVISOR_E2E_MARKERS = {
   /** Blocks the turn on a Bash permission request until it is answered. */
   permission: 'SUPERVISOR_E2E_PERMISSION',
-  /** Holds the turn until an interrupt arrives, then reports an interrupted result. */
+  /**
+   * Holds the turn until an interrupt arrives, then reports an interrupted
+   * result; a held turn that ends with stdin closing (End, New conversation)
+   * logs `hold-ended:<turn>` instead.
+   */
   hold: 'SUPERVISOR_E2E_HOLD',
   /**
    * Commits one complete assistant text message (supervisorStubPartialReply),
@@ -159,6 +163,26 @@ export const SUPERVISOR_E2E_HELPER_LOG_PREFIX = 'helper:';
  * supervisorProvider stub logs each turn whose wire text carries it.
  */
 export const SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING = 'Chat context';
+
+/**
+ * The invocation-log lines the supervisorProvider stub writes for one
+ * attachment its wire text names (an `Attached Images:` / `Attached Files:`
+ * block with `- [Image #N]: <path>` / `- [<name>]: <path>` lines): the path,
+ * then the path with the file's first line (printable ASCII only, at most
+ * 200 characters), which proves the harness process could read the copy. An
+ * unreadable path logs `attachment-unreadable:<turn>:<path>` instead of the
+ * second line.
+ */
+export function supervisorStubAttachmentLogLines(
+  turn: number,
+  attachmentPath: string,
+  firstLine: string,
+): [string, string] {
+  return [
+    `attachment:${turn}:${attachmentPath}`,
+    `attachment-line:${turn}:${attachmentPath}:${firstLine}`,
+  ];
+}
 
 /** The deterministic reply the supervisorProvider stub commits for a turn (1-based). */
 export function supervisorStubReply(turn: number): string {
@@ -742,7 +766,7 @@ function supervisorResumeLines(providerInvocationLog: string, home: string): str
  * the same message id, and reports success; the permission marker blocks on
  * a Bash request until its control response arrives; the hold marker emits
  * nothing until the interrupt control request, then reports an interrupted
- * result; the partial-hold marker first commits one complete assistant text
+ * result (stdin closing first logs `hold-ended:<turn>`); the partial-hold marker first commits one complete assistant text
  * message, then holds the same way (a server restart cuts it with no result).
  * A process resumed with `--resume` answers its first plain prompt with the
  * resumed history count instead. The operate markers drive Agentico like a real model would: each
@@ -752,7 +776,9 @@ function supervisorResumeLines(providerInvocationLog: string, home: string): str
  * output, and a `helper:<command>` / `helper-exit:<n>:<code>` pair in the
  * invocation log; a text reply and a success result close the turn. A turn
  * whose wire text carries a hidden error-context bundle logs
- * `hidden-context:<turn>`. The process keeps reading stdin and exits cleanly
+ * `hidden-context:<turn>`; one whose wire text carries an attachment block
+ * logs each attached path and its first line (supervisorStubAttachmentLogLines)
+ * before serving the turn. The process keeps reading stdin and exits cleanly
  * on EOF.
  */
 function supervisorStubLines(providerInvocationLog: string): string[] {
@@ -825,9 +851,39 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     `      *'"subtype":"interrupt"'*) _interrupted=1; break ;;`,
     '    esac',
     '  done',
-    '  [ "$_interrupted" = 1 ] || exit 0',
+    `  [ "$_interrupted" = 1 ] || { printf 'hold-ended:%s\\n' "$turn" >> "${providerInvocationLog}"; exit 0; }`,
     `  printf 'interrupted:%s\\n' "$turn" >> "${providerInvocationLog}"`,
     `  printf '%s\\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '}',
+    // Prints every path an attachment block in the raw JSON line names: the
+    // wire text's newlines arrive as literal `\n` escapes, the block starts at
+    // an `Attached Images:` / `Attached Files:` heading, and the last path
+    // ends where the JSON string closes.
+    'attachment_paths() {',
+    String.raw`  printf '%s\n' "$1" | awk '{`,
+    String.raw`    n = split($0, parts, /\\n/)`,
+    '    block = 0',
+    '    for (i = 1; i <= n; i++) {',
+    '      p = parts[i]',
+    String.raw`      if (p ~ /(^|")Attached (Images|Files):$/) { block = 1; continue }`,
+    String.raw`      if (block && p ~ /^- \[[^]]*\]: /) { sub(/^- \[[^]]*\]: /, "", p); sub(/".*$/, "", p); print p; continue }`,
+    '      block = 0',
+    '    }',
+    "  }'",
+    '}',
+    // Logs each attached path and its first line (see
+    // supervisorStubAttachmentLogLines) so a journey can prove the harness
+    // process read the copies.
+    'attachment_log() {',
+    '  attachment_paths "$1" | while IFS= read -r _path; do',
+    `    printf 'attachment:%s:%s\\n' "$turn" "$_path" >> "${providerInvocationLog}"`,
+    '    if [ -f "$_path" ] && [ -r "$_path" ]; then',
+    String.raw`      _head=$(head -n 1 "$_path" | LC_ALL=C tr -cd '[:print:]\t' | cut -c 1-200)`,
+    `      printf 'attachment-line:%s:%s:%s\\n' "$turn" "$_path" "$_head" >> "${providerInvocationLog}"`,
+    '    else',
+    `      printf 'attachment-unreadable:%s:%s\\n' "$turn" "$_path" >> "${providerInvocationLog}"`,
+    '    fi',
+    '  done',
     '}',
     'supervisor_turn() {',
     '  turn=$((turn + 1))',
@@ -844,6 +900,9 @@ function supervisorStubLines(providerInvocationLog: string): string[] {
     `    *'${SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING}'*)`,
     `      printf 'hidden-context:%s\\n' "$turn" >> "${providerInvocationLog}"`,
     '      ;;',
+    '  esac',
+    '  case "$1" in',
+    `    *'Attached Images:'*|*'Attached Files:'*) attachment_log "$1" ;;`,
     '  esac',
     '  case "$1" in',
     `    *${permission}*)`,

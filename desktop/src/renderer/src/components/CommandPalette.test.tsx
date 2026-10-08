@@ -397,6 +397,27 @@ describe('CommandPalette global entries', () => {
     expect(onRoute).toHaveBeenCalledWith({ target: 'new-feature' });
   });
 
+  it('lists New conversation under the assistant group and routes its target', async () => {
+    installAgenticoMock({
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
+    });
+    const onRoute = vi.fn();
+    render(
+      <CommandPalette
+        ready
+        routeRequest={{ id: 1, event: { target: 'palette' } }}
+        onRoute={onRoute}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
+    const assistant = within(dialog).getByRole('region', { name: 'Assistant' });
+    const option = within(assistant).getByRole('option', { name: /^New conversation/ });
+    expect(option).toBeEnabled();
+    await userEvent.click(option);
+    expect(onRoute).toHaveBeenCalledWith({ target: 'new-conversation' });
+  });
+
   it('enables Show/Hide Inspector once a feature is selected', async () => {
     const mock = installAgenticoMock({
       settings: {

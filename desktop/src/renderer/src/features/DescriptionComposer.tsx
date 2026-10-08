@@ -470,6 +470,8 @@ export function DescriptionComposer({
       const file = mentionResults[mentionIndex];
       if (file !== undefined) applyMention(file);
     } else if (event.key === 'Escape') {
+      // Claimed here, so a host's own Escape (the Supervisor's Stop) stays out.
+      event.preventDefault();
       setMention(null);
       setMentionResults([]);
     }

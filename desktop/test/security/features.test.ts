@@ -207,6 +207,7 @@ function makeServices(overrides: Partial<IpcServices> = {}): IpcServices {
     sendSupervisorMessage: vi.fn(() => Promise.reject(new Error('unused'))),
     interruptSupervisor: vi.fn(() => Promise.reject(new Error('unused'))),
     endSupervisor: vi.fn(() => Promise.reject(new Error('unused'))),
+    resetSupervisor: vi.fn(() => Promise.reject(new Error('unused'))),
     getCreationDefaults: vi.fn(() =>
       Promise.resolve({
         repositories: [],

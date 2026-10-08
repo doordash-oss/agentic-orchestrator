@@ -118,6 +118,17 @@ describe('command catalogue parity', () => {
     expect(commandById('global.bulk').target).toBe('bulk');
   });
 
+  it('offers New conversation as a palette-visible assistant command with no accelerator', () => {
+    expect(commandById('global.new-conversation')).toEqual({
+      id: 'global.new-conversation',
+      label: 'New conversation',
+      group: 'assistant',
+      target: 'new-conversation',
+      paletteVisible: true,
+    });
+    expect(paletteEntryIds()).toContain('global.new-conversation');
+  });
+
   it('maps every feature command onto its server action, except the local editor', () => {
     expect(featureActionId('feature.pause-stop')).toBe('pause-stop');
     expect(featureActionId('feature.review-feedback')).toBe('review-feedback');

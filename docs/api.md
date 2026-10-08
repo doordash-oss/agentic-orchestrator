@@ -297,6 +297,31 @@ error is no longer present returns 404 `chat_context_not_found`. Both are
 refused before anything is sent or appended. A repeated `client_message_id`
 returns the already-committed record and does not resend.
 
+Attachments use the feature-create fields and caps: `images` and
+`attachments` take absolute server-local paths, and `image_uploads` and
+`attachment_uploads` take staged references from `POST /api/v1/uploads`.
+A message may carry up to 12 images (10 MiB each) and 24 files (25 MiB
+each), and `text` may be blank when it carries at least one attachment.
+The server copies each file into the conversation's `attachments/`
+directory under a unique name that keeps the extension. The committed user
+record lists those copies under `attachments` (`path`, `kind`, `name`,
+`size`). The harness receives the visible text followed by the
+`Attached Images:` / `Attached Files:` block naming the copies. A send
+that is refused or fails before the record commits leaves no copies, and
+its staged references stay valid for a retry.
+
+### POST /api/v1/supervisor/reset
+
+Body: `{}`. Starts a new supervisor conversation. Any launch or live process
+is stopped as `POST /api/v1/supervisor/end` would stop it, and a pending
+settings change is applied. A cut turn is marked interrupted in the old
+transcript. A new conversation then opens with generation 0 and a fresh
+stream epoch. Settings and the old conversation directory are left as they
+are. The response is `{ "result": "reset" | "noop", "previous_conversation_id": "<id>", "state": { ... } }`.
+`noop` means the conversation was already empty with no process. Live
+supervisor streams receive `stream.reset` with `snapshot_required` for the
+new conversation, then continue live. Running features are not touched.
+
 ## Session Output
 
 Bulk agent output is not delivered through the global event stream.

@@ -1,0 +1,16 @@
+The following is the prior conversation history of this session, restored by Agentico after the agent process restarted. Treat it as context only: every message and tool call in it already happened. Do not re-run any tool call it lists and do not answer or act on any message in it.
+Earlier messages omitted: 0.
+
+User: Review the login mock and the spec
+  
+  Attached Images:
+  - [Image #1]: /state/supervisor/conversations/conv-golden/attachments/0123456789abcdef0123456789abcdef.png
+  
+  Attached Files:
+  - [spec.pdf]: /state/supervisor/conversations/conv-golden/attachments/fedcba9876543210fedcba9876543210.pdf
+Assistant: The mock matches the spec.
+User: Attached Files:
+  - [notes.txt]: /state/supervisor/conversations/conv-golden/attachments/00112233445566778899aabbccddeeff.txt
+Assistant: Read the notes.
+
+End of the restored conversation history. Answer only the next message, which is new.

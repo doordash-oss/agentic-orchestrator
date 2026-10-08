@@ -2037,6 +2037,12 @@ function makeMockApi(
     sendSupervisorMessage: () => Promise.reject(new Error('unavailable in screenshot capture')),
     interruptSupervisor: () => Promise.resolve({ result: 'not_active', state: SUPERVISOR_STATE }),
     endSupervisor: () => Promise.resolve({ result: 'not_active', state: SUPERVISOR_STATE }),
+    resetSupervisor: () =>
+      Promise.resolve({
+        result: 'noop',
+        previousConversationId: SUPERVISOR_STATE.conversationId,
+        state: SUPERVISOR_STATE,
+      }),
     onSupervisorEvent: () => () => undefined,
     getCreationDefaults: () =>
       Promise.resolve({

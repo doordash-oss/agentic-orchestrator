@@ -71,6 +71,8 @@ export function ToolbarPopover({
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      // Claimed here, so a page's own Escape (the Supervisor's Stop) stays out.
+      event.preventDefault();
       onDismiss();
       anchorRef.current?.focus();
     };

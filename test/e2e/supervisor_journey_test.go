@@ -218,6 +218,9 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 		Mutations:             supervisorAnswerTarget{sessions: h.sessions},
 		Supervisor:            coord,
 		Admission:             h.admission,
+		// The runtime state directory backs the uploads route, so staged
+		// attachment references resolve as on a real server.
+		Runtime: server.RuntimeIdentity{RuntimeDir: h.runtimeDir, StateDir: h.stateDir, Config: filepath.Join(h.runtimeDir, "config.yaml")},
 	}))
 }
 

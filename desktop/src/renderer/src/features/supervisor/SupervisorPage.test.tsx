@@ -43,7 +43,12 @@ import {
 } from '../../test/agenticoMock';
 import { installTranscriptLayout, viewportOffset } from '../../test/transcriptLayout';
 import { emptyAttentionDrafts, type AttentionDrafts } from '../AttentionInbox';
-import { SupervisorPage, type SupervisorComposeRequest } from './SupervisorPage';
+import {
+  SupervisorPage,
+  type SupervisorComposeRequest,
+  type SupervisorNewConversationRequest,
+} from './SupervisorPage';
+import { SupervisorDraftsContext, SupervisorDraftsStore } from './supervisorDrafts';
 import { supervisorConversationBuilder } from './supervisorModel';
 
 afterEach(cleanup);
@@ -141,20 +146,33 @@ function Harness({
   refreshAttention,
   composeRequest = null,
   onComposeRequestHandled,
+  serverKey,
+  store,
+  newConversationRequest = null,
 }: {
   refreshAttention?: () => Promise<AttentionItem[]>;
   composeRequest?: SupervisorComposeRequest | null;
   onComposeRequestHandled?: () => void;
+  serverKey?: string;
+  store?: SupervisorDraftsStore;
+  newConversationRequest?: SupervisorNewConversationRequest | null;
 }) {
   const [drafts, setDrafts] = useState<AttentionDrafts>(emptyAttentionDrafts);
-  return (
+  const page = (
     <SupervisorPage
+      serverKey={serverKey}
       attentionDrafts={drafts}
       setAttentionDrafts={setDrafts}
       refreshAttention={refreshAttention ?? (async () => [])}
       composeRequest={composeRequest}
       onComposeRequestHandled={onComposeRequestHandled}
+      newConversationRequest={newConversationRequest}
     />
+  );
+  return store === undefined ? (
+    page
+  ) : (
+    <SupervisorDraftsContext.Provider value={store}>{page}</SupervisorDraftsContext.Provider>
   );
 }
 
@@ -246,8 +264,8 @@ describe('SupervisorPage settings', () => {
     await user.type(composer(), 'Hello');
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     expect(status()).toHaveTextContent('Ready');
-    // No uploads in this phase.
-    expect(screen.queryByRole('button', { name: 'Attach files or photos' })).toBeNull();
+    // The shared attachment flow is offered from Phase 11 on.
+    expect(screen.getByRole('button', { name: 'Attach files or photos' })).toBeInTheDocument();
   });
 
   it('commits a harness and model through the chip, shows the committed values, and enables Send', async () => {
@@ -1725,5 +1743,469 @@ describe('SupervisorPage exactly-once reconciliation', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+const LOCAL_READY: ConnectionState = {
+  status: 'ready',
+  stage: 'ready',
+  detail: 'Connected.',
+  ownership: 'app-owned',
+  kind: 'local',
+  serverKey: 'server-key-1',
+};
+
+const REMOTE_READY: ConnectionState = {
+  status: 'ready',
+  stage: 'ready',
+  detail: 'Connected.',
+  ownership: 'external',
+  kind: 'remote',
+  serverKey: 'server-key-1',
+};
+
+const RUNNING = supervisorState({ settings: CHOSEN, lifecycle: 'running', sessionId: SESSION_ID });
+
+/** Renders the page with props the shell owns; `update` rerenders with new ones. */
+async function renderShellPage(
+  overrides: Parameters<typeof installAgenticoMock>[0] = {},
+  props: Parameters<typeof Harness>[0] = {},
+) {
+  const mock = installAgenticoMock(overrides);
+  mock.api.getModelCatalogue.mockResolvedValue(CATALOGUE);
+  const view = render(<Harness {...props} />);
+  await screen.findByTestId('supervisor-model-chip');
+  await waitFor(() => expect(screen.queryByText('Loading the supervisor…')).toBeNull());
+  const update = (next: Parameters<typeof Harness>[0]): void =>
+    view.rerender(<Harness {...props} {...next} />);
+  return Object.assign(mock, { update, view });
+}
+
+async function attach(kind: 'Add photos' | 'Add files', paths: string[], mock: AgenticoMockLike) {
+  mock.api.pickCreationFiles.mockResolvedValueOnce({ paths });
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: 'Attach files or photos' }));
+  await user.click(screen.getByRole('menuitem', { name: kind }));
+}
+
+type AgenticoMockLike = ReturnType<typeof installAgenticoMock>;
+
+function queueStrip(): HTMLElement {
+  return screen.getByRole('region', { name: 'Queued messages' });
+}
+
+function idleState(state: SupervisorState, outcome: SupervisorState['lastTurnOutcome']) {
+  return { ...state, lifecycle: 'idle' as const, lastTurnOutcome: outcome };
+}
+
+describe('SupervisorPage composer attachments', () => {
+  it('sends picked images and files as local paths and renders the committed chips', async () => {
+    const mock = await renderShellPage({
+      connection: LOCAL_READY,
+      supervisorState: supervisorState({ settings: CHOSEN }),
+    });
+    await attach('Add photos', ['/shots/one.png'], mock);
+    await attach('Add files', ['/notes/plan.txt'], mock);
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+    expect(screen.getByText(/plan\.txt/)).toBeVisible();
+
+    const user = userEvent.setup();
+    await user.type(composer(), 'Read these{Enter}');
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({
+      text: 'Read these',
+      images: ['/shots/one.png'],
+      attachments: ['/notes/plan.txt'],
+    });
+    const chips = await within(transcript()).findByRole('list', { name: 'Attachments' });
+    expect(within(chips).getByText(/one\.png/)).toBeVisible();
+    expect(within(chips).getByText(/plan\.txt/)).toBeVisible();
+    expect(within(transcript()).queryByText(/Attached Images:/)).toBeNull();
+    expect(within(transcript()).queryByText(/Attached Files:/)).toBeNull();
+  });
+
+  it('sends staged references on a remote connection', async () => {
+    const mock = await renderShellPage({
+      connection: REMOTE_READY,
+      supervisorState: supervisorState({ settings: CHOSEN }),
+    });
+    await attach('Add photos', ['/shots/one.png'], mock);
+    await attach('Add files', ['/notes/plan.txt'], mock);
+    await waitFor(() => expect(mock.api.uploadCreationFiles).toHaveBeenCalledTimes(2));
+
+    const user = userEvent.setup();
+    await user.type(composer(), 'Remote files{Enter}');
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({
+      text: 'Remote files',
+      imageUploads: ['ref-onepng'],
+      attachmentUploads: ['ref-plantxt'],
+    });
+  });
+
+  it('blocks Send while a staged item failed or belongs to another server', async () => {
+    const mock = await renderShellPage({
+      connection: REMOTE_READY,
+      supervisorState: supervisorState({ settings: CHOSEN }),
+    });
+    mock.api.uploadCreationFiles.mockResolvedValueOnce({
+      results: [
+        {
+          ok: false,
+          error: { code: 'too_big', class: 'blocking', title: 'x', summary: 'File exceeds limit.' },
+        },
+      ],
+    });
+    await attach('Add photos', ['/shots/big.png'], mock);
+    expect(await screen.findByText(/File exceeds limit\./)).toBeVisible();
+    const user = userEvent.setup();
+    await user.type(composer(), 'With a failed chip');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Remove big.png' }));
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+
+    await attach('Add photos', ['/shots/one.png'], mock);
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+    act(() => mock.emitConnection({ ...REMOTE_READY, serverKey: 'server-key-2' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled());
+    await user.type(composer(), '{Enter}');
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('SupervisorPage drafts store', () => {
+  it('keeps text, the error reference and staged items across a remount, per server key', async () => {
+    const store = new SupervisorDraftsStore();
+    const mock = await renderShellPage(
+      { connection: LOCAL_READY, supervisorState: supervisorState({ settings: CHOSEN }) },
+      { store, serverKey: 'server-a' },
+    );
+    mock.update({
+      composeRequest: {
+        id: 1,
+        draft: 'Explain this',
+        errorReference: RUN_REFERENCE,
+      },
+    });
+    await attach('Add photos', ['/shots/one.png'], mock);
+    expect(await screen.findByText(/one\.png/)).toBeVisible();
+    mock.view.unmount();
+
+    render(<Harness store={store} serverKey="server-b" />);
+    await screen.findByTestId('supervisor-model-chip');
+    expect(composer()).toHaveValue('');
+    expect(screen.queryByText(/one\.png/)).toBeNull();
+    cleanup();
+
+    render(<Harness store={store} serverKey="server-a" />);
+    await screen.findByTestId('supervisor-model-chip');
+    expect(composer()).toHaveValue('Explain this');
+    expect(screen.getByText(/one\.png/)).toBeVisible();
+    expect(store.entry('server-a').errorReference).not.toBeNull();
+  });
+
+  it('carries text and attachments into a different conversation and drops the queue', async () => {
+    const store = new SupervisorDraftsStore();
+    store.update('server-a', (entry) => ({
+      ...entry,
+      conversationId: 'supervisor-conversation-old',
+      text: 'Keep me',
+      items: { ...entry.items, images: ['/shots/one.png'] },
+      queue: [{ id: 'q1', text: 'Queued before', items: entry.items, errorReference: null }],
+    }));
+    await renderShellPage(
+      { connection: LOCAL_READY, supervisorState: supervisorState({ settings: CHOSEN }) },
+      { store, serverKey: 'server-a' },
+    );
+    expect(composer()).toHaveValue('Keep me');
+    expect(screen.getByText(/one\.png/)).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull();
+    expect(store.entry('server-a').conversationId).toBe('supervisor-conversation-1');
+    expect(store.entry('server-a').queue).toHaveLength(0);
+  });
+});
+
+describe('SupervisorPage Escape', () => {
+  it.each(['running', 'starting'] as const)('stops a %s turn once', async (lifecycle) => {
+    const mock = await renderShellPage({
+      supervisorState: supervisorState({ settings: CHOSEN, lifecycle, sessionId: SESSION_ID }),
+    });
+    fireEvent.keyDown(composer(), { key: 'Escape' });
+    await waitFor(() => expect(mock.api.interruptSupervisor).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(['idle', 'stopped', 'failed', 'waiting_permission', 'waiting_question'] as const)(
+    'does nothing while %s',
+    async (lifecycle) => {
+      const mock = await renderShellPage({
+        supervisorState: supervisorState({ settings: CHOSEN, lifecycle, sessionId: SESSION_ID }),
+      });
+      fireEvent.keyDown(composer(), { key: 'Escape' });
+      expect(mock.api.interruptSupervisor).not.toHaveBeenCalled();
+    },
+  );
+
+  it('leaves the turn running when Escape closes the slash list or the chip popover', async () => {
+    const mock = await renderShellPage({ supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await user.type(composer(), '/');
+    expect(screen.getByRole('listbox')).toBeVisible();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox')).toBeNull();
+    expect(mock.api.interruptSupervisor).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('supervisor-model-chip'));
+    expect(screen.getByTestId('supervisor-model-chip')).toHaveAttribute('aria-expanded', 'true');
+    await user.keyboard('{Escape}');
+    expect(screen.getByTestId('supervisor-model-chip')).toHaveAttribute('aria-expanded', 'false');
+    expect(mock.api.interruptSupervisor).not.toHaveBeenCalled();
+  });
+});
+
+describe('SupervisorPage message queue', () => {
+  it('queues during a turn and sends one message per completed turn, in order', async () => {
+    const mock = await renderShellPage({ connection: LOCAL_READY, supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await attach('Add photos', ['/shots/one.png'], mock);
+    await user.type(composer(), 'First queued{Enter}');
+    await user.type(composer(), 'Second queued{Enter}');
+
+    expect(within(queueStrip()).getAllByRole('listitem')).toHaveLength(2);
+    expect(within(queueStrip()).getByText('First queued')).toBeVisible();
+    expect(within(queueStrip()).getByText('1 attachment')).toBeVisible();
+    expect(composer()).toHaveValue('');
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: idleState(RUNNING, 'completed') });
+    await waitFor(() => expect(mock.api.sendSupervisorMessage).toHaveBeenCalledTimes(1));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenLastCalledWith({
+      text: 'First queued',
+      images: ['/shots/one.png'],
+    });
+    await waitFor(() => expect(within(queueStrip()).getAllByRole('listitem')).toHaveLength(1));
+
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: RUNNING });
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: idleState(RUNNING, 'completed') });
+    await waitFor(() => expect(mock.api.sendSupervisorMessage).toHaveBeenCalledTimes(2));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenLastCalledWith({ text: 'Second queued' });
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull(),
+    );
+  });
+
+  it('holds after an interrupted turn, lets a manual send go first, then resumes', async () => {
+    const mock = await renderShellPage({ supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await user.type(composer(), 'Held one{Enter}');
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: idleState(RUNNING, 'interrupted') });
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+    expect(within(queueStrip()).getByText('Held one')).toBeVisible();
+
+    await user.type(composer(), 'Manual first{Enter}');
+    await waitFor(() => expect(mock.api.sendSupervisorMessage).toHaveBeenCalledTimes(1));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenLastCalledWith({ text: 'Manual first' });
+    expect(within(queueStrip()).getByText('Held one')).toBeVisible();
+
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: RUNNING });
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: idleState(RUNNING, 'completed') });
+    await waitFor(() => expect(mock.api.sendSupervisorMessage).toHaveBeenCalledTimes(2));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenLastCalledWith({ text: 'Held one' });
+  });
+
+  it('sends a "Send now" item at the next idle whatever the outcome, leaving the rest', async () => {
+    const mock = await renderShellPage({ supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await user.type(composer(), 'Stays queued{Enter}');
+    await user.type(composer(), 'Jump the line{Enter}');
+    const rows = within(queueStrip()).getAllByRole('listitem');
+    await user.click(within(rows[1]!).getByRole('button', { name: 'Send now' }));
+    expect(mock.api.interruptSupervisor).toHaveBeenCalledTimes(1);
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: idleState(RUNNING, 'interrupted') });
+    await waitFor(() => expect(mock.api.sendSupervisorMessage).toHaveBeenCalledTimes(1));
+    expect(mock.api.sendSupervisorMessage).toHaveBeenLastCalledWith({ text: 'Jump the line' });
+    await waitFor(() => expect(within(queueStrip()).getAllByRole('listitem')).toHaveLength(1));
+    expect(within(queueStrip()).getByText('Stays queued')).toBeVisible();
+  });
+
+  it('edits an item back into the composer and removes another', async () => {
+    const mock = await renderShellPage({ connection: LOCAL_READY, supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await attach('Add files', ['/notes/plan.txt'], mock);
+    await user.type(composer(), 'Edit me{Enter}');
+    await user.type(composer(), 'Remove me{Enter}');
+    await user.type(composer(), 'Already typed');
+
+    const rows = within(queueStrip()).getAllByRole('listitem');
+    await user.click(within(rows[0]!).getByRole('button', { name: 'Edit' }));
+    expect(composer()).toHaveValue('Already typed\n\nEdit me');
+    expect(screen.getByText(/plan\.txt/)).toBeVisible();
+    await user.click(within(queueStrip()).getByRole('button', { name: 'Remove' }));
+    expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull();
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+  });
+
+  it('keeps an item refused as turn_active at the head without an error', async () => {
+    const mock = await renderShellPage({ supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await user.type(composer(), 'Try later{Enter}');
+    mock.api.sendSupervisorMessage.mockRejectedValueOnce(
+      ipcError('turn_active', 'A turn is running.'),
+    );
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: idleState(RUNNING, 'completed') });
+    await waitFor(() => expect(mock.api.sendSupervisorMessage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(within(queueStrip()).getByText('Try later')).toBeVisible());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText('A turn is running.')).toBeNull();
+  });
+
+  it('marks a failed delivery in the strip with its error', async () => {
+    const mock = await renderShellPage({ supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await user.type(composer(), 'Will fail{Enter}');
+    mock.api.sendSupervisorMessage.mockRejectedValueOnce(
+      ipcError('supervisor_launch_failed', 'The supervisor could not start.'),
+    );
+    emit(mock, { type: 'state', ...envelope(RUNNING), state: idleState(RUNNING, 'completed') });
+    const strip = await screen.findByRole('region', { name: 'Queued messages' });
+    expect(await within(strip).findByText('The supervisor could not start.')).toBeVisible();
+    await user.click(within(queueStrip()).getByRole('button', { name: 'Remove' }));
+    expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull();
+  });
+
+  it('blocks Send and queues nothing while a request is pending', async () => {
+    const waiting = supervisorState({
+      settings: CHOSEN,
+      lifecycle: 'waiting_permission',
+      sessionId: SESSION_ID,
+      pendingRequests: [permissionRequest],
+    });
+    const mock = await renderShellPage({ supervisorState: waiting });
+    const user = userEvent.setup();
+    await user.type(composer(), 'Not now{Enter}');
+    expect(composer()).toHaveValue('Not now');
+    expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull();
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('SupervisorPage new conversation', () => {
+  const IDLE_WITH_HISTORY = supervisorState({
+    settings: CHOSEN,
+    lifecycle: 'idle',
+    lastTurnOutcome: 'completed',
+    sessionId: SESSION_ID,
+    headSeq: 1,
+  });
+  const HISTORY = supervisorTranscriptPage({
+    items: [
+      supervisorRecord({
+        seq: 1,
+        messages: [{ index: 1, role: 'user', type: 'text', text: 'Old question' }],
+      }),
+    ],
+    firstSeq: 1,
+    lastSeq: 1,
+    headSeq: 1,
+  });
+
+  it('resets an idle conversation at once, keeping the chip and the composer text', async () => {
+    const mock = await renderShellPage({
+      supervisorState: IDLE_WITH_HISTORY,
+      supervisorTranscript: HISTORY,
+    });
+    expect(within(transcript()).getByText('Old question')).toBeVisible();
+    const user = userEvent.setup();
+    await user.type(composer(), 'Draft stays');
+    mock.api.getSupervisorTranscript.mockResolvedValue(supervisorTranscriptPage());
+
+    mock.update({ newConversationRequest: { id: 1 } });
+    await waitFor(() => expect(mock.api.resetSupervisor).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await waitFor(() => expect(within(transcript()).queryByText('Old question')).toBeNull());
+    expect(screen.getByTestId('supervisor-model-chip')).toHaveAccessibleName('Claude Opus · High');
+    expect(composer()).toHaveValue('Draft stays');
+  });
+
+  it('confirms while a turn runs or messages are queued; Cancel changes nothing', async () => {
+    const mock = await renderShellPage({ supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await user.type(composer(), 'Queued{Enter}');
+
+    mock.update({ newConversationRequest: { id: 1 } });
+    const dialog = await screen.findByRole('dialog', { name: 'Start a new conversation' });
+    expect(dialog).toHaveTextContent('The current turn will be stopped.');
+    expect(dialog).toHaveTextContent('The queued message will be discarded.');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mock.api.resetSupervisor).not.toHaveBeenCalled();
+    expect(within(queueStrip()).getByText('Queued')).toBeVisible();
+
+    mock.update({ newConversationRequest: { id: 2 } });
+    const again = await screen.findByRole('dialog', { name: 'Start a new conversation' });
+    await user.click(within(again).getByRole('button', { name: 'New conversation' }));
+    await waitFor(() => expect(mock.api.resetSupervisor).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull(),
+    );
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+  });
+
+  it('runs /new the same way and leaves /new text as the unsent draft', async () => {
+    const mock = await renderShellPage({
+      supervisorState: IDLE_WITH_HISTORY,
+      supervisorTranscript: HISTORY,
+    });
+    const user = userEvent.setup();
+    await user.type(composer(), '/new hello{Enter}');
+    await waitFor(() => expect(mock.api.resetSupervisor).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(composer()).toHaveValue('hello'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();
+  });
+
+  it('confirms /new during a turn', async () => {
+    const mock = await renderShellPage({ supervisorState: RUNNING });
+    const user = userEvent.setup();
+    await user.type(composer(), '/new {Enter}');
+    expect(await screen.findByRole('dialog', { name: 'Start a new conversation' })).toBeVisible();
+    expect(mock.api.resetSupervisor).not.toHaveBeenCalled();
+  });
+
+  it('swaps to the newest page of a conversation another client started, ignoring late old records', async () => {
+    const mock = await renderShellPage({
+      supervisorState: IDLE_WITH_HISTORY,
+      supervisorTranscript: HISTORY,
+    });
+    expect(within(transcript()).getByText('Old question')).toBeVisible();
+    const next = { ...IDLE_WITH_HISTORY, conversationId: 'supervisor-conversation-2', headSeq: 1 };
+    mock.api.getSupervisorState.mockResolvedValue(next);
+    mock.api.getSupervisorTranscript.mockResolvedValue(
+      supervisorTranscriptPage({
+        conversationId: 'supervisor-conversation-2',
+        items: [
+          supervisorRecord({
+            seq: 1,
+            conversationId: 'supervisor-conversation-2',
+            messages: [{ index: 1, role: 'user', type: 'text', text: 'Fresh start' }],
+          }),
+        ],
+        firstSeq: 1,
+        lastSeq: 1,
+        headSeq: 1,
+      }),
+    );
+    emit(mock, { type: 'reset' });
+    expect(await within(transcript()).findByText('Fresh start')).toBeVisible();
+    expect(within(transcript()).queryByText('Old question')).toBeNull();
+
+    emit(mock, {
+      type: 'record',
+      ...envelope(IDLE_WITH_HISTORY),
+      record: supervisorRecord({
+        seq: 2,
+        messages: [{ index: 2, role: 'user', type: 'text', text: 'Late old record' }],
+      }),
+    });
+    expect(within(transcript()).queryByText('Late old record')).toBeNull();
   });
 });

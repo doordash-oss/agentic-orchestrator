@@ -85,7 +85,11 @@ import {
   SUPERVISOR_ATTENTION_ROUTE,
   type AttentionDrafts,
 } from './AttentionInbox';
-import { SupervisorPage, type SupervisorComposeRequest } from './supervisor/SupervisorPage';
+import {
+  SupervisorPage,
+  type SupervisorComposeRequest,
+  type SupervisorNewConversationRequest,
+} from './supervisor/SupervisorPage';
 import { SidebarChromeControls } from './SidebarChromeControls';
 import { ServerSwitcher } from '../components/ServerSwitcher';
 import { Toolbar } from './Toolbar';
@@ -279,6 +283,14 @@ export function WorkspaceShell({
   // clearing it then keeps a later remount from replaying the draft.
   const [supervisorCompose, setSupervisorCompose] = useState<SupervisorComposeRequest | null>(null);
   const clearSupervisorCompose = useCallback(() => setSupervisorCompose(null), []);
+  // The single "New conversation" intent the toolbar button, the palette and
+  // the Navigate menu share; held like a compose request until the Supervisor
+  // page consumes it. Ids come from one shell-local counter so every intent is
+  // distinct whichever surface raised it.
+  const [supervisorNewConversation, setSupervisorNewConversation] =
+    useState<SupervisorNewConversationRequest | null>(null);
+  const newConversationSeqRef = useRef(0);
+  const clearSupervisorNewConversation = useCallback(() => setSupervisorNewConversation(null), []);
   // Route-and-focus signal for the footer's server switcher (the menu and
   // palette "Switch Server…" command lands here).
   const [switcherRoute, setSwitcherRoute] = useState<{ id: number } | null>(null);
@@ -537,6 +549,12 @@ export function WorkspaceShell({
     }
   }, [persistPatch, scopeKey]);
 
+  const requestNewConversation = useCallback(() => {
+    selectSupervisor();
+    newConversationSeqRef.current += 1;
+    setSupervisorNewConversation({ id: newConversationSeqRef.current });
+  }, [selectSupervisor]);
+
   const handleFeatureDeleted = useCallback(
     (featureId: string) => {
       setList((current) =>
@@ -690,6 +708,8 @@ export function WorkspaceShell({
         ...(draft === undefined ? {} : { draft }),
         ...(errorReference === undefined ? {} : { errorReference }),
       });
+    } else if (routeRequest.event.target === 'new-conversation') {
+      requestNewConversation();
     } else if (routeRequest.event.target === 'recovery') {
       openRecoverySheet(null);
     } else if (routeRequest.event.target === 'bulk') {
@@ -716,7 +736,14 @@ export function WorkspaceShell({
         runFeatureCommand(command);
       }
     }
-  }, [openRecoverySheet, routeRequest, selectFeature, selectSupervisor, shell]);
+  }, [
+    openRecoverySheet,
+    requestNewConversation,
+    routeRequest,
+    selectFeature,
+    selectSupervisor,
+    shell,
+  ]);
 
   if (shell === null) {
     return (
@@ -979,6 +1006,17 @@ export function WorkspaceShell({
             onOpenSettings: onOpenUpdatesSettings,
             onInstallWhenIdle: onInstallUpdateWhenIdle,
           }}
+          pageActions={
+            selection.kind === 'supervisor' ? (
+              <button
+                type="button"
+                className="toolbar__page-action"
+                onClick={requestNewConversation}
+              >
+                New conversation
+              </button>
+            ) : undefined
+          }
           actionsSlotRef={setActionsSlot}
           overflowSlotRef={setOverflowSlot}
           inspectorSlotRef={setInspectorSlot}
@@ -993,11 +1031,14 @@ export function WorkspaceShell({
           {selection.kind === 'supervisor' ? (
             <SupervisorPage
               key={scopeKey}
+              serverKey={scopeKey}
               attentionDrafts={activeAttentionDrafts}
               setAttentionDrafts={updateAttentionDrafts}
               refreshAttention={refreshAttention}
               composeRequest={supervisorCompose}
               onComposeRequestHandled={clearSupervisorCompose}
+              newConversationRequest={supervisorNewConversation}
+              onNewConversationRequestHandled={clearSupervisorNewConversation}
             />
           ) : (
             <FeatureCockpit

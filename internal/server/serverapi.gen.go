@@ -1001,6 +1001,24 @@ func (e SupervisorActionResponseResult) Valid() bool {
 	}
 }
 
+// Defines values for SupervisorAttachmentKind.
+const (
+	File  SupervisorAttachmentKind = "file"
+	Image SupervisorAttachmentKind = "image"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorAttachmentKind enum.
+func (e SupervisorAttachmentKind) Valid() bool {
+	switch e {
+	case File:
+		return true
+	case Image:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupervisorCheckpointRecordReason.
 const (
 	NativeAuto SupervisorCheckpointRecordReason = "native_auto"
@@ -1229,6 +1247,24 @@ func (e SupervisorRequestRecordStage) Valid() bool {
 	case SupervisorRequestStageRequested:
 		return true
 	case SupervisorRequestStageResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorResetResponseResult.
+const (
+	SupervisorResetDone SupervisorResetResponseResult = "reset"
+	SupervisorResetNoop SupervisorResetResponseResult = "noop"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorResetResponseResult enum.
+func (e SupervisorResetResponseResult) Valid() bool {
+	switch e {
+	case SupervisorResetDone:
+		return true
+	case SupervisorResetNoop:
 		return true
 	default:
 		return false
@@ -2018,6 +2054,21 @@ func (e CancelSupervisorPendingChangeParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for ResetSupervisorParamsXAgenticoClient.
+const (
+	ResetSupervisorParamsXAgenticoClientLocal ResetSupervisorParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ResetSupervisorParamsXAgenticoClient enum.
+func (e ResetSupervisorParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ResetSupervisorParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for UpdateSupervisorSettingsParamsXAgenticoClient.
 const (
 	UpdateSupervisorSettingsParamsXAgenticoClientLocal UpdateSupervisorSettingsParamsXAgenticoClient = "local"
@@ -2245,13 +2296,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -4717,6 +4768,21 @@ type SupervisorActionResponse struct {
 // SupervisorActionResponseResult defines model for SupervisorActionResponse.Result.
 type SupervisorActionResponseResult string
 
+// SupervisorAttachment defines model for SupervisorAttachment.
+type SupervisorAttachment struct {
+	Kind SupervisorAttachmentKind `json:"kind"`
+
+	// Name Original file name, for display.
+	Name string `json:"name"`
+
+	// Path Absolute server-local path of the conversation copy.
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// SupervisorAttachmentKind defines model for SupervisorAttachment.Kind.
+type SupervisorAttachmentKind string
+
 // SupervisorCheckpointRecord Model-only checkpoint projection; native baseline is never sent to clients.
 type SupervisorCheckpointRecord struct {
 	CoversThroughSeq  int64                            `json:"covers_through_seq"`
@@ -4773,18 +4839,29 @@ type SupervisorMarkerRecord struct {
 // SupervisorMarkerRecordMarker defines model for SupervisorMarkerRecord.Marker.
 type SupervisorMarkerRecordMarker string
 
-// SupervisorMessageRequest defines model for SupervisorMessageRequest.
+// SupervisorMessageRequest One user message. `text` may be blank only when at least one attachment is present. Attachments arrive as absolute server-local paths (`images`, `attachments`) or as staged upload references (`image_uploads`, `attachment_uploads`); the combined caps are 12 images and 24 files, at most 10 MiB per image and 25 MiB per file. Every attached file is copied into the conversation's `attachments/` directory and the committed user record references only those copies; staged references are consumed only when the user record is committed, so a refused or failed send leaves them valid for a retry.
 type SupervisorMessageRequest struct {
+	// AttachmentUploads Staged attachment upload references.
+	AttachmentUploads []string `json:"attachment_uploads,omitempty"`
+
+	// Attachments Absolute server-local file paths.
+	Attachments     []string       `json:"attachments,omitempty"`
 	ClientMessageID string         `json:"client_message_id"`
 	ErrorReference  ErrorReference `json:"error_reference,omitempty"`
-	Text            string         `json:"text"`
+
+	// ImageUploads Staged image upload references.
+	ImageUploads []string `json:"image_uploads,omitempty"`
+
+	// Images Absolute server-local image paths.
+	Images []string `json:"images,omitempty"`
+	Text   string   `json:"text"`
 }
 
 // SupervisorMessageResponse defines model for SupervisorMessageResponse.
 type SupervisorMessageResponse struct {
 	APIVersion string `json:"api_version"`
 
-	// Deduplicated True when the `client_message_id` was already committed with the same text and error reference; nothing was appended or delivered.
+	// Deduplicated True when the `client_message_id` was already committed with the same text, error reference and attachments; nothing was appended or delivered.
 	Deduplicated bool `json:"deduplicated"`
 
 	// Launched True when this send launched the supervisor process.
@@ -4818,6 +4895,9 @@ type SupervisorPermissionMode struct {
 
 // SupervisorRecord One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
 type SupervisorRecord struct {
+	// Attachments Files attached to a user record, in harness order (images, then files); each path names the copy under the conversation's `attachments/` directory.
+	Attachments []SupervisorAttachment `json:"attachments,omitempty"`
+
 	// Checkpoint Model-only checkpoint projection; native baseline is never sent to clients.
 	Checkpoint      *SupervisorCheckpointRecord `json:"checkpoint,omitempty"`
 	ClientMessageID string                      `json:"client_message_id,omitempty"`
@@ -4867,6 +4947,21 @@ type SupervisorRequestRecordOutcome string
 
 // SupervisorRequestRecordStage defines model for SupervisorRequestRecord.Stage.
 type SupervisorRequestRecordStage string
+
+// SupervisorResetResponse defines model for SupervisorResetResponse.
+type SupervisorResetResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// PreviousConversationID The conversation current when the request arrived; equals `state.conversation_id` for `noop`.
+	PreviousConversationID string `json:"previous_conversation_id"`
+
+	// Result `reset` when a new conversation was opened; `noop` when there was no process, no launch and an empty transcript.
+	Result SupervisorResetResponseResult `json:"result"`
+	State  SupervisorState               `json:"state"`
+}
+
+// SupervisorResetResponseResult `reset` when a new conversation was opened; `noop` when there was no process, no launch and an empty transcript.
+type SupervisorResetResponseResult string
 
 // SupervisorSettings Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default.
 type SupervisorSettings struct {
@@ -5773,6 +5868,18 @@ type CancelSupervisorPendingChangeParams struct {
 // CancelSupervisorPendingChangeParamsXAgenticoClient defines parameters for CancelSupervisorPendingChange.
 type CancelSupervisorPendingChangeParamsXAgenticoClient string
 
+// ResetSupervisorJSONBody defines parameters for ResetSupervisor.
+type ResetSupervisorJSONBody map[string]interface{}
+
+// ResetSupervisorParams defines parameters for ResetSupervisor.
+type ResetSupervisorParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ResetSupervisorParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ResetSupervisorParamsXAgenticoClient defines parameters for ResetSupervisor.
+type ResetSupervisorParamsXAgenticoClient string
+
 // UpdateSupervisorSettingsParams defines parameters for UpdateSupervisorSettings.
 type UpdateSupervisorSettingsParams struct {
 	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
@@ -6018,6 +6125,9 @@ type InterruptSupervisorJSONRequestBody InterruptSupervisorJSONBody
 
 // SendSupervisorMessageJSONRequestBody defines body for SendSupervisorMessage for application/json ContentType.
 type SendSupervisorMessageJSONRequestBody = SupervisorMessageRequest
+
+// ResetSupervisorJSONRequestBody defines body for ResetSupervisor for application/json ContentType.
+type ResetSupervisorJSONRequestBody ResetSupervisorJSONBody
 
 // UpdateSupervisorSettingsJSONRequestBody defines body for UpdateSupervisorSettings for application/json ContentType.
 type UpdateSupervisorSettingsJSONRequestBody = SupervisorSettingsRequest

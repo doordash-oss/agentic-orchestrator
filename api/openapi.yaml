@@ -1760,6 +1760,35 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/supervisor/reset:
+    post:
+      operationId: resetSupervisor
+      summary: Start a new supervisor conversation.
+      description: >-
+        Retires the current conversation and opens an empty one. An in-flight
+        launch is cancelled and a live process is stopped the way `end` stops
+        it, applying a queued settings change at exit; a cut turn is marked
+        interrupted by the user in the old transcript and its open requests
+        are resolved. The new conversation has a new `conversation_id`,
+        generation 0, a fresh `stream_epoch` and no native session id; the
+        lifecycle is `stopped` with `last_turn_outcome` `none`. Settings and
+        the old conversation's files stay on disk untouched, and running
+        features are never affected. Every open event stream receives
+        `stream.reset` with `snapshot_required` under the new conversation
+        and continues live. Returns `noop` with the current state when there
+        is no process, no launch and the transcript is empty.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorResetResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/supervisor/events:
     get:
       operationId: streamSupervisorEvents
@@ -1818,7 +1847,9 @@ paths:
         capped at 10 MiB; attachment uploads accept any bytes and are capped
         at 25 MiB. References are consumed by the image_uploads /
         attachment_uploads fields of the feature-creation and
-        refactor-launch mutations and expire 24 hours after staging.
+        refactor-launch mutations and of the supervisor message route
+        (POST /api/v1/supervisor/messages), and expire 24 hours after
+        staging.
       parameters:
         - name: kind
           in: query
@@ -2381,6 +2412,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/SupervisorActionResponse"
+    SupervisorResetResponse:
+      description: Supervisor new-conversation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorResetResponse"
     SupervisorEventStream:
       description: Supervisor SSE stream carrying `SupervisorStreamEvent` JSON payloads.
       content:
@@ -5908,6 +5945,24 @@ components:
         - SupervisorRecordKindMarker
         - SupervisorRecordKindNote
         - SupervisorRecordKindCheckpoint
+    SupervisorAttachment:
+      type: object
+      additionalProperties: false
+      required: [path, kind, name, size]
+      properties:
+        path:
+          type: string
+          description: Absolute server-local path of the conversation copy.
+        kind:
+          type: string
+          enum: [image, file]
+        name:
+          type: string
+          description: Original file name, for display.
+        size:
+          type: integer
+          format: int64
+          minimum: 0
     SupervisorRecordVisibility:
       type: string
       enum: [content, model_only, display_only]
@@ -6061,6 +6116,14 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/TranscriptMessage"
+        attachments:
+          type: array
+          description: >-
+            Files attached to a user record, in harness order (images, then
+            files); each path names the copy under the conversation's
+            `attachments/` directory.
+          items:
+            $ref: "#/components/schemas/SupervisorAttachment"
         request:
           $ref: "#/components/schemas/SupervisorRequestRecord"
           x-go-type-skip-optional-pointer: false
@@ -6112,11 +6175,41 @@ components:
       type: object
       additionalProperties: false
       required: [text, client_message_id]
+      description: >-
+        One user message. `text` may be blank only when at least one
+        attachment is present. Attachments arrive as absolute server-local
+        paths (`images`, `attachments`) or as staged upload references
+        (`image_uploads`, `attachment_uploads`); the combined caps are 12
+        images and 24 files, at most 10 MiB per image and 25 MiB per file.
+        Every attached file is copied into the conversation's
+        `attachments/` directory and the committed user record references
+        only those copies; staged references are consumed only when the
+        user record is committed, so a refused or failed send leaves them
+        valid for a retry.
       properties:
         text:
           type: string
-          minLength: 1
           maxLength: 100000
+        images:
+          type: array
+          maxItems: 12
+          items: { type: string }
+          description: Absolute server-local image paths.
+        image_uploads:
+          type: array
+          maxItems: 12
+          items: { type: string }
+          description: Staged image upload references.
+        attachments:
+          type: array
+          maxItems: 24
+          items: { type: string }
+          description: Absolute server-local file paths.
+        attachment_uploads:
+          type: array
+          maxItems: 24
+          items: { type: string }
+          description: Staged attachment upload references.
         client_message_id:
           type: string
           minLength: 1
@@ -6139,7 +6232,8 @@ components:
           type: boolean
           description: >-
             True when the `client_message_id` was already committed with the
-            same text and error reference; nothing was appended or delivered.
+            same text, error reference and attachments; nothing was appended
+            or delivered.
     SupervisorActionResponse:
       type: object
       required: [api_version, result, state]
@@ -6150,6 +6244,26 @@ components:
           type: string
           enum: [accepted, ended, not_active]
           x-enum-varnames: [SupervisorActionAccepted, SupervisorActionEnded, SupervisorActionNotActive]
+        state:
+          $ref: "#/components/schemas/SupervisorState"
+    SupervisorResetResponse:
+      type: object
+      required: [api_version, result, previous_conversation_id, state]
+      properties:
+        api_version:
+          type: string
+        result:
+          type: string
+          enum: [reset, noop]
+          x-enum-varnames: [SupervisorResetDone, SupervisorResetNoop]
+          description: >-
+            `reset` when a new conversation was opened; `noop` when there was
+            no process, no launch and an empty transcript.
+        previous_conversation_id:
+          type: string
+          description: >-
+            The conversation current when the request arrived; equals
+            `state.conversation_id` for `noop`.
         state:
           $ref: "#/components/schemas/SupervisorState"
     SupervisorDelta:

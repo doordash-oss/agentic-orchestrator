@@ -173,6 +173,7 @@ export function buildApplicationMenuTemplate(deps: MenuTemplateDeps): MenuItemCo
         },
         routedItem('global.attention', deps),
         routedItem('global.message-supervisor', deps),
+        routedItem('global.new-conversation', deps, { enabled: uiState.runtimeReady }),
         routedItem('global.recovery', deps),
         routedItem('global.bulk', deps),
       ],

@@ -39,6 +39,14 @@ limitations under the License.
  * A routed compose request ("Explain in chat", ⌘⇧M) focuses the composer
  * and may draft text into it unsent, carrying an error reference that rides
  * hidden with the next send.
+ *
+ * The draft (text, reference, attachments) and the local message queue live
+ * in the renderer-wide drafts store, keyed by server, so they survive
+ * navigation and server switches. A message submitted during a turn queues;
+ * the queue sends one message per turn when a turn completes naturally and
+ * holds after an interrupted, failed or restart-cut one. Escape that reaches
+ * the page unhandled stops a working turn. "New conversation" resets the
+ * server's conversation, confirming first only when work would be lost.
  */
 import {
   useCallback,
@@ -62,7 +70,7 @@ import type {
 } from '../../../../shared/ipc';
 import { ErrorSurface } from '../../components/ErrorSurface';
 import { StopIcon } from '../../components/icons';
-import { retryAction } from '../../hooks';
+import { retryAction, useConnectionState } from '../../hooks';
 import { parseIpcError } from '../../wizard/ipcError';
 import {
   AttentionDetail,
@@ -85,9 +93,24 @@ import {
   questionAnswersRequest,
 } from '../QuestionTurn';
 import { ConversationTranscript } from '../transcript/ConversationTranscript';
+import type { ConversationAttachment } from '../transcript/conversation';
+import {
+  isBlockingStagedItem,
+  STAGED_ITEMS_BLOCK_SUBMIT,
+  submittableReferences,
+} from '../stagedItems';
 import { SupervisorModelChip } from './SupervisorModelChip';
 import { SupervisorContextRing } from './SupervisorContextRing';
 import { SupervisorSwitchDialog, type SupervisorSwitchChoice } from './SupervisorSwitchDialog';
+import { SupervisorQueueStrip } from './SupervisorQueueStrip';
+import { SupervisorResetDialog } from './SupervisorResetDialog';
+import {
+  draftItemsEmpty,
+  useSupervisorDraftEntry,
+  useSupervisorDrafts,
+  type SupervisorDraftItems,
+  type SupervisorQueuedMessage,
+} from './supervisorDrafts';
 import {
   findCatalogueModel,
   harnessLabel,
@@ -108,6 +131,10 @@ import { SUPERVISOR_MESSAGE_MAX_CHARS } from '../../../../shared/ipc';
 const NO_REPOSITORIES: readonly never[] = [];
 const NO_FILES: readonly never[] = [];
 const ignoreUpdate = (): void => {};
+/** The drafts-store key when the shell supplies no server key (standalone renders). */
+const DEFAULT_SERVER_KEY = 'default';
+/** The server's machine code for a send refused because a turn is running. */
+const TURN_ACTIVE = 'turn_active';
 
 /**
  * A routed ask to focus the composer, optionally drafting `draft` into it
@@ -119,7 +146,14 @@ export interface SupervisorComposeRequest {
   errorReference?: ErrorReference;
 }
 
+/** One routed "New conversation" intent; the page applies its confirmation rule. */
+export interface SupervisorNewConversationRequest {
+  id: number;
+}
+
 export interface SupervisorPageProps {
+  /** The connection key the page's draft and queue are stored under. */
+  serverKey?: string;
   attentionDrafts: AttentionDrafts;
   setAttentionDrafts: Dispatch<SetStateAction<AttentionDrafts>>;
   /** Refreshes the shell-wide attention snapshot after an answer. */
@@ -127,11 +161,33 @@ export interface SupervisorPageProps {
   /** Owned by the shell: the newest routed compose request, until handled. */
   composeRequest?: SupervisorComposeRequest | null;
   onComposeRequestHandled?(): void;
+  /**
+   * Owned by the shell: the newest "New conversation" intent (toolbar button,
+   * palette, Navigate menu), until handled. Each request has a fresh id.
+   */
+  newConversationRequest?: SupervisorNewConversationRequest | null;
+  onNewConversationRequestHandled?(): void;
 }
 
-/** Sets an empty composer to the draft; otherwise appends it after a blank line. */
-function appendDraft(current: string, draft: string): string {
-  return current.trim() === '' ? draft : `${current.trimEnd()}\n\n${draft}`;
+/** One message on its way to the server: the composer's or a queued item's. */
+interface OutgoingMessage {
+  text: string;
+  items: SupervisorDraftItems;
+  errorReference: ErrorReference | null;
+}
+
+/** An outgoing message's attachments as optimistic chips. */
+function outgoingChips(items: SupervisorDraftItems): ConversationAttachment[] {
+  return [
+    ...items.images.map((path) => ({ kind: 'image' as const, name: basename(path) })),
+    ...items.imageUploads.map((item) => ({ kind: 'image' as const, name: item.name })),
+    ...items.attachments.map((path) => ({ kind: 'file' as const, name: basename(path) })),
+    ...items.attachmentUploads.map((item) => ({ kind: 'file' as const, name: item.name })),
+  ];
+}
+
+function basename(path: string): string {
+  return path.split(/[\\/]/).at(-1) ?? path;
 }
 
 /** Where loading the page before the oldest loaded record stands. */
@@ -161,11 +217,14 @@ function userRecordText(record: SupervisorRecord): string | undefined {
 }
 
 export function SupervisorPage({
+  serverKey = DEFAULT_SERVER_KEY,
   attentionDrafts,
   setAttentionDrafts,
   refreshAttention,
   composeRequest = null,
   onComposeRequestHandled,
+  newConversationRequest = null,
+  onNewConversationRequestHandled,
 }: SupervisorPageProps) {
   const catalogue = useModelCatalogue();
   const [state, setState] = useState<SupervisorState | null>(null);
@@ -175,15 +234,37 @@ export function SupervisorPage({
   const [provisional, setProvisional] = useState<ReadonlyMap<string, ProvisionalReply>>(
     () => new Map(),
   );
-  const [draft, setDraft] = useState('');
-  // The hidden error reference attached to the pending draft: set by a
-  // routed explain (a later one replaces it), cleared by a successful send
-  // or by the person emptying the composer.
-  const [errorReference, setErrorReference] = useState<ErrorReference | null>(null);
+  // The draft text, the hidden error reference attached to it (set by a
+  // routed explain, a later one replacing it; cleared by a successful send
+  // or by the person emptying the composer), the attachments and the queue
+  // all live in the per-server drafts store.
+  const drafts = useSupervisorDrafts();
+  const entry = useSupervisorDraftEntry(drafts, serverKey);
+  const draft = entry.text;
+  const errorReference = entry.errorReference;
+  const draftItems = entry.items;
+  const queue = entry.queue;
+  const connection = useConnectionState();
+  const connectionServerKey = connection.status === 'ready' ? (connection.serverKey ?? null) : null;
   const [focusToken, setFocusToken] = useState(0);
   const composerRef = useRef<DescriptionComposerHandle | null>(null);
   const handledComposeRequest = useRef<number | null>(null);
-  const [optimistic, setOptimistic] = useState<string | null>(null);
+  const handledNewConversationRequest = useRef<number | null>(null);
+  const [optimistic, setOptimistic] = useState<{
+    text: string;
+    attachments: ConversationAttachment[];
+  } | null>(null);
+  // Delivery failures of queued items, by id; Edit or Remove resolves one.
+  const [queueFailures, setQueueFailures] = useState<ReadonlyMap<string, CanonicalError>>(
+    () => new Map(),
+  );
+  // The stream state event a queued delivery last went out on: the next
+  // automatic delivery waits for a newer idle-and-completed state.
+  const [stateTick, setStateTick] = useState(0);
+  const flushedAtTick = useRef(-1);
+  const flushing = useRef(false);
+  const [resetConfirm, setResetConfirm] = useState<{ draft?: string } | null>(null);
+  const pageRef = useRef<HTMLElement | null>(null);
   const [sending, setSending] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [inlineError, setInlineError] = useState<CanonicalError | null>(null);
@@ -213,8 +294,12 @@ export function SupervisorPage({
   const resetEpoch = useRef(0);
   const serverEpoch = useRef(0);
   const earlierRequest = useRef<PageStamp | null>(null);
-  // Records the stream delivered while a snapshot reload was in flight.
-  const reloadStreamed = useRef<SupervisorRecord[] | null>(null);
+  // Records the stream delivered while a snapshot reload was in flight, with
+  // the conversation each belongs to: a reload that lands on a different
+  // conversation (a reset) keeps only that conversation's records.
+  const reloadStreamed = useRef<{ conversationId: string; record: SupervisorRecord }[] | null>(
+    null,
+  );
   const committedStreams = useRef<CommittedStreams>({ generation: -1, ids: new Set() });
   // Counts the stream's state events. A fetched read model is applied only
   // if no stream state arrived while it was in flight: the stream's is newer,
@@ -258,6 +343,7 @@ export function SupervisorPage({
     async (replace: boolean) => {
       const request = ++loadRequest.current;
       const tick = streamStateTick.current;
+      const previousConversation = conversationIdRef.current;
       if (replace) {
         resetEpoch.current += 1;
         earlierRequest.current = null;
@@ -271,16 +357,36 @@ export function SupervisorPage({
       if (request !== loadRequest.current) return;
       const streamed = reloadStreamed.current ?? [];
       reloadStreamed.current = null;
+      const fetchedConversation =
+        stateResult.status === 'fulfilled'
+          ? stateResult.value.conversationId
+          : previousConversation;
+      // Another conversation behind the reset (a New conversation here or
+      // from another client): the old one's rows and pages go entirely.
+      const swapped =
+        previousConversation !== null &&
+        fetchedConversation !== null &&
+        fetchedConversation !== previousConversation;
       if (stateResult.status === 'fulfilled') {
-        if (tick === streamStateTick.current) setState(stateResult.value);
+        if (tick === streamStateTick.current || swapped) {
+          conversationIdRef.current = stateResult.value.conversationId;
+          setState(stateResult.value);
+        }
         setStateError(null);
       } else {
         setStateError(parseIpcError(stateResult.reason));
       }
+      if (swapped) setOptimistic(null);
       if (pageResult.status === 'fulfilled') {
         const fetched = pageResult.value;
-        if (replace) {
-          const kept = mergeSnapshotRecords(fetched.items, fetched.headSeq, streamed);
+        if (replace || swapped) {
+          const kept = mergeSnapshotRecords(
+            fetched.items,
+            fetched.headSeq,
+            streamed
+              .filter((item) => item.conversationId === fetchedConversation)
+              .map((item) => item.record),
+          );
           committedStreams.current = { generation: -1, ids: new Set() };
           rememberCommitted(kept);
           setRecords(kept);
@@ -376,11 +482,16 @@ export function SupervisorPage({
         return;
       }
       if (event.type === 'stream-status') return;
+      if (event.type === 'record') {
+        reloadStreamed.current?.push({
+          conversationId: event.conversationId,
+          record: event.record,
+        });
+      }
       const conversationId = conversationIdRef.current;
       if (conversationId !== null && event.conversationId !== conversationId) return;
       if (event.type === 'record') {
         const { record } = event;
-        reloadStreamed.current?.push(record);
         rememberCommitted([record]);
         setRecords((current) => mergeRecords(current, [record]));
         if (record.streamMessageId !== undefined) {
@@ -393,7 +504,9 @@ export function SupervisorPage({
           });
         }
         const text = userRecordText(record);
-        if (text !== undefined) setOptimistic((current) => (current === text ? null : current));
+        if (text !== undefined) {
+          setOptimistic((current) => (current?.text === text ? null : current));
+        }
       } else if (event.type === 'delta') {
         const { delta } = event;
         // A retired generation's text, or a chunk of a message that already
@@ -420,6 +533,7 @@ export function SupervisorPage({
         });
       } else if (event.type === 'state') {
         streamStateTick.current += 1;
+        setStateTick(streamStateTick.current);
         generationRef.current = event.state.generation;
         if (event.state.generation !== committedStreams.current.generation) {
           committedStreams.current = { generation: event.state.generation, ids: new Set() };
@@ -451,12 +565,19 @@ export function SupervisorPage({
   useEffect(() => {
     if (composeRequest === null || handledComposeRequest.current === composeRequest.id) return;
     handledComposeRequest.current = composeRequest.id;
-    const { draft: routedDraft, errorReference: routedReference } = composeRequest;
-    if (routedDraft !== undefined) setDraft((current) => appendDraft(current, routedDraft));
-    if (routedReference !== undefined) setErrorReference(routedReference);
+    drafts.appendDraft(serverKey, composeRequest.draft, composeRequest.errorReference);
     setFocusToken((token) => token + 1);
     onComposeRequestHandled?.();
-  }, [composeRequest, onComposeRequestHandled]);
+  }, [composeRequest, drafts, onComposeRequestHandled, serverKey]);
+
+  // The draft belongs to one conversation: when the server's current one
+  // differs (a reset here or elsewhere), the text and attachments carry over
+  // and the queue is discarded.
+  const loadedConversation = state?.conversationId ?? null;
+  useEffect(() => {
+    if (loadedConversation === null) return;
+    drafts.adoptConversation(serverKey, loadedConversation);
+  }, [drafts, loadedConversation, serverKey]);
 
   // Focus lands after the drafted text commits, so the caret sits at its end.
   useEffect(() => {
@@ -473,7 +594,8 @@ export function SupervisorPage({
   const conversation = useMemo(
     () =>
       supervisorConversationTail(committedConversation, {
-        optimistic,
+        optimistic: optimistic?.text ?? null,
+        optimisticAttachments: optimistic?.attachments ?? [],
         provisional: [...provisional.values()],
       }),
     [committedConversation, optimistic, provisional],
@@ -487,8 +609,14 @@ export function SupervisorPage({
   );
   const requestPending = pendingRequests.length > 0;
   const turnActive = isTurnActive(lifecycle);
-  const canSend =
-    state !== null && chosen && !requestPending && !turnActive && !sending && draft.trim() !== '';
+  // In-flight, failed or foreign-server uploads block Send until removed.
+  const uploadsBlocking = [...draftItems.imageUploads, ...draftItems.attachmentUploads].some(
+    (item) => isBlockingStagedItem(item, connectionServerKey),
+  );
+  const composerFilled = draft.trim() !== '' || !draftItemsEmpty(draftItems);
+  // Submitting during a turn (or while a send is in flight) queues instead.
+  const queues = turnActive || sending;
+  const canSend = state !== null && chosen && !requestPending && !uploadsBlocking && composerFilled;
   const placeholderOverride = requestPending
     ? SUPERVISOR_COPY.pendingPlaceholder
     : state !== null && !chosen
@@ -515,39 +643,167 @@ export function SupervisorPage({
       ? null
       : inlineError;
 
-  const send = async (): Promise<void> => {
-    if (runComposerSlashCommand(draft, slashCommands)) {
-      setDraft('');
-      return;
-    }
-    const text = draft.trim();
-    if (!canSend) return;
-    const reference = errorReference;
-    setOptimistic(text);
-    setDraft('');
+  /**
+   * Sends one message through the ordinary path: local paths as paths and
+   * staged items as references scoped to the connected server. Throws what
+   * the send threw; a result from a conversation retired meanwhile is not
+   * merged.
+   */
+  const deliver = async (message: OutgoingMessage): Promise<void> => {
+    const { items } = message;
+    const imageUploads = submittableReferences(items.imageUploads, 'image', connectionServerKey);
+    const attachmentUploads = submittableReferences(
+      items.attachmentUploads,
+      'attachment',
+      connectionServerKey,
+    );
+    const sentIn = conversationIdRef.current;
+    setOptimistic({ text: message.text, attachments: outgoingChips(items) });
     setInlineError(null);
     setSending(true);
     setPinToBottom((token) => token + 1);
     try {
       const result = await window.agentico.sendSupervisorMessage({
-        text,
-        ...(reference === null ? {} : { errorReference: reference }),
+        text: message.text,
+        ...(message.errorReference === null ? {} : { errorReference: message.errorReference }),
+        ...(items.images.length === 0 ? {} : { images: [...items.images] }),
+        ...(items.attachments.length === 0 ? {} : { attachments: [...items.attachments] }),
+        ...(imageUploads.length === 0 ? {} : { imageUploads }),
+        ...(attachmentUploads.length === 0 ? {} : { attachmentUploads }),
       });
-      rememberCommitted([result.record]);
-      setRecords((current) => mergeRecords(current, [result.record]));
+      if (sentIn === conversationIdRef.current) {
+        rememberCommitted([result.record]);
+        setRecords((current) => mergeRecords(current, [result.record]));
+      }
       setOptimistic(null);
-      // A newer explain routed in while the send was in flight keeps its own.
-      setErrorReference((current) => (current === reference ? null : current));
     } catch (error) {
       setOptimistic(null);
-      // Nothing was committed: the text goes back where it came from, unless
-      // the person has already started a new draft.
-      setDraft((current) => (current === '' ? text : current));
-      setInlineError(parseIpcError(error));
+      throw error;
     } finally {
       setSending(false);
       void refreshState();
     }
+  };
+
+  const queueMessage = (message: OutgoingMessage): void => {
+    drafts.enqueue(serverKey, { id: crypto.randomUUID(), ...message });
+  };
+
+  const send = async (): Promise<void> => {
+    if (runComposerSlashCommand(draft, slashCommands)) {
+      drafts.setText(serverKey, '');
+      return;
+    }
+    if (!canSend) return;
+    const message: OutgoingMessage = {
+      text: draft.trim(),
+      items: draftItems,
+      errorReference,
+    };
+    drafts.clearComposer(serverKey);
+    if (queues) {
+      queueMessage(message);
+      return;
+    }
+    // A manual send goes ahead of held items; the queue resumes after the
+    // turn it starts completes, not on the idle state already showing.
+    flushedAtTick.current = streamStateTick.current;
+    try {
+      await deliver(message);
+    } catch (error) {
+      const parsed = parseIpcError(error);
+      if (parsed.code === TURN_ACTIVE) {
+        // The view was stale: the server is mid-turn, so the message waits
+        // at the head of the queue instead of failing.
+        drafts.requeueFront(serverKey, { id: crypto.randomUUID(), ...message });
+        return;
+      }
+      // Nothing was committed: the message goes back where it came from,
+      // unless the person has already started a new draft.
+      drafts.update(serverKey, (current) =>
+        current.text === '' && draftItemsEmpty(current.items)
+          ? {
+              ...current,
+              text: message.text,
+              items: message.items,
+              errorReference: current.errorReference ?? message.errorReference,
+            }
+          : current,
+      );
+      setInlineError(parsed);
+    }
+  };
+
+  /** Sends one queued item, removing it on success and marking it failed otherwise. */
+  const flushQueued = async (item: SupervisorQueuedMessage): Promise<void> => {
+    if (flushing.current) return;
+    flushing.current = true;
+    flushedAtTick.current = streamStateTick.current;
+    drafts.removeQueued(serverKey, item.id);
+    try {
+      await deliver({ text: item.text, items: item.items, errorReference: item.errorReference });
+    } catch (error) {
+      const parsed = parseIpcError(error);
+      drafts.requeueFront(serverKey, { ...item, next: false });
+      if (parsed.code !== TURN_ACTIVE) {
+        setQueueFailures((current) => new Map(current).set(item.id, parsed));
+      }
+    } finally {
+      flushing.current = false;
+    }
+  };
+
+  const lastTurnOutcome = state?.lastTurnOutcome ?? 'none';
+  const queueHead = queue[0];
+  const markedNext = queue.find((item) => item.next === true);
+  // The flush controller: a marked item goes at the first moment no turn is
+  // working, whatever the last outcome; otherwise the head goes only after a
+  // turn completed naturally, once per state event, and holds while failed.
+  useEffect(() => {
+    if (state === null || sending || flushing.current || requestPending || !chosen) return;
+    if (markedNext !== undefined) {
+      if (!turnActive) void flushQueued(markedNext);
+      return;
+    }
+    if (queueHead === undefined || queueFailures.has(queueHead.id)) return;
+    if (lifecycle !== 'idle' || lastTurnOutcome !== 'completed') return;
+    if (flushedAtTick.current === stateTick) return;
+    void flushQueued(queueHead);
+    // flushQueued reads the latest render's values; the listed inputs are
+    // the conditions that decide whether a delivery is due.
+  }, [
+    state,
+    sending,
+    requestPending,
+    chosen,
+    markedNext,
+    turnActive,
+    queueHead,
+    queueFailures,
+    lifecycle,
+    lastTurnOutcome,
+    stateTick,
+  ]);
+
+  const clearQueueFailure = (id: string): void => {
+    setQueueFailures((current) => {
+      if (!current.has(id)) return current;
+      const next = new Map(current);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const editQueued = (id: string): void => {
+    clearQueueFailure(id);
+    drafts.editQueued(serverKey, id);
+    setFocusToken((token) => token + 1);
+  };
+
+  const removeQueued = (id: string): void => {
+    clearQueueFailure(id);
+    // Staged references the item held are left to the server's sweep.
+    drafts.removeQueued(serverKey, id);
   };
 
   const stop = async (): Promise<void> => {
@@ -563,6 +819,92 @@ export function SupervisorPage({
     } finally {
       setStopping(false);
     }
+  };
+
+  // Escape stops a working turn, exactly as Stop does, when it reaches the
+  // page unhandled: the slash and mention lists, the chip popover, the
+  // palette and dialogs claim it first by preventing its default. Listening
+  // on the window runs after those document- and element-level handlers.
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
+  const escapeStops = lifecycle === 'running' || lifecycle === 'starting';
+  useEffect(() => {
+    if (!escapeStops) return;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const target = event.target;
+      const onPage =
+        target === document.body ||
+        (target instanceof Node && pageRef.current?.contains(target) === true);
+      if (!onPage) return;
+      event.preventDefault();
+      void stopRef.current();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [escapeStops]);
+
+  /**
+   * Starts a new conversation: the queue is discarded, the draft text and
+   * attachments carry over (or become `nextDraft` from `/new <text>`), and
+   * the page swaps to the empty conversation the server returns.
+   */
+  const performReset = async (nextDraft?: string): Promise<void> => {
+    try {
+      const result = await window.agentico.resetSupervisor();
+      drafts.update(serverKey, (current) => ({
+        ...current,
+        conversationId: result.state.conversationId,
+        queue: [],
+        ...(nextDraft === undefined ? {} : { text: nextDraft }),
+      }));
+      setQueueFailures(new Map());
+      setResetConfirm(null);
+      if (result.result === 'noop') {
+        setState(result.state);
+        return;
+      }
+      conversationIdRef.current = result.state.conversationId;
+      generationRef.current = result.state.generation;
+      committedStreams.current = { generation: -1, ids: new Set() };
+      setState(result.state);
+      setRecords([]);
+      setProvisional(new Map());
+      setOptimistic(null);
+      setAnswered(new Set());
+      setHasMoreBefore(false);
+      setInlineError(null);
+      void load(true);
+    } catch (error) {
+      setResetConfirm(null);
+      setInlineError(parseIpcError(error));
+    }
+  };
+
+  /** The one "New conversation" handler: confirms only when work would be lost. */
+  const requestReset = (nextDraft?: string): void => {
+    if (turnActive || queue.length > 0) {
+      setResetConfirm(nextDraft === undefined ? {} : { draft: nextDraft });
+      return;
+    }
+    void performReset(nextDraft);
+  };
+
+  // Each routed "New conversation" (toolbar, palette, Navigate menu) is
+  // handled once by its id, after the read model has loaded.
+  useEffect(() => {
+    if (newConversationRequest === null || state === null) return;
+    if (handledNewConversationRequest.current === newConversationRequest.id) return;
+    handledNewConversationRequest.current = newConversationRequest.id;
+    onNewConversationRequestHandled?.();
+    requestReset();
+    // requestReset reads the latest render's lifecycle and queue.
+  }, [newConversationRequest, onNewConversationRequestHandled, state === null]);
+
+  const sendQueuedNow = (id: string): void => {
+    clearQueueFailure(id);
+    drafts.markNext(serverKey, id);
+    if (turnActive) void stop();
   };
 
   const commitSettings = async (
@@ -660,6 +1002,16 @@ export function SupervisorPage({
         } else setOpenSection({ section: 'effort', filter: argument.trim(), token: Date.now() });
       },
     },
+    {
+      name: '/new',
+      description: 'Start a new conversation',
+      onExecute: (argument) => {
+        // The composer clears after a command runs; `<text>` becomes the new
+        // conversation's draft once the reset lands, unsent.
+        const nextDraft = argument.trim();
+        requestReset(nextDraft === '' ? undefined : nextDraft);
+      },
+    },
   ];
 
   const submitAttention = async (
@@ -683,7 +1035,7 @@ export function SupervisorPage({
 
   if (state === null && stateError !== null) {
     return (
-      <section className="supervisor-page" aria-label={SUPERVISOR_COPY.title}>
+      <section className="supervisor-page" aria-label={SUPERVISOR_COPY.title} ref={pageRef}>
         <div className="supervisor-page__failure">
           <ErrorSurface
             error={stateError}
@@ -742,7 +1094,7 @@ export function SupervisorPage({
   ) : undefined;
 
   return (
-    <section className="supervisor-page" aria-label={SUPERVISOR_COPY.title}>
+    <section className="supervisor-page" aria-label={SUPERVISOR_COPY.title} ref={pageRef}>
       <ConversationTranscript
         className="supervisor-page__transcript"
         ariaLabel="Supervisor conversation"
@@ -844,6 +1196,13 @@ export function SupervisorPage({
             </button>
           </div>
         ) : null}
+        <SupervisorQueueStrip
+          queue={queue}
+          failures={queueFailures}
+          onEdit={editQueued}
+          onSendNow={sendQueuedNow}
+          onRemove={removeQueued}
+        />
         {failure !== null ? (
           <ErrorSurface
             error={
@@ -884,21 +1243,23 @@ export function SupervisorPage({
             rows={2}
             maxLength={SUPERVISOR_MESSAGE_MAX_CHARS}
             composerRef={composerRef}
-            allowUploads={false}
+            allowUploads
             searchRepositories={NO_REPOSITORIES}
-            images={NO_FILES}
-            attachments={NO_FILES}
-            imageUploads={NO_FILES}
-            attachmentUploads={NO_FILES}
+            images={draftItems.images}
+            attachments={draftItems.attachments}
+            imageUploads={draftItems.imageUploads}
+            attachmentUploads={draftItems.attachmentUploads}
             repositoryFiles={NO_FILES}
             onValueChange={(value) => {
-              setDraft(value);
-              if (value.trim() === '') setErrorReference(null);
+              drafts.setText(serverKey, value);
+              if (value.trim() === '') drafts.setErrorReference(serverKey, null);
             }}
-            onImagesChange={ignoreUpdate}
-            onAttachmentsChange={ignoreUpdate}
-            onImageUploadsChange={ignoreUpdate}
-            onAttachmentUploadsChange={ignoreUpdate}
+            onImagesChange={(update) => drafts.updateItems(serverKey, 'images', update)}
+            onAttachmentsChange={(update) => drafts.updateItems(serverKey, 'attachments', update)}
+            onImageUploadsChange={(update) => drafts.updateItems(serverKey, 'imageUploads', update)}
+            onAttachmentUploadsChange={(update) =>
+              drafts.updateItems(serverKey, 'attachmentUploads', update)
+            }
             onRepositoryFilesChange={ignoreUpdate}
             onError={setInlineError}
             onSubmit={() => void send()}
@@ -924,6 +1285,11 @@ export function SupervisorPage({
                   <span className="supervisor-status__lamp" aria-hidden="true" />
                   {statusLine}
                 </p>
+                {uploadsBlocking ? (
+                  <p className="supervisor-composer__blocked" role="status">
+                    {STAGED_ITEMS_BLOCK_SUBMIT}
+                  </p>
+                ) : null}
                 {turnActive ? (
                   <button
                     type="button"
@@ -950,6 +1316,14 @@ export function SupervisorPage({
           />
         </div>
       </div>
+      {resetConfirm !== null ? (
+        <SupervisorResetDialog
+          turnActive={turnActive}
+          queued={queue.length}
+          onCancel={() => setResetConfirm(null)}
+          onConfirm={() => performReset(resetConfirm.draft)}
+        />
+      ) : null}
       {switchChoice !== null ? (
         <SupervisorSwitchDialog
           key={`${switchChoice.harness}:${switchChoice.model ?? ''}`}

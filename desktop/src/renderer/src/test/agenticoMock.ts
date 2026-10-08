@@ -46,6 +46,7 @@ import type {
   ServerListSnapshot,
   Settings,
   SupervisorActionResult,
+  SupervisorResetResult,
   SupervisorEvent,
   SupervisorMessageRequest,
   SupervisorMessageResult,
@@ -455,6 +456,7 @@ export interface AgenticoMock {
     sendSupervisorMessage: ReturnType<typeof vi.fn>;
     interruptSupervisor: ReturnType<typeof vi.fn>;
     endSupervisor: ReturnType<typeof vi.fn>;
+    resetSupervisor: ReturnType<typeof vi.fn>;
     onSupervisorEvent: ReturnType<typeof vi.fn>;
     getFeatureConfig: ReturnType<typeof vi.fn>;
     updateFeatureConfig: ReturnType<typeof vi.fn>;
@@ -526,6 +528,23 @@ export interface AgenticoMock {
  * lifecycle `stopped`, empty settings, no pending requests, and an empty
  * transcript (head seq 0).
  */
+/** The conversation copies a mocked send commits for the request's attachments. */
+function supervisorMockAttachments(
+  request: SupervisorMessageRequest,
+): Pick<SupervisorRecord, 'attachments'> {
+  const copy = (kind: 'image' | 'file', source: string) => {
+    const name = source.split(/[\\/]/).at(-1) ?? source;
+    return { path: `/state/supervisor/attachments/${name}`, kind, name, size: 10 };
+  };
+  const attachments = [
+    ...(request.images ?? []).map((path) => copy('image', path)),
+    ...(request.imageUploads ?? []).map((ref) => copy('image', ref)),
+    ...(request.attachments ?? []).map((path) => copy('file', path)),
+    ...(request.attachmentUploads ?? []).map((ref) => copy('file', ref)),
+  ];
+  return attachments.length === 0 ? {} : { attachments };
+}
+
 export function supervisorState(overrides: Partial<SupervisorState> = {}): SupervisorState {
   return {
     conversationId: 'supervisor-conversation-1',
@@ -919,6 +938,7 @@ export function installAgenticoMock(
             clientMessageId: `supervisor-client-message-${String(seq)}`,
             // Only the visible text is committed; the reference rides hidden.
             messages: [{ index: seq, role: 'user', type: 'text', text: request.text }],
+            ...supervisorMockAttachments(request),
           }),
           launched,
           deduplicated: false,
@@ -932,6 +952,28 @@ export function installAgenticoMock(
       const result = supervisorCurrent.lifecycle === 'stopped' ? 'not_active' : 'ended';
       supervisorCurrent = { ...supervisorCurrent, lifecycle: 'stopped', sessionId: '' };
       return Promise.resolve({ result, state: supervisorCurrent });
+    }),
+    resetSupervisor: vi.fn((): Promise<SupervisorResetResult> => {
+      const previousConversationId = supervisorCurrent.conversationId;
+      if (supervisorCurrent.lifecycle === 'stopped' && supervisorCurrent.headSeq === 0) {
+        return Promise.resolve({
+          result: 'noop',
+          previousConversationId,
+          state: supervisorCurrent,
+        });
+      }
+      const conversationId = `${previousConversationId}-next`;
+      supervisorCurrent = {
+        ...supervisorCurrent,
+        conversationId,
+        generation: 0,
+        sessionId: '',
+        lifecycle: 'stopped',
+        lastTurnOutcome: 'none',
+        headSeq: 0,
+        pendingRequests: [],
+      };
+      return Promise.resolve({ result: 'reset', previousConversationId, state: supervisorCurrent });
     }),
     onSupervisorEvent: vi.fn((listener: (event: SupervisorEvent) => void) => {
       supervisorEventListeners.add(listener);

@@ -587,6 +587,107 @@ describe('SupervisorService', () => {
     expect(api.apiRequest).not.toHaveBeenCalled();
   });
 
+  it('sends local attachment paths on a local connection and maps the record attachments', async () => {
+    const attachments = [
+      {
+        path: '/state/conversations/conv-1/attachments/a1.png',
+        kind: 'image',
+        name: 'shot.png',
+        size: 12,
+      },
+      {
+        path: '/state/conversations/conv-1/attachments/a2.txt',
+        kind: 'file',
+        name: 'notes.txt',
+        size: 4,
+      },
+    ];
+    const api = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        record: { ...wireRecord(10), attachments },
+        launched: false,
+        deduplicated: false,
+      },
+    }));
+    const service = new SupervisorService({
+      transport: api,
+      makeClientMessageId: () => 'minted-1',
+      locality: () => 'local',
+    });
+
+    const result = await service.sendMessage({
+      text: '',
+      images: ['/Users/me/shot.png'],
+      attachments: ['/Users/me/notes.txt'],
+      // Staged refs never travel on a local connection.
+      imageUploads: ['0123456789abcdef0123456789abcdef'],
+    });
+
+    expect(api.apiRequest.mock.calls[0]?.[1]).toEqual({
+      method: 'POST',
+      body: {
+        text: '',
+        images: ['/Users/me/shot.png'],
+        attachments: ['/Users/me/notes.txt'],
+        client_message_id: 'minted-1',
+      },
+    });
+    expect(result.record.attachments).toEqual(attachments);
+  });
+
+  it('sends staged references on a remote connection and refuses local paths there', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: { api_version: 'v1', record: wireRecord(10), launched: false, deduplicated: false },
+    }));
+    const service = new SupervisorService({
+      transport: api,
+      makeClientMessageId: () => 'minted-1',
+      locality: () => 'remote',
+    });
+
+    await service.sendMessage({
+      text: 'look',
+      imageUploads: ['ref-image'],
+      attachmentUploads: ['ref-file'],
+    });
+    expect(api.apiRequest.mock.calls[0]?.[1]).toEqual({
+      method: 'POST',
+      body: {
+        text: 'look',
+        image_uploads: ['ref-image'],
+        attachment_uploads: ['ref-file'],
+        client_message_id: 'minted-1',
+      },
+    });
+
+    const refused = await service
+      .sendMessage({ text: 'look', images: ['/Users/me/shot.png'] })
+      .catch((e: unknown) => e);
+    expect((refused as CanonicalErrorException).canonical.code).toBe('E_REQUIRES_LOCAL_SERVER');
+    expect(api.apiRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a blank message without attachments, relative paths and over-cap images', async () => {
+    const api = transport(() => ({ status: 200, body: {} }));
+    const service = new SupervisorService({ transport: api });
+    for (const request of [
+      { text: '   ' },
+      { text: 'hi', images: ['relative/shot.png'] },
+      { text: 'hi', attachments: ['./notes.txt'] },
+      {
+        text: 'hi',
+        images: Array.from({ length: 6 }, (_, i) => `/shots/${String(i)}.png`),
+        imageUploads: Array.from({ length: 7 }, (_, i) => `ref-${String(i)}`),
+      },
+    ]) {
+      await expect(service.sendMessage(request)).rejects.toThrow();
+    }
+    expect(api.apiRequest).not.toHaveBeenCalled();
+  });
+
   it('defaults to a UUID idempotency key that satisfies the server syntax', async () => {
     const api = transport(() => ({
       status: 200,
@@ -625,6 +726,64 @@ describe('SupervisorService', () => {
       ['/api/v1/supervisor/interrupt', { method: 'POST', body: {} }],
       ['/api/v1/supervisor/end', { method: 'POST', body: {} }],
     ]);
+  });
+
+  it('resets with an empty JSON body and maps the new-conversation result', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        result: 'reset',
+        previous_conversation_id: 'conv-old',
+        state: wireState({
+          conversation_id: 'conv-new',
+          lifecycle: 'stopped',
+          pending_requests: [],
+        }),
+      },
+    }));
+    const service = new SupervisorService({ transport: api });
+
+    await expect(service.reset()).resolves.toMatchObject({
+      result: 'reset',
+      previousConversationId: 'conv-old',
+      state: { conversationId: 'conv-new', lifecycle: 'stopped' },
+    });
+    expect(api.apiRequest.mock.calls).toEqual([
+      ['/api/v1/supervisor/reset', { method: 'POST', body: {} }],
+    ]);
+  });
+
+  it('refuses a reset reply with an unknown result or missing previous conversation', async () => {
+    for (const body of [
+      { api_version: 'v1', result: 'cleared', previous_conversation_id: 'c', state: wireState() },
+      { api_version: 'v1', result: 'noop', state: wireState() },
+    ]) {
+      const service = new SupervisorService({
+        transport: transport(() => ({ status: 200, body })),
+      });
+      await expect(service.reset()).rejects.toThrow();
+    }
+  });
+
+  it('discards a reset reply that crossed a server switch', async () => {
+    let identity = { serverKey: 'server-a' as string | null, generation: 1 };
+    const api = transport(() => {
+      identity = { serverKey: 'server-b', generation: 2 };
+      return {
+        status: 200,
+        body: {
+          api_version: 'v1',
+          result: 'reset',
+          previous_conversation_id: 'conv-old',
+          state: wireState(),
+        },
+      };
+    });
+    const service = new SupervisorService({ transport: api, identity: () => identity });
+
+    const err = await service.reset().catch((e: unknown) => e);
+    expect((err as CanonicalErrorException).canonical.code).toBe('E_SERVER_SWITCHED');
   });
 
   it('discards a reply that crossed a server switch', async () => {

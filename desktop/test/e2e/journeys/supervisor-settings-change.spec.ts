@@ -87,7 +87,8 @@ test('supervisor changes settings while idle and during a held turn', async ({},
     await expect(chip).toHaveAccessibleName('Claude Sonnet · Default');
     await page.getByRole('button', { name: 'Cancel' }).click();
     await expect(page.getByText(/Effort change pending/)).toHaveCount(0);
-    await page.keyboard.press('Escape');
+    // The tray click already dismissed the popover; an Escape here would now
+    // stop the turn itself, so the explicit Stop below does it.
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
     await expect(page.getByTestId('supervisor-status')).toHaveAttribute('data-lifecycle', 'idle');
 

@@ -111,6 +111,7 @@ export const IPC_CHANNELS = {
   supervisorMessageSend: 'agentico:supervisor:message-send',
   supervisorInterrupt: 'agentico:supervisor:interrupt',
   supervisorEnd: 'agentico:supervisor:end',
+  supervisorReset: 'agentico:supervisor:reset',
   creationDefaults: 'agentico:creation:defaults',
   creationSources: 'agentico:creation:sources',
   creationOriginStatus: 'agentico:creation:origin-status',
@@ -975,6 +976,9 @@ export const AppRouteEventSchema = z
       // Selects the Supervisor page and focuses its composer, optionally
       // drafting `draft` (with its `errorReference`) into it unsent.
       'supervisor',
+      // Selects the Supervisor page and asks it to start a new conversation;
+      // the page applies its own confirmation rule.
+      'new-conversation',
       // Opens the Recovery sheet; 'bulk' opens the same sheet with its bulk
       // preview loading.
       'recovery',
@@ -2612,6 +2616,10 @@ export type TestingContractSnapshot = z.output<typeof TestingContractSnapshotSch
 /** An opaque, single-use staged-upload handle the server returned. */
 export const UploadReferenceSchema = z.string().min(1).max(128);
 
+/** Per-submission caps on images and files, local paths and staged refs combined. */
+export const CREATION_IMAGE_LIMIT = 12;
+export const CREATION_ATTACHMENT_LIMIT = 24;
+
 // --- Sessions and bounded transcript/output operations ---------------------
 
 /** Canonical safe URL-segment syntax for server-owned session identifiers. */
@@ -3000,6 +3008,20 @@ export const SupervisorCheckpointSchema = z.strictObject({
   hasNativeBaseline: z.boolean(),
 });
 
+/** Images plus files one supervisor message may carry. */
+const SUPERVISOR_ATTACHMENT_MAX = CREATION_IMAGE_LIMIT + CREATION_ATTACHMENT_LIMIT;
+
+/** One attachment of a committed user record: the server's conversation copy. */
+export const SupervisorAttachmentSchema = z.strictObject({
+  /** Absolute server-local path of the copy (display and dedupe only). */
+  path: z.string().min(1).max(4096),
+  kind: z.enum(['image', 'file']),
+  /** Original file name, for display. */
+  name: z.string().max(1024),
+  size: z.number().int().nonnegative(),
+});
+export type SupervisorAttachment = z.output<typeof SupervisorAttachmentSchema>;
+
 /** One committed transcript record; its `messages` rows carry `index = seq`. */
 export const SupervisorRecordSchema = z.strictObject({
   seq: z.number().int().positive(),
@@ -3016,6 +3038,8 @@ export const SupervisorRecordSchema = z.strictObject({
   request: SupervisorRequestVerdictSchema.optional(),
   marker: SupervisorMarkerSchema.optional(),
   checkpoint: SupervisorCheckpointSchema.optional(),
+  /** User records only: the conversation copies of the message's attachments. */
+  attachments: z.array(SupervisorAttachmentSchema).max(SUPERVISOR_ATTACHMENT_MAX).optional(),
 });
 export type SupervisorRecord = z.output<typeof SupervisorRecordSchema>;
 
@@ -3074,14 +3098,51 @@ export type SupervisorPendingChangeCancelRequest = z.output<
  * reference whose context reaches the harness hidden; the main process mints
  * `client_message_id`.
  */
-export const SupervisorMessageRequestSchema = z.strictObject({
-  text: z
-    .string()
-    .min(1)
-    .max(SUPERVISOR_MESSAGE_MAX_CHARS)
-    .refine((value) => value.trim() !== ''),
-  errorReference: ErrorReferenceSchema.optional(),
-});
+export const SupervisorMessageRequestSchema = z
+  .strictObject({
+    /** The visible text; may be blank when the message carries an attachment. */
+    text: z.string().max(SUPERVISOR_MESSAGE_MAX_CHARS),
+    errorReference: ErrorReferenceSchema.optional(),
+    /**
+     * Native-picker approved local paths (local connections) and
+     * server-staged upload references (remote connections), with the
+     * creation schemas and combined caps. The main process refuses local
+     * paths while remote, exactly as feature creation does.
+     */
+    images: z.array(AbsolutePathSchema).max(CREATION_IMAGE_LIMIT).optional(),
+    attachments: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT).optional(),
+    imageUploads: z.array(UploadReferenceSchema).max(CREATION_IMAGE_LIMIT).optional(),
+    attachmentUploads: z.array(UploadReferenceSchema).max(CREATION_ATTACHMENT_LIMIT).optional(),
+  })
+  .refine(
+    (request) =>
+      (request.images?.length ?? 0) + (request.imageUploads?.length ?? 0) <= CREATION_IMAGE_LIMIT,
+    { message: `At most ${CREATION_IMAGE_LIMIT} images per message.` },
+  )
+  .refine(
+    (request) =>
+      (request.attachments?.length ?? 0) + (request.attachmentUploads?.length ?? 0) <=
+      CREATION_ATTACHMENT_LIMIT,
+    { message: `At most ${CREATION_ATTACHMENT_LIMIT} files per message.` },
+  )
+  .refine((request) => request.text.trim() !== '' || supervisorAttachmentCount(request) > 0, {
+    message: 'A message needs text or an attachment.',
+  });
+
+/** How many images and files a supervisor message request carries. */
+export function supervisorAttachmentCount(request: {
+  images?: readonly string[];
+  attachments?: readonly string[];
+  imageUploads?: readonly string[];
+  attachmentUploads?: readonly string[];
+}): number {
+  return (
+    (request.images?.length ?? 0) +
+    (request.attachments?.length ?? 0) +
+    (request.imageUploads?.length ?? 0) +
+    (request.attachmentUploads?.length ?? 0)
+  );
+}
 export type SupervisorMessageRequest = z.output<typeof SupervisorMessageRequestSchema>;
 
 export const SupervisorMessageResultSchema = z.strictObject({
@@ -3098,6 +3159,17 @@ export const SupervisorActionResultSchema = z.strictObject({
   state: SupervisorStateSchema,
 });
 export type SupervisorActionResult = z.output<typeof SupervisorActionResultSchema>;
+
+/**
+ * New-conversation outcome: `reset` opened a fresh conversation (its id is
+ * `state.conversationId`); `noop` left an already-empty idle one in place.
+ */
+export const SupervisorResetResultSchema = z.strictObject({
+  result: z.enum(['reset', 'noop']),
+  previousConversationId: SupervisorIdentifierSchema,
+  state: SupervisorStateSchema,
+});
+export type SupervisorResetResult = z.output<typeof SupervisorResetResultSchema>;
 
 /** Non-persisted streaming text for a provisional assistant row. */
 export const SupervisorDeltaSchema = z.strictObject({
@@ -3151,8 +3223,6 @@ export type SupervisorEvent = z.output<typeof SupervisorEventSchema>;
 
 // --- Feature creation ---------------------------------------------------------
 
-export const CREATION_IMAGE_LIMIT = 12;
-export const CREATION_ATTACHMENT_LIMIT = 24;
 export const CREATION_REPOSITORY_FILE_LIMIT = 24;
 export const CREATION_FILE_SEARCH_RESULT_LIMIT = 50;
 export const CREATION_IMAGE_FORMATS = [
@@ -4603,6 +4673,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([]),
     response: SupervisorActionResultSchema,
   },
+  [IPC_CHANNELS.supervisorReset]: {
+    request: z.tuple([]),
+    response: SupervisorResetResultSchema,
+  },
   [IPC_CHANNELS.creationDefaults]: {
     request: z.tuple([]),
     response: CreationDefaultsSchema,
@@ -5013,6 +5087,12 @@ export interface AgenticoApi {
   interruptSupervisor(): Promise<SupervisorActionResult>;
   /** Stops the supervisor process, keeping the transcript and settings. */
   endSupervisor(): Promise<SupervisorActionResult>;
+  /**
+   * Starts a new conversation: stops any live turn or process the way End
+   * does and opens a fresh conversation id, keeping settings and the old
+   * transcript on disk. `noop` when the conversation was already empty.
+   */
+  resetSupervisor(): Promise<SupervisorResetResult>;
   /** Schema-validated supervisor stream pushes; returns the exact unsubscribe. */
   onSupervisorEvent(listener: (event: SupervisorEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;

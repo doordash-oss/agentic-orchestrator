@@ -259,6 +259,30 @@ func (s *uploadStore) resolve(ref, wantKind string) (preparedUpload, error) {
 	return preparedUpload{ref: ref, meta: meta}, nil
 }
 
+// describe reads one reference's metadata without claiming it, for a
+// message identity check that precedes consumption. Unlike resolve it also
+// describes a consumed reference from its tombstone, so an identical resend
+// of a committed message can deduplicate; consumption still refuses it.
+func (s *uploadStore) describe(ref, wantKind string) (stagedUploadMeta, error) {
+	if s == nil {
+		return stagedUploadMeta{}, &uploadReferenceError{msg: "upload service is unavailable"}
+	}
+	if !uploadRefPattern.MatchString(ref) {
+		return stagedUploadMeta{}, &uploadReferenceError{msg: fmt.Sprintf("upload reference %q has an invalid format", ref)}
+	}
+	meta, err := s.readMeta(ref)
+	if err == nil && meta.ConsumedAt == 0 {
+		_, err = os.Stat(s.dataPath(ref))
+	}
+	if err != nil {
+		return stagedUploadMeta{}, &uploadReferenceError{msg: fmt.Sprintf("upload reference %q is unknown, expired, or already consumed", ref)}
+	}
+	if meta.Kind != wantKind {
+		return stagedUploadMeta{}, &uploadReferenceError{msg: fmt.Sprintf("upload reference %q has kind %q, not %q", ref, meta.Kind, wantKind)}
+	}
+	return meta, nil
+}
+
 // safeUploadExtension keeps only simple dot-extensions from the original
 // client name for durable copy names; anything else yields none.
 func safeUploadExtension(name string) string {
@@ -269,21 +293,21 @@ func safeUploadExtension(name string) string {
 	return ""
 }
 
-// copyInto durably copies staged bytes to destDir under a name derived from
-// the claim ID and the opaque reference (never the client name), so each
-// transaction gets an isolated handoff path even if another request
-// referenced the same upload.
-func (s *uploadStore) copyInto(p preparedUpload, claimID, destDir string) (string, error) {
+// copyInto durably copies staged bytes to destDir under name, which callers
+// derive from server-generated identifiers and the safe extension (never
+// the client name), so each transaction gets an isolated handoff path even
+// if another request referenced the same upload.
+func (s *uploadStore) copyInto(p preparedUpload, destDir, name string) (string, error) {
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return "", err
 	}
-	dest := filepath.Join(destDir, consumedUploadPrefix+claimID+"-"+p.ref+safeUploadExtension(p.meta.Name))
+	dest := filepath.Join(destDir, name)
 	src, err := os.Open(s.dataPath(p.ref))
 	if err != nil {
 		return "", err
 	}
 	defer src.Close()
-	dst, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	dst, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return "", err
 	}
@@ -410,6 +434,13 @@ type consumedUploads struct {
 // tasks) consumes; deleting the staged source at commit time satisfies the
 // copy-then-delete single-use rule because the copies are durable.
 func (s *uploadStore) consume(imageRefs, attachmentRefs []string, destDir string) (*consumedUploads, error) {
+	return s.consumeNamed(imageRefs, attachmentRefs, destDir, nil)
+}
+
+// consumeNamed is consume with a caller-chosen copy name: nameFor receives
+// the safe extension of the original name and returns a unique file name
+// keeping it. A nil nameFor uses the per-claim handoff name.
+func (s *uploadStore) consumeNamed(imageRefs, attachmentRefs []string, destDir string, nameFor func(ext string) (string, error)) (*consumedUploads, error) {
 	if len(imageRefs) == 0 && len(attachmentRefs) == 0 {
 		return nil, nil
 	}
@@ -458,7 +489,15 @@ func (s *uploadStore) consume(imageRefs, attachmentRefs []string, destDir string
 		}
 	}
 	for _, p := range consumed.prepared {
-		copyPath, err := s.copyInto(p, claimID, destDir)
+		ext := safeUploadExtension(p.meta.Name)
+		name := consumedUploadPrefix + claimID + "-" + p.ref + ext
+		if nameFor != nil {
+			name, err = nameFor(ext)
+		}
+		copyPath := ""
+		if err == nil {
+			copyPath, err = s.copyInto(p, destDir, name)
+		}
 		if err != nil {
 			for _, prior := range consumed.copies {
 				_ = os.Remove(prior)

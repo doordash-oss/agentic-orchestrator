@@ -1609,6 +1609,14 @@ export const ServerSupervisorCheckpointRecordSchema = z.object({
   has_native_baseline: z.boolean(),
 });
 
+/** A user record's attachment: the conversation copy the server made. */
+export const ServerSupervisorAttachmentSchema = z.object({
+  path: z.string().min(1).max(4096),
+  kind: z.enum(['image', 'file']),
+  name: z.string().max(1024),
+  size: z.number().int().nonnegative(),
+});
+
 export const ServerSupervisorRecordSchema = z.object({
   seq: z.number().int().positive(),
   id: ServerSupervisorIdSchema,
@@ -1634,6 +1642,7 @@ export const ServerSupervisorRecordSchema = z.object({
   request: ServerSupervisorRequestRecordSchema.optional(),
   marker: ServerSupervisorMarkerRecordSchema.optional(),
   checkpoint: ServerSupervisorCheckpointRecordSchema.optional(),
+  attachments: z.array(ServerSupervisorAttachmentSchema).max(36).optional(),
 });
 export type ServerSupervisorRecord = z.output<typeof ServerSupervisorRecordSchema>;
 
@@ -1669,6 +1678,14 @@ export const SupervisorActionResponseSchema = z.object({
   state: ServerSupervisorStateSchema,
 });
 export type SupervisorActionResponse = z.output<typeof SupervisorActionResponseSchema>;
+
+export const SupervisorResetResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.enum(['reset', 'noop']),
+  previous_conversation_id: ServerSupervisorIdSchema,
+  state: ServerSupervisorStateSchema,
+});
+export type SupervisorResetResponse = z.output<typeof SupervisorResetResponseSchema>;
 
 export const ServerSupervisorDeltaSchema = z.object({
   turn_id: ServerSupervisorIdSchema,
@@ -2099,6 +2116,10 @@ type SupervisorActionResponseDTO = components['schemas']['SupervisorActionRespon
 const _supervisorActionSubset = (value: SupervisorActionResponseDTO): SupervisorActionResponse =>
   value;
 void _supervisorActionSubset;
+type SupervisorResetResponseDTO = components['schemas']['SupervisorResetResponse'];
+const _supervisorResetSubset = (value: SupervisorResetResponseDTO): SupervisorResetResponse =>
+  value;
+void _supervisorResetSubset;
 type SupervisorStreamEventDTO = components['schemas']['SupervisorStreamEvent'];
 const _supervisorStreamEventSubset = (
   value: SupervisorStreamEventDTO,

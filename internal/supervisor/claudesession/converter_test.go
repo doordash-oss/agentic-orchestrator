@@ -776,3 +776,34 @@ func TestImagePlaceholder(t *testing.T) {
 		}
 	}
 }
+
+// attachmentBlocks are the harness-facing texts of the two user records in
+// testdata/attachments.jsonl.
+var attachmentBlocks = []string{
+	"Review the login mock and the spec\n\nAttached Images:\n- [Image #1]: /state/supervisor/conversations/conv-golden/attachments/0123456789abcdef0123456789abcdef.png\n\nAttached Files:\n- [spec.pdf]: /state/supervisor/conversations/conv-golden/attachments/fedcba9876543210fedcba9876543210.pdf",
+	"Attached Files:\n- [notes.txt]: /state/supervisor/conversations/conv-golden/attachments/00112233445566778899aabbccddeeff.txt",
+}
+
+func TestAttachmentsGolden(t *testing.T) {
+	data, err := Render(input(loadRecords(t, "attachments.jsonl")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertLineShape(t, data)
+	for _, block := range attachmentBlocks {
+		encoded, _ := json.Marshal(block)
+		if !bytes.Contains(data, []byte(`"role":"user","content":`+string(encoded))) {
+			t.Errorf("rebuilt session lacks the user prompt %s", encoded)
+		}
+	}
+	path := filepath.Join("testdata", "attachments.golden.jsonl")
+	if *updateGolden {
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, want) {
+		t.Fatalf("attachments golden mismatch: %v\n--- got ---\n%s", err, data)
+	}
+}

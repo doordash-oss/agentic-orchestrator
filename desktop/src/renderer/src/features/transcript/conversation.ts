@@ -40,6 +40,12 @@ export interface SubagentActivity {
 /** The tone of a one-line notice row: a cut turn, a failure, or a caveat. */
 export type ConversationNoticeTone = 'interrupted' | 'failed' | 'caveat' | 'neutral';
 
+/** A file a user message carried, shown as a chip under its text. */
+export interface ConversationAttachment {
+  kind: 'image' | 'file';
+  name: string;
+}
+
 export type ConversationItem =
   | {
       kind: 'message';
@@ -48,6 +54,8 @@ export type ConversationItem =
       text: string;
       /** A quiet trailing note on the message, e.g. "Interrupted" for a cut reply. */
       footer?: string;
+      /** The message's attachments, one chip each under the text. */
+      attachments?: readonly ConversationAttachment[];
     }
   | {
       kind: 'auto-pick';

@@ -270,8 +270,7 @@ func decodeEntry(rec *supervisor.Record) (entry, error) {
 			return entry{}, err
 		}
 		e := entry{rec: rec, role: roleUser}
-		if strings.TrimSpace(u.Text) != "" {
-			text := u.Text
+		if text := supervisor.RenderUserMessage(u); strings.TrimSpace(text) != "" {
 			e.prompt = &text
 		}
 		return e, nil

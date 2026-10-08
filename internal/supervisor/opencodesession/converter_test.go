@@ -625,3 +625,34 @@ func assistant(seq int64, turn, text string) supervisor.Record {
 	data, _ := json.Marshal(supervisor.ContentData{Content: []llm.ContentBlock{{Type: "text", Text: text}}})
 	return supervisor.Record{Seq: seq, TurnID: turn, Kind: supervisor.KindAssistant, Visibility: supervisor.VisibilityContent, Data: data}
 }
+
+func TestAttachmentsGolden(t *testing.T) {
+	data, err := Render(input(t.TempDir(), loadRecords(t, "attachments.jsonl")), Options{ContextWindow: windowFor(1_000_000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertShape(t, data)
+	for _, want := range []string{
+		// Continuation lines of one seed item are indented two spaces.
+		"User: Review the login mock and the spec\n  \n  Attached Images:\n  - [Image #1]: /state/supervisor/conversations/conv-golden/attachments/0123456789abcdef0123456789abcdef.png\n  \n  Attached Files:\n  - [spec.pdf]: /state/supervisor/conversations/conv-golden/attachments/fedcba9876543210fedcba9876543210.pdf",
+		"User: Attached Files:\n  - [notes.txt]: /state/supervisor/conversations/conv-golden/attachments/00112233445566778899aabbccddeeff.txt",
+	} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Errorf("seed lacks %q", want)
+		}
+	}
+	compareGolden(t, "attachments.golden.txt", data)
+}
+
+func TestAttachmentBlockIsClippedWithTheText(t *testing.T) {
+	recs := loadRecords(t, "attachments.jsonl")
+	long := strings.Repeat("x", maxTextChars)
+	recs[0].Data = json.RawMessage(`{"text":"` + long + `","attachments":[{"path":"/a/b.png","kind":"image","name":"b.png","size":1}]}`)
+	data, err := Render(input(t.TempDir(), recs), Options{ContextWindow: windowFor(1_000_000)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte("/a/b.png")) || !bytes.Contains(data, []byte("[clipped ")) {
+		t.Fatalf("the clip did not apply to the rendered text:\n%s", data)
+	}
+}

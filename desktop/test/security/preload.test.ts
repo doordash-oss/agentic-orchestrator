@@ -321,6 +321,7 @@ describe('preload surface', () => {
       getSupervisorTranscript(request: { before?: number; limit?: number }): Promise<unknown>;
       interruptSupervisor(): Promise<unknown>;
       endSupervisor(): Promise<unknown>;
+      resetSupervisor(): Promise<unknown>;
     };
     invoke.mockResolvedValue({ ok: true, value: {} });
 
@@ -333,6 +334,7 @@ describe('preload surface', () => {
     await api.getSupervisorTranscript({ before: 9, limit: 20 });
     await api.interruptSupervisor();
     await api.endSupervisor();
+    await api.resetSupervisor();
 
     expect(invoke.mock.calls).toEqual([
       ['agentico:supervisor:state-get'],
@@ -347,6 +349,7 @@ describe('preload surface', () => {
       ['agentico:supervisor:transcript-get', { before: 9, limit: 20 }],
       ['agentico:supervisor:interrupt'],
       ['agentico:supervisor:end'],
+      ['agentico:supervisor:reset'],
     ]);
     invoke.mockReset();
   });

@@ -216,6 +216,9 @@ type Coordinator struct {
 	streamID     string
 	streamChunks int
 	streamCount  int
+	// turnText is the current turn's latest assistant text, so a failed
+	// result whose error the harness already printed is not repeated.
+	turnText string
 	// ordinals counts provider records per turn and kind, keying the
 	// deterministic id of output that carries no provider id.
 	ordinals map[string]int
@@ -1212,6 +1215,7 @@ func (c *Coordinator) resetProcessLocked() {
 	c.streamID = ""
 	c.streamChunks = 0
 	c.streamCount = 0
+	c.turnText = ""
 	c.ordinals = nil
 	c.ending = false
 	c.keepTurns = false
@@ -1902,6 +1906,7 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 			c.failWriteLocked(c.appendProviderLocked(gen, KindAssistant, ContentData{Content: text}, msg.Assistant.Message.ID, streamID))
 			if current {
 				c.streamID, c.streamChunks = "", 0
+				c.turnText = joinText(text)
 			}
 		}
 		if len(tools) > 0 {
@@ -2155,6 +2160,15 @@ func blockIDs(blocks []llm.ContentBlock, id func(llm.ContentBlock) string) strin
 	return strings.Join(ids, ",")
 }
 
+// joinText concatenates the text of the given text blocks.
+func joinText(blocks []llm.ContentBlock) string {
+	var b strings.Builder
+	for _, block := range blocks {
+		b.WriteString(block.Text)
+	}
+	return b.String()
+}
+
 // providerIDLocked keys a provider record's deterministic id: the provider
 // item id when there is one, else the turn, kind and ordinal within the
 // turn.
@@ -2382,6 +2396,8 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 	c.pending = nil
 	c.unresolved = nil
 	c.streamID, c.streamChunks = "", 0
+	turnText := c.turnText
+	c.turnText = ""
 	switch {
 	case c.interrupt != nil:
 		c.setOutcomeLocked(OutcomeInterrupted, InterruptedByUser)
@@ -2389,6 +2405,13 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 		c.interrupt = nil
 	case result.IsError || result.Subtype == "error" || writeFailed:
 		c.setOutcomeLocked(OutcomeFailed, InterruptedByNone)
+		// A harness that fails the prompt without streaming its error (an
+		// OpenCode or Codex provider error) would otherwise end the turn
+		// with nothing on screen; the marker shows why. A result outside a
+		// turn is a launch failure, which records its own marker.
+		if text := strings.TrimSpace(result.Result); turnID != "" && text != "" && text != strings.TrimSpace(turnText) {
+			c.appendMarkerLocked(c.conv.Generation, turnID, MarkerData{Marker: MarkerError, Text: text})
+		}
 	default:
 		c.setOutcomeLocked(OutcomeCompleted, InterruptedByNone)
 	}

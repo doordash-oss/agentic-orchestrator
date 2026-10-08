@@ -465,6 +465,42 @@ func TestCoordinator_InterruptReturnsAtOnceAndIdlesOnlyAfterResult(t *testing.T)
 	}
 }
 
+func TestCoordinator_FailedResultShowsUnstreamedError(t *testing.T) {
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "what can you do?", "", "cm-1"); err != nil {
+		t.Fatal(err)
+	}
+	sess := launcher.session(0)
+	const cause = "OpenCode prompt failed: code -32603: Internal error: Model not found"
+	sess.emit(llm.SDKMessage{Type: "result", Result: &llm.ResultMessage{Subtype: "error", IsError: true, Result: cause}})
+	if st := c.State(); st.Lifecycle != LifecycleIdle || st.LastTurnOutcome != OutcomeFailed {
+		t.Fatalf("state after failed result = %+v", st)
+	}
+	markers := markersOf(t, allRecords(t, c), MarkerError)
+	if len(markers) != 1 {
+		t.Fatalf("error markers = %d, want 1", len(markers))
+	}
+	var data MarkerData
+	if err := json.Unmarshal(markers[0].Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Text != cause || markers[0].TurnID == "" {
+		t.Fatalf("marker = %+v turn=%q", data, markers[0].TurnID)
+	}
+
+	// An error the harness already streamed as assistant text is not repeated.
+	if _, err := c.Send(context.Background(), "again", "", "cm-2"); err != nil {
+		t.Fatal(err)
+	}
+	sess.emit(assistantText("msg_err", "API Error: overloaded"))
+	sess.emit(llm.SDKMessage{Type: "result", Result: &llm.ResultMessage{Subtype: "error", IsError: true, Result: "API Error: overloaded"}})
+	if got := len(markersOf(t, allRecords(t, c), MarkerError)); got != 1 {
+		t.Fatalf("error markers after streamed error = %d, want 1", got)
+	}
+}
+
 func TestCoordinator_InterruptIgnoredTerminatesAfterGrace(t *testing.T) {
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher, func(o *Options) { o.InterruptGrace = 50 * time.Millisecond })

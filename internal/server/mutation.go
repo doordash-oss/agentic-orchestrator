@@ -1653,14 +1653,6 @@ func ReviewFeedbackGateFromRequest(req ReviewFeedbackFeatureRequest) *bool {
 	return req.Gate
 }
 
-// RebaseChildSpecFromRequest is the zero-input mapper for rebase child
-// launches. The rebase action takes no user input; the orchestrator preflight
-// resolves targets and computes behind-ness before child creation. The mapper
-// exists for structural consistency with the other child-launch actions.
-func RebaseChildSpecFromRequest(_ RebaseFeatureRequest) feature.RebaseChildSpec {
-	return feature.RebaseChildSpec{}
-}
-
 func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {
 	if raw == nil {
 		return true

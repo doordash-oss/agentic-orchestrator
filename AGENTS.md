@@ -137,3 +137,9 @@ Sibling dirs (`permissions/`, `provider-state/`, `worktrees/`, `skills/`,
 `guidelines/`, `agentico.log`) are derived from `filepath.Dir(--state-dir)`. Always pass a
 `<parent>/features` path — not the parent itself — so they stay grouped under
 `<parent>/`.
+
+## Vocabulary and recorded decisions
+
+Before proposing structural changes, read `GLOSSARY.md` for the project's
+vocabulary and `docs/adr/` for recorded decisions, including rejected and
+deferred ones, so a settled question is not reopened without new evidence.

@@ -176,6 +176,24 @@ func ParsePhaseDirName(name string) (Phase, bool) {
 	}
 }
 
+// ParsePhaseName is the strict phase-name parser shared by the REST mutation
+// module and the validate-artifacts command. It accepts every name
+// ParsePhaseDirName accepts plus the review and publish aliases, which have no
+// phase directory of their own.
+func ParsePhaseName(in string) (Phase, error) {
+	if phase, ok := ParsePhaseDirName(in); ok {
+		return phase, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(in)) {
+	case "review":
+		return PhaseReview, nil
+	case "publish":
+		return PhasePublish, nil
+	default:
+		return PhaseResearch, fmt.Errorf("unknown phase %q", in)
+	}
+}
+
 // RewindPreviewForFeature computes an authoritative, side-effect-free rewind
 // preview from the current feature state. It mirrors RewindWithRequest's
 // choice validation, effective-target escalation, partial-roadmap semantics,

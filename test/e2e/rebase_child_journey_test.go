@@ -123,7 +123,8 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 	}
 
 	wm := git.NewWorktreeManager(wtBaseDir)
-	mgr := feature.NewManager(store, config.NewDefault())
+	cfg := config.NewDefault()
+	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = wm
 
 	serverEvents := make(chan interface{}, 512)
@@ -174,7 +175,7 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 		Features:              store,
 		FeatureStore:          store,
 		Events:                serverEvents,
-		Mutations:             &journeyMutationTarget{mgr: mgr, orch: orch},
+		Mutations:             newJourneyMutations(t, orch, mgr, cfg, sm),
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)

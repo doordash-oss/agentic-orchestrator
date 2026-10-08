@@ -32,7 +32,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
+	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/internal/server/mutations"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -96,7 +98,8 @@ func TestRefactorAPIJourney(t *testing.T) {
 	// Real-git adapters: the same wiring the fx module provides in
 	// internal/orchestrator/module.go.
 	wm := git.NewWorktreeManager(wtBaseDir)
-	mgr := feature.NewManager(store, config.NewDefault())
+	cfg := config.NewDefault()
+	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = wm
 
 	orch := orchestrator.New(orchestrator.Deps{Lifecycle: mgr, Store: store}, orchestrator.Hooks{})
@@ -131,7 +134,7 @@ func TestRefactorAPIJourney(t *testing.T) {
 		Features:              store,
 		FeatureStore:          store,
 		Events:                serverEvents,
-		Mutations:             &journeyMutationTarget{mgr: mgr, orch: orch},
+		Mutations:             newJourneyMutations(t, orch, mgr, cfg, nil),
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)
@@ -278,100 +281,19 @@ func TestRefactorAPIJourney(t *testing.T) {
 	}
 }
 
-// journeyMutationTarget drives only the mutations this journey exercises; the
-// embedded interface satisfies MutationTarget, and any other method would
-// fail loudly if dispatched (matching the handler test fakes' pattern is
-// avoided here because every non-refactor/start call would be a test bug).
-type journeyMutationTarget struct {
-	server.MutationTarget
-	mgr  *feature.Manager
-	orch *orchestrator.Orchestrator
-}
-
-func (t *journeyMutationTarget) RefactorFeature(featureID string, req server.RefactorFeatureRequest) (server.RefactorFeatureResponse, error) {
-	resp := server.RefactorFeatureResponse{ParentID: featureID, Result: "failed"}
-	// Use the single production request→spec mapping so the journey cannot
-	// silently drift out of sync with request fields handled in production.
-	spec, err := server.RefactorChildSpecFromRequest(req)
-	if err != nil {
-		return resp, err
-	}
-	child, err := t.mgr.CreateRefactorChild(featureID, spec)
-	if err != nil {
-		return resp, err
-	}
-	t.orch.ChildCreated(child)
-	// Mirror the production mutation target: asynchronous child setup is
-	// orchestrator-owned so terminal setup errors are recorded and emitted.
-	t.orch.RunSetupAsync(child.ID)
-	resp.FeatureID = child.ID
-	resp.Result = "created"
-	return resp, nil
-}
-
-// RebaseFeature mirrors the production rebase child launch: orchestrator
-// preflight resolves targets and computes behind-ness, then the child is
-// created under the relationship write lock with the persisted results.
-func (t *journeyMutationTarget) RebaseFeature(featureID string, _ server.RebaseFeatureRequest) (server.RebaseFeatureResponse, error) {
-	resp := server.RebaseFeatureResponse{ParentID: featureID, Result: "failed"}
-	preflight, err := t.orch.RebaseChildPreflight(featureID)
-	if err != nil {
-		return resp, err
-	}
-	spec := feature.RebaseChildSpec{
-		Bases:   preflight.Bases,
-		Targets: preflight.Targets,
-		Behind:  preflight.Behind,
-	}
-	var child *feature.Feature
-	if err := t.orch.WithRelationshipWriteLock(func() error {
-		var createErr error
-		child, createErr = t.mgr.CreateRebaseChild(featureID, spec)
-		return createErr
-	}); err != nil {
-		return resp, err
-	}
-	t.orch.ChildCreated(child)
-	t.orch.RunSetupAsync(child.ID)
-	resp.FeatureID = child.ID
-	resp.Result = "created"
-	return resp, nil
-}
-
-func (t *journeyMutationTarget) StartFeature(featureID string) (server.FeatureStartResponse, error) {
-	resp := server.FeatureStartResponse{FeatureID: featureID, Result: "failed"}
-	if err := t.orch.StartFeature(featureID); err != nil {
-		return resp, err
-	}
-	resp.Result = "started"
-	return resp, nil
-}
-
-// ReviewDecision mirrors the production mapping so the journey resumes
-// configured roadmap and phase-plan gates through the standard flow.
-func (t *journeyMutationTarget) ReviewDecision(featureID string, req server.ReviewDecisionRequest) error {
-	decision := orchestrator.ReviewDecision{
-		Decision:    req.Decision,
-		TargetPhase: journeyParsePhase(req.Phase),
-		IsRewind:    req.IsRewind,
-		PhasePlan:   req.PhasePlan,
-		Roadmap:     req.Roadmap,
-		Comment:     req.Comment,
-	}
-	return t.orch.HandleReviewDecision(featureID, decision)
-}
-
-// journeyParsePhase mirrors the production phase-name mapping for the small
-// set this journey can request.
-func journeyParsePhase(name string) feature.Phase {
-	switch name {
-	case "Plan":
-		return feature.PhasePlan
-	case "Implement":
-		return feature.PhaseImplement
-	default:
-		return 0
-	}
+// newJourneyMutations wires the production mutation module over the journey's
+// orchestrator, manager, and sessions. Config-update paths persist to a
+// writable temp config path, as the runtime does with its config file.
+func newJourneyMutations(t *testing.T, orch *orchestrator.Orchestrator, mgr *feature.Manager, cfg *config.Config, sessions ports.SessionManager) server.MutationTarget {
+	t.Helper()
+	return mutations.New(mutations.Deps{
+		Orchestrator: orch,
+		Features:     mgr,
+		Store:        mgr.Store,
+		Sessions:     sessions,
+		Config:       cfg,
+		ConfigPath:   filepath.Join(t.TempDir(), "config.yaml"),
+	})
 }
 
 func waitForJourneySetupComplete(t *testing.T, baseURL, childID string) map[string]any {

@@ -95,7 +95,8 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	}
 
 	wm := git.NewWorktreeManager(wtBaseDir)
-	mgr := feature.NewManager(store, config.NewDefault())
+	cfg := config.NewDefault()
+	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = wm
 
 	serverEvents := make(chan interface{}, 512)
@@ -138,7 +139,7 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 		Features:              store,
 		FeatureStore:          store,
 		Events:                serverEvents,
-		Mutations:             &journeyMutationTarget{mgr: mgr, orch: orch},
+		Mutations:             newJourneyMutations(t, orch, mgr, cfg, sm),
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)

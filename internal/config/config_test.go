@@ -1845,3 +1845,23 @@ func TestProvidersEmptyOmittedFromYAML(t *testing.T) {
 		t.Errorf("empty Providers map should be omitted from YAML, got:\n%s", data)
 	}
 }
+
+func TestModelConfigIsEmpty(t *testing.T) {
+	if !(ModelConfig{}).IsEmpty() {
+		t.Fatal("zero ModelConfig should be empty")
+	}
+	for name, m := range map[string]ModelConfig{
+		"inquiry":          {Inquiry: "x"},
+		"research":         {Research: "x"},
+		"planning":         {Planning: "x"},
+		"implementation":   {Implementation: "x"},
+		"review":           {Review: "x"},
+		"utilities":        {Utilities: "x"},
+		"kb build":         {KBBuild: "x"},
+		"automatic review": {AutomaticReview: "x"},
+	} {
+		if m.IsEmpty() {
+			t.Errorf("ModelConfig with %s set should not be empty", name)
+		}
+	}
+}

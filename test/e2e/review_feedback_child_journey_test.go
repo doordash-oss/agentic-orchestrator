@@ -97,7 +97,8 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 
 	fakeAPI := installReviewFeedbackJourneyFakeAPI(t)
 	wm := git.NewWorktreeManager(wtBaseDir)
-	mgr := feature.NewManager(store, config.NewDefault())
+	cfg := config.NewDefault()
+	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = wm
 
 	serverEvents := make(chan interface{}, 512)
@@ -137,7 +138,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 		Features:              store,
 		FeatureStore:          store,
 		Events:                serverEvents,
-		Mutations:             &journeyMutationTarget{mgr: mgr, orch: orch},
+		Mutations:             newJourneyMutations(t, orch, mgr, cfg, sm),
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)
@@ -428,28 +429,6 @@ func reviewFeedbackJourneyBareRemote(t *testing.T, repoPath, branch string) stri
 	// pushes the merge commit for the first time — preserving the
 	// two-parent merge boundary.
 	return remote
-}
-
-// ReviewFeedbackFeature mirrors the production request mapping and async
-// setup ownership while keeping the e2e server wired to its isolated manager.
-func (t *journeyMutationTarget) ReviewFeedbackFeature(featureID string, req server.ReviewFeedbackFeatureRequest) (server.ReviewFeedbackFeatureResponse, error) {
-	resp := server.ReviewFeedbackFeatureResponse{ParentID: featureID, Result: "failed"}
-	var launch *feature.ReviewFeedbackLaunchResult
-	if err := t.orch.WithRelationshipWriteLock(func() error {
-		var launchErr error
-		launch, launchErr = t.mgr.LaunchReviewFeedbackChildFromDraft(featureID, int64(req.ExpectedRevision), req.Gate)
-		return launchErr
-	}); err != nil {
-		return resp, err
-	}
-	child := launch.Child
-	resp.Changed, resp.Omitted, resp.Deferred = launch.Changed, launch.Omitted, launch.Deferred
-	resp.ChildID = child.ID
-	t.orch.ChildCreated(child)
-	t.orch.RunSetupAsync(child.ID)
-	resp.FeatureID = child.ID
-	resp.Result = "created"
-	return resp, nil
 }
 
 // installReviewFeedbackJourneyFakeAPI fakes the PR feedback endpoints for

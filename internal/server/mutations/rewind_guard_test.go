@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package mutations
 
 import (
 	"errors"
@@ -48,7 +48,7 @@ func TestValidateRewindGuardAcceptsCurrentRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	target := serverMutationTarget{store: store}
+	target := mutationTarget{store: store}
 	if _, err := target.validateRewindGuard(f.ID, serverruntime.RewindFeatureRequest{
 		SourceRunNumber: loaded.ActiveRun,
 		SourceRevision:  feature.RewindRevision(loaded),
@@ -59,7 +59,7 @@ func TestValidateRewindGuardAcceptsCurrentRevision(t *testing.T) {
 
 func TestValidateRewindGuardUnguardedWhenNoRevision(t *testing.T) {
 	store, f := newGuardStoreAndFeature(t)
-	target := serverMutationTarget{store: store}
+	target := mutationTarget{store: store}
 	got, err := target.validateRewindGuard(f.ID, serverruntime.RewindFeatureRequest{})
 	if err != nil {
 		t.Fatalf("validateRewindGuard unguarded error = %v; want nil", err)
@@ -71,7 +71,7 @@ func TestValidateRewindGuardUnguardedWhenNoRevision(t *testing.T) {
 
 func TestValidateRewindGuardRejectsStaleRevision(t *testing.T) {
 	store, f := newGuardStoreAndFeature(t)
-	target := serverMutationTarget{store: store}
+	target := mutationTarget{store: store}
 	_, err := target.validateRewindGuard(f.ID, serverruntime.RewindFeatureRequest{
 		SourceRunNumber: f.ActiveRun,
 		SourceRevision:  "stale-revision-token",
@@ -91,7 +91,7 @@ func TestValidateRewindGuardRejectsChangedActiveRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	target := serverMutationTarget{store: store}
+	target := mutationTarget{store: store}
 	_, err = target.validateRewindGuard(f.ID, serverruntime.RewindFeatureRequest{
 		SourceRunNumber: f.ActiveRun + 1, // a different (historical/future) run
 		SourceRevision:  feature.RewindRevision(loaded),
@@ -106,7 +106,7 @@ func TestValidateRewindGuardRejectsChangedActiveRun(t *testing.T) {
 }
 
 func TestValidateRewindGuardRejectsWhenStoreMissing(t *testing.T) {
-	target := serverMutationTarget{} // no store
+	target := mutationTarget{} // no store
 	_, err := target.validateRewindGuard("feat-x", serverruntime.RewindFeatureRequest{
 		SourceRevision: "some-revision",
 	})
@@ -147,29 +147,5 @@ func TestWireRewindWarningsClassifiesAndRedacts(t *testing.T) {
 		warnings[0].Context.Repositories[0].Name != "repo-a" ||
 		warnings[0].Context.Repositories[0].Branch != "feature/x" {
 		t.Fatalf("warnings[0].Context = %+v; want the repo-a repositories block with branch", warnings[0].Context)
-	}
-}
-
-func TestParseServerPhaseStrictUsesSharedDirParser(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  feature.Phase
-	}{
-		{name: "knowledge base alias", input: " KB ", want: feature.PhaseKnowledgeBase},
-		{name: "final review alias", input: "final review", want: feature.PhaseFinalReview},
-		{name: "review extra", input: "review", want: feature.PhaseReview},
-		{name: "publish extra", input: "publish", want: feature.PhasePublish},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseServerPhaseStrict(tt.input)
-			if err != nil {
-				t.Fatalf("parseServerPhaseStrict(%q) error = %v", tt.input, err)
-			}
-			if got != tt.want {
-				t.Fatalf("parseServerPhaseStrict(%q) = %v; want %v", tt.input, got, tt.want)
-			}
-		})
 	}
 }

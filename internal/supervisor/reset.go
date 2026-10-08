@@ -112,6 +112,7 @@ func (c *Coordinator) Reset() (ResetResult, error) {
 	c.applyingChange = false
 	c.failure = nil
 	c.persistFailure = nil
+	c.changeFailure = nil
 	c.lifecycle = LifecycleStopped
 	c.setOutcomeLocked(OutcomeNone, InterruptedByNone)
 	if c.relaunchPrevious != nil {

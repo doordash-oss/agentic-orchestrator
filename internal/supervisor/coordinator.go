@@ -188,13 +188,16 @@ type Coordinator struct {
 	sessionID        string
 	effectiveModel   string
 	launch           *launchAttempt
-	// persistFailure is the latest authoritative write failure. A later
+	// persistFailure is the latest history write failure. A later
 	// successful turn does not restore the lost history, so it stays until
-	// acknowledged or the conversation is reset. failedTurns holds the
-	// current process's turns that lost a write, so their result cannot
-	// report completed.
+	// acknowledged or the conversation is reset. changeFailure is the latest
+	// settings apply failure, kept apart so repairing the change cannot hide
+	// lost history. failedTurns holds the cause for each of the current
+	// process's turns that lost a write, independent of acknowledgement, so
+	// their result cannot report completed.
 	persistFailure *PersistError
-	failedTurns    map[string]bool
+	changeFailure  *PersistError
+	failedTurns    map[string]*PersistError
 	// turns holds the delivered turns still awaiting a result, oldest first.
 	turns     []string
 	turnCount int
@@ -502,8 +505,8 @@ func (c *Coordinator) rememberChangeLocked(id string) error {
 	}
 	// An applied change repairs its own earlier apply failure; no history
 	// was lost there, unlike a failed transcript write.
-	if c.persistFailure != nil && c.persistFailure.ChangeID == id {
-		c.persistFailure = nil
+	if c.changeFailure != nil && c.changeFailure.ChangeID == id {
+		c.changeFailure = nil
 	}
 	c.appliedChanges[id] = true
 	return saveAppliedChanges(c.dir, c.appliedChanges)
@@ -592,7 +595,7 @@ func (c *Coordinator) stateLocked() State {
 		PendingChange:   c.pendingChange,
 		EffectiveModel:  c.effectiveModel,
 		PermissionMode:  c.permMode,
-		PersistFailure:  c.persistFailure,
+		PersistFailure:  c.visiblePersistFailureLocked(),
 		PendingRequests: append([]*llm.ControlRequestMessage(nil), c.pending...),
 		Session:         c.session,
 		HeadSeq:         c.store.head(),
@@ -846,11 +849,25 @@ func (c *Coordinator) CancelPendingChange(id string) (State, error) {
 func (c *Coordinator) AcknowledgePersistFailure() State {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.persistFailure != nil {
+	switch {
+	case c.persistFailure != nil:
 		c.persistFailure = nil
-		c.publishStateLocked()
+	case c.changeFailure != nil:
+		c.changeFailure = nil
+	default:
+		return c.stateLocked()
 	}
+	c.publishStateLocked()
 	return c.stateLocked()
+}
+
+// visiblePersistFailureLocked is the failure the read model shows: lost
+// history outranks a retryable settings apply failure.
+func (c *Coordinator) visiblePersistFailureLocked() *PersistError {
+	if c.persistFailure != nil {
+		return c.persistFailure
+	}
+	return c.changeFailure
 }
 
 func (c *Coordinator) applyRelaunchChange(change *PendingChange) error {
@@ -1272,12 +1289,18 @@ func (c *Coordinator) failWriteLocked(err error) {
 	if !errors.As(err, &perr) {
 		perr = &PersistError{Op: "write", ConversationID: c.conv.ConversationID, Generation: c.conv.Generation, Err: err}
 	}
-	c.persistFailure = perr
+	if perr.ChangeID != "" {
+		c.changeFailure = perr
+	} else {
+		c.persistFailure = perr
+	}
 	if perr.TurnID != "" && perr.Generation == c.conv.Generation {
 		if c.failedTurns == nil {
-			c.failedTurns = map[string]bool{}
+			c.failedTurns = map[string]*PersistError{}
 		}
-		c.failedTurns[perr.TurnID] = true
+		if _, ok := c.failedTurns[perr.TurnID]; !ok {
+			c.failedTurns[perr.TurnID] = perr
+		}
 	}
 	c.publishStateLocked()
 }
@@ -2329,7 +2352,8 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 		c.turns = c.turns[1:]
 		c.failWriteLocked(c.persistTurnsLocked(turnID))
 	}
-	writeFailed := c.failedTurns[turnID]
+	writeFailure := c.failedTurns[turnID]
+	writeFailed := writeFailure != nil
 	delete(c.failedTurns, turnID)
 	// Turn end clears any request the harness left unanswered. Its record
 	// stays requested: the turn was not cut, so a stop leaves it to boot.
@@ -2349,7 +2373,7 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 	if writeFailed {
 		// The turn's history is incomplete on disk; the marker is its
 		// durable trace once the store accepts writes again.
-		c.appendMarkerLocked(c.conv.Generation, turnID, MarkerData{Marker: MarkerError, Text: "Couldn't save part of this turn: " + c.persistFailure.Err.Error()})
+		c.appendMarkerLocked(c.conv.Generation, turnID, MarkerData{Marker: MarkerError, Text: "Couldn't save part of this turn: " + writeFailure.Err.Error()})
 	}
 	if len(c.turns) == 0 {
 		if c.pendingChange != nil {

@@ -160,3 +160,81 @@ func TestPendingChangeFailureKeepsChange(t *testing.T) {
 		t.Fatalf("retried change state: %+v", st)
 	}
 }
+
+func TestDismissDuringTurnStillFailsOutcome(t *testing.T) {
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "first", "", "cm-1"); err != nil {
+		t.Fatal(err)
+	}
+	c.store.mu.Lock()
+	_ = c.store.file.Close()
+	c.store.mu.Unlock()
+	sess := launcher.session(0)
+	sess.emit(assistantText("msg-1", "lost"))
+	waitFor(t, "persist failure while running", func() bool { return c.State().PersistFailure != nil })
+	if st := c.AcknowledgePersistFailure(); st.PersistFailure != nil {
+		t.Fatalf("acknowledged persist failure: %+v", st.PersistFailure)
+	}
+	sess.emit(successResult())
+	st := waitLifecycle(t, c, LifecycleIdle)
+	if st.LastTurnOutcome != OutcomeFailed {
+		t.Fatalf("outcome = %s, want failed", st.LastTurnOutcome)
+	}
+}
+
+func TestRepairedChangeKeepsHistoryFailure(t *testing.T) {
+	dir := t.TempDir()
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, dir, launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "held", "", "cm-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ChangeSettings(SettingsChange{Model: settingValue("sonnet"), RequestID: "change-1", ExpectedGeneration: 1}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, supervisorDirName, pendingChangeFileName)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(path, "block"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c.store.mu.Lock()
+	_ = c.store.file.Close()
+	c.store.mu.Unlock()
+	sess := launcher.session(0)
+	sess.emit(assistantText("msg-1", "lost"))
+	sess.emit(successResult())
+	waitFor(t, "failed change", func() bool {
+		st := c.State()
+		return st.Lifecycle == LifecycleIdle && st.PendingChange != nil
+	})
+	if st := c.State(); st.PersistFailure == nil || st.PersistFailure.TurnID != "g1.t1" {
+		t.Fatalf("history failure hidden by change failure: %+v", st.PersistFailure)
+	}
+	c.store.mu.Lock()
+	f, err := os.OpenFile(filepath.Join(c.store.dir, transcriptFileName), os.O_RDWR, 0o644)
+	if err != nil {
+		c.store.mu.Unlock()
+		t.Fatal(err)
+	}
+	c.store.file = f
+	c.store.mu.Unlock()
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Send(context.Background(), "again", "", "cm-2"); err != nil {
+		t.Fatal(err)
+	}
+	sess.emit(successResult())
+	st := waitLifecycle(t, c, LifecycleStopped)
+	if st.Settings.Model != "sonnet" || st.PendingChange != nil {
+		t.Fatalf("retried change state: %+v", st)
+	}
+	if st.PersistFailure == nil || st.PersistFailure.TurnID != "g1.t1" || st.PersistFailure.ChangeID != "" {
+		t.Fatalf("history failure after repaired change: %+v", st.PersistFailure)
+	}
+}

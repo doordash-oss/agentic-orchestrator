@@ -326,6 +326,34 @@ describe('SupervisorService', () => {
     });
   });
 
+  it('maps an idle persistence failure and dismisses it through DELETE', async () => {
+    const api = transport(() => ({
+      status: 200,
+      body: {
+        api_version: 'v1',
+        state: wireState({
+          lifecycle: 'idle',
+          persist_failure: {
+            code: 'supervisor_history_incomplete',
+            class: 'blocking',
+            title: 'Conversation history not fully saved',
+            summary: 'Part of the supervisor conversation could not be saved.',
+            diagnostics: 'supervisor append assistant record: file already closed',
+          },
+        }),
+      },
+    }));
+    const state = await new SupervisorService({ transport: api }).dismissPersistFailure();
+    expect(api.apiRequest).toHaveBeenCalledWith('/api/v1/supervisor/persist-failure', {
+      method: 'DELETE',
+    });
+    expect(state.failure).toBeUndefined();
+    expect(state.persistFailure).toMatchObject({
+      code: 'supervisor_history_incomplete',
+      diagnostics: 'supervisor append assistant record: file already closed',
+    });
+  });
+
   it('passes the server canonical settings rejection through unchanged', async () => {
     const api = transport(() => ({
       status: 409,

@@ -111,6 +111,7 @@ func (c *Coordinator) Reset() (ResetResult, error) {
 	c.resetProcessLocked()
 	c.applyingChange = false
 	c.failure = nil
+	c.persistFailure = nil
 	c.lifecycle = LifecycleStopped
 	c.setOutcomeLocked(OutcomeNone, InterruptedByNone)
 	if c.relaunchPrevious != nil {

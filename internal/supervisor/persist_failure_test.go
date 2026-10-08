@@ -50,6 +50,47 @@ func TestTurnWriteFailureFailsOutcome(t *testing.T) {
 	}
 }
 
+func TestPersistFailureOutlivesLaterSuccessfulTurn(t *testing.T) {
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "first", "", "cm-1"); err != nil {
+		t.Fatal(err)
+	}
+	c.store.mu.Lock()
+	_ = c.store.file.Close()
+	c.store.mu.Unlock()
+	sess := launcher.session(0)
+	sess.emit(assistantText("msg-1", "lost"))
+	sess.emit(successResult())
+	waitLifecycle(t, c, LifecycleIdle)
+	// Storage recovers; the next turn commits but cannot restore the lost reply.
+	c.store.mu.Lock()
+	f, err := os.OpenFile(filepath.Join(c.store.dir, transcriptFileName), os.O_RDWR, 0o644)
+	if err != nil {
+		c.store.mu.Unlock()
+		t.Fatal(err)
+	}
+	c.store.file = f
+	c.store.mu.Unlock()
+	if _, err := c.Send(context.Background(), "second", "", "cm-2"); err != nil {
+		t.Fatal(err)
+	}
+	sess.emit(assistantText("msg-2", "kept"))
+	sess.emit(successResult())
+	var st State
+	waitFor(t, "completed second turn", func() bool {
+		st = c.State()
+		return st.Lifecycle == LifecycleIdle && st.LastTurnOutcome == OutcomeCompleted
+	})
+	if st.PersistFailure == nil || st.PersistFailure.TurnID != "g1.t1" {
+		t.Fatalf("persist failure after a later successful turn: %+v", st.PersistFailure)
+	}
+	if st := c.AcknowledgePersistFailure(); st.PersistFailure != nil {
+		t.Fatalf("acknowledged persist failure: %+v", st.PersistFailure)
+	}
+}
+
 func TestRetiredGenerationOutputIsNotAWriteFailure(t *testing.T) {
 	launcher := &fakeLauncher{}
 	c := newTestCoordinator(t, t.TempDir(), launcher)

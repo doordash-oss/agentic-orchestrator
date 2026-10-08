@@ -33,16 +33,17 @@ import (
 )
 
 const (
-	apiPathSupervisor              = "/api/v1/supervisor"
-	apiPathSupervisorState         = apiPathSupervisor + "/state"
-	apiPathSupervisorSettings      = apiPathSupervisor + "/settings"
-	apiPathSupervisorPendingChange = apiPathSupervisor + "/pending-change/"
-	apiPathSupervisorTranscript    = apiPathSupervisor + "/transcript"
-	apiPathSupervisorMessages      = apiPathSupervisor + "/messages"
-	apiPathSupervisorInterrupt     = apiPathSupervisor + "/interrupt"
-	apiPathSupervisorEnd           = apiPathSupervisor + "/end"
-	apiPathSupervisorReset         = apiPathSupervisor + "/reset"
-	apiPathSupervisorEvents        = apiPathSupervisor + "/events"
+	apiPathSupervisor               = "/api/v1/supervisor"
+	apiPathSupervisorState          = apiPathSupervisor + "/state"
+	apiPathSupervisorSettings       = apiPathSupervisor + "/settings"
+	apiPathSupervisorPendingChange  = apiPathSupervisor + "/pending-change/"
+	apiPathSupervisorPersistFailure = apiPathSupervisor + "/persist-failure"
+	apiPathSupervisorTranscript     = apiPathSupervisor + "/transcript"
+	apiPathSupervisorMessages       = apiPathSupervisor + "/messages"
+	apiPathSupervisorInterrupt      = apiPathSupervisor + "/interrupt"
+	apiPathSupervisorEnd            = apiPathSupervisor + "/end"
+	apiPathSupervisorReset          = apiPathSupervisor + "/reset"
+	apiPathSupervisorEvents         = apiPathSupervisor + "/events"
 )
 
 // maxSupervisorMessageRunes bounds one supervisor message's text.
@@ -62,6 +63,7 @@ type SupervisorService interface {
 	UpdateSettings(supervisor.Settings) (supervisor.State, error)
 	ChangeSettings(supervisor.SettingsChange) (supervisor.State, error)
 	CancelPendingChange(string) (supervisor.State, error)
+	AcknowledgePersistFailure() supervisor.State
 	SendMessage(ctx context.Context, msg supervisor.Message) (supervisor.SendResult, error)
 	Interrupt() (supervisor.ActionResult, supervisor.State)
 	End() (supervisor.ActionResult, supervisor.State)
@@ -79,6 +81,8 @@ func supervisorMutationMethods(path string) ([]string, bool) {
 	switch path {
 	case apiPathSupervisorSettings:
 		return []string{http.MethodPatch}, true
+	case apiPathSupervisorPersistFailure:
+		return []string{http.MethodDelete}, true
 	case apiPathSupervisorMessages, apiPathSupervisorInterrupt, apiPathSupervisorEnd, apiPathSupervisorReset:
 		return []string{http.MethodPost}, true
 	}
@@ -116,6 +120,8 @@ func supervisorRoute(path string) (func(*apiHandler, http.ResponseWriter, *http.
 		return (*apiHandler).handleSupervisorState, http.MethodGet
 	case apiPathSupervisorSettings:
 		return (*apiHandler).handleSupervisorSettings, http.MethodPatch
+	case apiPathSupervisorPersistFailure:
+		return (*apiHandler).handleSupervisorPersistFailure, http.MethodDelete
 	case apiPathSupervisorTranscript:
 		return (*apiHandler).handleSupervisorTranscript, http.MethodGet
 	case apiPathSupervisorMessages:
@@ -181,6 +187,10 @@ func (h *apiHandler) handleSupervisorPendingChange(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, http.StatusOK, SupervisorStateResponse{APIVersion: APIVersion, State: supervisorStateDTO(st)})
+}
+
+func (h *apiHandler) handleSupervisorPersistFailure(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, SupervisorStateResponse{APIVersion: APIVersion, State: supervisorStateDTO(h.supervisor.AcknowledgePersistFailure())})
 }
 
 func (h *apiHandler) handleSupervisorTranscript(w http.ResponseWriter, r *http.Request) {
@@ -443,6 +453,10 @@ func supervisorStateDTO(st supervisor.State) SupervisorState {
 	if st.Failure != nil && st.Lifecycle == supervisor.LifecycleFailed {
 		failure := supervisorLaunchFailure(st.Failure)
 		dto.Failure = &failure
+	}
+	if st.PersistFailure != nil {
+		failure := wireError(errcat.New(errcat.SupervisorHistoryIncomplete, errcat.WithDiagnostics(SafeDisplayText(st.PersistFailure.Error(), 400))))
+		dto.PersistFailure = &failure
 	}
 	return dto
 }

@@ -1230,6 +1230,23 @@ export function SupervisorPage({
             }
           />
         ) : null}
+        {state?.persistFailure !== undefined ? (
+          // Independent of lifecycle: a later successful turn does not
+          // restore the unsaved history, so only Dismiss or a new
+          // conversation removes it.
+          <ErrorSurface
+            error={state.persistFailure}
+            variant="compact"
+            localAction={{
+              label: SUPERVISOR_COPY.dismiss,
+              onAction: () =>
+                void window.agentico
+                  .dismissSupervisorPersistFailure()
+                  .then(setState)
+                  .catch((error) => setInlineError(parseIpcError(error))),
+            }}
+          />
+        ) : null}
         {shownInlineError !== null ? (
           <ErrorSurface error={shownInlineError} variant="compact" />
         ) : null}

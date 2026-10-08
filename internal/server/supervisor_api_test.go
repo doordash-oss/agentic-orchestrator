@@ -20,6 +20,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -130,6 +131,40 @@ func TestSupervisorRoutes_CancelPendingChange(t *testing.T) {
 	}
 	serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorPendingChange+"change-1", ""), http.StatusMethodNotAllowed, nil)
 	serveSupervisor(t, h, supervisorRequest(http.MethodDelete, apiPathSupervisorPendingChange+"bad/id", ""), http.StatusNotFound, nil)
+}
+
+func (s *recordingSupervisor) AcknowledgePersistFailure() supervisor.State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.state.PersistFailure = nil
+	return s.state
+}
+
+// A write failure reaches the read model on an idle conversation, not only
+// with the failed lifecycle, and leaves only when dismissed.
+func TestSupervisorRoutes_PersistFailure(t *testing.T) {
+	svc := &recordingSupervisor{state: supervisor.State{
+		ConversationID:  "conv-1",
+		Lifecycle:       supervisor.LifecycleIdle,
+		LastTurnOutcome: supervisor.OutcomeCompleted,
+		PersistFailure:  &supervisor.PersistError{Op: "append assistant record", ConversationID: "conv-1", Generation: 1, TurnID: "g1.t1", Err: os.ErrClosed},
+	}}
+	h := newSupervisorTestHandler(svc, nil)
+	var body SupervisorStateResponse
+	serveSupervisor(t, h, supervisorRequest(http.MethodGet, apiPathSupervisorState, ""), http.StatusOK, &body)
+	failure := body.State.PersistFailure
+	if failure == nil || failure.Code != string(errcat.SupervisorHistoryIncomplete) || !strings.Contains(failure.Diagnostics, "append assistant record") {
+		t.Fatalf("persist failure: %+v", failure)
+	}
+	if body.State.Failure != nil {
+		t.Fatalf("idle state carried a launch failure: %+v", body.State.Failure)
+	}
+	body = SupervisorStateResponse{}
+	serveSupervisor(t, h, supervisorRequest(http.MethodDelete, apiPathSupervisorPersistFailure, ""), http.StatusOK, &body)
+	if body.State.PersistFailure != nil {
+		t.Fatalf("persist failure survived dismissal: %+v", body.State.PersistFailure)
+	}
+	serveSupervisor(t, h, supervisorRequest(http.MethodPost, apiPathSupervisorPersistFailure, ""), http.StatusMethodNotAllowed, nil)
 }
 
 func (s *recordingSupervisor) SendMessage(ctx context.Context, msg supervisor.Message) (supervisor.SendResult, error) {
@@ -475,11 +510,12 @@ func TestSupervisorRoutes_UnavailableWithoutService(t *testing.T) {
 
 func TestSupervisorMutationPreflightListsOnlyAllowedMethods(t *testing.T) {
 	for path, want := range map[string]string{
-		apiPathSupervisorSettings:  http.MethodPatch,
-		apiPathSupervisorMessages:  http.MethodPost,
-		apiPathSupervisorInterrupt: http.MethodPost,
-		apiPathSupervisorEnd:       http.MethodPost,
-		apiPathSupervisorReset:     http.MethodPost,
+		apiPathSupervisorSettings:       http.MethodPatch,
+		apiPathSupervisorMessages:       http.MethodPost,
+		apiPathSupervisorInterrupt:      http.MethodPost,
+		apiPathSupervisorEnd:            http.MethodPost,
+		apiPathSupervisorReset:          http.MethodPost,
+		apiPathSupervisorPersistFailure: http.MethodDelete,
 	} {
 		methods, ok := mutationRouteMethods(path)
 		if !ok || len(methods) != 1 || methods[0] != want {

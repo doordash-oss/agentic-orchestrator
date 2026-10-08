@@ -107,6 +107,7 @@ export const IPC_CHANNELS = {
   supervisorStateGet: 'agentico:supervisor:state-get',
   supervisorSettingsUpdate: 'agentico:supervisor:settings-update',
   supervisorPendingChangeCancel: 'agentico:supervisor:pending-change-cancel',
+  supervisorPersistFailureDismiss: 'agentico:supervisor:persist-failure-dismiss',
   supervisorTranscriptGet: 'agentico:supervisor:transcript-get',
   supervisorMessageSend: 'agentico:supervisor:message-send',
   supervisorInterrupt: 'agentico:supervisor:interrupt',
@@ -2940,6 +2941,11 @@ export const SupervisorStateSchema = z.strictObject({
   failure: CanonicalErrorSchema.extend({
     attemptedSettings: SupervisorSettingsSchema.optional(),
   }).optional(),
+  /**
+   * Canonical `supervisor_history_incomplete` error for the latest write
+   * that failed, whatever the lifecycle; stays until dismissed or reset.
+   */
+  persistFailure: CanonicalErrorSchema.optional(),
   pendingRequests: z.array(SupervisorPendingRequestSchema).max(100),
   contextUsage: z
     .strictObject({
@@ -4679,6 +4685,10 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([SupervisorPendingChangeCancelRequestSchema]),
     response: SupervisorStateSchema,
   },
+  [IPC_CHANNELS.supervisorPersistFailureDismiss]: {
+    request: z.tuple([]),
+    response: SupervisorStateSchema,
+  },
   [IPC_CHANNELS.supervisorTranscriptGet]: {
     request: z.tuple([SupervisorTranscriptRequestSchema]),
     response: SupervisorTranscriptPageSchema,
@@ -5097,6 +5107,8 @@ export interface AgenticoApi {
   cancelSupervisorPendingChange(
     request: SupervisorPendingChangeCancelRequest,
   ): Promise<SupervisorState>;
+  /** Dismisses the retained history-write failure (`persistFailure`). */
+  dismissSupervisorPersistFailure(): Promise<SupervisorState>;
   /** Reads one transcript page: newest with no cursor, else before/after a seq. */
   getSupervisorTranscript(request: SupervisorTranscriptRequest): Promise<SupervisorTranscriptPage>;
   /**

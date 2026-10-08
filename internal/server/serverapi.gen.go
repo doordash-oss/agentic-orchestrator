@@ -2054,6 +2054,21 @@ func (e CancelSupervisorPendingChangeParamsXAgenticoClient) Valid() bool {
 	}
 }
 
+// Defines values for DismissSupervisorPersistFailureParamsXAgenticoClient.
+const (
+	DismissSupervisorPersistFailureParamsXAgenticoClientLocal DismissSupervisorPersistFailureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the DismissSupervisorPersistFailureParamsXAgenticoClient enum.
+func (e DismissSupervisorPersistFailureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case DismissSupervisorPersistFailureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ResetSupervisorParamsXAgenticoClient.
 const (
 	ResetSupervisorParamsXAgenticoClientLocal ResetSupervisorParamsXAgenticoClient = "local"
@@ -2296,13 +2311,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -5010,6 +5025,9 @@ type SupervisorState struct {
 	// PermissionMode Permission mode the supervisor asked the harness for and the mode the running harness reported. `effective` is empty until a process reports it.
 	PermissionMode SupervisorPermissionMode `json:"permission_mode"`
 
+	// PersistFailure Canonical `supervisor_history_incomplete` error for the most recent transcript or state write that failed, whatever the lifecycle. A later successful turn does not clear it; it stays until dismissed through `DELETE /api/v1/supervisor/persist-failure` or the conversation is reset.
+	PersistFailure *Error `json:"persist_failure,omitempty"`
+
 	// SessionID Session-manager id of the current generation (`__supervisor__.<conversation>.<generation>`); empty when no process exists.
 	SessionID string `json:"session_id"`
 
@@ -5870,6 +5888,15 @@ type CancelSupervisorPendingChangeParams struct {
 
 // CancelSupervisorPendingChangeParamsXAgenticoClient defines parameters for CancelSupervisorPendingChange.
 type CancelSupervisorPendingChangeParamsXAgenticoClient string
+
+// DismissSupervisorPersistFailureParams defines parameters for DismissSupervisorPersistFailure.
+type DismissSupervisorPersistFailureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient DismissSupervisorPersistFailureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// DismissSupervisorPersistFailureParamsXAgenticoClient defines parameters for DismissSupervisorPersistFailure.
+type DismissSupervisorPersistFailureParamsXAgenticoClient string
 
 // ResetSupervisorJSONBody defines parameters for ResetSupervisor.
 type ResetSupervisorJSONBody map[string]interface{}

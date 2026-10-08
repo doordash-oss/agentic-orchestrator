@@ -265,6 +265,7 @@ function makeServices(): IpcServices {
       ),
     ),
     cancelSupervisorPendingChange: vi.fn(() => Promise.resolve(supervisorState())),
+    dismissSupervisorPersistFailure: vi.fn(() => Promise.resolve(supervisorState())),
     getSupervisorTranscript: vi.fn(() =>
       Promise.resolve({
         conversationId: 'conv-1',

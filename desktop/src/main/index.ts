@@ -1552,6 +1552,7 @@ if (!hasSingleInstanceLock) {
       getSupervisorState: () => supervisor.getState(),
       updateSupervisorSettings: (request) => supervisor.updateSettings(request),
       cancelSupervisorPendingChange: (request) => supervisor.cancelPendingChange(request),
+      dismissSupervisorPersistFailure: () => supervisor.dismissPersistFailure(),
       getSupervisorTranscript: (request) => supervisor.getTranscript(request),
       sendSupervisorMessage: async (request) => {
         const result = await supervisor.sendMessage(request);

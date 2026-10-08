@@ -45,6 +45,7 @@ export const EXPECTED_API_SURFACE: readonly string[] = [
   'deleteFeatureCascade',
   'discardLocalReviewDraft',
   'discardRefactorChild',
+  'dismissSupervisorPersistFailure',
   'dispatchFeatureAction',
   'dispatchFeatureSetup',
   'endSupervisor',

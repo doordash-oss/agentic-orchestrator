@@ -188,9 +188,11 @@ type Coordinator struct {
 	sessionID        string
 	effectiveModel   string
 	launch           *launchAttempt
-	// persistFailure is the latest authoritative write failure; failedTurns
-	// holds the current process's turns that lost a write, so their result
-	// cannot report completed.
+	// persistFailure is the latest authoritative write failure. A later
+	// successful turn does not restore the lost history, so it stays until
+	// acknowledged or the conversation is reset. failedTurns holds the
+	// current process's turns that lost a write, so their result cannot
+	// report completed.
 	persistFailure *PersistError
 	failedTurns    map[string]bool
 	// turns holds the delivered turns still awaiting a result, oldest first.
@@ -497,6 +499,11 @@ func (c *Coordinator) applyBootChange() error {
 func (c *Coordinator) rememberChangeLocked(id string) error {
 	if id == "" {
 		return nil
+	}
+	// An applied change repairs its own earlier apply failure; no history
+	// was lost there, unlike a failed transcript write.
+	if c.persistFailure != nil && c.persistFailure.ChangeID == id {
+		c.persistFailure = nil
 	}
 	c.appliedChanges[id] = true
 	return saveAppliedChanges(c.dir, c.appliedChanges)
@@ -832,6 +839,18 @@ func (c *Coordinator) CancelPendingChange(id string) (State, error) {
 	}
 	c.publishStateLocked()
 	return c.stateLocked(), nil
+}
+
+// AcknowledgePersistFailure dismisses the retained write failure once the
+// person has seen that part of the history was not saved.
+func (c *Coordinator) AcknowledgePersistFailure() State {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.persistFailure != nil {
+		c.persistFailure = nil
+		c.publishStateLocked()
+	}
+	return c.stateLocked()
 }
 
 func (c *Coordinator) applyRelaunchChange(change *PendingChange) error {
@@ -1238,12 +1257,12 @@ func (c *Coordinator) persistTurnsLocked(turnID string) error {
 // changeErrorLocked wraps a failure to apply or persist a queued settings
 // change.
 func (c *Coordinator) changeErrorLocked(change *PendingChange, err error) error {
-	return &PersistError{Op: "apply " + change.Kind + " change " + change.RequestID, ConversationID: c.conv.ConversationID, Generation: c.conv.Generation, Err: err}
+	return &PersistError{Op: "apply " + change.Kind + " change " + change.RequestID, ConversationID: c.conv.ConversationID, Generation: c.conv.Generation, ChangeID: change.RequestID, Err: err}
 }
 
 // failWriteLocked records an authoritative write failure: it is logged,
-// surfaced in the read model and, for a turn of the current generation,
-// fails that turn's outcome.
+// published in the read model whatever the lifecycle and, for a turn of the
+// current generation, fails that turn's outcome.
 func (c *Coordinator) failWriteLocked(err error) {
 	if err == nil {
 		return
@@ -1260,6 +1279,7 @@ func (c *Coordinator) failWriteLocked(err error) {
 		}
 		c.failedTurns[perr.TurnID] = true
 	}
+	c.publishStateLocked()
 }
 
 func (c *Coordinator) generationDir(gen int64) string {
@@ -2325,7 +2345,6 @@ func (c *Coordinator) observeResultLocked(result *llm.ResultMessage) {
 		c.setOutcomeLocked(OutcomeFailed, InterruptedByNone)
 	default:
 		c.setOutcomeLocked(OutcomeCompleted, InterruptedByNone)
-		c.persistFailure = nil
 	}
 	if writeFailed {
 		// The turn's history is incomplete on disk; the marker is its

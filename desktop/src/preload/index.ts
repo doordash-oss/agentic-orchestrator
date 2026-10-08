@@ -275,6 +275,7 @@ const api: AgenticoApi = {
     call(IPC_CHANNELS.supervisorSettingsUpdate, request),
   cancelSupervisorPendingChange: (request: SupervisorPendingChangeCancelRequest) =>
     call(IPC_CHANNELS.supervisorPendingChangeCancel, request),
+  dismissSupervisorPersistFailure: () => call(IPC_CHANNELS.supervisorPersistFailureDismiss),
   getSupervisorTranscript: (request: SupervisorTranscriptRequest) =>
     call(IPC_CHANNELS.supervisorTranscriptGet, request),
   sendSupervisorMessage: (request: SupervisorMessageRequest) =>

@@ -17,7 +17,8 @@ package errcat
 // Supervisor conversation codes. The supervisor REST namespace refuses a
 // request with one of these before any provider work starts, except
 // SupervisorLaunchFailed, which reports a launch or handshake that failed
-// after the request was admitted.
+// after the request was admitted, and SupervisorHistoryIncomplete, which
+// only the read model carries.
 const (
 	// SupervisorSettingsLocked refuses a settings change while a supervisor
 	// process exists.
@@ -41,4 +42,8 @@ const (
 	// CursorOutOfRange refuses a transcript page cursor beyond the stored
 	// range; the client reloads the newest page.
 	CursorOutOfRange Code = "cursor_out_of_range"
+	// SupervisorHistoryIncomplete reports an authoritative transcript or
+	// state write that failed; it stays in the read model until dismissed
+	// or the conversation is reset, whatever the lifecycle.
+	SupervisorHistoryIncomplete Code = "supervisor_history_incomplete"
 )

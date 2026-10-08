@@ -2024,6 +2024,7 @@ function makeMockApi(
         },
       }),
     cancelSupervisorPendingChange: () => Promise.resolve(SUPERVISOR_STATE),
+    dismissSupervisorPersistFailure: () => Promise.resolve(SUPERVISOR_STATE),
     getSupervisorTranscript: () =>
       Promise.resolve({
         conversationId: SUPERVISOR_STATE.conversationId,

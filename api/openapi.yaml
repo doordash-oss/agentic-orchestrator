@@ -1631,6 +1631,24 @@ paths:
         "503":
           $ref: "#/components/responses/ErrorResponse"
 
+  /api/v1/supervisor/persist-failure:
+    delete:
+      operationId: dismissSupervisorPersistFailure
+      summary: Dismiss the retained history-write failure.
+      description: >-
+        Clears `persist_failure` from the read model once the person has seen
+        that part of the history was not saved. Idempotent: dismissing when
+        no failure is retained returns the unchanged state.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
   /api/v1/supervisor/transcript:
     get:
       operationId: getSupervisorTranscript
@@ -5877,6 +5895,15 @@ components:
             Canonical error of the most recent launch failure; present only
             while the lifecycle is `failed`. attempted_settings is present
             when a relaunch change was reverted.
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+        persist_failure:
+          description: >-
+            Canonical `supervisor_history_incomplete` error for the most recent
+            transcript or state write that failed, whatever the lifecycle.
+            A later successful turn does not clear it; it stays until
+            dismissed through `DELETE /api/v1/supervisor/persist-failure` or
+            the conversation is reset.
           $ref: "#/components/schemas/Error"
           x-go-type-skip-optional-pointer: false
         pending_requests:

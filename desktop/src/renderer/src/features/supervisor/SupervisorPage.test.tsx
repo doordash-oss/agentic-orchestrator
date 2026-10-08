@@ -1116,6 +1116,32 @@ describe('SupervisorPage restart and launch failure', () => {
   });
 });
 
+describe('SupervisorPage history write failure', () => {
+  it('shows the persistence failure on an idle conversation until dismissed', async () => {
+    const mock = await renderPage({
+      supervisorState: supervisorState({
+        settings: CHOSEN,
+        generation: 1,
+        lifecycle: 'idle',
+        lastTurnOutcome: 'completed',
+        persistFailure: {
+          code: 'supervisor_history_incomplete',
+          class: 'blocking',
+          title: 'Conversation history not fully saved',
+          summary: 'Part of the supervisor conversation could not be saved.',
+        },
+      }),
+    });
+
+    expect(status()).toHaveTextContent('Ready');
+    const card = screen.getByRole('alert');
+    expect(within(card).getByText('Conversation history not fully saved')).toBeVisible();
+    await userEvent.setup().click(within(card).getByRole('button', { name: 'Dismiss' }));
+    expect(mock.api.dismissSupervisorPersistFailure).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+});
+
 describe('SupervisorPage sub-agent requests', () => {
   const CHILD = { origin: 'child' as const, childSessionId: 'agent_sub_1' };
 

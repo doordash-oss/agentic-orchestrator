@@ -1260,6 +1260,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/supervisor/persist-failure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Dismiss the retained history-write failure.
+         * @description Clears `persist_failure` from the read model once the person has seen that part of the history was not saved. Idempotent: dismissing when no failure is retained returns the unchanged state.
+         */
+        delete: operations["dismissSupervisorPersistFailure"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/supervisor/transcript": {
         parameters: {
             query?: never;
@@ -2795,6 +2815,8 @@ export interface components {
             permission_mode: components["schemas"]["SupervisorPermissionMode"];
             /** @description Canonical error of the most recent launch failure; present only while the lifecycle is `failed`. attempted_settings is present when a relaunch change was reverted. */
             failure?: components["schemas"]["Error"];
+            /** @description Canonical `supervisor_history_incomplete` error for the most recent transcript or state write that failed, whatever the lifecycle. A later successful turn does not clear it; it stays until dismissed through `DELETE /api/v1/supervisor/persist-failure` or the conversation is reset. */
+            persist_failure?: components["schemas"]["Error"];
             pending_requests: components["schemas"]["ControlRequest"][];
             /**
              * Format: int64
@@ -5545,6 +5567,23 @@ export interface operations {
             200: components["responses"]["SupervisorStateResponse"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["ErrorResponse"];
+            503: components["responses"]["ErrorResponse"];
+        };
+    };
+    dismissSupervisorPersistFailure: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
+                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: components["responses"]["SupervisorStateResponse"];
+            401: components["responses"]["Unauthorized"];
             503: components["responses"]["ErrorResponse"];
         };
     };

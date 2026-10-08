@@ -68,6 +68,7 @@ const SUPERVISOR_ROUTES: Readonly<
 > = {
   '/api/v1/supervisor/state': { method: 'GET' },
   '/api/v1/supervisor/settings': { method: 'PATCH' },
+  '/api/v1/supervisor/persist-failure': { method: 'DELETE' },
   '/api/v1/supervisor/transcript': { method: 'GET', query: hasSupervisorTranscriptQuery },
   '/api/v1/supervisor/messages': { method: 'POST' },
   '/api/v1/supervisor/interrupt': { method: 'POST' },

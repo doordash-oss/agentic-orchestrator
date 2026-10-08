@@ -157,12 +157,14 @@ func (e *ChangePendingError) Error() string { return "supervisor change pending:
 var ErrPendingChangeNotFound = errors.New("supervisor pending change not found")
 
 // PersistError reports an authoritative write the coordinator could not
-// commit. TurnID is empty for writes outside a turn.
+// commit. TurnID is empty for writes outside a turn; ChangeID names the
+// queued settings change a failed apply belongs to.
 type PersistError struct {
 	Op             string
 	ConversationID string
 	Generation     int64
 	TurnID         string
+	ChangeID       string
 	Err            error
 }
 
@@ -194,8 +196,9 @@ type State struct {
 	// Failure is the most recent launch failure; set only while the
 	// lifecycle is failed.
 	Failure *LaunchFailedError
-	// PersistFailure is the most recent authoritative write failure; a
-	// later cleanly completed turn clears it.
+	// PersistFailure is the most recent authoritative write failure,
+	// independent of lifecycle; it stays until acknowledged or the
+	// conversation is reset.
 	PersistFailure *PersistError
 	// PendingRequests are the surfaced control requests awaiting an answer,
 	// in arrival order. Session is the session they belong to.

@@ -1776,6 +1776,12 @@ var catalog = map[Code]Entry{
 		Summary:     "The requested transcript position is past the end of the conversation.",
 		Remediation: "Reload the newest page of the conversation.",
 	},
+	SupervisorHistoryIncomplete: {
+		Class:       ClassBlocking,
+		Title:       "Conversation history not fully saved",
+		Summary:     "Part of the supervisor conversation could not be saved, so it may be missing after a restart or harness switch.",
+		Remediation: "Check that the Agentico data directory is writable and has free space, then dismiss this notice or start a new conversation.",
+	},
 
 	// --- Chat-context codes ---------------------------------------------------
 	// An explain-in-chat turn can attach a structured reference to the

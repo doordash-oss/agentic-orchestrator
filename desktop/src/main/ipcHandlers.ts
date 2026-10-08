@@ -233,6 +233,7 @@ export interface IpcServices {
   cancelSupervisorPendingChange(
     request: SupervisorPendingChangeCancelRequest,
   ): Promise<SupervisorState>;
+  dismissSupervisorPersistFailure(): Promise<SupervisorState>;
   getSupervisorTranscript(request: SupervisorTranscriptRequest): Promise<SupervisorTranscriptPage>;
   sendSupervisorMessage(request: SupervisorMessageRequest): Promise<SupervisorMessageResult>;
   interruptSupervisor(): Promise<SupervisorActionResult>;
@@ -472,6 +473,8 @@ export function registerIpcHandlers(
       _event,
       request: SupervisorPendingChangeCancelRequest,
     ) => services.cancelSupervisorPendingChange(request),
+    [IPC_CHANNELS.supervisorPersistFailureDismiss]: () =>
+      services.dismissSupervisorPersistFailure(),
     [IPC_CHANNELS.supervisorTranscriptGet]: (_event, request: SupervisorTranscriptRequest) =>
       services.getSupervisorTranscript(request),
     [IPC_CHANNELS.supervisorMessageSend]: (_event, request: SupervisorMessageRequest) =>

@@ -1556,6 +1556,7 @@ export const ServerSupervisorStateSchema = z.object({
   failure: CanonicalErrorSchema.extend({
     attempted_settings: ServerSupervisorSettingsSchema.optional(),
   }).optional(),
+  persist_failure: CanonicalErrorSchema.optional(),
   pending_requests: z.array(ServerControlRequestSchema).max(100),
   context_usage: z
     .object({

@@ -63,6 +63,7 @@ export const SUPERVISOR_COPY = {
   failed: 'Supervisor failed — Retry',
   retry: 'Retry',
   retryNeedsText: 'Type a message to retry.',
+  dismiss: 'Dismiss',
   loadingEarlier: 'Loading earlier messages…',
   earlierFailed: "Couldn't load earlier messages",
   interruptedFooter: 'Interrupted',

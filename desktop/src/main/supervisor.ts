@@ -97,6 +97,21 @@ export function toWireErrorReference(reference: ErrorReference): Record<string, 
   };
 }
 
+type ServerStateError = NonNullable<ServerSupervisorState['persist_failure']>;
+
+/** Maps a canonical error carried in the state read model. */
+function toStateError(error: ServerStateError) {
+  return {
+    code: error.code,
+    class: error.class,
+    title: error.title,
+    summary: error.summary,
+    ...(error.remediation === undefined ? {} : { remediation: error.remediation }),
+    ...(error.context === undefined ? {} : { context: error.context }),
+    ...(error.diagnostics === undefined ? {} : { diagnostics: error.diagnostics }),
+  };
+}
+
 /** Maps the wire state read model to the renderer shape. */
 export function toSupervisorState(state: ServerSupervisorState): SupervisorState {
   return validateWithSchema(
@@ -133,22 +148,15 @@ export function toSupervisorState(state: ServerSupervisorState): SupervisorState
         ? {}
         : {
             failure: {
-              code: state.failure.code,
-              class: state.failure.class,
-              title: state.failure.title,
-              summary: state.failure.summary,
-              ...(state.failure.remediation === undefined
-                ? {}
-                : { remediation: state.failure.remediation }),
-              ...(state.failure.context === undefined ? {} : { context: state.failure.context }),
-              ...(state.failure.diagnostics === undefined
-                ? {}
-                : { diagnostics: state.failure.diagnostics }),
+              ...toStateError(state.failure),
               ...(state.failure.attempted_settings === undefined
                 ? {}
                 : { attemptedSettings: state.failure.attempted_settings }),
             },
           }),
+      ...(state.persist_failure === undefined
+        ? {}
+        : { persistFailure: toStateError(state.persist_failure) }),
       pendingRequests: state.pending_requests.map(supervisorPendingRequest),
       contextUsage:
         state.context_usage === null
@@ -291,6 +299,11 @@ export class SupervisorService {
         method: 'DELETE',
       },
     );
+    return toSupervisorState(validateWithSchema(body, SupervisorStateResponseSchema).state);
+  }
+
+  async dismissPersistFailure(): Promise<SupervisorState> {
+    const body = await this.request('/api/v1/supervisor/persist-failure', { method: 'DELETE' });
     return toSupervisorState(validateWithSchema(body, SupervisorStateResponseSchema).state);
   }
 

@@ -364,6 +364,7 @@ func TestEmbeddedSupervisorSkillPresent(t *testing.T) {
 		"SKILL.md",
 		"api-reference.md",
 		"recipes.md",
+		"slack-monitoring.md",
 		"environment.md",
 		"user-guide/index.md",
 	} {
@@ -385,7 +386,7 @@ func TestEmbeddedSupervisorSkillPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading supervisor SKILL.md: %v", err)
 	}
-	for _, link := range []string{"](api-reference.md)", "](recipes.md)", "](environment.md)", "](user-guide/index.md)"} {
+	for _, link := range []string{"](api-reference.md)", "](recipes.md)", "](slack-monitoring.md)", "](environment.md)", "](user-guide/index.md)"} {
 		if !strings.Contains(string(core), link) {
 			t.Errorf("supervisor SKILL.md does not link %q", link)
 		}

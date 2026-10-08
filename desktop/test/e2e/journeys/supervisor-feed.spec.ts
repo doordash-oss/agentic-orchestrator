@@ -166,7 +166,7 @@ test('supervisor feed replays Markdown and every completed file diff in both the
         content: [
           {
             type: 'text',
-            text: '**Done.** The welcome now uses a time-of-day greeting.\n\n- Updated `welcome.ts`\n- Added a regression test\n\nBoth checks pass.',
+            text: '**Done.** The welcome now uses a time-of-day greeting.\n\n- Updated `welcome.ts`\n- Added a regression test\n\nBoth checks pass. [Review PR](https://example.com/pull/1?x=1&y=2) or see https://example.com/guide.\n\n`https://example.com/code`',
           },
         ],
       },
@@ -202,6 +202,38 @@ test('supervisor feed replays Markdown and every completed file diff in both the
     await expect(creationCards.last()).toContainText('answer = 2');
     await expect(feed.getByText('Welcome screen reviewed')).toBeVisible();
     await expect(feed.getByText('Completed', { exact: true })).toBeVisible();
+    // Keep the real renderer → preload → main validation path, replacing
+    // only the final OS browser launch so this journey opens no real browser.
+    await handle.app.evaluate(({ shell }) => {
+      const state = globalThis as typeof globalThis & { openedLinks: string[] };
+      state.openedLinks = [];
+      shell.openExternal = async (url) => {
+        state.openedLinks.push(url);
+      };
+    });
+    const pageUrl = handle.page.url();
+    await feed.getByRole('link', { name: 'Review PR' }).click({ modifiers: ['Meta'] });
+    await feed
+      .getByRole('link', { name: 'https://example.com/guide' })
+      .click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
+    await feed.getByRole('link', { name: 'Review PR' }).focus();
+    await handle.page.keyboard.press('Enter');
+    await expect
+      .poll(() =>
+        handle!.app.evaluate(
+          () => (globalThis as typeof globalThis & { openedLinks: string[] }).openedLinks,
+        ),
+      )
+      .toEqual([
+        'https://example.com/pull/1?x=1&y=2',
+        'https://example.com/guide',
+        'https://example.com/pull/1?x=1&y=2',
+      ]);
+    expect(handle.page.url()).toBe(pageUrl);
+    expect(handle.app.windows()).toHaveLength(1);
+    await expect(
+      feed.locator('code').filter({ hasText: 'https://example.com/code' }),
+    ).toBeVisible();
     await evidenceShotBothThemes(handle, 'supervisor-feed');
   } finally {
     if (handle !== null) await closeApp(handle);

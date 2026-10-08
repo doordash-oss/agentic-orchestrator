@@ -98,6 +98,10 @@ Relay the question to the user and send only their answer. Never answer on the u
 
 Prefer one state check. Only watch over time when the user asks you to.
 
+### Monitor a feature on Slack
+
+Load [slack-monitoring.md](slack-monitoring.md). The request includes DM updates for blockers, questions and phase changes, plus listening for the user's replies and acting on them. Use that playbook for setup, correlation, lifetime and confirmation; use the recipes above and [api-reference.md](api-reference.md) for the actual operations.
+
 ### One state poll
 
 1. `"$AGENTICO_BIN" api GET /api/v1/features`

@@ -20,6 +20,14 @@ If the new harness fails to launch, the previous harness and its session are res
 
 Type `/model` or `/effort` in the composer to open the corresponding picker. Add a model id, alias, display name, or supported effort level to change directly, for example `/effort high`. A unique model on another harness opens the switch dialog with that model selected. Unknown or ambiguous model text opens the filtered picker. These commands do not send a message.
 
+## Monitoring a feature on Slack
+
+Ask “Monitor this feature and update me on Slack” to request DMs for phase changes, blockers, questions, permissions and review decisions. The supervisor also listens for your replies: answer in the update's thread or send a message in the same DM to direct the work. You can ask it to pause, retry, change configuration or take another supported action, and it confirms the result in Slack. You do not need to repeat the instruction in the app.
+
+The default check interval is about a minute, and the watch continues through questions, failures and pauses until the feature is done or you stop monitoring. The supervisor confirms the actual cadence and monitor lifetime when it starts. Slack access and a supported monitoring mechanism must be available; a session-scoped watch can expire or end on a restart or harness switch. A stopped supervisor cannot listen for Slack replies, so return to the app to resume it. “Stop monitoring” ends updates without stopping the feature.
+
+The supervisor's [Slack monitoring playbook](../slack-monitoring.md) defines these defaults and how it handles replies.
+
 ## Composing messages
 
 Attach images and files with the **+** button beside the composer, or paste or drop them onto it. On a local server the files are attached by path; on a remote server they upload first, and **Send** waits until every upload is ready. Remove an attachment that failed or that shows **Staged on another server** to send. A message may be attachments alone. The server keeps a copy of each file with the conversation, so the harness can still read it after a relaunch or a harness switch. The transcript shows one chip per attachment under your message.

@@ -29,7 +29,7 @@ import {
   AgenticoActivityMark,
   type AgenticoActivityState,
 } from '../../components/AgenticoActivityMark';
-import { renderSanitizedMarkdown } from '../sanitizedMarkdown';
+import { ConversationMarkdown } from './ConversationMarkdown';
 import {
   friendlyToolName,
   type ConversationItem,
@@ -81,7 +81,7 @@ function Notice({ item }: { item: Extract<ConversationItem, { kind: 'notice' }> 
       </p>
       {item.summary !== undefined && expanded ? (
         <div id={summaryId} className="conversation__notice-summary">
-          <div dangerouslySetInnerHTML={{ __html: renderSanitizedMarkdown(item.summary) }} />
+          <ConversationMarkdown text={item.summary} />
           {item.summaryTruncated ? (
             <p className="conversation__notice-truncated">Summary truncated</p>
           ) : null}
@@ -574,10 +574,9 @@ export function ConversationTranscript({
           >
             {item.role === 'assistant' ? (
               <>
-                <div
-                  className="conversation__markdown"
-                  dangerouslySetInnerHTML={{ __html: renderSanitizedMarkdown(item.text) }}
-                />
+                <div className="conversation__markdown">
+                  <ConversationMarkdown text={item.text} />
+                </div>
                 <CopyMessageButton text={item.text} />
               </>
             ) : item.text !== '' ? (

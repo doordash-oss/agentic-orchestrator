@@ -14,4 +14,4 @@ The guide describes labeled controls delivered in the Electron app. Each topic c
 | Verification | [verification.md](verification.md) | Fast suite, extended gates, and timing baseline |
 | Post-Publish | [post-publish.md](post-publish.md) | Post-publish engine semantics and desktop controls |
 | Permissions | [permissions.md](permissions.md) | Runtime rules, caching, and desktop permission controls |
-| Supervisor conversation | [supervisor-conversation.md](supervisor-conversation.md) | Model and effort changes, pending tray, slash commands, sidebar status, turn notifications, updates and partial setup |
+| Supervisor conversation | [supervisor-conversation.md](supervisor-conversation.md) | Model and effort changes, Slack monitoring and replies, pending tray, slash commands, sidebar status, turn notifications, updates and partial setup |

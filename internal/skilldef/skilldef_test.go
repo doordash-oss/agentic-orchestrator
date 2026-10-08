@@ -656,7 +656,7 @@ func TestReconcileSkills_RemovesStaleChatSkill(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(skillsDir, "chat")); !os.IsNotExist(err) {
 		t.Fatalf("stale chat skill should be removed, stat err = %v", err)
 	}
-	for _, rel := range []string{"SKILL.md", "api-reference.md", "recipes.md", "environment.md", filepath.Join("user-guide", "index.md")} {
+	for _, rel := range []string{"SKILL.md", "api-reference.md", "recipes.md", "slack-monitoring.md", "environment.md", filepath.Join("user-guide", "index.md")} {
 		if _, err := os.Stat(filepath.Join(skillsDir, "supervisor", rel)); err != nil {
 			t.Errorf("supervisor/%s not reconciled: %v", rel, err)
 		}

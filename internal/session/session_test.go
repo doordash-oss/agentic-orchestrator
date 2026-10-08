@@ -2891,6 +2891,16 @@ func TestSession_StreamBackpressurePreservesCritical(t *testing.T) {
 	s.protocol = claude.NewProtocol(llm.ProtocolOpts{WorkDir: dir})
 	s.SetAttachDropReporter(reporter)
 
+	// The drainer below is a real consumer: register it. Without
+	// registration the session treats attachCh as headless and drops
+	// Results non-blockingly the moment the buffer is full (see
+	// TestSession_NoAttachConsumerSuppressesCriticalDropReport), so the
+	// flood can overrun the stream-ring reserve between drainer wake-ups
+	// and silently lose Results — a test artifact, not a product path
+	// this test means to exercise.
+	unregister := registerAttachConsumerForTest(t, s)
+	defer unregister()
+
 	// Slow consumer — targets ~1/10 the producer's line-read rate.
 	// The exact ratio is not load-bearing: we only need enough
 	// backpressure to keep attachCh near its cap throughout the run.

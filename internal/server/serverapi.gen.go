@@ -1019,6 +1019,57 @@ func (e SupervisorAttachmentKind) Valid() bool {
 	}
 }
 
+// Defines values for SupervisorBackgroundTaskKind.
+const (
+	SupervisorBackgroundTaskKindMonitor   SupervisorBackgroundTaskKind = "monitor"
+	SupervisorBackgroundTaskKindScheduled SupervisorBackgroundTaskKind = "scheduled"
+	SupervisorBackgroundTaskKindTask      SupervisorBackgroundTaskKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorBackgroundTaskKind enum.
+func (e SupervisorBackgroundTaskKind) Valid() bool {
+	switch e {
+	case SupervisorBackgroundTaskKindMonitor:
+		return true
+	case SupervisorBackgroundTaskKindScheduled:
+		return true
+	case SupervisorBackgroundTaskKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorBackgroundTaskState.
+const (
+	SupervisorBackgroundTaskStateCompleted   SupervisorBackgroundTaskState = "completed"
+	SupervisorBackgroundTaskStateFailed      SupervisorBackgroundTaskState = "failed"
+	SupervisorBackgroundTaskStateInterrupted SupervisorBackgroundTaskState = "interrupted"
+	SupervisorBackgroundTaskStateRunning     SupervisorBackgroundTaskState = "running"
+	SupervisorBackgroundTaskStateStopped     SupervisorBackgroundTaskState = "stopped"
+	SupervisorBackgroundTaskStateWatching    SupervisorBackgroundTaskState = "watching"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorBackgroundTaskState enum.
+func (e SupervisorBackgroundTaskState) Valid() bool {
+	switch e {
+	case SupervisorBackgroundTaskStateCompleted:
+		return true
+	case SupervisorBackgroundTaskStateFailed:
+		return true
+	case SupervisorBackgroundTaskStateInterrupted:
+		return true
+	case SupervisorBackgroundTaskStateRunning:
+		return true
+	case SupervisorBackgroundTaskStateStopped:
+		return true
+	case SupervisorBackgroundTaskStateWatching:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupervisorCheckpointRecordReason.
 const (
 	NativeAuto SupervisorCheckpointRecordReason = "native_auto"
@@ -4798,6 +4849,34 @@ type SupervisorAttachment struct {
 // SupervisorAttachmentKind defines model for SupervisorAttachment.Kind.
 type SupervisorAttachmentKind string
 
+// SupervisorBackgroundActivity defines model for SupervisorBackgroundActivity.
+type SupervisorBackgroundActivity struct {
+	At     string `json:"at"`
+	Detail string `json:"detail"`
+}
+
+// SupervisorBackgroundTask defines model for SupervisorBackgroundTask.
+type SupervisorBackgroundTask struct {
+	Activity   []SupervisorBackgroundActivity `json:"activity,omitempty"`
+	Detail     string                         `json:"detail"`
+	ExpiresAt  string                         `json:"expires_at"`
+	Generation int64                          `json:"generation"`
+	ID         string                         `json:"id"`
+	Kind       SupervisorBackgroundTaskKind   `json:"kind"`
+	ProviderID string                         `json:"provider_id"`
+	Schedule   string                         `json:"schedule"`
+	StartedAt  string                         `json:"started_at"`
+	State      SupervisorBackgroundTaskState  `json:"state"`
+	Title      string                         `json:"title"`
+	UpdatedAt  string                         `json:"updated_at"`
+}
+
+// SupervisorBackgroundTaskKind defines model for SupervisorBackgroundTask.Kind.
+type SupervisorBackgroundTaskKind string
+
+// SupervisorBackgroundTaskState defines model for SupervisorBackgroundTask.State.
+type SupervisorBackgroundTaskState string
+
 // SupervisorCheckpointRecord Model-only checkpoint projection; native baseline is never sent to clients.
 type SupervisorCheckpointRecord struct {
 	CoversThroughSeq  int64                            `json:"covers_through_seq"`
@@ -4999,6 +5078,9 @@ type SupervisorStartingStep string
 
 // SupervisorState defines model for SupervisorState.
 type SupervisorState struct {
+	// BackgroundTasks Confirmed background work across turns, plus recent terminal tasks. Rebuilt from durable history; independent of transcript pagination.
+	BackgroundTasks []SupervisorBackgroundTask `json:"background_tasks,omitempty"`
+
 	// ContextUsage Live context fill; null until the current process reports usage.
 	ContextUsage   *SupervisorContextUsage `json:"context_usage"`
 	ConversationID string                  `json:"conversation_id"`

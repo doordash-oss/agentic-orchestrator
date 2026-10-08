@@ -593,6 +593,7 @@ func (c *Coordinator) State() State {
 
 func (c *Coordinator) stateLocked() State {
 	st := State{
+		BackgroundTasks: c.store.backgroundTasks(c.conv.Generation, c.session != nil && c.session.IsActive(), c.opts.Now()),
 		ConversationID:  c.conv.ConversationID,
 		Generation:      c.conv.Generation,
 		SessionID:       c.sessionID,
@@ -1865,6 +1866,12 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 	if !current {
 		return
 	}
+	revision := c.store.backgroundRevision()
+	defer func() {
+		if revision != c.store.backgroundRevision() {
+			c.publishStateLocked()
+		}
+	}()
 	if msg.Compact != nil {
 		c.observeCompactionLocked(gen, sessionID, msg.Compact)
 		return

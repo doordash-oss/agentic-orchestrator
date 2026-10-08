@@ -44,6 +44,7 @@ limitations under the License.
  * switches with no recorded selection, feature close and feature delete all
  * land there, and choosing Supervisor clears the persisted feature.
  */
+import { backgroundWorkSummary } from './supervisor/SupervisorBackgroundWork';
 import {
   useCallback,
   useEffect,
@@ -1237,7 +1238,14 @@ export function supervisorRowView(status: SupervisorStatus): SupervisorRowView {
     }
     case 'starting':
     case 'running':
-      return { marker: 'working', tone: 'progress', subline: 'Working', unread: false };
+      return {
+        marker: 'working',
+        tone: 'progress',
+        subline: ['Working', backgroundWorkSummary(state.backgroundTasks)]
+          .filter(Boolean)
+          .join(' · '),
+        unread: false,
+      };
     case 'failed':
       return {
         marker: 'error',
@@ -1246,7 +1254,20 @@ export function supervisorRowView(status: SupervisorStatus): SupervisorRowView {
         unread: false,
       };
     default:
-      return { marker: 'none', unread: status.unread };
+      return {
+        marker: 'none',
+        unread: status.unread,
+        ...(backgroundWorkSummary(state?.backgroundTasks) === ''
+          ? {}
+          : {
+              subline: backgroundWorkSummary(state?.backgroundTasks),
+              tone: state?.backgroundTasks?.some(
+                (task) => task.state === 'interrupted' || task.state === 'failed',
+              )
+                ? 'attention'
+                : 'progress',
+            }),
+      };
   }
 }
 

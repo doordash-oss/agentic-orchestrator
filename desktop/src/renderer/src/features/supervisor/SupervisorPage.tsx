@@ -104,6 +104,7 @@ import { SupervisorModelChip } from './SupervisorModelChip';
 import { SupervisorContextRing } from './SupervisorContextRing';
 import { SupervisorSwitchDialog, type SupervisorSwitchChoice } from './SupervisorSwitchDialog';
 import { SupervisorQueueStrip } from './SupervisorQueueStrip';
+import { SupervisorBackgroundWork, backgroundWorkSummary } from './SupervisorBackgroundWork';
 import { SupervisorResetDialog } from './SupervisorResetDialog';
 import {
   draftItemsEmpty,
@@ -607,11 +608,19 @@ export function SupervisorPage({
         optimistic: optimistic?.text ?? null,
         optimisticAttachments: optimistic?.attachments ?? [],
         provisional: [...provisional.values()],
+        backgroundTasks: state?.backgroundTasks,
         activeTurnId: isTurnActive(state?.lifecycle ?? 'stopped')
           ? (records.findLast((record) => record.kind === 'user')?.turnId ?? '')
           : '',
       }),
-    [committedConversation, optimistic, provisional, state?.lifecycle, records],
+    [
+      committedConversation,
+      optimistic,
+      provisional,
+      state?.lifecycle,
+      state?.backgroundTasks,
+      records,
+    ],
   );
 
   const lifecycle = state?.lifecycle ?? 'stopped';
@@ -1191,6 +1200,31 @@ export function SupervisorPage({
         }
       />
       <div className="supervisor-page__dock">
+        <SupervisorBackgroundWork
+          tasks={state?.backgroundTasks}
+          stopDisabled={
+            sending || !settings.harness || lifecycle === 'stopped' || lifecycle === 'failed'
+          }
+          onStop={(task) => {
+            const message: OutgoingMessage = {
+              text: `Stop ${JSON.stringify(task.title)} (background ${task.kind === 'scheduled' ? 'schedule' : 'task'} ${task.providerId}). Confirm when it has stopped.`,
+              items: { images: [], attachments: [], imageUploads: [], attachmentUploads: [] },
+              errorReference: null,
+            };
+            if (turnActive || requestPending) {
+              queueMessage(message);
+              return;
+            }
+            void deliver(message).catch((error) => {
+              const parsed = parseIpcError(error);
+              if (parsed.code === TURN_ACTIVE) {
+                queueMessage(message);
+                return;
+              }
+              setInlineError(parsed);
+            });
+          }}
+        />
         {state?.pendingChange !== undefined ? (
           <div className="supervisor-pending-tray" role="status">
             <span>
@@ -1331,7 +1365,12 @@ export function SupervisorPage({
                   data-tone={paused ? 'paused' : undefined}
                 >
                   <span className="supervisor-status__lamp" aria-hidden="true" />
-                  <span className="supervisor-status__text">{statusLine}</span>
+                  <span className="supervisor-status__text">
+                    {statusLine}
+                    {backgroundWorkSummary(state?.backgroundTasks)
+                      ? ` · ${backgroundWorkSummary(state?.backgroundTasks)}`
+                      : ''}
+                  </span>
                 </p>
                 {uploadsBlocking ? (
                   <p className="supervisor-composer__blocked" role="status">

@@ -1526,7 +1526,26 @@ export const ServerSupervisorPermissionModeSchema = z.object({
   restricted_by_policy: z.boolean(),
 });
 
+export const ServerSupervisorBackgroundTaskSchema = z.object({
+  activity: z
+    .array(z.object({ at: z.string().max(100), detail: z.string().max(1000) }))
+    .max(8)
+    .optional(),
+  id: z.string().max(500),
+  provider_id: z.string().max(200),
+  generation: z.number().int().nonnegative(),
+  kind: z.enum(['scheduled', 'monitor', 'task']),
+  title: z.string().max(500),
+  state: z.enum(['watching', 'running', 'completed', 'failed', 'stopped', 'interrupted']),
+  schedule: z.string().max(500),
+  detail: z.string().max(1000),
+  started_at: z.string().max(100),
+  updated_at: z.string().max(100),
+  expires_at: z.string().max(100),
+});
+
 export const ServerSupervisorStateSchema = z.object({
+  background_tasks: z.array(ServerSupervisorBackgroundTaskSchema).optional(),
   conversation_id: ServerSupervisorIdSchema,
   generation: ServerSupervisorSeqSchema,
   session_id: z.string().max(200),

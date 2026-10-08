@@ -2920,7 +2920,27 @@ export const SupervisorPendingRequestSchema = z.discriminatedUnion('kind', [
 ]);
 export type SupervisorPendingRequest = z.output<typeof SupervisorPendingRequestSchema>;
 
+export const SupervisorBackgroundTaskSchema = z.strictObject({
+  activity: z
+    .array(z.strictObject({ at: z.string().max(100), detail: z.string().max(1000) }))
+    .max(8)
+    .optional(),
+  id: z.string().max(500),
+  providerId: z.string().max(200),
+  generation: z.number().int().nonnegative(),
+  kind: z.enum(['scheduled', 'monitor', 'task']),
+  title: z.string().max(500),
+  state: z.enum(['watching', 'running', 'completed', 'failed', 'stopped', 'interrupted']),
+  schedule: z.string().max(500),
+  detail: z.string().max(1000),
+  startedAt: z.string().max(100),
+  updatedAt: z.string().max(100),
+  expiresAt: z.string().max(100),
+});
+export type SupervisorBackgroundTask = z.output<typeof SupervisorBackgroundTaskSchema>;
+
 export const SupervisorStateSchema = z.strictObject({
+  backgroundTasks: z.array(SupervisorBackgroundTaskSchema).optional(),
   conversationId: SupervisorIdentifierSchema,
   /** Number of provider process launches; increments on every launch. */
   generation: SupervisorSeqSchema,

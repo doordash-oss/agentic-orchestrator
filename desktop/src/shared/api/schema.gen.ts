@@ -2795,7 +2795,30 @@ export interface components {
             model?: string;
             effort?: string;
         };
+        SupervisorBackgroundActivity: {
+            at: string;
+            detail: string;
+        };
+        SupervisorBackgroundTask: {
+            activity?: components["schemas"]["SupervisorBackgroundActivity"][];
+            id: string;
+            provider_id: string;
+            /** Format: int64 */
+            generation: number;
+            /** @enum {string} */
+            kind: "scheduled" | "monitor" | "task";
+            title: string;
+            /** @enum {string} */
+            state: "watching" | "running" | "completed" | "failed" | "stopped" | "interrupted";
+            schedule: string;
+            detail: string;
+            started_at: string;
+            updated_at: string;
+            expires_at: string;
+        };
         SupervisorState: {
+            /** @description Confirmed background work across turns, plus recent terminal tasks. Rebuilt from durable history; independent of transcript pagination. */
+            background_tasks?: components["schemas"]["SupervisorBackgroundTask"][];
             conversation_id: string;
             /**
              * Format: int64

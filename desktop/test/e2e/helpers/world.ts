@@ -120,6 +120,7 @@ export const SUPERVISOR_E2E_MARKERS = {
    */
   hold: 'SUPERVISOR_E2E_HOLD',
   shellDiff: 'SUPERVISOR_E2E_SHELL_DIFF',
+  backgroundWork: 'SUPERVISOR_E2E_BACKGROUND_WORK',
   /**
    * Commits one complete assistant text message (supervisorStubPartialReply),
    * then holds the turn like `hold` without ever reporting a result, so a
@@ -980,6 +981,17 @@ function supervisorStubLines(providerInvocationLog: string, gatePath: string): s
     `      printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-partial-%s","role":"assistant","content":[{"type":"text","text":"Partial supervisor reply %s"}]}}\\n' "$turn" "$turn"`,
     `      printf 'partial-holding:%s\\n' "$turn" >> "${providerInvocationLog}"`,
     '      hold_turn',
+    '      ;;',
+    `    *${SUPERVISOR_E2E_MARKERS.backgroundWork}*)`,
+    String.raw`      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"background-create","name":"CronCreate","input":{"cron":"* * * * *","prompt":"Watch translation questions","recurring":true}}]}}'`,
+    String.raw`      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"background-create","content":"Scheduled recurring job b95f1124 (every minute). Session-only (not written to disk, dies when Claude exits). Auto-expires after 3 days. Use CronDelete to cancel sooner."}]}}'`,
+    String.raw`      printf '%s\n' '{"type":"system","subtype":"task_started","task_id":"background-tests","description":"Run test suite","task_type":"local_agent"}'`,
+    '      supervisor_reply',
+    '      ;;',
+    `    *'Stop '*'background schedule b95f1124'*)`,
+    String.raw`      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"background-delete","name":"CronDelete","input":{"id":"b95f1124"}}]}}'`,
+    String.raw`      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"background-delete","content":"Cancelled job b95f1124."}]}}'`,
+    '      supervisor_reply',
     '      ;;',
     `    *${SUPERVISOR_E2E_MARKERS.shellDiff}*)`,
     '      _diff_root=${1#*\\[}',

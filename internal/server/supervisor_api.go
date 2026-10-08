@@ -441,6 +441,20 @@ func supervisorStateDTO(st supervisor.State) SupervisorState {
 		HeadSeq:         st.HeadSeq,
 		StreamEpoch:     st.StreamEpoch,
 	}
+	dto.BackgroundTasks = make([]SupervisorBackgroundTask, 0, len(st.BackgroundTasks))
+	for _, task := range st.BackgroundTasks {
+		activity := make([]SupervisorBackgroundActivity, 0, len(task.Activity))
+		for _, event := range task.Activity {
+			activity = append(activity, SupervisorBackgroundActivity{At: event.At, Detail: SafeDisplayText(event.Detail, 400)})
+		}
+		dto.BackgroundTasks = append(dto.BackgroundTasks, SupervisorBackgroundTask{
+			Activity: activity,
+			ID:       task.ID, ProviderID: task.ProviderID, Generation: task.Generation,
+			Kind: SupervisorBackgroundTaskKind(task.Kind), State: SupervisorBackgroundTaskState(task.State),
+			Title: SafeDisplayText(task.Title, 160), Detail: SafeDisplayText(task.Detail, 400),
+			Schedule: SafeDisplayText(task.Schedule, 120), StartedAt: task.StartedAt, UpdatedAt: task.UpdatedAt, ExpiresAt: task.ExpiresAt,
+		})
+	}
 	if st.ContextUsage != nil {
 		dto.ContextUsage = &SupervisorContextUsage{Percent: st.ContextUsage.Percent, UsedTokens: st.ContextUsage.UsedTokens, WindowTokens: st.ContextUsage.WindowTokens}
 	}

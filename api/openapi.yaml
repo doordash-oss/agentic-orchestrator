@@ -5842,6 +5842,48 @@ components:
           type: string
           maxLength: 40
           x-go-type-skip-optional-pointer: false
+    SupervisorBackgroundActivity:
+      type: object
+      required: [at, detail]
+      properties:
+        at:
+          type: string
+        detail:
+          type: string
+    SupervisorBackgroundTask:
+      type: object
+      required: [id, provider_id, generation, kind, title, state, schedule, detail, started_at, updated_at, expires_at]
+      properties:
+        activity:
+          type: array
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/SupervisorBackgroundActivity"
+        id:
+          type: string
+        provider_id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+        kind:
+          type: string
+          enum: [scheduled, monitor, task]
+        title:
+          type: string
+        state:
+          type: string
+          enum: [watching, running, completed, failed, stopped, interrupted]
+        schedule:
+          type: string
+        detail:
+          type: string
+        started_at:
+          type: string
+        updated_at:
+          type: string
+        expires_at:
+          type: string
     SupervisorState:
       type: object
       required:
@@ -5859,6 +5901,11 @@ components:
         - stream_epoch
         - context_usage
       properties:
+        background_tasks:
+          description: Confirmed background work across turns, plus recent terminal tasks. Rebuilt from durable history; independent of transcript pagination.
+          type: array
+          items:
+            $ref: "#/components/schemas/SupervisorBackgroundTask"
         conversation_id:
           type: string
         generation:
@@ -7204,6 +7251,7 @@ components:
         state:
           type: string
           enum: [running, completed, failed, cancelled]
+          x-enum-varnames: [TaskActivityStateRunning, TaskActivityStateCompleted, TaskActivityStateFailed, TaskActivityStateCancelled]
         last_tool_name:
           type: string
         last_path:
@@ -7643,6 +7691,7 @@ components:
         outcome:
           type: string
           enum: [pending, confirmed, rolled_back]
+          x-enum-varnames: [UpdatePublicReceiptOutcomePending, UpdatePublicReceiptOutcomeConfirmed, UpdatePublicReceiptOutcomeRolledBack]
         from_version:
           type: string
         to_version:

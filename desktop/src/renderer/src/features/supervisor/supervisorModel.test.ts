@@ -452,3 +452,59 @@ it('keeps one task across verdict seams and settles missing final reports honest
   );
   expect(stopped[0]?.agents[0]?.state).toBe('unknown');
 });
+
+it('keeps a task live across turns and separates reused provider ids across generations', () => {
+  const start = (seq: number, generation: number, turnId: string) =>
+    supervisorRecord({
+      seq,
+      generation,
+      turnId,
+      kind: 'tool_use',
+      messages: [
+        {
+          index: seq,
+          role: 'system',
+          type: 'task_started',
+          task: { id: 'same', description: `Task in generation ${generation}` },
+        },
+      ],
+    });
+  const records = [
+    start(1, 1, 'first'),
+    supervisorRecord({
+      seq: 2,
+      generation: 1,
+      turnId: 'second',
+      kind: 'tool_use',
+      messages: [
+        {
+          index: 2,
+          role: 'system',
+          type: 'task_progress',
+          task: { id: 'same', lastToolName: 'Bash' },
+        },
+      ],
+    }),
+    start(3, 2, 'third'),
+  ];
+  const task = {
+    id: '1:task:same',
+    providerId: 'same',
+    generation: 1,
+    kind: 'task' as const,
+    title: 'Run tests',
+    state: 'running' as const,
+    schedule: '',
+    detail: 'Using Bash',
+    startedAt: '',
+    updatedAt: '',
+    expiresAt: '',
+  };
+  const groups = buildSupervisorConversation(records, {
+    activeTurnId: '',
+    backgroundTasks: [task, { ...task, id: '2:task:same', generation: 2, state: 'completed' }],
+  }).filter((item) => item.kind === 'subagents');
+  expect(groups).toHaveLength(2);
+  expect(groups[0]?.agents[0]).toMatchObject({ state: 'running', lastTool: 'Bash' });
+  expect(groups[1]?.agents[0]).toMatchObject({ state: 'done' });
+});

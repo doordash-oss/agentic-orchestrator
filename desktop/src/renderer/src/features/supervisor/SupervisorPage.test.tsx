@@ -2327,3 +2327,40 @@ describe('SupervisorPage new conversation', () => {
     expect(within(transcript()).queryByText('Late old record')).toBeNull();
   });
 });
+
+it('asks to stop a confirmed monitor without discarding the composer draft', async () => {
+  const task = {
+    id: '1:cron:watch',
+    providerId: 'watch',
+    generation: 1,
+    kind: 'scheduled' as const,
+    title: 'Watch tests',
+    state: 'watching' as const,
+    schedule: 'every minute',
+    detail: 'Schedule armed',
+    startedAt: '2026-10-08T12:00:00Z',
+    updatedAt: '2026-10-08T12:00:00Z',
+    expiresAt: '',
+  };
+  const mock = await renderPage({
+    supervisorState: supervisorState({
+      settings: CHOSEN,
+      lifecycle: 'idle',
+      lastTurnOutcome: 'completed',
+      sessionId: SESSION_ID,
+      backgroundTasks: [task],
+    }),
+  });
+  const user = userEvent.setup();
+  const composer = screen.getByRole('textbox', { name: 'Message the supervisor' });
+  await user.type(composer, 'Keep my draft');
+  const panel = screen.getByRole('region', { name: 'Background work' });
+  await user.click(within(panel).getByText('Watch tests'));
+  await user.click(within(panel).getByRole('button', { name: 'Ask to stop' }));
+  await waitFor(() =>
+    expect(mock.api.sendSupervisorMessage).toHaveBeenCalledWith({
+      text: 'Stop "Watch tests" (background schedule watch). Confirm when it has stopped.',
+    }),
+  );
+  expect(composer).toHaveValue('Keep my draft');
+});

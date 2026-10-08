@@ -14966,3 +14966,75 @@ body {
   outline: var(--focus-ring);
   outline-offset: -2px;
 }
+
+/* Background work remains at the composer across turns. Watching is a quiet
+ * label; animation would imply continuous execution between monitor events. */
+.supervisor-background {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  font: 12px var(--bench-font-text);
+  color: var(--muted);
+}
+.supervisor-background header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+}
+.supervisor-background header strong {
+  color: var(--text);
+}
+.supervisor-background__body {
+  max-height: min(24vh, 220px);
+  overflow: auto;
+}
+.supervisor-background ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.supervisor-background__task {
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+}
+.supervisor-background summary {
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
+}
+.supervisor-background__state {
+  color: var(--accent);
+  margin-right: var(--space-2);
+}
+.supervisor-background__task[data-state='interrupted'] .supervisor-background__state,
+.supervisor-background__task[data-state='failed'] .supervisor-background__state {
+  color: var(--text);
+  font-weight: 600;
+}
+.supervisor-background__title {
+  color: var(--text);
+}
+.supervisor-background__activity {
+  padding: 0 var(--space-3) var(--space-2);
+  overflow-wrap: anywhere;
+}
+.supervisor-background__activity p {
+  margin: var(--space-1) 0;
+}
+.supervisor-background button {
+  font: inherit;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  padding: var(--space-1) 0;
+  cursor: pointer;
+}
+.supervisor-background button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.supervisor-background :is(summary, button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}

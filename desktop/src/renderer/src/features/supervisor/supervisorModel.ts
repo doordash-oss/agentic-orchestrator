@@ -26,6 +26,7 @@ import {
   type EffortLevel,
   type ModelCatalogue,
   type SupervisorLifecycle,
+  type SupervisorBackgroundTask,
   type SupervisorMarker,
   type SupervisorRecord,
   type SupervisorSettings,
@@ -374,6 +375,7 @@ export function recordAttachmentChips(record: SupervisorRecord): ConversationAtt
 }
 
 export interface SupervisorConversationOptions {
+  backgroundTasks?: readonly SupervisorBackgroundTask[];
   /** The just-sent text, shown until its committed record arrives. */
   optimistic?: string | null;
   /** The just-sent message's attachments, chips under the optimistic row. */
@@ -386,6 +388,7 @@ export interface SupervisorConversationOptions {
 export interface CommittedConversation {
   items: readonly ConversationItem[];
   itemTurns?: readonly string[];
+  itemGenerations?: readonly number[];
   /** `streamKey(generation, streamMessageId)` of every committed assistant record. */
   committedStreams: ReadonlySet<string>;
 }
@@ -413,6 +416,8 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
   const items: ConversationItem[] = [];
   // The turn each item belongs to, index-aligned with `items`.
   const itemTurns: string[] = [];
+  const itemGenerations: number[] = [];
+  let segmentGeneration = 0;
   // Permission verdicts split transcript segments. Keep one task card across
   // those seams, updating its original row when the task reports again.
   const tasks = new Map<
@@ -423,7 +428,7 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
     for (const item of produced) {
       if (item.kind === 'subagents') {
         item.agents = item.agents.filter((agent) => {
-          const key = `${turnId}:${agent.id}`;
+          const key = `${segmentGeneration}:${agent.id}`;
           const previous = tasks.get(key);
           if (previous !== undefined) {
             Object.assign(previous, agent);
@@ -436,6 +441,7 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
       }
       items.push(item);
       itemTurns.push(turnId);
+      itemGenerations.push(segmentGeneration);
     }
   };
   let segment: TranscriptMessage[] = [];
@@ -509,7 +515,8 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
         }
         attachmentsByKey.set(`message-${messageKey(visible)}`, chips);
       }
-      if (record.turnId !== segmentTurn) flush();
+      if (record.turnId !== segmentTurn || record.generation !== segmentGeneration) flush();
+      segmentGeneration = record.generation;
       segmentTurn = record.turnId;
       segment.push(...record.messages);
       continue;
@@ -535,7 +542,7 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
         : [streamKey(record.generation, record.streamMessageId)],
     ),
   );
-  return { items, itemTurns, committedStreams };
+  return { items, itemTurns, itemGenerations, committedStreams };
 }
 
 /**
@@ -555,18 +562,36 @@ export function supervisorConversationTail(
   committed: CommittedConversation,
   options: SupervisorConversationOptions = {},
 ): ConversationItem[] {
+  const taskStates = new Map(
+    (options.backgroundTasks ?? [])
+      .filter((task) => task.kind !== 'scheduled')
+      .map((task) => [`${task.generation}:${task.providerId}`, task]),
+  );
   const items: ConversationItem[] = committed.items.map((item, index) => {
-    if (
-      item.kind !== 'subagents' ||
-      options.activeTurnId === undefined ||
-      committed.itemTurns?.[index] === options.activeTurnId
-    )
-      return item;
+    if (item.kind !== 'subagents') return item;
     return {
       ...item,
-      agents: item.agents.map((agent) =>
-        agent.state === 'running' ? { ...agent, state: 'unknown' as const } : agent,
-      ),
+      agents: item.agents.map((agent) => {
+        const task = taskStates.get(`${committed.itemGenerations?.[index]}:${agent.id}`);
+        if (task !== undefined) {
+          const state =
+            task.state === 'completed'
+              ? 'done'
+              : task.state === 'stopped'
+                ? 'cancelled'
+                : task.state === 'failed'
+                  ? 'failed'
+                  : task.state === 'interrupted'
+                    ? 'unknown'
+                    : 'running';
+          return { ...agent, state: state as typeof agent.state };
+        }
+        return agent.state === 'running' &&
+          options.activeTurnId !== undefined &&
+          committed.itemTurns?.[index] !== options.activeTurnId
+          ? { ...agent, state: 'unknown' as const }
+          : agent;
+      }),
     };
   });
   for (const reply of options.provisional ?? []) {

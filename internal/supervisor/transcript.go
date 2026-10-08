@@ -163,6 +163,7 @@ type transcriptStore struct {
 	byCMID          map[string]int64
 	byID            map[string]int64
 	creationDisplay creationDisplayIndex
+	background      backgroundIndex
 	// recovery is set when open preserved a corrupt transcript; the
 	// coordinator turns it into a marker once.
 	recovery *RecoveryNote
@@ -235,6 +236,7 @@ func (s *transcriptStore) load() error {
 	s.size = scan.size
 	for _, rec := range scan.records {
 		s.creationDisplay.observe(rec)
+		s.background.observe(rec)
 		if rec.Kind == KindUser && rec.ClientMessageID != "" {
 			s.byCMID[rec.ClientMessageID] = rec.Seq
 		}
@@ -494,6 +496,7 @@ func (s *transcriptStore) appendRecord(rec Record) (Record, bool, error) {
 	}
 	s.byID[rec.ID] = rec.Seq
 	s.creationDisplay.observe(rec)
+	s.background.observe(rec)
 	if isHistoryContent(rec) {
 		s.content = true
 	}

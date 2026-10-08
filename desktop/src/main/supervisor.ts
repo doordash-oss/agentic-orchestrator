@@ -116,6 +116,24 @@ function toStateError(error: ServerStateError) {
 export function toSupervisorState(state: ServerSupervisorState): SupervisorState {
   return validateWithSchema(
     {
+      ...(state.background_tasks === undefined
+        ? {}
+        : {
+            backgroundTasks: state.background_tasks.map((task) => ({
+              id: task.id,
+              providerId: task.provider_id,
+              activity: task.activity,
+              generation: task.generation,
+              kind: task.kind,
+              title: task.title,
+              state: task.state,
+              schedule: task.schedule,
+              detail: task.detail,
+              startedAt: task.started_at,
+              updatedAt: task.updated_at,
+              expiresAt: task.expires_at,
+            })),
+          }),
       conversationId: state.conversation_id,
       generation: state.generation,
       sessionId: state.session_id,

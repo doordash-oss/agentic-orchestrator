@@ -49,9 +49,16 @@ export async function chooseSupervisorModel(page: Page): Promise<void> {
   await page.getByTestId('supervisor-model-chip').click();
   const popover = page.getByRole('region', { name: 'Harness and model' });
   await expect(popover).toBeVisible();
-  await popover.getByRole('group', { name: 'Claude' }).getByText('Haiku', { exact: true }).click();
+  // Catalogues may use the short fixture label or the canonical context label.
+  const model = popover.getByRole('group', { name: 'Claude' }).getByRole('radio', {
+    name: /^(?:Claude )?Haiku(?: \(200K\))?$/,
+  });
+  const label = (
+    await model.locator('..').locator('.supervisor-chip__option-name').innerText()
+  ).trim();
+  await model.locator('..').click();
   await expect(page.getByTestId('supervisor-model-chip')).toHaveAccessibleName(
-    'Claude Haiku · Default',
+    `Claude ${label} · Default`,
   );
   await page.keyboard.press('Escape');
   await expect(popover).toHaveCount(0);

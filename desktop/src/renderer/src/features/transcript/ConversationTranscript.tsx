@@ -347,7 +347,7 @@ type FileChange = NonNullable<TranscriptMessage['fileChange']>;
 type DiffLineKind = 'added' | 'removed' | 'context' | 'meta';
 
 /** Bounded cap on rendered diff lines; the rest collapses into a meta row. */
-const MAX_DIFF_LINES = 24;
+const MAX_DIFF_LINES = 8;
 
 function fileChangeLabel(operation: string | undefined): string {
   switch (operation?.trim().toLocaleLowerCase()) {
@@ -422,23 +422,22 @@ function visibleDiff(change: FileChange): string[] {
 }
 
 export function FileChangeCard({ change }: { change: FileChange }): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
   const allLines = visibleDiff(change);
   const inferredAdded = allLines.filter((line) => diffLineKind(line) === 'added').length;
   const inferredRemoved = allLines.filter((line) => diffLineKind(line) === 'removed').length;
   const added = change.addedLines ?? inferredAdded;
   const removed = change.removedLines ?? inferredRemoved;
   const label = fileChangeLabel(change.operation);
-  const lines =
-    allLines.length > MAX_DIFF_LINES
-      ? [...allLines.slice(0, MAX_DIFF_LINES), `… ${allLines.length - MAX_DIFF_LINES} more lines`]
-      : allLines;
+  const lines = expanded ? allLines : allLines.slice(0, MAX_DIFF_LINES);
+  const shortPath = (path: string | undefined) => path?.split(/[\\/]/).slice(-2).join('/') ?? '';
 
   return (
     <article className="conversation__file-change" aria-label={`${label} ${change.path}`}>
       <header className="conversation__file-change-header">
         <span className="conversation__file-change-path" title={change.path}>
-          {change.oldPath ? `${change.oldPath} → ` : null}
-          {change.path}
+          {change.oldPath ? `${shortPath(change.oldPath)} → ` : null}
+          {shortPath(change.path)}
         </span>
         <span className="conversation__file-change-status">{label.toLocaleLowerCase()}</span>
         {added > 0 || removed > 0 ? (
@@ -465,6 +464,16 @@ export function FileChangeCard({ change }: { change: FileChange }): React.ReactE
             );
           })}
         </div>
+      ) : null}
+      {allLines.length > MAX_DIFF_LINES ? (
+        <button
+          type="button"
+          className="conversation__diff-expand"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? 'Show less' : `Show ${allLines.length - MAX_DIFF_LINES} more lines`}
+        </button>
       ) : null}
     </article>
   );

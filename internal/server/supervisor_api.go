@@ -495,6 +495,9 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 		var data supervisor.ContentData
 		_ = json.Unmarshal(rec.Data, &data)
 		dto.Messages = conversationDTOs(index, roleUser, data.Content, workDir, false, false, "", 0)
+		if data.ObservedFiles {
+			dto.Messages = nil
+		}
 		for _, row := range fileChangeDTOsFromSDKFileChanges(index, "Write", data.FileChanges, workDir) {
 			row.BlockIndex = len(dto.Messages)
 			dto.Messages = append(dto.Messages, row)

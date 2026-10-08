@@ -90,8 +90,10 @@ describe('FileChangeCard', () => {
 
     expect(screen.getByText('+40')).toBeVisible();
     const diff = screen.getByRole('region', { name: 'Diff for big.txt' });
-    expect(diff.querySelectorAll('.conversation__diff-line')).toHaveLength(25);
-    expect(screen.getByText('… 16 more lines')).toBeVisible();
+    expect(diff.querySelectorAll('.conversation__diff-line')).toHaveLength(8);
+    expect(screen.getByRole('button', { name: 'Show 32 more lines' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Show 32 more lines' }));
+    expect(diff.querySelectorAll('.conversation__diff-line')).toHaveLength(40);
   });
 
   it('keeps the header without a diff body for placeholder details', () => {

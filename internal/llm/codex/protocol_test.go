@@ -1270,3 +1270,12 @@ func TestInteractiveFileResultCarriesOnlySuccessfulDiffs(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexShellToolHistoryPreservesCwd(t *testing.T) {
+	msg := toolUseMessage(ItemUnion{ID: "shell", Type: "commandExecution", Command: "python3 edit.py", Cwd: "/repo"}, nil)
+	var input map[string]any
+	json.Unmarshal(msg.Assistant.Message.Content[0].Input, &input)
+	if input["cwd"] != "/repo" {
+		t.Fatalf("cwd lost: %+v", input)
+	}
+}

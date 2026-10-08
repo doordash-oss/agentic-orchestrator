@@ -327,6 +327,7 @@ type ItemStartedParams struct {
 
 // ItemUnion is a polymorphic item; Type discriminates the variant.
 type ItemUnion struct {
+	Cwd               string          `json:"cwd,omitempty"`
 	ID                string          `json:"id"`
 	Type              string          `json:"type"`
 	Phase             string          `json:"phase,omitempty"`

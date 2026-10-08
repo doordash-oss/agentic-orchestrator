@@ -119,6 +119,7 @@ export const SUPERVISOR_E2E_MARKERS = {
    * logs `hold-ended:<turn>` instead.
    */
   hold: 'SUPERVISOR_E2E_HOLD',
+  shellDiff: 'SUPERVISOR_E2E_SHELL_DIFF',
   /**
    * Commits one complete assistant text message (supervisorStubPartialReply),
    * then holds the turn like `hold` without ever reporting a result, so a
@@ -978,6 +979,15 @@ function supervisorStubLines(providerInvocationLog: string, gatePath: string): s
     `    *${partialHold}*)`,
     `      printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-partial-%s","role":"assistant","content":[{"type":"text","text":"Partial supervisor reply %s"}]}}\\n' "$turn" "$turn"`,
     `      printf 'partial-holding:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      hold_turn',
+    '      ;;',
+    `    *${SUPERVISOR_E2E_MARKERS.shellDiff}*)`,
+    '      _diff_root=${1#*\\[}',
+    '      _diff_root=${_diff_root%%\\]*}',
+    String.raw`      printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"shell-diff-1","name":"Bash","input":{"command":"sh rewrite-files.sh","cwd":"%s","description":"Rewrite two source files"}}]}}\n' "$(json_escape "$_diff_root")"`,
+    `      wait_gate '${gatePath}.diff'`,
+    '      printf "const value = 2;\\n" > "$_diff_root/app.ts"',
+    '      printf "export const added = true;\\n" > "$_diff_root/new.ts"',
     '      hold_turn',
     '      ;;',
     `    *${hold}*)`,

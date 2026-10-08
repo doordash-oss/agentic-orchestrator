@@ -14884,3 +14884,22 @@ body {
 .conversation__subagent[data-state='unknown'] .conversation__subagent-lamp {
   background: var(--muted);
 }
+
+.conversation__diff-expand {
+  width: 100%;
+  border: 0;
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+  padding: 6px 12px;
+  text-align: left;
+  color: var(--muted);
+  background: var(--raised);
+  font: 12px var(--bench-font-text);
+  cursor: pointer;
+}
+.conversation__diff-expand:hover {
+  color: var(--text);
+}
+.conversation__diff-expand:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}

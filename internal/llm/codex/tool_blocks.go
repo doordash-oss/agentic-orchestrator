@@ -81,6 +81,9 @@ func changedPaths(item ItemUnion) []string {
 func toolUseMessage(item ItemUnion, paths []string) llm.SDKMessage {
 	name := "Bash"
 	input := map[string]any{"command": item.Command}
+	if item.Cwd != "" {
+		input["cwd"] = item.Cwd
+	}
 	if item.Type == codexItemTypeFileChange {
 		name = codexToolNameWrite
 		input = map[string]any{}

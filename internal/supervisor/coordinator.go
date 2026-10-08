@@ -54,6 +54,7 @@ type UserData struct {
 type ContentData struct {
 	Content []llm.ContentBlock `json:"content"`
 	// Display metadata survives replay without changing provider tool history.
+	ObservedFiles    bool                         `json:"observed_files,omitempty"`
 	FileChanges      []llm.FileChangeEvent        `json:"file_changes,omitempty"`
 	TaskStarted      *llm.TaskStartedMessage      `json:"task_started,omitempty"`
 	TaskProgress     *llm.TaskProgressMessage     `json:"task_progress,omitempty"`
@@ -1348,6 +1349,7 @@ func (c *Coordinator) runLaunch(attempt *launchAttempt) {
 		c.failLaunch(attempt, err)
 		return
 	}
+	go func() { <-sess.Done(); obs.closeShellDiff() }()
 	timer := time.NewTimer(c.opts.HandshakeTimeout)
 	defer timer.Stop()
 	select {
@@ -1818,10 +1820,12 @@ type generationObserver struct {
 	generation int64
 	once       sync.Once
 	handshake  chan struct{}
+	diff       shellDiffObserver
 }
 
 func (o *generationObserver) ObserveSessionMessage(sessionID string, msg llm.SDKMessage) {
 	o.once.Do(func() { close(o.handshake) })
+	o.observeShellChanges(sessionID, msg)
 	o.c.observeMessage(o.generation, sessionID, msg)
 }
 
@@ -2180,7 +2184,7 @@ func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload a
 		return &PersistError{Op: "encode " + string(kind) + " record", ConversationID: c.conv.ConversationID, Generation: gen, TurnID: turnID, Err: err}
 	}
 	visibility := VisibilityContent
-	if data, ok := payload.(ContentData); ok && (data.TaskStarted != nil || data.TaskProgress != nil || data.TaskNotification != nil) {
+	if data, ok := payload.(ContentData); ok && (data.ObservedFiles || data.TaskStarted != nil || data.TaskProgress != nil || data.TaskNotification != nil) {
 		visibility = VisibilityDisplayOnly
 	}
 	if kind == KindPermission || kind == KindQuestion {

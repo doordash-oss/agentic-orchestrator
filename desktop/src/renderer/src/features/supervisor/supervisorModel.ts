@@ -69,6 +69,7 @@ export const SUPERVISOR_COPY = {
   interruptedFooter: 'Interrupted',
   interruptedMarker: 'Interrupted before restart',
   launchFailedMarker: 'Supervisor failed to start',
+  errorMarker: 'Supervisor error',
   send: 'Send',
   stop: 'Stop',
   emptyHeading: 'Start a conversation with the supervisor.',
@@ -350,6 +351,11 @@ export function markerNoticeText(marker: SupervisorMarker): string {
     case 'interrupted':
       return SUPERVISOR_COPY.interruptedMarker;
     case 'error':
+      // Only launch failures get the launch label; persistence and settings
+      // errors already carry operation-specific text from the server.
+      if (marker.code !== 'supervisor_launch_failed') {
+        return text === '' ? SUPERVISOR_COPY.errorMarker : text;
+      }
       return text === ''
         ? SUPERVISOR_COPY.launchFailedMarker
         : `${SUPERVISOR_COPY.launchFailedMarker} · ${text}`;

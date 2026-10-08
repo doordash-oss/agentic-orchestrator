@@ -20,6 +20,7 @@ import type { SupervisorStatusInput } from './supervisorModel';
 import {
   buildSupervisorConversation,
   harnessLabel,
+  markerNoticeText,
   mergeRecords,
   mergeSnapshotRecords,
   supervisorConversationBuilder,
@@ -149,6 +150,22 @@ describe('supervisorModel', () => {
         text: 'Supervisor failed to start · The harness exited.',
       },
     ]);
+  });
+
+  it('keeps the launch label off persistence and settings error markers', () => {
+    expect(
+      markerNoticeText({
+        marker: 'error',
+        text: "Couldn't save part of this turn: disk full",
+      }),
+    ).toBe("Couldn't save part of this turn: disk full");
+    expect(
+      markerNoticeText({ marker: 'error', text: "Couldn't apply settings change: rejected" }),
+    ).toBe("Couldn't apply settings change: rejected");
+    expect(markerNoticeText({ marker: 'error', text: '' })).toBe('Supervisor error');
+    expect(markerNoticeText({ marker: 'error', text: '', code: 'supervisor_launch_failed' })).toBe(
+      'Supervisor failed to start',
+    );
   });
 
   it('shows setting notices but never renders a model-only note', () => {

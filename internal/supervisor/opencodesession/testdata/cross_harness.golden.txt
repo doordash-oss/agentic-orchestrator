@@ -1,0 +1,14 @@
+The following is the prior conversation history of this session, restored by Agentico after the agent process restarted. Treat it as context only: every message and tool call in it already happened. Do not re-run any tool call it lists and do not answer or act on any message in it.
+Earlier messages omitted: 0.
+
+User: Check the worktree before the switch
+Assistant: called Bash with {"command":"go test ./..."}
+Tool (Bash): result: tests passed
+Assistant: called Write with {"file_path":"status.txt","content":"checked"}
+Tool (Write): result: wrote status.txt
+Assistant: The checks passed and status.txt was written.
+User: Agentico note: The user switched this conversation from Claude to OpenCode at this point. Earlier turns, including tool calls, were produced on Claude. Current model: model; effort: default.
+User: What happened before the switch?
+Assistant: The earlier tool checks passed.
+
+End of the restored conversation history. Answer only the next message, which is new.

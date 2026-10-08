@@ -25,8 +25,8 @@ import {
 function declaration(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     api_version: 'v1',
-    schema_version: 1,
-    min_client_schema: 1,
+    schema_version: 2,
+    min_client_schema: 2,
     runtime_policy: 'loopback-bearer-v1',
     server_build: { version: 'v9.9.9-other', revision: 'abc123' },
     ...overrides,
@@ -64,6 +64,16 @@ describe('evaluateCompatibility', () => {
     expect(verdict.compatible).toBe(false);
     if (!verdict.compatible) {
       expect(verdict).toMatchObject({ code: 'unsupported_schema', schemaVersion: '999' });
+    }
+  });
+
+  it('refuses a server from the previous release (series 1) as unsupported_schema', () => {
+    // Series 2 retired the chat prompt routes and renamed the update
+    // summary's activity field, so a series-1 server is never attached.
+    const verdict = evaluateCompatibility(declaration({ schema_version: 1, min_client_schema: 1 }));
+    expect(verdict.compatible).toBe(false);
+    if (!verdict.compatible) {
+      expect(verdict).toMatchObject({ code: 'unsupported_schema', schemaVersion: '1' });
     }
   });
 
@@ -118,8 +128,8 @@ describe('evaluateCompatibility', () => {
   });
 
   it('pins the desktop support tables so widening is a conscious change', () => {
-    expect(DESKTOP_SCHEMA_VERSION).toBe(1);
-    expect(SUPPORTED_SERVER_SCHEMA_VERSIONS).toEqual([1]);
+    expect(DESKTOP_SCHEMA_VERSION).toBe(2);
+    expect(SUPPORTED_SERVER_SCHEMA_VERSIONS).toEqual([2]);
     expect(SUPPORTED_RUNTIME_POLICIES).toEqual(['loopback-bearer-v1', 'network-bearer-v1']);
   });
 });

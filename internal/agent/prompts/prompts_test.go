@@ -582,6 +582,12 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
+			name: "supervisor_system",
+			render: func() string {
+				return SupervisorSystemPrompt(supervisorSystemFixture)
+			},
+		},
+		{
 			name:   "autoreview_format_retry",
 			render: AutoReviewFormatRetryPrompt,
 		},
@@ -804,39 +810,32 @@ func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 	}
 }
 
-func TestChatSystemPromptDefinesAMASpecificProtocol(t *testing.T) {
-	got := ChatSystemPrompt(ChatSystemInput{
-		SkillPath:       "/state/skills/chat/SKILL.md",
-		RuntimeRoot:     "/isolated/agentico",
-		StateDir:        "/isolated/agentico/features",
-		ConfigPath:      "/isolated/agentico/config.yaml",
-		WorkspaceDir:    "/workspace/repo",
-		CurrentFeatures: "- **2d-retro-game-maker** (ID: feat-1): Build a game maker - Status: Implementing",
-	})
+var supervisorSystemFixture = SupervisorSystemInput{
+	RuntimeDir:    "/home/u/.agentic-orchestrator",
+	StateDir:      "/home/u/.agentic-orchestrator/state",
+	WorkDir:       "/home/u/workspace",
+	ConfigPath:    "/home/u/.agentic-orchestrator/config.yaml",
+	DiscoveryPath: "/home/u/.agentic-orchestrator/.agentico-server.json",
+	SkillPath:     "/home/u/.agentic-orchestrator/skills/supervisor/SKILL.md",
+	HelperCommand: "/opt/agentico/bin/agentico api",
+}
 
-	for _, want := range []string{
-		"Agentic Orchestrator Expert Assistant",
-		"Answer directly whenever the user's request is clear enough",
-		"/state/skills/chat/SKILL.md",
-		"Runtime root: `/isolated/agentico`",
-		"Feature state directory: `/isolated/agentico/features`",
-		"Config file: `/isolated/agentico/config.yaml`",
-		"Workspace: `/workspace/repo`",
-		"Do not substitute the default paths from the user guide",
-		"2d-retro-game-maker",
-	} {
+// TestSupervisorSystemPromptNamesPathsSkillAndHelper pins the content the
+// supervisor needs on its launch channel, and the retired chat-era
+// constraints it must no longer carry.
+func TestSupervisorSystemPromptNamesPathsSkillAndHelper(t *testing.T) {
+	in := supervisorSystemFixture
+	got := SupervisorSystemPrompt(in)
+	for _, want := range []string{in.RuntimeDir, in.StateDir, in.WorkDir, in.ConfigPath, in.DiscoveryPath, in.SkillPath, in.HelperCommand + " METHOD /api/v1/"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("ChatSystemPrompt() missing %q:\n%s", want, got)
+			t.Errorf("supervisor system prompt missing %q:\n%s", want, got)
 		}
 	}
-	paths := strings.Join([]string{
-		"- Runtime root: `/isolated/agentico`",
-		"- Feature state directory: `/isolated/agentico/features`",
-		"- Config file: `/isolated/agentico/config.yaml`",
-		"- Workspace: `/workspace/repo`",
-	}, "\n")
-	if !strings.Contains(got, paths) {
-		t.Fatalf("ChatSystemPrompt() runtime paths are not rendered as separate bullets:\n%s", got)
+	lower := strings.ToLower(got)
+	for _, banned := range []string{"read-only", "read only", "do not delegate", "never delegate", "current features"} {
+		if strings.Contains(lower, banned) {
+			t.Errorf("supervisor system prompt carries retired language %q", banned)
+		}
 	}
 }
 
@@ -846,6 +845,7 @@ func TestLegacyPromptSurfacesAreRemoved(t *testing.T) {
 		filepath.Join("templates", "system_implement_completion_protocol.tmpl"),
 		filepath.Join("templates", "system_validator.tmpl"),
 		filepath.Join("templates", "system_final_review.tmpl"),
+		filepath.Join("templates", "chat.system.tmpl"),
 		filepath.Join("partials", "design_reference.tmpl"),
 		filepath.Join("partials", "skill_instruction.tmpl"),
 		filepath.Join("partials", "preflight.tmpl"),

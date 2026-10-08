@@ -306,15 +306,13 @@ describe('SettingsPanel updates pane', () => {
         packageFormat: 'macos',
         signatureStatus: 'verified',
         message: 'A verified update is downloaded and ready to install.',
-        activeWorkSummary: '1 workflow and AMA session are active.',
+        activeWorkSummary: '1 workflow and the supervisor',
       }),
     });
     render(<SettingsPanel pane="updates" />);
 
     const updates = await screen.findByRole('region', { name: 'Updates' });
-    expect(
-      await within(updates).findByText('1 workflow and AMA session are active.'),
-    ).toBeVisible();
+    expect(await within(updates).findByText('1 workflow and the supervisor')).toBeVisible();
     expect(within(updates).getByRole('button', { name: 'Install When Idle' })).toBeVisible();
     expect(
       within(updates).getByRole('button', { name: 'Stop Work and Install Now' }),
@@ -332,7 +330,7 @@ describe('SettingsPanel updates pane', () => {
         packageFormat: 'macos',
         signatureStatus: 'verified',
         message: 'A verified update is downloaded and ready to install.',
-        activeWorkSummary: '1 workflow and AMA session are active.',
+        activeWorkSummary: '1 workflow and the supervisor',
       }),
     });
     render(<SettingsPanel pane="updates" />);
@@ -340,6 +338,8 @@ describe('SettingsPanel updates pane', () => {
     const trigger = await screen.findByRole('button', { name: 'Stop Work and Install Now' });
     await user.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'Install update confirmation' });
+    expect(dialog).toHaveTextContent('Workflows may be interrupted');
+    expect(dialog).not.toHaveTextContent(/AMA/);
     const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
     const confirm = within(dialog).getByRole('button', { name: 'Stop Work and Install Now' });
     await waitFor(() => expect(cancel).toHaveFocus());
@@ -403,7 +403,7 @@ describe('SettingsPanel server update card', () => {
       serverUpdate: defaultServerUpdateState({
         status: 'available',
         latestVersion: '0.2.0',
-        activeWorkSummary: '1 feature and chat active on the server.',
+        activeWorkSummary: '1 feature and the supervisor active on the server.',
       }),
     });
     render(<SettingsPanel pane="updates" />);
@@ -415,7 +415,9 @@ describe('SettingsPanel server update card', () => {
     const dialog = await screen.findByRole('dialog', {
       name: 'Install server update confirmation',
     });
-    expect(dialog).toHaveTextContent('1 feature and chat active on the server.');
+    expect(dialog).toHaveTextContent('1 feature and the supervisor active on the server.');
+    expect(dialog).toHaveTextContent('Workflows may be interrupted');
+    expect(dialog).not.toHaveTextContent(/chat/i);
     await user.click(within(dialog).getByRole('button', { name: 'Stop work and install now' }));
     await waitFor(() =>
       expect(mock.api.installServerUpdate).toHaveBeenCalledWith({

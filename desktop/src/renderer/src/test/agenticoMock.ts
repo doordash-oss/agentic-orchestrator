@@ -45,13 +45,24 @@ import type {
   SessionTranscript,
   ServerListSnapshot,
   Settings,
+  SupervisorActionResult,
+  SupervisorResetResult,
+  SupervisorEvent,
+  WindowFocusEvent,
+  SupervisorMessageRequest,
+  SupervisorMessageResult,
+  SupervisorPendingRequest,
+  SupervisorRecord,
+  SupervisorSettingsRequest,
+  SupervisorState,
+  SupervisorTranscriptPage,
   ThemeInfo,
   UpdateState,
   ServerUpdateInstallRequest,
   ServerUpdateState,
   WindowPurpose,
 } from '../../../shared/ipc';
-import { defaultSettings } from '../../../shared/ipc';
+import { defaultSettings, SupervisorMessageRequestSchema } from '../../../shared/ipc';
 
 /**
  * A rejection shaped the way the preload rethrows envelope errors: the
@@ -439,8 +450,17 @@ export interface AgenticoMock {
     resolveGate: ReturnType<typeof vi.fn>;
     waiveTestingContract: ReturnType<typeof vi.fn>;
     getTestingContract: ReturnType<typeof vi.fn>;
-    startChat: ReturnType<typeof vi.fn>;
-    endChat: ReturnType<typeof vi.fn>;
+    getSupervisorState: ReturnType<typeof vi.fn>;
+    updateSupervisorSettings: ReturnType<typeof vi.fn>;
+    cancelSupervisorPendingChange: ReturnType<typeof vi.fn>;
+    dismissSupervisorPersistFailure: ReturnType<typeof vi.fn>;
+    getSupervisorTranscript: ReturnType<typeof vi.fn>;
+    sendSupervisorMessage: ReturnType<typeof vi.fn>;
+    interruptSupervisor: ReturnType<typeof vi.fn>;
+    endSupervisor: ReturnType<typeof vi.fn>;
+    resetSupervisor: ReturnType<typeof vi.fn>;
+    onSupervisorEvent: ReturnType<typeof vi.fn>;
+    onWindowFocusChanged: ReturnType<typeof vi.fn>;
     getFeatureConfig: ReturnType<typeof vi.fn>;
     updateFeatureConfig: ReturnType<typeof vi.fn>;
     getWorkspaceDefaults: ReturnType<typeof vi.fn>;
@@ -497,8 +517,205 @@ export interface AgenticoMock {
   routeListenerCount(): number;
   emitSessionOutput(event: SessionOutputEvent): void;
   sessionOutputListenerCount(): number;
+  /** Push one supervisor stream event to every `onSupervisorEvent` listener. */
+  emitSupervisorEvent(event: SupervisorEvent): void;
+  supervisorEventListenerCount(): number;
+  /** Push one main-window focus change to every `onWindowFocusChanged` listener. */
+  emitWindowFocus(event: WindowFocusEvent): void;
+  /** The mock's current supervisor read model (updated by settings/send/end). */
+  supervisorState(): SupervisorState;
   emitServersChanged(snapshot: ServerListSnapshot): void;
   serversChangedListenerCount(): number;
+}
+
+/**
+ * Deterministic supervisor read model: a never-launched conversation with
+ * lifecycle `stopped`, empty settings, no pending requests, and an empty
+ * transcript (head seq 0).
+ */
+/** The conversation copies a mocked send commits for the request's attachments. */
+function supervisorMockAttachments(
+  request: SupervisorMessageRequest,
+): Pick<SupervisorRecord, 'attachments'> {
+  const copy = (kind: 'image' | 'file', source: string) => {
+    const name = source.split(/[\\/]/).at(-1) ?? source;
+    return { path: `/state/supervisor/attachments/${name}`, kind, name, size: 10 };
+  };
+  const attachments = [
+    ...(request.images ?? []).map((path) => copy('image', path)),
+    ...(request.imageUploads ?? []).map((ref) => copy('image', ref)),
+    ...(request.attachments ?? []).map((path) => copy('file', path)),
+    ...(request.attachmentUploads ?? []).map((ref) => copy('file', ref)),
+  ];
+  return attachments.length === 0 ? {} : { attachments };
+}
+
+export function supervisorState(overrides: Partial<SupervisorState> = {}): SupervisorState {
+  return {
+    conversationId: 'supervisor-conversation-1',
+    generation: 0,
+    sessionId: '',
+    lifecycle: 'stopped',
+    lastTurnOutcome: 'none',
+    interruptedBy: 'none',
+    settings: { harness: '', model: '', effort: '' },
+    effectiveModel: '',
+    permissionMode: { requested: 'default', effective: '', restrictedByPolicy: false },
+    pendingRequests: [],
+    contextUsage: null,
+    headSeq: 0,
+    streamEpoch: 'supervisor-epoch-1',
+    ...overrides,
+  };
+}
+
+type SupervisorPendingPermission = Extract<SupervisorPendingRequest, { kind: 'permission' }>;
+type SupervisorPendingQuestion = Extract<SupervisorPendingRequest, { kind: 'questions' }>;
+
+/**
+ * One pending supervisor permission (a root-agent Bash request by default).
+ * Pass `origin: 'child'` and a `childSessionId` for a sub-agent's request.
+ */
+export function supervisorPendingPermission(
+  overrides: Partial<SupervisorPendingPermission> = {},
+): SupervisorPendingPermission {
+  return {
+    kind: 'permission',
+    id: 'supervisor-permission-1',
+    sessionId: '__supervisor__.supervisor-conversation-1.1',
+    target: 'supervisor',
+    toolName: 'Bash',
+    summary: 'make test',
+    input: { command: 'make test' },
+    waitingSince: '2026-10-06T10:00:00.000Z',
+    origin: 'root',
+    ...overrides,
+  };
+}
+
+/**
+ * One pending supervisor question (a root-agent single-choice question by
+ * default). Pass `origin: 'child'` and a `childSessionId` for a sub-agent's.
+ */
+export function supervisorPendingQuestion(
+  overrides: Partial<SupervisorPendingQuestion> = {},
+): SupervisorPendingQuestion {
+  return {
+    kind: 'questions',
+    id: 'supervisor-question-1',
+    sessionId: '__supervisor__.supervisor-conversation-1.1',
+    target: 'supervisor',
+    waitingSince: '2026-10-06T10:00:00.000Z',
+    questions: [
+      {
+        key: 'Which branch should the sub-task use?',
+        header: 'Branch',
+        multiSelect: false,
+        options: [{ label: 'main' }, { label: 'dev' }],
+      },
+    ],
+    origin: 'root',
+    ...overrides,
+  };
+}
+
+/** The canonical launch failure a `failed` supervisor state carries. */
+export function supervisorLaunchFailure(
+  overrides: Partial<NonNullable<SupervisorState['failure']>> = {},
+): NonNullable<SupervisorState['failure']> {
+  return {
+    code: 'supervisor_launch_failed',
+    class: 'blocking',
+    title: 'Supervisor failed to start',
+    summary: 'The harness exited before it answered the handshake.',
+    ...overrides,
+  };
+}
+
+/** One committed supervisor transcript record (a user message by default). */
+export function supervisorRecord(overrides: Partial<SupervisorRecord> = {}): SupervisorRecord {
+  const seq = overrides.seq ?? 1;
+  return {
+    seq,
+    id: `supervisor-record-${String(seq)}`,
+    conversationId: 'supervisor-conversation-1',
+    generation: 1,
+    turnId: `supervisor-turn-${String(seq)}`,
+    kind: 'user',
+    visibility: 'content',
+    createdAt: '2026-10-06T10:00:00Z',
+    messages: [{ index: seq, role: 'user', type: 'text', text: 'Hello supervisor' }],
+    ...overrides,
+  };
+}
+
+/**
+ * One display-only `marker` record (the interrupted notice by default); the
+ * turn id names the turn it describes.
+ */
+export function supervisorMarkerRecord(
+  marker: NonNullable<SupervisorRecord['marker']> = {
+    marker: 'interrupted',
+    text: 'Interrupted before restart',
+  },
+  overrides: Partial<SupervisorRecord> = {},
+): SupervisorRecord {
+  return supervisorRecord({
+    kind: 'marker',
+    visibility: 'display_only',
+    messages: [],
+    marker,
+    ...overrides,
+  });
+}
+
+export function supervisorCheckpointRecord(
+  overrides: Partial<SupervisorRecord> = {},
+): SupervisorRecord {
+  return supervisorRecord({
+    kind: 'checkpoint',
+    visibility: 'model_only',
+    messages: [],
+    checkpoint: {
+      coversThroughSeq: 1,
+      reason: 'native_auto',
+      model: 'claude-opus',
+      summary: 'Earlier context',
+      truncated: false,
+      hasNativeBaseline: true,
+    },
+    ...overrides,
+  });
+}
+
+export function supervisorCompactedMarkerRecord(
+  summary?: string,
+  overrides: Partial<SupervisorRecord> = {},
+): SupervisorRecord {
+  return supervisorMarkerRecord(
+    {
+      marker: 'compacted',
+      text: 'Conversation compacted',
+      ...(summary === undefined ? {} : { summary, truncated: false }),
+    },
+    overrides,
+  );
+}
+
+/** One transcript page; empty (all cursors 0, nothing more) by default. */
+export function supervisorTranscriptPage(
+  overrides: Partial<SupervisorTranscriptPage> = {},
+): SupervisorTranscriptPage {
+  return {
+    conversationId: 'supervisor-conversation-1',
+    items: [],
+    firstSeq: 0,
+    lastSeq: 0,
+    hasMoreBefore: false,
+    hasMoreAfter: false,
+    headSeq: 0,
+    ...overrides,
+  };
 }
 
 export function installAgenticoMock(
@@ -514,6 +731,8 @@ export function installAgenticoMock(
     sessions?: SessionSummary[];
     session?: SessionDetail;
     transcript?: SessionTranscript;
+    supervisorState?: SupervisorState;
+    supervisorTranscript?: SupervisorTranscriptPage;
     attention?: { items: AttentionItem[] };
     cloneOperation?: Partial<CloneOperation>;
     cloneOperations?: CloneOperation[];
@@ -543,6 +762,12 @@ export function installAgenticoMock(
   const routeListeners = new Set<(event: AppRouteEvent) => void>();
   const appEventListeners = new Set<(event: AppEvent) => void>();
   const sessionOutputListeners = new Set<(event: SessionOutputEvent) => void>();
+  const supervisorEventListeners = new Set<(event: SupervisorEvent) => void>();
+  const windowFocusListeners = new Set<(event: WindowFocusEvent) => void>();
+  let supervisorCurrent: SupervisorState = overrides.supervisorState ?? supervisorState();
+  const supervisorTranscript =
+    overrides.supervisorTranscript ??
+    supervisorTranscriptPage({ conversationId: supervisorCurrent.conversationId });
   const sessions = overrides.sessions ?? [];
   const updates = overrides.updates ?? defaultUpdateState();
   const serverUpdate = overrides.serverUpdate ?? defaultServerUpdateState();
@@ -644,8 +869,6 @@ export function installAgenticoMock(
       Promise.resolve({ result: 'waived', contractRevision: 2, waivedItems: [] }),
     ),
     getTestingContract: vi.fn(() => Promise.resolve({ available: false as const })),
-    startChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'started' })),
-    endChat: vi.fn(() => Promise.resolve({ sessionId: '__chat__', result: 'ended' })),
     listSessions: vi.fn(() => Promise.resolve(sessions)),
     getSession: vi.fn((sessionId: string) => {
       if (overrides.session !== undefined) return Promise.resolve(overrides.session);
@@ -673,6 +896,106 @@ export function installAgenticoMock(
     onSessionOutput: vi.fn((listener: (event: SessionOutputEvent) => void) => {
       sessionOutputListeners.add(listener);
       return () => sessionOutputListeners.delete(listener);
+    }),
+    getSupervisorState: vi.fn(() => Promise.resolve(supervisorCurrent)),
+    updateSupervisorSettings: vi.fn((request: SupervisorSettingsRequest) => {
+      supervisorCurrent = {
+        ...supervisorCurrent,
+        settings: {
+          harness: request.harness,
+          model: request.model ?? supervisorCurrent.settings.model,
+          effort: request.effort ?? '',
+        },
+      };
+      return Promise.resolve(supervisorCurrent);
+    }),
+    cancelSupervisorPendingChange: vi.fn(() => {
+      supervisorCurrent = { ...supervisorCurrent, pendingChange: undefined };
+      return Promise.resolve(supervisorCurrent);
+    }),
+    dismissSupervisorPersistFailure: vi.fn(() => {
+      supervisorCurrent = { ...supervisorCurrent, persistFailure: undefined };
+      return Promise.resolve(supervisorCurrent);
+    }),
+    getSupervisorTranscript: vi.fn(() => Promise.resolve(supervisorTranscript)),
+    sendSupervisorMessage: vi.fn(
+      (request: SupervisorMessageRequest): Promise<SupervisorMessageResult> => {
+        // The IPC contract fails closed on a malformed request (an
+        // undisciplined error reference included) before anything is sent.
+        if (!SupervisorMessageRequestSchema.safeParse(request).success) {
+          return Promise.reject(
+            ipcError('E_SCHEMA_MISMATCH', 'The request did not match the expected shape.'),
+          );
+        }
+        const seq = supervisorCurrent.headSeq + 1;
+        const launched =
+          supervisorCurrent.lifecycle === 'stopped' || supervisorCurrent.lifecycle === 'failed';
+        const generation = supervisorCurrent.generation + (launched ? 1 : 0);
+        supervisorCurrent = {
+          ...supervisorCurrent,
+          generation,
+          headSeq: seq,
+          lifecycle: 'running',
+          sessionId: `__supervisor__.${supervisorCurrent.conversationId}.${String(generation)}`,
+          // A launch clears the previous launch failure, as the server does.
+          failure: undefined,
+        };
+        return Promise.resolve({
+          record: supervisorRecord({
+            seq,
+            conversationId: supervisorCurrent.conversationId,
+            generation,
+            clientMessageId: `supervisor-client-message-${String(seq)}`,
+            // Only the visible text is committed; the reference rides hidden.
+            messages: [{ index: seq, role: 'user', type: 'text', text: request.text }],
+            ...supervisorMockAttachments(request),
+          }),
+          launched,
+          deduplicated: false,
+        });
+      },
+    ),
+    interruptSupervisor: vi.fn((): Promise<SupervisorActionResult> =>
+      Promise.resolve({ result: 'accepted', state: supervisorCurrent }),
+    ),
+    endSupervisor: vi.fn((): Promise<SupervisorActionResult> => {
+      const result = supervisorCurrent.lifecycle === 'stopped' ? 'not_active' : 'ended';
+      supervisorCurrent = { ...supervisorCurrent, lifecycle: 'stopped', sessionId: '' };
+      return Promise.resolve({ result, state: supervisorCurrent });
+    }),
+    resetSupervisor: vi.fn((): Promise<SupervisorResetResult> => {
+      const previousConversationId = supervisorCurrent.conversationId;
+      if (supervisorCurrent.lifecycle === 'stopped' && supervisorCurrent.headSeq === 0) {
+        return Promise.resolve({
+          result: 'noop',
+          previousConversationId,
+          state: supervisorCurrent,
+        });
+      }
+      const conversationId = `${previousConversationId}-next`;
+      supervisorCurrent = {
+        ...supervisorCurrent,
+        conversationId,
+        generation: 0,
+        sessionId: '',
+        lifecycle: 'stopped',
+        lastTurnOutcome: 'none',
+        headSeq: 0,
+        pendingRequests: [],
+      };
+      return Promise.resolve({ result: 'reset', previousConversationId, state: supervisorCurrent });
+    }),
+    onSupervisorEvent: vi.fn((listener: (event: SupervisorEvent) => void) => {
+      supervisorEventListeners.add(listener);
+      return () => {
+        supervisorEventListeners.delete(listener);
+      };
+    }),
+    onWindowFocusChanged: vi.fn((listener: (event: WindowFocusEvent) => void) => {
+      windowFocusListeners.add(listener);
+      return () => {
+        windowFocusListeners.delete(listener);
+      };
     }),
     getCreationDefaults: vi.fn(() => Promise.resolve(defaults)),
     inspectRepositorySources: vi.fn((request: RepositorySourcesRequest) =>
@@ -896,6 +1219,14 @@ export function installAgenticoMock(
       for (const listener of sessionOutputListeners) listener(event);
     },
     sessionOutputListenerCount: () => sessionOutputListeners.size,
+    emitSupervisorEvent: (event) => {
+      for (const listener of supervisorEventListeners) listener(event);
+    },
+    supervisorEventListenerCount: () => supervisorEventListeners.size,
+    emitWindowFocus: (event) => {
+      for (const listener of windowFocusListeners) listener(event);
+    },
+    supervisorState: () => supervisorCurrent,
     emitServersChanged: (snapshot) => {
       for (const listener of serversChangedListeners) listener(snapshot);
     },

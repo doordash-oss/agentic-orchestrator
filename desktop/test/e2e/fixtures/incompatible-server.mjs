@@ -15,11 +15,15 @@ limitations under the License.
 */
 
 // Journey 4 fixture: a loopback HTTP process that answers the auth-exempt
-// health probe with an EXPLICIT but unsupported compatibility declaration
-// (wrong schema series + runtime policy). It stands in for a future/foreign
-// Agentico runtime the desktop app must refuse to use — and must never stop.
+// health probe with an EXPLICIT but unsupported compatibility declaration.
+// The default `foreign` contract (wrong schema series + runtime policy)
+// stands in for a future/foreign Agentico runtime; the `previous` contract
+// is exactly the previous release's declaration (schema series 1, the real
+// loopback runtime policy). The desktop app must refuse to use either — and
+// must never stop it.
 //
 // Usage: node incompatible-server.mjs --state-dir <dir> --log <request-log>
+//          [--contract foreign|previous]
 // Prints "PORT <n>" on stdout once listening. Runs until signalled.
 import fs from 'node:fs';
 import http from 'node:http';
@@ -31,8 +35,33 @@ function arg(name) {
 
 const stateDir = arg('--state-dir');
 const logPath = arg('--log');
+const contract = arg('--contract') ?? 'foreign';
 if (stateDir === undefined || logPath === undefined) {
-  console.error('usage: incompatible-server.mjs --state-dir <dir> --log <file>');
+  console.error(
+    'usage: incompatible-server.mjs --state-dir <dir> --log <file> [--contract foreign|previous]',
+  );
+  process.exit(2);
+}
+
+const contracts = {
+  foreign: {
+    api_version: 'v1',
+    schema_version: 99,
+    min_client_schema: 99,
+    runtime_policy: 'quantum-entangled-v99',
+    server_build: { version: 'v99.0.0', revision: 'f'.repeat(40) },
+  },
+  previous: {
+    api_version: 'v1',
+    schema_version: 1,
+    min_client_schema: 1,
+    runtime_policy: 'loopback-bearer-v1',
+    server_build: { version: 'v1.0.0', revision: 'a'.repeat(40) },
+  },
+};
+const compatibility = contracts[contract];
+if (compatibility === undefined) {
+  console.error(`unknown contract ${contract}`);
   process.exit(2);
 }
 
@@ -42,13 +71,7 @@ const health = {
   runtime: { runtime_dir: '', state_dir: stateDir, config_path: '' },
   started_at: new Date().toISOString(),
   server_time: new Date().toISOString(),
-  compatibility: {
-    api_version: 'v1',
-    schema_version: 99,
-    min_client_schema: 99,
-    runtime_policy: 'quantum-entangled-v99',
-    server_build: { version: 'v99.0.0', revision: 'f'.repeat(40) },
-  },
+  compatibility,
 };
 
 const server = http.createServer((req, res) => {

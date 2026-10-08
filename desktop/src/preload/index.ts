@@ -30,6 +30,8 @@ import {
   AppEventSchema,
   AppRouteEventSchema,
   SessionOutputEventSchema,
+  SupervisorEventSchema,
+  WindowFocusEventSchema,
   ServerListSnapshotSchema,
   ConnectionStateSchema,
   CREATION_ATTACHMENT_LIMIT,
@@ -43,7 +45,6 @@ import {
   type AppRouteEvent,
   type ConnectionState,
   type ServerListSnapshot,
-  type ChatStartRequest,
   type CreateFeatureInput,
   type CreationFileKind,
   type CreationFileSearchRequest,
@@ -63,6 +64,12 @@ import {
   type SessionOutputOpenRequest,
   type SessionOutputOpenResult,
   type SessionOutputEvent,
+  type SupervisorEvent,
+  type WindowFocusEvent,
+  type SupervisorMessageRequest,
+  type SupervisorSettingsRequest,
+  type SupervisorPendingChangeCancelRequest,
+  type SupervisorTranscriptRequest,
   type LocalReviewDraftSaveRequest,
   type LocalReviewDraftLookupRequest,
   type LocalReviewDraftDiscardRequest,
@@ -239,8 +246,6 @@ const api: AgenticoApi = {
   resolveGate: (request) => call(IPC_CHANNELS.attentionResolveGate, request),
   waiveTestingContract: (request) => call(IPC_CHANNELS.attentionWaiveTestingContract, request),
   getTestingContract: (request) => call(IPC_CHANNELS.attentionGetTestingContract, request),
-  startChat: (request: ChatStartRequest) => call(IPC_CHANNELS.chatStart, request),
-  endChat: () => call(IPC_CHANNELS.chatEnd),
   listSessions: () => call(IPC_CHANNELS.sessionsList),
   getSession: (sessionId: string) => call(IPC_CHANNELS.sessionsGet, sessionId),
   getSessionTranscript: (request) => call(IPC_CHANNELS.sessionsTranscript, request),
@@ -263,6 +268,49 @@ const api: AgenticoApi = {
     ipcRenderer.on(IPC_EVENTS.sessionOutput, wrapped);
     return () => {
       ipcRenderer.removeListener(IPC_EVENTS.sessionOutput, wrapped);
+    };
+  },
+  getSupervisorState: () => call(IPC_CHANNELS.supervisorStateGet),
+  updateSupervisorSettings: (request: SupervisorSettingsRequest) =>
+    call(IPC_CHANNELS.supervisorSettingsUpdate, request),
+  cancelSupervisorPendingChange: (request: SupervisorPendingChangeCancelRequest) =>
+    call(IPC_CHANNELS.supervisorPendingChangeCancel, request),
+  dismissSupervisorPersistFailure: () => call(IPC_CHANNELS.supervisorPersistFailureDismiss),
+  getSupervisorTranscript: (request: SupervisorTranscriptRequest) =>
+    call(IPC_CHANNELS.supervisorTranscriptGet, request),
+  sendSupervisorMessage: (request: SupervisorMessageRequest) =>
+    call(IPC_CHANNELS.supervisorMessageSend, request),
+  interruptSupervisor: () => call(IPC_CHANNELS.supervisorInterrupt),
+  endSupervisor: () => call(IPC_CHANNELS.supervisorEnd),
+  resetSupervisor: () => call(IPC_CHANNELS.supervisorReset),
+  onSupervisorEvent: (listener: (event: SupervisorEvent) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return; // drop unsafe events silently — fail closed
+      }
+      const event = SupervisorEventSchema.safeParse(payload);
+      if (event.success) listener(event.data);
+    };
+    ipcRenderer.on(IPC_EVENTS.supervisorEvent, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.supervisorEvent, wrapped);
+    };
+  },
+  onWindowFocusChanged: (listener: (event: WindowFocusEvent) => void) => {
+    const wrapped = (_event: unknown, payload: unknown): void => {
+      try {
+        assertNoPrototypePollution(payload);
+      } catch {
+        return; // drop unsafe events silently — fail closed
+      }
+      const event = WindowFocusEventSchema.safeParse(payload);
+      if (event.success) listener(event.data);
+    };
+    ipcRenderer.on(IPC_EVENTS.windowFocusChanged, wrapped);
+    return () => {
+      ipcRenderer.removeListener(IPC_EVENTS.windowFocusChanged, wrapped);
     };
   },
   getCreationDefaults: () => call(IPC_CHANNELS.creationDefaults),

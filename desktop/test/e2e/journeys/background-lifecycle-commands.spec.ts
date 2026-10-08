@@ -62,8 +62,12 @@ test('packaged command palette, native menu routes, and active close policy stay
     await assertNativeCommandsInstalled(handle);
     await assertTrayState(handle);
 
-    await clickNativeMenu(handle, 'global.ama');
-    await expect(handle.page.getByRole('complementary', { name: 'Ask Agentico' })).toBeVisible();
+    // ⌘⇧M ("Message the supervisor") selects the Supervisor page and focuses
+    // its composer. Synthetic key events never reach native accelerators, so
+    // the journey clicks the native menu item the accelerator is bound to.
+    await clickNativeMenu(handle, 'global.message-supervisor');
+    await expect(supervisorRow(handle)).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorComposer(handle)).toBeFocused();
     await assertEditorShortcutSuppression(handle);
 
     await openPalette(handle);
@@ -78,14 +82,11 @@ test('packaged command palette, native menu routes, and active close policy stay
     await closeSettings(handle);
 
     await openPalette(handle);
-    // The palette searches command labels, not ids: `global.home` is now
-    // labeled "Overview", so it's found by that text.
-    await palette.getByLabel('Search features and commands').fill('overview');
+    // The palette searches command labels, not ids: `global.home` is labeled
+    // "Supervisor" and is the first catalogue match, so Enter goes home.
+    await palette.getByLabel('Search features and commands').fill('supervisor');
     await handle.page.keyboard.press('Enter');
-    await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    await expect(supervisorRow(handle)).toHaveAttribute('aria-selected', 'true');
     await clickNativeMenu(handle, 'global.show');
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
 
@@ -96,7 +97,7 @@ test('packaged command palette, native menu routes, and active close policy stay
       waitForReady: true,
     });
     const nonTargetFeatureId = await currentFeatureId(handle, 'Palette Non Target');
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await supervisorRow(handle).click();
 
     await createFeatureViaForm(handle, {
       name: 'Background Command Lifecycle',
@@ -369,6 +370,11 @@ async function openPalette(handle: AppHandle): Promise<void> {
   await expect(handle.page.getByRole('dialog', { name: 'Command palette' })).toBeVisible();
 }
 
+/** The pinned first sidebar row; exact so a feature row naming the supervisor never matches. */
+function supervisorRow(handle: AppHandle) {
+  return handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+}
+
 async function clickNativeMenu(handle: AppHandle, id: string): Promise<void> {
   await handle.app.evaluate(({ BrowserWindow, Menu }, commandId) => {
     const item = Menu.getApplicationMenu()?.getMenuItemById(commandId);
@@ -384,7 +390,7 @@ async function assertNativeCommandsInstalled(handle: AppHandle): Promise<void> {
       show: menu?.getMenuItemById('global.show') !== null,
       quit: menu?.getMenuItemById('global.quit') !== null,
       palette: menu?.getMenuItemById('global.palette') !== null,
-      ama: menu?.getMenuItemById('global.ama') !== null,
+      messageSupervisor: menu?.getMenuItemById('global.message-supervisor') !== null,
       bulk: menu?.getMenuItemById('global.bulk') !== null,
     };
   });
@@ -392,7 +398,7 @@ async function assertNativeCommandsInstalled(handle: AppHandle): Promise<void> {
     show: true,
     quit: true,
     palette: true,
-    ama: true,
+    messageSupervisor: true,
     bulk: true,
   });
 }
@@ -407,12 +413,16 @@ async function assertTrayState(handle: AppHandle): Promise<void> {
   expect(state).not.toBeNull();
   expect(state!.trayInstalled || state!.trayFallbackActive).toBe(true);
   expect(state!.attentionCount).toBeGreaterThanOrEqual(0);
-  expect(typeof state!.amaActive).toBe('boolean');
+  // The tray reads the supervisor lifecycle in three grades; this journey
+  // never starts the supervisor, so it rests at idle.
+  expect(['working', 'waiting', 'idle']).toContain(state!.supervisorGrade);
+  expect(state!.supervisorGrade).toBe('idle');
+  expect(state).not.toHaveProperty('supervisorActive');
 }
 
 async function nativeCommandState(handle: AppHandle): Promise<{
   attentionCount: number;
-  amaActive: boolean;
+  supervisorGrade: 'working' | 'waiting' | 'idle';
   trayInstalled: boolean;
   trayFallbackActive: boolean;
   platform: NodeJS.Platform;
@@ -421,7 +431,7 @@ async function nativeCommandState(handle: AppHandle): Promise<{
     const global = globalThis as typeof globalThis & {
       __agenticoNativeCommandState?: {
         attentionCount: number;
-        amaActive: boolean;
+        supervisorGrade: 'working' | 'waiting' | 'idle';
         trayInstalled: boolean;
         trayFallbackActive: boolean;
         platform: NodeJS.Platform;
@@ -471,10 +481,12 @@ async function assertPaletteTargetsCurrentFeature(
   );
 }
 
+function supervisorComposer(handle: AppHandle) {
+  return handle.page.getByRole('textbox', { name: 'Message the supervisor' });
+}
+
 async function assertEditorShortcutSuppression(handle: AppHandle): Promise<void> {
-  const textbox = handle.page
-    .getByRole('complementary', { name: 'Ask Agentico' })
-    .getByRole('textbox', { name: 'Ask Agentico' });
+  const textbox = supervisorComposer(handle);
   await textbox.fill('Shortcut focus stays in the composer');
   await textbox.click();
   await handle.page.keyboard.press(process.platform === 'darwin' ? 'Meta+K' : 'Control+K');

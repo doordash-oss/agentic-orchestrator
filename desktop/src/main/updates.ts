@@ -30,6 +30,7 @@ import path from 'node:path';
 import type { UpdateInstallNowRequest, UpdatePackageFormat, UpdateState } from '../shared/ipc';
 import { buildCanonicalError, redactText } from '../shared/errors';
 import type { DiagnosticsService } from './diagnostics';
+import { supervisorActivitySentence } from './quitCoordinator';
 
 const REPO_API = 'https://api.github.com/repos/doordash-oss/agentic-orchestrator/releases';
 const RELEASE_NOTES = 'https://github.com/doordash-oss/agentic-orchestrator/releases';
@@ -66,7 +67,10 @@ MCowBQYDK2VwAyEAmhM+TNlJSPzGSFwd/DakW3G6MzxCpouletrsW4WAezE=
 
 export interface UpdateActiveWork {
   featureCount: number;
-  amaActive: boolean;
+  /** The supervisor is starting, running, or waiting on a permission or question. */
+  supervisorActive: boolean;
+  /** The supervisor is waiting on a permission or question; implies supervisorActive. */
+  supervisorWaiting: boolean;
   detectionFailed: boolean;
 }
 
@@ -93,6 +97,12 @@ export interface UpdateCoordinatorOptions {
   onStateChanged?: (state: UpdateState) => void;
   detectActiveWork(): Promise<UpdateActiveWork>;
   stopActiveWork(active: UpdateActiveWork): Promise<{ stopped: boolean; message?: string }>;
+  /**
+   * Ends a supervisor that is waiting on the user, for a scheduled install
+   * that fires while it waits, and resolves once it reports stopped. A
+   * failure postpones the restart; the update stays staged.
+   */
+  endWaitingSupervisor(): Promise<{ ended: boolean; message?: string }>;
   restart(update: VerifiedUpdatePackage): Promise<void> | void;
 }
 
@@ -273,8 +283,8 @@ export class UpdateCoordinator {
       return this.fail('E_UPDATE_NOT_READY');
     }
     const active = await this.options.detectActiveWork();
-    if (!active.detectionFailed && active.featureCount === 0 && !active.amaActive) {
-      return this.applyStagedUpdate();
+    if (!blocksIdleInstall(active)) {
+      return this.applyStagedUpdate({ endWaitingSupervisor: active.supervisorWaiting });
     }
     this.state = {
       ...this.state,
@@ -308,10 +318,7 @@ export class UpdateCoordinator {
       return this.fail('E_UPDATE_NOT_READY');
     }
     const active = await this.options.detectActiveWork();
-    if (
-      (active.featureCount > 0 || active.amaActive || active.detectionFailed) &&
-      !request.stopActiveWork
-    ) {
+    if (blocksImmediateInstall(active) && !request.stopActiveWork) {
       this.state = {
         ...this.state,
         activeWorkSummary: activeSummary(active),
@@ -349,9 +356,9 @@ export class UpdateCoordinator {
     try {
       active = await this.options.detectActiveWork();
     } catch {
-      active = { featureCount: 0, amaActive: false, detectionFailed: true };
+      active = UNVERIFIED_ACTIVE_WORK;
     }
-    if (active.detectionFailed || active.featureCount > 0 || active.amaActive) {
+    if (blocksImmediateInstall(active)) {
       this.state = {
         ...this.state,
         status: 'ready',
@@ -365,7 +372,14 @@ export class UpdateCoordinator {
     return this.applyStagedUpdate();
   }
 
-  private async applyStagedUpdate(): Promise<UpdateState> {
+  /**
+   * Restarts into the staged update. A scheduled install that found the
+   * supervisor waiting on the user ends it first, so the restart's quit
+   * decision sees nothing to ask about; a failed end postpones the restart.
+   */
+  private async applyStagedUpdate(
+    options: { endWaitingSupervisor?: boolean } = {},
+  ): Promise<UpdateState> {
     if (!isInstallable(this.state) || this.stagedPackage === null) {
       return this.fail('E_UPDATE_NOT_READY');
     }
@@ -379,6 +393,20 @@ export class UpdateCoordinator {
     this.options.diagnostics?.record('update', 'info', this.state.message);
     this.notify();
     try {
+      if (options.endWaitingSupervisor === true) {
+        const ended = await this.options
+          .endWaitingSupervisor()
+          .catch((error: unknown) => ({ ended: false, message: safeMessage(error) }));
+        if (!ended.ended) {
+          this.options.diagnostics?.record(
+            'update',
+            'warn',
+            'The waiting supervisor could not be ended for the scheduled install.',
+            ended.message,
+          );
+          throw new UpdateRestartPostponedError();
+        }
+      }
       await this.options.restart(this.stagedPackage);
     } catch (error) {
       if (error instanceof UpdateRestartPostponedError) {
@@ -813,11 +841,11 @@ export class UpdateCoordinator {
   private async activeWorkSummaryForInstallSurface(): Promise<string | undefined> {
     try {
       const active = await this.options.detectActiveWork();
-      if (active.detectionFailed || active.featureCount > 0 || active.amaActive) {
+      if (blocksImmediateInstall(active)) {
         return activeSummary(active);
       }
     } catch {
-      return activeSummary({ featureCount: 0, amaActive: false, detectionFailed: true });
+      return activeSummary(UNVERIFIED_ACTIVE_WORK);
     }
     return undefined;
   }
@@ -827,15 +855,15 @@ export class UpdateCoordinator {
     try {
       active = await this.options.detectActiveWork();
     } catch {
-      active = { featureCount: 0, amaActive: false, detectionFailed: true };
+      active = UNVERIFIED_ACTIVE_WORK;
     }
-    if (!active.detectionFailed && active.featureCount === 0 && !active.amaActive) {
+    if (!blocksIdleInstall(active)) {
       this.options.diagnostics?.record(
         'update',
         'info',
         'Scheduled update consent remained valid after work went idle.',
       );
-      return this.applyStagedUpdate();
+      return this.applyStagedUpdate({ endWaitingSupervisor: active.supervisorWaiting });
     }
     this.state = {
       ...this.state,
@@ -1046,14 +1074,39 @@ function isInstallable(state: UpdateState): boolean {
   );
 }
 
+const UNVERIFIED_ACTIVE_WORK: UpdateActiveWork = {
+  featureCount: 0,
+  supervisorActive: false,
+  supervisorWaiting: false,
+  detectionFailed: true,
+};
+
+/** Install now and restart-to-update on demand: any of the four busy lifecycles refuses. */
+function blocksImmediateInstall(active: UpdateActiveWork): boolean {
+  return active.detectionFailed || active.featureCount > 0 || active.supervisorActive;
+}
+
+/**
+ * Install when idle and its scheduled reconciliation: a supervisor waiting on
+ * the user does not hold the install up — only `starting | running` does.
+ */
+function blocksIdleInstall(active: UpdateActiveWork): boolean {
+  return (
+    active.detectionFailed ||
+    active.featureCount > 0 ||
+    (active.supervisorActive && !active.supervisorWaiting)
+  );
+}
+
 function activeSummary(active: UpdateActiveWork): string {
   if (active.detectionFailed) return 'Active work status could not be verified.';
   const parts: string[] = [];
   if (active.featureCount > 0) {
     parts.push(`${active.featureCount} workflow${active.featureCount === 1 ? '' : 's'}`);
   }
-  if (active.amaActive) parts.push('AMA session');
-  return parts.length === 0 ? 'No active workflows or AMA sessions.' : parts.join(' and ');
+  const supervisor = supervisorActivitySentence(active);
+  if (supervisor !== null) parts.push(supervisor);
+  return parts.length === 0 ? 'No active workflows or supervisor work.' : parts.join('. ');
 }
 
 async function fetchJson(fetchImpl: typeof fetch, url: string, maxBytes: number): Promise<unknown> {

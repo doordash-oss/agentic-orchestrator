@@ -22,10 +22,17 @@ Tests fail if the committed generated code drifts from `api/openapi.yaml`.
   fields as errors.
 
 `/api/v1/health` carries the same optional top-level `name` field. Both
-surfaces are strictly additive: the compatibility declaration
-(`loopback-bearer-v1`, schema 1) and the discovery schema version are
-unchanged, so older consumers keep working against named servers and newer
-consumers tolerate name-less servers.
+surfaces are strictly additive: neither the compatibility declaration nor
+the discovery schema version changes for it, so older consumers keep working
+against named servers and newer consumers tolerate name-less servers.
+
+The compatibility declaration on `/api/v1/health` reports schema series 2
+and minimum client series 2 under the `loopback-bearer-v1` runtime policy
+(`network-bearer-v1` for non-loopback listeners). Series 2 removed the chat
+prompt routes (`/api/v1/prompts/chat/start` and `/api/v1/prompts/chat/end`,
+now `404`) and renamed the update summary's `chat_active` to
+`supervisor_active`. Routes stay under `/api/v1`; a client and server from
+different series refuse each other.
 
 The server's bind address is selected with `--listen [host:]port` (loopback
 hosts only: `127.0.0.1`, `localhost`, `[::1]`; a bare port binds
@@ -38,6 +45,23 @@ Programmatic clients send `Authorization: Bearer <auth_token>`. Browser
 `EventSource` clients that cannot set headers may pass `access_token` only on
 SSE endpoints. Mutations also keep the trusted local header,
 `X-Agentico-Client: local`, as CSRF defense in depth.
+
+Shell callers on the server machine use `agentico api METHOD /api/v1/<path>
+[json]` as the sanctioned client instead of building requests by hand. It
+resolves the runtime directory (`--runtime-dir`, then `AGENTICO_RUNTIME_DIR`,
+then the default home runtime directory), trusts the discovery file only when
+it is a regular file owned by the caller with no group or other permission
+bits, and sends `Authorization: Bearer`, `X-Agentico-Client: local`, `Accept:
+application/json` and, with a body, `Content-Type: application/json` to the
+published `base_url`. It never prints headers or the token: a 2xx body goes to
+stdout (exit 0), any other status writes the canonical error envelope to
+stdout (exit 1), and discovery or connection failures render
+`discovery_missing`, `discovery_untrusted` or `server_unreachable` on stderr.
+On the SSE routes it requires `--timeout <duration>`, forwards `--after
+<cursor>` as `Last-Event-ID`, never uses the `access_token` query fallback,
+and prints one line per event payload (heartbeats skipped) until the timeout
+or the server closes the stream. Run `agentico api --help` for the full
+grammar.
 
 The MCP adapter has been removed. The supported client surface is REST plus SSE.
 
@@ -79,7 +103,7 @@ Snapshot highlights:
 - `current_version`, `latest_version`, and `latest_release_url` describe the discovered release. A release that rolled back stays visible as `latest_version` with `failed` and `update_rolled_back` until a newer one appears.
 - `last_check_at`, `last_success_at`, `next_check_at`, and `retry_not_before` describe check timing. A failed refresh keeps the last successful metadata.
 - `receipt` is the sanitized outcome of the last install, when one exists.
-- `active_work_summary` reports current features, chat, clones, uploads, origin checks, and pending admissions. `detection_failed` means an immediate install will be refused.
+- `active_work_summary` reports current features, the supervisor (`supervisor_active`, with `supervisor_waiting` while it waits on a permission or question), clones, uploads, origin checks, and pending admissions. `detection_failed` means an immediate install will be refused.
 - While an install is active: `method`, `stop_active_work`, `target_version`, `scheduled_for`, `signature`, and `target_contract`. `signature` is `verified` only after the pinned candidate was verified. `scheduled_for` is the next window opening an automatic install waits for, otherwise `null`.
 
 ### POST /api/v1/update/check
@@ -103,8 +127,8 @@ files, probes candidates, or writes receipts.
 Body: `UpdateInstallRequest`. Returns `202` with the current snapshot.
 
 - `consent` must be `true`.
-- `when` is `idle` or `now`. `idle` stages the release and waits for work to finish without interrupting it. `now` installs immediately if nothing is active.
-- `stop_active_work: true` with `now` authorizes stopping feature sessions and the chat. Stop dispatch and confirmation share a ten-second budget. Any stop failure or timeout aborts the install and keeps the current build serving. Already-stopped work stays stopped.
+- `when` is `idle` or `now`. `idle` stages the release and waits for work to finish without interrupting it. A supervisor waiting on a permission or question does not hold it up: the install's restart ends the supervisor and resolves the open request as `interrupted`. `now` installs immediately if nothing is active.
+- `stop_active_work: true` with `now` authorizes stopping feature sessions and ending the supervisor. Stop dispatch and confirmation share a ten-second budget. Any stop failure or timeout aborts the install and keeps the current build serving. Already-stopped work stays stopped.
 - `version`, when set, must equal the discovered latest stable release.
 
 Repository work such as clones, uploads, and origin checks is never
@@ -140,8 +164,8 @@ after cleanup. Cancelling when nothing is active succeeds.
 ### Stopping and draining
 
 Once an install starts stopping work or draining, new work is refused with
-`503` `update_in_progress` and a `Retry-After` header. This covers chat
-turns, prompt and permission replies, and reads that start background work.
+`503` `update_in_progress` and a `Retry-After` header. This covers supervisor
+messages, prompt and permission replies, and reads that start background work.
 Existing stop and completion paths keep settling.
 
 ### Event
@@ -253,6 +277,50 @@ a mismatch returns 409 `conflict` so a selection never applies to a later
 phase or revision. The response
 (`TestingContractWaiveResponse`) carries the new `contract_revision` and the
 `waived_items`.
+
+## Supervisor Messages
+
+### POST /api/v1/supervisor/messages
+
+Body: `SupervisorMessageRequest`:
+`{ "text": "<visible text>", "client_message_id": "<id>", "error_reference": { ... } }`.
+`error_reference` is optional and uses the shared `ErrorReference` schema
+(`scope` and `code`, plus the keys the scope requires: `feature_id`,
+`repository`, `task_key`, or `snapshot_id` and `key`). The server resolves
+it against durable state into a hidden context bundle: the error's catalog
+rendering, full stored diagnostics, and known log locations. The harness
+receives the bundle, a blank line, then `text`; the committed user record,
+the transcript, the event stream, and the response carry only `text`.
+
+A malformed reference returns 400 `chat_context_invalid`; a reference whose
+error is no longer present returns 404 `chat_context_not_found`. Both are
+refused before anything is sent or appended. A repeated `client_message_id`
+returns the already-committed record and does not resend.
+
+Attachments use the feature-create fields and caps: `images` and
+`attachments` take absolute server-local paths, and `image_uploads` and
+`attachment_uploads` take staged references from `POST /api/v1/uploads`.
+A message may carry up to 12 images (10 MiB each) and 24 files (25 MiB
+each), and `text` may be blank when it carries at least one attachment.
+The server copies each file into the conversation's `attachments/`
+directory under a unique name that keeps the extension. The committed user
+record lists those copies under `attachments` (`path`, `kind`, `name`,
+`size`). The harness receives the visible text followed by the
+`Attached Images:` / `Attached Files:` block naming the copies. A send
+that is refused or fails before the record commits leaves no copies, and
+its staged references stay valid for a retry.
+
+### POST /api/v1/supervisor/reset
+
+Body: `{}`. Starts a new supervisor conversation. Any launch or live process
+is stopped as `POST /api/v1/supervisor/end` would stop it, and a pending
+settings change is applied. A cut turn is marked interrupted in the old
+transcript. A new conversation then opens with generation 0 and a fresh
+stream epoch. Settings and the old conversation directory are left as they
+are. The response is `{ "result": "reset" | "noop", "previous_conversation_id": "<id>", "state": { ... } }`.
+`noop` means the conversation was already empty with no process. Live
+supervisor streams receive `stream.reset` with `snapshot_required` for the
+new conversation, then continue live. Running features are not touched.
 
 ## Session Output
 

@@ -117,17 +117,24 @@ test('recovery orphans: priority attention, live/dead context, batch actions, an
     transcript.step('seeded 1 live orphan (alpha) and 1 dead orphan (beta) PID file');
 
     handle = await launchApp(world, testInfo, { traceName: 'recovery-orphans-seeded' });
-    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
-    await overviewOption.click();
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
-      timeout: 10_000,
-    });
+    // Recovery lives in its own sheet, opened from the toolbar on any page —
+    // the relaunch restores the feature selection, and that is fine.
+    const recoveryButton = handle.page
+      .locator('header.toolbar')
+      .getByRole('button', { name: 'Recovery', exact: true });
+    await expect(recoveryButton).toBeVisible({ timeout: 60_000 });
     transcript.step('relaunched against seeded orphan state');
 
     transcript.section('Recovery workspace — auto-scan and priority attention');
-    const recoveryPanel = handle.page.locator('.recovery-workspace').first();
+    await recoveryButton.click();
+    const recoverySheet = handle.page.getByRole('dialog', { name: 'Recovery', exact: true });
+    await expect(recoverySheet).toBeVisible({ timeout: 10_000 });
+    const recoveryPanel = recoverySheet.getByRole('region', { name: 'Recovery workspace' });
     await expect(recoveryPanel).toBeVisible({ timeout: 15_000 });
+    await expect(
+      recoverySheet.getByRole('region', { name: 'Bulk resume and retry' }),
+    ).toBeVisible();
+    transcript.step('the toolbar Recovery button opened the sheet: Recovery above Bulk');
 
     const recoveryQueue = recoveryPanel.locator('.recovery-workspace__queue');
     await expect(recoveryQueue).toBeVisible({ timeout: 30_000 });

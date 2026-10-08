@@ -43,6 +43,13 @@ type Provider struct {
 	binary string
 }
 
+// NewProvider returns a Codex provider that launches binary instead of the
+// codex executable on PATH; empty means the default. Tests use it to drive
+// the real adapter against a stand-in app-server.
+func NewProvider(binary string) *Provider {
+	return &Provider{binary: binary}
+}
+
 func (p *Provider) Name() string { return "codex" }
 
 // SupportsNativeToollessReview attests that Codex's isolated app-server launch
@@ -469,6 +476,14 @@ func (p *Provider) defaultModelInfos() []llm.ModelInfo {
 // --- Environment setup ---
 
 func (p *Provider) resolveCodexHome() (string, error) {
+	return ResolveHome()
+}
+
+// ResolveHome returns the Codex home directory: CODEX_HOME from the
+// environment when set (with ~ expanded, made absolute), else $HOME/.codex.
+// Everything Agentico writes for Codex (agents, rebuilt rollouts) resolves
+// through this so tests can redirect it with CODEX_HOME.
+func ResolveHome() (string, error) {
 	if raw := strings.TrimSpace(os.Getenv("CODEX_HOME")); raw != "" {
 		expanded, err := expandHomeDir(raw)
 		if err != nil {

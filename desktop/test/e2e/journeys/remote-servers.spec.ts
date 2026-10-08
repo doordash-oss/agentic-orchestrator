@@ -709,15 +709,14 @@ test('local↔remote switching: per-server selection and workspace truth restore
     expect(backOnLocal.status).toBe('ready');
     expect(backOnLocal.ownership).toBe('app-owned');
     // The local server never heard of the remote feature; no selection was
-    // recorded for it, so the shell lands on Overview — no stale cursor.
+    // recorded for it, so the shell lands on the Supervisor page — no stale
+    // cursor.
     await expect(handle.page.getByRole('option', { name: new RegExp(SWITCH_FEATURE) })).toHaveCount(
       0,
     );
-    await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-      { timeout: 60_000 },
-    );
+    await expect(
+      handle.page.getByRole('option', { name: 'Supervisor', exact: true }),
+    ).toHaveAttribute('aria-selected', 'true', { timeout: 60_000 });
     transcript.step('remote→local: remote feature absent, own (empty) selection restored');
 
     transcript.section('Switch local→remote: the remote selection restores');
@@ -1260,7 +1259,9 @@ exec /usr/bin/git "$@"
         await expect(
           handle.page.getByRole('button', { name: `${local.serverName!} — switch server` }),
         ).toBeVisible({ timeout: 5_000 });
-        await expect(handle.page.getByRole('option', { name: 'Overview' })).toBeVisible();
+        await expect(
+          handle.page.getByRole('option', { name: 'Supervisor', exact: true }),
+        ).toBeVisible();
         expect(catalogSettled).toBe(false);
         await selectSettingsPane(settings, 'Workspace roots');
         await expect(settings.getByText('Loading repositories…', { exact: true })).toBeVisible();

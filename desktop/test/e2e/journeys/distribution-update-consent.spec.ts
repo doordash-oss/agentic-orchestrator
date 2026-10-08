@@ -30,8 +30,20 @@ import {
   restoreRelaunchProbe,
   type AppHandle,
 } from '../helpers/app';
+import {
+  chooseSupervisorModel,
+  readProviderLog,
+  sendSupervisorMessage,
+  waitForProviderLog,
+} from '../helpers/supervisor';
 import { Transcript } from '../helpers/transcript';
-import { createRepo, createWorld, destroyWorld } from '../helpers/world';
+import {
+  createRepo,
+  createWorld,
+  destroyWorld,
+  SUPERVISOR_E2E_MARKERS,
+  waitFor,
+} from '../helpers/world';
 import { updatePackageName, writeSignedUpdateFixture } from '../helpers/update-fixtures';
 
 test('verified download, Install When Idle, and Restart to Update require explicit consent', async ({}, testInfo) => {
@@ -158,6 +170,160 @@ test('verified download, Install When Idle, and Restart to Update require explic
   transcript.write(testInfo);
 });
 
+const SUPERVISOR_UPDATE_COPY =
+  'Updating restarts the supervisor; your conversation is saved. Sub-agents and background shells will be lost.';
+
+test('Install When Idle proceeds past a supervisor waiting on the user and ends it first', async ({}, testInfo) => {
+  test.setTimeout(240_000);
+  const transcript = new Transcript(
+    'distribution-update-consent-supervisor-waiting',
+    'Packaged Install When Idle with the supervisor waiting on a permission',
+  );
+  const world = createWorld('update-consent-waiting', {
+    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
+    presetWorkspaceRoot: true,
+    supervisorProvider: true,
+  });
+  const packageName = updatePackageName(process.platform === 'darwin' ? 'macos' : 'appimage');
+  const fixture = writeSignedUpdateFixture(world.root, {
+    packageName,
+    packageText: 'waiting supervisor package bytes',
+  });
+  let handle: AppHandle | null = null;
+
+  try {
+    handle = await launchApp(world, testInfo, {
+      traceName: 'distribution-update-consent-supervisor-waiting',
+      env: { AGENTICO_UPDATE_FIXTURE: fixture, AGENTICO_UPDATE_INSTALL_MODE: 'in-app' },
+    });
+    const page = handle.page;
+    await expect(page.getByRole('button', { name: 'New feature' })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.evaluate(() => window.agentico.checkForUpdates())).resolves.toMatchObject({
+      status: 'ready',
+      signatureStatus: 'verified',
+    });
+
+    transcript.section('The supervisor parks a turn on a permission request');
+    await chooseSupervisorModel(page);
+    await sendSupervisorMessage(page, `Run the checks ${SUPERVISOR_E2E_MARKERS.permission}`);
+    await waitForProviderLog(world, 'pending:supervisor-perm-1');
+    await waitFor(
+      async () =>
+        (await page.evaluate(() => window.agentico.getSupervisorState())).lifecycle ===
+        'waiting_permission',
+      'the supervisor to wait on its permission request',
+    );
+    const waiting = await page.evaluate(() => window.agentico.checkForUpdates());
+    expect(waiting.activeWorkSummary).toBe('The supervisor is waiting for your answer.');
+    transcript.json('update state with the supervisor waiting', waiting);
+
+    transcript.section('Settings carries the update copy for a live supervisor');
+    const updateTrigger = page.getByRole('button', { name: 'Show available update' });
+    const updatePopover = page.getByRole('region', { name: 'Available update' });
+    await updateTrigger.click();
+    await expect(updatePopover).toContainText(SUPERVISOR_UPDATE_COPY);
+    await updatePopover.getByRole('button', { name: 'Updates' }).click();
+    const settings = await awaitSettingsWindow(handle);
+    await page.keyboard.press('Escape');
+    await expect(updatePopover).toHaveCount(0);
+    await expect(settings.getByRole('region', { name: 'Updates', exact: true })).toContainText(
+      SUPERVISOR_UPDATE_COPY,
+    );
+    await settings.getByRole('button', { name: 'Stop Work and Install Now' }).click();
+    const dialog = settings.getByRole('dialog', { name: 'Install update confirmation' });
+    await expect(dialog).toContainText(SUPERVISOR_UPDATE_COPY);
+    await expect(dialog).toContainText('The supervisor is waiting for your answer.');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toHaveCount(0);
+    await closeSettings(handle);
+    transcript.step('popover, Updates card and Stop Work and Install Now dialog carry the copy');
+
+    transcript.section(
+      'Install When Idle waits only on the workflow, never on the waiting supervisor',
+    );
+    await setForcedWaitingSupervisorWork(handle, true);
+    await updateTrigger.click();
+    await updatePopover.getByRole('button', { name: 'Install When Idle' }).click();
+    await expect(updatePopover).toContainText('scheduled for the next idle window', {
+      timeout: 10_000,
+    });
+    const scheduled = await page.evaluate(() => window.agentico.getUpdates());
+    expect(scheduled.status).toBe('scheduled');
+    expect(scheduled.activeWorkSummary).toBe(
+      '1 workflow. The supervisor is waiting for your answer.',
+    );
+    transcript.json('scheduled behind a forced workflow', scheduled);
+
+    // The app quits its server on the way to the restart, so record the
+    // lifecycle the stream reports rather than reading it afterwards.
+    await page.evaluate(() => {
+      const global = window as typeof window & { __supervisorLifecycles?: string[] };
+      global.__supervisorLifecycles = [];
+      window.agentico.onSupervisorEvent((event) => {
+        if (event.type === 'state') global.__supervisorLifecycles?.push(event.state.lifecycle);
+      });
+    });
+    await installRelaunchProbe(handle);
+    // The forced workflow ends; real detection now sees only the supervisor
+    // waiting on its request, which no longer holds the install up.
+    await setForcedWaitingSupervisorWork(handle, false);
+    await expect.poll(() => relaunchCount(handle!), { timeout: 30_000 }).toBeGreaterThanOrEqual(1);
+    await waitForProviderLog(world, 'permission-ended:1');
+    expect(readProviderLog(world)).not.toContain('response:supervisor-perm-1');
+    const lifecycles = await page.evaluate(
+      () =>
+        (window as typeof window & { __supervisorLifecycles?: string[] }).__supervisorLifecycles,
+    );
+    expect(lifecycles).toContain('stopped');
+    const installing = await page.evaluate(() => window.agentico.getUpdates());
+    expect(installing.status).toBe('installing');
+    transcript.json('ended the waiting supervisor, then restarted to update', {
+      supervisorLifecycles: lifecycles,
+      update: installing,
+    });
+    await restoreRelaunchProbe(handle);
+    persistAppLogs(handle, 'distribution-update-consent-supervisor-waiting');
+  } finally {
+    if (handle !== null) {
+      await restoreRelaunchProbe(handle).catch(() => undefined);
+      await closeApp(handle);
+    }
+    await assertNoLeakedProcesses(world);
+    destroyWorld(world);
+  }
+  transcript.write(testInfo);
+});
+
+/**
+ * While on, forces one workflow on top of the waiting supervisor so an
+ * idle install stays scheduled; off removes the override entirely, so the
+ * real detection (the supervisor still waiting) decides.
+ */
+async function setForcedWaitingSupervisorWork(handle: AppHandle, active: boolean): Promise<void> {
+  await handle.app.evaluate((_electron, isActive) => {
+    const global = globalThis as typeof globalThis & {
+      __agenticoForcedActiveWork?: {
+        featureIds?: string[];
+        featureLabels?: Record<string, string>;
+        supervisorWaiting?: boolean;
+      };
+      __agenticoRefreshBackgroundState?: () => void;
+    };
+    if (isActive) {
+      global.__agenticoForcedActiveWork = {
+        featureIds: ['e2e-update-waiting-work'],
+        featureLabels: { 'e2e-update-waiting-work': 'Update Waiting Work' },
+        supervisorWaiting: true,
+      };
+    } else {
+      delete global.__agenticoForcedActiveWork;
+    }
+    global.__agenticoRefreshBackgroundState?.();
+  }, active);
+}
+
 async function assertRestartToUpdateConsent(
   testInfo: TestInfo,
   transcript: Transcript,
@@ -231,7 +397,7 @@ async function setForcedActiveWork(handle: AppHandle, active: boolean): Promise<
       __agenticoForcedActiveWork?: {
         featureIds?: string[];
         featureLabels?: Record<string, string>;
-        chatActive?: boolean;
+        supervisorActive?: boolean;
         detectionFailed?: boolean;
       };
       __agenticoRefreshBackgroundState?: () => void;

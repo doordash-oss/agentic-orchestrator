@@ -65,7 +65,7 @@ func TestPermissionHandlerInterface(t *testing.T) {
 	var _ ports.PermissionHandler = &permission.AutoApproveHandler{}
 	var _ ports.PermissionHandler = &permission.DenyAllHandler{}
 	var _ ports.PermissionHandler = &permission.ReadOnlyHandler{}
-	var _ ports.PermissionHandler = &permission.AMAHandler{}
+	var _ ports.PermissionHandler = &permission.SupervisorHandler{}
 }
 
 func TestReadOnlyHandler(t *testing.T) {
@@ -108,43 +108,6 @@ func TestReadOnlyHandler(t *testing.T) {
 				Input:     tt.input,
 			}
 			decision, err := handler.CanUseTool(req)
-			if err != nil {
-				t.Fatalf("CanUseTool: %v", err)
-			}
-			if decision.Behavior != tt.wantBeh {
-				t.Errorf("behavior = %q, want %q", decision.Behavior, tt.wantBeh)
-			}
-		})
-	}
-}
-
-func TestAMAHandler(t *testing.T) {
-	handler := &permission.AMAHandler{}
-
-	tests := []struct {
-		name    string
-		tool    string
-		input   string
-		wantBeh string
-	}{
-		{"read allowed", "Read", `{"file_path":"/some/file.go"}`, "allow"},
-		{"grep allowed", "Grep", `{"pattern":"foo"}`, "allow"},
-		{"websearch allowed", "WebSearch", `{"query":"test"}`, "allow"},
-		{"todo allowed", "TodoWrite", `{}`, "allow"},
-		{"agent denied", "Agent", `{"prompt":"research"}`, "deny"},
-		{"task denied", "Task", `{"prompt":"research"}`, "deny"},
-		{"bash deferred", "Bash", `{"command":"ps -p 123"}`, ""},
-		{"edit deferred", "Edit", `{"file_path":"/tmp/diagnostic.sh"}`, ""},
-		{"unknown deferred", "SomeNewTool", `{}`, ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			decision, err := handler.CanUseTool(ports.ToolPermissionRequest{
-				RequestID: "req_1",
-				ToolName:  tt.tool,
-				Input:     tt.input,
-			})
 			if err != nil {
 				t.Fatalf("CanUseTool: %v", err)
 			}

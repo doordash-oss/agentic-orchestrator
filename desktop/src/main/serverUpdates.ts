@@ -28,6 +28,7 @@ import {
   type ServerUpdateInstallRequest,
   type ServerUpdateState,
 } from '../shared/ipc';
+import { supervisorActivitySentence } from './quitCoordinator';
 import { mapServerError, type ServerTransport } from './serverClient';
 
 const WireSnapshotSchema = z
@@ -50,7 +51,9 @@ const WireSnapshotSchema = z
     active_work_summary: z
       .object({
         feature_count: z.number().int().nonnegative(),
-        chat_active: z.boolean(),
+        supervisor_active: z.boolean(),
+        // Absent from servers that predate the waiting split.
+        supervisor_waiting: z.boolean().optional(),
         clone_count: z.number().int().nonnegative(),
         upload_count: z.number().int().nonnegative(),
         origin_check_count: z.number().int().nonnegative(),
@@ -73,15 +76,20 @@ export function describeActiveWork(
   const parts: string[] = [];
   const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
   if (summary.feature_count > 0) parts.push(plural(summary.feature_count, 'feature'));
-  if (summary.chat_active) parts.push('chat');
   const repository = summary.clone_count + summary.upload_count + summary.origin_check_count;
   if (repository > 0) parts.push(plural(repository, 'repository operation'));
-  if (parts.length === 0) return undefined;
+  const supervisor = supervisorActivitySentence({
+    supervisorActive: summary.supervisor_active,
+    supervisorWaiting: summary.supervisor_waiting === true,
+  });
+  const last = parts.pop();
   const list =
-    parts.length === 1
-      ? parts[0]
-      : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
-  return `${list} active on the server.`;
+    last === undefined ? null : parts.length === 0 ? last : `${parts.join(', ')} and ${last}`;
+  const sentences = [
+    list === null ? null : `${list.charAt(0).toUpperCase()}${list.slice(1)} active on the server.`,
+    supervisor,
+  ].filter((sentence): sentence is string => sentence !== null);
+  return sentences.length === 0 ? undefined : sentences.join(' ');
 }
 
 export function projectServerUpdate(raw: unknown): ServerUpdateState {

@@ -214,7 +214,7 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     transcript.section('Reopen merge modal and retry merge to success');
     // Re-enter the feature after the rebase pass's persisted terminal state. This mirrors a user
     // returning from the pass workspace and ensures the retry is driven by a fresh snapshot.
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await handle.page.getByRole('option', { name: 'Supervisor', exact: true }).click();
     await openCompletion(handle, featureName);
     await aftercareRunway.getByRole('button', { name: /Merge this feature/ }).click();
     const retryMerge = mergeModal.getByRole('button', { name: 'Merge', exact: true });
@@ -261,10 +261,11 @@ test('packaged local-merge-rebase completion: conflict, rebase, retry, done, cle
     await expect(deleteButton).toBeEnabled();
     await deleteButton.click();
     await waitForFeatureMissing(handle, featureId);
-    await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    // Deleting the open feature lands back home on the Supervisor page.
+    await expect(
+      handle.page.getByRole('option', { name: 'Supervisor', exact: true }),
+    ).toHaveAttribute('aria-selected', 'true');
+    await expect(handle.page.locator('.toolbar__title-name')).toHaveText('Supervisor');
     await expect(handle.page.getByRole('option', { name: featureName })).toHaveCount(0);
     transcript.step(
       'delete confirmed through the overflow menu and removed server-side feature state',

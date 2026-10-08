@@ -34,10 +34,10 @@ import { z } from 'zod';
 import { redactText, buildCanonicalError, CanonicalErrorException } from '../shared/errors';
 import { assertNoPrototypePollution, assertWithinByteSize } from '../shared/sanitize';
 import {
-  AmaPrefsSchema,
   FeatureIdSchema,
   MAX_KNOWN_SERVERS,
   NotificationPrefsSchema,
+  ServersPrefsSchema,
   SettingsPatchSchema,
   SettingsSchema,
   SettingsWindowPrefsSchema,
@@ -45,8 +45,8 @@ import {
   ThemePreferenceSchema,
   WindowBoundsSchema,
   WizardPrefsSchema,
-  defaultAmaPrefs,
   defaultNotificationPrefs,
+  defaultServersPrefs,
   defaultSettings,
   defaultSettingsWindowPrefs,
   defaultShellPrefs,
@@ -73,6 +73,24 @@ const MAX_SETTINGS_BYTES = 256 * 1024;
 const SETTINGS_TAB_SENTINEL = '__settings__';
 
 /**
+ * Shape of the retired AMA panel preferences (open state and floating-panel
+ * placement), kept ONLY so `load()` can validate v1–v5 documents that still
+ * carry the section; the v5→v6 migration drops it. Strict, so a malformed
+ * section still fails the whole document closed.
+ */
+const LegacyAmaPrefsSchema = z.strictObject({
+  drawer: z.enum(['compact', 'expanded']),
+  geometry: z
+    .strictObject({
+      right: z.number().int().min(0).max(100000),
+      bottom: z.number().int().min(0).max(100000),
+      width: z.number().int().min(1).max(100000),
+      height: z.number().int().min(1).max(100000),
+    })
+    .optional(),
+});
+
+/**
  * Shape of a schema-version-1 settings document, kept ONLY so `load()` can
  * validate and migrate legacy files still on disk. Not exported: v1's
  * `tabs` concept (open tab list, per-tab selected run) has no v2 equivalent
@@ -95,7 +113,7 @@ const SettingsSchemaV1 = z.strictObject({
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
   theme: ThemePreferenceSchema,
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
-  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  ama: LegacyAmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   tabs: LegacyV1OpenListSchema.default({ open: [], activeFeatureId: null }),
 });
@@ -186,7 +204,7 @@ const SettingsSchemaV3 = z.strictObject({
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
   theme: ThemePreferenceSchema,
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
-  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  ama: LegacyAmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   shell: ShellPrefsSchemaV3.default(defaultShellPrefsV3()),
   settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
@@ -234,7 +252,7 @@ const SettingsSchemaV4 = z.strictObject({
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
   theme: ThemePreferenceSchema,
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
-  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  ama: LegacyAmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   shell: ShellPrefsSchema.default(defaultShellPrefs()),
   settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
@@ -249,7 +267,7 @@ type SettingsV4 = z.output<typeof SettingsSchemaV4>;
  * entry was a local runtime attachment) and every other field, including
  * ordering and the last-used pointer, is carried over byte-for-byte.
  */
-function migrateSettingsV4ToV5(v4: SettingsV4): Settings {
+function migrateSettingsV4ToV5(v4: SettingsV4): SettingsV5 {
   return {
     schemaVersion: 5,
     runtime: v4.runtime,
@@ -268,6 +286,44 @@ function migrateSettingsV4ToV5(v4: SettingsV4): Settings {
 }
 
 /**
+ * Shape of a schema-version-5 settings document, kept ONLY so `load()` can
+ * validate and migrate files written while the floating AMA panel existed.
+ * Not exported: new code must only ever see the current SettingsSchema.
+ */
+const SettingsSchemaV5 = z.strictObject({
+  schemaVersion: z.literal(5),
+  runtime: z.strictObject({ selection: z.string().max(200).nullable() }),
+  window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
+  theme: ThemePreferenceSchema,
+  wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
+  ama: LegacyAmaPrefsSchema.optional(),
+  notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
+  shell: ShellPrefsSchema.default(defaultShellPrefs()),
+  settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
+  servers: ServersPrefsSchema.default(defaultServersPrefs()),
+});
+
+type SettingsV5 = z.output<typeof SettingsSchemaV5>;
+
+/**
+ * Upgrades a validated v5 document to v6: the retired `ama` section is
+ * dropped and every other field is carried over byte-for-byte.
+ */
+function migrateSettingsV5ToV6(v5: SettingsV5): Settings {
+  return {
+    schemaVersion: 6,
+    runtime: v5.runtime,
+    window: v5.window,
+    theme: v5.theme,
+    wizard: v5.wizard,
+    notifications: v5.notifications,
+    shell: v5.shell,
+    settingsWindow: v5.settingsWindow,
+    servers: v5.servers,
+  };
+}
+
+/**
  * Shape of a schema-version-2 settings document, kept ONLY so `load()` can
  * validate and migrate files written before the multi-server fields existed.
  * Not exported: new code must only ever see the current SettingsSchema.
@@ -278,7 +334,7 @@ const SettingsSchemaV2 = z.strictObject({
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }),
   theme: ThemePreferenceSchema,
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
-  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
+  ama: LegacyAmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   shell: ShellPrefsSchemaV3.default(defaultShellPrefsV3()),
   settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
@@ -339,7 +395,6 @@ export class SettingsStore {
       ...(parsed.data.window !== undefined ? { window: parsed.data.window } : {}),
       ...(parsed.data.theme !== undefined ? { theme: parsed.data.theme } : {}),
       ...(parsed.data.wizard !== undefined ? { wizard: parsed.data.wizard } : {}),
-      ...(parsed.data.ama !== undefined ? { ama: parsed.data.ama } : {}),
       ...(parsed.data.notifications !== undefined
         ? { notifications: parsed.data.notifications }
         : {}),
@@ -391,8 +446,10 @@ export class SettingsStore {
       if (schemaVersion === 1) {
         const legacy = SettingsSchemaV1.safeParse(data);
         if (legacy.success) {
-          const migrated = migrateSettingsV4ToV5(
-            migrateSettingsV3ToV4(migrateSettingsV2ToV3(migrateSettingsV1ToV2(legacy.data))),
+          const migrated = migrateSettingsV5ToV6(
+            migrateSettingsV4ToV5(
+              migrateSettingsV3ToV4(migrateSettingsV2ToV3(migrateSettingsV1ToV2(legacy.data))),
+            ),
           );
           this.persist(migrated);
           return migrated;
@@ -401,8 +458,8 @@ export class SettingsStore {
       if (schemaVersion === 2) {
         const legacy = SettingsSchemaV2.safeParse(data);
         if (legacy.success) {
-          const migrated = migrateSettingsV4ToV5(
-            migrateSettingsV3ToV4(migrateSettingsV2ToV3(legacy.data)),
+          const migrated = migrateSettingsV5ToV6(
+            migrateSettingsV4ToV5(migrateSettingsV3ToV4(migrateSettingsV2ToV3(legacy.data))),
           );
           this.persist(migrated);
           return migrated;
@@ -411,7 +468,9 @@ export class SettingsStore {
       if (schemaVersion === 3) {
         const legacy = SettingsSchemaV3.safeParse(data);
         if (legacy.success) {
-          const migrated = migrateSettingsV4ToV5(migrateSettingsV3ToV4(legacy.data));
+          const migrated = migrateSettingsV5ToV6(
+            migrateSettingsV4ToV5(migrateSettingsV3ToV4(legacy.data)),
+          );
           this.persist(migrated);
           return migrated;
         }
@@ -419,7 +478,15 @@ export class SettingsStore {
       if (schemaVersion === 4) {
         const legacy = SettingsSchemaV4.safeParse(data);
         if (legacy.success) {
-          const migrated = migrateSettingsV4ToV5(legacy.data);
+          const migrated = migrateSettingsV5ToV6(migrateSettingsV4ToV5(legacy.data));
+          this.persist(migrated);
+          return migrated;
+        }
+      }
+      if (schemaVersion === 5) {
+        const legacy = SettingsSchemaV5.safeParse(data);
+        if (legacy.success) {
+          const migrated = migrateSettingsV5ToV6(legacy.data);
           this.persist(migrated);
           return migrated;
         }

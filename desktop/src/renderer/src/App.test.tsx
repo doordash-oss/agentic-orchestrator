@@ -165,8 +165,8 @@ describe('App readiness gating', () => {
 
     await waitFor(() => expect(mock.api.getAttention).toHaveBeenCalledTimes(1));
     expect(mock.api.scanRecovery).toHaveBeenCalledTimes(1);
-    // listFeatures is now fetched by the Overview surface inside the shell
-    // (App no longer does its own feature-name lookup), which mounts once the
+    // listFeatures is fetched by the sidebar inside the shell (App no longer
+    // does its own feature-name lookup), which mounts once the
     // separate readiness fetch resolves — a second async hop after attention.
     await waitFor(() => expect(mock.api.listFeatures).toHaveBeenCalledTimes(1));
   });
@@ -205,9 +205,7 @@ describe('App readiness gating', () => {
       readiness: readySnapshot(),
       settings: {
         ...defaultSettings(),
-        // The bell is only shown in the toolbar once a feature is selected
-        // (it is hidden entirely on Overview), so this test starts on
-        // the feature it wants to jump from.
+        // This test starts on the feature it wants to jump from.
         shell: { featureByServer: { 'default-runtime': featureId }, sidebarCollapsed: false },
       },
       features: [
@@ -228,7 +226,7 @@ describe('App readiness gating', () => {
     });
     render(<App />);
 
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
     await userEvent.click(
       await screen.findByRole('button', { name: /Attention inbox, 1 pending/ }),
     );
@@ -247,7 +245,7 @@ describe('App readiness gating', () => {
       readiness: readySnapshot(),
     });
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
 
     act(() => mock.emitRouteRequest({ target: 'attention' }));
     await screen.findByRole('complementary', { name: 'Attention inbox' });
@@ -276,7 +274,7 @@ describe('App readiness gating', () => {
       readiness: readySnapshot(),
     });
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
     const before = mock.api.getAttention.mock.calls.length;
 
     act(() => {
@@ -293,7 +291,7 @@ describe('App readiness gating', () => {
       updates: defaultUpdateState({ status: 'current' }),
     });
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
     expect(screen.queryByLabelText('Update available')).not.toBeInTheDocument();
 
     mock.api.getUpdates.mockResolvedValueOnce(
@@ -347,7 +345,7 @@ describe('App readiness gating', () => {
       readiness: readySnapshot(),
     });
     render(<App />);
-    expect(await screen.findByRole('option', { name: 'Overview' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Supervisor' })).toBeInTheDocument();
     expect(screen.queryByLabelText(/first-launch setup/i)).not.toBeInTheDocument();
   });
 
@@ -405,7 +403,7 @@ describe('App settings-window routing', () => {
   it('asks the main process to open the Settings window instead of rendering a panel', async () => {
     const mock = readyMock();
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
 
     act(() => mock.emitRouteRequest({ target: 'settings' }));
 
@@ -415,7 +413,7 @@ describe('App settings-window routing', () => {
       screen.queryByRole('region', { name: 'Settings and readiness' }),
     ).not.toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: /theme/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+    expect(screen.getByRole('option', { name: 'Supervisor' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -424,7 +422,7 @@ describe('App settings-window routing', () => {
   it('forwards a deep-linked settings section as the window request payload', async () => {
     const mock = readyMock();
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
 
     act(() => mock.emitRouteRequest({ target: 'settings', settingsSection: 'updates' }));
 
@@ -438,12 +436,12 @@ describe('App settings-window routing', () => {
     const mock = readyMock();
     mock.api.openSettingsWindow.mockRejectedValueOnce(ipcError('E_INTERNAL', 'refused'));
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
 
     act(() => mock.emitRouteRequest({ target: 'settings' }));
 
     await waitFor(() => expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({}));
-    expect(screen.getByRole('option', { name: 'Overview' })).toHaveAttribute(
+    expect(screen.getByRole('option', { name: 'Supervisor' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
@@ -463,7 +461,7 @@ describe('App settings-window routing', () => {
       }),
     });
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
 
     await user.click(await screen.findByRole('button', { name: 'Show available update' }));
     const popover = screen.getByRole('region', { name: 'Available update' });
@@ -478,7 +476,7 @@ describe('App settings-window routing', () => {
     const user = userEvent.setup();
     const mock = readyMock();
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
 
     act(() => mock.emitRouteRequest({ target: 'palette' }));
     const palette = await screen.findByRole('dialog', { name: 'Command palette' });
@@ -486,6 +484,61 @@ describe('App settings-window routing', () => {
 
     await waitFor(() => expect(mock.api.openSettingsWindow).toHaveBeenCalledWith({}));
     expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
+  });
+});
+
+describe('App partial-readiness setup command', () => {
+  const partialMock = () =>
+    installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'app-owned' }),
+      readiness: readySnapshot({
+        ready: false,
+        models: { available: false },
+        issues: [
+          {
+            code: 'models_unavailable',
+            class: 'blocking',
+            title: 'Models unavailable',
+            summary: 'No usable provider exposes any model.',
+          },
+        ],
+      }),
+    });
+
+  it("opens the wizard sheet from the palette's Setup… entry", async () => {
+    const user = userEvent.setup();
+    const mock = partialMock();
+    render(<App />);
+    await screen.findByRole('button', { name: 'Open setup' });
+
+    act(() => mock.emitRouteRequest({ target: 'palette' }));
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    await user.click(within(palette).getByRole('option', { name: /^Setup…/ }));
+
+    const sheet = await screen.findByRole('dialog', { name: 'Set up Agentico' });
+    expect(within(sheet).getByRole('heading', { name: /model availability/i })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).not.toBeInTheDocument();
+  });
+
+  it('opens the wizard sheet from a native setup route', async () => {
+    const mock = partialMock();
+    render(<App />);
+    await screen.findByRole('button', { name: 'Open setup' });
+    act(() => mock.emitRouteRequest({ target: 'setup' }));
+    expect(await screen.findByRole('dialog', { name: 'Set up Agentico' })).toBeInTheDocument();
+  });
+
+  it('omits Setup… from the palette when the runtime is complete', async () => {
+    const mock = installAgenticoMock({
+      connection: connection({ status: 'ready', stage: 'ready', ownership: 'external' }),
+      readiness: readySnapshot(),
+    });
+    render(<App />);
+    await screen.findByRole('option', { name: 'Supervisor' });
+    act(() => mock.emitRouteRequest({ target: 'palette' }));
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    expect(within(palette).getByRole('option', { name: /^New Feature/ })).toBeInTheDocument();
+    expect(within(palette).queryByRole('option', { name: /^Setup…/ })).toBeNull();
   });
 });
 
@@ -519,7 +572,7 @@ describe('App per-server attention drafts', () => {
       attention: { items: [helpItem] },
     });
     render(<App />);
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
 
     const draftOnCurrentServer = async (text: string) => {
       await user.click(await screen.findByRole('button', { name: /Attention inbox, 1 pending/ }));
@@ -535,7 +588,7 @@ describe('App per-server attention drafts', () => {
     // Ride the real connection-shell transition to server B.
     act(() => mock.emitConnection(connection({ status: 'attaching', stage: 'connect' })));
     act(() => mock.emitConnection(readyAt('key-beta', 'beta')));
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
 
     const betaDraft = await draftOnCurrentServer('beta says hi');
     expect(betaDraft).toHaveValue('beta says hi');
@@ -543,13 +596,13 @@ describe('App per-server attention drafts', () => {
     // Back to A: its draft is restored exactly; B's is nowhere visible.
     act(() => mock.emitConnection(connection({ status: 'attaching', stage: 'connect' })));
     act(() => mock.emitConnection(readyAt('key-alpha', 'alpha')));
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
     expect(await draftOnCurrentServer('')).toHaveValue('alpha says hi');
 
     // And B still has its own.
     act(() => mock.emitConnection(connection({ status: 'attaching', stage: 'connect' })));
     act(() => mock.emitConnection(readyAt('key-beta', 'beta')));
-    await screen.findByRole('option', { name: 'Overview' });
+    await screen.findByRole('option', { name: 'Supervisor' });
     expect(await draftOnCurrentServer('')).toHaveValue('beta says hi');
   });
 });

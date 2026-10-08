@@ -26,9 +26,12 @@ package opencode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -203,8 +206,96 @@ func (p *Provider) AvailableModels() []string {
 // inherited compatibility/config sources are scrubbed through environment flags —
 // none of which mutates the user's global OpenCode configuration. Any build
 // failure aborts before a launchable command exists. See buildManagedSession.
+//
+// Interactive sessions take the interactive launch profile instead (see
+// buildInteractiveSession).
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
-	return buildManagedSession(p.cliBinary(), opts, p.effortOptions(opts.Model, opts.EffortLevel))
+	effort := p.effortOptions(opts.Model, opts.EffortLevel)
+	if opts.Interactive {
+		return buildInteractiveSession(p.cliBinary(), opts, p.interactiveEffortOptions(opts.EffortLevel))
+	}
+	return buildManagedSession(p.cliBinary(), opts, effort)
+}
+
+// interactiveEffortOptions prepares every chat model before an ACP model switch.
+// A missing variant leaves that model to OpenCode's own default options.
+func (p *Provider) interactiveEffortOptions(level llm.EffortLevel) map[string]any {
+	providers := make(map[string]any)
+	for _, info := range p.ModelCatalog() {
+		if info.Capabilities != nil && info.Capabilities.TextOutput != nil && !*info.Capabilities.TextOutput {
+			continue
+		}
+		options := info.EffortVariants[level]
+		if len(options) == 0 {
+			continue
+		}
+		backend := BackendModel(info.ID)
+		if validateBackendModel(backend) != nil {
+			continue
+		}
+		provider, model, _ := splitBackend(backend)
+		entry, ok := providers[provider].(map[string]any)
+		if !ok {
+			entry = map[string]any{"models": map[string]any{}}
+			providers[provider] = entry
+		}
+		entry["models"].(map[string]any)[model] = map[string]any{"options": options}
+	}
+	return providers
+}
+
+// buildInteractiveSession overlays only the supervisor policy on the user's
+// OpenCode configuration. It leaves plugins, skills, project config and MCP
+// servers available, while the embedded HTTP server handles child requests.
+func buildInteractiveSession(binary string, opts llm.CommandBuildOpts, effortProviders map[string]any) ([]string, []string, error) {
+	backend := BackendModel(opts.Model)
+	if err := validateBackendModel(backend); err != nil {
+		return nil, nil, err
+	}
+	overlay := map[string]any{
+		"model": backend,
+		"permission": map[string]any{
+			"bash":               map[string]string{"*": "ask"},
+			"edit":               map[string]string{"*": "ask"},
+			"external_directory": map[string]string{"*": "ask"},
+			"task":               map[string]string{"*": "ask"},
+			"skill":              map[string]string{"*": "ask"},
+			"question":           "ask",
+			"read":               map[string]string{"*": "allow"},
+			"webfetch":           "allow",
+			"websearch":          "allow",
+		},
+		"agent": map[string]any{
+			"general": map[string]any{"permission": map[string]any{"task": map[string]string{"*": "deny"}}},
+			"explore": map[string]any{"permission": map[string]any{"task": map[string]string{"*": "deny"}}},
+		},
+		"autoupdate": false,
+	}
+	if strings.TrimSpace(opts.SystemPrompt) != "" {
+		if strings.TrimSpace(opts.StateDir) == "" {
+			return nil, nil, fmt.Errorf("OpenCode supervisor instructions require a provider state directory")
+		}
+		if err := os.MkdirAll(opts.StateDir, managedDirPerm); err != nil {
+			return nil, nil, fmt.Errorf("creating OpenCode supervisor directory: %s", sanitizeDiagnostic(err.Error()))
+		}
+		generationDir, err := os.MkdirTemp(opts.StateDir, "opencode-supervisor-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("creating OpenCode supervisor generation: %s", sanitizeDiagnostic(err.Error()))
+		}
+		instructionsPath := filepath.Join(generationDir, instructionsFileName)
+		if err := os.WriteFile(instructionsPath, []byte(opts.SystemPrompt), managedFilePerm); err != nil {
+			return nil, nil, fmt.Errorf("writing OpenCode supervisor instructions: %s", sanitizeDiagnostic(err.Error()))
+		}
+		overlay["instructions"] = []string{instructionsPath}
+	}
+	if len(effortProviders) != 0 {
+		overlay["provider"] = effortProviders
+	}
+	content, err := json.Marshal(overlay)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshaling OpenCode supervisor config: marshal failed")
+	}
+	return withServerBridge([]string{binary, "acp"}, []string{configContentEnvVar + "=" + string(content)})
 }
 
 // validateBackendModel reports whether a stripped OpenCode backend model is a

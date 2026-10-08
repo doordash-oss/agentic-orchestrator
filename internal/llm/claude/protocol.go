@@ -19,14 +19,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/claudeconfig"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
@@ -136,6 +135,19 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 			TaskID:         msg.TaskNotification.TaskID,
 			ChildSessionID: msg.TaskNotification.SessionID,
 		}
+	case msg.ControlRequest != nil && msg.ControlRequest.Request.AgentID != "" && p.opts.Interactive:
+		// A permission a sub-agent raises names the sub-agent. Only
+		// human-driven chat routes it as the sub-agent's own request;
+		// orchestrated phases keep treating it as the root agent's.
+		agentID := msg.ControlRequest.Request.AgentID
+		msg.Origin = llm.EventOrigin{
+			Kind:           llm.EventOriginTask,
+			TaskID:         agentID,
+			ChildSessionID: agentID,
+		}
+	}
+	if msg.ControlRequest != nil {
+		msg.ControlRequest.Origin = msg.Origin
 	}
 
 	return []llm.SDKMessage{msg}, nil
@@ -296,19 +308,11 @@ func (p *Protocol) TranscriptPath() string {
 		return ""
 	}
 
-	home, err := os.UserHomeDir()
+	configDir, err := claudeconfig.DefaultDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".claude", "projects",
-		claudeProjectsDirName(p.opts.WorkDir),
-		sid+".jsonl")
-}
-
-// claudeProjectsDirName encodes a working directory path into the directory
-// name used by the Claude CLI under ~/.claude/projects/.
-func claudeProjectsDirName(workDir string) string {
-	return regexp.MustCompile(`[/.]`).ReplaceAllString(workDir, "-")
+	return filepath.Join(claudeconfig.ProjectsDir(configDir, p.opts.WorkDir), sid+".jsonl")
 }
 
 func (p *Protocol) Close() error {

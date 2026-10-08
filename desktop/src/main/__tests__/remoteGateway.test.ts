@@ -59,8 +59,8 @@ function remoteKey(): string {
 function compatibleDeclaration(): Record<string, unknown> {
   return {
     api_version: 'v1',
-    schema_version: 1,
-    min_client_schema: 1,
+    schema_version: 2,
+    min_client_schema: 2,
     runtime_policy: 'loopback-bearer-v1',
     server_build: { version: 'v9.9.9-remote', revision: 'deadbeef' },
   };

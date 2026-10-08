@@ -1101,7 +1101,7 @@ func seamsForFailAt(points map[string]bool) selfupdate.FileOps {
 // RemoveRegistryEntry are idempotent, so overlapping with the deferred
 // cleanup in runServer is safe.
 func shutdownSequence(r serverRun) {
-	shutdownFeatures(r.boot.orchestrator, r.boot.sessionManager)
+	shutdownRuntimeWork(r.boot)
 	closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := r.server.Close(closeCtx); err != nil {

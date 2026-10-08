@@ -93,17 +93,6 @@ type RoleSystemInput struct {
 	CompletionTool string
 }
 
-// ChatSystemInput is the data passed to chat.system.tmpl for the persistent
-// AMA chat session.
-type ChatSystemInput struct {
-	SkillPath       string
-	RuntimeRoot     string
-	StateDir        string
-	ConfigPath      string
-	WorkspaceDir    string
-	CurrentFeatures string
-}
-
 // AutoReviewUserInput is the sanitized command context passed to the hidden
 // automatic Bash safety reviewer. Nonce fences the untrusted request fields;
 // WritableRootsSummary carries the caller's explicit read/write semantics.
@@ -207,6 +196,18 @@ type DeferralsDueInput struct {
 type SummaryUserInput struct {
 	Name        string
 	Description string
+}
+
+// SupervisorSystemInput is the data passed to supervisor.system.tmpl. Every
+// path is absolute; HelperCommand is the agentico binary path plus `api`.
+type SupervisorSystemInput struct {
+	RuntimeDir    string
+	StateDir      string
+	WorkDir       string
+	ConfigPath    string
+	DiscoveryPath string
+	SkillPath     string
+	HelperCommand string
 }
 
 // PRDescriptionUserInput is the data passed to pr_description.user.tmpl.

@@ -21,6 +21,7 @@ limitations under the License.
  * is deleted in teardown; the journeys never touch the real user profile.
  */
 import { execFileSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -44,12 +45,28 @@ export interface JourneyWorld {
   stubDir: string;
   /** The claude stub CLI (config providers.claude.cli points here). */
   claudeStub: string;
+  /** Detectable Codex CLI that records and fails app-server launches. */
+  codexStub: string;
   /** Path of the stub's auth-state file. */
   authStatePath: string;
   /** Marker file: while present the stub sleeps before answering auth. */
   authDelayPath: string;
   /** One line per real stream-json provider session (catalog/auth probes excluded). */
   providerInvocationLog: string;
+  /**
+   * Sentinel file: while present, a supervisor-launched stub process exits
+   * non-zero before printing anything, so the launch fails before its
+   * handshake (supervisorProvider worlds only).
+   */
+  supervisorLaunchFailurePath: string;
+  /**
+   * Prefix of the gate files a `gatedPermission` supervisor turn waits on:
+   * the stub raises its permission request once `<prefix>.1` exists and
+   * finishes the turn once `<prefix>.2` exists (supervisorProvider worlds
+   * only). Open a gate with openSupervisorGate.
+   */
+  supervisorGatePath: string;
+  codexInvocationLog: string;
 }
 
 export interface WorldOptions {
@@ -65,7 +82,157 @@ export interface WorldOptions {
   attentionProvider?: boolean;
   /** Resolve the completion rebase journey's hermetic conflict and approve review gates. */
   rebaseProvider?: boolean;
+  /**
+   * Serve the supervisor's long-lived interactive Claude session: stream
+   * deterministic replies turn after turn and stay alive between turns.
+   * Prompts carrying SUPERVISOR_E2E_MARKERS script permission, hold and
+   * operate turns. Combined with `workflowProvider`, only the process the
+   * supervisor launcher started (it alone carries AGENTICO_RUNTIME_DIR) is
+   * the supervisor; every other stream session is a workflow session.
+   */
+  supervisorProvider?: boolean;
+  /** Include a detectable Codex CLI whose app-server launch always fails. */
+  unlaunchableCodex?: boolean;
+  /**
+   * Write a `defaults.pipeline` the server rejects, so readiness reports an
+   * invalid configuration while the provider itself can still be ready.
+   */
+  invalidPipelineProfile?: boolean;
 }
+
+/** Prompt markers the supervisorProvider stub reacts to. */
+export const SUPERVISOR_E2E_MARKERS = {
+  /** Blocks the turn on a Bash permission request until it is answered. */
+  permission: 'SUPERVISOR_E2E_PERMISSION',
+  /**
+   * A turn the journey paces through two gate files (see
+   * JourneyWorld.supervisorGatePath): it holds as running until gate 1
+   * opens, then blocks on the same Bash permission request as `permission`,
+   * then, once answered, holds as running again until gate 2 opens before
+   * committing its reply. Logs `gated:<turn>`, `pending:supervisor-perm-<turn>`
+   * and `response:supervisor-perm-<turn>:...` like `permission`.
+   */
+  gatedPermission: 'SUPERVISOR_E2E_GATED_PERMISSION',
+  /**
+   * Holds the turn until an interrupt arrives, then reports an interrupted
+   * result; a held turn that ends with stdin closing (End, New conversation)
+   * logs `hold-ended:<turn>` instead.
+   */
+  hold: 'SUPERVISOR_E2E_HOLD',
+  shellDiff: 'SUPERVISOR_E2E_SHELL_DIFF',
+  backgroundWork: 'SUPERVISOR_E2E_BACKGROUND_WORK',
+  /**
+   * Commits one complete assistant text message (supervisorStubPartialReply),
+   * then holds the turn like `hold` without ever reporting a result, so a
+   * server restart cuts a turn that already has partial text.
+   */
+  partialHold: 'SUPERVISOR_E2E_PARTIAL_HOLD',
+  /**
+   * Operates Agentico through the real `"$AGENTICO_BIN" api` helper: creates
+   * the feature named in `[...]` right after the marker (build it with
+   * supervisorOperateCreateMarker), dispatches its setup (an API-created
+   * feature waits in SettingUpWorktrees until a client does), posts its
+   * config, and reads it back.
+   */
+  operateCreate: 'SUPERVISOR_E2E_OPERATE_CREATE',
+  /** Starts the feature the last operate-create turn created, through the helper. */
+  operateStart: 'SUPERVISOR_E2E_OPERATE_START',
+  compact: 'SUPERVISOR_E2E_COMPACT',
+  usageHigh: 'SUPERVISOR_E2E_USAGE_HIGH',
+} as const;
+
+/** Feature names an operate-create marker may carry (kept sh- and JSON-safe). */
+const OPERATE_FEATURE_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}$/;
+
+/** The operate-create marker text carrying the journey-chosen feature name. */
+export function supervisorOperateCreateMarker(featureName: string): string {
+  if (!OPERATE_FEATURE_NAME.test(featureName)) {
+    throw new Error(`operate feature name ${JSON.stringify(featureName)} is not sh/JSON-safe`);
+  }
+  return `${SUPERVISOR_E2E_MARKERS.operateCreate}[${featureName}]`;
+}
+
+/**
+ * The feature config the operate-create turn posts: every role on the
+ * world's stub Claude provider, no inquiry and no review checkpoints, so a
+ * started feature stays in its first running phase for the workflow stub.
+ */
+export const SUPERVISOR_E2E_OPERATE_CONFIG = {
+  models: {
+    inquiry: 'claude:haiku',
+    research: 'claude:haiku',
+    planning: 'claude:haiku',
+    implementation: 'claude:haiku',
+    review: 'claude:haiku',
+    utilities: 'claude:haiku',
+    kb_build: 'claude:haiku',
+  },
+  inquireness: 'none',
+} as const;
+
+/** The text reply that closes an operate-create turn. */
+export function supervisorOperateCreatedReply(featureName: string): string {
+  return `Created and configured ${featureName}.`;
+}
+
+/** The text reply that closes an operate-start turn. */
+export const SUPERVISOR_E2E_OPERATE_STARTED_REPLY = 'Started the feature.';
+
+/** Invocation-log prefix of every helper command the operate turns run. */
+export const SUPERVISOR_E2E_HELPER_LOG_PREFIX = 'helper:';
+
+/**
+ * The heading the server's hidden error-context bundle opens with; the
+ * supervisorProvider stub logs each turn whose wire text carries it.
+ */
+export const SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING = 'Chat context';
+
+/**
+ * The invocation-log lines the supervisorProvider stub writes for one
+ * attachment its wire text names (an `Attached Images:` / `Attached Files:`
+ * block with `- [Image #N]: <path>` / `- [<name>]: <path>` lines): the path,
+ * then the path with the file's first line (printable ASCII only, at most
+ * 200 characters), which proves the harness process could read the copy. An
+ * unreadable path logs `attachment-unreadable:<turn>:<path>` instead of the
+ * second line.
+ */
+export function supervisorStubAttachmentLogLines(
+  turn: number,
+  attachmentPath: string,
+  firstLine: string,
+): [string, string] {
+  return [
+    `attachment:${turn}:${attachmentPath}`,
+    `attachment-line:${turn}:${attachmentPath}:${firstLine}`,
+  ];
+}
+
+/** Opens gate `gate` (1 or 2) of a `gatedPermission` supervisor turn. */
+export function openSupervisorGate(world: JourneyWorld, gate: 1 | 2): void {
+  fs.writeFileSync(`${world.supervisorGatePath}.${gate}`, '');
+}
+
+/** The deterministic reply the supervisorProvider stub commits for a turn (1-based). */
+export function supervisorStubReply(turn: number): string {
+  return `Supervisor reply ${turn}`;
+}
+
+/** The partial assistant text a partial-hold turn commits before holding (1-based turn). */
+export function supervisorStubPartialReply(turn: number): string {
+  return `Partial supervisor reply ${turn}`;
+}
+
+/**
+ * The reply the supervisorProvider stub gives the first prompt of a process
+ * launched with `--resume <id>`: the number of prior user prompts it found
+ * in the rebuilt session file.
+ */
+export function supervisorStubResumedReply(priorMessages: number): string {
+  return `Resumed with ${priorMessages} prior messages`;
+}
+
+/** The Bash command the supervisorProvider stub asks permission for. */
+export const SUPERVISOR_E2E_PERMISSION_COMMAND = 'printf supervisor-permission';
 
 const STUB_VERSION = '2.99.0 (Claude Code)';
 
@@ -127,9 +294,30 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
   }
 
   const claudeStub = path.join(stubDir, 'claude-stub');
+  const codexStub = path.join(stubDir, 'codex-stub');
+  const codexInvocationLog = path.join(stubDir, 'codex-invocations.log');
+  if (options.unlaunchableCodex === true) {
+    fs.writeFileSync(
+      codexStub,
+      [
+        '#!/bin/sh',
+        'if [ "$1" = "--version" ]; then echo "codex-cli 0.156.0"; exit 0; fi',
+        'if [ "$1" = "login" ] && [ "$2" = "status" ]; then echo "Logged in using ChatGPT"; exit 0; fi',
+        `if [ "$1" = "debug" ] && [ "$2" = "models" ] && [ "$3" = "--bundled" ]; then echo '{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4","visibility":"list","supported_in_api":true,"context_window":272000},{"slug":"gpt-5.3-codex","display_name":"GPT-5.3 Codex","visibility":"list","supported_in_api":true,"context_window":272000}]}'; exit 0; fi`,
+        'if [ "$1" = "debug" ] && [ "$2" = "models" ]; then exit 3; fi',
+        `printf '%s\\n' "$*" >> "${codexInvocationLog}"`,
+        'echo "Codex app-server unavailable" >&2',
+        'exit 3',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+  }
   const authStatePath = path.join(stubDir, 'claude-auth.json');
   const authDelayPath = path.join(stubDir, 'claude-auth-delay');
   const providerInvocationLog = path.join(stubDir, 'workflow-invocations.log');
+  const supervisorLaunchFailurePath = path.join(stubDir, 'supervisor-launch-failure');
+  const supervisorGatePath = path.join(stubDir, 'supervisor-gate');
   const delaySeconds = options.authDelaySeconds ?? 0;
   writeStubCli(
     claudeStub,
@@ -140,6 +328,8 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     options.workflowProvider === true,
     options.attentionProvider === true,
     options.rebaseProvider === true,
+    options.supervisorProvider === true,
+    { home, launchFailurePath: supervisorLaunchFailurePath, gatePath: supervisorGatePath },
   );
   writeAuthState(authStatePath, options.auth ?? { loggedIn: false });
   if (delaySeconds > 0) {
@@ -158,11 +348,20 @@ export function createWorld(name: string, options: WorldOptions = {}): JourneyWo
     workspaceRoot,
     stubDir,
     claudeStub,
+    codexStub,
+    codexInvocationLog,
     authStatePath,
     authDelayPath,
     providerInvocationLog,
+    supervisorLaunchFailurePath,
+    supervisorGatePath,
   };
-  writeRuntimeConfig(world, options.presetWorkspaceRoot === true);
+  writeRuntimeConfig(
+    world,
+    options.presetWorkspaceRoot === true,
+    options.unlaunchableCodex === true,
+    options.invalidPipelineProfile === true,
+  );
   return world;
 }
 
@@ -182,6 +381,8 @@ function writeStubCli(
   workflowProvider: boolean,
   attentionProvider: boolean,
   rebaseProvider: boolean,
+  supervisorProvider: boolean,
+  supervisorPaths: { home: string; launchFailurePath: string; gatePath: string },
 ): void {
   const script = [
     '#!/bin/sh',
@@ -204,12 +405,51 @@ function writeStubCli(
     '  if [ "$arg" = "--input-format" ]; then is_stream=1; fi',
     'done',
     'if [ "$is_stream" -ne 1 ]; then exit 1; fi',
+    // A supervisor launch (only its child carries AGENTICO_RUNTIME_DIR) dies
+    // before printing anything while the failure sentinel exists.
+    ...(supervisorProvider
+      ? [
+          `if [ -n "$AGENTICO_RUNTIME_DIR" ] && [ -e "${supervisorPaths.launchFailurePath}" ]; then`,
+          `  printf 'launch-failed\\n' >> "${providerInvocationLog}"`,
+          '  exit 3',
+          'fi',
+        ]
+      : []),
     'IFS= read -r _agentico_init || exit 1',
     `request_id=$(printf '%s\\n' "$_agentico_init" | sed -n 's/.*"request_id" *: *"\\([^"]*\\)".*/\\1/p')`,
     '[ -n "$request_id" ] || exit 1',
     `printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":%s}}\\n' "$request_id" '${STUB_MODEL_CATALOG}'`,
+    // With both supervisor and workflow scripts, only the supervisor
+    // launcher's child carries AGENTICO_RUNTIME_DIR; alone, every stream
+    // session is the supervisor.
+    ...(supervisorProvider
+      ? [
+          workflowProvider
+            ? 'if [ -n "$AGENTICO_RUNTIME_DIR" ]; then is_supervisor=1; else is_supervisor=0; fi'
+            : 'is_supervisor=1',
+        ]
+      : []),
+    // The supervisor launch completes its handshake on the first provider
+    // output and only then sends the first user message, so its session
+    // reports init before that message arrives (as an idle Claude does).
+    // A resumed session reports the id it resumed, as Claude does.
+    ...(supervisorProvider
+      ? [
+          'if [ "$is_supervisor" = 1 ]; then',
+          ...supervisorResumeLines(providerInvocationLog, supervisorPaths.home),
+          `  printf '{"type":"system","subtype":"init","session_id":"%s","model":"claude-haiku-4-5"}\\n' "\${_resume_id:-e2e-supervisor-session}"`,
+          'fi',
+        ]
+      : []),
     // Discovery stops here; only real sessions send a user prompt.
     'IFS= read -r _agentico_prompt || exit 1',
+    ...(supervisorProvider
+      ? [
+          'if [ "$is_supervisor" = 1 ]; then',
+          ...supervisorStubLines(providerInvocationLog, supervisorPaths.gatePath),
+          'fi',
+        ]
+      : []),
     ...(rebaseProvider
       ? [
           '_context=$(printf "%s\\n" "$@" "$_agentico_prompt")',
@@ -481,21 +721,6 @@ function writeStubCli(
           '    exit 0',
           '  fi',
           '}',
-          'case "$_agentico_prompt" in',
-          '  *"attention chat help"*)',
-          `    echo '{"type":"system","subtype":"init","session_id":"e2e-attention-chat"}'`,
-          `    echo '{"type":"result","subtype":"success","session_id":"e2e-attention-chat","total_cost_usd":0}'`,
-          `    printf 'chat-waiting\\n' >> "${providerInvocationLog}"`,
-          '    while :; do',
-          '      if IFS= read -r _help; then',
-          `      printf 'help-response:%s\\n' "$_help" >> "${providerInvocationLog}"`,
-          '        exit 0',
-          '      fi',
-          '      sleep 0.2',
-          '    done',
-          '    exit 0',
-          '    ;;',
-          'esac',
           `echo '{"type":"system","subtype":"init","session_id":"e2e-attention-session"}'`,
           `echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Attention fixture ready."}]}}'`,
           `emit_request '{"type":"control_request","request_id":"perm-allow-once","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"printf allow-once"}}}' "perm-allow-once"`,
@@ -529,6 +754,283 @@ function writeStubCli(
   fs.writeFileSync(stubPath, script, { mode: 0o755 });
 }
 
+/**
+ * `--resume <id>` handling for the supervisor stub: reads the session file
+ * the server rebuilt at `<claude config>/projects/<encoded physical cwd>/<id>.jsonl`
+ * (config is CLAUDE_CONFIG_DIR, else $HOME/.claude; the encoding replaces
+ * every `/` and `.` of `pwd -P` with `-`), counts its prior user prompts
+ * (string `content`; tool results carry arrays), logs `resume:<id>` and
+ * `history:<n>`, and arms the first reply to report the count.
+ */
+function supervisorResumeLines(providerInvocationLog: string, home: string): string[] {
+  return [
+    '  _resume_id=""',
+    '  _resume_reply=""',
+    '  _prev_arg=""',
+    '  for _arg in "$@"; do',
+    '    if [ "$_prev_arg" = "--resume" ]; then _resume_id="$_arg"; fi',
+    `    if [ "$_prev_arg" = "--model" ]; then printf 'launch-model:%s\\n' "$_arg" >> "${providerInvocationLog}"; fi`,
+    `    if [ "$_prev_arg" = "--effort" ]; then printf 'launch-effort:%s\\n' "$_arg" >> "${providerInvocationLog}"; fi`,
+    '    _prev_arg="$_arg"',
+    '  done',
+    '  if [ -n "$_resume_id" ]; then',
+    `    _claude_config="\${CLAUDE_CONFIG_DIR:-\${HOME:-${home}}/.claude}"`,
+    `    _session_file="$_claude_config/projects/$(pwd -P | sed 's#[/.]#-#g')/$_resume_id.jsonl"`,
+    `    printf 'resume:%s\\n' "$_resume_id" >> "${providerInvocationLog}"`,
+    '    if [ -f "$_session_file" ]; then',
+    `      _history=$(grep -c '"role":"user","content":"' "$_session_file")`,
+    '    else',
+    `      printf 'resume-file-missing:%s\\n' "$_session_file" >> "${providerInvocationLog}"`,
+    '      _history=0',
+    '    fi',
+    `    printf 'history:%s\\n' "$_history" >> "${providerInvocationLog}"`,
+    '    _resume_reply="Resumed with $_history prior messages"',
+    '    if [ -f "$_session_file" ] && grep -q compact_boundary "$_session_file"; then',
+    String.raw`      _history=$(awk '/compact_boundary/ { n=0; next } /"type":"user"/ { n++ } END { print n+0 }' "$_session_file")`,
+    String.raw`      _summary=$(grep 'isCompactSummary' "$_session_file" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | tail -n 1 | cut -c 1-80)`,
+    String.raw`      printf 'resume-compacted:%s\n' "$_history" >> "${providerInvocationLog}"`,
+    '      _resume_reply="Resumed after compaction with $_history prior messages: $_summary"',
+    '    fi',
+    '  fi',
+  ];
+}
+
+/**
+ * The supervisor's interactive session: one process serves every turn. A
+ * plain prompt streams two text deltas, commits one assistant message with
+ * the same message id, and reports success; the permission marker blocks on
+ * a Bash request until its control response arrives; the hold marker emits
+ * nothing until the interrupt control request, then reports an interrupted
+ * result (stdin closing first logs `hold-ended:<turn>`); the partial-hold marker first commits one complete assistant text
+ * message, then holds the same way (a server restart cuts it with no result).
+ * A process resumed with `--resume` answers its first plain prompt with the
+ * resumed history count instead. The operate markers drive Agentico like a real model would: each
+ * helper call is one assistant `tool_use` (Bash, mirroring the command), the
+ * command run through `eval` exactly as written (so "$AGENTICO_BIN" expands
+ * from the launch environment), one `tool_result` user record carrying its
+ * output, and a `helper:<command>` / `helper-exit:<n>:<code>` pair in the
+ * invocation log; a text reply and a success result close the turn. A turn
+ * whose wire text carries a hidden error-context bundle logs
+ * `hidden-context:<turn>`; one whose wire text carries an attachment block
+ * logs each attached path and its first line (supervisorStubAttachmentLogLines)
+ * before serving the turn. The process keeps reading stdin and exits cleanly
+ * on EOF.
+ */
+function supervisorStubLines(providerInvocationLog: string, gatePath: string): string[] {
+  const {
+    permission,
+    gatedPermission,
+    hold,
+    partialHold,
+    operateCreate,
+    operateStart,
+    compact,
+    usageHigh,
+  } = SUPERVISOR_E2E_MARKERS;
+  const permissionInput = JSON.stringify({ command: SUPERVISOR_E2E_PERMISSION_COMMAND });
+  // Single-quoted inside the sh command text, so it must carry no single quote.
+  const operateConfig = JSON.stringify(SUPERVISOR_E2E_OPERATE_CONFIG);
+  if (operateConfig.includes("'")) throw new Error('operate config must not contain a quote');
+  const helper = '\\"\\$AGENTICO_BIN\\" api';
+  return [
+    `printf 'session\\n' >> "${providerInvocationLog}"`,
+    'turn=0',
+    'tool=0',
+    '_operate_feature=""',
+    // JSON string escaping for arbitrary text: backslashes, then quotes,
+    // then newlines joined as \n (helper bodies are JSON on one line, but a
+    // usage error or a pretty-printed body would not be).
+    'json_escape() {',
+    String.raw`  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'NR > 1 { printf "%s", "\\n" } { printf "%s", $0 }'`,
+    '}',
+    'operate_helper() {',
+    '  tool=$((tool + 1))',
+    `  printf '${SUPERVISOR_E2E_HELPER_LOG_PREFIX}%s\\n' "$1" >> "${providerInvocationLog}"`,
+    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-tool-%s","role":"assistant","content":[{"type":"tool_use","id":"toolu-e2e-supervisor-%s","name":"Bash","input":{"command":"%s"}}]}}\\n' "$tool" "$tool" "$(json_escape "$1")"`,
+    // stdin stays the session's input pipe; the helper must never read it.
+    '  _operate_out=$(eval "$1" </dev/null 2>&1)',
+    '  _operate_code=$?',
+    `  printf 'helper-exit:%s:%s\\n' "$tool" "$_operate_code" >> "${providerInvocationLog}"`,
+    '  if [ "$_operate_code" = 0 ]; then _is_error=false; else _is_error=true; fi',
+    `  printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu-e2e-supervisor-%s","content":"%s","is_error":%s}]}}\\n' "$tool" "$(json_escape "$_operate_out")" "$_is_error"`,
+    '}',
+    'operate_reply() {',
+    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-%s","role":"assistant","content":[{"type":"text","text":"%s"}]}}\\n' "$turn" "$(json_escape "$1")"`,
+    `  printf '%s\\n' '{"type":"result","subtype":"success","session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '}',
+    'operate_create() {',
+    String.raw`  _name=$(printf '%s\n' "$1" | sed -n 's/.*${operateCreate}\[\([^]]*\)\].*/\1/p' | head -n 1)`,
+    `  operate_helper "${helper} POST /api/v1/features '{\\"name\\":\\"$_name\\"}'"`,
+    String.raw`  _operate_feature=$(printf '%s\n' "$_operate_out" | sed -n 's/.*"feature_id" *: *"\([^"]*\)".*/\1/p' | head -n 1)`,
+    `  printf 'operate-feature:%s\\n' "$_operate_feature" >> "${providerInvocationLog}"`,
+    `  operate_helper "${helper} POST /api/v1/features/$_operate_feature/actions/setup '{}'"`,
+    `  operate_helper "${helper} POST /api/v1/features/$_operate_feature/config '${operateConfig.replaceAll('"', '\\"')}'"`,
+    `  operate_helper "${helper} GET /api/v1/features/$_operate_feature"`,
+    `  operate_reply "Created and configured $_name."`,
+    '}',
+    'operate_start() {',
+    `  operate_helper "${helper} POST /api/v1/features/$_operate_feature/actions/start '{}'"`,
+    `  operate_reply '${SUPERVISOR_E2E_OPERATE_STARTED_REPLY}'`,
+    '}',
+    // Two deltas split at the first space, then the committed message; the
+    // first reply of a resumed process reports the history it found.
+    'supervisor_reply() {',
+    '  _reply="Supervisor reply $turn"',
+    '  if [ -n "$_resume_reply" ]; then _reply="$_resume_reply"; _resume_reply=""; fi',
+    '  _input_tokens=$((10000 + turn * 1000))',
+    '  if [ "$_usage_high" = 1 ]; then _input_tokens=170000; fi',
+    '  if [ "$_compacted" = 1 ]; then _input_tokens=10000; fi',
+    `  printf '{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg-e2e-supervisor-%s"}}}\\n' "$turn"`,
+    `  printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"%s "}}}\\n' "\${_reply%% *}"`,
+    `  printf '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"%s"}}}\\n' "\${_reply#* }"`,
+    `  printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-%s","role":"assistant","content":[{"type":"text","text":"%s"}],"usage":{"input_tokens":%s,"output_tokens":100}}}\\n' "$turn" "$(json_escape "$_reply")" "$_input_tokens"`,
+    `  printf '%s\\n' '{"type":"result","subtype":"success","session_id":"e2e-supervisor-session","total_cost_usd":0,"modelUsage":{"claude-haiku-4-5":{"contextWindow":200000}}}'`,
+    '}',
+    // Blocks until the interrupt control request; EOF ends the process.
+    'hold_turn() {',
+    '  _interrupted=0',
+    '  while IFS= read -r _line; do',
+    '    case "$_line" in',
+    `      *'"subtype":"interrupt"'*) _interrupted=1; break ;;`,
+    '    esac',
+    '  done',
+    `  [ "$_interrupted" = 1 ] || { printf 'hold-ended:%s\\n' "$turn" >> "${providerInvocationLog}"; exit 0; }`,
+    `  printf 'interrupted:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    `  printf '%s\\n' '{"type":"result","subtype":"error_during_execution","is_error":true,"session_id":"e2e-supervisor-session","total_cost_usd":0}'`,
+    '}',
+    // Prints every path an attachment block in the raw JSON line names: the
+    // wire text's newlines arrive as literal `\n` escapes, the block starts at
+    // an `Attached Images:` / `Attached Files:` heading, and the last path
+    // ends where the JSON string closes.
+    'attachment_paths() {',
+    String.raw`  printf '%s\n' "$1" | awk '{`,
+    String.raw`    n = split($0, parts, /\\n/)`,
+    '    block = 0',
+    '    for (i = 1; i <= n; i++) {',
+    '      p = parts[i]',
+    String.raw`      if (p ~ /(^|")Attached (Images|Files):$/) { block = 1; continue }`,
+    String.raw`      if (block && p ~ /^- \[[^]]*\]: /) { sub(/^- \[[^]]*\]: /, "", p); sub(/".*$/, "", p); print p; continue }`,
+    '      block = 0',
+    '    }',
+    "  }'",
+    '}',
+    // Logs each attached path and its first line (see
+    // supervisorStubAttachmentLogLines) so a journey can prove the harness
+    // process read the copies.
+    'attachment_log() {',
+    '  attachment_paths "$1" | while IFS= read -r _path; do',
+    `    printf 'attachment:%s:%s\\n' "$turn" "$_path" >> "${providerInvocationLog}"`,
+    '    if [ -f "$_path" ] && [ -r "$_path" ]; then',
+    String.raw`      _head=$(head -n 1 "$_path" | LC_ALL=C tr -cd '[:print:]\t' | cut -c 1-200)`,
+    `      printf 'attachment-line:%s:%s:%s\\n' "$turn" "$_path" "$_head" >> "${providerInvocationLog}"`,
+    '    else',
+    `      printf 'attachment-unreadable:%s:%s\\n' "$turn" "$_path" >> "${providerInvocationLog}"`,
+    '    fi',
+    '  done',
+    '}',
+    // Raises the Bash permission request and blocks until it is answered;
+    // stdin closing first (End, shutdown) logs `permission-ended:<turn>`.
+    'permission_request() {',
+    `  printf '{"type":"control_request","request_id":"supervisor-perm-%s","request":{"subtype":"can_use_tool","tool_name":"Bash","input":${permissionInput}}}\\n' "$turn"`,
+    `  printf 'pending:supervisor-perm-%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '  _answered=0',
+    '  while IFS= read -r _line; do',
+    '    case "$_line" in',
+    `      *'"control_response"'*) _answered=1; break ;;`,
+    '    esac',
+    '  done',
+    `  [ "$_answered" = 1 ] || { printf 'permission-ended:%s\\n' "$turn" >> "${providerInvocationLog}"; exit 0; }`,
+    `  printf 'response:supervisor-perm-%s:%s\\n' "$turn" "$_line" >> "${providerInvocationLog}"`,
+    '}',
+    // Sleeps until the journey creates the gate file; stdin stays unread.
+    'wait_gate() {',
+    '  while [ ! -e "$1" ]; do sleep 0.2; done',
+    '}',
+    'supervisor_turn() {',
+    '  turn=$((turn + 1))',
+    '  _usage_high=0',
+    '  _compacted=0',
+    `  case "$1" in *${usageHigh}*) _usage_high=1 ;; esac`,
+    `  case "$1" in *${compact}*) _compacted=1 ;; esac`,
+    '  if [ "$_compacted" = 1 ]; then',
+    String.raw`    printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":170000}}'`,
+    String.raw`    printf '{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"Summary: %s"}}\n' "$(json_escape "$1")"`,
+    '  fi',
+    `  printf 'turn:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '  case "$1" in',
+    `    *'${SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING}'*)`,
+    `      printf 'hidden-context:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      ;;',
+    '  esac',
+    '  case "$1" in',
+    `    *'Attached Images:'*|*'Attached Files:'*) attachment_log "$1" ;;`,
+    '  esac',
+    '  case "$1" in',
+    `    *${gatedPermission}*)`,
+    `      printf 'gated:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    `      wait_gate '${gatePath}.1'`,
+    '      permission_request',
+    `      wait_gate '${gatePath}.2'`,
+    '      supervisor_reply',
+    '      ;;',
+    `    *${permission}*)`,
+    '      permission_request',
+    '      supervisor_reply',
+    '      ;;',
+    `    *${partialHold}*)`,
+    `      printf '{"type":"assistant","message":{"id":"msg-e2e-supervisor-partial-%s","role":"assistant","content":[{"type":"text","text":"Partial supervisor reply %s"}]}}\\n' "$turn" "$turn"`,
+    `      printf 'partial-holding:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      hold_turn',
+    '      ;;',
+    `    *${SUPERVISOR_E2E_MARKERS.backgroundWork}*)`,
+    String.raw`      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"background-create","name":"CronCreate","input":{"cron":"* * * * *","prompt":"Watch translation questions","recurring":true}}]}}'`,
+    String.raw`      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"background-create","content":"Scheduled recurring job b95f1124 (every minute). Session-only (not written to disk, dies when Claude exits). Auto-expires after 3 days. Use CronDelete to cancel sooner."}]}}'`,
+    String.raw`      printf '%s\n' '{"type":"system","subtype":"task_started","task_id":"background-tests","description":"Run test suite","task_type":"local_agent"}'`,
+    '      supervisor_reply',
+    '      ;;',
+    `    *'Stop '*'background schedule b95f1124'*)`,
+    String.raw`      printf '%s\n' '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"background-delete","name":"CronDelete","input":{"id":"b95f1124"}}]}}'`,
+    String.raw`      printf '%s\n' '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"background-delete","content":"Cancelled job b95f1124."}]}}'`,
+    '      supervisor_reply',
+    '      ;;',
+    `    *${SUPERVISOR_E2E_MARKERS.shellDiff}*)`,
+    '      _diff_root=${1#*\\[}',
+    '      _diff_root=${_diff_root%%\\]*}',
+    String.raw`      printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"shell-diff-1","name":"Bash","input":{"command":"sh rewrite-files.sh","cwd":"%s","description":"Rewrite two source files"}}]}}\n' "$(json_escape "$_diff_root")"`,
+    `      wait_gate '${gatePath}.diff'`,
+    '      printf "const value = 2;\\n" > "$_diff_root/app.ts"',
+    '      printf "export const added = true;\\n" > "$_diff_root/new.ts"',
+    '      hold_turn',
+    '      ;;',
+    `    *${hold}*)`,
+    `      printf 'holding:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      hold_turn',
+    '      ;;',
+    `    *${operateCreate}*)`,
+    `      printf 'operate-create:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      operate_create "$1"',
+    '      ;;',
+    `    *${operateStart}*)`,
+    `      printf 'operate-start:%s\\n' "$turn" >> "${providerInvocationLog}"`,
+    '      operate_start',
+    '      ;;',
+    '    *)',
+    '      supervisor_reply',
+    '      ;;',
+    '  esac',
+    '}',
+    `case "$_agentico_prompt" in`,
+    `  *'"type":"user"'*) supervisor_turn "$_agentico_prompt" ;;`,
+    'esac',
+    'while IFS= read -r _line; do',
+    '  case "$_line" in',
+    `    *'"type":"user"'*) supervisor_turn "$_line" ;;`,
+    '  esac',
+    'done',
+    'exit 0',
+  ];
+}
+
 export function writeAuthState(authStatePath: string, state: StubAuthState): void {
   fs.writeFileSync(authStatePath, `${JSON.stringify(state)}\n`);
 }
@@ -547,7 +1049,12 @@ export function setStubAuthenticated(world: JourneyWorld, loggedIn: boolean): vo
  * the stub; codex/opencode are pointed at paths that cannot exist so a
  * provider installed on the host machine can never leak into a journey.
  */
-function writeRuntimeConfig(world: JourneyWorld, presetWorkspaceRoot: boolean): void {
+function writeRuntimeConfig(
+  world: JourneyWorld,
+  presetWorkspaceRoot: boolean,
+  unlaunchableCodex: boolean,
+  invalidPipelineProfile: boolean,
+): void {
   const missing = path.join(world.stubDir, 'missing');
   fs.writeFileSync(
     world.configPath,
@@ -556,10 +1063,11 @@ function writeRuntimeConfig(world: JourneyWorld, presetWorkspaceRoot: boolean): 
       '  claude:',
       `    cli: ${world.claudeStub}`,
       '  codex:',
-      `    cli: ${path.join(missing, 'codex')}`,
+      `    cli: ${unlaunchableCodex ? world.codexStub : path.join(missing, 'codex')}`,
       '  opencode:',
       `    cli: ${path.join(missing, 'opencode')}`,
       ...(presetWorkspaceRoot ? ['workspace_roots:', `  - ${world.workspaceRoot}`] : []),
+      ...(invalidPipelineProfile ? ['defaults:', '  pipeline: bogus-profile'] : []),
       '',
     ].join('\n'),
   );
@@ -694,6 +1202,64 @@ export function seedRunHistory(
   featureYaml = upsertYamlScalar(featureYaml, 'active_run', String(runCount));
   featureYaml = upsertYamlScalar(featureYaml, 'run_count', String(runCount));
   fs.writeFileSync(featurePath, featureYaml);
+}
+
+/** The text of the n-th seeded supervisor user record (1-based turn). */
+export function seededSupervisorQuestion(turn: number): string {
+  return `Seeded question ${turn}`;
+}
+
+/** The text of the n-th seeded supervisor assistant record (1-based turn). */
+export function seededSupervisorAnswer(turn: number): string {
+  return `Seeded answer ${turn}`;
+}
+
+/**
+ * Seeds a generation-0 supervisor conversation of `records` records,
+ * alternating user and assistant, directly in the durable format under the
+ * server state directory, as a long-lived server would leave it (mirrors
+ * test/testutil/supervisor_seed.go). Call before launch. No settings file and
+ * no sidecar index are written; the store rebuilds the index on open.
+ * Returns the conversation id.
+ */
+export function seedSupervisorConversation(world: JourneyWorld, records: number): string {
+  const conversationId = crypto.randomUUID();
+  const dir = path.join(world.stateDir, 'supervisor');
+  const conversationDir = path.join(dir, 'conversations', conversationId);
+  fs.mkdirSync(conversationDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'conversation.json'),
+    JSON.stringify({
+      format: 1,
+      conversation_id: conversationId,
+      generation: 0,
+      stream_epoch: 'seeded-epoch',
+    }),
+  );
+  const created = Date.UTC(2026, 0, 1);
+  const lines: string[] = [];
+  for (let seq = 1; seq <= records; seq += 1) {
+    const turn = Math.floor((seq + 1) / 2);
+    const user = seq % 2 === 1;
+    lines.push(
+      JSON.stringify({
+        seq,
+        id: `seed-${seq}`,
+        conversation_id: conversationId,
+        generation: 0,
+        turn_id: `g0.t${turn}`,
+        kind: user ? 'user' : 'assistant',
+        ...(user ? { client_message_id: `seed-cm-${turn}` } : {}),
+        data: user
+          ? { text: seededSupervisorQuestion(turn) }
+          : { content: [{ type: 'text', text: seededSupervisorAnswer(turn) }] },
+        visibility: 'content',
+        created_at: new Date(created + seq * 1000).toISOString().replace('.000Z', 'Z'),
+      }),
+    );
+  }
+  fs.writeFileSync(path.join(conversationDir, 'transcript.jsonl'), `${lines.join('\n')}\n`);
+  return conversationId;
 }
 
 // --- discovery / processes -----------------------------------------------------

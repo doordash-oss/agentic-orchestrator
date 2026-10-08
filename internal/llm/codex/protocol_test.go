@@ -16,6 +16,7 @@ package codex
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -286,6 +287,48 @@ func TestCodexProtocol_NativeToollessReviewFailsClosed(t *testing.T) {
 				t.Fatalf("ParseLine() = %+v, want result/error or parse error", msgs)
 			}
 		})
+	}
+}
+
+func TestCodexProtocol_ContextCompactionBecomesBoundary(t *testing.T) {
+	for _, interactive := range []bool{false, true} {
+		p := NewProtocol(llm.ProtocolOpts{Interactive: interactive})
+		p.SetThreadIDForTest("thread-main")
+		msgs, err := p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-main","turnId":"turn-1","item":{"id":"compact-1","type":"contextCompaction"}}}`))
+		if err != nil || len(msgs) != 1 || msgs[0].Compact == nil || msgs[0].Compact.ItemID != "compact-1" {
+			t.Fatalf("interactive=%t messages = %+v, err = %v", interactive, msgs, err)
+		}
+	}
+}
+
+func TestCodexProtocol_ForceCompactionForTestRequiresIdleInteractiveThread(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{Interactive: true})
+	var sent bytes.Buffer
+	p.SetStdin(&sent)
+	if err := p.ForceCompactionForTest(context.Background()); err == nil {
+		t.Fatal("compacted without a thread")
+	}
+	p.SetThreadIDForTest("thread-main")
+	if err := p.ForceCompactionForTest(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sent.String(), `"method":"thread/compact/start"`) || !strings.Contains(sent.String(), `"threadId":"thread-main"`) {
+		t.Fatalf("request = %s", sent.String())
+	}
+	if err := NewProtocol(llm.ProtocolOpts{}).ForceCompactionForTest(context.Background()); !errors.Is(err, llm.ErrNotSupported) {
+		t.Fatalf("noninteractive err = %v", err)
+	}
+}
+
+func TestCodexProtocol_AssistantMessageCarriesTheCompletedItemID(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{})
+	p.SetThreadIDForTest("thread-root")
+	msgs, err := p.ParseLine([]byte(`{"method":"item/completed","params":{"threadId":"thread-root","turnId":"turn-1","item":{"id":"item-1-3","type":"agentMessage","text":"done"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Assistant == nil || msgs[0].Assistant.Message.ID != "item-1-3" {
+		t.Fatalf("assistant messages = %+v, want message id item-1-3", msgs)
 	}
 }
 
@@ -1205,5 +1248,34 @@ func TestNativeReviewFailureDiagnosticsAreSanitizedAndTerminal(t *testing.T) {
 				t.Fatal("terminal failure became success")
 			}
 		})
+	}
+}
+
+func TestInteractiveFileResultCarriesOnlySuccessfulDiffs(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "declined"} {
+		t.Run(status, func(t *testing.T) {
+			var item ItemUnion
+			if err := json.Unmarshal([]byte(`{"id":"edit-1","type":"fileChange","changes":[{"path":"src/a.go","kind":{"type":"update"},"diff":"-old\n+new"}]}`), &item); err != nil {
+				t.Fatal(err)
+			}
+			item.Status = status
+			msg := toolResultMessage(item, []string{"src/a.go"})
+			if status == "completed" {
+				if len(msg.FileChanges) != 1 || msg.FileChanges[0].Detail != "-old\n+new" {
+					t.Fatalf("missing diff: %+v", msg.FileChanges)
+				}
+			} else if len(msg.FileChanges) != 0 {
+				t.Fatal("failed edit reported a diff")
+			}
+		})
+	}
+}
+
+func TestCodexShellToolHistoryPreservesCwd(t *testing.T) {
+	msg := toolUseMessage(ItemUnion{ID: "shell", Type: "commandExecution", Command: "python3 edit.py", Cwd: "/repo"}, nil)
+	var input map[string]any
+	json.Unmarshal(msg.Assistant.Message.Content[0].Input, &input)
+	if input["cwd"] != "/repo" {
+		t.Fatalf("cwd lost: %+v", input)
 	}
 }

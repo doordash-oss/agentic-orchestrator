@@ -30,9 +30,14 @@ import {
   ATTENTION_ALREADY_RESOLVED_NOTICE,
   ATTENTION_SUBMITTED_NOTICE,
   attentionOwnerFeatureId,
-  CHAT_SESSION_ID,
   ERROR_CLASS_LABELS,
+  isSubagentAttentionItem,
+  isSupervisorAttentionItem,
+  isSupervisorSessionId,
   isSyntheticHelpItem,
+  SUBAGENT_ORIGIN_LABEL,
+  SUPERVISOR_CONTEXT_LABEL,
+  SUPERVISOR_FEATURE_ID,
   type AttentionActionResult,
   type AttentionItem,
   type AutoApproveScope,
@@ -76,6 +81,13 @@ export function OwnerAwareAttention({
   const ownerIsVisible = useRegisteredErrorCard(item.kind === 'error' ? item.ref : undefined);
   return ownerIsVisible ? null : children;
 }
+
+/**
+ * The shell route sentinel a supervisor item jumps through, like the
+ * recovery jump's `__recovery__` (which the shell resolves to the Recovery
+ * sheet): the shell resolves this one to the Supervisor page.
+ */
+export const SUPERVISOR_ATTENTION_ROUTE = SUPERVISOR_FEATURE_ID;
 
 export function emptyAttentionDrafts(): AttentionDrafts {
   return { questions: {}, help: {}, gates: {} };
@@ -161,9 +173,9 @@ export function AttentionInbox({
   open: controlledOpen,
   onOpenChange,
 }: AttentionInboxProps) {
-  // Synthetic help items (a session idling between turns — phase coordination
-  // or the chat resting after a reply) are never inbox rows. Memoized: effects
-  // key on the list's identity, so a fresh array every render would loop them.
+  // Synthetic help items (a phase session idling between turns) are never
+  // inbox rows. Memoized: effects key on the list's identity, so a fresh array
+  // every render would loop them.
   const items = useMemo(() => allItems.filter((item) => !isSyntheticHelpItem(item)), [allItems]);
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const open = controlledOpen ?? uncontrolledOpen;
@@ -196,7 +208,8 @@ export function AttentionInbox({
       setExpanded(
         requested !== undefined &&
           requested.kind !== 'recovery' &&
-          requested.featureId === undefined
+          requested.featureId === undefined &&
+          !isSupervisorAttentionItem(requested)
           ? openRequest.attentionId
           : null,
       );
@@ -359,7 +372,9 @@ export function AttentionInbox({
                   type="button"
                   className="attention-popover__item"
                   aria-expanded={
-                    item.kind !== 'recovery' && item.featureId === undefined
+                    item.kind !== 'recovery' &&
+                    item.featureId === undefined &&
+                    !isSupervisorAttentionItem(item)
                       ? expanded === item.id
                       : undefined
                   }
@@ -367,6 +382,13 @@ export function AttentionInbox({
                     if (item.kind === 'recovery') {
                       setOpen(false);
                       onJump('__recovery__');
+                      return;
+                    }
+                    // A supervisor request is answered on the Supervisor page,
+                    // where its card sits at the bottom of the conversation.
+                    if (isSupervisorAttentionItem(item)) {
+                      setOpen(false);
+                      onJump(SUPERVISOR_ATTENTION_ROUTE, item.id);
                       return;
                     }
                     const ownerFeatureId = attentionOwnerFeatureId(item);
@@ -384,7 +406,10 @@ export function AttentionInbox({
                     <span className="attention-popover__feature">
                       {item.kind === 'recovery'
                         ? 'Recovery workspace'
-                        : featureLabel(attentionOwnerFeatureId(item))}
+                        : isSupervisorAttentionItem(item)
+                          ? SUPERVISOR_CONTEXT_LABEL
+                          : featureLabel(attentionOwnerFeatureId(item))}
+                      {isSubagentAttentionItem(item) ? <SubagentTag /> : null}
                     </span>
                   </span>
                   <span className="attention-popover__waiting">
@@ -797,7 +822,7 @@ export function AttentionDetail({
   if (item.kind === 'help') {
     // A harness wait is not a question: the turn ended and the runtime is
     // coordinating. The reply box stays — a message is a legitimate unblock.
-    const waiting = item.waitingKind === 'input' || item.waitingKind === 'coordinating';
+    const waiting = item.waitingKind === 'coordinating';
     return (
       <div className="attention-detail">
         <AttentionContextMeta item={item} />
@@ -1029,10 +1054,20 @@ export function AttentionDetail({
 function AttentionContextMeta({ item }: { item: AttentionItem }) {
   if (item.kind === 'recovery') return null;
   const entries: string[] = [];
-  if ('sessionId' in item && item.sessionId !== undefined && item.sessionId !== CHAT_SESSION_ID) {
+  // The supervisor is a singleton: its session ids name a generation, not
+  // anything a person tells apart.
+  if (
+    'sessionId' in item &&
+    item.sessionId !== undefined &&
+    !isSupervisorSessionId(item.sessionId)
+  ) {
     entries.push(`session ${shortSessionId(item.sessionId)}`);
   }
-  if ('phase' in item && item.phase !== undefined) entries.push(item.phase);
+  // A supervisor session runs outside any feature phase; the phase its
+  // session carries is a placeholder, not context.
+  if ('phase' in item && item.phase !== undefined && !isSupervisorAttentionItem(item)) {
+    entries.push(item.phase);
+  }
   if (item.kind === 'gate') {
     if (item.iteration !== undefined) entries.push(`iteration ${item.iteration}`);
     if (item.repoName !== undefined) entries.push(item.repoName);
@@ -1040,7 +1075,10 @@ function AttentionContextMeta({ item }: { item: AttentionItem }) {
   entries.push(formatWaitingSince(item.waitingSince));
   return (
     <header className="attention-ask">
-      <span className="attention-ask__eyebrow">{attentionAskLabel(item)}</span>
+      <span className="attention-ask__eyebrow">
+        {attentionAskLabel(item)}
+        {isSubagentAttentionItem(item) ? <SubagentTag /> : null}
+      </span>
       <div className="attention-detail__meta" aria-label="Attention context">
         {entries.map((entry, index) => (
           <span key={`${index}:${entry}`}>{entry}</span>
@@ -1048,6 +1086,14 @@ function AttentionContextMeta({ item }: { item: AttentionItem }) {
       </div>
     </header>
   );
+}
+
+/**
+ * Marks a supervisor request a sub-agent raised, in the same hairline-chip
+ * language as the other provenance badges.
+ */
+export function SubagentTag() {
+  return <span className="origin-tag">{SUBAGENT_ORIGIN_LABEL}</span>;
 }
 
 function attentionAskLabel(item: Exclude<AttentionItem, { kind: 'recovery' }>): string {

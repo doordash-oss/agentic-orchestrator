@@ -40,6 +40,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 )
 
 // Fixture literals used repeatedly across this file's contract assertions.
@@ -58,8 +59,9 @@ const (
 	// secretTokenLiteral is a fake secret value asserted to never leak into
 	// responses, alongside testRepoPath/worktreePathLiteral/secretBranchLiteral.
 	secretTokenLiteral = "private-token"
-	// chatLabel is the shared kind/label value for chat-prompt fixtures.
-	chatLabel = "chat"
+	// supervisorLabel is the shared kind/label value for supervisor
+	// session fixtures.
+	supervisorLabel = "supervisor"
 	// controlSubtypeCanUseTool is the llm.ControlRequest.Subtype value for a
 	// tool-permission control request.
 	controlSubtypeCanUseTool = "can_use_tool"
@@ -2376,24 +2378,24 @@ func TestSessionListOmitsUnavailableContextPercentage(t *testing.T) {
 	}
 }
 
-func TestSessionListExposesChatSessionKind(t *testing.T) {
+func TestSessionListExposesSupervisorSessionKind(t *testing.T) {
 	t.Parallel()
 	store, _ := seedReadFeature(t)
 	sessions := fakeSessionManager{views: []ports.SessionView{
 		&fakeSessionView{
-			id:        ChatSessionID,
-			featureID: ChatSessionID,
+			id:        "supervisor-idle",
+			featureID: supervisor.FeatureID,
 			phase:     feature.PhaseResearch,
-			kind:      ports.KindChat,
-			label:     chatLabel,
+			kind:      ports.KindSupervisor,
+			label:     supervisorLabel,
 			status:    ports.SessionWaitingHelp,
 		},
 		&fakeSessionView{
-			id:        "chat-ask",
-			featureID: ChatSessionID,
+			id:        "supervisor-ask",
+			featureID: supervisor.FeatureID,
 			phase:     feature.PhaseResearch,
-			kind:      ports.KindChat,
-			label:     chatLabel,
+			kind:      ports.KindSupervisor,
+			label:     supervisorLabel,
 			status:    ports.SessionWaitingHelp,
 			pending: []*llm.ControlRequestMessage{{
 				RequestID: "ask-1",
@@ -2408,25 +2410,25 @@ func TestSessionListExposesChatSessionKind(t *testing.T) {
 	body := getJSONMap(t, handler, apiPathSessions)
 	rawSessions := body["sessions"].([]any)
 	if len(rawSessions) != 2 {
-		t.Fatalf("sessions length = %d; want both chat sessions", len(rawSessions))
+		t.Fatalf("sessions length = %d; want both supervisor sessions", len(rawSessions))
 	}
 	byID := map[string]map[string]any{}
 	for _, raw := range rawSessions {
 		session := raw.(map[string]any)
 		byID[session["id"].(string)] = session
 	}
-	chat := byID[ChatSessionID]
-	if chat["id"] != ChatSessionID || chat["feature_id"] != ChatSessionID {
-		t.Fatalf("chat session identity = %+v; want stable chat identity", chat)
+	idle := byID["supervisor-idle"]
+	if idle["feature_id"] != supervisor.FeatureID {
+		t.Fatalf("supervisor session identity = %+v; want the supervisor feature identity", idle)
 	}
-	if chat["kind"] != chatLabel || chat[labelFieldKey] != chatLabel {
-		t.Fatalf("chat session metadata = kind %v label %v; want chat/chat", chat["kind"], chat[labelFieldKey])
+	if idle["kind"] != supervisorLabel || idle[labelFieldKey] != supervisorLabel {
+		t.Fatalf("supervisor session metadata = kind %v label %v; want supervisor/supervisor", idle["kind"], idle[labelFieldKey])
 	}
-	if chat["turn_state"] != "waiting_input" {
-		t.Fatalf("chat turn_state = %v; want waiting_input", chat["turn_state"])
+	if idle["turn_state"] != "waiting_input" {
+		t.Fatalf("supervisor turn_state = %v; want waiting_input", idle["turn_state"])
 	}
-	if got := byID["chat-ask"]["turn_state"]; got != "waiting_question" {
-		t.Fatalf("chat AskUser turn_state = %v; want waiting_question", got)
+	if got := byID["supervisor-ask"]["turn_state"]; got != "waiting_question" {
+		t.Fatalf("supervisor AskUser turn_state = %v; want waiting_question", got)
 	}
 }
 
@@ -2547,13 +2549,13 @@ func TestSessionTranscriptPreservesProtocolPromptsAndLocalUserEchoes(t *testing.
 func TestSessionTranscriptDoesNotTruncateAssistantText(t *testing.T) {
 	t.Parallel()
 	store, f := seedReadFeature(t)
-	longAnswer := "The chat answer must stay complete for the AMA transcript.\n\n" +
+	longAnswer := "The supervisor answer must stay complete in the transcript.\n\n" +
 		strings.Repeat("This sentence is part of the answer body and must remain visible. ", 12) +
 		"tail marker"
 	sessions := fakeSessionManager{
 		views: []ports.SessionView{&fakeSessionView{
-			id: "sess-chat-long-answer", featureID: f.ID, phase: feature.PhaseResearch,
-			kind: ports.KindChat, status: ports.SessionRunning,
+			id: "sess-supervisor-long-answer", featureID: f.ID, phase: feature.PhaseResearch,
+			kind: ports.KindSupervisor, status: ports.SessionRunning,
 			messages: []llm.SDKMessage{{
 				Type: roleAssistant,
 				Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{
@@ -2567,7 +2569,7 @@ func TestSessionTranscriptDoesNotTruncateAssistantText(t *testing.T) {
 	opts.Sessions = sessions
 	handler := NewHandler(opts)
 
-	body := getJSONMap(t, handler, "/api/v1/sessions/sess-chat-long-answer/transcript")
+	body := getJSONMap(t, handler, "/api/v1/sessions/sess-supervisor-long-answer/transcript")
 	messages := body["messages"].([]any)
 	if len(messages) != 1 {
 		t.Fatalf("messages length = %d, want assistant row", len(messages))
@@ -3791,31 +3793,5 @@ func TestCompletionPreflightRepoCarriesPendingDeliveryFields(t *testing.T) {
 	}
 	if decoded["pending_dirty_file_total"] != float64(2) {
 		t.Errorf("pending_dirty_file_total = %v; want 2", decoded["pending_dirty_file_total"])
-	}
-}
-
-// A chat session parked between turns is waiting on the user, and the attention
-// inbox is the only place to answer it — so it must not be marked as the
-// coordinating byproduct that clients filter out.
-func TestPromptSnapshotMarksChatWaitAsAwaitingInput(t *testing.T) {
-	t.Parallel()
-	store, f := seedReadFeature(t)
-	sessions := fakeSessionManager{views: []ports.SessionView{
-		&fakeSessionView{
-			id:        "sess-chat-waiting",
-			featureID: f.ID,
-			kind:      ports.KindChat,
-			status:    ports.SessionWaitingHelp,
-			startedAt: time.Date(2026, 6, 13, 12, 3, 0, 0, time.UTC),
-		},
-	}}
-	opts := baseReadHandlerOptions(store)
-	opts.Sessions = sessions
-	handler := NewHandler(opts)
-
-	prompts := getJSONMap(t, handler, apiPathPrompts)
-	entry := prompts["help_queue"].([]any)[0].(map[string]any)
-	if got := entry["kind"]; got != helpKindInput {
-		t.Fatalf("chat help_queue kind = %v; want %q", got, helpKindInput)
 	}
 }

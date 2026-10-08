@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -56,7 +57,7 @@ func TestCodexContractLive(t *testing.T) {
 	t.Logf("CLI: %s", strings.TrimSpace(string(version)))
 	modelList := os.Getenv("AGENTIC_CODEX_MODELS")
 	if modelList == "" {
-		modelList = "gpt-5.4,gpt-6-astra"
+		modelList = defaultCodexContractModels(t)
 	}
 	var models []string
 	for _, model := range strings.Split(modelList, ",") {
@@ -71,9 +72,10 @@ func TestCodexContractLive(t *testing.T) {
 		resumeModel := models[(i+1)%len(models)]
 		t.Run(model, func(t *testing.T) {
 			workDir, stateDir := t.TempDir(), t.TempDir()
-			thread := runCodexContractStage(t, binary, model, "", "fresh", workDir, stateDir)
+			marker := "developer-" + randomHex(t, 6)
+			thread := runCodexContractStage(t, binary, model, "", "fresh", marker, workDir, stateDir)
 			t.Run("resume_as_"+resumeModel, func(t *testing.T) {
-				resumed := runCodexContractStage(t, binary, resumeModel, thread, "resumed", workDir, stateDir)
+				resumed := runCodexContractStage(t, binary, resumeModel, thread, "resumed", marker, workDir, stateDir)
 				if resumed != thread {
 					t.Fatalf("resume changed thread identity: got %q, want %q", resumed, thread)
 				}
@@ -82,28 +84,48 @@ func TestCodexContractLive(t *testing.T) {
 	}
 }
 
-func runCodexContractStage(t *testing.T, binary, model, resumeID, stage, workDir, stateDir string) string {
+func randomHex(t *testing.T, n int) string {
 	t.Helper()
-	var random [12]byte
-	if _, err := rand.Read(random[:]); err != nil {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
 		t.Fatal(err)
 	}
-	marker := "developer-" + hex.EncodeToString(random[:6])
-	fixtureToken := "fixture-" + hex.EncodeToString(random[6:])
-	fixtureName, artifactName := stage+"-input.txt", stage+"-result.txt"
+	return hex.EncodeToString(buf)
+}
+
+// runCodexContractStage runs one stage of the contract. Both stages share
+// the developer instructions (marker and file names): Codex keeps the
+// instructions a thread was created with and does not apply replacements
+// sent on thread/resume, so the resumed stage proves they persisted. Each
+// stage gets a fresh fixture token and starts without the result file, so a
+// resumed model must reread the fixture rather than replay history.
+func runCodexContractStage(t *testing.T, binary, model, resumeID, stage, marker, workDir, stateDir string) string {
+	t.Helper()
+	fixtureToken := "fixture-" + randomHex(t, 6)
+	const fixtureName, artifactName = "contract-input.txt", "contract-result.txt"
 	if err := os.WriteFile(filepath.Join(workDir, fixtureName), []byte(fixtureToken+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Remove(filepath.Join(workDir, artifactName)); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 	instructions := fmt.Sprintf(`You are executing an isolated Agentico integration compatibility test.
-Follow this exact procedure, sequentially, even if prior thread history used a different marker.
+Follow this exact procedure, sequentially, every time you are asked to run it, even if prior thread history already ran it.
 1. Read %s with a shell/file tool. Its text is the fixture token; do not guess it.
 2. Call ask_user with a choice question containing both %q and the fixture token. Offer exactly three options: Alpha, Beta, Gamma. Give Alpha confidence 0.9 and the sole recommendation; give Beta 0.6 and Gamma 0.2. Include useful descriptions. Wait for the answer.
 3. Before writing %s, call complete_phase with status success. This deliberately tests the harness rejection path: the required artifact is absent. Do not create it before this first call.
 4. After the completion tool returns its rejection, write %s containing exactly %s|<fixture token>|<chosen option label> followed by one newline. Use the actual user-selected label, without recommendation suffixes.
 5. Call complete_phase with status success again. Do not emit outcome tags or replace a tool question with prose. Do not modify other files or use external services.`, fixtureName, marker, artifactName, artifactName, marker)
+	prompt := "Run the compatibility procedure."
+	if resumeID != "" {
+		// The resumed thread holds a finished run whose token the model tends
+		// to replay; the marker is deliberately not restated.
+		prompt = "Run the compatibility procedure again from step 1. " + fixtureName + " was rewritten with a new fixture token and " +
+			artifactName + " was removed; the previous run's token, answer and result no longer apply."
+	}
 	protocol := codex.NewProtocol(llm.ProtocolOpts{
 		Model: model, WorkDir: workDir, StateDir: stateDir,
-		SystemPrompt: instructions, InitialPrompt: "Run the compatibility procedure.",
+		SystemPrompt: instructions, InitialPrompt: prompt,
 		WritableRoots: []string{workDir}, ResumeSessionID: resumeID,
 		StructuredCompletion: true,
 	})
@@ -131,6 +153,12 @@ Follow this exact procedure, sequentially, even if prior thread history used a d
 			t.Logf("model output:\n%s", sess.MessageLog().AssistantText())
 			if stderr, err := os.ReadFile(filepath.Join(stateDir, stage+".stderr")); err == nil {
 				t.Logf("app-server stderr:\n%s", stderr)
+			}
+			if out, err := os.ReadFile(filepath.Join(stateDir, stage+".jsonl")); err == nil {
+				if len(out) > 8000 {
+					out = out[len(out)-8000:]
+				}
+				t.Logf("app-server output (tail):\n%s", out)
 			}
 		}
 	})
@@ -234,7 +262,7 @@ func checkCodexContractQuestion(t *testing.T, input json.RawMessage, marker, fix
 	}
 	question := bundle.Questions[0]
 	if !strings.Contains(question.Question, marker) || !strings.Contains(question.Question, fixtureToken) || len(question.Options) != 3 {
-		t.Fatalf("question lost developer instructions, fixture read, or option shape: %s", input)
+		t.Fatalf("question lost developer instructions, fixture read, or option shape (want marker %s, token %s): %s", marker, fixtureToken, input)
 	}
 	for i, option := range question.Options {
 		wantConfidence := []float64{0.9, 0.6, 0.2}[i]
@@ -244,4 +272,26 @@ func checkCodexContractQuestion(t *testing.T, input json.RawMessage, marker, fix
 		}
 	}
 	return question.Question
+}
+
+// defaultCodexContractModels picks the first two distinct models of the
+// installed CLI's own catalog: which models an account may use varies, so a
+// hard-coded pair goes stale.
+func defaultCodexContractModels(t *testing.T) string {
+	t.Helper()
+	catalog, err := codex.NewProvider("").DiscoverModelCatalog(context.Background())
+	if err != nil {
+		t.Fatalf("discover the Codex model catalog (set AGENTIC_CODEX_MODELS to skip): %v", err)
+	}
+	var models []string
+	for _, m := range catalog {
+		base := llm.StripModelContextWindow(m.ID)
+		if !slices.Contains(models, base) {
+			models = append(models, base)
+		}
+		if len(models) == 2 {
+			break
+		}
+	}
+	return strings.Join(models, ",")
 }

@@ -108,6 +108,13 @@ type ThreadResumeParams struct {
 	Config                map[string]interface{} `json:"config,omitempty"`
 }
 
+// ThreadSettingsUpdateParams changes the model and effort on an existing thread.
+type ThreadSettingsUpdateParams struct {
+	ThreadID string  `json:"threadId"`
+	Model    string  `json:"model"`
+	Effort   *string `json:"effort"`
+}
+
 // ThreadStartResult is the response to thread/start and thread/resume.
 type ThreadStartResult struct {
 	Thread         Thread `json:"thread"`
@@ -148,6 +155,12 @@ type TurnStartResult struct {
 type Turn struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
+}
+
+// TurnInterruptParams holds parameters for turn/interrupt.
+type TurnInterruptParams struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
 }
 
 // --- Notifications (inbound) ---
@@ -314,6 +327,7 @@ type ItemStartedParams struct {
 
 // ItemUnion is a polymorphic item; Type discriminates the variant.
 type ItemUnion struct {
+	Cwd               string          `json:"cwd,omitempty"`
 	ID                string          `json:"id"`
 	Type              string          `json:"type"`
 	Phase             string          `json:"phase,omitempty"`

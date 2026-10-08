@@ -202,6 +202,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.effectiveEffort = opts[0].EffectiveEffort
 		s.effortSource = opts[0].EffortSource
 		s.askUserAutoPick = opts[0].AskUserAutoPick
+		s.observer = opts[0].Observer
 		s.watchdog = newSessionWatchdog(s, opts[0].Watchdog)
 		if s.pidDir != "" {
 			sum := sha256.Sum256([]byte(id))
@@ -480,7 +481,7 @@ func (m *Manager) handleSessionMessage(s *Session, id, featureID string, phase f
 		// Failed autonomous work must not become a synthetic help request.
 		// The phase waiter owns stopping the still-live provider transport;
 		// chat remains available for the user's next turn after an error.
-		if s.kind != ports.KindChat && (msg.Result.IsError || msg.Result.Subtype == "error") {
+		if !s.kind.Conversational() && (msg.Result.IsError || msg.Result.Subtype == "error") {
 			s.setStatusLocked(SessionFailed)
 			break
 		}

@@ -17,17 +17,19 @@ limitations under the License.
 /**
  * Bench shell visual-evidence capture: drives the packaged app to produce
  * the contract screenshots for the sidebar/toolbar shell (a populated
- * five-lane sidebar, light theme, the Overview stub, the trailing inspector
- * split-view pane, the collapsed sidebar, and the 400x480 minimum with
- * auto-collapse).
+ * five-lane sidebar, light theme, the Supervisor home page under its pinned
+ * first row, the trailing inspector split-view pane, the collapsed sidebar,
+ * and the 400x480 minimum with auto-collapse).
  *
- * Not a behavioral assertion journey — window-chrome.spec.ts,
+ * Mostly not a behavioral assertion journey — window-chrome.spec.ts,
  * workspace-sidebar.spec.ts, and the unit/component suites already cover
- * the underlying contracts. This spec exists purely to produce evidence
- * artifacts via contractEvidenceShot, which only writes when
- * AGENTICO_EVIDENCE_DIR is set.
+ * the underlying contracts. Before each capture it only pins down the shell
+ * the screenshot is meant to show: Supervisor first and selected on launch,
+ * no Overview row, the "Supervisor" toolbar title, and "New feature" on
+ * every page. It exists to produce evidence artifacts via
+ * contractEvidenceShot, which only writes when AGENTICO_EVIDENCE_DIR is set.
  */
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
@@ -69,6 +71,7 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
+    await expectSupervisorHome(handle);
 
     // Create five features via the real form — every one settles into the
     // "At rest" lane once setup completes.
@@ -85,7 +88,8 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
         repoPatterns: [/evidence-lab/],
         waitForReady: true,
       });
-      await handle.page.getByRole('option', { name: 'Overview' }).click();
+      // "New feature" stays in the toolbar on the feature page just opened.
+      await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
     }
 
     const ids: Record<string, string> = {};
@@ -125,6 +129,10 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
+    // The relaunch restores the last selected feature (the fifth created);
+    // going home first keeps the lane sanity checks below on a known page.
+    await supervisorRow(handle).click();
+    await expectSupervisorHome(handle);
 
     // Sanity: confirm at least three lanes are now populated before
     // spending time on screenshots. The "Done" lane's <details> disclosure
@@ -147,6 +155,10 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
       timeout: 15_000,
     });
     await expect(handle.page.getByRole('button', { name: 'Toggle inspector' })).toBeVisible();
+    // A feature page titles the toolbar with the feature and keeps "New feature".
+    await expect(handle.page.locator('.toolbar__title-name')).toHaveText('Evidence Selected');
+    await expect(supervisorRow(handle)).toHaveAttribute('aria-selected', 'false');
+    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
     await contractEvidenceShot(
       handle,
       'shell-with-a-feature-selected-populated-five-lane-sidebar-toolbar-with-bell-over-1440x900',
@@ -171,16 +183,14 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
       timeout: 15_000,
     });
 
-    // 3. Overview selected/active, dark theme, the Bench lane lists.
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
-    await expect(handle.page.locator('.overview-surface')).toBeVisible();
-    await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
+    // 3. Supervisor selected/active, dark theme: the pinned first row over
+    //    the populated lanes, the Supervisor page in the pane, and the
+    //    toolbar's "Supervisor" title beside "New feature".
+    await supervisorRow(handle).click();
+    await expectSupervisorHome(handle);
     await contractEvidenceShot(
       handle,
-      'overview-selected-pinned-row-active-lane-lists-in-the-pane-dark-theme-1440x900',
+      'supervisor-selected-pinned-first-row-supervisor-page-in-the-pane-dark-theme-1440x900',
       1440,
       900,
       'dark',
@@ -211,8 +221,8 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
     // local inspectorOpen state — a more robust reset than re-clicking the
     // same toggle button, whose element handle can go stale across the
     // theme/window-size churn above.
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
-    await expect(handle.page.locator('.overview-surface')).toBeVisible();
+    await supervisorRow(handle).click();
+    await expectSupervisorHome(handle);
     await selectedRow.click();
     await expect(handle.page.getByLabel('Feature Evidence Selected')).toBeVisible({
       timeout: 15_000,
@@ -257,3 +267,21 @@ test('Bench shell evidence: five-lane sidebar, themes, inspector, collapse, mini
     destroyWorld(world);
   }
 });
+
+function supervisorRow(handle: AppHandle): Locator {
+  // Exact, so a feature row whose name mentions the supervisor never matches.
+  return handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+}
+
+/** The home shell: Supervisor first and selected, its page mounted, no Overview. */
+async function expectSupervisorHome(handle: AppHandle): Promise<void> {
+  const rows = handle.page.getByRole('listbox', { name: 'Features' }).getByRole('option');
+  await expect(rows.first()).toHaveAccessibleName('Supervisor');
+  await expect(rows.first()).toHaveAttribute('aria-selected', 'true');
+  await expect(handle.page.getByRole('option', { name: 'Overview' })).toHaveCount(0);
+  await expect(handle.page.getByRole('region', { name: 'Supervisor', exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(handle.page.locator('.toolbar__title-name')).toHaveText('Supervisor');
+  await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible();
+}

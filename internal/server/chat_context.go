@@ -27,7 +27,7 @@ import (
 )
 
 // Error reference scopes: the durable homes an error reference can point
-// at, shared by chat start's explain-in-chat context and the feature
+// at, shared by the explain-in-chat context resolver and the feature
 // summary's owned-error projection. The zero value means the request carries
 // no reference.
 const (

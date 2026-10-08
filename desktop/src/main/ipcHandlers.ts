@@ -87,6 +87,15 @@ import {
   type SessionTranscript,
   type SessionOutputOpenRequest,
   type SessionOutputEvent,
+  type SupervisorActionResult,
+  type SupervisorResetResult,
+  type SupervisorMessageRequest,
+  type SupervisorMessageResult,
+  type SupervisorSettingsRequest,
+  type SupervisorPendingChangeCancelRequest,
+  type SupervisorState,
+  type SupervisorTranscriptPage,
+  type SupervisorTranscriptRequest,
   type AttentionSnapshot,
   type PermissionDecisionRequest,
   type AskUserAnswerRequest,
@@ -98,8 +107,6 @@ import {
   type TestingContractWaiveRequest,
   type TestingContractWaiveResult,
   type AttentionActionResult,
-  type ChatActionResult,
-  type ChatStartRequest,
   type LocalReviewDraft,
   type LocalReviewDraftSaveRequest,
   type LocalReviewDraftLookupRequest,
@@ -221,6 +228,17 @@ export interface IpcServices {
     emit: (event: SessionOutputEvent) => void,
   ): string;
   cancelSessionOutput(subscriptionId: string): boolean;
+  getSupervisorState(): Promise<SupervisorState>;
+  updateSupervisorSettings(request: SupervisorSettingsRequest): Promise<SupervisorState>;
+  cancelSupervisorPendingChange(
+    request: SupervisorPendingChangeCancelRequest,
+  ): Promise<SupervisorState>;
+  dismissSupervisorPersistFailure(): Promise<SupervisorState>;
+  getSupervisorTranscript(request: SupervisorTranscriptRequest): Promise<SupervisorTranscriptPage>;
+  sendSupervisorMessage(request: SupervisorMessageRequest): Promise<SupervisorMessageResult>;
+  interruptSupervisor(): Promise<SupervisorActionResult>;
+  endSupervisor(): Promise<SupervisorActionResult>;
+  resetSupervisor(): Promise<SupervisorResetResult>;
   getCreationDefaults(): Promise<CreationDefaults>;
   inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
   checkRepositoryOriginStatus(
@@ -248,8 +266,6 @@ export interface IpcServices {
   resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
   waiveTestingContract(request: TestingContractWaiveRequest): Promise<TestingContractWaiveResult>;
   getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot>;
-  startChat(request: ChatStartRequest): Promise<ChatActionResult>;
-  endChat(): Promise<ChatActionResult>;
   loadLocalReviewDraft(request: LocalReviewDraftLookupRequest): LocalReviewDraft | null;
   saveLocalReviewDraft(request: LocalReviewDraftSaveRequest): LocalReviewDraft;
   discardLocalReviewDraft(request: LocalReviewDraftDiscardRequest): boolean;
@@ -435,8 +451,6 @@ export function registerIpcHandlers(
       services.waiveTestingContract(request),
     [IPC_CHANNELS.attentionGetTestingContract]: (_event, request: TestingContractRequest) =>
       services.getTestingContract(request),
-    [IPC_CHANNELS.chatStart]: (_event, request: ChatStartRequest) => services.startChat(request),
-    [IPC_CHANNELS.chatEnd]: () => services.endChat(),
     [IPC_CHANNELS.sessionsList]: () => services.listSessions(),
     [IPC_CHANNELS.sessionsGet]: (_event, sessionId: string) => services.getSession(sessionId),
     [IPC_CHANNELS.sessionsTranscript]: (_event, request: SessionTranscriptRequest) =>
@@ -452,6 +466,22 @@ export function registerIpcHandlers(
     [IPC_CHANNELS.sessionsOutputCancel]: (_event, request: { subscriptionId: string }) => ({
       cancelled: services.cancelSessionOutput(request.subscriptionId),
     }),
+    [IPC_CHANNELS.supervisorStateGet]: () => services.getSupervisorState(),
+    [IPC_CHANNELS.supervisorSettingsUpdate]: (_event, request: SupervisorSettingsRequest) =>
+      services.updateSupervisorSettings(request),
+    [IPC_CHANNELS.supervisorPendingChangeCancel]: (
+      _event,
+      request: SupervisorPendingChangeCancelRequest,
+    ) => services.cancelSupervisorPendingChange(request),
+    [IPC_CHANNELS.supervisorPersistFailureDismiss]: () =>
+      services.dismissSupervisorPersistFailure(),
+    [IPC_CHANNELS.supervisorTranscriptGet]: (_event, request: SupervisorTranscriptRequest) =>
+      services.getSupervisorTranscript(request),
+    [IPC_CHANNELS.supervisorMessageSend]: (_event, request: SupervisorMessageRequest) =>
+      services.sendSupervisorMessage(request),
+    [IPC_CHANNELS.supervisorInterrupt]: () => services.interruptSupervisor(),
+    [IPC_CHANNELS.supervisorEnd]: () => services.endSupervisor(),
+    [IPC_CHANNELS.supervisorReset]: () => services.resetSupervisor(),
     [IPC_CHANNELS.creationDefaults]: () => services.getCreationDefaults(),
     [IPC_CHANNELS.creationSources]: (_event, request: RepositorySourcesRequest) =>
       services.inspectRepositorySources(request),

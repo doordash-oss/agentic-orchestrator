@@ -16,23 +16,24 @@ limitations under the License.
 
 /**
  * Journey — explain in chat, end to end against the packaged app and real
- * bundled server with the workflow provider stub:
+ * bundled server with the supervisor provider stub:
  *
- * seeded iteration_budget_exhausted failure → cockpit card → "Explain in
- * chat" → AMA panel opens and auto-submits the templated question with the
- * run-scoped context reference → the transcript shows the question as the
- * user bubble followed by the stub's assistant reply, the composer stays
- * empty, the stored initial prompt equals the visible question alone, and
- * no transcript row carries the hidden bundle heading → a typed follow-up
- * sends into the same live session.
+ * a harness and model chosen on the Supervisor chip → seeded
+ * iteration_budget_exhausted failure → cockpit card → "Explain in chat" →
+ * the Supervisor page is selected with the templated question drafted into
+ * its focused composer and nothing sent (no provider invocation, empty
+ * transcript) → Send → the stub's reply arrives over exactly one provider
+ * invocation, the hidden error-context bundle reached the provider's wire,
+ * and the committed user record holds only the visible question.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
   createFeatureViaForm,
+  evidenceShot,
   launchApp,
   persistAppLogs,
   type AppHandle,
@@ -40,34 +41,47 @@ import {
 import { setFeatureStatus } from '../helpers/seed';
 import { replaceTopLevelBlock, upsertYamlScalar } from '../helpers/yaml';
 import { Transcript } from '../helpers/transcript';
-import { createRepo, createWorld, destroyWorld } from '../helpers/world';
+import {
+  createRepo,
+  createWorld,
+  destroyWorld,
+  providerInvocationCount,
+  SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING,
+  supervisorStubReply,
+  type JourneyWorld,
+} from '../helpers/world';
 
-const HIDDEN_BUNDLE_HEADING = 'Chat context —';
+const CHIP_LABEL = 'Claude Haiku · Default';
 
-test('explain in chat submits the templated question with hidden context', async ({}, testInfo) => {
+test('explain in chat drafts the templated question into the Supervisor composer unsent', async ({}, testInfo) => {
   const transcript = new Transcript(
     'explain-in-chat',
-    'Seeded failure → Explain in chat → auto-submitted question with hidden context → live follow-up',
+    'Seeded failure → Explain in chat → unsent Supervisor draft → Send with hidden context',
   );
   const world = createWorld('explain-in-chat', {
     auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
     presetWorkspaceRoot: true,
-    workflowProvider: true,
+    supervisorProvider: true,
   });
   const alpha = createRepo(world, 'alpha', { commit: true });
   transcript.section('World');
   transcript.step(`isolated world at \`${world.root}\``);
   transcript.step(
-    `committed repository discovered from the preset workspace root: \`${alpha}\`, workflow provider stub armed`,
+    `committed repository discovered from the preset workspace root: \`${alpha}\`, supervisor provider stub armed`,
   );
 
   let handle: AppHandle | null = null;
   try {
-    transcript.section('Create the feature; setup completes');
+    transcript.section('Choose the supervisor model, then create the feature');
     handle = await launchApp(world, testInfo, { traceName: 'explain-in-chat-create' });
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 60_000,
     });
+    await expect(supervisorPage(handle.page)).toBeVisible();
+    await chooseModel(handle.page);
+    expect(providerInvocationCount(world.providerInvocationLog)).toBe(0);
+    transcript.step(`the Supervisor chip reads "${CHIP_LABEL}"; no provider session yet`);
+
     const featureName = 'Explain Target';
     await createFeatureViaForm(handle, {
       name: featureName,
@@ -101,9 +115,10 @@ test('explain in chat submits the templated question with hidden context', async
     fs.writeFileSync(runPath, runYaml);
     transcript.step('seeded Failed@implement with an iteration_budget_exhausted record');
 
-    transcript.section('Relaunch; Explain in chat auto-submits the templated question');
+    transcript.section('Relaunch; Explain in chat drafts into the Supervisor composer');
     handle = await launchApp(world, testInfo, { traceName: 'explain-in-chat-relaunch' });
-    const cockpit = handle.page.getByLabel(`Feature ${featureName}`);
+    const page = handle.page;
+    const cockpit = page.getByLabel(`Feature ${featureName}`);
     await expect(cockpit).toBeVisible({ timeout: 60_000 });
 
     const failureCard = cockpit.getByRole('alert');
@@ -114,59 +129,108 @@ test('explain in chat submits the templated question with hidden context', async
     await expect(failureCard.locator('.error-surface__title')).toHaveText(
       'Iteration budget exhausted',
     );
-
-    const panel = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await expect(panel).toHaveCount(0);
     await failureCard.getByRole('button', { name: 'Explain in chat' }).click();
-    await expect(panel).toBeVisible({ timeout: 60_000 });
 
     const question = `Explain the "Iteration budget exhausted" error (iteration_budget_exhausted) on ${featureName} and what I should do next.`;
-    const chatTranscript = panel.getByLabel('AMA transcript');
-    await expect(chatTranscript).toContainText(question, { timeout: 60_000 });
-    await expect(chatTranscript).toContainText(/Backfill ready|Live semantic/, { timeout: 60_000 });
-    transcript.step('the AMA panel opened with the templated question and the stub reply');
+    await expect(supervisorRow(page)).toHaveAttribute('aria-selected', 'true');
+    await expect(supervisorPage(page)).toBeVisible();
+    await expect(page.locator('.toolbar__title-name')).toHaveText('Supervisor');
+    await expect(composer(page)).toHaveValue(question);
+    await expect(composer(page)).toBeFocused();
+    await expect(chip(page)).toHaveAccessibleName(CHIP_LABEL);
+    await expect(sendButton(page)).toBeEnabled();
+    transcript.step('the Supervisor page shows the templated question in its focused composer');
 
-    const composer = panel.getByRole('textbox', { name: 'Ask Agentico' });
-    await expect(composer).toHaveValue('');
-
-    const session = await handle.page.evaluate(() => window.agentico.getSession('__chat__'));
-    expect(session.id).toBe('__chat__');
-    expect(session.initialPrompt).toBe(question);
-    transcript.step('the stored initial prompt is the visible question alone');
-
-    const loaded = await handle.page.evaluate(() =>
-      window.agentico.getSessionTranscript({ sessionId: '__chat__', limit: 200 }),
+    // Nothing was sent: no provider session, an empty conversation.
+    await expect(conversation(page)).toContainText(/Good (?:morning|afternoon|evening)\./);
+    const unsent = await page.evaluate(() => window.agentico.getSupervisorTranscript({}));
+    expect(unsent.items).toHaveLength(0);
+    expect((await page.evaluate(() => window.agentico.getSupervisorState())).lifecycle).toBe(
+      'stopped',
     );
-    expect(loaded.messages.length).toBeGreaterThan(0);
-    for (const message of loaded.messages) {
-      expect(message.text ?? '').not.toContain(HIDDEN_BUNDLE_HEADING);
+    expect(providerInvocationCount(world.providerInvocationLog)).toBe(0);
+    await evidenceShot(handle, 'explain-in-chat-draft');
+    transcript.step('nothing was sent: no provider invocation and an empty transcript');
+
+    transcript.section('Send delivers the question with its hidden context');
+    await sendButton(page).click();
+    await expect(conversation(page)).toContainText(supervisorStubReply(1), { timeout: 60_000 });
+    await expect(conversation(page)).toContainText(question);
+    await expect(composer(page)).toHaveValue('');
+    expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
+    expect(readProviderLog(world)).toContain('hidden-context:1');
+    transcript.step('the stub replied over one provider invocation; the bundle reached its wire');
+
+    const sent = await page.evaluate(() => window.agentico.getSupervisorTranscript({}));
+    const userTexts = sent.items
+      .filter((record) => record.kind === 'user')
+      .map((record) => record.messages.map((message) => message.text ?? '').join(''));
+    expect(userTexts).toEqual([question]);
+    for (const record of sent.items) {
+      for (const message of record.messages) {
+        expect(message.text ?? '').not.toContain(SUPERVISOR_E2E_HIDDEN_CONTEXT_HEADING);
+      }
     }
-    transcript.step('no transcript row carries the hidden bundle heading');
+    await evidenceShot(handle, 'explain-in-chat-reply');
+    transcript.step('the committed user record holds only the visible question');
 
-    transcript.section('A typed follow-up sends into the same live session');
-    await composer.fill('What should I do first?');
-    await panel.getByRole('button', { name: 'Send' }).click();
-    const followUp = await handle.page.evaluate(() =>
-      window.agentico.getSessionTranscript({ sessionId: '__chat__', limit: 200 }),
-    );
-    expect(followUp.messages.length).toBeGreaterThan(loaded.messages.length);
-    expect(
-      followUp.messages.some((message) => (message.text ?? '').includes('What should I do first?')),
-    ).toBe(true);
-    const liveSession = await handle.page.evaluate(() => window.agentico.getSession('__chat__'));
-    expect(liveSession.id).toBe('__chat__');
-    transcript.step('the follow-up joined the same live chat session');
-
+    transcript.json('provider log', readProviderLog(world).split('\n'));
     persistAppLogs(handle, 'explain-in-chat-second-run');
     await closeApp(handle);
     handle = null;
-    assertNoLeakedProcesses(world);
+    await assertNoLeakedProcesses(world);
     transcript.write(testInfo);
   } finally {
     if (handle !== null) {
       await closeApp(handle).catch(() => {});
     }
-    assertNoLeakedProcesses(world);
+    await assertNoLeakedProcesses(world);
     destroyWorld(world);
   }
 });
+
+/** Commits Claude Haiku through the Supervisor chip and closes the popover. */
+async function chooseModel(page: Page): Promise<void> {
+  await chip(page).click();
+  const popover = page.getByRole('region', { name: 'Harness and model' });
+  await expect(popover).toBeVisible();
+  await popover.getByRole('group', { name: 'Claude' }).getByText('Haiku', { exact: true }).click();
+  await expect(chip(page)).toHaveAccessibleName(CHIP_LABEL);
+  await page.keyboard.press('Escape');
+  await expect(popover).toHaveCount(0);
+}
+
+/** The pinned first sidebar row; exact so a feature row naming the supervisor never matches. */
+function supervisorRow(page: Page): Locator {
+  return page.getByRole('option', { name: 'Supervisor', exact: true });
+}
+
+function supervisorPage(page: Page): Locator {
+  return page.getByRole('region', { name: 'Supervisor', exact: true });
+}
+
+function conversation(page: Page): Locator {
+  return page.getByRole('region', { name: 'Supervisor conversation' });
+}
+
+function composer(page: Page): Locator {
+  return page.getByRole('textbox', { name: 'Message the supervisor' });
+}
+
+function sendButton(page: Page): Locator {
+  return supervisorPage(page)
+    .locator('.supervisor-page__dock')
+    .getByRole('button', { name: 'Send', exact: true });
+}
+
+function chip(page: Page): Locator {
+  return page.getByTestId('supervisor-model-chip');
+}
+
+function readProviderLog(world: JourneyWorld): string {
+  try {
+    return fs.readFileSync(world.providerInvocationLog, 'utf8');
+  } catch {
+    return '';
+  }
+}

@@ -33,9 +33,6 @@ const APIVersion = "v1"
 
 const discoveryFilename = ".agentico-server.json"
 
-// ChatSessionID is the stable utility-session identity used by the AMA chat.
-const ChatSessionID = "__chat__"
-
 type Options struct {
 	Runtime      RuntimeIdentity
 	LaunchPolicy LaunchPolicy
@@ -100,7 +97,10 @@ type Options struct {
 	// CLI wiring so Git freshness refreshes participate. Nil creates a
 	// private counter.
 	ProbeActivity *ProbeActivity
-	HTTPMetrics   HTTPMetrics
+	// Supervisor owns the supervisor conversation; nil serves 503 on the
+	// supervisor namespace.
+	Supervisor  SupervisorService
+	HTTPMetrics HTTPMetrics
 }
 
 type HandlerOptions struct {
@@ -153,6 +153,9 @@ type HandlerOptions struct {
 	// CLI wiring so Git freshness refreshes participate. Nil creates a
 	// private counter.
 	ProbeActivity *ProbeActivity
+	// Supervisor owns the supervisor conversation; nil serves 503 on the
+	// supervisor namespace.
+	Supervisor SupervisorService
 }
 
 type FeatureLister interface {

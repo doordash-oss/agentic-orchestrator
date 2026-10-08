@@ -228,7 +228,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'light',
     1440,
     900,
-    'active-workflow-plus-ama-close-dialog-with-keep-running-stop-work-and-quit-and-c-1440x900',
+    'active-workflow-plus-supervisor-close-dialog-with-keep-running-stop-work-and-quit-1440x900',
     '.impact-dialog',
   );
 
@@ -277,7 +277,7 @@ test('capture all visual evidence screenshots', async ({ page }) => {
     'light',
     1440,
     900,
-    'stop-work-and-install-now-impact-confirmation-showing-workflow-and-ama-consequen-1440x900',
+    'stop-work-and-install-now-impact-confirmation-showing-workflow-and-supervisor-con-1440x900',
     '.settings-panel__section--updates',
     async (p) => {
       await expectSettingsPane(p, 'Updates', 'Updates');

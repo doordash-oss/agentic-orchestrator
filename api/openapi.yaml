@@ -891,47 +891,6 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
-  /api/v1/prompts/chat/start:
-    post:
-      operationId: startChatPrompt
-      summary: Start a chat prompt session.
-      description: >-
-        Sends one user turn to the singleton AMA chat session, starting the
-        session when none is live. An optional `context` reference points at
-        the durable home of an error the question is about; the server
-        resolves it into a hidden context bundle the provider sees but the
-        transcript never echoes. Failure machine codes: 400
-        `chat_context_invalid` (malformed reference) and 404
-        `chat_context_not_found` (referenced error no longer present); both
-        are rejected before any chat turn is sent.
-      parameters:
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ChatStartRequest"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /api/v1/prompts/chat/end:
-    post:
-      operationId: endChatPrompt
-      summary: End the active singleton chat prompt session.
-      parameters:
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
   /api/v1/permissions:
     get:
       operationId: listPermissions
@@ -1508,8 +1467,8 @@ paths:
         interrupting it. With when now and no stop_active_work the install
         proceeds only when no work is active. With when now and
         stop_active_work true the install may interrupt feature sessions
-        and the singleton chat through the existing pause-stop and
-        chat-end semantics — repository work (clones, uploads, origin
+        and the supervisor through the existing pause-stop and supervisor
+        end semantics — repository work (clones, uploads, origin
         checks, other repository activity), protected or unknown
         admission reservations, and failed activity detection still refuse
         before staging, again after staging, and again under the closed
@@ -1606,6 +1565,292 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /api/v1/supervisor/state:
+    get:
+      operationId: getSupervisorState
+      summary: Read the supervisor conversation's lifecycle read model.
+      description: >-
+        Returns the per-server supervisor conversation identity, generation,
+        lifecycle, committed harness settings, pending requests and the
+        durable transcript head. Never carries transcript records.
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/settings:
+    patch:
+      operationId: updateSupervisorSettings
+      summary: Change the supervisor harness, model or effort.
+      description: >-
+        Omitted settings merge over the committed settings. A change during a
+        turn waits until the turn ends. The request id is idempotent within a
+        pending change. A harness switch retires an idle process or waits for
+        an active turn to finish, then rebuilds history on the destination.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupervisorSettingsRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorStateResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/pending-change/{request_id}:
+    delete:
+      operationId: cancelSupervisorPendingChange
+      summary: Cancel one queued settings change.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+        - name: request_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/persist-failure:
+    delete:
+      operationId: dismissSupervisorPersistFailure
+      summary: Dismiss the retained history-write failure.
+      description: >-
+        Clears `persist_failure` from the read model once the person has seen
+        that part of the history was not saved. Idempotent: dismissing when
+        no failure is retained returns the unchanged state.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorStateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/transcript:
+    get:
+      operationId: getSupervisorTranscript
+      summary: Read one page of the durable supervisor transcript.
+      description: >-
+        Records are ordered by their per-conversation `seq`. With neither
+        cursor the newest page is returned; `before` pages backwards and
+        `after` pages forwards. `before=1`, `after=<head>` and
+        `before=<head+1>` return an empty page; an `after` beyond the head or
+        a `before` beyond the head plus one is refused with 409
+        `cursor_out_of_range`, whose diagnostics carry `head_seq=<n>`.
+      parameters:
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: limit
+          in: query
+          required: false
+          description: Page size, default 100 and maximum 500.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorTranscriptResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/messages:
+    post:
+      operationId: sendSupervisorMessage
+      summary: Send one user message to the supervisor.
+      description: >-
+        Launches the supervisor process when the conversation is `stopped`
+        or `failed`; sends arriving while a launch is in flight join it and
+        are delivered in arrival order. A repeated `client_message_id` with
+        the same text and error reference returns the already-committed record
+        with `deduplicated` set, without appending or delivering anything; a
+        repeated `client_message_id` whose text or error reference differs is
+        refused with 409 `client_message_conflict`, whose diagnostics carry
+        the committed record's `committed_seq=<n>`. An optional
+        `error_reference` points at the durable home of an error the message
+        is about; the server resolves it into a hidden context bundle the
+        harness receives ahead of the visible text, while the committed user
+        record holds only `text`. Failure machine codes: 400
+        `chat_context_invalid` when the reference is malformed, 404
+        `chat_context_not_found` when the referenced error is no longer
+        present (both rejected before anything is sent or appended), 409
+        `settings_required` when no harness or model is chosen, 409
+        `turn_active` while a turn is running, 502
+        `supervisor_launch_failed` when the launch or handshake fails (no
+        user record is committed), and 503 `update_in_progress` while work
+        admission is closed.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupervisorMessageRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorMessageResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+        "502":
+          $ref: "#/components/responses/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/interrupt:
+    post:
+      operationId: interruptSupervisor
+      summary: Interrupt the supervisor's current turn.
+      description: >-
+        Returns `accepted` immediately. The lifecycle returns to `idle` only
+        once a turn result or process exit is observed; a harness that does
+        not answer within the grace is terminated and the lifecycle becomes
+        `stopped` with `last_turn_outcome` `interrupted`.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/supervisor/end:
+    post:
+      operationId: endSupervisor
+      summary: Stop the supervisor process and keep the conversation.
+      description: >-
+        Stops the process, keeps the transcript and settings, and sets the
+        lifecycle to `stopped`. Returns `not_active` when no process exists.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorActionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/supervisor/reset:
+    post:
+      operationId: resetSupervisor
+      summary: Start a new supervisor conversation.
+      description: >-
+        Retires the current conversation and opens an empty one. An in-flight
+        launch is cancelled and a live process is stopped the way `end` stops
+        it, applying a queued settings change at exit; a cut turn is marked
+        interrupted by the user in the old transcript and its open requests
+        are resolved. The new conversation has a new `conversation_id`,
+        generation 0, a fresh `stream_epoch` and no native session id; the
+        lifecycle is `stopped` with `last_turn_outcome` `none`. Settings and
+        the old conversation's files stay on disk untouched, and running
+        features are never affected. Every open event stream receives
+        `stream.reset` with `snapshot_required` under the new conversation
+        and continues live. Returns `noop` with the current state when there
+        is no process, no launch and the transcript is empty.
+      parameters:
+        - $ref: "#/components/parameters/TrustedMutationHeader"
+      requestBody:
+        $ref: "#/components/requestBodies/JSONMutation"
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorResetResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /api/v1/supervisor/events:
+    get:
+      operationId: streamSupervisorEvents
+      summary: Stream the supervisor conversation as SSE.
+      description: >-
+        The stream opens with a `state` event. Committed transcript records
+        are `record` events whose SSE id is the record `seq`; non-persisted
+        `delta`, `state` and `request` events carry no id. Every event
+        carries `conversation_id`, `generation` and `stream_epoch`. Resume
+        with `Last-Event-ID` or `after`: committed records after the cursor
+        replay from the durable store before live events follow, at most 500
+        of them. A cursor more than 500 records behind the head (a range gap),
+        a cursor beyond the head, a stale `epoch`, or a consumer that falls
+        behind yields one `stream.reset` event with `snapshot_required`, after
+        which the stream continues live from the head and the client reloads
+        through the paged transcript endpoint.
+      security:
+        - bearerAuth: []
+        - sseAccessToken: []
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: epoch
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: heartbeat_ms
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          $ref: "#/components/responses/SupervisorEventStream"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /api/v1/uploads:
     post:
       operationId: stageUpload
@@ -1619,9 +1864,10 @@ paths:
         require a png, jpg, jpeg, gif, or webp file name extension and are
         capped at 10 MiB; attachment uploads accept any bytes and are capped
         at 25 MiB. References are consumed by the image_uploads /
-        attachment_uploads fields of the feature-creation, refactor-launch,
-        and chat-start mutations (chat resolves image references only) and
-        expire 24 hours after staging.
+        attachment_uploads fields of the feature-creation and
+        refactor-launch mutations and of the supervisor message route
+        (POST /api/v1/supervisor/messages), and expire 24 hours after
+        staging.
       parameters:
         - name: kind
           in: query
@@ -2160,6 +2406,42 @@ components:
         text/event-stream:
           schema:
             $ref: "#/components/schemas/SessionOutputChunk"
+    SupervisorStateResponse:
+      description: Supervisor lifecycle read model.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorStateResponse"
+    SupervisorTranscriptResponse:
+      description: One page of the durable supervisor transcript.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorTranscriptResponse"
+    SupervisorMessageResponse:
+      description: The committed user record for a supervisor send.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorMessageResponse"
+    SupervisorActionResponse:
+      description: Supervisor lifecycle mutation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorActionResponse"
+    SupervisorResetResponse:
+      description: Supervisor new-conversation result.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SupervisorResetResponse"
+    SupervisorEventStream:
+      description: Supervisor SSE stream carrying `SupervisorStreamEvent` JSON payloads.
+      content:
+        text/event-stream:
+          schema:
+            $ref: "#/components/schemas/SupervisorStreamEvent"
 
   headers:
     Sequence:
@@ -2245,6 +2527,10 @@ components:
         diagnostics:
           type: string
           description: Raw detail text, deepest disclosure only.
+        attempted_settings:
+          $ref: "#/components/schemas/SupervisorSettings"
+          description: Settings attempted before a supervisor launch failure restored the previous choice.
+          x-go-type-skip-optional-pointer: false
     ErrorRemediation:
       type: object
       description: Catalog-authored next step for an error code.
@@ -3719,6 +4005,7 @@ components:
               provider_models,
               phase_defaults,
               phase_provider_models,
+              chat_default_effort,
             ]
           properties:
             provider_order:
@@ -3741,6 +4028,10 @@ components:
                   type: array
                   items:
                     type: string
+            chat_default_effort:
+              type: object
+              additionalProperties:
+                type: string
     ProviderModelRefreshRequest:
       type: object
       additionalProperties: false
@@ -4123,10 +4414,6 @@ components:
               $ref: "#/components/schemas/AskUserAnswerResponse"
             help_send_response:
               $ref: "#/components/schemas/HelpSendResponse"
-            chat_start_response:
-              $ref: "#/components/schemas/ChatStartResponse"
-            chat_end_response:
-              $ref: "#/components/schemas/ChatEndResponse"
             runtime_config_update_response:
               $ref: "#/components/schemas/RuntimeConfigUpdateResponse"
             publish_feature_response:
@@ -4349,8 +4636,9 @@ components:
       # repository to address a journal entry's warning instead of the
       # attention record; repository needs feature_id and repository; setup
       # needs feature_id and task_key; recovery needs snapshot_id and key.
-      # Shared by chat start's `context` (explain-in-chat questions) and the
-      # feature summary's owned-error entries (presence surfaces).
+      # Shared by the supervisor message's `error_reference` (explain-in-chat
+      # questions) and the feature summary's owned-error entries (presence
+      # surfaces).
       type: object
       additionalProperties: false
       required: [scope, code]
@@ -4380,45 +4668,6 @@ components:
           $ref: "#/components/schemas/ErrorReference"
         error:
           $ref: "#/components/schemas/Error"
-    ChatStartRequest:
-      # Bound by the startChatPrompt operation at
-      # /api/v1/prompts/chat/start; oapi-codegen emits the Go binding
-      # (internal/server/serverapi.gen.go).
-      type: object
-      additionalProperties: false
-      required: [message]
-      properties:
-        message: { type: string, minLength: 1 }
-        images:
-          type: array
-          maxItems: 12
-          items: { type: string }
-        image_uploads:
-          type: array
-          maxItems: 12
-          items: { type: string }
-        context:
-          $ref: "#/components/schemas/ErrorReference"
-    ChatStartResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - type: object
-          required: [session_id, result]
-          properties:
-            session_id:
-              type: string
-            result:
-              type: string
-    ChatEndResponse:
-      allOf:
-        - $ref: "#/components/schemas/ActionBaseResponse"
-        - type: object
-          required: [session_id, result]
-          properties:
-            session_id:
-              type: string
-            result:
-              type: string
     RuntimeConfigUpdateResponse:
       allOf:
         - $ref: "#/components/schemas/ActionBaseResponse"
@@ -5266,7 +5515,6 @@ components:
         pending:
           type: boolean
         # "question": a real help request awaiting an answer.
-        # "input": a chat session awaiting the user's next message.
         # "coordinating": synthetic — a phase session idling between turns,
         # which no human needs to answer.
         kind:
@@ -5496,6 +5744,656 @@ components:
           x-go-type-skip-optional-pointer: false
         task:
           $ref: "#/components/schemas/Task"
+          x-go-type-skip-optional-pointer: false
+
+    # --- Supervisor conversation: one per server, durable transcript,
+    # lifecycle read model and per-conversation event stream.
+    SupervisorLifecycle:
+      type: string
+      enum: [stopped, starting, idle, running, waiting_permission, waiting_question, failed]
+      x-enum-varnames:
+        - SupervisorLifecycleStopped
+        - SupervisorLifecycleStarting
+        - SupervisorLifecycleIdle
+        - SupervisorLifecycleRunning
+        - SupervisorLifecycleWaitingPermission
+        - SupervisorLifecycleWaitingQuestion
+        - SupervisorLifecycleFailed
+    SupervisorStartingStep:
+      type: string
+      description: >-
+        Present only while the lifecycle is `starting`: `rebuilding` while the
+        harness's native session is rebuilt from the transcript, `launching`
+        while the process spawns, `handshake` until it first answers.
+      enum: [rebuilding, launching, handshake]
+      x-enum-varnames: [SupervisorStartingStepRebuilding, SupervisorStartingStepLaunching, SupervisorStartingStepHandshake]
+    SupervisorTurnOutcome:
+      type: string
+      enum: [none, completed, interrupted, failed]
+      x-enum-varnames:
+        - SupervisorTurnOutcomeNone
+        - SupervisorTurnOutcomeCompleted
+        - SupervisorTurnOutcomeInterrupted
+        - SupervisorTurnOutcomeFailed
+    SupervisorInterruptedBy:
+      type: string
+      description: >-
+        Who cut the most recent turn; meaningful when `last_turn_outcome` is
+        `interrupted`. `user` is Stop or End, `shutdown` is a server
+        shutdown or crash detected at boot.
+      enum: [none, user, shutdown]
+      x-enum-varnames:
+        - SupervisorInterruptedByNone
+        - SupervisorInterruptedByUser
+        - SupervisorInterruptedByShutdown
+    SupervisorPermissionMode:
+      type: object
+      description: >-
+        Permission mode the supervisor asked the harness for and the mode the
+        running harness reported. `effective` is empty until a process
+        reports it.
+      required: [requested, effective, restricted_by_policy]
+      properties:
+        requested:
+          type: string
+        effective:
+          type: string
+        restricted_by_policy:
+          type: boolean
+          description: True when the harness reported a mode other than the requested one.
+    SupervisorSettings:
+      type: object
+      description: >-
+        Committed harness choice. Empty `harness` or `model` means unset;
+        empty `effort` means the harness default.
+      required: [harness, model, effort]
+      properties:
+        harness:
+          type: string
+        model:
+          type: string
+        effort:
+          type: string
+    SupervisorSettingsRequest:
+      type: object
+      description: >-
+        Optional fields merge into the committed settings. When harness changes,
+        omitted model selects the destination's first chat-eligible model and
+        omitted effort selects its default (empty) effort.
+      additionalProperties: false
+      required: [request_id, expected_generation]
+      properties:
+        request_id:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,128}$'
+        expected_generation:
+          type: integer
+          format: int64
+          minimum: 0
+        harness:
+          type: string
+          maxLength: 100
+          x-go-type-skip-optional-pointer: false
+        model:
+          type: string
+          maxLength: 200
+          x-go-type-skip-optional-pointer: false
+        effort:
+          type: string
+          maxLength: 40
+          x-go-type-skip-optional-pointer: false
+    SupervisorBackgroundActivity:
+      type: object
+      required: [at, detail]
+      properties:
+        at:
+          type: string
+        detail:
+          type: string
+    SupervisorBackgroundTask:
+      type: object
+      required: [id, provider_id, generation, kind, title, state, schedule, detail, started_at, updated_at, expires_at]
+      properties:
+        activity:
+          type: array
+          maxItems: 8
+          items:
+            $ref: "#/components/schemas/SupervisorBackgroundActivity"
+        id:
+          type: string
+        provider_id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+        kind:
+          type: string
+          enum: [scheduled, monitor, task]
+        title:
+          type: string
+        state:
+          type: string
+          enum: [watching, running, completed, failed, stopped, interrupted]
+        schedule:
+          type: string
+        detail:
+          type: string
+        started_at:
+          type: string
+        updated_at:
+          type: string
+        expires_at:
+          type: string
+    SupervisorState:
+      type: object
+      required:
+        - conversation_id
+        - generation
+        - session_id
+        - lifecycle
+        - last_turn_outcome
+        - interrupted_by
+        - settings
+        - effective_model
+        - permission_mode
+        - pending_requests
+        - head_seq
+        - stream_epoch
+        - context_usage
+      properties:
+        background_tasks:
+          description: Confirmed background work across turns, plus recent terminal tasks. Rebuilt from durable history; independent of transcript pagination.
+          type: array
+          items:
+            $ref: "#/components/schemas/SupervisorBackgroundTask"
+        conversation_id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Number of provider process launches; increments on every launch.
+        session_id:
+          type: string
+          description: >-
+            Session-manager id of the current generation
+            (`__supervisor__.<conversation>.<generation>`); empty when no
+            process exists.
+        lifecycle:
+          $ref: "#/components/schemas/SupervisorLifecycle"
+        starting_step:
+          $ref: "#/components/schemas/SupervisorStartingStep"
+        last_turn_outcome:
+          $ref: "#/components/schemas/SupervisorTurnOutcome"
+        interrupted_by:
+          $ref: "#/components/schemas/SupervisorInterruptedBy"
+        settings:
+          $ref: "#/components/schemas/SupervisorSettings"
+        pending_change:
+          $ref: "#/components/schemas/SupervisorPendingChange"
+          x-go-type-skip-optional-pointer: false
+        effective_model:
+          type: string
+          description: Model the running harness reports; empty when no process exists.
+        permission_mode:
+          $ref: "#/components/schemas/SupervisorPermissionMode"
+        failure:
+          description: >-
+            Canonical error of the most recent launch failure; present only
+            while the lifecycle is `failed`. attempted_settings is present
+            when a relaunch change was reverted.
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+        persist_failure:
+          description: >-
+            Canonical `supervisor_history_incomplete` error for the most recent
+            transcript or state write that failed, whatever the lifecycle.
+            A later successful turn does not clear it; it stays until
+            dismissed through `DELETE /api/v1/supervisor/persist-failure` or
+            the conversation is reset.
+          $ref: "#/components/schemas/Error"
+          x-go-type-skip-optional-pointer: false
+        pending_requests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ControlRequest"
+        head_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Seq of the newest committed transcript record; 0 when empty.
+        stream_epoch:
+          type: string
+          description: Resume epoch for the supervisor event stream.
+        context_usage:
+          description: Live context fill; null until the current process reports usage.
+          $ref: "#/components/schemas/SupervisorContextUsage"
+          nullable: true
+          x-go-type-skip-optional-pointer: false
+    SupervisorContextUsage:
+      type: object
+      required: [percent, used_tokens, window_tokens]
+      properties:
+        percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+        used_tokens:
+          type: integer
+          minimum: 0
+        window_tokens:
+          type: integer
+          minimum: 1
+    SupervisorStateResponse:
+      type: object
+      required: [api_version, state]
+      properties:
+        api_version:
+          type: string
+        state:
+          $ref: "#/components/schemas/SupervisorState"
+    SupervisorPendingChange:
+      type: object
+      required: [request_id, kind, target, requested_at]
+      properties:
+        request_id:
+          type: string
+        kind:
+          type: string
+          enum: [model, effort, harness]
+        target:
+          $ref: "#/components/schemas/SupervisorSettings"
+        requested_at:
+          type: string
+          format: date-time
+    SupervisorRecordKind:
+      type: string
+      enum: [user, assistant, tool_use, tool_result, permission, question, marker, note, checkpoint]
+      x-enum-varnames:
+        - SupervisorRecordKindUser
+        - SupervisorRecordKindAssistant
+        - SupervisorRecordKindToolUse
+        - SupervisorRecordKindToolResult
+        - SupervisorRecordKindPermission
+        - SupervisorRecordKindQuestion
+        - SupervisorRecordKindMarker
+        - SupervisorRecordKindNote
+        - SupervisorRecordKindCheckpoint
+    SupervisorAttachment:
+      type: object
+      additionalProperties: false
+      required: [path, kind, name, size]
+      properties:
+        path:
+          type: string
+          description: Absolute server-local path of the conversation copy.
+        kind:
+          type: string
+          enum: [image, file]
+        name:
+          type: string
+          description: Original file name, for display.
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+    SupervisorRecordVisibility:
+      type: string
+      enum: [content, model_only, display_only]
+      x-enum-varnames:
+        - SupervisorVisibilityContent
+        - SupervisorVisibilityModelOnly
+        - SupervisorVisibilityDisplayOnly
+    SupervisorRequestRecord:
+      type: object
+      description: Request or verdict carried by `permission` and `question` records.
+      required: [request_id, tool_name, stage, outcome]
+      properties:
+        request_id:
+          type: string
+        tool_name:
+          type: string
+        stage:
+          type: string
+          enum: [requested, resolved]
+          x-enum-varnames: [SupervisorRequestStageRequested, SupervisorRequestStageResolved]
+        outcome:
+          type: string
+          enum: [pending, allowed, denied, answered, interrupted]
+          x-enum-varnames:
+            - SupervisorRequestOutcomePending
+            - SupervisorRequestOutcomeAllowed
+            - SupervisorRequestOutcomeDenied
+            - SupervisorRequestOutcomeAnswered
+            - SupervisorRequestOutcomeInterrupted
+        summary:
+          type: string
+        origin:
+          $ref: "#/components/schemas/RequestOrigin"
+        child_session_id:
+          type: string
+          description: The sub-agent's session id; present only when `origin` is `child`.
+    RequestOrigin:
+      type: string
+      description: >-
+        Who raised a permission or question: `root` for the session's own
+        agent, `child` for one of its sub-agents. Supervisor requests always
+        carry it; a supervisor record written before origins existed reads as
+        `root`.
+      enum: [root, child]
+      x-enum-varnames: [RequestOriginRoot, RequestOriginChild]
+    SupervisorMarkerRecord:
+      type: object
+      description: >-
+        Display-only notice carried by `marker` records: a turn cut by a
+        server restart, a launch failure, history that could not be restored,
+        a permission mode restricted by policy, or a transcript recovered
+        from a corrupt line (`transcript_recovered`, whose text names the
+        unread record count and the preserved original). `code` is the
+        catalog code of an `error` marker.
+      required: [marker, text]
+      properties:
+        marker:
+          type: string
+          enum: [interrupted, error, history_not_restored, permission_restricted, settings_changed, settings_reverted, harness_change, compacted, transcript_recovered]
+          x-enum-varnames:
+            - SupervisorMarkerInterrupted
+            - SupervisorMarkerError
+            - SupervisorMarkerHistoryNotRestored
+            - SupervisorMarkerPermissionRestricted
+            - SupervisorMarkerSettingsChanged
+            - SupervisorMarkerSettingsReverted
+            - SupervisorMarkerHarnessChange
+            - SupervisorMarkerCompacted
+            - SupervisorMarkerTranscriptRecovered
+        text:
+          type: string
+        code:
+          type: string
+        from_harness:
+          type: string
+          description: Source harness for a harness_change marker.
+        to_harness:
+          type: string
+          description: Destination harness for a harness_change marker.
+        summary:
+          type: string
+          description: Display-bounded readable compaction summary, when available.
+        truncated:
+          type: boolean
+          description: Whether the display summary was truncated at 16 KiB.
+    SupervisorCheckpointRecord:
+      type: object
+      description: Model-only checkpoint projection; native baseline is never sent to clients.
+      required: [covers_through_seq, reason, model, summary, truncated, has_native_baseline]
+      properties:
+        covers_through_seq:
+          type: integer
+          format: int64
+          minimum: 0
+        reason:
+          type: string
+          enum: [native_auto]
+        model:
+          type: string
+        summary:
+          type: string
+        truncated:
+          type: boolean
+        has_native_baseline:
+          type: boolean
+    SupervisorRecord:
+      type: object
+      description: >-
+        One committed transcript record projected with the same redaction
+        the session transcript applies; `messages` rows carry `index = seq`.
+      required:
+        - seq
+        - id
+        - conversation_id
+        - generation
+        - turn_id
+        - kind
+        - visibility
+        - created_at
+        - messages
+      properties:
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+        id:
+          type: string
+        conversation_id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        turn_id:
+          type: string
+        kind:
+          $ref: "#/components/schemas/SupervisorRecordKind"
+        note:
+          type: string
+          description: Bounded text of a model-only Agentico note.
+        visibility:
+          $ref: "#/components/schemas/SupervisorRecordVisibility"
+        created_at:
+          type: string
+          format: date-time
+        client_message_id:
+          type: string
+        stream_message_id:
+          type: string
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/TranscriptMessage"
+        attachments:
+          type: array
+          description: >-
+            Files attached to a user record, in harness order (images, then
+            files); each path names the copy under the conversation's
+            `attachments/` directory.
+          items:
+            $ref: "#/components/schemas/SupervisorAttachment"
+        request:
+          $ref: "#/components/schemas/SupervisorRequestRecord"
+          x-go-type-skip-optional-pointer: false
+        marker:
+          $ref: "#/components/schemas/SupervisorMarkerRecord"
+          x-go-type-skip-optional-pointer: false
+        checkpoint:
+          $ref: "#/components/schemas/SupervisorCheckpointRecord"
+          x-go-type-skip-optional-pointer: false
+    SupervisorTranscriptResponse:
+      type: object
+      required:
+        - api_version
+        - conversation_id
+        - items
+        - first_seq
+        - last_seq
+        - has_more_before
+        - has_more_after
+        - head_seq
+      properties:
+        api_version:
+          type: string
+        conversation_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SupervisorRecord"
+        first_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Seq of the first returned record; 0 for an empty page.
+        last_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Seq of the last returned record; 0 for an empty page.
+        has_more_before:
+          type: boolean
+        has_more_after:
+          type: boolean
+        head_seq:
+          type: integer
+          format: int64
+          minimum: 0
+    SupervisorMessageRequest:
+      type: object
+      additionalProperties: false
+      required: [text, client_message_id]
+      description: >-
+        One user message. `text` may be blank only when at least one
+        attachment is present. Attachments arrive as absolute server-local
+        paths (`images`, `attachments`) or as staged upload references
+        (`image_uploads`, `attachment_uploads`); the combined caps are 12
+        images and 24 files, at most 10 MiB per image and 25 MiB per file.
+        Every attached file is copied into the conversation's
+        `attachments/` directory and the committed user record references
+        only those copies; staged references are consumed only when the
+        user record is committed, so a refused or failed send leaves them
+        valid for a retry.
+      properties:
+        text:
+          type: string
+          maxLength: 100000
+        images:
+          type: array
+          maxItems: 12
+          items: { type: string }
+          description: Absolute server-local image paths.
+        image_uploads:
+          type: array
+          maxItems: 12
+          items: { type: string }
+          description: Staged image upload references.
+        attachments:
+          type: array
+          maxItems: 24
+          items: { type: string }
+          description: Absolute server-local file paths.
+        attachment_uploads:
+          type: array
+          maxItems: 24
+          items: { type: string }
+          description: Staged attachment upload references.
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: "^[A-Za-z0-9._-]+$"
+        error_reference:
+          $ref: "#/components/schemas/ErrorReference"
+    SupervisorMessageResponse:
+      type: object
+      required: [api_version, record, launched, deduplicated]
+      properties:
+        api_version:
+          type: string
+        record:
+          $ref: "#/components/schemas/SupervisorRecord"
+        launched:
+          type: boolean
+          description: True when this send launched the supervisor process.
+        deduplicated:
+          type: boolean
+          description: >-
+            True when the `client_message_id` was already committed with the
+            same text, error reference and attachments; nothing was appended
+            or delivered.
+    SupervisorActionResponse:
+      type: object
+      required: [api_version, result, state]
+      properties:
+        api_version:
+          type: string
+        result:
+          type: string
+          enum: [accepted, ended, not_active]
+          x-enum-varnames: [SupervisorActionAccepted, SupervisorActionEnded, SupervisorActionNotActive]
+        state:
+          $ref: "#/components/schemas/SupervisorState"
+    SupervisorResetResponse:
+      type: object
+      required: [api_version, result, previous_conversation_id, state]
+      properties:
+        api_version:
+          type: string
+        result:
+          type: string
+          enum: [reset, noop]
+          x-enum-varnames: [SupervisorResetDone, SupervisorResetNoop]
+          description: >-
+            `reset` when a new conversation was opened; `noop` when there was
+            no process, no launch and an empty transcript.
+        previous_conversation_id:
+          type: string
+          description: >-
+            The conversation current when the request arrived; equals
+            `state.conversation_id` for `noop`.
+        state:
+          $ref: "#/components/schemas/SupervisorState"
+    SupervisorDelta:
+      type: object
+      description: Non-persisted streaming text for a provisional assistant row.
+      required: [turn_id, stream_message_id, chunk_index, text]
+      properties:
+        turn_id:
+          type: string
+        stream_message_id:
+          type: string
+        chunk_index:
+          type: integer
+          minimum: 0
+        text:
+          type: string
+    SupervisorStreamEvent:
+      type: object
+      required: [kind, conversation_id, generation, stream_epoch]
+      properties:
+        kind:
+          type: string
+          enum: [record, delta, state, request, stream.reset, heartbeat]
+          x-enum-varnames:
+            - SupervisorEventRecord
+            - SupervisorEventDelta
+            - SupervisorEventState
+            - SupervisorEventRequest
+            - SupervisorEventStreamReset
+            - SupervisorEventHeartbeat
+        conversation_id:
+          type: string
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        stream_epoch:
+          type: string
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Record seq for `record` events; the head seq otherwise.
+        snapshot_required:
+          type: boolean
+        record:
+          $ref: "#/components/schemas/SupervisorRecord"
+          x-go-type-skip-optional-pointer: false
+        delta:
+          $ref: "#/components/schemas/SupervisorDelta"
+          x-go-type-skip-optional-pointer: false
+        state:
+          $ref: "#/components/schemas/SupervisorState"
+          x-go-type-skip-optional-pointer: false
+        request:
+          $ref: "#/components/schemas/ControlRequest"
           x-go-type-skip-optional-pointer: false
 
     # --- Feature/session payload types backing FeatureListResponse,
@@ -6353,6 +7251,7 @@ components:
         state:
           type: string
           enum: [running, completed, failed, cancelled]
+          x-enum-varnames: [TaskActivityStateRunning, TaskActivityStateCompleted, TaskActivityStateFailed, TaskActivityStateCancelled]
         last_tool_name:
           type: string
         last_path:
@@ -6518,6 +7417,11 @@ components:
         auto_approve:
           $ref: "#/components/schemas/PermissionAutoApproveOffer"
           x-go-type-skip-optional-pointer: false
+        origin:
+          $ref: "#/components/schemas/RequestOrigin"
+        child_session_id:
+          type: string
+          description: The sub-agent's session id; present only when `origin` is `child`.
     PermissionAutomaticReview:
       type: object
       description: Sanitized explanation of a failed automatic review; retry never grants permission by itself.
@@ -6787,6 +7691,7 @@ components:
         outcome:
           type: string
           enum: [pending, confirmed, rolled_back]
+          x-enum-varnames: [UpdatePublicReceiptOutcomePending, UpdatePublicReceiptOutcomeConfirmed, UpdatePublicReceiptOutcomeRolledBack]
         from_version:
           type: string
         to_version:
@@ -6808,7 +7713,8 @@ components:
       required:
         [
           feature_count,
-          chat_active,
+          supervisor_active,
+          supervisor_waiting,
           clone_count,
           upload_count,
           origin_check_count,
@@ -6820,9 +7726,19 @@ components:
         feature_count:
           type: integer
           description: Number of features with live activity.
-        chat_active:
+        supervisor_active:
           type: boolean
-          description: Whether any feature chat turn is active.
+          description: >-
+            Whether the supervisor is active work: its lifecycle is
+            starting, running, waiting_permission or waiting_question.
+        supervisor_waiting:
+          type: boolean
+          description: >-
+            Whether the active supervisor is waiting on the user: its
+            lifecycle is waiting_permission or waiting_question. A waiting
+            supervisor still counts in supervisor_active, but it does not
+            hold up an install-when-idle; the install's own shutdown ends
+            it and resolves the open request as interrupted.
         clone_count:
           type: integer
           description: Number of in-flight repository clone operations.
@@ -6876,7 +7792,7 @@ components:
           description: >-
             Stop-work permission for an immediate install; valid only with
             when now. Authorizes interrupting feature sessions and the
-            singleton chat through the existing pause-stop and chat-end
+            supervisor through the existing pause-stop and supervisor end
             semantics. Repository work, protected or unknown admission
             reservations, and failed activity detection still refuse, and
             any stop failure or timeout aborts the install with

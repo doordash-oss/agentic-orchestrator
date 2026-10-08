@@ -186,6 +186,10 @@ type Session struct {
 	// event path as provider-originated messages.
 	onMessage func(msg llm.SDKMessage)
 
+	// observer receives provider output and control answers synchronously;
+	// nil disables observation. Set before Start and never changed.
+	observer ports.SessionObserver
+
 	// For attach mode: subscribers receive copies of messages
 	attachCh                  chan llm.SDKMessage
 	criticalAttachSendTimeout time.Duration
@@ -893,6 +897,9 @@ func (s *Session) Start(command []string, workdir string, env []string, onMessag
 	s.process = cmd
 	s.stdin = stdinPipe
 	s.stdout = stdoutPipe
+	if interposer, ok := s.protocol.(llm.StdoutInterposer); ok {
+		s.stdout = interposer.InterposeStdout(stdoutPipe)
+	}
 
 	// Start the stream-ring drainer before any producer goroutines
 	// begin pushing events.
@@ -1227,6 +1234,9 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 					// attachCh slots that critical messages need.
 					s.streamRing.Push(msg)
 				}
+				if s.observer != nil {
+					s.observer.ObserveSessionMessage(s.id, msg)
+				}
 				continue
 			}
 
@@ -1376,6 +1386,11 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			if onMessage != nil && !notifiedExternal {
 				onMessage(msg)
 			}
+			// The observer runs last so it sees the session status the
+			// manager derived from this message.
+			if s.observer != nil {
+				s.observer.ObserveSessionMessage(s.id, msg)
+			}
 		}
 	}
 
@@ -1421,8 +1436,10 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 
 	// AskUserQuestion normally surfaces to the desktop app, except for allowlisted
 	// confidence-qualified creator questions that the session can answer safely.
+	// Sub-agent questions are denied outside the supervisor, whose user answers
+	// them directly.
 	if req.Request.ToolName == "AskUserQuestion" {
-		if msg.Origin.Kind == llm.EventOriginTask {
+		if msg.Origin.Kind == llm.EventOriginTask && s.Kind() != ports.KindSupervisor {
 			s.respondToControlViaProtocol(
 				req.RequestID,
 				false,
@@ -1480,6 +1497,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 	case "":
 		req.AutoApproveOffer = decision.AutoApproveOffer
 		req.AutomaticReview = decision.AutomaticReview
+		req.DeferralReason = decision.Reason
 		return false
 	default:
 		s.respondToControlViaProtocol(req.RequestID, true, req.Request.Input, "")
@@ -1631,6 +1649,34 @@ func (s *Session) SendUserMessage(text string) error {
 	return s.SendUserMessageWithHiddenContext(text, "")
 }
 
+// ApplySettings delegates an in-place model/effort change to a provider that
+// supports it. The supervisor can fall back to a relaunch otherwise.
+func (s *Session) ApplySettings(ctx context.Context, model, effort string) error {
+	s.mu.Lock()
+	p := s.protocol
+	s.mu.Unlock()
+	updater, ok := p.(interface {
+		ApplySettings(context.Context, string, string) error
+	})
+	if !ok {
+		return llm.ErrNotSupported
+	}
+	return updater.ApplySettings(ctx, model, effort)
+}
+
+// ForceCompactionForTest invokes a provider's native compaction in opt-in
+// integration tests. Normal supervisor operation never calls this method.
+func (s *Session) ForceCompactionForTest(ctx context.Context) error {
+	s.mu.Lock()
+	p := s.protocol
+	s.mu.Unlock()
+	compactor, ok := p.(interface{ ForceCompactionForTest(context.Context) error })
+	if !ok {
+		return llm.ErrNotSupported
+	}
+	return compactor.ForceCompactionForTest(ctx)
+}
+
 // SendUserMessageWithHiddenContext sends a user turn whose provider-bound
 // text is the hidden context, a blank line, then the visible message, while
 // the locally appended chat transcript record carries only the visible
@@ -1665,7 +1711,7 @@ func (s *Session) SendUserMessageWithHiddenContext(visible, hiddenContext string
 		return err
 	}
 
-	if s.Kind() == ports.KindChat && strings.TrimSpace(visible) != "" {
+	if s.Kind().Conversational() && strings.TrimSpace(visible) != "" {
 		s.messageLog.Append(llm.SDKMessage{
 			Type:            "user",
 			LocallyAppended: true,
@@ -1820,6 +1866,39 @@ func (s *Session) RespondToControl(requestID string, allow bool, reason string) 
 	return s.respondToPendingControl(requestID, allow, reason)
 }
 
+// RespondToControlRemember lets providers with a native session permission
+// memory receive the user's remembered approval as such.
+func (s *Session) RespondToControlRemember(requestID string) error {
+	s.permissionResponseMu.Lock()
+	defer s.permissionResponseMu.Unlock()
+	if _, ok := s.protocol.(llm.RememberingControlResponder); !ok {
+		return s.respondToPendingControl(requestID, true, "")
+	}
+	s.mu.Lock()
+	pending := s.findPendingControlRequestLocked(requestID)
+	if pending == nil {
+		s.mu.Unlock()
+		return errors.New("permission request is no longer pending")
+	}
+	toolName := pending.Request.ToolName
+	s.mu.Unlock()
+	if err := s.protocol.(llm.RememberingControlResponder).RespondToControlRemember(requestID); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.findPendingControlRequestLocked(requestID) == pending {
+		s.removePendingControlRequestLocked(requestID)
+	}
+	if s.status == SessionWaitingPermission && len(s.pendingControlRequests) == 0 {
+		s.setStatusLocked(SessionRunning)
+	}
+	s.mu.Unlock()
+	if s.observer != nil {
+		s.observer.ObserveControlAnswer(s.id, ports.ControlAnswer{RequestID: requestID, ToolName: toolName, Allowed: true})
+	}
+	return nil
+}
+
 // RetryAutomaticReview reruns only a previously failed review. It neither
 // grants permission itself nor changes auto mode or remembered rules.
 func (s *Session) RetryAutomaticReview(requestID string) error {
@@ -1879,15 +1958,20 @@ func (s *Session) respondToPendingControl(requestID string, allow bool, reason s
 	if pending != nil {
 		originalInput = pending.Request.Input
 	}
+	toolName := pending.Request.ToolName
+	wireReason := reason
+	if !allow {
+		wireReason = withDeferralReason(reason, pending.DeferralReason)
+	}
 	s.mu.Unlock()
 
 	var err error
 	if s.protocol != nil {
-		err = s.protocol.RespondToControl(requestID, allow, originalInput, reason)
+		err = s.protocol.RespondToControl(requestID, allow, originalInput, wireReason)
 	} else if allow {
 		err = s.writeJSON(llm.NewAllowResponse(requestID, originalInput))
 	} else {
-		err = s.writeJSON(llm.NewDenyResponse(requestID, reason))
+		err = s.writeJSON(llm.NewDenyResponse(requestID, wireReason))
 	}
 	if err != nil {
 		return err
@@ -1902,7 +1986,28 @@ func (s *Session) respondToPendingControl(requestID string, allow bool, reason s
 	}
 	s.mu.Unlock()
 
+	if s.observer != nil {
+		s.observer.ObserveControlAnswer(s.id, ports.ControlAnswer{
+			RequestID: requestID,
+			ToolName:  toolName,
+			Allowed:   allow,
+			Reason:    reason,
+		})
+	}
 	return nil
+}
+
+// withDeferralReason appends the permission handler's deferral explanation to
+// the user's denial so the model learns why the request needed a prompt.
+func withDeferralReason(reason, deferral string) string {
+	switch {
+	case deferral == "":
+		return reason
+	case reason == "":
+		return deferral
+	default:
+		return reason + ". " + deferral
+	}
 }
 
 // RespondToAskUser sends a control response that allows an AskUserQuestion
@@ -1932,6 +2037,14 @@ func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, 
 		return err
 	}
 	s.appendAskUserMessages(questions, answers, nil)
+	if s.observer != nil {
+		s.observer.ObserveControlAnswer(s.id, ports.ControlAnswer{
+			RequestID: requestID,
+			ToolName:  "AskUserQuestion",
+			Allowed:   true,
+			Answers:   answers,
+		})
+	}
 	return nil
 }
 

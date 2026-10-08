@@ -106,3 +106,43 @@ export function deriveWizardState(snapshot: RuntimeReadinessSnapshot): WizardSta
     blockers,
   };
 }
+
+/**
+ * How the readiness gate presents a snapshot. With no ready provider the
+ * runtime cannot do anything, so the full-page wizard owns the window. Once
+ * one provider is ready the shell mounts even while other gates are still
+ * outstanding (`partial`), carrying a banner and an on-demand wizard sheet;
+ * `complete` is the shell as it has always been.
+ */
+export type ReadinessGateMode = 'wizard' | 'partial' | 'complete';
+
+export function readinessGateMode(snapshot: RuntimeReadinessSnapshot): ReadinessGateMode {
+  const derived = deriveWizardState(snapshot);
+  if (derived.complete) return 'complete';
+  return derived.gates.providers ? 'partial' : 'wizard';
+}
+
+/** Mirrors the catalog's authored not_ready entry, for the no-detail case. */
+const NOT_READY_ISSUE: ReadinessIssue = {
+  code: 'not_ready',
+  class: 'needs_action',
+  title: 'Runtime not ready',
+  summary: 'The runtime is not ready to create features.',
+};
+
+/**
+ * The single issue the partial-readiness banner names: the configuration
+ * issue first (it blocks everything), then the active step's first blocker,
+ * then the models gate's own issue, then whatever the server listed, and
+ * finally the catalog's generic not-ready entry.
+ */
+export function setupBannerIssue(snapshot: RuntimeReadinessSnapshot): ReadinessIssue {
+  const derived = deriveWizardState(snapshot);
+  return (
+    derived.configurationIssue ??
+    derived.blockers[0] ??
+    (derived.activeStep === 'models' ? snapshot.models.issue : undefined) ??
+    snapshot.issues[0] ??
+    NOT_READY_ISSUE
+  );
+}

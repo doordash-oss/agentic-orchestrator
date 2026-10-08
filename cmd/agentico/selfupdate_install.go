@@ -412,7 +412,7 @@ func executeReplacementTail(r serverRun, tx *selfupdate.Transaction, releaseUpda
 
 	// Drain and stop before any installed-path mutation. The executable is
 	// never replaced unless all of these succeed.
-	shutdownFeatures(r.boot.orchestrator, r.boot.sessionManager)
+	shutdownRuntimeWork(r.boot)
 	drainCtx, cancelDrain := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelDrain()
 	closeErr := r.server.Close(drainCtx)

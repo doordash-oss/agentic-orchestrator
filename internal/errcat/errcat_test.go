@@ -47,6 +47,7 @@ var zeroParams = []Params{
 	OrphanSessionParams{},
 	ChatContextParams{},
 	CloneDestinationParams{},
+	RuntimeDirParams{},
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {
@@ -345,6 +346,34 @@ func TestPackageImportsOnlyStdlib(t *testing.T) {
 			if strings.Contains(first, ".") || first == "internal" || strings.HasPrefix(path, "github.com/") {
 				t.Errorf("%s imports %q: errcat must import nothing outside the standard library", name, path)
 			}
+		}
+	}
+}
+
+func TestSupervisorCodesPinShape(t *testing.T) {
+	cases := []struct {
+		code Code
+		want Class
+	}{
+		{SupervisorSettingsLocked, ClassNeedsAction},
+		{SupervisorSettingsInvalid, ClassBlocking},
+		{SettingsRequired, ClassNeedsAction},
+		{TurnActive, ClassWarning},
+		{SupervisorLaunchFailed, ClassBlocking},
+		{ChangePending, ClassNeedsAction},
+		{StaleGeneration, ClassNeedsAction},
+		{PendingChangeNotFound, ClassWarning},
+		{ClientMessageConflict, ClassBlocking},
+		{CursorOutOfRange, ClassWarning},
+		{SupervisorHistoryIncomplete, ClassBlocking},
+	}
+	for _, tc := range cases {
+		rendered := New(tc.code)
+		if rendered.Code != tc.code || rendered.Class != tc.want {
+			t.Errorf("%s: rendered %+v; want class %q", tc.code, rendered, tc.want)
+		}
+		if rendered.Title == "" || rendered.Summary == "" || rendered.Remediation == nil || rendered.Remediation.Hint == "" {
+			t.Errorf("%s: missing authored title, summary or remediation: %+v", tc.code, rendered)
 		}
 	}
 }

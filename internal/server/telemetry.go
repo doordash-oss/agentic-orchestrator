@@ -72,7 +72,9 @@ func telemetryRoute(r *http.Request) (string, bool) {
 		return "", false
 	}
 	path := r.URL.EscapedPath()
-	if path == apiPathHealth || path == apiPathEvents || strings.HasSuffix(path, "/output/stream") {
+	// Streams are excluded: the metrics writer is not an http.Flusher, and a
+	// stream's duration is its connection lifetime, not a request latency.
+	if path == apiPathHealth || path == apiPathEvents || path == apiPathSupervisorEvents || strings.HasSuffix(path, "/output/stream") {
 		return "", false
 	}
 	parts := strings.Split(path, "/")

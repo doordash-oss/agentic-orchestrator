@@ -528,7 +528,12 @@ func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCall {
 	switch block.Name {
 	case "Agent", "Task", "TaskCreate":
 	default:
-		return nil
+		fields := transcriptJSONFields(block.Input)
+		summary := firstTranscriptString(fields, "description", "summary", "title")
+		if summary == "" {
+			summary = safeControlSummary(&llm.ControlRequestMessage{Request: llm.ControlRequest{ToolName: block.Name, Input: block.Input}})
+		}
+		return &ToolCall{Summary: SafeDisplayText(summary, 180)}
 	}
 	fields := transcriptJSONFields(block.Input)
 	summary := firstTranscriptString(fields, "description", "summary", "title")
@@ -539,10 +544,7 @@ func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCall {
 	if summary == "" && prompt == "" {
 		return nil
 	}
-	return &ToolCall{
-		Summary: SafeDisplayText(summary, 500),
-		Prompt:  safeTranscriptPrompt(prompt),
-	}
+	return &ToolCall{Summary: SafeDisplayText(summary, 500), Prompt: safeTranscriptPrompt(prompt)}
 }
 
 func taskDTOFromStarted(msg *llm.TaskStartedMessage) *Task {
@@ -614,6 +616,16 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 		return nil
 	}
 	input := transcriptJSONFields(block.Input)
+	// Codex announces paths before an edit completes, without file content.
+	// Keep that announcement as activity; the completed result owns its diff.
+	if block.Name == toolNameWrite {
+		_, content := input["content"]
+		_, newString := input["new_string"]
+		_, newText := input["newText"]
+		if !content && !newString && !newText {
+			return nil
+		}
+	}
 	switch block.Name {
 	case toolNameEdit, toolNameMultiEdit, toolNameWrite:
 		path := firstTranscriptString(input, "file_path", "path", "target_file")

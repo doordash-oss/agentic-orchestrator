@@ -77,7 +77,7 @@ export function ServerSwitcher({
 }: {
   /** Footer text: the connected server's display name (or generic label). */
   currentLabel: string;
-  /** The existing footer tone contract: ready | progress | error | ama. */
+  /** The existing footer tone contract: ready | progress | error. */
   tone: string;
   /** Whether server selection is available on the hosting surface. */
   enabled: boolean;

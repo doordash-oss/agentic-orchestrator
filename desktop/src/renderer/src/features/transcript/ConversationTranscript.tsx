@@ -14,37 +14,188 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import type { TranscriptMessage } from '../../../../shared/ipc';
-import { friendlyToolName, type ConversationItem, type SubagentActivity } from './conversation';
+import { CopyIcon } from '../../components/icons';
+import {
+  AgenticoActivityMark,
+  type AgenticoActivityState,
+} from '../../components/AgenticoActivityMark';
+import { ConversationMarkdown } from './ConversationMarkdown';
+import {
+  friendlyToolName,
+  type ConversationItem,
+  type ConversationNoticeTone,
+  type SubagentActivity,
+} from './conversation';
 
 const NEAR_BOTTOM_PX = 40;
+/** Scrolling within this distance of the top asks for earlier rows. */
+const NEAR_TOP_PX = 160;
+
+type VerdictOutcome = Extract<ConversationItem, { kind: 'verdict' }>['outcome'];
+
+const VERDICT_MARKS: Readonly<Record<VerdictOutcome, string>> = {
+  allowed: '✓',
+  answered: '✓',
+  denied: '✕',
+  interrupted: '‖',
+};
+
+const NOTICE_MARKS: Readonly<Record<ConversationNoticeTone, string>> = {
+  interrupted: '‖',
+  failed: '✕',
+  caveat: '!',
+  neutral: '•',
+};
+
+function Notice({ item }: { item: Extract<ConversationItem, { kind: 'notice' }> }) {
+  const [expanded, setExpanded] = useState(false);
+  const summaryId = `${item.key}-summary`;
+  return (
+    <div className="conversation__notice-container">
+      <p className="conversation__notice" data-tone={item.tone}>
+        <span className="conversation__notice-mark" aria-hidden="true">
+          {NOTICE_MARKS[item.tone]}
+        </span>
+        <span className="conversation__notice-text">{item.text}</span>
+        {item.summary !== undefined ? (
+          <button
+            type="button"
+            className="conversation__notice-toggle"
+            aria-expanded={expanded}
+            aria-controls={summaryId}
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? 'Hide summary' : 'Show summary'}
+          </button>
+        ) : null}
+      </p>
+      {item.summary !== undefined && expanded ? (
+        <div id={summaryId} className="conversation__notice-summary">
+          <ConversationMarkdown text={item.summary} />
+          {item.summaryTruncated ? (
+            <p className="conversation__notice-truncated">Summary truncated</p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A quiet, hover-revealed control under each reply to copy its source text. */
+function CopyMessageButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="conversation__message-copy"
+      aria-label={copied ? 'Copied' : 'Copy message'}
+      title="Copy message"
+      onClick={() => {
+        const clipboard = (navigator as Partial<Navigator>).clipboard;
+        if (clipboard === undefined) return;
+        void clipboard.writeText(text).then(
+          () => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1600);
+          },
+          () => undefined,
+        );
+      }}
+    >
+      <CopyIcon />
+      <span>{copied ? 'Copied' : 'Copy'}</span>
+    </button>
+  );
+}
+
+function ActivityClock({
+  startedAt,
+  lastActivityAt,
+}: {
+  startedAt?: string;
+  lastActivityAt?: string;
+}) {
+  const [mountedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const start = startedAt === undefined ? mountedAt : Date.parse(startedAt);
+  const last = lastActivityAt === undefined ? start : Date.parse(lastActivityAt);
+  const elapsed = Math.max(
+    0,
+    Math.floor((now - (Number.isFinite(start) ? start : mountedAt)) / 1000),
+  );
+  const quiet = Math.max(0, Math.floor((now - (Number.isFinite(last) ? last : mountedAt)) / 1000));
+  const duration = (seconds: number) =>
+    seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return (
+    <span className="conversation__activity-time" aria-live="off">
+      {duration(elapsed)} elapsed{quiet >= 30 ? ` · No new update for ${duration(quiet)}` : ''}
+    </span>
+  );
+}
 
 export function ActivityIndicator({
   labels,
   active,
   idleLabel,
+  startedAt,
+  lastActivityAt,
+  mark,
 }: {
   labels: string[];
   active: boolean;
   idleLabel: string;
+  startedAt?: string;
+  lastActivityAt?: string;
+  mark?: ReactNode;
 }) {
-  const shownLabels = labels.slice(-3);
+  const latest = labels.at(-1) ?? idleLabel;
   return (
-    <div
-      className="conversation__activity"
-      data-active={active}
-      role={active ? 'status' : undefined}
-    >
-      <span className="conversation__thinking" aria-hidden="true">
-        {Array.from({ length: 8 }, (_, index) => (
-          <span key={index} />
-        ))}
-      </span>
-      <div className="conversation__activity-copy">
-        <strong>{active ? 'Working' : 'Worked'}</strong>
-        {shownLabels.length > 0 ? <span>{shownLabels.join(' · ')}</span> : <span>{idleLabel}</span>}
+    <div className="conversation__activity" data-active={active}>
+      <div className="conversation__activity-line" role={active ? 'status' : undefined}>
+        {mark ??
+          (active ? (
+            <span className="conversation__thinking" aria-hidden="true">
+              {Array.from({ length: 8 }, (_, index) => (
+                <span key={index} />
+              ))}
+            </span>
+          ) : (
+            <span className="conversation__activity-mark" aria-hidden="true">
+              ·
+            </span>
+          ))}
+        <div className="conversation__activity-copy">
+          <strong>{active ? 'Working' : 'Worked'}</strong>
+          {active && latest !== '' ? <span title={latest}>{latest}</span> : null}
+        </div>
       </div>
+      {active ? <ActivityClock startedAt={startedAt} lastActivityAt={lastActivityAt} /> : null}
+      {labels.length > 0 && (!active || labels.length > 1) ? (
+        <details className="conversation__activity-history">
+          <summary>
+            {labels.length} activity {labels.length === 1 ? 'step' : 'steps'}
+          </summary>
+          <ol>
+            {labels.map((label, index) => (
+              <li key={`${index}:${label}`}>{label}</li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -53,8 +204,9 @@ function subagentDetail(agent: SubagentActivity): string {
   if (agent.state === 'running') {
     return agent.lastTool !== undefined && agent.lastTool !== ''
       ? `using ${friendlyToolName(agent.lastTool)}`
-      : 'starting up';
+      : 'In progress';
   }
+  if (agent.state === 'unknown') return 'Turn ended without a final task update';
   if (agent.summary?.trim()) return agent.summary.trim();
   if (agent.state === 'failed') return 'Failed';
   return agent.state === 'cancelled' ? 'Cancelled' : 'Finished';
@@ -63,9 +215,11 @@ function subagentDetail(agent: SubagentActivity): string {
 function subagentTally(agents: SubagentActivity[]): string {
   const running = agents.filter((agent) => agent.state === 'running').length;
   const failed = agents.filter((agent) => agent.state === 'failed').length;
+  const unknown = agents.filter((agent) => agent.state === 'unknown').length;
   const cancelled = agents.filter((agent) => agent.state === 'cancelled').length;
   if (running > 0) return `${running} of ${agents.length} running`;
   if (failed > 0) return `${failed} of ${agents.length} failed`;
+  if (unknown > 0) return `${unknown} status unavailable`;
   return cancelled > 0 ? `${cancelled} of ${agents.length} cancelled` : 'all finished';
 }
 
@@ -87,10 +241,23 @@ export function SubagentGroupCard({ agents }: { agents: SubagentActivity[] }) {
         {agents.map((agent) => (
           <li key={agent.id} className="conversation__subagent" data-state={agent.state}>
             <span className="conversation__subagent-lamp" aria-hidden="true" />
-            <span className="conversation__subagent-desc">
-              {agent.description ?? agent.taskType ?? 'Delegated task'}
+            <div className="conversation__subagent-copy">
+              <span className="conversation__subagent-desc">
+                {agent.description ?? agent.taskType ?? 'Delegated task'}
+              </span>
+              <span className="conversation__subagent-detail">{subagentDetail(agent)}</span>
+            </div>
+            <span className="conversation__subagent-state">
+              {agent.state === 'done'
+                ? 'Completed'
+                : agent.state === 'running'
+                  ? 'Running'
+                  : agent.state === 'failed'
+                    ? 'Failed'
+                    : agent.state === 'unknown'
+                      ? 'No final update'
+                      : 'Cancelled'}
             </span>
-            <span className="conversation__subagent-detail">{subagentDetail(agent)}</span>
           </li>
         ))}
       </ul>
@@ -113,13 +280,85 @@ export interface ConversationTranscriptProps {
   trailing?: ReactNode;
   /** Bump to force a scroll to the newest row (e.g. after sending a message). */
   pinToBottomToken?: number;
+  /** Rows rendered directly above the first conversation row (e.g. a load-earlier status). */
+  top?: ReactNode;
+  /**
+   * Called when the viewport scrolls within a threshold of the top, or when
+   * the rows do not fill the viewport; the caller decides whether more exists.
+   */
+  onNearTop?(): void;
+  /** Holds the first visible row in place when rows are prepended above it. */
+  anchorPrepend?: boolean;
+  activityStartedAt?: string;
+  lastActivityAt?: string;
+  /** A stable per-turn mark; only an explicit successful outcome becomes a check. */
+  liveActivity?: { key: string; state: AgenticoActivityState };
+}
+
+interface PrependAnchor {
+  row: Element;
+  offset: number;
+}
+
+/**
+ * Prepend anchoring: after every commit it remembers the first row visible
+ * in the viewport and that row's offset from the viewport top (refreshed on
+ * scroll as well). When a commit changes the first item's key and the
+ * remembered row is still mounted, rows were added above it, so the scroll
+ * position moves by exactly the distance the row was pushed down. Rows are
+ * the siblings after the `rowsStart` marker, so status and top-slot rows
+ * that come and go are never chosen as the anchor. Returns the capture
+ * function for the scroll handler.
+ */
+export function usePrependAnchor(
+  scrollRef: RefObject<HTMLElement | null>,
+  rowsStartRef: RefObject<HTMLElement | null>,
+  firstKey: string | undefined,
+  enabled: boolean,
+): () => void {
+  const anchor = useRef<PrependAnchor | null>(null);
+  const previousFirstKey = useRef(firstKey);
+
+  const capture = useCallback(() => {
+    anchor.current = null;
+    const container = scrollRef.current;
+    const start = rowsStartRef.current;
+    if (!enabled || container === null || start === null) return;
+    const viewportTop = container.getBoundingClientRect().top;
+    for (let row = start.nextElementSibling; row !== null; row = row.nextElementSibling) {
+      const bounds = row.getBoundingClientRect();
+      if (bounds.bottom > viewportTop) {
+        anchor.current = { row, offset: bounds.top - viewportTop };
+        return;
+      }
+    }
+  }, [enabled, rowsStartRef, scrollRef]);
+
+  useLayoutEffect(() => {
+    const container = scrollRef.current;
+    const held = anchor.current;
+    if (
+      enabled &&
+      container !== null &&
+      held !== null &&
+      firstKey !== previousFirstKey.current &&
+      held.row.isConnected
+    ) {
+      const offset = held.row.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      container.scrollTop += offset - held.offset;
+    }
+    previousFirstKey.current = firstKey;
+    capture();
+  });
+
+  return capture;
 }
 
 type FileChange = NonNullable<TranscriptMessage['fileChange']>;
 type DiffLineKind = 'added' | 'removed' | 'context' | 'meta';
 
 /** Bounded cap on rendered diff lines; the rest collapses into a meta row. */
-const MAX_DIFF_LINES = 24;
+const MAX_DIFF_LINES = 8;
 
 function fileChangeLabel(operation: string | undefined): string {
   switch (operation?.trim().toLocaleLowerCase()) {
@@ -194,23 +433,22 @@ function visibleDiff(change: FileChange): string[] {
 }
 
 export function FileChangeCard({ change }: { change: FileChange }): React.ReactElement {
+  const [expanded, setExpanded] = useState(false);
   const allLines = visibleDiff(change);
   const inferredAdded = allLines.filter((line) => diffLineKind(line) === 'added').length;
   const inferredRemoved = allLines.filter((line) => diffLineKind(line) === 'removed').length;
   const added = change.addedLines ?? inferredAdded;
   const removed = change.removedLines ?? inferredRemoved;
   const label = fileChangeLabel(change.operation);
-  const lines =
-    allLines.length > MAX_DIFF_LINES
-      ? [...allLines.slice(0, MAX_DIFF_LINES), `… ${allLines.length - MAX_DIFF_LINES} more lines`]
-      : allLines;
+  const lines = expanded ? allLines : allLines.slice(0, MAX_DIFF_LINES);
+  const shortPath = (path: string | undefined) => path?.split(/[\\/]/).slice(-2).join('/') ?? '';
 
   return (
     <article className="conversation__file-change" aria-label={`${label} ${change.path}`}>
       <header className="conversation__file-change-header">
         <span className="conversation__file-change-path" title={change.path}>
-          {change.oldPath ? `${change.oldPath} → ` : null}
-          {change.path}
+          {change.oldPath ? `${shortPath(change.oldPath)} → ` : null}
+          {shortPath(change.path)}
         </span>
         <span className="conversation__file-change-status">{label.toLocaleLowerCase()}</span>
         {added > 0 || removed > 0 ? (
@@ -238,11 +476,21 @@ export function FileChangeCard({ change }: { change: FileChange }): React.ReactE
           })}
         </div>
       ) : null}
+      {allLines.length > MAX_DIFF_LINES ? (
+        <button
+          type="button"
+          className="conversation__diff-expand"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? 'Show less' : `Show ${allLines.length - MAX_DIFF_LINES} more lines`}
+        </button>
+      ) : null}
     </article>
   );
 }
 
-/** Shared conversational renderer for AMA and the current-run live preview. */
+/** Shared conversational renderer for the supervisor and the current-run live preview. */
 export function ConversationTranscript({
   items,
   waiting,
@@ -254,11 +502,22 @@ export function ConversationTranscript({
   status,
   trailing,
   pinToBottomToken,
+  top,
+  onNearTop,
+  anchorPrepend = false,
+  activityStartedAt,
+  lastActivityAt,
+  liveActivity,
 }: ConversationTranscriptProps) {
   const scrollRef = useRef<HTMLElement>(null);
+  const rowsStartRef = useRef<HTMLSpanElement>(null);
   const stickToBottom = useRef(true);
   const lastItem = items.at(-1);
+  const runningAgents = items.flatMap((item) =>
+    item.kind === 'subagents' ? item.agents.filter((agent) => agent.state === 'running') : [],
+  );
   const hasTrailing = trailing !== undefined && trailing !== null;
+  const captureAnchor = usePrependAnchor(scrollRef, rowsStartRef, items[0]?.key, anchorPrepend);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -271,6 +530,18 @@ export function ConversationTranscript({
     const element = scrollRef.current;
     if (element !== null) element.scrollTop = element.scrollHeight;
   }, [pinToBottomToken]);
+
+  // Rows too few to scroll can never be scrolled near the top: ask at once.
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (
+      onNearTop !== undefined &&
+      element !== null &&
+      element.scrollHeight <= element.clientHeight
+    ) {
+      onNearTop();
+    }
+  });
 
   return (
     <section
@@ -285,17 +556,50 @@ export function ConversationTranscript({
         const element = event.currentTarget;
         stickToBottom.current =
           element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX;
+        captureAnchor();
+        if (onNearTop !== undefined && element.scrollTop <= NEAR_TOP_PX) onNearTop();
       }}
     >
       {status}
       {items.length === 0 && !waiting ? (emptyState ?? null) : null}
+      {top}
+      {anchorPrepend ? <span ref={rowsStartRef} hidden /> : null}
       {items.map((item, index) =>
         item.kind === 'message' ? (
-          <article key={item.key} className="conversation__message" data-role={item.role}>
-            <span className="conversation__message-role">
-              {item.role === 'user' ? 'You' : assistantName}
-            </span>
-            <p>{item.text}</p>
+          <article
+            key={item.key}
+            className="conversation__message"
+            data-role={item.role}
+            aria-label={item.role === 'user' ? 'You' : assistantName}
+          >
+            {item.role === 'assistant' ? (
+              <>
+                <div className="conversation__markdown">
+                  <ConversationMarkdown text={item.text} />
+                </div>
+                <CopyMessageButton text={item.text} />
+              </>
+            ) : item.text !== '' ? (
+              <p>{item.text}</p>
+            ) : null}
+            {item.attachments !== undefined && item.attachments.length > 0 ? (
+              <ol className="composer__chips conversation__attachments" aria-label="Attachments">
+                {item.attachments.map((attachment, index) => (
+                  <li
+                    key={`${String(index)}:${attachment.name}`}
+                    className="composer__chip"
+                    data-kind={attachment.kind === 'image' ? 'image' : 'attachment'}
+                  >
+                    <span>
+                      {attachment.kind === 'image' ? '🖼' : '📎'} {attachment.name}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+            {item.footer !== undefined ? (
+              <span className="conversation__message-footer">{item.footer}</span>
+            ) : null}
           </article>
         ) : item.kind === 'auto-pick' ? (
           <article
@@ -318,26 +622,49 @@ export function ConversationTranscript({
           <p key={item.key} className="conversation__verification-tick" data-tone={item.tone}>
             <span aria-hidden="true">{item.symbol}</span> {item.name}
           </p>
-        ) : (
+        ) : item.kind === 'verdict' ? (
+          <p key={item.key} className="conversation__verdict" data-outcome={item.outcome}>
+            <span className="conversation__verdict-mark" aria-hidden="true">
+              {VERDICT_MARKS[item.outcome]}
+            </span>
+            <span className="conversation__verdict-text">{item.text}</span>
+          </p>
+        ) : item.kind === 'notice' ? (
+          <Notice key={item.key} item={item} />
+        ) : liveActivity !== undefined &&
+          liveActivity.state !== 'resting' &&
+          index === items.length - 1 ? null : (
           <ActivityIndicator
             key={item.key}
             labels={item.labels}
             idleLabel={idleLabel}
-            active={waiting && index === items.length - 1}
+            active={liveActivity === undefined && waiting && index === items.length - 1}
+            startedAt={activityStartedAt}
+            lastActivityAt={lastActivityAt}
           />
         ),
       )}
-      {waiting && lastItem?.kind !== 'activity' ? (
+      {liveActivity !== undefined ? (
+        <div key={liveActivity.key} hidden={liveActivity.state === 'resting'}>
+          <ActivityIndicator
+            labels={lastItem?.kind === 'activity' ? lastItem.labels : []}
+            idleLabel={liveActivity.state === 'working' ? idleLabel : ''}
+            active={liveActivity.state === 'working'}
+            startedAt={activityStartedAt}
+            lastActivityAt={lastActivityAt}
+            mark={<AgenticoActivityMark state={liveActivity.state} />}
+          />
+        </div>
+      ) : waiting && lastItem?.kind !== 'activity' ? (
         <ActivityIndicator
           labels={(() => {
-            const running =
-              lastItem?.kind === 'subagents'
-                ? lastItem.agents.filter((agent) => agent.state === 'running').length
-                : 0;
+            const running = runningAgents.length;
             return running > 0
               ? [`waiting on ${running} sub-agent${running === 1 ? '' : 's'}`]
               : [];
           })()}
+          startedAt={activityStartedAt}
+          lastActivityAt={lastActivityAt}
           idleLabel={idleLabel}
           active
         />

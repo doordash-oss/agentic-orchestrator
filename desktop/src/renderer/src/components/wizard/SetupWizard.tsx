@@ -15,14 +15,19 @@ limitations under the License.
 */
 
 /**
- * Runtime readiness wizard, shown only while the runtime cannot run work at
- * all. Every step derives entirely from the latest authoritative readiness
+ * Runtime readiness wizard. It has two hosts: the full page, shown while no
+ * provider is ready and the runtime cannot run work at all, and a sheet the
+ * shell opens on demand while a runtime with a ready provider is still
+ * incomplete (the banner's "Open setup", the Setup… command, the `setup`
+ * route). The sheet is the Recovery sheet's presentation — scrim, sheet
+ * classes, and the shared modal-dismiss hook — and never opens on its own.
+ * Every step derives entirely from the latest authoritative readiness
  * snapshot (deriveWizardState); the only local state is transient
  * presentation (a refresh flag, announcements). Provider remediation is an
  * external flow: the server-supplied CLI command is shown for copying — the
  * app never runs provider auth itself and never sees provider credentials.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ProviderReadiness, RuntimeReadinessSnapshot } from '../../../../shared/ipc';
 import { useNarrowViewport } from '../../hooks';
 import { deriveWizardState, type WizardStepId } from '../../wizard/deriveWizardState';
@@ -31,6 +36,7 @@ import type { CanonicalError } from '../../../../shared/ipc';
 import { PhaseRailTrack } from '../../features/PhaseRailRow';
 import { stepSegments } from '../../features/phaseRail';
 import { ErrorSurface } from '../../components/ErrorSurface';
+import { useModalDismiss } from '../useModalDismiss';
 
 const STEP_LABELS: Record<WizardStepId, string> = {
   providers: 'Providers',
@@ -42,11 +48,25 @@ export interface SetupWizardProps {
   snapshot: RuntimeReadinessSnapshot;
   /** Receives every fresh authoritative snapshot produced by an action. */
   onSnapshot(next: RuntimeReadinessSnapshot): void;
+  /** `page` (default) fills the window; `sheet` descends over the shell. */
+  host?: 'page' | 'sheet';
+  /** Sheet host only: Escape, a scrim press, and the Close button call it. */
+  onClose?(): void;
 }
 
-export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
+const noop = (): void => {};
+
+export function SetupWizard({
+  snapshot,
+  onSnapshot,
+  host = 'page',
+  onClose = noop,
+}: SetupWizardProps) {
   const derived = deriveWizardState(snapshot);
   const narrow = useNarrowViewport();
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const titleId = useId();
+  useModalDismiss(sheetRef, onClose, host === 'sheet');
 
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<CanonicalError | null>(null);
@@ -120,24 +140,19 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
     });
   }, [persistCollapsedHelp]);
 
-  return (
-    <section
-      className="shell-card setup-wizard"
-      aria-label="First-launch setup"
-      {...(narrow ? { 'data-narrow': 'true' } : {})}
+  const helpToggle = (
+    <button
+      type="button"
+      className="setup-wizard__help-toggle"
+      aria-expanded={!helpCollapsed}
+      onClick={toggleHelp}
     >
-      <header className="shell-card__identity">
-        <h1 className="shell-card__title">Set up Agentico</h1>
-        <button
-          type="button"
-          className="setup-wizard__help-toggle"
-          aria-expanded={!helpCollapsed}
-          onClick={toggleHelp}
-        >
-          {helpCollapsed ? 'Show help' : 'Hide help'}
-        </button>
-      </header>
+      {helpCollapsed ? 'Show help' : 'Hide help'}
+    </button>
+  );
 
+  const body = (
+    <>
       <PhaseRailTrack
         segments={stepSegments(
           derived.steps.map((id) => ({ id, label: STEP_LABELS[id] })),
@@ -199,6 +214,50 @@ export function SetupWizard({ snapshot, onSnapshot }: SetupWizardProps) {
           </button>
         </div>
       ) : null}
+    </>
+  );
+
+  if (host === 'sheet') {
+    return (
+      <div className="sheet-scrim" onMouseDown={onClose}>
+        <div
+          ref={sheetRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          className="sheet setup-sheet"
+          tabIndex={-1}
+          onMouseDown={(event) => event.stopPropagation()}
+          {...(narrow ? { 'data-narrow': 'true' } : {})}
+        >
+          <header className="setup-sheet__header">
+            <h2 id={titleId} className="setup-sheet__title">
+              Set up Agentico
+            </h2>
+            <div className="setup-sheet__header-actions">
+              {helpToggle}
+              <button type="button" className="sheet__footer-secondary" onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </header>
+          <div className="sheet__body setup-sheet__body">{body}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <section
+      className="shell-card setup-wizard"
+      aria-label="First-launch setup"
+      {...(narrow ? { 'data-narrow': 'true' } : {})}
+    >
+      <header className="shell-card__identity">
+        <h1 className="shell-card__title">Set up Agentico</h1>
+        {helpToggle}
+      </header>
+      {body}
     </section>
   );
 }

@@ -14,9 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { describe, expect, it } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import { FileChangeCard } from './ConversationTranscript';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { installTranscriptLayout, viewportOffset } from '../../test/transcriptLayout';
+import {
+  ActivityIndicator,
+  ConversationTranscript,
+  FileChangeCard,
+} from './ConversationTranscript';
+import type { ConversationItem } from './conversation';
+
+afterEach(cleanup);
 
 describe('FileChangeCard', () => {
   it('renders diff lines with added and removed markers', () => {
@@ -82,8 +90,10 @@ describe('FileChangeCard', () => {
 
     expect(screen.getByText('+40')).toBeVisible();
     const diff = screen.getByRole('region', { name: 'Diff for big.txt' });
-    expect(diff.querySelectorAll('.conversation__diff-line')).toHaveLength(25);
-    expect(screen.getByText('… 16 more lines')).toBeVisible();
+    expect(diff.querySelectorAll('.conversation__diff-line')).toHaveLength(8);
+    expect(screen.getByRole('button', { name: 'Show 32 more lines' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Show 32 more lines' }));
+    expect(diff.querySelectorAll('.conversation__diff-line')).toHaveLength(40);
   });
 
   it('keeps the header without a diff body for placeholder details', () => {
@@ -95,5 +105,220 @@ describe('FileChangeCard', () => {
 
     expect(screen.getByLabelText('Updated src/app.ts')).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Diff for src/app.ts' })).not.toBeInTheDocument();
+  });
+});
+
+describe('conversation turns', () => {
+  it('renders assistant replies as markdown and user messages verbatim', () => {
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        assistantName="Supervisor"
+        items={[
+          { kind: 'message', key: 'u', role: 'user', text: 'Run **everything**' },
+          {
+            kind: 'message',
+            key: 'a',
+            role: 'assistant',
+            text: '**Done.** Two files changed:\n\n- `a.ts`\n- `b.ts`\n\n<script>alert(1)</script>',
+          },
+        ]}
+      />,
+    );
+
+    const user = screen.getByRole('article', { name: 'You' });
+    expect(user).toHaveTextContent('Run **everything**');
+    expect(user.querySelector('strong')).toBeNull();
+
+    const reply = screen.getByRole('article', { name: 'Supervisor' });
+    expect(reply.querySelector('strong')).toHaveTextContent('Done.');
+    expect(reply.querySelectorAll('li')).toHaveLength(2);
+    expect(reply.querySelector('code')).toHaveTextContent('a.ts');
+    expect(reply.querySelector('script')).toBeNull();
+    expect(reply).toHaveTextContent('<script>alert(1)</script>');
+    expect(screen.getByRole('button', { name: 'Copy message' })).toBeInTheDocument();
+  });
+
+  it('folds tool activity into one quiet line', () => {
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        items={[{ kind: 'activity', key: 'act', labels: ['Using bash', 'Using read'] }]}
+      />,
+    );
+
+    const line = screen.getByText('Worked').closest('.conversation__activity')!;
+    expect(line).toHaveTextContent('Worked');
+    expect(line.querySelector('.conversation__activity-copy')).toHaveTextContent(/^Worked$/);
+    fireEvent.click(screen.getByText('2 activity steps'));
+    expect(screen.getByText('Using bash')).toBeVisible();
+    expect(screen.getByText('Using read')).toBeVisible();
+    expect(line.querySelector('.conversation__thinking')).toBeNull();
+    expect(line.querySelector('.conversation__activity-mark')).not.toBeNull();
+  });
+
+  it('keeps a single completed tool available in history without crowding the summary', () => {
+    const { rerender } = render(
+      <ActivityIndicator labels={['Using bash']} active idleLabel="Idle" />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('WorkingUsing bash');
+    expect(screen.queryByText('1 activity step')).not.toBeInTheDocument();
+
+    rerender(<ActivityIndicator labels={['Using bash']} active={false} idleLabel="Idle" />);
+    const line = screen.getByText('Worked').closest('.conversation__activity')!;
+    expect(line.querySelector('.conversation__activity-copy')).toHaveTextContent(/^Worked$/);
+    fireEvent.click(screen.getByText('1 activity step'));
+    expect(screen.getByText('Using bash')).toBeVisible();
+  });
+});
+
+function rows(from: number, to: number): ConversationItem[] {
+  return Array.from({ length: to - from + 1 }, (_, offset) => ({
+    kind: 'message' as const,
+    key: `message-${String(from + offset)}:0`,
+    role: 'assistant' as const,
+    text: `Row ${String(from + offset)}`,
+  }));
+}
+
+function article(text: string): HTMLElement {
+  return screen.getByText(text).closest('article')!;
+}
+
+describe('ConversationTranscript', () => {
+  const isTranscript = (element: Element): boolean =>
+    element.getAttribute('aria-label') === 'Transcript';
+
+  it('renders the top slot above the first row', () => {
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        items={rows(1, 2)}
+        top={<p>Loading earlier messages…</p>}
+      />,
+    );
+    const region = screen.getByRole('region', { name: 'Transcript' });
+    const texts = [...region.querySelectorAll('p')].map((node) => node.textContent);
+    expect(texts).toEqual(['Loading earlier messages…', 'Row 1', 'Row 2']);
+  });
+
+  it('holds the first visible row at its viewport offset when rows are prepended', () => {
+    const restore = installTranscriptLayout(isTranscript);
+    try {
+      const props = { ariaLabel: 'Transcript', idleLabel: 'Idle', waiting: false } as const;
+      const { rerender } = render(
+        <ConversationTranscript {...props} items={rows(10, 30)} anchorPrepend />,
+      );
+      const region = screen.getByRole('region', { name: 'Transcript' });
+      region.scrollTop = 120;
+      fireEvent.scroll(region);
+      const before = viewportOffset(article('Row 12'));
+      expect(before).toBeLessThanOrEqual(0);
+
+      rerender(<ConversationTranscript {...props} items={rows(1, 30)} anchorPrepend />);
+
+      expect(viewportOffset(article('Row 12'))).toBe(before);
+      expect(region.scrollTop).toBe(120 + 9 * 50);
+    } finally {
+      restore();
+    }
+  });
+
+  it('leaves the scroll position alone without prepend anchoring', () => {
+    const restore = installTranscriptLayout(isTranscript);
+    try {
+      const props = { ariaLabel: 'Transcript', idleLabel: 'Idle', waiting: false } as const;
+      const { rerender } = render(<ConversationTranscript {...props} items={rows(10, 30)} />);
+      const region = screen.getByRole('region', { name: 'Transcript' });
+      region.scrollTop = 120;
+      fireEvent.scroll(region);
+
+      rerender(<ConversationTranscript {...props} items={rows(1, 30)} />);
+
+      expect(region.scrollTop).toBe(120);
+      expect(region.querySelector('[hidden]')).toBeNull();
+    } finally {
+      restore();
+    }
+  });
+
+  it('asks for earlier rows when scrolled near the top, and not further down', () => {
+    const restore = installTranscriptLayout(isTranscript);
+    try {
+      const onNearTop = vi.fn();
+      render(
+        <ConversationTranscript
+          ariaLabel="Transcript"
+          idleLabel="Idle"
+          waiting={false}
+          items={rows(1, 40)}
+          onNearTop={onNearTop}
+        />,
+      );
+      const region = screen.getByRole('region', { name: 'Transcript' });
+      onNearTop.mockClear();
+      region.scrollTop = 1200;
+      fireEvent.scroll(region);
+      expect(onNearTop).not.toHaveBeenCalled();
+      region.scrollTop = 40;
+      fireEvent.scroll(region);
+      expect(onNearTop).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('asks for earlier rows when the rows do not fill the viewport', () => {
+    const onNearTop = vi.fn();
+    render(
+      <ConversationTranscript
+        ariaLabel="Transcript"
+        idleLabel="Idle"
+        waiting={false}
+        items={rows(1, 2)}
+        onNearTop={onNearTop}
+      />,
+    );
+    expect(onNearTop).toHaveBeenCalled();
+  });
+});
+
+describe('long running activity', () => {
+  it('advances elapsed time and explains quiet periods without changing tool labels', () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date('2026-10-08T12:00:00Z');
+      vi.setSystemTime(now);
+      const props = {
+        labels: ['bash · Run tests'],
+        idleLabel: 'Waiting',
+        active: true,
+        startedAt: now.toISOString(),
+        lastActivityAt: now.toISOString(),
+      };
+      const view = render(<ActivityIndicator {...props} />);
+      act(() => vi.advanceTimersByTime(31000));
+      expect(screen.getByText(/31s elapsed/)).toHaveTextContent('No new update for 31s');
+      view.rerender(
+        <ActivityIndicator
+          {...props}
+          lastActivityAt={new Date().toISOString()}
+          labels={['bash · Run tests', 'read · Inspect results']}
+        />,
+      );
+      expect(screen.getByText('31s elapsed')).toBeVisible();
+      expect(screen.queryByText(/No new update/)).toBeNull();
+      view.rerender(<ActivityIndicator {...props} active={false} />);
+      expect(screen.queryByText(/elapsed/)).toBeNull();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 });

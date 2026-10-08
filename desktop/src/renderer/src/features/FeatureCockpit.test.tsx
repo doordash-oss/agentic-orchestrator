@@ -1700,11 +1700,10 @@ describe('FeatureCockpit explain-in-chat', () => {
     await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledTimes(1);
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft:
         'Explain the "Iteration budget exhausted" error (iteration_budget_exhausted) on Search revamp and what I should do next.',
-      autoSubmit: true,
-      chatContext: {
+      errorReference: {
         scope: 'run',
         code: 'iteration_budget_exhausted',
         featureId: FEATURE_ID,
@@ -1722,11 +1721,10 @@ describe('FeatureCockpit explain-in-chat', () => {
     const alert = screen.getByRole('alert');
     await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft:
         'Explain the "Worktree setup failed" error (worktree_setup_failed) on Search revamp and what I should do next.',
-      autoSubmit: true,
-      chatContext: {
+      errorReference: {
         scope: 'setup',
         code: 'worktree_setup_failed',
         featureId: FEATURE_ID,
@@ -1762,9 +1760,8 @@ describe('FeatureCockpit explain-in-chat', () => {
     const alert = await screen.findByRole('alert');
     await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft: 'Explain the "Conflict" error (conflict) on Search revamp and what I should do next.',
-      autoSubmit: true,
     });
   });
 });

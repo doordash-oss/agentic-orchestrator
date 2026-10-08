@@ -16,7 +16,7 @@ limitations under the License.
 
 /**
  * Pure lane classification for the Bench: every feature maps to exactly one
- * of six lanes so the sidebar and the Overview pane can group and count
+ * of six lanes so the sidebar can group and count
  * features without re-deriving dashboard rules. Builds strictly on top of
  * featureView.ts's dashboard classification — it never duplicates the
  * intervention/active status logic that already lives there.
@@ -128,8 +128,8 @@ export type LaneCounts = Record<Lane, number>;
  * Per-lane counts, derived from the same classification as the groupings.
  * This is the raw per-snapshot classification only — it does not apply the
  * `classifyFeaturesByLaneWithAttention` post-pass below, so a consumer that
- * needs counts consistent with the rendered sidebar (e.g. an Overview that
- * also surfaces pending-attention features under "Waiting on you") must
+ * needs counts consistent with the rendered sidebar (which also surfaces
+ * pending-attention features under "Waiting on you") must
  * apply that same re-bucketing rather than reading these counts directly.
  */
 export function laneCounts(snapshots: readonly FeatureSnapshot[]): LaneCounts {

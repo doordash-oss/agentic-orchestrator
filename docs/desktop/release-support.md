@@ -266,7 +266,7 @@ runtime parent automatically.
 - The app checks the stable GitHub Releases feed after runtime readiness and on
   a six-hour bounded schedule; manual checks share the same state machine.
 - macOS and AppImage updates can be prepared for explicit restart. `Install
-When Idle` never interrupts workflows or AMA implicitly. `Stop Work and
+When Idle` never interrupts workflows or the supervisor implicitly. `Stop Work and
 Install Now` requires a separate confirmation.
 - DEB installs do not self-replace. Settings shows verified package-manager
   guidance and the trusted release page instead.

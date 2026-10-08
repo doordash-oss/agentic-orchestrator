@@ -1756,27 +1756,41 @@ func TestIntegrationDefaultOffLiveOptInTakesEffect(t *testing.T) {
 	}
 }
 
-func TestIntegrationEnabledAskChatRoutesBashThroughAutomaticReview(t *testing.T) {
+func TestIntegrationEnabledSupervisorRoutesBashThroughAutomaticReview(t *testing.T) {
 	reg := agentFakeRegistry(t, testutil.FakeClaudeAllowScriptBody())
 	reviewer, ok, _ := autoreview.ResolveReviewer(reg, "")
 	if !ok {
 		t.Fatal("ResolveReviewer = false, want true")
 	}
-	original := &permission.AMAHandler{}
-	composed := permission.WrapGeneralPhaseHandlerWithSafeCreate(original, nil)
-	handler := decorateHandlerWithAutoReview(composed, original, alwaysEnabled, reviewer, "", nil)
-
-	for name, input := range map[string]string{
-		"fast path":  `{"command":"git status --short"}`,
-		"model path": `{"command":"ps -p 16846 -o pid,stat,etime,command 2>/dev/null; echo \"---exit:$?\""}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			got, err := handler.CanUseTool(bashReq(input))
-			if err != nil || got.Behavior != permission.DecisionAllow {
-				t.Fatalf("enabled Ask chat %s = %+v err %v, want allow", name, got, err)
-			}
-		})
+	original := &permission.SupervisorHandler{}
+	if !permission.IsAutomaticReviewHandler(original) {
+		t.Fatal("the supervisor handler must be eligible for automatic review")
 	}
+	handler := decorateHandlerWithAutoReview(original, original, alwaysEnabled, reviewer, "", nil)
+	got, err := handler.CanUseTool(bashReq(`{"command":"ps -p 16846 -o pid,stat 2>/dev/null"}`))
+	if err != nil || got.Behavior != permission.DecisionAllow {
+		t.Fatalf("enabled supervisor Bash = %+v err %v, want reviewed allow", got, err)
+	}
+}
+
+func TestBuildSessionSupervisorHandlerSkipPermissionsAutoApproves(t *testing.T) {
+	dir := t.TempDir()
+	provider := &captureProvider{name: "capture", model: "model-a", contextWindow: 200_000}
+	pr := NewPhaseRunner(nil, feature.NewStore(dir), dir)
+	pr.Registry = newRegistryWithCaptureProvider(provider)
+	pr.Config = &config.Config{Defaults: config.DefaultsConfig{DangerouslySkipPermissions: true}}
+	_, _, opts, err := pr.BuildSession(BuildSessionOpts{Model: "model-a", WorkDir: t.TempDir(), PermHandler: &permission.SupervisorHandler{}, Interactive: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"Bash", "Edit", "Task"} {
+		got, err := opts.PermHandler.CanUseTool(ports.ToolPermissionRequest{ToolName: tool, Input: `{}`})
+		if err != nil || got.Behavior != permission.DecisionAllow {
+			t.Fatalf("skip-permissions %s = %+v err %v, want allow", tool, got, err)
+		}
+	}
+	// Questions never reach the handler: the session carves
+	// AskUserQuestion out before permission handling, as it does for chat.
 }
 
 func TestIntegrationEnabledFastPathApprovesCuratedCommands(t *testing.T) {

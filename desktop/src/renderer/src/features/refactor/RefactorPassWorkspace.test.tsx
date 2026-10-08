@@ -1071,11 +1071,10 @@ describe('RefactorPassWorkspace explain-in-chat', () => {
     await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledTimes(1);
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft:
         'Explain the "Integration merge conflict" error (integration_merge_conflict) on Slop removal pass and what I should do next.',
-      autoSubmit: true,
-      chatContext: {
+      errorReference: {
         scope: 'transaction',
         code: 'integration_merge_conflict',
         featureId: CHILD_ID,
@@ -1092,11 +1091,10 @@ describe('RefactorPassWorkspace explain-in-chat', () => {
     const alert = screen.getByRole('alert');
     await user.click(within(alert).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft:
         'Explain the "Worktree setup failed" error (worktree_setup_failed) on Slop removal pass and what I should do next.',
-      autoSubmit: true,
-      chatContext: {
+      errorReference: {
         scope: 'setup',
         code: 'worktree_setup_failed',
         featureId: CHILD_ID,
@@ -1126,11 +1124,10 @@ describe('RefactorPassWorkspace explain-in-chat', () => {
     expect(surface).not.toBeNull();
     await user.click(within(surface).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft:
         'Explain the "Cleanup incomplete" error (child_cleanup_incomplete) on Slop removal pass and what I should do next.',
-      autoSubmit: true,
-      chatContext: {
+      errorReference: {
         scope: 'transaction',
         code: 'child_cleanup_incomplete',
         featureId: CHILD_ID,

@@ -1202,6 +1202,9 @@ func TestModelCatalogIncludesChatUtilityEligibility(t *testing.T) {
 	}
 
 	chatModels := body.PhaseProviderModels[string(llm.PhaseChat)][providerCodex]
+	if got := body.ChatDefaultEffort[providerCodex]; got != string(llm.EffortLow) {
+		t.Fatalf("Codex chat default effort = %q, want low", got)
+	}
 	if len(chatModels) != 2 || chatModels[0] != modelGPT54 || chatModels[1] != modelGPT54Mini {
 		t.Fatalf("chat utility models = %+v, want both compatible models regardless of category", chatModels)
 	}

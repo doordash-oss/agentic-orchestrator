@@ -54,8 +54,18 @@ func (p FakeClaudeProvider) ModelCatalog() []llm.ModelInfo {
 		Category:      "cheap",
 	}}
 }
-func (p FakeClaudeProvider) BuildCommand(llm.CommandBuildOpts) ([]string, []string, error) {
-	return []string{"sh", p.Script}, nil, nil
+
+// BuildCommand carries a system prompt and a resumed session id on the same
+// launch flags the real Claude adapter uses, so scripts can observe them.
+func (p FakeClaudeProvider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
+	cmd := []string{"sh", p.Script}
+	if opts.SystemPrompt != "" {
+		cmd = append(cmd, "--append-system-prompt", opts.SystemPrompt)
+	}
+	if opts.ResumeSessionID != "" {
+		cmd = append(cmd, "--resume", opts.ResumeSessionID)
+	}
+	return cmd, nil, nil
 }
 func (p FakeClaudeProvider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
 	return claude.NewProtocol(opts)

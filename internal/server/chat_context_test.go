@@ -17,6 +17,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,70 +29,71 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// TestChatStartWithoutContextReachesTargetUnchanged pins the compatibility
-// contract: a chat start with no `context` decodes into the typed request
-// and reaches the mutation target exactly as before.
-func TestChatStartWithoutContextReachesTargetUnchanged(t *testing.T) {
-	t.Parallel()
-	target := &uploadMutationRecorder{}
-	_, handler, _ := newUploadTestAPI(t, target, false)
+// resolveErrorReference drives the explain-in-chat error-reference resolver
+// the way a route does: shape validation first, then resolution against
+// durable state, writing any rejection through the canonical envelope. The
+// recorder stays at 200 with an empty body when the reference resolves.
+func resolveErrorReference(t *testing.T, api *apiHandler, raw map[string]any) (string, *httptest.ResponseRecorder) {
+	t.Helper()
+	data, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal reference: %v", err)
+	}
+	var ref ErrorReference
+	if err := json.Unmarshal(data, &ref); err != nil {
+		t.Fatalf("decode reference: %v", err)
+	}
+	w := httptest.NewRecorder()
+	if field := validateChatContextReference(ref); field != "" {
+		writeChatContextInvalid(w, ref, field)
+		return "", w
+	}
+	bundle, rejection := api.resolveChatContext(ref)
+	if rejection != nil {
+		rejection.write(w, ref)
+		return "", w
+	}
+	return bundle, w
+}
 
-	w := postTrustedJSON(handler, "/api/v1/prompts/chat/start", map[string]any{
-		"message": "What is running?",
-		"images":  []string{"/tmp/shot.png"},
-	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("chat start status = %d body=%s; want 200", w.Code, w.Body.String())
+// TestErrorReferenceAbsentIsWellFormed pins that a zero reference means the
+// request carries none: shape validation accepts it.
+func TestErrorReferenceAbsentIsWellFormed(t *testing.T) {
+	t.Parallel()
+	if !chatContextAbsent(ErrorReference{}) {
+		t.Fatal("zero reference must read as absent")
 	}
-	if target.chatReq == nil {
-		t.Fatal("StartChat was not called")
-	}
-	if target.chatReq.Message != "What is running?" {
-		t.Fatalf("message = %q; want the sent message", target.chatReq.Message)
-	}
-	if !chatContextAbsent(target.chatReq.Context) {
-		t.Fatalf("context = %#v; want none", target.chatReq.Context)
+	if field := validateChatContextReference(ErrorReference{}); field != "" {
+		t.Fatalf("absent reference rejected on field %q", field)
 	}
 }
 
-// TestChatStartAcceptsWellFormedRunReference pins that a validated,
-// resolvable reference crosses to the mutation target with its scope,
-// code, and keys, alongside the resolved bundle.
-func TestChatStartAcceptsWellFormedRunReference(t *testing.T) {
+// TestErrorReferenceResolverAcceptsWellFormedRunReference pins that a
+// validated, resolvable reference yields the resolved bundle.
+func TestErrorReferenceResolverAcceptsWellFormedRunReference(t *testing.T) {
 	t.Parallel()
 	store := feature.NewStore(t.TempDir())
 	chatContextSeedRunFailure(t, store)
-	target := &uploadMutationRecorder{}
-	handler := newChatContextTestAPI(t, target, store).handler
+	api := newChatContextTestAPI(t, store).api
 
-	w := postTrustedJSON(handler, "/api/v1/prompts/chat/start", map[string]any{
-		"message": "Explain this error",
-		"context": map[string]any{
-			"scope":      "run",
-			"code":       "iteration_budget_exhausted",
-			"feature_id": "feat-run-failed",
-		},
+	bundle, w := resolveErrorReference(t, api, map[string]any{
+		"scope":      "run",
+		"code":       "iteration_budget_exhausted",
+		"feature_id": "feat-run-failed",
 	})
-	if w.Code != http.StatusOK {
-		t.Fatalf("chat start status = %d body=%s; want 200", w.Code, w.Body.String())
+	if w.Code != http.StatusOK || w.Body.Len() != 0 {
+		t.Fatalf("resolution wrote status = %d body=%s; want no rejection", w.Code, w.Body.String())
 	}
-	if target.chatReq == nil {
-		t.Fatal("StartChat was not called")
-	}
-	got := target.chatReq.Context
-	if got.Scope != errorScopeRun || got.Code != "iteration_budget_exhausted" || got.FeatureID != "feat-run-failed" {
-		t.Fatalf("context = %#v; want the run reference unchanged", got)
-	}
-	if !strings.Contains(target.chatHiddenContext, "error[iteration_budget_exhausted]") {
-		t.Fatalf("hidden context = %q; want the resolved run-failure bundle", target.chatHiddenContext)
+	if !strings.Contains(bundle, "error[iteration_budget_exhausted]") {
+		t.Fatalf("hidden context = %q; want the resolved run-failure bundle", bundle)
 	}
 }
 
-// TestChatStartRejectsMalformedContextReferences pins the 400
+// TestErrorReferenceRejectsMalformedReferences pins the 400
 // chat_context_invalid family: unknown scope, a key missing for the scope,
-// and a key foreign to the scope are all rejected before the mutation
-// target runs, with the offending field named in diagnostics.
-func TestChatStartRejectsMalformedContextReferences(t *testing.T) {
+// and a key foreign to the scope are all rejected before resolution, with
+// the offending field named in diagnostics.
+func TestErrorReferenceRejectsMalformedReferences(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
@@ -146,15 +148,14 @@ func TestChatStartRejectsMalformedContextReferences(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			target := &uploadMutationRecorder{}
-			_, handler, _ := newUploadTestAPI(t, target, false)
+			api := newChatContextTestAPI(t, nil).api
 
-			w := postTrustedJSON(handler, "/api/v1/prompts/chat/start", map[string]any{
-				"message": "Explain this error",
-				"context": tc.context,
-			})
+			bundle, w := resolveErrorReference(t, api, tc.context)
 			if w.Code != http.StatusBadRequest {
-				t.Fatalf("chat start status = %d body=%s; want 400", w.Code, w.Body.String())
+				t.Fatalf("status = %d body=%s; want 400", w.Code, w.Body.String())
+			}
+			if bundle != "" {
+				t.Fatalf("bundle = %q; want none for a malformed reference", bundle)
 			}
 			var body ErrorResponse
 			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
@@ -169,9 +170,6 @@ func TestChatStartRejectsMalformedContextReferences(t *testing.T) {
 			if !strings.Contains(body.Error.Diagnostics, tc.wantField) {
 				t.Fatalf("diagnostics = %q; want it to name field %q", body.Error.Diagnostics, tc.wantField)
 			}
-			if target.chatReq != nil {
-				t.Fatal("StartChat was called for a malformed reference")
-			}
 		})
 	}
 }
@@ -183,23 +181,22 @@ func chatContextLongDiagnostics(marker string) string {
 	return "raw failure detail for " + marker + ": " + strings.Repeat("context line; ", 160) + "end " + marker
 }
 
-// chatContextTestAPI is one handler instance serving chat-start requests
-// against a temp state dir, a feature store, and a recording target.
+// chatContextTestAPI is one handler instance resolving error references
+// against a temp state dir and a feature store.
 type chatContextTestAPI struct {
 	api      *apiHandler
 	handler  http.Handler
 	stateDir string
 }
 
-// newChatContextTestAPI builds a trusted-mutation handler backed by a temp
-// state dir, the feature store, and the recording mutation target.
-func newChatContextTestAPI(t *testing.T, target MutationTarget, store *feature.Store) chatContextTestAPI {
+// newChatContextTestAPI builds a handler backed by a temp state dir and the
+// feature store.
+func newChatContextTestAPI(t *testing.T, store *feature.Store) chatContextTestAPI {
 	t.Helper()
 	stateDir := t.TempDir()
 	opts := HandlerOptions{
 		Runtime:               RuntimeIdentity{RuntimeDir: filepath.Dir(stateDir), StateDir: stateDir, Config: testRuntimeConfigPath},
 		Config:                config.NewDefault(),
-		Mutations:             target,
 		DisableHostValidation: true,
 	}
 	if store != nil {
@@ -351,8 +348,8 @@ func chatContextSeedRecovery(t *testing.T, api *apiHandler) (snapshotID, itemKey
 }
 
 // TestChatContextResolverBuildsBundlePerScope pins the resolver's five
-// scopes: a matching reference yields 200 and the mutation target receives
-// a bundle containing the catalog heading with the code, the full stored
+// scopes: a matching reference resolves without a rejection into a bundle
+// containing the catalog heading with the code, the full stored
 // diagnostics beyond the safe-display bound, and the home's log path.
 func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 	t.Parallel()
@@ -430,20 +427,12 @@ func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			recorder := &uploadMutationRecorder{}
-			testAPI := newChatContextTestAPI(t, recorder, store)
+			testAPI := newChatContextTestAPI(t, store)
 
-			w := postTrustedJSON(testAPI.handler, "/api/v1/prompts/chat/start", map[string]any{
-				"message": "Explain this error",
-				"context": tc.context,
-			})
-			if w.Code != http.StatusOK {
-				t.Fatalf("chat start status = %d body=%s; want 200", w.Code, w.Body.String())
+			bundle, w := resolveErrorReference(t, testAPI.api, tc.context)
+			if w.Code != http.StatusOK || w.Body.Len() != 0 {
+				t.Fatalf("resolution wrote status = %d body=%s; want no rejection", w.Code, w.Body.String())
 			}
-			if recorder.chatReq == nil {
-				t.Fatal("StartChat was not called")
-			}
-			bundle := recorder.chatHiddenContext
 			if !strings.Contains(bundle, tc.wantHeading) {
 				t.Fatalf("bundle missing catalog heading %q:\n%s", tc.wantHeading, bundle)
 			}
@@ -459,35 +448,24 @@ func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 			if tc.notContains != "" && strings.Contains(bundle, tc.notContains) {
 				t.Fatalf("bundle must not contain %q:\n%s", tc.notContains, bundle)
 			}
-			if strings.Contains(w.Body.String(), "Chat context —") || strings.Contains(w.Body.String(), "/tmp/chat-context-") {
-				t.Fatalf("response body leaked bundle text or a log path: %s", w.Body.String())
-			}
 		})
 	}
 
 	// The recovery scope resolves through the handler's stored snapshot.
 	t.Run("recovery item", func(t *testing.T) {
 		t.Parallel()
-		recorder := &uploadMutationRecorder{}
-		testAPI := newChatContextTestAPI(t, recorder, store)
+		testAPI := newChatContextTestAPI(t, store)
 		snapshotID, itemKey := chatContextSeedRecovery(t, testAPI.api)
 
-		w := postTrustedJSON(testAPI.handler, "/api/v1/prompts/chat/start", map[string]any{
-			"message": "Explain this error",
-			"context": map[string]any{
-				"scope":       "recovery",
-				"code":        "orphan_session_live",
-				"snapshot_id": snapshotID,
-				"key":         itemKey,
-			},
+		bundle, w := resolveErrorReference(t, testAPI.api, map[string]any{
+			"scope":       "recovery",
+			"code":        "orphan_session_live",
+			"snapshot_id": snapshotID,
+			"key":         itemKey,
 		})
-		if w.Code != http.StatusOK {
-			t.Fatalf("chat start status = %d body=%s; want 200", w.Code, w.Body.String())
+		if w.Code != http.StatusOK || w.Body.Len() != 0 {
+			t.Fatalf("resolution wrote status = %d body=%s; want no rejection", w.Code, w.Body.String())
 		}
-		if recorder.chatReq == nil {
-			t.Fatal("StartChat was not called")
-		}
-		bundle := recorder.chatHiddenContext
 		for _, want := range []string{
 			"needs-action[orphan_session_live]: Orphaned session running",
 			`"Orphaned Feature"`,
@@ -497,18 +475,14 @@ func TestChatContextResolverBuildsBundlePerScope(t *testing.T) {
 				t.Fatalf("bundle missing %q:\n%s", want, bundle)
 			}
 		}
-		if strings.Contains(w.Body.String(), "Chat context —") || strings.Contains(w.Body.String(), "/tmp/chat-context-") {
-			t.Fatalf("response body leaked bundle text or a log path: %s", w.Body.String())
-		}
 	})
 }
 
 // TestChatContextResolverRejectsStaleReferences pins the rejection family:
 // a code that differs from the stored record, a run with no failure, and an
 // expired recovery snapshot return 404 chat_context_not_found; an unknown
-// feature id returns 400 chat_context_invalid. No chat turn starts, no
-// response body carries bundle text or a filesystem path, and staged
-// uploads stay staged.
+// feature id returns 400 chat_context_invalid. No bundle is produced and no
+// response body carries bundle text or a filesystem path.
 func TestChatContextResolverRejectsStaleReferences(t *testing.T) {
 	t.Parallel()
 	store := feature.NewStore(t.TempDir())
@@ -566,19 +540,14 @@ func TestChatContextResolverRejectsStaleReferences(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			target := &uploadMutationRecorder{}
-			testAPI := newChatContextTestAPI(t, target, store)
+			testAPI := newChatContextTestAPI(t, store)
 
-			// A staged image must survive every rejection untouched.
-			staged := stageViaAPI(t, testAPI.handler, uploadKindImage, "shot.png", []byte("chat-image"))
-
-			w := postTrustedJSON(testAPI.handler, "/api/v1/prompts/chat/start", map[string]any{
-				"message":       "Explain this error",
-				"image_uploads": []string{staged.Reference},
-				"context":       tc.context,
-			})
+			bundle, w := resolveErrorReference(t, testAPI.api, tc.context)
 			if w.Code != tc.wantStatus {
-				t.Fatalf("chat start status = %d body=%s; want %d", w.Code, w.Body.String(), tc.wantStatus)
+				t.Fatalf("status = %d body=%s; want %d", w.Code, w.Body.String(), tc.wantStatus)
+			}
+			if bundle != "" {
+				t.Fatalf("bundle = %q; want none for a rejected reference", bundle)
 			}
 			var body ErrorResponse
 			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
@@ -586,12 +555,6 @@ func TestChatContextResolverRejectsStaleReferences(t *testing.T) {
 			}
 			if body.Error.Code != tc.wantCode {
 				t.Fatalf("code = %q; want %q", body.Error.Code, tc.wantCode)
-			}
-			if target.chatReq != nil {
-				t.Fatal("StartChat was called for a rejected reference")
-			}
-			if _, err := os.Stat(filepath.Join(testAPI.stateDir, uploadStagingDirName, staged.Reference)); err != nil {
-				t.Fatalf("staged upload after rejection err = %v; want still staged", err)
 			}
 			if strings.Contains(w.Body.String(), "Chat context —") || strings.Contains(w.Body.String(), "/tmp/") {
 				t.Fatalf("response body leaked bundle text or a filesystem path: %s", w.Body.String())
@@ -641,19 +604,18 @@ func TestChatContextUnloadableFeatureIsServerError(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			target := &uploadMutationRecorder{}
-			testAPI := newChatContextTestAPI(t, target, store)
+			testAPI := newChatContextTestAPI(t, store)
 
-			w := postTrustedJSON(testAPI.handler, "/api/v1/prompts/chat/start", map[string]any{
-				"message": "Explain this error",
-				"context": map[string]any{
-					"scope":      "run",
-					"code":       "iteration_budget_exhausted",
-					"feature_id": tc.featureID,
-				},
+			bundle, w := resolveErrorReference(t, testAPI.api, map[string]any{
+				"scope":      "run",
+				"code":       "iteration_budget_exhausted",
+				"feature_id": tc.featureID,
 			})
 			if w.Code != tc.wantStatus {
-				t.Fatalf("chat start status = %d body=%s; want %d", w.Code, w.Body.String(), tc.wantStatus)
+				t.Fatalf("status = %d body=%s; want %d", w.Code, w.Body.String(), tc.wantStatus)
+			}
+			if bundle != "" {
+				t.Fatalf("bundle = %q; want none for a rejected reference", bundle)
 			}
 			var body ErrorResponse
 			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
@@ -661,9 +623,6 @@ func TestChatContextUnloadableFeatureIsServerError(t *testing.T) {
 			}
 			if body.Error.Code != tc.wantCode {
 				t.Fatalf("code = %q; want %q", body.Error.Code, tc.wantCode)
-			}
-			if target.chatReq != nil {
-				t.Fatal("StartChat was called for a rejected reference")
 			}
 		})
 	}

@@ -1449,10 +1449,12 @@ type BuildSessionOpts struct {
 	// protocol setup so each provider resumes via its own supported path.
 	ResumeSessionID string
 	// Interactive marks a session where a human answers every AskUserQuestion
-	// turn in real time (e.g. AMA chat). Forwarded to llm.ProtocolOpts.Interactive;
+	// turn in real time (a conversation). Forwarded to llm.ProtocolOpts.Interactive;
 	// see its doc comment for why this changes text-parsed AskUserQuestion
 	// providers' behavior.
 	Interactive bool
+	// SeedHistoryPath is forwarded to llm.ProtocolOpts.SeedHistoryPath.
+	SeedHistoryPath string
 	// AutoReview carries the snapshotted automatic-review settings for this
 	// session. When AutoReview.Enabled is non-nil (crash-resume), the
 	// snapshotted values are used; otherwise BuildSession reads the current
@@ -1675,6 +1677,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		WritableRoots:        commandWritableRoots,
 		ReadRoots:            readRoots,
 		WorkDir:              opts.WorkDir,
+		Interactive:          opts.Interactive,
 	}
 
 	cmd, env, err = prov.BuildCommand(buildOpts)
@@ -1690,6 +1693,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
 		Model:                bareModel,
+		EffortLevel:          opts.EffortLevel,
 		ContextWindow:        contextWindow,
 		WorkDir:              opts.WorkDir,
 		SystemPrompt:         opts.SystemPrompt,
@@ -1699,7 +1703,10 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		StateDir:             providerStateDir(pr.StateDir),
 		ResumeSessionID:      opts.ResumeSessionID,
 		Interactive:          opts.Interactive,
+		SeedHistoryPath:      opts.SeedHistoryPath,
 		StructuredCompletion: opts.CompletionProtocol && !opts.Interactive,
+		LaunchArgs:           cmd,
+		LaunchEnv:            env,
 	})
 
 	// Snapshot the automatic-review settings and decorate the permission
@@ -1768,20 +1775,37 @@ func providerStateDir(featureStateDir string) string {
 	return filepath.Join(filepath.Dir(featureStateDir), "provider-state")
 }
 
+// RuntimeDirEnv names the environment variable carrying the serving
+// runtime directory to the supervisor child, so `agentico api` binds to this
+// server's discovery file rather than the default home runtime.
+const RuntimeDirEnv = "AGENTICO_RUNTIME_DIR"
+
 func appendAgenticoBinEnv(env []string) []string {
 	path := currentAgenticoBinPath()
 	if path == "" {
 		return env
 	}
-	entry := "AGENTICO_BIN=" + path
+	return SetEnv(env, "AGENTICO_BIN", path)
+}
+
+// SetEnv returns a copy of env with key set to value, replacing an existing
+// entry for key in place.
+func SetEnv(env []string, key, value string) []string {
+	entry := key + "=" + value
 	out := append([]string(nil), env...)
 	for i, existing := range out {
-		if strings.HasPrefix(existing, "AGENTICO_BIN=") {
+		if strings.HasPrefix(existing, key+"=") {
 			out[i] = entry
 			return out
 		}
 	}
 	return append(out, entry)
+}
+
+// AgenticoBinPath is the absolute path of the running agentico executable,
+// the same value exported to harness children as AGENTICO_BIN.
+func AgenticoBinPath() string {
+	return currentAgenticoBinPath()
 }
 
 func currentAgenticoBinPath() string {
@@ -1800,12 +1824,4 @@ func currentAgenticoBinPath() string {
 // by external callers (e.g. desktop app).
 func (pr *PhaseRunner) AskingClauseForModel(model string) string {
 	return pr.askingQuestionsClauseForModel(model)
-}
-
-// ModelForRole resolves the effective model for a phase role. If configured is
-// non-empty it is returned as-is; otherwise the catalog default for the role is
-// returned. Exported so external callers can perform the same resolution that
-// PhaseRunner uses internally.
-func (pr *PhaseRunner) ModelForRole(configured string, role llm.PhaseRole) string {
-	return pr.modelForRole(configured, role)
 }

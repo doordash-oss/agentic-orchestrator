@@ -240,38 +240,46 @@ describe('preload surface', () => {
       ([channel]) => channel === 'agentico:route:requested',
     )?.[1] as (event: unknown, payload: unknown) => void;
 
-    listener({}, { target: 'ama' });
-    expect(cb).toHaveBeenCalledWith({ target: 'ama' });
+    listener({}, { target: 'supervisor' });
+    expect(cb).toHaveBeenCalledWith({ target: 'supervisor' });
 
     cb.mockClear();
     listener({}, { target: 'settings', settingsSection: 'updates' });
     expect(cb).toHaveBeenCalledWith({ target: 'settings', settingsSection: 'updates' });
 
     cb.mockClear();
-    // The routed chat draft rides the ama target only and crosses intact.
-    const amaRoute = {
-      target: 'ama',
+    // The setup sheet's route carries nothing but its target.
+    listener({}, { target: 'setup' });
+    expect(cb).toHaveBeenCalledWith({ target: 'setup' });
+
+    cb.mockClear();
+    // The explain draft rides the supervisor target only and crosses intact.
+    const supervisorRoute = {
+      target: 'supervisor',
       draft: 'Explain the "Run failed" error (run_failed) on add-login.',
-      autoSubmit: true,
-      chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+      errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
     };
-    listener({}, amaRoute);
-    expect(cb).toHaveBeenCalledWith(amaRoute);
+    listener({}, supervisorRoute);
+    expect(cb).toHaveBeenCalledWith(supervisorRoute);
 
     cb.mockClear();
     listener({}, { target: 'shell' });
     listener({}, { target: 'settings', settingsSection: 'secrets' });
     listener({}, { target: 'attention', token: 'tok-leak' });
-    // A non-ama route cannot smuggle any of the chat draft fields through.
+    // A non-supervisor route cannot smuggle a draft or a reference through,
+    // and the retired chat target and auto-submit flag fail closed.
     listener({}, { target: 'home', draft: 'smuggled draft' });
-    listener({}, { target: 'home', autoSubmit: true });
     listener(
       {},
       {
         target: 'settings',
-        chatContext: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+        errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
       },
     );
+    listener({}, { target: 'ama', draft: 'smuggled draft' });
+    listener({}, { target: 'setup', draft: 'smuggled draft' });
+    listener({}, { target: 'setup', token: 'tok-leak' });
+    listener({}, { target: 'supervisor', draft: 'auto', autoSubmit: true });
     listener({}, JSON.parse('{"__proto__": {}, "target": "home"}'));
     expect(cb).not.toHaveBeenCalled();
 
@@ -309,5 +317,162 @@ describe('preload surface', () => {
     expect(cb).not.toHaveBeenCalled();
     unsubscribe();
     expect(removeListener).toHaveBeenCalledWith('agentico:sessions:output', listener);
+  });
+  it('routes supervisor calls over fixed channels with only renderer-owned fields', async () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      getSupervisorState(): Promise<unknown>;
+      sendSupervisorMessage(request: {
+        text: string;
+        errorReference?: Record<string, string>;
+      }): Promise<unknown>;
+      getSupervisorTranscript(request: { before?: number; limit?: number }): Promise<unknown>;
+      interruptSupervisor(): Promise<unknown>;
+      endSupervisor(): Promise<unknown>;
+      resetSupervisor(): Promise<unknown>;
+    };
+    invoke.mockResolvedValue({ ok: true, value: {} });
+
+    await api.getSupervisorState();
+    await api.sendSupervisorMessage({ text: 'hello' });
+    await api.sendSupervisorMessage({
+      text: 'explain',
+      errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+    });
+    await api.getSupervisorTranscript({ before: 9, limit: 20 });
+    await api.interruptSupervisor();
+    await api.endSupervisor();
+    await api.resetSupervisor();
+
+    expect(invoke.mock.calls).toEqual([
+      ['agentico:supervisor:state-get'],
+      ['agentico:supervisor:message-send', { text: 'hello' }],
+      [
+        'agentico:supervisor:message-send',
+        {
+          text: 'explain',
+          errorReference: { scope: 'run', code: 'run_failed', featureId: 'abcd1234' },
+        },
+      ],
+      ['agentico:supervisor:transcript-get', { before: 9, limit: 20 }],
+      ['agentico:supervisor:interrupt'],
+      ['agentico:supervisor:end'],
+      ['agentico:supervisor:reset'],
+    ]);
+    invoke.mockReset();
+  });
+
+  it('validates pushed supervisor events fail-closed and removes the exact listener', () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      onSupervisorEvent(cb: (event: unknown) => void): () => void;
+    };
+    const cb = vi.fn();
+    const unsubscribe = api.onSupervisorEvent(cb);
+    expect(on).toHaveBeenCalledWith('agentico:supervisor:event', expect.any(Function));
+    const listener = on.mock.calls.find(
+      ([channel]) => channel === 'agentico:supervisor:event',
+    )?.[1] as (event: unknown, payload: unknown) => void;
+
+    const envelope = { conversationId: 'conv-1', generation: 2, streamEpoch: 'epoch-1' };
+    const record = {
+      type: 'record',
+      ...envelope,
+      record: {
+        seq: 4,
+        id: 'rec-4',
+        conversationId: 'conv-1',
+        generation: 2,
+        turnId: 'turn-1',
+        kind: 'assistant',
+        visibility: 'content',
+        createdAt: '2026-10-06T10:00:00Z',
+        messages: [{ index: 4, role: 'assistant', type: 'text', text: '<script>x</script>' }],
+      },
+    };
+    const delta = {
+      type: 'delta',
+      ...envelope,
+      delta: { turnId: 'turn-1', streamMessageId: 'msg-1', chunkIndex: 0, text: 'Hel' },
+    };
+    const request = {
+      type: 'request',
+      ...envelope,
+      request: {
+        kind: 'permission',
+        id: 'perm-1',
+        sessionId: '__supervisor__.conv-1.2',
+        target: 'supervisor',
+        toolName: 'Bash',
+        waitingSince: '2026-10-06T10:00:00Z',
+      },
+    };
+    // A sub-agent's request carries its origin and child session id.
+    const childRequest = {
+      ...request,
+      request: { ...request.request, id: 'perm-2', origin: 'child', childSessionId: 'agent_sub_1' },
+    };
+    for (const valid of [
+      record,
+      delta,
+      request,
+      childRequest,
+      { type: 'reset' },
+      { type: 'stream-status', status: 'live' },
+      { type: 'stream-status', status: 'stale' },
+    ]) {
+      listener({}, valid);
+      expect(cb).toHaveBeenLastCalledWith(valid);
+    }
+
+    cb.mockClear();
+    listener({}, { ...record, accessToken: 'leak' });
+    listener({}, { ...delta, delta: { ...delta.delta, bearer: 'leak' } });
+    listener({}, { type: 'reset', snapshot: true });
+    listener({}, { type: 'stream-status', status: 'connecting' });
+    listener({}, { type: 'stream.reset' });
+    listener({}, { ...record, streamEpoch: 'epoch?after=1&x' });
+    listener({}, { ...request, request: { ...request.request, target: 'feature' } });
+    listener({}, { ...childRequest, request: { ...childRequest.request, origin: 'parent' } });
+    listener(
+      {},
+      {
+        ...childRequest,
+        request: { ...childRequest.request, childSessionId: 'x'.repeat(201) },
+      },
+    );
+    listener({}, JSON.parse('{"type":"reset","__proto__":{"polluted":true}}'));
+    expect(cb).not.toHaveBeenCalled();
+
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('agentico:supervisor:event', listener);
+  });
+
+  it('validates pushed window focus events fail-closed and removes the exact listener', () => {
+    const api = exposeInMainWorld.mock.calls[0]![1] as {
+      onWindowFocusChanged(cb: (event: unknown) => void): () => void;
+    };
+    const cb = vi.fn();
+    const unsubscribe = api.onWindowFocusChanged(cb);
+    expect(on).toHaveBeenCalledWith('agentico:window:focus-changed', expect.any(Function));
+    const listener = on.mock.calls.find(
+      ([channel]) => channel === 'agentico:window:focus-changed',
+    )?.[1] as (event: unknown, payload: unknown) => void;
+
+    listener({}, { focused: true });
+    expect(cb).toHaveBeenLastCalledWith({ focused: true });
+    listener({}, { focused: false });
+    expect(cb).toHaveBeenLastCalledWith({ focused: false });
+
+    cb.mockClear();
+    // Only the boolean crosses: token-shaped fields, foreign shapes and
+    // polluted objects are dropped.
+    listener({}, { focused: true, bearerToken: 'tok-leak' });
+    listener({}, { focused: 'yes' });
+    listener({}, true);
+    listener({}, {});
+    listener({}, JSON.parse('{"focused":true,"__proto__":{"polluted":true}}'));
+    expect(cb).not.toHaveBeenCalled();
+
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith('agentico:window:focus-changed', listener);
   });
 });

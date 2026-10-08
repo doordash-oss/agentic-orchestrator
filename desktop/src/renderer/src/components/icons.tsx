@@ -52,15 +52,26 @@ export function MaximizeIcon(props: SVGProps<SVGSVGElement>) {
 }
 
 /**
- * The pinned Overview row's leading mark, shaped after SF Symbols' `house`.
- * Overview is the one row that is a place rather than a feature, so it carries
- * a glyph where feature rows carry a status dot.
+ * The pinned Supervisor row's leading mark, shaped after SF Symbols'
+ * `text.bubble`: the one row that is a place rather than a feature carries a
+ * glyph where feature rows carry a status dot, and the place is a
+ * conversation.
  */
-export function HouseIcon(props: SVGProps<SVGSVGElement>) {
+export function SupervisorIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <Icon {...props}>
-      <path d="M3 10.5 12 4l9 6.5" />
-      <path d="M5.5 12.5V20h13v-7.5" />
+      <path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-7.5L7 20v-3.5H5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5Z" />
+      <path d="M8 9h8" />
+      <path d="M8 12h5" />
+    </Icon>
+  );
+}
+
+/** The supervisor composer's Stop action, shaped after SF Symbols' `stop.fill`. */
+export function StopIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor" stroke="none" />
     </Icon>
   );
 }
@@ -91,6 +102,33 @@ export function BellIcon(props: SVGProps<SVGSVGElement>) {
     <Icon {...props}>
       <path d="M18 8a6 6 0 0 0-12 0c0 4.5-1.5 6-2 6.5h16c-.5-.5-2-2-2-6.5" />
       <path d="M10.3 18.5a2 2 0 0 0 3.4 0" />
+    </Icon>
+  );
+}
+
+/** The toolbar Recovery trigger, shaped after SF Symbols' `lifepreserver`. */
+export function RecoveryIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="3.5" />
+      <path d="m5.6 5.6 3.9 3.9" />
+      <path d="m14.5 9.5 3.9-3.9" />
+      <path d="m14.5 14.5 3.9 3.9" />
+      <path d="m9.5 14.5-3.9 3.9" />
+    </Icon>
+  );
+}
+
+/**
+ * The Supervisor's "New conversation" toolbar action once narrow windows
+ * collapse it to an icon, shaped after SF Symbols' `square.and.pencil`.
+ */
+export function NewConversationIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M12 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6" />
+      <path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L12 14.8l-4 1 1-4Z" />
     </Icon>
   );
 }
@@ -224,5 +262,40 @@ export function TriangleAlertIcon(props: SVGProps<SVGSVGElement>) {
       <line x1="12" y1="9" x2="12" y2="13" />
       <line x1="12" y1="17" x2="12.01" y2="17" />
     </Icon>
+  );
+}
+
+export function CopyIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+      <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </Icon>
+  );
+}
+
+/**
+ * The Agentico glass monogram from the app icon, without the tile: the ivory
+ * stroke (the human) and the accent stroke (the agent) lean into each other to
+ * form the A. The human stroke follows the text colour so it reads in both
+ * themes; the accent stroke is the brand constant.
+ */
+export function AgenticoMonogram(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      width="40"
+      height="40"
+      viewBox="0 0 1024 1024"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="150"
+      strokeLinecap="round"
+      aria-hidden="true"
+      focusable="false"
+      {...props}
+    >
+      <path d="M 330 810 L 512 250" />
+      <path d="M 694 810 L 512 250" stroke="var(--accent)" />
+    </svg>
   );
 }

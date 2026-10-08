@@ -117,6 +117,11 @@ test(
 
       const readiness = await handle.page.evaluate(() => window.agentico.getReadiness());
       expect(readiness.ready).toBe(false);
+      // No provider is ready, so the wizard owns the whole window: no shell,
+      // no partial-readiness banner.
+      expect(readiness.providers.some((provider) => provider.ready)).toBe(false);
+      await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toHaveCount(0);
+      await expect(handle.page.getByRole('region', { name: 'Setup incomplete' })).toHaveCount(0);
       transcript.json('GET /api/v1/readiness (via IPC) while unauthenticated', readiness);
 
       // The server itself refuses creation while not ready — not just the UI.
@@ -155,6 +160,8 @@ test(
       await expect(app.page.getByRole('button', { name: 'New feature' })).toBeVisible({
         timeout: 30_000,
       });
+      // Complete, not partial: no setup banner rides above the shell.
+      await expect(app.page.getByRole('region', { name: 'Setup incomplete' })).toHaveCount(0);
       transcript.step(
         'the only readiness gates are provider and model availability: one refresh satisfied both and setup handed straight to Home — no workspace or repository step in between',
       );

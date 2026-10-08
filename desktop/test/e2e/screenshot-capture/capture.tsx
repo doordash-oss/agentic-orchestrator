@@ -45,7 +45,6 @@ import { FeatureCockpit } from '../../../src/renderer/src/features/FeatureCockpi
 import { ConnectionShell } from '../../../src/renderer/src/components/ConnectionShell';
 import { SetupWizard } from '../../../src/renderer/src/components/wizard/SetupWizard';
 import type { ReadinessSnapshot } from '../../../src/shared/ipc';
-import { AmaPanel } from '../../../src/renderer/src/components/AmaPanel';
 import { CommandPalette } from '../../../src/renderer/src/components/CommandPalette';
 import { MonacoBuffer } from '../../../src/renderer/src/components/monaco';
 import {
@@ -1381,7 +1380,7 @@ function CloseDialogScene(): React.ReactElement {
         <h2>Work is still running</h2>
         <p>Agentico has background work that may continue without the window.</p>
         <p>
-          1 feature run is stoppable. The AMA session is active. Keep Running hides the window and
+          1 feature run is stoppable. The supervisor is working. Keep Running hides the window and
           leaves work attached.
         </p>
         <div className="impact-dialog__actions">
@@ -1443,7 +1442,7 @@ function UpdateAppScene(): React.ReactElement {
  * The mixed snapshot (an ownerless verification gate plus feature-owned
  * permission and review items) comes from the mock API. The scene does not open
  * the popover: the evidence spec clicks the bell, mirroring how the
- * creation-sheet and ama-panel scenes leave the interaction to the spec.
+ * creation-sheet scene leaves the interaction to the spec.
  */
 function AttentionPopoverScene(): React.ReactElement {
   const [drafts, setDrafts] = React.useState(emptyAttentionDrafts());
@@ -1559,46 +1558,6 @@ function CreationSheetScene(): React.ReactElement {
 }
 
 /**
- * The floating AMA panel inside the real shell: the same WorkspaceShell the app
- * mounts (so the panel floats over a live cockpit and the sidebar footer keeps
- * its server identity) plus the real AmaPanel, opened from the persisted
- * preference exactly as the app opens it. The evidence spec drives the
- * attachment, confirmation, drag, resize, and expand states from here.
- */
-function AmaPanelScene(): React.ReactElement {
-  const [drafts, setDrafts] = React.useState(emptyAttentionDrafts());
-  const [attentionItems, setAttentionItems] = React.useState<AttentionItem[]>([]);
-
-  React.useEffect(() => {
-    void window.agentico.getAttention().then((snapshot) => setAttentionItems(snapshot.items));
-  }, []);
-
-  const refreshAttention = React.useCallback(async () => {
-    const snapshot = await window.agentico.getAttention();
-    setAttentionItems(snapshot.items);
-    return snapshot.items;
-  }, []);
-
-  return (
-    <div className="app-frame" style={{ height: '100vh' }}>
-      <WorkspaceShell
-        attentionItems={attentionItems}
-        refreshAttention={refreshAttention}
-        attentionDrafts={drafts}
-        setAttentionDrafts={setDrafts}
-      />
-      <AmaPanel
-        attentionItems={attentionItems}
-        refreshAttention={refreshAttention}
-        attentionDrafts={drafts}
-        setAttentionDrafts={setDrafts}
-        routeRequest={null}
-      />
-    </div>
-  );
-}
-
-/**
  * The ⌘K palette inside the real shell: the same WorkspaceShell the app mounts
  * (so a real sidebar selection backs the palette's target) beside the real
  * CommandPalette, opened through the same routed request ⌘K produces. Which
@@ -1632,9 +1591,6 @@ function CaptureApp() {
 
   if (scene.startsWith('creation-sheet')) {
     return <CreationSheetScene />;
-  }
-  if (scene === 'ama-panel') {
-    return <AmaPanelScene />;
   }
   if (scene === 'overview-lanes') {
     return <OverviewLanesScene />;

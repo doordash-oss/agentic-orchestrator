@@ -27,6 +27,9 @@ describe('HelpOverlay', () => {
     for (const command of COMMAND_CATALOGUE.filter((entry) => entry.accelerator)) {
       expect(dialog).toHaveTextContent(command.label);
     }
+    // Commands with no accelerator (New conversation) are not shortcuts.
+    expect(dialog).not.toHaveTextContent('New conversation');
+    expect(dialog).not.toHaveTextContent('Setup…');
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).toBeNull();
   });

@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
-	agentprompts "github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/buildinfo"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
@@ -53,7 +52,10 @@ import (
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/skilldef"
-	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/claudesession"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/codexsession"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/opencodesession"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"go.uber.org/fx"
 	"golang.org/x/term"
@@ -134,6 +136,7 @@ const (
 	launchModeVerifyEvidence
 	launchModeCapabilityProbe
 	launchModeReportBlocker
+	launchModeAPI
 )
 
 type launchOptions struct {
@@ -152,6 +155,7 @@ type launchOptions struct {
 	verifyEvidence    verifyEvidenceOptions
 	capabilityProbe   capabilityProbeOptions
 	reportBlocker     reportBlockerOptions
+	api               apiOptions
 	// updateCheck is set when update mode was selected with --check / -n,
 	// requesting a check-only run that never attempts to install.
 	updateCheck bool
@@ -266,6 +270,8 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 		return runCapabilityProbe(opts.capabilityProbe, stdout, stderr)
 	case launchModeReportBlocker:
 		return runReportBlocker(opts.reportBlocker, stdout, stderr)
+	case launchModeAPI:
+		return runAPI(opts.api, stdout, stderr)
 	case launchModeServer:
 		providers, ok := validateProviderSelection(stderr, opts.enabledProviders)
 		if !ok {
@@ -372,6 +378,10 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 	if len(args) > 0 && args[0] == cliSubcommandReportBlocker {
 		opts.mode = launchModeReportBlocker
 		return parseReportBlockerArgs(opts, args[1:])
+	}
+	if len(args) > 0 && args[0] == cliSubcommandAPI {
+		opts.mode = launchModeAPI
+		return parseAPIArgs(opts, args[1:])
 	}
 	if len(args) > 0 && args[0] == cliSubcommandServer {
 		opts.mode = launchModeServer
@@ -725,6 +735,7 @@ Usage: agentico
        agentico capability-probe <name[(argument)]>
        agentico report-blocker --contract </abs/path/testing-contract.yaml> --dir </abs/path/iteration_dir> \
                                --items <id,id,...> --capability <name> --reason <text>
+       agentico api [--runtime-dir <dir>] [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path> [json]
 
 Starts or focuses the installed Agentico desktop app. Use the explicit 'server'
 subcommand to start the foreground loopback HTTP server for headless automation.
@@ -744,6 +755,10 @@ blocked rows for the user's decision instead of an unanswerable chat question.
 Agent sessions must run verify-evidence and report-blocker as one bare command
 with absolute literal paths (no cd, &&, ;, pipes, redirects, or shell variables);
 the permission guard refuses any other shape that references the contract.
+Run 'agentico api' on the server machine to make one authenticated REST call
+through the server's discovery file without handling the bearer token; SSE
+stream paths require --timeout and print one line per event. See
+'agentico api --help'.
 
 Server flags (use with 'agentico server'):
   --config <path>                  Config file path (default: ~/.agentic-orchestrator/config.yaml)
@@ -1203,6 +1218,9 @@ type runtimeBootstrap struct {
 	// admission is the runtime work-admission boundary: one instance shared
 	// by the orchestrator, repository work, and the HTTP server.
 	admission *workadmission.Coordinator
+	// supervisor owns the supervisor conversation for a serving runtime;
+	// nil outside `agentico server`.
+	supervisor *supervisor.Coordinator
 }
 
 // serverUpdates returns the raw server.updates config values, tolerating a
@@ -1273,9 +1291,6 @@ type serverMutationTarget struct {
 	phaseRunner           *agent.PhaseRunner
 	permissionCache       *permission.Cache
 	workspaceDir          string
-	// admission is the runtime work-admission boundary; nil disables the
-	// chat-launch reservation (tests).
-	admission *workadmission.Coordinator
 	// dispatchAsync runs server-owned background work (durable feature
 	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
 	dispatchAsync func(fn func())
@@ -1735,6 +1750,11 @@ func (t *serverMutationTarget) AnswerPermission(req serverruntime.PermissionAnsw
 		RememberScope:    rememberScope,
 		RememberScopeSet: req.RememberScope != nil,
 	}, func(requestID string, allow bool, reason string) error {
+		if allow && req.Decision == "allow_remember" {
+			if remembering, ok := sess.(interface{ RespondToControlRemember(string) error }); ok {
+				return remembering.RespondToControlRemember(requestID)
+			}
+		}
 		return sess.RespondToControl(requestID, allow, reason)
 	})
 	if err != nil {
@@ -1901,202 +1921,6 @@ func (t *serverMutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (se
 		return serverruntime.HelpSendResponse{}, fmt.Errorf("send help message: %w", err)
 	}
 	return serverruntime.HelpSendResponse{FeatureID: sess.FeatureID(), SessionID: sess.ID(), Result: resultSent}, nil
-}
-
-const serverChatSessionID = serverruntime.ChatSessionID
-
-func (t *serverMutationTarget) StartChat(req serverruntime.ChatStartRequest, hiddenContext string) (serverruntime.ChatStartResponse, error) {
-	message := strings.TrimSpace(req.Message)
-	if message == "" {
-		return serverruntime.ChatStartResponse{}, errors.New("message is required")
-	}
-	if t.sessions == nil {
-		return serverruntime.ChatStartResponse{}, errors.New("session manager is not available")
-	}
-	deliveryMessage := chatMessageWithImages(message, req.Images)
-	hiddenContext = strings.TrimSpace(hiddenContext)
-	if sess := t.sessions.GetSession(serverChatSessionID); sess != nil && sess.IsActive() {
-		if hiddenContext != "" {
-			// Hidden context splits wire text from echoed text: the provider
-			// sees the bundle followed by the visible message, the transcript
-			// records only the visible message. A session that cannot carry
-			// hidden context fails the turn rather than dropping the bundle.
-			sender, ok := sess.(ports.HiddenContextSender)
-			if !ok {
-				return serverruntime.ChatStartResponse{}, errors.New("chat session cannot carry hidden context")
-			}
-			if err := sender.SendUserMessageWithHiddenContext(deliveryMessage, hiddenContext); err != nil {
-				return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
-			}
-		} else if err := sess.SendUserMessage(deliveryMessage); err != nil {
-			return serverruntime.ChatStartResponse{}, fmt.Errorf("send chat message: %w", err)
-		}
-		return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultSent}, nil
-	}
-	if t.phaseRunner == nil {
-		return serverruntime.ChatStartResponse{}, errors.New("phase runner is not available")
-	}
-
-	// A fresh chat session runs its provider handshake before registration
-	// makes it visible: the chat reservation covers that whole window, and
-	// a closed admission boundary refuses the launch. It settles once the
-	// registered session is detector-visible.
-	chatReservation, err := acquireChatAdmission(t.admission)
-	if err != nil {
-		return serverruntime.ChatStartResponse{}, err
-	}
-	defer chatReservation.Release()
-
-	chatSkillPath := serverChatSkillPath(t.phaseRunner.SkillsDir)
-	// Wire prompt order: skill instruction, hidden context, visible message.
-	// The stored initial prompt below stays the visible message alone.
-	prompt := deliveryMessage
-	if hiddenContext != "" {
-		prompt = hiddenContext + "\n\n" + prompt
-	}
-	if instruction := serverChatSkillInstruction(t.phaseRunner.SkillsDir); instruction != "" {
-		prompt = instruction + "\n\n" + prompt
-	}
-	model := modelNameSonnet
-	if t.cfg != nil && t.cfg.Defaults.Models.Utilities != "" {
-		model = t.cfg.Defaults.Models.Utilities
-	}
-	model = t.phaseRunner.ModelForRole(model, llm.PhaseChat)
-	workDir := t.workspaceDir
-	if workDir == "" {
-		workDir = t.phaseRunner.StateDir
-	}
-	chatDir := filepath.Join(t.phaseRunner.StateDir, chatName)
-	if err := os.MkdirAll(chatDir, 0o755); err != nil {
-		return serverruntime.ChatStartResponse{}, fmt.Errorf("prepare chat state: %w", err)
-	}
-	cmd, env, sessOpts, err := t.phaseRunner.BuildSession(agent.BuildSessionOpts{
-		Model:           model,
-		Prompt:          prompt,
-		SystemPrompt:    t.buildChatSystemPrompt(chatSkillPath),
-		DisallowedTools: []string{"Task"},
-		WorkDir:         workDir,
-		PIDDir:          chatDir,
-		PermHandler:     &permission.AMAHandler{},
-		Phase:           utilskill.PhaseAll,
-		TurnMode:        ports.TurnModeInteractive,
-		EffortLevel:     llm.EffortLow,
-		Interactive:     true,
-	})
-	if err != nil {
-		return serverruntime.ChatStartResponse{}, fmt.Errorf("build chat session: %w", err)
-	}
-	if sessOpts == nil {
-		sessOpts = &ports.SessionOpts{}
-	}
-	sessOpts.InitialPrompt = deliveryMessage
-	sessOpts.Kind = ports.KindChat
-	sessOpts.TurnMode = ports.TurnModeInteractive
-	sessOpts.Label = chatName
-	sessOpts.LogPath = filepath.Join(chatDir, "output.txt")
-	sessOpts.StderrPath = filepath.Join(chatDir, "stderr.log")
-	sess, err := t.sessions.StartSession(serverChatSessionID, serverChatSessionID, feature.PhaseResearch, cmd, workDir, env, sessOpts)
-	if err != nil {
-		return serverruntime.ChatStartResponse{}, fmt.Errorf("start chat session: %w", err)
-	}
-	return serverruntime.ChatStartResponse{SessionID: sess.ID(), Result: resultStarted}, nil
-}
-
-// acquireChatAdmission reserves one chat launch; a nil boundary (tests)
-// admits trivially.
-func acquireChatAdmission(coordinator *workadmission.Coordinator) (*workadmission.Reservation, error) {
-	if coordinator == nil {
-		return nil, nil
-	}
-	return coordinator.Acquire(workadmission.CategoryChat)
-}
-
-func chatMessageWithImages(message string, images []string) string {
-	if len(images) == 0 {
-		return message
-	}
-	var prompt strings.Builder
-	prompt.WriteString(message)
-	prompt.WriteString("\n\nAttached images (inspect these local files):")
-	for _, image := range images {
-		prompt.WriteString("\n- ")
-		prompt.WriteString(strconv.Quote(image))
-	}
-	return prompt.String()
-}
-
-func (t *serverMutationTarget) EndChat() (serverruntime.ChatEndResponse, error) {
-	if t.sessions == nil {
-		return serverruntime.ChatEndResponse{}, errors.New("session manager is not available")
-	}
-	sess := t.sessions.GetSession(serverChatSessionID)
-	if sess == nil || !sess.IsActive() {
-		return serverruntime.ChatEndResponse{SessionID: serverChatSessionID, Result: "not_active"}, nil
-	}
-	if err := t.sessions.StopSession(serverChatSessionID); err != nil {
-		return serverruntime.ChatEndResponse{}, fmt.Errorf("end chat session: %w", err)
-	}
-	return serverruntime.ChatEndResponse{SessionID: serverChatSessionID, Result: "ended"}, nil
-}
-
-func serverChatSkillInstruction(skillsDir string) string {
-	skillPath := serverChatSkillPath(skillsDir)
-	if skillPath == "" {
-		return ""
-	}
-	return fmt.Sprintf("Before starting your task, read the methodology instructions at: %s\n\nRead the file completely, then follow its instructions as you work on the task below.", skillPath)
-}
-
-func serverChatSkillPath(skillsDir string) string {
-	if strings.TrimSpace(skillsDir) == "" {
-		return ""
-	}
-	return filepath.Join(skillsDir, chatName, "SKILL.md")
-}
-
-func (t *serverMutationTarget) buildChatSystemPrompt(skillPath string) string {
-	runtimeRoot := ""
-	stateDir := ""
-	if t.phaseRunner != nil {
-		stateDir = t.phaseRunner.StateDir
-		if stateDir != "" {
-			runtimeRoot = filepath.Dir(stateDir)
-		}
-	}
-	return agentprompts.ChatSystemPrompt(agentprompts.ChatSystemInput{
-		SkillPath:       skillPath,
-		RuntimeRoot:     runtimeRoot,
-		StateDir:        stateDir,
-		ConfigPath:      t.configPath,
-		WorkspaceDir:    t.workspaceDir,
-		CurrentFeatures: strings.TrimSpace(t.buildChatContext()),
-	})
-}
-
-func (t *serverMutationTarget) buildChatContext() string {
-	if t.store == nil {
-		return ""
-	}
-	features, err := t.store.List()
-	if err != nil || len(features) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\n\n## Current Features\n\n")
-	for _, f := range features {
-		if f == nil {
-			continue
-		}
-		fmt.Fprintf(&b, "- **%s** (ID: %s): %s - Status: %s\n", f.Name, f.ID, f.Description, f.Status)
-		if len(f.Repos) > 0 {
-			fmt.Fprintf(&b, "  Repo: %s", f.Repos[0].Path)
-			if f.Repos[0].WorktreePath != "" {
-				fmt.Fprintf(&b, ", Worktree: %s", f.Repos[0].WorktreePath)
-			}
-			b.WriteString("\n")
-		}
-	}
-	return b.String()
 }
 
 func (t *serverMutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMutationRequest) (serverruntime.RuntimeConfigUpdateResponse, error) {
@@ -3437,6 +3261,14 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		}, err)
 	}
 
+	supervisorCoordinator, err := newSupervisorCoordinator(boot)
+	if err != nil {
+		return targetStartupFailure(func(e error) {
+			renderStartupFailure(os.Stderr, &runtimeInitError{fmt.Errorf("preparing supervisor state: %w", e)})
+		}, err)
+	}
+	boot.supervisor = supervisorCoordinator
+
 	runtimeServer, err := serverruntime.Start(bootCtx, serverruntime.Options{
 		Runtime:      boot.runtime,
 		LaunchPolicy: policy,
@@ -3465,7 +3297,6 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			phaseRunner:           boot.phaseRunner,
 			permissionCache:       boot.permissionCache,
 			workspaceDir:          boot.workspaceDir,
-			admission:             boot.admission,
 		},
 		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
 			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
@@ -3475,6 +3306,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		Admission:   boot.admission,
 		Lifetime:    ctx,
 		HTTPMetrics: boot.observer,
+		Supervisor:  supervisorCoordinator,
 	})
 	if err != nil {
 		return targetStartupFailure(func(e error) {
@@ -3563,8 +3395,58 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	case code := <-installLifecycle.exitCode:
 		return code
 	}
-	shutdownFeatures(boot.orchestrator, boot.sessionManager)
+	shutdownRuntimeWork(boot)
 	return 0
+}
+
+// newSupervisorCoordinator loads the supervisor conversation for this
+// server without launching anything. The provider runs in the workspace
+// root, else the state directory.
+func newSupervisorCoordinator(boot *runtimeBootstrap) (*supervisor.Coordinator, error) {
+	stateDir := boot.phaseRunner.StateDir
+	workDir := boot.workspaceDir
+	if workDir == "" {
+		workDir = stateDir
+	}
+	return supervisor.New(supervisor.Options{
+		StateDir: stateDir,
+		WorkDir:  workDir,
+		Catalog:  supervisor.RegistryCatalog{Registry: boot.registry},
+		Launcher: &supervisor.SessionLauncher{
+			Runner:        boot.phaseRunner,
+			Sessions:      boot.sessionManager,
+			RuntimeDir:    boot.runtime.RuntimeDir,
+			ConfigPath:    boot.runtime.Config,
+			DiscoveryPath: serverruntime.DiscoveryPath(boot.runtime.RuntimeDir),
+		},
+		Admission:  boot.admission,
+		Converters: supervisorConverters(boot.registry),
+	})
+}
+
+// supervisorConverters restores history for every harness: Claude and Codex
+// resume a rebuilt native session, OpenCode receives a history seed sized
+// from the registry's model catalog.
+func supervisorConverters(registry *llm.Registry) map[string]supervisor.Converter {
+	return map[string]supervisor.Converter{
+		claudesession.Harness: claudesession.New(claudesession.Options{}),
+		codexsession.Harness:  codexsession.New(codexsession.Options{}),
+		opencodesession.Harness: opencodesession.New(opencodesession.Options{
+			ContextWindow: opencodesession.RegistryContextWindow(registry),
+		}),
+	}
+}
+
+// shutdownRuntimeWork ends the supervisor (refusing any relaunch) and then
+// stops features and sessions.
+func shutdownRuntimeWork(boot *runtimeBootstrap) {
+	if boot == nil {
+		return
+	}
+	if boot.supervisor != nil {
+		_ = boot.supervisor.Close()
+	}
+	shutdownFeatures(boot.orchestrator, boot.sessionManager)
 }
 
 // launchIdentity is the update-launch state resolved before bootstrap: the

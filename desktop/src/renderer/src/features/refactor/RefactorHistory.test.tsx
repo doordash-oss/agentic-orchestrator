@@ -206,11 +206,10 @@ describe('RefactorHistory relationship warnings', () => {
     await user.click(within(surface).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledTimes(1);
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft:
         'Explain the "Cleanup incomplete" error (child_cleanup_incomplete) on Settled pass and what I should do next.',
-      autoSubmit: true,
-      chatContext: {
+      errorReference: {
         scope: 'transaction',
         code: 'child_cleanup_incomplete',
         featureId: 'child1234ef567890',

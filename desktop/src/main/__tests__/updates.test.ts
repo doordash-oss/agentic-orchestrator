@@ -26,7 +26,16 @@ import {
   detectCanInstallInApp,
   detectPackageFormat,
   fetchBytesStreaming,
+  type UpdateActiveWork,
 } from '../updates';
+import {
+  QuitCoordinator,
+  endWaitingSupervisor as endWaitingSupervisorWith,
+  isSupervisorBusy,
+  isSupervisorWaiting,
+  type ActiveWorkCheck,
+} from '../quitCoordinator';
+import type { SupervisorLifecycle } from '../../shared/ipc';
 
 const RELEASES_API = 'https://api.github.com/repos/doordash-oss/agentic-orchestrator/releases';
 const PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
@@ -570,7 +579,12 @@ describe('UpdateCoordinator', () => {
       arch: 'arm64',
       packageFormat: 'macos',
       fixture,
-      activeWork: { featureCount: 1, amaActive: true, detectionFailed: false },
+      activeWork: {
+        featureCount: 1,
+        supervisorActive: true,
+        supervisorWaiting: false,
+        detectionFailed: false,
+      },
       onStateChanged,
     });
     await update.checkNow();
@@ -579,11 +593,11 @@ describe('UpdateCoordinator', () => {
       update.installNow({ consent: true, stopActiveWork: false }),
     ).resolves.toMatchObject({
       status: 'ready',
-      activeWorkSummary: '1 workflow and AMA session',
+      activeWorkSummary: '1 workflow. The supervisor is working.',
       message: 'Active work must be stopped before installing now.',
     });
     expect(update.getState()).toMatchObject({
-      activeWorkSummary: '1 workflow and AMA session',
+      activeWorkSummary: '1 workflow. The supervisor is working.',
       message: 'Active work must be stopped before installing now.',
     });
     expect(onStateChanged).toHaveBeenCalledWith(
@@ -592,14 +606,19 @@ describe('UpdateCoordinator', () => {
 
     await expect(update.installWhenIdle()).resolves.toMatchObject({
       status: 'scheduled',
-      activeWorkSummary: '1 workflow and AMA session',
+      activeWorkSummary: '1 workflow. The supervisor is working.',
     });
   });
 
   it('automatically restarts a scheduled install after authoritative work goes idle', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
     const restart = vi.fn();
-    const activeWork = { featureCount: 1, amaActive: false, detectionFailed: false };
+    const activeWork = {
+      featureCount: 1,
+      supervisorActive: false,
+      supervisorWaiting: false,
+      detectionFailed: false,
+    };
     const update = makeCoordinator({
       platform: 'darwin',
       arch: 'arm64',
@@ -622,6 +641,286 @@ describe('UpdateCoordinator', () => {
     });
     expect(restart).toHaveBeenCalledOnce();
     await update.reconcileScheduledInstall();
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a scheduled install waiting while the supervisor is busy and installs once it is idle', async () => {
+    const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
+    const restart = vi.fn();
+    const activeWork = {
+      featureCount: 0,
+      supervisorActive: true,
+      supervisorWaiting: false,
+      detectionFailed: false,
+    };
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture,
+      activeWork,
+      restart,
+    });
+    await update.checkNow();
+
+    await expect(
+      update.installNow({ consent: true, stopActiveWork: false }),
+    ).resolves.toMatchObject({
+      status: 'ready',
+      activeWorkSummary: 'The supervisor is working.',
+      message: 'Active work must be stopped before installing now.',
+    });
+    await expect(Promise.resolve(update.restartToUpdate())).resolves.toMatchObject({
+      status: 'ready',
+      activeWorkSummary: 'The supervisor is working.',
+      message: 'Active work must be stopped before installing now.',
+    });
+    await expect(update.installWhenIdle()).resolves.toMatchObject({
+      status: 'scheduled',
+      activeWorkSummary: 'The supervisor is working.',
+    });
+    await expect(update.reconcileScheduledInstall()).resolves.toMatchObject({
+      status: 'scheduled',
+    });
+    expect(restart).not.toHaveBeenCalled();
+
+    activeWork.supervisorActive = false;
+    await expect(update.reconcileScheduledInstall()).resolves.toMatchObject({
+      status: 'installing',
+      activeWorkSummary: undefined,
+    });
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['idle', true],
+    ['waiting_permission', true],
+    ['waiting_question', true],
+    ['starting', false],
+    ['running', false],
+  ] as const)(
+    'install when idle with the supervisor %s and no features applies=%s',
+    async (lifecycle, applies) => {
+      const restart = vi.fn();
+      const update = makeCoordinator({
+        platform: 'darwin',
+        arch: 'arm64',
+        packageFormat: 'macos',
+        fixture: signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes'),
+        activeWork: workWith(0, lifecycle),
+        restart,
+      });
+      await update.checkNow();
+
+      await expect(update.installWhenIdle()).resolves.toMatchObject({
+        status: applies ? 'installing' : 'scheduled',
+      });
+      expect(restart).toHaveBeenCalledTimes(applies ? 1 : 0);
+    },
+  );
+
+  it.each([
+    ['idle', true],
+    ['waiting_permission', true],
+    ['waiting_question', true],
+    ['starting', false],
+    ['running', false],
+  ] as const)(
+    'scheduled reconciliation with the supervisor %s and no features applies=%s',
+    async (lifecycle, applies) => {
+      const restart = vi.fn();
+      const activeWork = workWith(1, lifecycle);
+      const update = makeCoordinator({
+        platform: 'darwin',
+        arch: 'arm64',
+        packageFormat: 'macos',
+        fixture: signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes'),
+        activeWork,
+        restart,
+      });
+      await update.checkNow();
+      await expect(update.installWhenIdle()).resolves.toMatchObject({ status: 'scheduled' });
+
+      activeWork.featureCount = 0;
+      await expect(update.reconcileScheduledInstall()).resolves.toMatchObject({
+        status: applies ? 'installing' : 'scheduled',
+      });
+      expect(restart).toHaveBeenCalledTimes(applies ? 1 : 0);
+    },
+  );
+
+  it.each(['starting', 'running', 'waiting_permission', 'waiting_question'] as const)(
+    'install now and restart to update on demand refuse while the supervisor is %s',
+    async (lifecycle) => {
+      const restart = vi.fn();
+      const endWaitingSupervisor = vi.fn(() => Promise.resolve({ ended: true }));
+      const update = makeCoordinator({
+        platform: 'darwin',
+        arch: 'arm64',
+        packageFormat: 'macos',
+        fixture: signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes'),
+        activeWork: workWith(0, lifecycle),
+        endWaitingSupervisor,
+        restart,
+      });
+      await update.checkNow();
+
+      await expect(
+        update.installNow({ consent: true, stopActiveWork: false }),
+      ).resolves.toMatchObject({
+        status: 'ready',
+        message: 'Active work must be stopped before installing now.',
+      });
+      await expect(update.restartToUpdate()).resolves.toMatchObject({
+        status: 'ready',
+        message: 'Active work must be stopped before installing now.',
+      });
+      expect(restart).not.toHaveBeenCalled();
+      expect(endWaitingSupervisor).not.toHaveBeenCalled();
+    },
+  );
+
+  it('words the update summary by supervisor grade', async () => {
+    const activeWork = workWith(0, 'waiting_question');
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes'),
+      activeWork,
+    });
+    await update.checkNow();
+    await expect(update.refreshActiveWorkSummary()).resolves.toMatchObject({
+      activeWorkSummary: 'The supervisor is waiting for your answer.',
+    });
+    Object.assign(activeWork, workWith(2, 'running'));
+    await expect(update.refreshActiveWorkSummary()).resolves.toMatchObject({
+      activeWorkSummary: '2 workflows. The supervisor is working.',
+    });
+  });
+
+  it('ends a waiting supervisor once and restarts without the quit dialog when a scheduled install fires', async () => {
+    let lifecycle: SupervisorLifecycle = 'running';
+    const featureCount = { value: 1 };
+    const detect = vi.fn((): Promise<ActiveWorkCheck> =>
+      Promise.resolve({
+        featureIds: featureCount.value > 0 ? ['feature-1'] : [],
+        ...supervisorWork(lifecycle),
+        detectionFailed: false,
+      }),
+    );
+    const endSupervisor = vi.fn(() => {
+      lifecycle = 'stopped';
+      return Promise.resolve();
+    });
+    const quitDeps = {
+      detectActiveWork: detect,
+      stopWork: vi.fn(),
+      showActiveWorkDialog: vi.fn().mockResolvedValue('cancel'),
+      showStopFailureDialog: vi.fn(),
+      confirmQuitAnyway: vi.fn(),
+      hide: vi.fn(),
+      focusMainWindow: vi.fn(),
+      runtimeOwnership: vi.fn().mockReturnValue('app-owned' as const),
+      shutdown: vi.fn().mockResolvedValue(undefined),
+      quitApplication: vi.fn(),
+    };
+    const quit = new QuitCoordinator(quitDeps);
+    const swap = vi.fn();
+    const update = new UpdateCoordinator({
+      currentVersion: '0.1.0',
+      isPackaged: true,
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      userDataDir: dir,
+      fetch: signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes').fetch,
+      releasePublicKey: createPublicKey(PUBLIC_KEY),
+      now: () => new Date('2026-07-20T10:00:00.000Z'),
+      setTimeout: (() => 1) as unknown as typeof setTimeout,
+      clearTimeout: vi.fn(),
+      detectActiveWork: async () => {
+        const active = await detect();
+        return {
+          featureCount: active.featureIds.length,
+          supervisorActive: active.supervisorActive,
+          supervisorWaiting: active.supervisorWaiting,
+          detectionFailed: active.detectionFailed,
+        };
+      },
+      stopActiveWork: vi.fn(() => Promise.resolve({ stopped: true })),
+      endWaitingSupervisor: async () => {
+        const result = await endWaitingSupervisorWith({
+          endSupervisor,
+          detectActiveWork: detect,
+          describeStopFailure: String,
+          sleep: () => Promise.resolve(),
+        });
+        return result.ended ? { ended: true } : { ended: false, message: result.reason };
+      },
+      restart: async () => {
+        if (!(await quit.requestQuitDecision())) throw new UpdateRestartPostponedError();
+        swap();
+      },
+    });
+    await update.checkNow();
+    await expect(update.installWhenIdle()).resolves.toMatchObject({ status: 'scheduled' });
+
+    lifecycle = 'waiting_permission';
+    featureCount.value = 0;
+    await expect(update.reconcileScheduledInstall()).resolves.toMatchObject({
+      status: 'installing',
+    });
+
+    expect(endSupervisor).toHaveBeenCalledOnce();
+    expect(quitDeps.showActiveWorkDialog).not.toHaveBeenCalled();
+    expect(quitDeps.shutdown).toHaveBeenCalledWith({ quitAnyway: false });
+    expect(swap).toHaveBeenCalledOnce();
+  });
+
+  it('postpones a scheduled restart with the existing message when the waiting supervisor cannot be ended', async () => {
+    const restart = vi.fn();
+    const endWaitingSupervisor = vi.fn(() =>
+      Promise.resolve({ ended: false, message: 'end refused' }),
+    );
+    const activeWork = workWith(1, 'waiting_question');
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes'),
+      activeWork,
+      endWaitingSupervisor,
+      restart,
+    });
+    await update.checkNow();
+    await update.installWhenIdle();
+
+    activeWork.featureCount = 0;
+    await expect(update.reconcileScheduledInstall()).resolves.toMatchObject({
+      status: 'ready',
+      signatureStatus: 'verified',
+      message: 'Restart was postponed. The verified update remains staged and ready to install.',
+    });
+    expect(endWaitingSupervisor).toHaveBeenCalledOnce();
+    expect(restart).not.toHaveBeenCalled();
+  });
+
+  it('does not end an idle supervisor before a scheduled restart', async () => {
+    const endWaitingSupervisor = vi.fn(() => Promise.resolve({ ended: true }));
+    const restart = vi.fn();
+    const update = makeCoordinator({
+      platform: 'darwin',
+      arch: 'arm64',
+      packageFormat: 'macos',
+      fixture: signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes'),
+      endWaitingSupervisor,
+      restart,
+    });
+    await update.checkNow();
+
+    await expect(update.installWhenIdle()).resolves.toMatchObject({ status: 'installing' });
+    expect(endWaitingSupervisor).not.toHaveBeenCalled();
     expect(restart).toHaveBeenCalledOnce();
   });
 
@@ -648,7 +947,12 @@ describe('UpdateCoordinator', () => {
 
   it('rechecks active work before applying a previously ready update', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
-    const activeWork = { featureCount: 0, amaActive: false, detectionFailed: false };
+    const activeWork = {
+      featureCount: 0,
+      supervisorActive: false,
+      supervisorWaiting: false,
+      detectionFailed: false,
+    };
     const restart = vi.fn();
     const update = makeCoordinator({
       platform: 'darwin',
@@ -931,7 +1235,12 @@ describe('UpdateCoordinator', () => {
       arch: 'arm64',
       packageFormat: 'macos',
       fixture,
-      activeWork: { featureCount: 0, amaActive: false, detectionFailed: true },
+      activeWork: {
+        featureCount: 0,
+        supervisorActive: false,
+        supervisorWaiting: false,
+        detectionFailed: true,
+      },
       restart,
     });
     await update.checkNow();
@@ -951,7 +1260,12 @@ describe('UpdateCoordinator', () => {
       arch: 'arm64',
       packageFormat: 'macos',
       fixture,
-      activeWork: { featureCount: 1, amaActive: false, detectionFailed: false },
+      activeWork: {
+        featureCount: 1,
+        supervisorActive: false,
+        supervisorWaiting: false,
+        detectionFailed: false,
+      },
       stopActiveWork: vi.fn(() =>
         Promise.resolve({ stopped: false, message: 'Feature alpha did not stop in time.' }),
       ),
@@ -970,7 +1284,12 @@ describe('UpdateCoordinator', () => {
 
   it('refreshes active-work summary after an update is ready', async () => {
     const fixture = signedFixture('v0.2.0', 'Agentico-mac-universal.dmg', 'package bytes');
-    const activeWork = { featureCount: 0, amaActive: false, detectionFailed: false };
+    const activeWork = {
+      featureCount: 0,
+      supervisorActive: false,
+      supervisorWaiting: false,
+      detectionFailed: false,
+    };
     const update = makeCoordinator({
       platform: 'darwin',
       arch: 'arm64',
@@ -983,10 +1302,10 @@ describe('UpdateCoordinator', () => {
       activeWorkSummary: undefined,
     });
 
-    activeWork.amaActive = true;
+    activeWork.supervisorActive = true;
     await expect(update.refreshActiveWorkSummary()).resolves.toMatchObject({
       status: 'ready',
-      activeWorkSummary: 'AMA session',
+      activeWorkSummary: 'The supervisor is working.',
     });
   });
 });
@@ -1107,31 +1426,50 @@ describe('fetchBytesStreaming', () => {
   });
 });
 
+/** The supervisor half of an active-work check for one lifecycle. */
+function supervisorWork(lifecycle: SupervisorLifecycle): {
+  supervisorActive: boolean;
+  supervisorWaiting: boolean;
+} {
+  return {
+    supervisorActive: isSupervisorBusy(lifecycle),
+    supervisorWaiting: isSupervisorWaiting(lifecycle),
+  };
+}
+
+/** A verified active-work check: featureCount runs beside a supervisor in lifecycle. */
+function workWith(featureCount: number, lifecycle: SupervisorLifecycle): UpdateActiveWork {
+  return { featureCount, ...supervisorWork(lifecycle), detectionFailed: false };
+}
+
 function makeCoordinator({
   platform,
   arch,
   packageFormat,
   fixture,
-  activeWork = { featureCount: 0, amaActive: false, detectionFailed: false },
+  activeWork = {
+    featureCount: 0,
+    supervisorActive: false,
+    supervisorWaiting: false,
+    detectionFailed: false,
+  },
   canInstallInApp,
   clock,
   onStateChanged,
   stopActiveWork = vi.fn(() => Promise.resolve({ stopped: true })),
+  endWaitingSupervisor = vi.fn(() => Promise.resolve({ ended: true })),
   restart = vi.fn(),
 }: {
   platform: NodeJS.Platform;
   arch: string;
   packageFormat: 'macos' | 'appimage' | 'deb';
   fixture: SignedFixture;
-  activeWork?: { featureCount: number; amaActive: boolean; detectionFailed: boolean };
+  activeWork?: UpdateActiveWork;
   canInstallInApp?: boolean;
   clock?: FakeClock;
   onStateChanged?: (state: ReturnType<UpdateCoordinator['getState']>) => void;
-  stopActiveWork?: (active: {
-    featureCount: number;
-    amaActive: boolean;
-    detectionFailed: boolean;
-  }) => Promise<{ stopped: boolean; message?: string }>;
+  stopActiveWork?: (active: UpdateActiveWork) => Promise<{ stopped: boolean; message?: string }>;
+  endWaitingSupervisor?: () => Promise<{ ended: boolean; message?: string }>;
   restart?: (update: {
     packageFormat: 'macos' | 'appimage' | 'deb' | 'unknown';
     packagePath: string;
@@ -1154,6 +1492,7 @@ function makeCoordinator({
     onStateChanged,
     detectActiveWork: vi.fn(() => Promise.resolve(activeWork)),
     stopActiveWork,
+    endWaitingSupervisor,
     restart,
   });
 }

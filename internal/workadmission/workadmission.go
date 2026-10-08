@@ -18,9 +18,9 @@
 // a deterministic invariant holds: either work owns a reservation, or
 // installation owns closed admission — never both — except during an
 // install operation's explicitly consented stopping interval, where
-// already-admitted feature/chat reservations persist under a closed boundary
-// and settle through their own completion and stop paths while every new
-// reservation is refused. Closed admission alone therefore never proves
+// already-admitted feature/supervisor reservations persist under a closed
+// boundary and settle through their own completion and stop paths while
+// every new reservation is refused. Closed admission alone therefore never proves
 // inactivity. Reservations must be acquired before the underlying work
 // launches and released only after that work settles, so no window exists
 // where running work is invisible both to the reservation count and to the
@@ -44,9 +44,9 @@ const (
 	// CategoryFeature covers feature phases, setup, child workflows, and
 	// their finalization and continuation tails.
 	CategoryFeature Category = "feature"
-	// CategoryChat covers the singleton chat session from launch through
-	// registration.
-	CategoryChat Category = "chat"
+	// CategorySupervisor covers a supervisor process launch from admission
+	// through registration, after which the supervisor detector reports it.
+	CategorySupervisor Category = "supervisor"
 	// CategoryClone covers repository clone/create operations from queue
 	// admission until the record and its cleanup settle.
 	CategoryClone Category = "clone"
@@ -88,25 +88,49 @@ func AsClosed(err error) (*ClosedError, bool) {
 // state. Detection failure must never be reported as zero activity — the
 // caller treats a detection error as blocking.
 type Activity struct {
-	Features       int
-	ChatActive     bool
-	Clones         int
-	Uploads        int
-	OriginChecks   int
-	RepositoryWork int
+	Features int
+	// SupervisorActive reports a supervisor that is active work: starting,
+	// running, or waiting on a permission or question answer. Explicit
+	// stop, active-work summaries and Busy read it.
+	SupervisorActive bool
+	// SupervisorWaiting refines SupervisorActive: the supervisor's turn is
+	// waiting on the user. A waiting supervisor still counts as active
+	// work, but it does not hold up an unattended install. Meaningful only
+	// with SupervisorActive set.
+	SupervisorWaiting bool
+	Clones            int
+	Uploads           int
+	OriginChecks      int
+	RepositoryWork    int
 }
 
 // Busy reports whether any observed activity exists.
 func (a Activity) Busy() bool {
-	return a.Features > 0 || a.ChatActive || a.Clones > 0 ||
+	return a.Features > 0 || a.SupervisorActive || a.Clones > 0 ||
+		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
+}
+
+// SupervisorWorking reports a supervisor that is starting or running: the
+// supervisor activity that blocks an unattended install.
+func (a Activity) SupervisorWorking() bool {
+	return a.SupervisorActive && !a.SupervisorWaiting
+}
+
+// BlocksIdleInstall reports whether observed activity holds up an
+// unattended (install-when-idle) install. It is Busy except that a
+// supervisor waiting on the user does not count: nobody is there to
+// answer, and the install's own shutdown ends the supervisor and resolves
+// the open request as interrupted.
+func (a Activity) BlocksIdleInstall() bool {
+	return a.Features > 0 || a.SupervisorWorking() || a.Clones > 0 ||
 		a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
 
 // ProtectedBusy reports whether activity exists that an authorized stop may
 // not interrupt: repository work of every class — clones, uploads, origin
-// checks, and other repository work. Feature and chat activity alone never
-// counts: an explicit-stop install's accepted permission authorizes
-// interrupting exactly that work.
+// checks, and other repository work. Feature and supervisor activity
+// alone never counts: an explicit-stop install's accepted permission
+// authorizes interrupting exactly that work.
 func (a Activity) ProtectedBusy() bool {
 	return a.Clones > 0 || a.Uploads > 0 || a.OriginChecks > 0 || a.RepositoryWork > 0
 }
@@ -251,7 +275,7 @@ func (c *Coordinator) CloseIfQuiesced() bool {
 // the stoppable categories keeps its reservations and can still settle
 // through its normal completion and stop paths. The closure is refused —
 // with admission left open — when any reservation outside the stoppable
-// categories is held: that work won the race, no feature or chat work may
+// categories is held: that work won the race, no feature or supervisor work may
 // be stopped, and the operation must abort.
 func (c *Coordinator) CloseForStopping(stoppable ...Category) bool {
 	c.mu.Lock()
@@ -287,6 +311,9 @@ func (c *Coordinator) Open() {
 // activity as unknown and block installation.
 func (c *Coordinator) Detect(ctx context.Context) (Activity, error) {
 	var merged Activity
+	// A supervisor any detector reports working is working in the merged
+	// observation; it reads as waiting only when every active report waits.
+	working := false
 	if dp := c.detectors.Load(); dp != nil {
 		for _, detect := range *dp {
 			if detect == nil {
@@ -297,13 +324,15 @@ func (c *Coordinator) Detect(ctx context.Context) (Activity, error) {
 				return Activity{}, fmt.Errorf("activity detection failed: %w", err)
 			}
 			merged.Features += activity.Features
-			merged.ChatActive = merged.ChatActive || activity.ChatActive
+			merged.SupervisorActive = merged.SupervisorActive || activity.SupervisorActive
+			working = working || activity.SupervisorWorking()
 			merged.Clones += activity.Clones
 			merged.Uploads += activity.Uploads
 			merged.OriginChecks += activity.OriginChecks
 			merged.RepositoryWork += activity.RepositoryWork
 		}
 	}
+	merged.SupervisorWaiting = merged.SupervisorActive && !working
 	return merged, nil
 }
 
@@ -318,11 +347,13 @@ func (c *Coordinator) IdleSnapshot(ctx context.Context) (Activity, int, error) {
 	return activity, total, nil
 }
 
-// WaitForIdle blocks until one observation shows no detected activity and no
-// held reservations, or the context ends. Activity-change signals and a
-// bounded fallback poll both trigger reevaluation, so a missed event only
-// delays the decision by one poll interval. Detection errors return
-// immediately: uncertainty never counts as idle.
+// WaitForIdle blocks until one observation shows no activity that blocks an
+// unattended install (see Activity.BlocksIdleInstall: a supervisor waiting
+// on the user does not) and no held reservations, or the context ends.
+// Activity-change signals and a bounded fallback poll both trigger
+// reevaluation, so a missed event only delays the decision by one poll
+// interval. Detection errors return immediately: uncertainty never counts
+// as idle.
 func (c *Coordinator) WaitForIdle(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -335,7 +366,7 @@ func (c *Coordinator) WaitForIdle(ctx context.Context) error {
 		c.mu.Lock()
 		total := c.total
 		c.mu.Unlock()
-		if !activity.Busy() && total == 0 {
+		if !activity.BlocksIdleInstall() && total == 0 {
 			return nil
 		}
 		timer := c.after(c.poll)

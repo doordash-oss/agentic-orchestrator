@@ -89,9 +89,9 @@ type RelationshipChildren struct {
 
 // isLegacyProviderBookkeepingDir identifies runtime-owned directories written
 // beneath the feature store: provider bookkeeping from older Agentico
-// versions plus the server-owned AMA chat session state and upload staging.
-// They are not feature
-// records and must not participate in feature or relationship scans.
+// versions plus the retired chat session state older releases left behind
+// and upload staging. They are not feature records and must not participate
+// in feature or relationship scans.
 // ErrLegacySchemaVersion marks a record persisted by an older release with an
 // explicit lower schema version. Legacy records predate child relationships,
 // so relationship scans may skip them; every other read path still refuses

@@ -168,6 +168,65 @@ describe('application menu structure', () => {
     expect(item?.registerAccelerator).toBe(false);
   });
 
+  it('lists Recovery in Navigate beside Bulk Resume / Retry, with no accelerator', () => {
+    const navigate = submenuOf(
+      buildApplicationMenuTemplate(deps(disabledMainWindowUiState())),
+      'Navigate',
+    );
+    const ids = navigate.map((item) => item.id);
+    expect(ids.indexOf('global.recovery')).toBe(ids.indexOf('global.bulk') - 1);
+    const recovery = navigate.find((item) => item.id === 'global.recovery');
+    expect(recovery?.label).toBe('Recovery');
+    expect(recovery?.accelerator).toBeUndefined();
+  });
+
+  it('lists New conversation in Navigate after Message the supervisor, gated on readiness', () => {
+    const navigate = submenuOf(
+      buildApplicationMenuTemplate(deps(disabledMainWindowUiState())),
+      'Navigate',
+    );
+    const ids = navigate.map((item) => item.id);
+    expect(ids.indexOf('global.new-conversation')).toBe(
+      ids.indexOf('global.message-supervisor') + 1,
+    );
+    const item = navigate.find((entry) => entry.id === 'global.new-conversation');
+    expect(item?.label).toBe('New conversation');
+    expect(item?.accelerator).toBeUndefined();
+    expect(item?.enabled).toBe(false);
+    const ready = submenuOf(buildApplicationMenuTemplate(deps(selected([]))), 'Navigate');
+    expect(ready.find((entry) => entry.id === 'global.new-conversation')?.enabled).toBe(true);
+  });
+
+  it('lists Setup… in Navigate after Updates, enabled only while setup is incomplete', () => {
+    const navigate = submenuOf(
+      buildApplicationMenuTemplate(deps(disabledMainWindowUiState())),
+      'Navigate',
+    );
+    const ids = navigate.map((item) => item.id);
+    expect(ids.indexOf('global.setup')).toBe(ids.indexOf('global.updates') + 1);
+    const item = navigate.find((entry) => entry.id === 'global.setup');
+    expect(item?.label).toBe('Setup…');
+    expect(item?.accelerator).toBeUndefined();
+    expect(item?.enabled).toBe(false);
+
+    // A complete runtime has nothing left to set up.
+    const complete = submenuOf(buildApplicationMenuTemplate(deps(selected([]))), 'Navigate');
+    expect(complete.find((entry) => entry.id === 'global.setup')?.enabled).toBe(false);
+
+    const partial = submenuOf(
+      buildApplicationMenuTemplate(deps(selected([], { setupIncomplete: true }))),
+      'Navigate',
+    );
+    expect(partial.find((entry) => entry.id === 'global.setup')?.enabled).toBe(true);
+
+    // The flag alone never lights the item while the runtime itself is down.
+    const down = submenuOf(
+      buildApplicationMenuTemplate(deps({ ...disabledMainWindowUiState(), setupIncomplete: true })),
+      'Navigate',
+    );
+    expect(down.find((entry) => entry.id === 'global.setup')?.enabled).toBe(false);
+  });
+
   it('lists the fifteen feature verbs in catalogue order', () => {
     const feature = submenuOf(
       buildApplicationMenuTemplate(deps(disabledMainWindowUiState())),
@@ -267,6 +326,10 @@ describe('application menu dispatch', () => {
       ['global.home', 'home'],
       ['global.switch-server', 'switch-server'],
       ['global.attention', 'attention'],
+      ['global.new-conversation', 'new-conversation'],
+      ['global.recovery', 'recovery'],
+      ['global.bulk', 'bulk'],
+      ['global.setup', 'setup'],
     ] as const) {
       route.mockClear();
       itemById(template, id)?.click?.(undefined as never, undefined as never, undefined as never);
@@ -328,5 +391,6 @@ describe('sameMainWindowUiState', () => {
     expect(sameMainWindowUiState(base, { ...base, sidebarCollapsed: true })).toBe(false);
     expect(sameMainWindowUiState(base, { ...base, inspectorOpen: true })).toBe(false);
     expect(sameMainWindowUiState(base, { ...base, inspectorAvailable: false })).toBe(false);
+    expect(sameMainWindowUiState(base, { ...base, setupIncomplete: true })).toBe(false);
   });
 });

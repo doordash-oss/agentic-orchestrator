@@ -108,7 +108,7 @@ type UpdateOptions struct {
 	// Admission is the runtime work-admission boundary installs gate on.
 	// Nil means installs cannot run.
 	Admission InstallAdmission
-	// Stopper performs the authorized interruption of feature and chat
+	// Stopper performs the authorized interruption of feature and supervisor
 	// work for explicit-stop immediate installs. Nil means such installs
 	// cannot run (refused as unsupported).
 	Stopper InstallStopper

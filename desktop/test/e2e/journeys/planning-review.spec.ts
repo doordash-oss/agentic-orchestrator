@@ -60,7 +60,7 @@ test('packaged planning review saves, reconciles, iterates, and approves deliber
 
     handle = await launchApp(world, testInfo, { traceName: 'planning-review' });
     await waitForReview(handle, 'Packaged planning review');
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await handle.page.getByRole('option', { name: 'Supervisor', exact: true }).click();
     await handle.page.getByRole('button', { name: /Attention inbox, 1 pending/ }).click();
     const inbox = handle.page.getByRole('complementary', { name: 'Attention inbox' });
     await inbox.getByRole('button', { name: 'Review' }).click();
@@ -132,7 +132,7 @@ test('packaged planning review saves, reconciles, iterates, and approves deliber
     // before writing its deterministic review fixture. The iterated feature
     // intentionally remains under live planning supervision; mutating its
     // run files while that session is active would violate server ownership.
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await handle.page.getByRole('option', { name: 'Supervisor', exact: true }).click();
     await createFeatureViaForm(handle, {
       name: 'Follow-up planning review',
       description: 'A fresh review gate after an iterate decision.',

@@ -375,7 +375,7 @@ func (UpdateInProgressParams) params() {}
 // refused an immediate install.
 type UpdateBlockedActiveWorkParams struct {
 	Features          int  `json:"features"`
-	ChatActive        bool `json:"chat_active"`
+	SupervisorActive  bool `json:"supervisor_active"`
 	Clones            int  `json:"clones"`
 	Uploads           int  `json:"uploads"`
 	OriginChecks      int  `json:"origin_checks"`
@@ -1252,9 +1252,15 @@ var catalog = map[Code]Entry{
 		Remediation: "Wait for the update operation to finish or cancel it before retrying.",
 	},
 	UpdateBlockedActiveWork: {
-		Class:       ClassBlocking,
-		Title:       "Update blocked by active work",
-		Summary:     "Active work prevents installing a release right now.",
+		Class:   ClassBlocking,
+		Title:   "Update blocked by active work",
+		Summary: "Active work prevents installing a release right now.",
+		summaryParams: func(p Params) string {
+			if params, ok := p.(UpdateBlockedActiveWorkParams); ok && params.SupervisorActive {
+				return "Active work, including the supervisor, prevents installing a release right now."
+			}
+			return ""
+		},
 		Remediation: "Let the reported work finish, then request the install again.",
 	},
 	UpdateDownloadFailed: {
@@ -1314,6 +1320,30 @@ var catalog = map[Code]Entry{
 		Title:       "Server start failed",
 		Summary:     "The headless server could not start.",
 		Remediation: "Free the address or choose another --listen address, then retry.",
+	},
+	DiscoveryMissing: {
+		Class:             ClassBlocking,
+		Title:             "Server discovery file not found",
+		Summary:           "No Agentico server has published a discovery file in the runtime directory.",
+		summaryParams:     runtimeDirTemplate("No Agentico server has published a discovery file in {dir}."),
+		Remediation:       "Start the Agentico server, or name its runtime directory with --runtime-dir or AGENTICO_RUNTIME_DIR, then retry.",
+		remediationParams: runtimeDirTemplate("Start the Agentico server that uses {dir}, or name its runtime directory with --runtime-dir or AGENTICO_RUNTIME_DIR, then retry."),
+	},
+	DiscoveryUntrusted: {
+		Class:             ClassBlocking,
+		Title:             "Server discovery file not trusted",
+		Summary:           "The server discovery file is not a private file owned by you, or it is incomplete.",
+		summaryParams:     runtimeDirTemplate("The server discovery file in {dir} is not a private file owned by you, or it is incomplete."),
+		Remediation:       "Restart the Agentico server so it republishes its discovery file with owner-only permissions, then retry.",
+		remediationParams: runtimeDirTemplate("Restart the Agentico server that uses {dir} so it republishes its discovery file with owner-only permissions, then retry."),
+	},
+	ServerUnreachable: {
+		Class:             ClassBlocking,
+		Title:             "Server unreachable",
+		Summary:           "The Agentico server named by the discovery file did not respond.",
+		summaryParams:     runtimeDirTemplate("The Agentico server published in {dir} did not respond."),
+		Remediation:       "Check that the Agentico server is running, then retry; restarting it refreshes a stale discovery file.",
+		remediationParams: runtimeDirTemplate("Check that the Agentico server that uses {dir} is running, then retry; restarting it refreshes a stale discovery file."),
 	},
 	ProtocolViolation: {
 		Class:   ClassBlocking,
@@ -1695,6 +1725,62 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "Resume to relaunch the phase where it stopped, or kill to discard the state.",
 		Actions:     []string{"resume"},
+	},
+
+	// --- Supervisor codes ------------------------------------------------------
+	// The supervisor REST namespace refuses requests with these before any
+	// provider work starts, except supervisor_launch_failed, which reports a
+	// launch or handshake that failed after the send was admitted.
+	SupervisorSettingsLocked: {
+		Class:       ClassNeedsAction,
+		Title:       "Supervisor settings are locked",
+		Summary:     "The harness and model cannot change while the supervisor is running.",
+		Remediation: "End the supervisor, then choose the harness and model again.",
+	},
+	SupervisorSettingsInvalid: {
+		Class:       ClassBlocking,
+		Title:       "Supervisor settings not available",
+		Summary:     "The chosen harness, model or effort is not available for the supervisor.",
+		Remediation: "Choose a model listed for the harness and one of its effort levels.",
+	},
+	SettingsRequired: {
+		Class:       ClassNeedsAction,
+		Title:       "Choose a harness and model",
+		Summary:     "The supervisor needs a harness and model before it can start.",
+		Remediation: "Choose a harness and model, then send the message again.",
+	},
+	TurnActive: {
+		Class:       ClassWarning,
+		Title:       "Supervisor is busy",
+		Summary:     "The supervisor is still working on the previous message.",
+		Remediation: "Wait for the current turn to finish, then send the message again.",
+	},
+	SupervisorLaunchFailed: {
+		Class:       ClassBlocking,
+		Title:       "Supervisor failed to start",
+		Summary:     "The supervisor harness could not be started, so the message was not sent.",
+		Remediation: "Check that the harness is installed and signed in, then send the message again.",
+	},
+	ChangePending:         {Class: ClassNeedsAction, Title: "Settings change pending", Summary: "Another settings change is waiting to apply.", Remediation: "Cancel the pending change before choosing another setting."},
+	StaleGeneration:       {Class: ClassNeedsAction, Title: "Supervisor state changed", Summary: "The supervisor generation changed before the settings request arrived.", Remediation: "Refresh the supervisor state and try again."},
+	PendingChangeNotFound: {Class: ClassWarning, Title: "Pending change not found", Summary: "That settings change is no longer pending.", Remediation: "Refresh the supervisor state."},
+	ClientMessageConflict: {
+		Class:       ClassBlocking,
+		Title:       "Message id already used",
+		Summary:     "A different message was already sent with this message id.",
+		Remediation: "Send the message again with a new message id.",
+	},
+	CursorOutOfRange: {
+		Class:       ClassWarning,
+		Title:       "Transcript position out of range",
+		Summary:     "The requested transcript position is past the end of the conversation.",
+		Remediation: "Reload the newest page of the conversation.",
+	},
+	SupervisorHistoryIncomplete: {
+		Class:       ClassBlocking,
+		Title:       "Conversation history not fully saved",
+		Summary:     "Part of the supervisor conversation could not be saved, so it may be missing after a restart or harness switch.",
+		Remediation: "Check that the Agentico data directory is writable and has free space, then dismiss this notice or start a new conversation.",
 	},
 
 	// --- Chat-context codes ---------------------------------------------------

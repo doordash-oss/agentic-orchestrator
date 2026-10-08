@@ -153,6 +153,9 @@ type Entry struct {
 	Blocks []Block
 
 	summaryParams func(Params) string
+	// remediationParams renders a params-specific remediation hint; ""
+	// keeps the authored Remediation. A caller's WithRemediationHint wins.
+	remediationParams func(Params) string
 }
 
 // Lookup returns the catalog entry for code.
@@ -264,6 +267,11 @@ func New(code Code, opts ...Option) Error {
 	}
 	if entry.Remediation != "" || len(entry.Actions) > 0 {
 		rendered.Remediation = &Remediation{Hint: entry.Remediation, Actions: entry.Actions}
+	}
+	if entry.remediationParams != nil && cfg.remediationHint == "" {
+		if hint := strings.TrimSpace(entry.remediationParams(cfg.params)); hint != "" {
+			cfg.remediationHint = hint
+		}
 	}
 	if cfg.remediationHint != "" {
 		if rendered.Remediation == nil {

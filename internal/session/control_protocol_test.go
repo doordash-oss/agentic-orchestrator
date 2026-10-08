@@ -499,6 +499,37 @@ func TestTryHandleControlRequest_DelegatedTaskQuestionCannotCreateRootGate(t *te
 	}
 }
 
+// TestTryHandleControlRequest_SupervisorForwardsDelegatedTaskQuestion pins the
+// supervisor relaxation: a sub-agent question on a supervisor session reaches
+// the user like any other question instead of being denied.
+func TestTryHandleControlRequest_SupervisorForwardsDelegatedTaskQuestion(t *testing.T) {
+	s := NewSession("supervisor-child-question", "__supervisor__", feature.PhaseResearch)
+	s.SetKind(ports.KindSupervisor)
+	var stdin bytes.Buffer
+	s.SetStdinForTest(nopWriteCloser{Writer: &stdin})
+
+	msg := llm.SDKMessage{
+		Type:   "control_request",
+		Origin: llm.EventOrigin{Kind: llm.EventOriginTask, TaskID: "task-1", ChildSessionID: "child-1"},
+		ControlRequest: &llm.ControlRequestMessage{
+			Type:      "control_request",
+			RequestID: "child-question-1",
+			Request: llm.ControlRequest{
+				Subtype:  "can_use_tool",
+				ToolName: "AskUserQuestion",
+				Input:    json.RawMessage(`{"questions":[{"question":"Which API?"}]}`),
+			},
+		},
+	}
+
+	if s.tryHandleControlRequest(msg) {
+		t.Fatal("supervisor sub-agent question was handled in the session instead of surfaced")
+	}
+	if stdin.Len() != 0 {
+		t.Fatalf("supervisor sub-agent question wrote %q, want no automatic answer", stdin.String())
+	}
+}
+
 func TestRespondToAskUser_ClearsLastControlRequest(t *testing.T) {
 	t.Run("clears matching request", func(t *testing.T) {
 		s := &Session{
@@ -888,7 +919,7 @@ func TestManagerOnMessage_InteractiveTurnMode_ResultSetsWaitingHelp(t *testing.T
 }
 
 func TestManagerOnMessage_TerminalErrorDoesNotRequestPhaseInput(t *testing.T) {
-	for _, kind := range []ports.SessionKind{ports.KindPhase, ports.KindChat} {
+	for _, kind := range []ports.SessionKind{ports.KindPhase, ports.KindSupervisor} {
 		t.Run(kind.String(), func(t *testing.T) {
 			mgr := NewManager(make(chan interface{}, 100))
 			sess := NewSession("terminal-error", "feat-1", feature.PhaseImplement)
@@ -899,8 +930,8 @@ func TestManagerOnMessage_TerminalErrorDoesNotRequestPhaseInput(t *testing.T) {
 				Result: &llm.ResultMessage{Subtype: "error", IsError: true, Result: "unsupported image input"},
 			})
 			want := SessionFailed
-			if kind == ports.KindChat {
-				want = SessionWaitingHelp // Chat remains available for the next message.
+			if kind == ports.KindSupervisor {
+				want = SessionWaitingHelp // The supervisor remains available for the next message.
 			}
 			if got := sess.Status(); got != want {
 				t.Fatalf("status = %v, want %v", got, want)

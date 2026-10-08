@@ -419,6 +419,79 @@ describe('AttentionInbox popover presentation', () => {
     expect(popover()).not.toBeInTheDocument();
   });
 
+  it('routes the recovery detail’s Open recovery through the recovery jump sentinel', async () => {
+    installAgenticoMock();
+    const onJump = vi.fn();
+    render(
+      <AttentionDetail
+        item={recoveryItem}
+        busy={false}
+        submit={(action) => void action()}
+        onJump={onJump}
+        drafts={emptyAttentionDrafts()}
+        setDrafts={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('1 live orphan process need recovery.')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Open recovery' }));
+    // The shell resolves the sentinel by opening the Recovery sheet.
+    expect(onJump).toHaveBeenCalledWith('__recovery__');
+  });
+
+  it('labels a supervisor request "Supervisor" and jumps to the Supervisor page instead of expanding', async () => {
+    const onJump = vi.fn();
+    const supervisorPermission: AttentionItem = {
+      kind: 'permission',
+      id: 'supervisor-perm-1',
+      sessionId: '__supervisor__.supervisor-conversation-1.1',
+      target: 'supervisor',
+      toolName: 'Bash',
+      input: { command: 'make test' },
+      waitingSince: '2026-10-06T10:00:00.000Z',
+    };
+    render(<Harness items={[supervisorPermission]} onJump={onJump} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    const row = screen.getByRole('button', { name: /Permission/ });
+    expect(within(row).getByText('Supervisor')).toBeVisible();
+    // Never the ownerless "Runtime" fallback, and never an inline disclosure.
+    expect(within(row).queryByText('Search revamp')).toBeNull();
+    expect(row).not.toHaveAttribute('aria-expanded');
+
+    await user.click(row);
+    expect(onJump).toHaveBeenCalledWith('__supervisor__', 'supervisor-perm-1');
+    expect(popover()).not.toBeInTheDocument();
+  });
+
+  it('tags a sub-agent supervisor request beside its "Supervisor" label', async () => {
+    const base = {
+      kind: 'permission' as const,
+      sessionId: '__supervisor__.supervisor-conversation-1.1',
+      target: 'supervisor' as const,
+      toolName: 'Bash',
+      waitingSince: '2026-10-06T10:00:00.000Z',
+    };
+    const child: AttentionItem = {
+      ...base,
+      id: 'supervisor-perm-child',
+      origin: 'child',
+      childSessionId: 'agent_sub_1',
+    };
+    const root: AttentionItem = { ...base, id: 'supervisor-perm-root', origin: 'root' };
+    render(<Harness items={[child, root]} onJump={vi.fn()} />);
+    const user = userEvent.setup();
+
+    await user.click(bell());
+    const [childRow, rootRow] = screen.getAllByRole('button', { name: /Permission/ });
+    const tag = within(childRow!).getByText('Sub-agent');
+    expect(tag).toBeVisible();
+    expect(tag.parentElement).toHaveTextContent(/^SupervisorSub-agent$/);
+    expect(within(rootRow!).getByText('Supervisor')).toBeVisible();
+    expect(within(rootRow!).queryByText('Sub-agent')).toBeNull();
+  });
+
   it('keeps a submission notice announced after the popover is dismissed', async () => {
     const mock = installAgenticoMock();
     mock.api.sendHelp.mockResolvedValue({ result: 'submitted' });
@@ -714,17 +787,6 @@ describe('AttentionInbox help detail', () => {
     const user = userEvent.setup();
 
     await user.click(screen.getByRole('button', { name: /Attention inbox, 0 pending/ }));
-    expect(screen.getByText('No blocking input is waiting.')).toBeVisible();
-  });
-
-  // A chat resting after a reply is its normal state, not blocking input: the
-  // AMA panel is its reply surface, so the inbox and the badge stay quiet.
-  it('keeps a chat session waiting on the user out of the rows and the badge', async () => {
-    render(<Harness items={[{ ...helpWaitingItem, waitingKind: 'input' }]} onJump={vi.fn()} />);
-    const user = userEvent.setup();
-
-    await user.click(screen.getByRole('button', { name: /Attention inbox, 0 pending/ }));
-    expect(screen.queryByRole('button', { name: /Agent waiting/ })).not.toBeInTheDocument();
     expect(screen.getByText('No blocking input is waiting.')).toBeVisible();
   });
 });

@@ -137,6 +137,22 @@ export interface SseEventEnvelope {
 }
 
 /**
+ * The shared fail-closed decode of one SSE `data:` payload: byte bound,
+ * JSON parse, and prototype-pollution scan. Returns undefined — the caller
+ * drops the event — on any oversized, malformed, or polluted payload.
+ */
+export function decodeSsePayload(data: string, maxBytes: number): unknown {
+  try {
+    assertWithinByteSize(data, maxBytes);
+    const raw: unknown = JSON.parse(data);
+    assertNoPrototypePollution(raw);
+    return raw;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Parses one SSE data payload into the envelope, filling kind/seq from the
  * block's `event:`/`id:` fields when the JSON omits them (as the Go client
  * does). Returns null — the event is dropped — on any malformed, oversized,
@@ -147,9 +163,10 @@ export function parseSseEvent(
   block: { id: string; event: string },
 ): SseEventEnvelope | null {
   try {
-    assertWithinByteSize(data, MAX_EVENT_BYTES);
-    const raw: unknown = JSON.parse(data);
-    assertNoPrototypePollution(raw);
+    const raw = decodeSsePayload(data, MAX_EVENT_BYTES);
+    if (raw === undefined) {
+      return null;
+    }
     const parsed = SseEventEnvelopeSchema.safeParse(raw);
     if (!parsed.success) {
       return null;
@@ -301,7 +318,8 @@ export interface EventSupervisorDeps {
   backoff?: { initialMs: number; maxMs: number };
 }
 
-const DEFAULT_BACKOFF = { initialMs: 250, maxMs: 5000 };
+/** Reconnect backoff shared by every main-process SSE consumer. */
+export const DEFAULT_EVENT_STREAM_BACKOFF = { initialMs: 250, maxMs: 5000 };
 
 /**
  * Owns the reconnect loop while the gateway is ready: consumes the stream,
@@ -317,7 +335,7 @@ export class EventStreamSupervisor {
   private current: SseStream | null = null;
 
   constructor(private readonly deps: EventSupervisorDeps) {
-    this.backoff = deps.backoff ?? DEFAULT_BACKOFF;
+    this.backoff = deps.backoff ?? DEFAULT_EVENT_STREAM_BACKOFF;
   }
 
   /** Idempotent; resumes from the tracked cursor. */

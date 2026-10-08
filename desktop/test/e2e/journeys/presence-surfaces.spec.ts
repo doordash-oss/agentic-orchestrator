@@ -120,16 +120,18 @@ test('presence surfaces: one failure, one owner, every surface agrees', async ({
     );
     transcript.step('the Failed lane carries the feature with the catalog title as its sub-line');
 
-    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-    await overviewOption.click();
-    const overviewRow = handle.page
-      .getByRole('region', { name: 'Existing features' })
-      .locator('li', { hasText: featureName });
-    await expect(overviewRow.locator('.overview-row__state')).toHaveText(
+    // The sidebar row is the one per-feature summary there is: it reads the
+    // same away from the feature, on the Supervisor page.
+    const supervisorRow = sidebar.getByRole('option', { name: 'Supervisor', exact: true });
+    await supervisorRow.click();
+    await expect(supervisorRow).toHaveAttribute('aria-selected', 'true');
+    await expect(cockpit).toHaveCount(0);
+    await expect(failedRow).toHaveAttribute('aria-selected', 'false');
+    await expect(failedRow.locator('.sidebar__row-subline')).toHaveText(
       'Iteration budget exhausted',
     );
-    transcript.step('the Overview row state mirrors the sidebar sub-line');
-    await handle.page.getByRole('option', { name: new RegExp(featureName) }).click();
+    transcript.step('the sidebar sub-line holds while the Supervisor page is showing');
+    await failedRow.click();
     await expect(cockpit).toBeVisible({ timeout: 30_000 });
 
     transcript.section('Bell, inbox row, and the owning card');
@@ -212,12 +214,15 @@ test('presence surfaces: one failure, one owner, every surface agrees', async ({
     const dialog = handle.page.getByRole('dialog', { name: `Restart ${featureName}?` });
     await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: 'Confirm restart' }).click();
-    const afterRestart = await handle.page.evaluate(
-      (id) => window.agentico.getFeature(id),
-      featureId,
-    );
-    expect(afterRestart.status).not.toBe('Failed');
-    expect(afterRestart.errors).toHaveLength(0);
+    await expect
+      .poll(async () => {
+        const feature = await handle!.page.evaluate(
+          (id) => window.agentico.getFeature(id),
+          featureId,
+        );
+        return { failed: feature.status === 'Failed', errors: feature.errors };
+      })
+      .toEqual({ failed: false, errors: [] });
     transcript.step('the restart cleared the owned error from the authoritative snapshot');
 
     await waitFor(

@@ -117,22 +117,21 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
         });
       }
     }, overflowNames);
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await supervisorRow(handle.page).click();
     for (const name of overflowNames) {
-      const row = handle.page.getByRole('listitem').filter({
-        has: handle.page.locator('.overview-row__name', { hasText: sidebarRowNamePattern(name) }),
-      });
-      await expect(row).toBeVisible({ timeout: 30_000 });
       // This section's actual claim is reachability — every bulk-created
-      // feature stays one click away with no overflow affordance — not the
-      // contextual action attached to its current lane. Canonical error
-      // attention can legitimately make that action open the live preview;
-      // the row hit target always performs the plain navigation this loop is
-      // exercising.
-      const rowHitTarget = row.locator('.overview-row__hit');
-      await expect(rowHitTarget).toBeVisible({ timeout: 30_000 });
-      await rowHitTarget.click();
-      await handle.page.getByRole('option', { name: 'Overview' }).click();
+      // feature stays one click away with no overflow affordance. The sidebar
+      // row is plain navigation whatever lane the feature currently sits in:
+      // it opens that feature's cockpit, and the Supervisor row goes home.
+      const row = handle.page.getByRole('option', { name: sidebarRowNamePattern(name) });
+      await expect(row).toBeVisible({ timeout: 30_000 });
+      await row.click();
+      await expect(row).toHaveAttribute('aria-selected', 'true');
+      await expect(handle.page.getByLabel(`Feature ${name}`, { exact: true })).toBeVisible({
+        timeout: 30_000,
+      });
+      await supervisorRow(handle.page).click();
+      await expect(supervisorRow(handle.page)).toHaveAttribute('aria-selected', 'true');
     }
     await setWindowSize(handle, 760, 900);
     await setWindowSize(handle, 1440, 900);
@@ -156,7 +155,7 @@ test('packaged spatial shell keeps tab navigation, draft cancellation, and narro
     await expect(lastOverflowOption).toHaveAttribute('aria-selected', 'true');
 
     transcript.section('Dirty creation sheet requires deliberate cancellation');
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await supervisorRow(handle.page).click();
     await captureVisualMatrix(handle, [
       [1440, 900, 'visual_5b3f80a793ab', 'visual_51f1a4efb671'],
       [1728, 1117, 'visual_6f63b933d14e', 'visual_790ad17a43d8'],
@@ -225,6 +224,11 @@ async function captureVisualMatrix(handle: AppHandle, cells: readonly VisualCell
  * whose name merely starts with it (e.g. "Spatial overflow 12") once a lane
  * sub-line is appended to the row's accessible name.
  */
+/** The pinned home row; exact so a feature row naming the supervisor never matches. */
+function supervisorRow(page: Page): Locator {
+  return page.getByRole('option', { name: 'Supervisor', exact: true });
+}
+
 function sidebarRowNamePattern(name: string): RegExp {
   return new RegExp(`^${escapeRegExp(name)}(?:$|\\s)`);
 }
@@ -267,14 +271,20 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     transcript.section('Global inbox badge and allow-once resolution');
     await waitForAttentionItem(handle.page, 'perm-allow-once');
     await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 1 pending/);
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await supervisorRow(handle.page).click();
     // The old tab strip rendered every open tab's own badge alongside the
     // Home dashboard's, so the same status text appeared twice at once. The
     // sidebar has no such second, always-rendered surface — the equivalent
-    // signal is the Overview waiting-lane row's own state-cell text, which
-    // now carries the pending-approval summary instead of a separate badge.
+    // signal is the feature's own waiting-lane row sub-line, which carries
+    // the pending-approval summary instead of a separate badge, and stays
+    // visible from the Supervisor page.
     await expect(
-      handle.page.locator('.overview-row__state', { hasText: 'Approve 1 request' }),
+      handle.page
+        .getByRole('option', { name: /Packaged Attention Resolution/ })
+        .locator('.sidebar__row-subline'),
+    ).toHaveText('Approve 1 request');
+    await expect(
+      handle.page.locator('.sidebar__row-subline', { hasText: 'Approve 1 request' }),
     ).toHaveCount(1);
     await evidenceShot(handle, 'attention-badges-dashboard-tab-light-wide');
     await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
@@ -331,7 +341,7 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
     transcript.section('Inline cockpit resolution for feature-scoped attention');
     await waitForAttentionItem(handle.page, 'perm-deny');
     await closeInbox(handle.page);
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await supervisorRow(handle.page).click();
     await handle.page.getByRole('option', { name: /Packaged Attention Resolution/ }).click();
     cockpit = handle.page.getByLabel('Feature Packaged Attention Resolution');
     const inlineAttention = cockpit.getByRole('region', { name: 'Agent request' });
@@ -487,90 +497,6 @@ test('packaged inbox and cockpit resolve real attention classes from the bundled
   }
 });
 
-test('packaged chat idle wait stays out of the inbox and resolves through the AMA panel', async ({}, testInfo) => {
-  const transcript = new Transcript(
-    'attention-help',
-    'Chat idle wait attention contract via the packaged AMA panel',
-  );
-  const world = createWorld('attention-help', {
-    auth: { loggedIn: true, authMethod: 'oauth', email: 'e2e@example.invalid' },
-    presetWorkspaceRoot: true,
-    attentionProvider: true,
-  });
-  createRepo(world, 'help-lab', { commit: true });
-  let handle: AppHandle | null = null;
-
-  try {
-    handle = await launchApp(world, testInfo, { traceName: 'attention-help' });
-    await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
-      timeout: 60_000,
-    });
-
-    // A chat started with the panel closed delivers its reply in the
-    // background: the turn ends and the session rests between turns.
-    await expect(handle.page.getByRole('img', { name: 'Unread AMA reply' })).toHaveCount(0);
-    const chatStart = await serverPost(world, '/api/v1/prompts/chat/start', {
-      message: 'attention chat help',
-    });
-    transcript.json('chat start response', chatStart);
-    await waitForProviderLog(world, 'chat-waiting');
-    try {
-      await waitForAttentionKind(handle.page, 'help');
-    } catch (error) {
-      const sessions = await handle.page.evaluate(() => window.agentico.listSessions());
-      const prompts = await serverGet(world, '/api/v1/prompts');
-      throw new Error(
-        `chat did not become actionable: ${error instanceof Error ? error.message : String(error)}; sessions=${JSON.stringify(sessions)}; prompts=${JSON.stringify(prompts)}`,
-      );
-    }
-    await handle.page.reload();
-    await expect(handle.page.getByRole('navigation', { name: 'Feature sidebar' })).toBeVisible({
-      timeout: 60_000,
-    });
-
-    // The resting wait never badges or rows: the inbox is for blocking input,
-    // and an idle chat is the chat's own normal state, not a request.
-    await expect(attentionBell(handle.page)).toHaveAccessibleName(/Attention inbox, 0 pending/);
-    const inbox = await openInbox(handle);
-    await expect(inbox.getByText('No blocking input is waiting.')).toBeVisible();
-    await expect(inbox.getByRole('button', { name: /Agent waiting/ })).toHaveCount(0);
-    await evidenceShot(handle, 'attention-help-inbox-quiet');
-    await closeInbox(handle.page);
-
-    // The reply-delivered signal is the Ask chip's unread dot, and opening
-    // the panel is what marks the reply as seen.
-    await expect(handle.page.getByRole('img', { name: 'Unread AMA reply' })).toBeVisible();
-    await handle.page.getByRole('button', { name: /Ask ⌥Space/ }).click();
-    const panel = handle.page.getByRole('complementary', { name: 'Ask Agentico' });
-    await expect(panel).toBeVisible();
-    await expect(handle.page.getByRole('img', { name: 'Unread AMA reply' })).toHaveCount(0);
-    await expect(panel).toContainText('Active', { timeout: 30_000 });
-    await expect(panel).not.toContainText('pending');
-    const composer = panel.getByRole('textbox', { name: 'Ask Agentico' });
-    await expect(composer).toBeFocused();
-    await composer.fill('Continue with the compact packaged evidence path.');
-    await evidenceShot(handle, 'attention-help-reply');
-    await panel.getByRole('button', { name: 'Send', exact: true }).click();
-    await waitForProviderLog(world, 'help-response:');
-    expect(readProviderLog(world)).toContain('Continue with the compact packaged evidence path.');
-    await expect(panel.getByLabel('AMA transcript')).toContainText(
-      'Continue with the compact packaged evidence path.',
-      { timeout: 30_000 },
-    );
-
-    persistAppLogs(handle, 'attention-help-app-server');
-    transcript.step(
-      'chat reply surfaced through the Ask chip and the panel composer continued the session',
-    );
-    transcript.codeBlock('provider help-response log', readProviderLog(world), 120);
-    transcript.write(testInfo);
-  } finally {
-    if (handle !== null) await closeApp(handle).catch(() => {});
-    await assertNoLeakedProcessesEventually(world);
-    destroyWorld(world);
-  }
-});
-
 test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({}, testInfo) => {
   const transcript = new Transcript(
     'attention-gate',
@@ -630,7 +556,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     ).toBeDisabled();
     await initialGateDialog.getByRole('button', { name: 'Answer later' }).click();
     await expect(initialGateDialog).toHaveCount(0);
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await supervisorRow(handle.page).click();
 
     const inbox = await openInbox(handle);
     await inbox.getByRole('button', { name: /Input gate/ }).click();
@@ -689,7 +615,7 @@ test('packaged inbox renders and drafts a real NEED_USER_INPUT gate', async ({},
     );
 
     transcript.section('Feature-scoped Stop clears the paused gate');
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    await supervisorRow(handle.page).click();
     await createFeatureViaForm(handle, {
       name: 'Packaged Feature Stop Gate Fixture',
       description: 'Seeded feature-scoped NEED_USER_INPUT gate stopped through the cockpit.',

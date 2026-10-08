@@ -20,6 +20,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -56,10 +59,17 @@ type Protocol struct {
 	sessionReady chan struct{}
 
 	// Request ids for the handshake exchanges, used to route responses.
-	initID        int
-	sessionNewID  int
-	sessionLoadID int
-	promptID      int
+	initID            int
+	sessionNewID      int
+	sessionLoadID     int
+	promptID          int
+	modelChangeID     int
+	modelChangeDone   chan error
+	modelChangeTarget string
+	promptModel       string
+	deferredPrompt    string
+	promptActive      bool
+	promptQueue       []string
 
 	negotiatedVersion int
 	acpSessionID      string
@@ -119,13 +129,26 @@ type Protocol struct {
 	formatRetryCount int
 	synthSeq         int
 
+	// bridge follows OpenCode's HTTP event stream for interactive sessions
+	// (see bridge.go); nil otherwise. bridged holds the bridged requests the
+	// session has not answered, keyed by their Agentico request id;
+	// bridgedDone remembers OpenCode request ids already answered or
+	// resolved, so a replayed event cannot surface them again; bridgeSeq is
+	// the latest reconcile pass seen.
+	bridge      *serverBridge
+	bridged     map[string]*bridgedRequest
+	bridgedDone map[string]bool
+	bridgeSeq   int
+
 	logFunc func(string, ...interface{})
 }
 
 // permissionOptions records the option ids a permission request offers, so an
 // approve/deny decision from the session layer maps to a concrete ACP outcome.
+// alwaysID is the session-wide approval a remembered answer selects.
 type permissionOptions struct {
 	allowID  string
+	alwaysID string
 	rejectID string
 }
 
@@ -145,12 +168,20 @@ type toolCallState struct {
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
 func NewProtocol(opts llm.ProtocolOpts) *Protocol {
-	return &Protocol{
+	p := &Protocol{
 		opts:            opts,
 		model:           BackendModel(opts.Model),
+		promptModel:     BackendModel(opts.Model),
 		contextWindow:   opts.ContextWindow,
 		resumeSessionID: strings.TrimSpace(opts.ResumeSessionID),
 	}
+	if opts.Interactive && !opts.NativeToollessReview {
+		if client, ok := serverEndpointFromLaunch(opts.LaunchArgs, opts.LaunchEnv); ok {
+			client.directory = opts.WorkDir
+			p.bridge = newServerBridge(client, p.logDebug)
+		}
+	}
+	return p
 }
 
 // SetLogFunc sets a logging function for debug output.
@@ -172,9 +203,11 @@ func (p *Protocol) SetStdin(w io.Writer) {
 //  1. initialize — negotiate the protocol version and read agent capabilities.
 //  2. session/new (or session/load when resuming) — establish the session,
 //     rooted at the resolved work directory, the prompt is delivered to.
-//  3. session/prompt — deliver the rendered Agentico phase prompt as the first
-//     user turn. The prompt response arrives asynchronously and is surfaced as
-//     a terminal result by ParseLine.
+//  3. For interactive sessions launched with the embedded HTTP server, open
+//     the child-session bridge's event stream (see bridge.go); a server that
+//     is unreachable or rejects the credentials fails the handshake.
+//  4. For managed sessions, session/prompt delivers the rendered phase prompt.
+//     Interactive sessions wait for the user's first message instead.
 func (p *Protocol) Handshake(ctx context.Context) error {
 	if err := p.sendInitialize(); err != nil {
 		return err
@@ -195,7 +228,95 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 		return err
 	}
 
+	if p.bridge != nil {
+		if err := p.bridge.start(ctx); err != nil {
+			return fmt.Errorf("opencode child-session bridge: %s", sanitizeDiagnostic(err.Error()))
+		}
+	}
+	if err := p.seedHistory(ctx); err != nil {
+		return err
+	}
+
+	if p.opts.Interactive && p.opts.InitialPrompt == "" {
+		return nil
+	}
+	p.mu.Lock()
+	p.promptActive = true
+	p.mu.Unlock()
 	return p.sendPrompt(p.opts.InitialPrompt)
+}
+
+// seedHistory restores rendered prior turns in the newly created ACP session
+// without asking the model to answer them. The next ACP prompt remains the
+// first inference turn of this generation.
+func (p *Protocol) seedHistory(ctx context.Context) error {
+	if p.opts.SeedHistoryPath == "" {
+		return nil
+	}
+	if p.bridge == nil {
+		return fmt.Errorf("opencode history seed requires the interactive HTTP bridge")
+	}
+	seed, err := os.ReadFile(p.opts.SeedHistoryPath)
+	if err != nil {
+		return fmt.Errorf("read OpenCode history seed: %w", err)
+	}
+	p.mu.Lock()
+	sessionID := p.acpSessionID
+	p.mu.Unlock()
+	if sessionID == "" {
+		return fmt.Errorf("opencode history seed requires an ACP session id")
+	}
+	body := map[string]any{
+		"noReply": true,
+		"parts":   []map[string]string{{"type": "text", "text": string(seed)}},
+	}
+	seedCtx, cancel := context.WithTimeout(ctx, bridgeRequestTimeout)
+	defer cancel()
+	resp, err := p.bridge.client.request(seedCtx, http.MethodPost, "/session/"+url.PathEscape(sessionID)+"/message", body)
+	if err != nil {
+		return fmt.Errorf("post OpenCode history seed: %w", err)
+	}
+	var posted struct {
+		Info struct {
+			SessionID string `json:"sessionID"`
+			Role      string `json:"role"`
+		} `json:"info"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&posted); err != nil {
+		resp.Body.Close()
+		return fmt.Errorf("decode OpenCode history seed response: %w", err)
+	}
+	resp.Body.Close()
+	if posted.Info.SessionID != sessionID || posted.Info.Role != "user" {
+		return fmt.Errorf("OpenCode history seed was not accepted as a user message in the ACP session")
+	}
+	var messages []struct {
+		Info struct {
+			Role string `json:"role"`
+		} `json:"info"`
+		Parts []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"parts"`
+	}
+	if err := p.bridge.client.getJSON(ctx, "/session/"+url.PathEscape(sessionID)+"/message", &messages); err != nil {
+		return fmt.Errorf("confirm OpenCode history seed: %w", err)
+	}
+	for _, message := range messages {
+		if message.Info.Role != "user" {
+			continue
+		}
+		for _, part := range message.Parts {
+			if part.Type == "text" && part.Text == string(seed) {
+				return nil
+			}
+		}
+	}
+	roles := make([]string, 0, len(messages))
+	for _, message := range messages {
+		roles = append(roles, fmt.Sprintf("%s:%d", message.Info.Role, len(message.Parts)))
+	}
+	return fmt.Errorf("OpenCode did not retain the history seed in the ACP session (post session %q role %q; messages: %v)", posted.Info.SessionID, posted.Info.Role, roles)
 }
 
 // startSession establishes the ACP session the prompt is delivered to. With no
@@ -338,6 +459,22 @@ func (p *Protocol) sendSessionLoad() error {
 }
 
 func (p *Protocol) sendPrompt(text string) error {
+	p.mu.Lock()
+	p.deferredPrompt = text
+	p.mu.Unlock()
+	done, err := p.sendModelChangeIfNeeded()
+	if err != nil {
+		p.mu.Lock()
+		p.deferredPrompt = ""
+		p.mu.Unlock()
+		return err
+	}
+	if done != nil {
+		return nil
+	}
+	p.mu.Lock()
+	p.deferredPrompt = ""
+	p.mu.Unlock()
 	id := int(nextID.Add(1))
 	p.mu.Lock()
 	p.promptID = id
@@ -346,8 +483,8 @@ func (p *Protocol) sendPrompt(text string) error {
 	// next turn's question detection (and streamed partial) reflects only that
 	// turn, not text carried over from a prior answered question. Also reset
 	// the terminal-result latch: markTerminal exists to seal a session's FINAL
-	// outcome against a late duplicate, but a multi-turn session (e.g. AMA
-	// chat, where one Protocol instance serves many user messages over its
+	// outcome against a late duplicate, but a multi-turn session (e.g. a
+	// conversation, where one Protocol instance serves many user messages over its
 	// lifetime) must still produce a fresh terminal result for every turn, or
 	// the caller is left waiting forever after the first reply.
 	p.assistantBuf.Reset()
@@ -369,6 +506,72 @@ func (p *Protocol) sendPrompt(text string) error {
 	}
 	p.addEstimatedContextText(text)
 	return nil
+}
+
+// SetPromptModel selects the model for subsequent turns on the same ACP
+// session. OpenCode accepts session/set_model without a process relaunch.
+func (p *Protocol) SetPromptModel(model string) {
+	p.mu.Lock()
+	p.promptModel = BackendModel(model)
+	p.mu.Unlock()
+}
+
+// ApplySettings changes the live interactive model and confirms the ACP reply
+// before the coordinator commits the new setting. Effort is encoded in the
+// launch overlay; the coordinator relaunches for an effort change.
+func (p *Protocol) ApplySettings(ctx context.Context, model, _ string) error {
+	if !p.opts.Interactive {
+		return fmt.Errorf("OpenCode settings update requires an interactive session")
+	}
+	p.SetPromptModel(model)
+	done, err := p.sendModelChangeIfNeeded()
+	if err != nil {
+		return err
+	}
+	if done == nil {
+		return nil
+	}
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		p.mu.Lock()
+		p.promptModel = p.model
+		p.mu.Unlock()
+		return ctx.Err()
+	}
+}
+
+func (p *Protocol) sendModelChangeIfNeeded() (<-chan error, error) {
+	p.mu.Lock()
+	model, current, sessionID := p.promptModel, p.model, p.acpSessionID
+	if model == "" || model == current {
+		p.mu.Unlock()
+		return nil, nil
+	}
+	if p.modelChangeID != 0 {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("OpenCode model switch already in flight")
+	}
+	id := int(nextID.Add(1))
+	p.modelChangeID = id
+	// Retain this request's completion channel before writing: a reply can
+	// clear modelChangeDone before writeJSON returns to the waiting caller.
+	done := make(chan error, 1)
+	p.modelChangeDone = done
+	p.modelChangeTarget = model
+	p.mu.Unlock()
+	req := Request{JSONRPC: "2.0", ID: id, Method: "session/set_model", Params: map[string]string{"sessionId": sessionID, "modelId": model}}
+	if err := p.writeJSON(req); err != nil {
+		p.mu.Lock()
+		p.modelChangeID = 0
+		p.modelChangeDone = nil
+		p.modelChangeTarget = ""
+		p.promptModel = current
+		p.mu.Unlock()
+		return nil, fmt.Errorf("sending session/set_model request: %w", err)
+	}
+	return done, nil
 }
 
 func (p *Protocol) writeJSON(v interface{}) error {
@@ -399,6 +602,12 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	// before treating unparseable content as a protocol violation.
 	if len(bytes.TrimSpace(line)) == 0 {
 		return nil, nil
+	}
+
+	if p.bridge != nil && bytes.HasPrefix(line, bridgeLinePrefix) {
+		if msgs, ok := p.handleBridgeLine(line); ok {
+			return msgs, nil
+		}
 	}
 
 	var env inboundEnvelope
@@ -498,7 +707,7 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 	}
 
 	p.mu.Lock()
-	initID, sessionNewID, sessionLoadID, promptID := p.initID, p.sessionNewID, p.sessionLoadID, p.promptID
+	initID, sessionNewID, sessionLoadID, promptID, modelChangeID := p.initID, p.sessionNewID, p.sessionLoadID, p.promptID, p.modelChangeID
 	p.mu.Unlock()
 
 	hasErr := len(env.Error) > 0 && string(env.Error) != "null"
@@ -557,7 +766,61 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 		return []llm.SDKMessage{p.sessionInitMessage()}
 
 	case promptID:
-		return p.handlePromptResponse(env, hasErr)
+		messages := p.handlePromptResponse(env, hasErr)
+		for _, message := range messages {
+			if message.Result == nil {
+				continue
+			}
+			p.mu.Lock()
+			p.promptActive = false
+			if message.Result.IsError {
+				p.promptQueue = nil
+				p.mu.Unlock()
+				break
+			}
+			if len(p.promptQueue) == 0 {
+				p.mu.Unlock()
+				break
+			}
+			next := p.promptQueue[0]
+			p.promptQueue = p.promptQueue[1:]
+			p.promptActive = true
+			p.mu.Unlock()
+			if err := p.sendPrompt(next); err != nil {
+				if failed, ok := p.terminalError(err.Error()); ok {
+					messages = append(messages, failed)
+				}
+			}
+			break
+		}
+		return messages
+
+	case modelChangeID:
+		p.mu.Lock()
+		p.modelChangeID = 0
+		done := p.modelChangeDone
+		p.modelChangeDone = nil
+		target := p.modelChangeTarget
+		p.modelChangeTarget = ""
+		deferred := p.deferredPrompt
+		p.deferredPrompt = ""
+		var changeErr error
+		if hasErr {
+			changeErr = fmt.Errorf("session/set_model refused: %s", rpcErrorDetail(env.Error))
+			p.promptModel = p.model
+		} else {
+			p.model = target
+		}
+		p.mu.Unlock()
+		if done != nil {
+			done <- changeErr
+		}
+		if deferred != "" {
+			if err := p.sendPrompt(deferred); err != nil {
+				return seal(p.terminalError(err.Error()))
+			}
+		}
+		return nil
 
 	default:
 		if p.opts.NativeToollessReview {
@@ -774,6 +1037,17 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		}
 
 	case UpdateToolCall, UpdateToolCallUpdate:
+		// A tool can outlive this process. Commit the preceding assistant text
+		// before recording the tool so a restart can seed the partial turn.
+		if su.Update.SessionUpdate == UpdateToolCall {
+			p.mu.Lock()
+			prior := p.assistantBuf.String()
+			p.assistantBuf.Reset()
+			p.mu.Unlock()
+			if strings.TrimSpace(prior) != "" {
+				out = append(out, assistantFinal(prior))
+			}
+		}
 		p.addEstimatedToolContext(su.Update)
 		if msg, ok := p.taskToolUseFromUpdate(su.Update); ok {
 			out = append(out, msg)
@@ -1411,7 +1685,7 @@ func (p *Protocol) resultCost() float64 {
 // later duplicate, and trailing output can never undo a clean completion.
 // Callers that observe false must suppress their terminal message so only the
 // first terminal result reaches the session. sendPrompt resets this latch for
-// the next turn, so a multi-turn session (e.g. AMA chat) still gets a fresh
+// the next turn, so a multi-turn session (e.g. a conversation) still gets a fresh
 // terminal result every time the user sends a new message.
 func (p *Protocol) markTerminal() bool {
 	p.mu.Lock()
@@ -1558,7 +1832,21 @@ func (p *Protocol) SendUserMessage(text string) error {
 	if p.opts.NativeToollessReview {
 		return fmt.Errorf("OpenCode native tool-less review permits exactly one prompt")
 	}
-	return p.sendPrompt(text)
+	p.mu.Lock()
+	if p.promptActive {
+		p.promptQueue = append(p.promptQueue, text)
+		p.mu.Unlock()
+		return nil
+	}
+	p.promptActive = true
+	p.mu.Unlock()
+	if err := p.sendPrompt(text); err != nil {
+		p.mu.Lock()
+		p.promptActive = false
+		p.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // RespondToHook is a no-op — OpenCode ACP has no PreToolUse hook callbacks.
@@ -1577,6 +1865,7 @@ func (p *Protocol) Interrupt() error {
 	p.mu.Lock()
 	w := p.stdin
 	sessionID := p.acpSessionID
+	p.promptQueue = nil
 	p.mu.Unlock()
 	if w == nil || sessionID == "" {
 		return llm.ErrNotSupported
@@ -1614,8 +1903,14 @@ func (p *Protocol) TranscriptPath() string {
 	return p.transcriptPath
 }
 
-// Close performs no cleanup; the session layer owns process teardown.
-func (p *Protocol) Close() error { return nil }
+// Close stops the child-session bridge; the session layer owns process
+// teardown.
+func (p *Protocol) Close() error {
+	if p.bridge != nil {
+		p.bridge.stop()
+	}
+	return nil
+}
 
 // --- test accessors ---
 

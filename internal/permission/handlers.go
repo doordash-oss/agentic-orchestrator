@@ -327,16 +327,17 @@ func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
 
 // IsAutomaticReviewHandler reports whether h uses a permission policy whose
 // undecided Bash requests may be sent through automatic review. In addition to
-// the general phase handlers, Ask Me Anything chat deliberately defers Bash to
-// the same user-facing permission UI and therefore participates in review.
+// the general phase handlers, the supervisor deliberately defers Bash to the
+// same user-facing permission UI and therefore participates in review.
 //
-// Keep this separate from IsGeneralPhaseHandler: AMA chat must not inherit
-// unrelated general-phase exceptions such as safe-create approval.
+// Keep this separate from IsGeneralPhaseHandler: the supervisor must not
+// inherit unrelated general-phase exceptions such as safe-create approval.
 func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
 	if guard, ok := h.(*SessionGuardHandler); ok {
 		h = guard.Inner
 	}
-	if _, ok := h.(*AMAHandler); ok {
+	switch h.(type) {
+	case *SupervisorHandler:
 		return true
 	}
 	return IsGeneralPhaseHandler(h)
@@ -365,23 +366,33 @@ func (h *ReadOnlyHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.Per
 	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
 }
 
-// AMAHandler is used by the Ask Me Anything chat. It auto-approves read-only
-// inspection, disables delegation, and leaves other top-level tools for the
-// user-facing permission UI.
-type AMAHandler struct{}
+// SupervisorHandler is the supervisor conversation's harness-normal policy:
+// read-only inspection and web tools run without a prompt, as does a Bash
+// command that is exactly one bare `agentico api` helper call (the supervisor's
+// sanctioned REST client, which never exposes the bearer token). Everything
+// else — other shell, edits, writes, sub-agent spawn — is deferred to the
+// user. It never denies sub-agents. It is deliberately not a general-phase
+// handler, so phase guards and the safe-create exception never attach to it.
+type SupervisorHandler struct{}
 
-// CanUseTool approves safe reads, denies subagent delegation, and defers
-// diagnostics or mutations such as Bash/Edit/Write to the caller.
-func (h *AMAHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+// CanUseTool approves read-only and web tools and bare helper calls, and
+// defers everything else. A deferred compound command that embeds a helper
+// call carries supervisorHelperShapeReason so the model can retry with the
+// bare shape if the user declines.
+func (h *SupervisorHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	if isReadOnlyTool(req.ToolName) {
 		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 	}
-	switch req.ToolName {
-	case "Agent", "Task":
-		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "AMA chat does not support sub-agents"}, nil
-	default:
-		return ports.PermissionDecision{}, nil
+	if req.ToolName == toolNameBash {
+		command := extractBashCommand(req.Input)
+		if isBareAgenticoInvocation(command, supervisorHelperSubcommands) && !expandsBinaryDirectory(command) {
+			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
+		}
+		if _, ok := attemptedAgenticoSubcommand(command, supervisorHelperSubcommands); ok {
+			return ports.PermissionDecision{Reason: supervisorHelperShapeReason}, nil
+		}
 	}
+	return ports.PermissionDecision{}, nil
 }
 
 // BoundedHelperArtifactHandler auto-approves read-only inspection tools,
@@ -734,14 +745,36 @@ var harnessCLISubcommands = map[string]bool{
 	"capability-probe":   true,
 }
 
+// supervisorHelperSubcommands are the agentico subcommands the supervisor
+// conversation may run without a prompt. Feature-worker sessions never gain
+// them: harnessCLISubcommands is a separate set.
+var supervisorHelperSubcommands = map[string]bool{
+	"api": true,
+}
+
+// supervisorHelperShapeReason explains, on a deferred compound command that
+// embeds a helper call, the only shape the supervisor auto-allows.
+const supervisorHelperShapeReason = "agentico api must be invoked as a single bare command: no cd, &&, ;, pipes, redirects " +
+	"or command substitution, no shell variables in arguments (e.g. \"$AGENTICO_BIN\" api GET /api/v1/features)"
+
 // harnessCLIBinaryRE matches the sanctioned binary spellings: the
 // $AGENTICO_BIN expansion (optionally quoted) or an agentico executable path.
 var harnessCLIBinaryRE = regexp.MustCompile(`^(?:"\$AGENTICO_BIN"|\$AGENTICO_BIN|(?:\S*/)?agentico)$`)
 
-// isHarnessCLIInvocation reports whether command is exactly one agentico
-// subcommand call with plain arguments: no chaining, redirection, or
-// substitution that could turn the sanctioned call into a write path.
+// isHarnessCLIInvocation reports whether command is exactly one sanctioned
+// feature-worker agentico subcommand call with plain arguments.
 func isHarnessCLIInvocation(command string) bool {
+	return isBareAgenticoInvocation(command, harnessCLISubcommands)
+}
+
+// isBareAgenticoInvocation reports whether command is exactly one agentico
+// call whose subcommand is in subcommands, with plain arguments: no chaining,
+// redirection, or substitution that could turn the sanctioned call into a
+// write path, and no expansion in any argument after the subcommand. Quoted
+// arguments (such as a JSON body with spaces) are fine: the metacharacter
+// checks cover the whole command and the expansion check covers every field
+// after the subcommand, so how quotes split fields does not matter.
+func isBareAgenticoInvocation(command string, subcommands map[string]bool) bool {
 	command = strings.TrimSpace(command)
 	if command == "" || strings.ContainsAny(command, ";|&<>`\n") {
 		return false
@@ -750,11 +783,11 @@ func isHarnessCLIInvocation(command string) bool {
 		return false
 	}
 	fields := strings.Fields(command)
-	if len(fields) < 2 || !harnessCLIBinaryRE.MatchString(fields[0]) || !harnessCLISubcommands[fields[1]] {
+	if len(fields) < 2 || !harnessCLIBinaryRE.MatchString(fields[0]) || !subcommands[fields[1]] {
 		return false
 	}
 	for _, field := range fields[2:] {
-		// Arguments are literal paths and ids; any expansion is refused.
+		// Arguments are literal paths, ids and bodies; any expansion is refused.
 		if strings.Contains(field, "$") {
 			return false
 		}
@@ -762,17 +795,39 @@ func isHarnessCLIInvocation(command string) bool {
 	return true
 }
 
-// attemptedHarnessCLISubcommand reports the sanctioned subcommand of an
-// agentico call embedded anywhere in command. It only selects the deny reason
-// for commands isHarnessCLIInvocation already refused; it never allows
-// anything. Shell separators also split fields so `cd x&&agentico ...` is
-// recognized.
+// expandsBinaryDirectory reports whether the binary token of a recognised
+// agentico invocation lets a shell expansion pick the executable (for
+// example `$X/agentico`). Only the exact $AGENTICO_BIN spellings may expand,
+// so an auto-allowed helper call always runs this server's own binary.
+func expandsBinaryDirectory(command string) bool {
+	fields := strings.Fields(strings.TrimSpace(command))
+	if len(fields) == 0 {
+		return false
+	}
+	switch fields[0] {
+	case `"$AGENTICO_BIN"`, "$AGENTICO_BIN":
+		return false
+	}
+	return strings.ContainsAny(fields[0], "$~")
+}
+
+// attemptedHarnessCLISubcommand reports the sanctioned feature-worker
+// subcommand of an agentico call embedded anywhere in command.
 func attemptedHarnessCLISubcommand(command string) (string, bool) {
+	return attemptedAgenticoSubcommand(command, harnessCLISubcommands)
+}
+
+// attemptedAgenticoSubcommand reports the subcommand of an agentico call
+// embedded anywhere in command when it is in subcommands. It only selects the
+// deny or deferral reason for commands isBareAgenticoInvocation already
+// refused; it never allows anything. Shell separators also split fields so
+// `cd x&&agentico ...` is recognized.
+func attemptedAgenticoSubcommand(command string, subcommands map[string]bool) (string, bool) {
 	fields := strings.FieldsFunc(command, func(r rune) bool {
 		return unicode.IsSpace(r) || strings.ContainsRune(";&|()`", r)
 	})
 	for i := 0; i+1 < len(fields); i++ {
-		if harnessCLIBinaryRE.MatchString(fields[i]) && harnessCLISubcommands[fields[i+1]] {
+		if harnessCLIBinaryRE.MatchString(fields[i]) && subcommands[fields[i+1]] {
 			return fields[i+1], true
 		}
 	}

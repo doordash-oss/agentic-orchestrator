@@ -139,6 +139,16 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0;
+  /* Lets the title hide itself once the trailing actions leave it too
+   * little room to show more than a stray glyph (the minimum window). */
+  container: toolbar-title / inline-size;
+}
+
+@container toolbar-title (max-width: 48px) {
+  .toolbar__title-name,
+  .toolbar__title-subline {
+    visibility: hidden;
+  }
 }
 
 .toolbar__title-name {
@@ -166,10 +176,79 @@ body {
   gap: var(--space-2);
 }
 
+.toolbar__page-actions,
 .toolbar__actions-slot,
 .toolbar__overflow-slot,
 .toolbar__inspector-slot {
   display: contents;
+}
+
+/* A page's own text action in the toolbar (the Supervisor's "New
+ * conversation"): the "New feature" button's metrics with the quiet
+ * treatment of the icon buttons beside it, so the accent stays unique. */
+.toolbar__page-action {
+  flex: 0 0 auto;
+  padding: 6px var(--space-3);
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--muted);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.toolbar__page-action:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+/* The page action's glyph only shows once the label collapses (below). */
+.toolbar__page-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toolbar__page-action-icon {
+  display: none;
+  flex: none;
+}
+
+/*
+ * The minimum window (400 CSS px, collapsed sidebar, macOS traffic-light
+ * clearance): the toolbar tightens its gaps and the page's secondary text
+ * action collapses to an icon button — its label stays in the accessibility
+ * tree (and as the tooltip), so its name is unchanged — keeping "New
+ * feature" fully inside the window.
+ */
+@media (max-width: 520px) {
+  .toolbar {
+    gap: var(--space-2);
+  }
+
+  .toolbar__trailing {
+    gap: var(--space-1);
+  }
+
+  .toolbar__page-action {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+  }
+
+  .toolbar__page-action-icon {
+    display: block;
+  }
+
+  .toolbar__page-action-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
 }
 
 /* The cockpit portals its status chip, contextual primary verbs, and
@@ -206,7 +285,7 @@ body {
   color: var(--accent);
 }
 
-/* Overview's sole "New feature" entry point: the one accent-filled control
+/* The "New feature" entry point on every page: the one accent-filled control
  * in an otherwise quiet toolbar. */
 .toolbar__new-feature {
   flex: 0 0 auto;
@@ -223,10 +302,35 @@ body {
   opacity: 0.9;
 }
 
+/* The Recovery sheet's entry point, on every page beside the bell: the same
+ * quiet icon button, tinted amber only while the server reports orphaned
+ * sessions (which the bell's count deliberately leaves out). */
+.toolbar__recovery {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.toolbar__recovery:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.toolbar__recovery[data-attention='true'] {
+  color: var(--attention);
+}
+
 /* The content column: the toolbar and the scrollable content pane, stacked —
- * everything to the right of the sidebar. Nothing sits between the two: both
- * ambient notices hang off the toolbar as popovers, so no notice can shift the
- * content down when it appears. */
+ * everything to the right of the sidebar. Both ambient notices hang off the
+ * toolbar as popovers, so no notice shifts the content down when it appears;
+ * the one exception is the partial-readiness setup banner, which persists for
+ * as long as the runtime is incomplete rather than appearing transiently. */
 .content-column {
   flex: 1;
   min-width: 0;
@@ -235,6 +339,13 @@ body {
   flex-direction: column;
   /* Anchor for .server-switcher-dock (out-of-flow children only). */
   position: relative;
+}
+
+/* Partial readiness: one compact surface between the toolbar and the pane,
+ * naming the first blocking setup issue with its "Open setup" action. */
+.setup-banner {
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-4) 0;
 }
 
 /* ─── Toolbar popovers ────────────────────────────────────────────────────
@@ -535,458 +646,7 @@ body {
   color: var(--accent);
 }
 
-/* --- The floating Ask Agentico panel ---------------------------------------
- * A panel inside the main window, not a bar docked to its bottom edge: the
- * sidebar's vibrant material, a window-radius corner, the material-edge
- * hairline ring, and the deep panel shadow. It floats above the content layer
- * and below every popover-dialog, sheet, and the command palette. Dragging
- * lives on the header, resizing on the eight grips; both write the geometry
- * the panel restores on the next launch.
- *
- * Platform note: `backdrop-filter` over native window vibrancy has documented
- * double-render bugs on macOS. If that artifact shows up on real hardware, the
- * fallback is an opaque `--raised` background with the blur dropped — a
- * visual-only change, made here and nowhere else.
- */
-.ama-panel__modal-layer {
-  display: contents;
-}
-
-.ama-panel__modal-layer[data-open='true'] {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  padding: clamp(var(--space-4), 4vw, var(--space-6));
-  background: var(--color-scrim);
-}
-
-.ama-panel {
-  position: fixed;
-  z-index: 35;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  border-radius: var(--bench-radius-window);
-  background: var(--material);
-  backdrop-filter: blur(46px) saturate(170%);
-  box-shadow:
-    0 0 0 var(--bench-hairline-width) var(--material-edge),
-    var(--shadow);
-  color: var(--text);
-  font: 13px var(--bench-font-text);
-}
-
-/* The panel can float over the toolbar, which is a window drag region on
- * macOS — without this, dragging its header would move the window. */
-:root[data-platform='darwin'] .ama-panel {
-  -webkit-app-region: no-drag;
-}
-
-/* Expanded: the same panel as a whole-window presentation on the raised
- * surface, where the material has nothing behind it to sample. */
-.ama-panel[data-maximized='true'] {
-  position: relative;
-  inset: auto;
-  width: min(1180px, 100%);
-  height: min(88vh, 920px);
-  max-height: 100%;
-  background: var(--content);
-  backdrop-filter: none;
-  box-shadow:
-    0 0 0 var(--bench-hairline-width) var(--material-edge),
-    var(--sheet-shadow);
-}
-
-.ama-panel[data-maximized='true']:focus-visible {
-  outline: none;
-}
-
-.ama-panel__header {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 34px;
-  /* 12px of clearance on both sides keeps the header's own buttons clear of
-     the 10px corner resize grips below. */
-  padding: 0 var(--space-3);
-  border-bottom: var(--bench-hairline-width) solid var(--material-edge);
-  user-select: none;
-}
-
-.ama-panel:not([data-maximized='true']) .ama-panel__header {
-  cursor: grab;
-}
-
-.ama-panel[data-dragging='true']:not([data-maximized='true']) .ama-panel__header {
-  cursor: grabbing;
-}
-
-.ama-panel__title {
-  flex: none;
-  margin: 0;
-  color: var(--text);
-  font: 600 12.5px var(--bench-font-text);
-}
-
-.ama-panel__status {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin: 0;
-  color: var(--faint);
-  font: 11px var(--bench-font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ama-panel__icon-button {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: var(--bench-radius-control);
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.ama-panel__icon-button:hover {
-  background: var(--raised);
-  color: var(--text);
-}
-
-.ama-panel__icon-button svg {
-  width: 13px;
-  height: 13px;
-}
-
-.ama-panel__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-/* A pending AMA question stacks above the transcript rather than beside it —
- * the panel is 404px wide, not a full-width drawer. */
-.ama-panel__attention {
-  flex: 0 1 auto;
-  min-height: 0;
-  max-height: 55%;
-  overflow: auto;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: var(--bench-hairline-width) solid var(--material-edge);
-}
-
-.ama-panel__attention-item + .ama-panel__attention-item {
-  margin-top: var(--space-2);
-  padding-top: var(--space-2);
-  border-top: var(--bench-hairline-width) solid var(--hairline);
-}
-
-.ama-panel .ama-panel__transcript {
-  flex: 1 1 auto;
-  min-height: 0;
-  gap: var(--space-3);
-  padding: var(--space-3);
-}
-
-/* Expanded, the panel is a reading surface: generous side margins and a
- * capped measure, so a whole-window transcript never runs 1100px per line. */
-.ama-panel[data-maximized='true'] .ama-panel__transcript {
-  padding: var(--space-5) clamp(var(--space-5), 6vw, 96px);
-}
-
-.ama-panel[data-maximized='true'] .conversation__message {
-  max-width: 78ch;
-}
-
-/* Your turns carry the 2px accent left rule; Agentico's stay plain, so the
- * dialogue scans without bubbles. */
-.ama-panel .conversation__message[data-role='user'] {
-  border-left: 2px solid var(--accent);
-  padding-left: 10px;
-}
-
-.ama-panel .conversation__message-role {
-  color: var(--faint);
-  font: 600 11px var(--bench-font-text);
-}
-
-.ama-panel .conversation__message p {
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.ama-panel__notice {
-  flex: none;
-  min-width: 0;
-  margin: 0;
-  padding: 0 var(--space-3) var(--space-2);
-  color: var(--muted);
-  font: 11px var(--bench-font-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ama-panel__confirm {
-  flex: none;
-  display: grid;
-  gap: var(--space-2);
-  margin: 0 var(--space-3) var(--space-2);
-  border: var(--bench-hairline-width) solid var(--bad);
-  border-radius: var(--bench-radius-card);
-  padding: var(--space-2) var(--space-3);
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-}
-
-.ama-panel__confirm-text {
-  margin: 0;
-  color: var(--text);
-  font: 12px var(--bench-font-text);
-}
-
-.ama-panel__confirm-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-}
-
-.ama-panel__composer {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border-top: var(--bench-hairline-width) solid var(--material-edge);
-}
-
-.ama-panel__composer textarea {
-  width: 100%;
-  min-height: 32px;
-  max-height: 120px;
-  resize: none;
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  background: var(--content);
-  color: var(--text);
-  padding: 7px var(--space-2);
-  font: 12.5px var(--bench-font-text);
-}
-
-.ama-panel__composer textarea::placeholder {
-  color: var(--faint);
-}
-
-/* End session sits with the composer, per the mock: the destructive verb
- * belongs to the session you are typing into, not to the panel's chrome. */
-.ama-panel__composer-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.ama-panel__secondary {
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  padding: 4px var(--space-2);
-  background: var(--content);
-  color: var(--text);
-  font: 600 11.5px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.ama-panel__secondary:hover:not(:disabled) {
-  background: var(--raised);
-}
-
-.ama-panel__danger {
-  border: var(--bench-hairline-width) solid var(--bad);
-  border-radius: var(--bench-radius-control);
-  padding: 4px var(--space-2);
-  background: color-mix(in srgb, var(--bad) 10%, transparent);
-  color: var(--bad);
-  font: 600 11.5px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.ama-panel__danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--bad) 18%, transparent);
-}
-
-.ama-panel__send {
-  margin-left: auto;
-  border: 0;
-  border-radius: var(--bench-radius-control);
-  padding: 4px var(--space-3);
-  background: var(--accent);
-  color: #fff;
-  font: 600 11.5px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.ama-panel__send:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.ama-panel__send:disabled,
-.ama-panel__secondary:disabled,
-.ama-panel__danger:disabled,
-.ama-panel__icon-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.ama-panel__attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.ama-panel__attachment {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border-radius: 4px;
-  padding: 3px 6px;
-  background: var(--raised);
-  color: var(--muted);
-  font: 11px var(--bench-font-mono);
-}
-
-.ama-panel__attachment-glyph {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  background: var(--accent);
-}
-
-.ama-panel__attachment button {
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--faint);
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.ama-panel__attachment button:hover {
-  color: var(--text);
-}
-
-/* Upload lifecycle affordances (remote connections): same chip language. */
-.ama-panel__attachment[data-state='uploading'] {
-  opacity: 0.7;
-}
-
-.ama-panel__attachment[data-state='failed'] {
-  border: 1px solid var(--bad);
-  flex-wrap: wrap;
-}
-
-.ama-panel__attachment-state,
-.ama-panel__attachment-badge {
-  font: 10px var(--bench-font-text);
-  color: var(--faint);
-}
-
-/* Failure remediation is actionable copy: wrap it onto its own row so the
-   full message stays readable instead of being ellipsized mid-sentence. */
-.ama-panel__attachment-message {
-  flex-basis: 100%;
-  max-width: 22rem;
-  overflow: visible;
-  text-overflow: clip;
-  white-space: normal;
-  color: var(--bad);
-}
-
-/* Resize from every edge and corner, like a real macOS panel. The grips sit
- * just inside the edge — the panel clips its own overflow, so a straddling
- * target would lose half its hit area to the clip. */
-.ama-panel__grip {
-  position: absolute;
-  z-index: 1;
-}
-
-.ama-panel__grip[data-edge='n'],
-.ama-panel__grip[data-edge='s'] {
-  left: 10px;
-  right: 10px;
-  height: 5px;
-  cursor: ns-resize;
-}
-
-.ama-panel__grip[data-edge='e'],
-.ama-panel__grip[data-edge='w'] {
-  top: 10px;
-  bottom: 10px;
-  width: 5px;
-  cursor: ew-resize;
-}
-
-.ama-panel__grip[data-edge='n'] {
-  top: 0;
-}
-
-.ama-panel__grip[data-edge='s'] {
-  bottom: 0;
-}
-
-.ama-panel__grip[data-edge='e'] {
-  right: 0;
-}
-
-.ama-panel__grip[data-edge='w'] {
-  left: 0;
-}
-
-.ama-panel__grip[data-edge='ne'],
-.ama-panel__grip[data-edge='nw'],
-.ama-panel__grip[data-edge='se'],
-.ama-panel__grip[data-edge='sw'] {
-  width: 10px;
-  height: 10px;
-}
-
-.ama-panel__grip[data-edge='ne'] {
-  top: 0;
-  right: 0;
-  cursor: nesw-resize;
-}
-
-.ama-panel__grip[data-edge='nw'] {
-  top: 0;
-  left: 0;
-  cursor: nwse-resize;
-}
-
-.ama-panel__grip[data-edge='se'] {
-  bottom: 0;
-  right: 0;
-  cursor: nwse-resize;
-}
-
-.ama-panel__grip[data-edge='sw'] {
-  bottom: 0;
-  left: 0;
-  cursor: nesw-resize;
-}
-
-/* Shared conversational transcript (AMA + current-run live preview). */
+/* Shared conversational transcript (supervisor + current-run live preview). */
 .conversation__scroll {
   display: flex;
   flex-direction: column;
@@ -997,32 +657,207 @@ body {
   scroll-behavior: smooth;
 }
 
-/* Caption-labelled turns, not bubbles: a small muted caption above plain
- * flowing text, reading like one column rather than a chat log. */
+/* Rows keep their natural height when expanded; the transcript scrolls
+ * instead of shrinking activity histories into the messages after them. */
+.conversation__scroll > * {
+  flex-shrink: 0;
+}
+
+/* Turns read as a conversation, not a log. Your messages sit to the right
+ * in a soft bubble; the supervisor's replies are flowing prose in the
+ * reading column, rendered from its Markdown. Neither carries a caption:
+ * side and voice tell them apart, and the article's label names the speaker
+ * for assistive tech. */
 .conversation__message {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
 }
 
-.conversation__message-role {
-  color: var(--muted);
-  font: 600 11px var(--bench-font-text);
+.conversation__message[data-role='user'] {
+  align-items: flex-end;
 }
 
-.conversation__message p {
-  min-width: 0;
-  width: 100%;
+.conversation__message[data-role='user'] p {
+  max-width: min(78%, 620px);
   margin: 0;
-  border: none;
-  background: none;
-  padding: 0;
-  font-size: 13.5px;
-  line-height: 1.55;
+  padding: 10px 14px;
+  border-radius: 18px 18px 4px 18px;
+  background: var(--raised);
+  color: var(--text);
+  font: 14px/1.5 var(--bench-font-text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.conversation__message[data-role='assistant'] {
+  max-width: 72ch;
+  padding-block: var(--space-1);
+}
+
+.conversation__message-footer {
+  color: var(--faint);
+  font: 500 11px var(--bench-font-text);
+}
+
+.conversation__message-footer::before {
+  content: '‖';
+  margin-right: 5px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* The reply as prose: a serif measure with ordinary paragraph rhythm, code
+ * and tables in the bench's mono. The renderer is the sanitized subset, so
+ * only these elements ever appear. */
+.conversation__markdown {
+  width: 100%;
+  color: var(--text);
+  font: 15px/1.6 var(--bench-font-serif);
+  overflow-wrap: anywhere;
+}
+
+.conversation__markdown > :first-child {
+  margin-top: 0;
+}
+
+.conversation__markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.conversation__markdown p {
+  margin: 0 0 var(--space-3);
+}
+
+.conversation__markdown h1,
+.conversation__markdown h2,
+.conversation__markdown h3,
+.conversation__markdown h4,
+.conversation__markdown h5,
+.conversation__markdown h6 {
+  margin: var(--space-4) 0 var(--space-2);
+  font: 600 15px/1.35 var(--bench-font-serif);
+  letter-spacing: -0.005em;
+}
+
+.conversation__markdown h1 {
+  font-size: 19px;
+}
+
+.conversation__markdown h2 {
+  font-size: 17px;
+}
+
+.conversation__markdown ul,
+.conversation__markdown ol {
+  margin: 0 0 var(--space-3);
+  padding-left: 1.4em;
+}
+
+.conversation__markdown li {
+  margin: 3px 0;
+}
+
+.conversation__markdown li::marker {
+  color: var(--muted);
+}
+
+.conversation__markdown strong {
+  font-weight: 600;
+}
+
+.conversation__markdown code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--raised) 86%, var(--text));
+  font: 12.5px var(--bench-font-mono);
+}
+
+.conversation__markdown pre {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-3);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
+  background: var(--raised);
+  overflow-x: auto;
+  font: 12.5px/1.55 var(--bench-font-mono);
+}
+
+.conversation__markdown pre code {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+}
+
+.conversation__markdown table {
+  margin: 0 0 var(--space-3);
+  border-collapse: collapse;
+  font: 13px/1.45 var(--bench-font-text);
+}
+
+.conversation__markdown th,
+.conversation__markdown td {
+  padding: 4px 10px 4px 0;
+  border-bottom: var(--bench-hairline-width) solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+
+.conversation__markdown th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.conversation__markdown .md-link {
+  color: var(--accent);
+}
+
+/* The copy control under a reply: invisible until the turn is hovered or
+ * focused, so the column stays prose until you reach for it. */
+.conversation__message-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  padding: 3px 6px;
+  color: var(--muted);
+  font: 500 11px var(--bench-font-text);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.conversation__message:hover .conversation__message-copy,
+.conversation__message:focus-within .conversation__message-copy,
+.conversation__message-copy:focus-visible {
+  opacity: 1;
+}
+
+.conversation__message-copy:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.conversation__message-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.conversation__message-copy svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* A sent message's attachments: the composer's chips, read-only. */
+.conversation__attachments {
+  margin-top: 4px;
 }
 
 /* An automatic choice is provenance, not intervention: an inset card in the
@@ -1080,56 +915,54 @@ body {
   color: var(--accent);
 }
 
-.ama-panel__empty {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-1);
-  min-height: 120px;
-  margin: 0;
-  color: var(--muted);
-  font: 12px var(--bench-font-text);
-  text-align: center;
-}
-
-.ama-panel__empty strong {
-  color: var(--text);
-  font: 500 14px var(--bench-font-serif);
-}
-
-.ama-panel__empty span {
-  max-width: 300px;
-  line-height: 1.45;
-}
-
+/* Tool activity is one quiet trace line between turns: the dots while the
+ * supervisor is still working, a tick once it is done, then what it used. */
 .conversation__activity {
   display: flex;
   align-items: center;
   align-self: flex-start;
-  gap: 10px;
-  max-width: min(78%, 760px);
+  gap: 8px;
+  max-width: min(100%, 760px);
+  min-height: 22px;
   color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.conversation__activity-mark {
+  flex: none;
+  width: 16px;
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .conversation__activity-copy {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
-  font-size: 12px;
 }
 
 .conversation__activity-copy strong {
+  flex: none;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.conversation__activity[data-active='true'] .conversation__activity-copy strong {
   color: var(--text);
-  font-size: 12px;
 }
 
 .conversation__activity-copy span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation__activity-copy span::before {
+  content: '·';
+  margin-right: 6px;
 }
 
 /* Delegated sub-agents: one instrument lamp per task, folded live from
@@ -1253,8 +1086,8 @@ body {
      column never collapses diff cards into empty slivers. */
   flex-shrink: 0;
   width: min(100%, 880px);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-card);
   background: color-mix(in srgb, var(--raised) 92%, var(--content));
   overflow: hidden;
 }
@@ -1305,7 +1138,7 @@ body {
   max-height: 360px;
   overflow: auto;
   padding: var(--space-1) 0;
-  background: color-mix(in srgb, var(--content) 78%, black);
+  background: var(--content);
   font: 12px/1.55 var(--bench-font-mono);
 }
 
@@ -1355,6 +1188,38 @@ body {
   flex: 0 0 26px;
   width: 26px;
   height: 26px;
+}
+
+/* The monogram breathes into two orbiting strokes, then joins into a check.
+ * Geometry is animated on the existing paths so completion can start at any pose. */
+.agentico-activity-mark {
+  display: block;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  overflow: visible;
+}
+
+.agentico-activity-mark path {
+  stroke: var(--text);
+  transition:
+    stroke 500ms ease,
+    stroke-width 640ms ease;
+}
+
+.agentico-activity-mark path + path {
+  stroke: var(--accent);
+}
+
+.agentico-activity-mark[data-state='complete'] path {
+  stroke: var(--ok);
+  stroke-width: 2.6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentico-activity-mark path {
+    transition: none;
+  }
 }
 
 .conversation__thinking > span {
@@ -2105,8 +1970,7 @@ body {
   gap: var(--space-3);
 }
 
-/* The grouped inset list, shared shape with Overview's lanes and the
- * receipt below: a hairlined card whose rows are separated by hairlines. */
+/* The grouped inset list, shared shape with the receipt below: a hairlined card whose rows are separated by hairlines. */
 .aftercare-workspace__group,
 .aftercare-shipped__group {
   border: var(--bench-hairline-width) solid var(--hairline);
@@ -2733,7 +2597,7 @@ body {
   outline-offset: 2px;
 }
 
-/* Grouped inset lists, the Bench shape shared with Overview and Aftercare:
+/* Grouped inset lists, the Bench shape shared with Aftercare:
  * a quiet label above a hairlined card whose rows are hairline-separated. */
 
 .creation-sheet__group {
@@ -3069,6 +2933,78 @@ body {
   .creation-sheet__profiles[data-variant='full'] .creation-sheet__profile {
     min-height: 0;
   }
+}
+
+/* ─── The Recovery sheet ──────────────────────────────────────────────────
+ * The two operational panels in one do-and-dismiss sheet: Recovery stacked
+ * above Bulk resume/retry, each keeping its own raised card, with the title
+ * and its Close pinned above the scrolling body.
+ */
+.recovery-sheet {
+  width: min(760px, calc(100% - var(--space-6)));
+  max-height: min(88vh, 900px);
+}
+
+.recovery-sheet__header,
+.setup-sheet__header {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  border-bottom: var(--bench-hairline-width) solid var(--hairline);
+  padding: var(--space-4) var(--space-5);
+}
+
+.recovery-sheet__title,
+.setup-sheet__title {
+  margin: 0;
+  color: var(--text);
+  font: 500 22px/1.25 var(--bench-font-serif);
+}
+
+.recovery-sheet__lede {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font: 13px/1.5 var(--bench-font-text);
+}
+
+.recovery-sheet__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* The kill confirmation scopes itself to the sheet, as the creation sheet's
+ * nested dialogs do: the sheet's transform is already its containing block. */
+.recovery-sheet .impact-dialog__backdrop {
+  position: absolute;
+}
+
+/* ─── The setup wizard, in the sheet ─────────────────────────────────────
+ * The same wizard the full page shows, opened on demand while a runtime with
+ * a ready provider is still incomplete. It borrows the Recovery sheet's
+ * header (title, then the help toggle beside Close) and the wizard card's
+ * vertical rhythm for its body.
+ */
+.setup-sheet {
+  width: min(640px, calc(100% - var(--space-6)));
+}
+
+.setup-sheet__header {
+  align-items: center;
+}
+
+.setup-sheet__header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.setup-sheet__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
 }
 
 /* ─── The cycle gate, in the sheet ───────────────────────────────────────── */
@@ -4063,6 +3999,30 @@ body {
   font: 11px var(--bench-font-mono);
 }
 
+/* The topic and its sub-agent tag stay together on the head's leading edge. */
+.question-turn__lead {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+/* Provenance tag on a request a sub-agent raised: the hairline chip the
+ * ownership and carried badges use — a word, never color alone. */
+.origin-tag {
+  display: inline-block;
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: 3px;
+  padding: 0 var(--space-2);
+  color: var(--muted);
+  font: 400 11px/1.5 var(--bench-font-text);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.attention-popover__feature .origin-tag {
+  margin-inline-start: var(--space-2);
+}
+
 .question-turn__prompt {
   color: var(--text);
   font: 400 15px/1.5 var(--bench-font-serif);
@@ -4713,7 +4673,8 @@ body {
   }
 }
 
-.setup-wizard[data-narrow='true'] .provider-row__head {
+.setup-wizard[data-narrow='true'] .provider-row__head,
+.setup-sheet[data-narrow='true'] .provider-row__head {
   flex-direction: column;
   align-items: flex-start;
 }
@@ -4808,7 +4769,7 @@ body {
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* The translucent Bench source list: a pinned Overview row above five
+/* The translucent Bench source list: the pinned Supervisor row above five
  * disclosable lane sections. Built on the Bench material/hairline token set. */
 .sidebar {
   position: relative;
@@ -4853,6 +4814,12 @@ body {
   padding: var(--space-2);
 }
 
+/* A failed feature-list load: one compact surface pinned above the footer. */
+.sidebar__list-error {
+  flex: 0 0 auto;
+  padding: 0 var(--space-2) var(--space-2);
+}
+
 .sidebar__footer {
   flex: 0 0 auto;
   display: flex;
@@ -4888,31 +4855,6 @@ body {
   flex: 0 0 auto;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
-  background: var(--accent);
-}
-
-.sidebar__ama {
-  margin-left: auto;
-  padding: 0;
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font: 11px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.sidebar__ama:hover {
-  color: var(--text);
-}
-
-/* Ambient only, like the update dot: an AMA reply landed while the panel was
- * closed. The Ask button itself is the target that clears it. */
-.sidebar__ama-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-left: 6px;
   border-radius: 999px;
   background: var(--accent);
 }
@@ -5185,9 +5127,9 @@ body {
   background: rgb(255 255 255 / 78%);
 }
 
-/* The house is a glyph, not a dot: no fill of its own, and it inherits the
- * selected row's ink like the label beside it. */
-.sidebar__row[aria-selected='true'] .sidebar__row-glyph--house {
+/* The Supervisor mark is a glyph, not a dot: no fill of its own, and it
+ * inherits the selected row's ink like the label beside it. */
+.sidebar__row[aria-selected='true'] .sidebar__row-glyph--supervisor {
   background: none;
   color: rgb(255 255 255 / 88%);
 }
@@ -5224,9 +5166,10 @@ body {
   background: var(--ok);
 }
 
-/* Overview's leading mark: a caption-weight outline house on the dot's grid,
- * so the row's text still starts on the same optical line as every other. */
-.sidebar__row-glyph--house {
+/* The Supervisor row's leading mark: a caption-weight outline text bubble on
+ * the dot's grid, so the row's text still starts on the same optical line as
+ * every other. */
+.sidebar__row-glyph--supervisor {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5238,10 +5181,52 @@ body {
   color: var(--muted);
 }
 
-.sidebar__row-glyph--house svg {
+.sidebar__row-glyph--supervisor svg {
   width: 14px;
   height: 14px;
   stroke-width: 1.7;
+}
+
+/* The Supervisor row's status marker is its glyph's ink, in the feature
+ * dots' tones; the bubble itself never gains a fill. */
+.sidebar__row-glyph--supervisor[data-tone] {
+  background: none;
+}
+
+.sidebar__row-glyph--supervisor[data-tone='attention'] {
+  color: var(--attention);
+}
+
+.sidebar__row-glyph--supervisor[data-tone='danger'] {
+  color: var(--bad);
+}
+
+.sidebar__row-glyph--supervisor[data-tone='progress'] {
+  color: var(--accent);
+}
+
+/* Unread: a finished turn nobody has seen. A quiet accent dot just off the
+ * bubble's shoulder, in the sidebar update dot's metrics. */
+.sidebar__row-glyph--supervisor {
+  position: relative;
+}
+
+.sidebar__row-unread {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.sidebar__row[aria-selected='true'] .sidebar__row-glyph--supervisor[data-tone] {
+  color: rgb(255 255 255 / 88%);
+}
+
+.sidebar__row[aria-selected='true'] .sidebar__row-unread {
+  background: #fff;
 }
 
 .sidebar__row-body {
@@ -5330,45 +5315,6 @@ body {
   letter-spacing: 0.02em;
 }
 
-.overview-surface {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  min-height: 0;
-}
-
-.overview-surface__header {
-  width: min(1440px, 100%);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding-bottom: var(--space-3);
-}
-.overview-surface__headline {
-  margin: 0;
-  font: 500 26px var(--bench-font-serif);
-  color: var(--text);
-}
-.overview-surface__subline {
-  margin: 0;
-  color: var(--muted);
-  font: 13px var(--bench-font-text);
-}
-.overview-surface__cta {
-  align-self: flex-start;
-  margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  border: none;
-  border-radius: var(--bench-radius-control);
-  background: var(--accent);
-  color: #fff;
-  font: 600 13px var(--bench-font-text);
-  cursor: pointer;
-}
-.overview-surface__cta:hover {
-  opacity: 0.9;
-}
 .creation-wizard {
   max-width: 72rem;
   margin: 0 auto;
@@ -5563,6 +5509,7 @@ body {
 }
 .composer__attach {
   position: relative;
+  flex: 0 0 auto;
 }
 .composer__attach-button {
   width: 2rem;
@@ -5623,6 +5570,27 @@ body {
   padding: 0;
   list-style: none;
 }
+/* Conversation attachments share the attach row. Long clipboard names stay
+ * in tooltips; the single scrollable row never takes space from the draft. */
+.composer__chips--inline {
+  flex: 1 1 0;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-block: 2px;
+}
+.composer__chips--inline .composer__chip {
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+.composer__chips--inline .composer__chip button {
+  min-width: 1.25rem;
+  min-height: 1.25rem;
+}
+
 .composer__chip {
   display: inline-flex;
   align-items: center;
@@ -5819,198 +5787,6 @@ body {
   .pipeline-grid {
     grid-template-columns: 1fr;
   }
-}
-
-/* --- Overview lanes ------------------------------------------------------- */
-
-/* Every non-empty lane renders as its own grouped inset list, in sidebar
- * order — the same grouped-list vocabulary the sidebar itself uses. */
-.overview-lanes {
-  width: min(1440px, 100%);
-  margin: 0 auto;
-}
-
-.overview-lanes__groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.overview-lane {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.overview-lane__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-1);
-}
-
-.overview-lane__title {
-  margin: 0;
-  color: var(--text);
-  font: 600 15px var(--bench-font-text);
-}
-
-.overview-lane__count {
-  color: var(--muted);
-  font: 600 11px var(--bench-font-text);
-  background: var(--raised);
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: 999px;
-  padding: 1px 8px;
-  line-height: 1.5;
-}
-
-.overview-lane__group {
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-card);
-  background: var(--raised);
-  padding: var(--space-3);
-}
-
-.overview-lane__rows {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.overview-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  border-top: var(--bench-hairline-width) solid var(--hairline);
-  padding: 2px;
-}
-
-.overview-lane__rows li.overview-row:first-child {
-  border-top: none;
-}
-
-.overview-row[data-lane='waiting'] {
-  background: color-mix(in srgb, var(--attention) 9%, transparent);
-  border-radius: var(--bench-radius-control);
-}
-
-.overview-row__hit {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-2);
-  background: transparent;
-  border: none;
-  border-radius: var(--bench-radius-control);
-  cursor: pointer;
-  text-align: left;
-}
-
-.overview-row__hit:hover {
-  background: var(--content);
-}
-
-.overview-row__body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.overview-row__name {
-  font: 500 13px var(--bench-font-text);
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overview-row__subline {
-  font: 11px var(--bench-font-mono);
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overview-row__state-col {
-  flex: 0 0 auto;
-  width: clamp(140px, 22vw, 260px);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.overview-row__state {
-  flex: 0 1 auto;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font: 11px var(--bench-font-text);
-}
-
-.overview-row__state[data-tone='attention'] {
-  color: var(--attention);
-}
-
-.overview-row__state[data-tone='danger'] {
-  color: var(--bad);
-}
-
-.overview-row__state-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.overview-row__state-dot {
-  flex: none;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--faint);
-}
-
-.overview-row__state-dot[data-tone='attention'] {
-  background: var(--attention);
-}
-
-.overview-row__state-dot[data-tone='danger'] {
-  background: var(--bad);
-}
-
-.overview-row__state-dot[data-tone='progress'] {
-  background: var(--accent);
-}
-
-.overview-row__state-dot[data-tone='ok'] {
-  background: var(--ok);
-}
-
-.overview-row__action {
-  flex: 0 0 auto;
-  padding: 6px var(--space-3);
-  border: var(--bench-hairline-width) solid var(--hairline);
-  border-radius: var(--bench-radius-control);
-  background: transparent;
-  color: var(--text);
-  font: 600 12px var(--bench-font-text);
-  cursor: pointer;
-}
-
-.overview-row__action:hover {
-  border-color: var(--accent);
-  color: var(--accent);
 }
 
 /* --- Feature cockpit ------------------------------------------------------------ */
@@ -14275,4 +14051,990 @@ body {
 
 .config-editor__danger {
   color: var(--bad);
+}
+
+/* ─── Supervisor ──────────────────────────────────────────────────────────
+ * One conversation, read like a transcript but given the whole
+ * content pane: a centered reading column that scrolls on its own, with the
+ * composer docked beneath it. The one signal it adds is the status lamp
+ * beside the harness chip — the conversation's "on" light — so everything
+ * else stays in the shared transcript and attention vocabulary.
+ */
+.content-pane--conversation {
+  overflow: hidden;
+  gap: 0;
+  padding: 0;
+}
+
+.supervisor-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.supervisor-page__transcript {
+  flex: 1;
+  padding-block: var(--space-5) var(--space-4);
+  padding-inline: max(var(--space-5), calc((100% - 760px) / 2));
+  /* Programmatic scrolls must land at once: a smooth jump to the newest row
+   * passes the top threshold on its first frame and loads an earlier page,
+   * and a smooth prepend correction would let the anchored row drift. */
+  scroll-behavior: auto;
+}
+
+/* The welcome before the first message: the monogram beside a serif
+ * greeting with one short line underneath, centred in the empty column. */
+.supervisor-page__welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin: auto 0;
+  padding: var(--space-5) 0;
+  text-align: center;
+}
+
+.supervisor-page__welcome-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.supervisor-page__welcome-mark {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  color: var(--text);
+}
+
+.supervisor-page__welcome-greeting {
+  margin: 0;
+  color: var(--text);
+  font: 500 34px/1.1 var(--bench-font-serif);
+  letter-spacing: -0.015em;
+}
+
+.supervisor-page__welcome-line {
+  max-width: 44ch;
+  margin: 0;
+  color: var(--muted);
+  font: 15px/1.5 var(--bench-font-text);
+}
+
+.supervisor-page__failure {
+  padding: clamp(20px, 3vw, 44px);
+}
+
+.supervisor-page__requests {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* A pending permission wears the question turn's attention ground, so the
+ * two kinds of "waiting on you" read as one family in the stream. */
+.supervisor-request {
+  border: var(--bench-hairline-width) solid
+    color-mix(in srgb, var(--attention) 42%, var(--hairline));
+  border-radius: var(--bench-radius-card);
+  background: color-mix(in srgb, var(--attention) 7%, var(--content));
+  padding-top: var(--space-3);
+}
+
+.supervisor-request--question {
+  border: 0;
+  background: none;
+  padding-top: 0;
+  display: grid;
+}
+
+.supervisor-request--question .question-turn {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.supervisor-request--question .question-composer {
+  border: var(--bench-hairline-width) solid
+    color-mix(in srgb, var(--attention) 42%, var(--hairline));
+  border-top: 0;
+  border-radius: 0 0 var(--bench-radius-card) var(--bench-radius-card);
+}
+
+.supervisor-page__dock {
+  flex: none;
+  display: grid;
+  gap: var(--space-2);
+  /* minmax(0, …): the composer never grows past the dock to fit its footer. */
+  grid-template-columns: minmax(0, 1fr);
+  width: min(760px, calc(100% - 2 * var(--space-5)));
+  margin: 0 auto;
+  padding-top: var(--space-5);
+  padding-bottom: var(--space-4);
+}
+
+.supervisor-pending-tray {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  padding: var(--space-2) var(--space-3);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.supervisor-pending-tray strong {
+  color: var(--text);
+}
+.supervisor-pending-tray button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.supervisor-pending-tray button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+/* The queue strip: messages waiting for the turn to end, stacked like slips
+ * tucked above the composer. Quieter than the pending-change tray (no accent
+ * rule) since nothing here needs a decision; order is real, so each slip
+ * carries its delivery position, and "Next" marks a Send now. */
+.supervisor-queue {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: color-mix(in srgb, var(--raised) 70%, transparent);
+}
+
+.supervisor-queue__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.supervisor-queue__item {
+  display: grid;
+  grid-template-columns: 2.5em minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.supervisor-queue__item + .supervisor-queue__item {
+  border-top: var(--bench-hairline-width) dashed var(--hairline);
+}
+
+.supervisor-queue__order {
+  font: 600 11px var(--bench-font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.supervisor-queue__item[data-next='true'] .supervisor-queue__order {
+  color: var(--accent);
+}
+
+.supervisor-queue__text {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervisor-queue__count {
+  white-space: nowrap;
+}
+
+.supervisor-queue__actions {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.supervisor-queue__actions button {
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  background: transparent;
+  padding: 2px 6px;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.supervisor-queue__actions button:hover {
+  background: var(--raised);
+  color: var(--text);
+}
+
+.supervisor-queue__actions button:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.supervisor-queue__error {
+  grid-column: 2 / -1;
+}
+
+.supervisor-composer__blocked {
+  margin: 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.supervisor-composer {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-window);
+  background: var(--raised);
+  padding: var(--space-2) var(--space-3);
+  transition: border-color 120ms ease;
+}
+
+.supervisor-composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--hairline));
+}
+
+.supervisor-composer .composer {
+  /* minmax(0, …): a long status line ellipsizes instead of widening the
+   * column (and pushing Send/Stop past the frame). */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+/* The textarea sheds its form-field box: the composer frame is the field,
+ * and its focus-within border is the focus indication. */
+.supervisor-composer .form-field__input--multiline {
+  /* Let a draft grow before it scrolls; fixed rows clipped multi-line edits. */
+  field-sizing: content;
+  min-height: 64px;
+  max-height: 240px;
+  resize: none;
+  border: 0;
+  background: transparent;
+  padding: var(--space-1) 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.supervisor-composer .form-field__input--multiline:focus-visible {
+  outline: none;
+}
+
+.supervisor-composer .form-field__input--multiline::placeholder {
+  color: var(--faint);
+}
+
+.supervisor-composer__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* The model chip is the footer's one elastic item: it gives way (its label
+ * ellipsizes) before Send/Stop is ever pushed out of the composer. */
+.supervisor-composer__footer .supervisor-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/*
+ * Narrow windows: the chip, context ring and Send/Stop keep the first row,
+ * and the live status (with any staged-uploads notice) wraps onto its own
+ * row beneath, so a long status never competes with Stop for width.
+ */
+@media (max-width: 520px) {
+  .supervisor-composer__footer {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+    column-gap: var(--space-2);
+  }
+
+  .supervisor-composer__send,
+  .supervisor-composer__stop {
+    margin-inline-start: auto;
+  }
+
+  .supervisor-composer__footer .supervisor-status,
+  .supervisor-composer__footer .supervisor-composer__blocked {
+    order: 1;
+    flex: 1 0 100%;
+  }
+}
+
+.supervisor-context-ring {
+  --context-ink: var(--accent);
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: conic-gradient(var(--context-ink) var(--context-fill, 0%), var(--hairline) 0);
+  position: relative;
+}
+
+.supervisor-context-ring::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  background: var(--raised);
+}
+
+.supervisor-context-ring[data-known='false'] {
+  --context-ink: var(--hairline);
+}
+
+.supervisor-context-ring[data-tone='warning'] {
+  --context-ink: var(--attention);
+}
+
+.supervisor-status {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The status text ellipsizes on its own: text-overflow does not reach a
+ * flex container's bare text. */
+.supervisor-status__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervisor-status__lamp {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.supervisor-status[data-lifecycle='idle'] .supervisor-status__lamp {
+  background: var(--ok);
+}
+
+.supervisor-status[data-lifecycle='starting'] .supervisor-status__lamp,
+.supervisor-status[data-lifecycle='running'] .supervisor-status__lamp {
+  background: var(--accent);
+  animation: supervisor-lamp 1.4s ease-in-out infinite;
+}
+
+.supervisor-status[data-lifecycle='waiting_permission'] .supervisor-status__lamp,
+.supervisor-status[data-lifecycle='waiting_question'] .supervisor-status__lamp {
+  background: var(--attention);
+}
+
+.supervisor-status[data-lifecycle='failed'] .supervisor-status__lamp {
+  background: var(--bad);
+}
+
+/* Paused by a restart: the working lamp's accent, hollow and still — work
+ * that stopped mid-flight and waits for the next message. */
+.supervisor-status[data-tone='paused'] .supervisor-status__lamp {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+@keyframes supervisor-lamp {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .supervisor-status__lamp {
+    animation: none !important;
+  }
+}
+
+.supervisor-composer__send,
+.supervisor-composer__stop {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-radius: var(--bench-radius-control);
+  padding: 5px var(--space-3);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.supervisor-composer__send {
+  background: var(--accent);
+  color: #fff;
+}
+
+.supervisor-composer__send:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.supervisor-composer__send:disabled {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--faint);
+  cursor: default;
+}
+
+/* Stop is the same slot in ink rather than accent: a different verb, not an
+ * alarm. */
+.supervisor-composer__stop {
+  background: var(--text);
+  color: var(--content);
+}
+
+.supervisor-composer__stop:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.supervisor-composer__stop-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.supervisor-composer__send:focus-visible,
+.supervisor-composer__stop:focus-visible,
+.supervisor-chip__trigger:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* The harness chip reads as an instrument readout: mono, pill-shaped, and
+ * accent-tinted only while it still asks to be set. */
+.supervisor-chip__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: min(320px, 100%);
+  padding: 3px var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: 999px;
+  background: var(--content);
+  color: var(--text);
+  font: 500 11.5px var(--bench-font-mono);
+  cursor: pointer;
+}
+
+.supervisor-chip__trigger[data-unset='true'] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--hairline));
+  color: var(--accent);
+  font-family: var(--bench-font-text);
+}
+
+.supervisor-chip__trigger[aria-disabled='true'] {
+  color: var(--muted);
+  cursor: default;
+}
+
+.supervisor-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervisor-chip__chevron {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+}
+
+/* Hangs upward from the composer instead of down from the toolbar. */
+.supervisor-chip__popover {
+  top: auto;
+  right: auto;
+  bottom: calc(100% + var(--space-2));
+  left: 0;
+  width: 300px;
+  max-height: min(440px, 70vh);
+  overflow-y: auto;
+}
+
+.supervisor-chip__heading {
+  margin: 0;
+  color: var(--muted);
+  font: 600 12px var(--bench-font-text);
+}
+
+.supervisor-chip__popover input[aria-label='Filter models'] {
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--text);
+  font: 12px var(--bench-font-text);
+}
+
+.supervisor-chip__groups {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.supervisor-chip__group,
+.supervisor-chip__effort {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.supervisor-chip__harness {
+  padding: 0 0 var(--space-1);
+  color: var(--faint);
+  font: 600 11px var(--bench-font-text);
+  letter-spacing: 0.02em;
+}
+
+.supervisor-chip__switch {
+  justify-self: start;
+  margin: 0 0 var(--space-1);
+  padding: 3px var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--accent);
+  font: 600 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.supervisor-chip__switch:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.supervisor-chip__switch:focus-visible {
+  outline: var(--focus-ring);
+}
+
+.supervisor-switch-dialog {
+  display: grid;
+  gap: var(--space-3);
+  width: min(420px, calc(100vw - 40px));
+  padding: var(--space-5);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.supervisor-switch-dialog h2,
+.supervisor-switch-dialog p {
+  margin: 0;
+}
+
+.supervisor-switch-dialog label {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.supervisor-switch-dialog select {
+  width: 100%;
+  padding: var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.supervisor-switch-dialog__actions {
+  display: flex;
+  justify-content: end;
+  gap: var(--space-2);
+}
+.supervisor-switch-dialog__actions button {
+  padding: var(--space-2) var(--space-3);
+}
+.supervisor-switch-dialog :focus-visible {
+  outline: var(--focus-ring);
+}
+
+.supervisor-chip__option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 5px var(--space-2);
+  border-radius: var(--bench-radius-control);
+  font: 13px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.supervisor-chip__option:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.supervisor-chip__option[data-current] {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.supervisor-chip__option:has(:focus-visible),
+.supervisor-chip__segment:has(:focus-visible) {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.supervisor-chip__option-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supervisor-chip__check {
+  flex: none;
+  width: 1em;
+  color: var(--accent);
+  font-weight: 600;
+  text-align: right;
+}
+
+.supervisor-chip__note {
+  margin: 0;
+  padding: 2px var(--space-2);
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.supervisor-chip__segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.supervisor-chip__segment {
+  position: relative;
+  padding: 3px var(--space-2);
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: 999px;
+  font: 500 12px var(--bench-font-text);
+  cursor: pointer;
+}
+
+.supervisor-chip__segment[data-current] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.supervisor-chip__group:disabled .supervisor-chip__option,
+.supervisor-chip__effort:disabled .supervisor-chip__segment {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* An answered request, collapsed to one line in the stream. */
+.conversation__verdict {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.conversation__verdict-mark {
+  flex: none;
+  color: var(--ok);
+  font-weight: 700;
+}
+
+.conversation__verdict[data-outcome='denied'] .conversation__verdict-mark {
+  color: var(--bad);
+}
+
+.conversation__verdict[data-outcome='interrupted'] .conversation__verdict-mark {
+  color: var(--accent);
+}
+
+/* A seam in the stream: glyph and caption in the verdict's voice, trailed by
+ * a hairline to the column's edge, so a restart or failed launch reads as a
+ * break in time rather than as something anyone said. */
+.conversation__notice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font: 12px var(--bench-font-text);
+}
+
+.conversation__notice-container {
+  min-width: 0;
+}
+
+.conversation__notice-toggle {
+  flex: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.conversation__notice-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.conversation__notice-summary {
+  max-width: 66ch;
+  margin: var(--space-2) 0 var(--space-3) var(--space-4);
+  padding-left: var(--space-3);
+  border-left: var(--bench-hairline-width) solid var(--hairline);
+  color: var(--text);
+  font: 13px/1.55 var(--bench-font-text);
+  overflow-wrap: anywhere;
+}
+
+.conversation__notice-summary > div > :first-child {
+  margin-top: 0;
+}
+.conversation__notice-summary > div > :last-child {
+  margin-bottom: 0;
+}
+.conversation__notice-truncated {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.conversation__notice::after {
+  content: '';
+  flex: 1 0 var(--space-4);
+  align-self: center;
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+}
+
+.conversation__notice-mark {
+  flex: none;
+  font-weight: 700;
+}
+
+.conversation__notice[data-tone='interrupted'] .conversation__notice-mark {
+  color: var(--accent);
+}
+
+.conversation__notice[data-tone='failed'] .conversation__notice-mark {
+  color: var(--bad);
+}
+
+.conversation__notice[data-tone='caveat'] .conversation__notice-mark {
+  color: var(--attention);
+}
+
+.conversation__notice-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The load-earlier status row above the oldest loaded message: the notice's
+ * quiet seam, its mark breathing while the page is in flight. */
+.conversation__earlier {
+  padding-block: var(--space-1);
+}
+
+.conversation__earlier[data-state='loading'] .conversation__notice-mark {
+  color: var(--accent);
+  animation: supervisor-lamp 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation__earlier[data-state='loading'] .conversation__notice-mark {
+    animation: none;
+  }
+}
+
+.conversation__verdict-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Activity remains readable during long tool runs and quiet provider periods. */
+.conversation__activity {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  width: 100%;
+}
+.conversation__activity-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.conversation__activity-copy {
+  flex: 1;
+}
+.conversation__activity-time {
+  margin-left: 24px;
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.conversation__activity-history {
+  margin-left: 24px;
+  font: 12px/1.5 var(--bench-font-text);
+}
+.conversation__activity-history summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--muted);
+}
+.conversation__activity-history summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 3px;
+}
+.conversation__activity-history ol {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding-left: 20px;
+  border-left: 1px solid var(--hairline);
+}
+.conversation__activity-history li {
+  padding: 3px 8px;
+  overflow-wrap: anywhere;
+}
+.conversation__subagent-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.conversation__subagent-desc {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.conversation__subagent-detail {
+  max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.conversation__subagent-state {
+  font: 11px var(--bench-font-text);
+  color: var(--muted);
+}
+.conversation__subagent[data-state='running'] .conversation__subagent-state {
+  color: var(--accent);
+}
+.conversation__subagent[data-state='failed'] .conversation__subagent-state {
+  color: var(--bad);
+}
+
+.conversation__subagent[data-state='unknown'] .conversation__subagent-lamp {
+  background: var(--muted);
+}
+
+.conversation__diff-expand {
+  width: 100%;
+  border: 0;
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+  padding: 6px 12px;
+  text-align: left;
+  color: var(--muted);
+  background: var(--raised);
+  font: 12px var(--bench-font-text);
+  cursor: pointer;
+}
+.conversation__diff-expand:hover {
+  color: var(--text);
+}
+.conversation__diff-expand:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Background work remains at the composer across turns. Watching is a quiet
+ * label; animation would imply continuous execution between monitor events. */
+.supervisor-background {
+  border: var(--bench-hairline-width) solid var(--hairline);
+  border-radius: var(--bench-radius-control);
+  background: var(--raised);
+  font: 12px var(--bench-font-text);
+  color: var(--muted);
+}
+.supervisor-background header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+}
+.supervisor-background header strong {
+  color: var(--text);
+}
+.supervisor-background__body {
+  max-height: min(24vh, 220px);
+  overflow: auto;
+}
+.supervisor-background ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.supervisor-background__task {
+  border-top: var(--bench-hairline-width) solid var(--hairline);
+}
+.supervisor-background summary {
+  cursor: pointer;
+  padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
+}
+.supervisor-background__state {
+  color: var(--accent);
+  margin-right: var(--space-2);
+}
+.supervisor-background__task[data-state='interrupted'] .supervisor-background__state,
+.supervisor-background__task[data-state='failed'] .supervisor-background__state {
+  color: var(--text);
+  font-weight: 600;
+}
+.supervisor-background__title {
+  color: var(--text);
+}
+.supervisor-background__activity {
+  padding: 0 var(--space-3) var(--space-2);
+  overflow-wrap: anywhere;
+}
+.supervisor-background__activity p {
+  margin: var(--space-1) 0;
+}
+.supervisor-background button {
+  font: inherit;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  padding: var(--space-1) 0;
+  cursor: pointer;
+}
+.supervisor-background button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.supervisor-background :is(summary, button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }

@@ -17,15 +17,20 @@ limitations under the License.
 /**
  * Decides what a ready connection shows: nothing but a loading state until
  * the first authoritative readiness snapshot arrives (so an already-ready
- * runtime never flashes the wizard), the mandatory setup wizard while any
- * gate is unsatisfied, and the main view once everything passes. Mounted
- * fresh on every reconnect, so resume always starts from the server truth.
+ * runtime never flashes the wizard), then one of three modes. With no ready
+ * provider the full-page setup wizard owns the window. With at least one
+ * ready provider but setup still incomplete, the main view mounts in
+ * partial-readiness mode, carrying the snapshot so its banner and on-demand
+ * wizard sheet read the same truth the gate does. Once everything passes the
+ * main view mounts as-is. Partial and complete render the same shell element,
+ * so a "Check again" that completes setup never remounts it. Mounted fresh on
+ * every reconnect, so resume always starts from the server truth.
  */
-import { useCallback, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import type { AttentionItem, RoutedRequest, UpdateState } from '../../../shared/ipc';
 import { WorkspaceShell } from '../features/WorkspaceShell';
 import type { AttentionDrafts } from '../features/AttentionInbox';
-import { deriveWizardState } from '../wizard/deriveWizardState';
+import { readinessGateMode } from '../wizard/deriveWizardState';
 import { retryAction, useIpcLoad } from '../hooks';
 import { SetupWizard } from './wizard/SetupWizard';
 import { ErrorSurface } from './ErrorSurface';
@@ -45,9 +50,8 @@ export function ReadinessGate({
   onDismissUpdate = () => {},
   onOpenUpdatesSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
-  onOpenAma = () => {},
   onOpenPalette = () => {},
-  amaUnread = false,
+  onSetupIncompleteChange = () => {},
 }: {
   attentionDrafts?: AttentionDrafts;
   setAttentionDrafts?: Dispatch<SetStateAction<AttentionDrafts>>;
@@ -68,13 +72,25 @@ export function ReadinessGate({
   onDismissUpdate?(version: string): void;
   onOpenUpdatesSettings?(): void;
   onInstallUpdateWhenIdle?(): Promise<void>;
-  onOpenAma?(): void;
   /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
   onOpenPalette?(): void;
-  amaUnread?: boolean;
+  /**
+   * Owned by App: true while the shell is mounted in partial-readiness mode,
+   * so the palette can offer Setup…; false otherwise and on unmount.
+   */
+  onSetupIncompleteChange?(incomplete: boolean): void;
 }) {
   const load = useCallback(() => window.agentico.getRuntimeReadiness(), []);
   const { state, reload, replace } = useIpcLoad(load, []);
+  const mode = state.phase === 'loaded' ? readinessGateMode(state.data) : null;
+  const setupIncomplete = mode === 'partial';
+
+  const onSetupIncompleteChangeRef = useRef(onSetupIncompleteChange);
+  onSetupIncompleteChangeRef.current = onSetupIncompleteChange;
+  useEffect(() => {
+    onSetupIncompleteChangeRef.current(setupIncomplete);
+  }, [setupIncomplete]);
+  useEffect(() => () => onSetupIncompleteChangeRef.current(false), []);
 
   if (state.phase === 'loading') {
     return (
@@ -98,8 +114,7 @@ export function ReadinessGate({
   }
 
   const snapshot = state.data;
-  const derived = deriveWizardState(snapshot);
-  if (derived.complete) {
+  if (mode !== 'wizard') {
     return (
       <WorkspaceShell
         attentionItems={attentionItems}
@@ -116,9 +131,8 @@ export function ReadinessGate({
         onDismissUpdate={onDismissUpdate}
         onOpenUpdatesSettings={onOpenUpdatesSettings}
         onInstallUpdateWhenIdle={onInstallUpdateWhenIdle}
-        onOpenAma={onOpenAma}
         onOpenPalette={onOpenPalette}
-        amaUnread={amaUnread}
+        setupReadiness={setupIncomplete ? { snapshot, onSnapshot: replace } : null}
       />
     );
   }

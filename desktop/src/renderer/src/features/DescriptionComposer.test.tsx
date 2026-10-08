@@ -14,15 +14,19 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionState, RepositoryFileRef } from '../../../shared/ipc';
 import { installAgenticoMock } from '../test/agenticoMock';
 import { FILE_SEARCH_REQUIRES_LOCAL_SERVER } from '../localServerCopy';
 import { STAGED_ON_OTHER_SERVER, type ComposerUploadItem } from './stagedItems';
-import { DescriptionComposer } from './DescriptionComposer';
+import {
+  DescriptionComposer,
+  runComposerSlashCommand,
+  type ComposerSlashCommand,
+} from './DescriptionComposer';
 
 afterEach(cleanup);
 
@@ -44,7 +48,7 @@ const REMOTE_CONNECTION: ConnectionState = {
 };
 
 /** A controlled host so staged images/attachments/references render as chips. */
-function Harness() {
+function Harness({ compactAttachments = false }: { compactAttachments?: boolean }) {
   const [value, setValue] = useState('');
   const [images, setImages] = useState<readonly string[]>([]);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
@@ -56,6 +60,7 @@ function Harness() {
       id="description"
       label="Description"
       placeholder="Describe the work"
+      compactAttachments={compactAttachments}
       value={value}
       searchRepositories={[{ key: 'repo-a' }]}
       images={images}
@@ -371,6 +376,83 @@ describe('DescriptionComposer on a local server', () => {
   });
 });
 
+describe('DescriptionComposer compact attachments', () => {
+  it('keeps numbered image and file tokens beside Attach while preserving names and draft editing', async () => {
+    const mock = installAgenticoMock({ connection: LOCAL_CONNECTION });
+    const first = 'clipboard-79963618-2eca-44b2-a61a-c39946ffc3b4.png';
+    const second = 'clipboard-f5c1973c-5f82-401b-954d-83b7d6e4b066.png';
+    mock.api.pickCreationFiles.mockImplementation((kind: string) =>
+      Promise.resolve({
+        paths: kind === 'image' ? [`/safe/${first}`, `/safe/${second}`] : ['/safe/design.pdf'],
+      }),
+    );
+    render(<Harness compactAttachments />);
+    const user = userEvent.setup();
+    const textarea = await screen.findByLabelText('Description');
+    await user.type(textarea, 'Compare these screenshots');
+    const attach = screen.getByRole('button', { name: 'Attach files or photos' });
+    await user.click(attach);
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    await user.click(attach);
+    await user.click(screen.getByRole('menuitem', { name: 'Add files' }));
+
+    const files = screen.getByRole('list', { name: 'Attached files' });
+    expect(within(files).getByText('Image 1')).toHaveAttribute('title', first);
+    expect(within(files).getByText('Image 2')).toHaveAttribute('title', second);
+    expect(within(files).getByText('File 1')).toHaveAttribute('title', 'design.pdf');
+    expect(files.closest('.composer__toolbar')).toContainElement(attach);
+    expect(screen.queryByText(/Paste or drop/)).not.toBeInTheDocument();
+    expect(textarea).toHaveValue('Compare these screenshots');
+    expect(files).not.toHaveTextContent('clipboard-');
+
+    const remove = within(files).getByRole('button', { name: `Remove ${first}` });
+    remove.focus();
+    await user.keyboard('{Enter}');
+    expect(within(files).getByText('Image 1')).toHaveAttribute('title', second);
+    expect(within(files).queryByText('Image 2')).not.toBeInTheDocument();
+    await user.click(textarea);
+    await user.type(textarea, ' please');
+    expect(textarea).toHaveValue('Compare these screenshots please');
+  });
+
+  it('keeps remote tokens and their numbers through upload completion and failure', async () => {
+    const mock = installAgenticoMock({ connection: REMOTE_CONNECTION });
+    let release: (result: unknown) => void = () => undefined;
+    mock.api.uploadCreationFiles.mockImplementation(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    mock.api.pickCreationFiles.mockResolvedValue({
+      paths: ['/shots/first.png', '/shots/second.png'],
+    });
+    render(<Harness compactAttachments />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    expect(screen.getByText('Image 1')).toHaveAttribute('title', 'first.png');
+    expect(screen.getByText('Image 2')).toHaveAttribute('title', 'second.png');
+    expect(screen.getAllByText('Uploading…')).toHaveLength(2);
+    await act(async () =>
+      release({
+        results: [
+          {
+            ok: true,
+            upload: { id: 'first', name: 'first.png', kind: 'image', serverKey: 'server-key-1' },
+          },
+          { ok: false, error: { code: 'internal', summary: 'Upload failed. Try again.' } },
+        ],
+      }),
+    );
+    expect(screen.getByText('Image 1')).toHaveAttribute('title', 'first.png');
+    expect(screen.getByText('Image 2')).toHaveAttribute('title', 'second.png');
+    expect(screen.queryByText('Uploading…')).not.toBeInTheDocument();
+    expect(screen.getByText('Upload failed. Try again.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retry second.png' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
+    expect(screen.queryByText('Image 2')).not.toBeInTheDocument();
+    expect(screen.getByText('Image 1')).toBeVisible();
+  });
+});
+
 describe('DescriptionComposer locality gating matrix', () => {
   it('keeps attach affordances enabled under every connection; only mention search stays local-only', async () => {
     const mock = installAgenticoMock();
@@ -384,5 +466,162 @@ describe('DescriptionComposer locality gating matrix', () => {
       act(() => mock.emitConnection(connection));
       expect(screen.getByRole('button', { name: 'Attach files or photos' })).toBeEnabled();
     }
+  });
+});
+
+/** A conversational host: Enter submits, uploads are off, the footer is the host's. */
+function ConversationalHarness({
+  onSubmit,
+  submitDisabled = false,
+  placeholderOverride,
+  slashCommands,
+}: {
+  onSubmit(value: string): void;
+  submitDisabled?: boolean;
+  placeholderOverride?: string;
+  slashCommands?: readonly ComposerSlashCommand[];
+}) {
+  const [value, setValue] = useState('');
+  return (
+    <DescriptionComposer
+      id="conversation"
+      label="Message"
+      hideLabel
+      placeholder="Say something"
+      placeholderOverride={placeholderOverride}
+      value={value}
+      searchRepositories={[]}
+      images={[]}
+      attachments={[]}
+      imageUploads={[]}
+      attachmentUploads={[]}
+      repositoryFiles={[]}
+      onValueChange={setValue}
+      onImagesChange={() => undefined}
+      onAttachmentsChange={() => undefined}
+      onImageUploadsChange={() => undefined}
+      onAttachmentUploadsChange={() => undefined}
+      onRepositoryFilesChange={() => undefined}
+      onError={() => undefined}
+      allowUploads={false}
+      onSubmit={() => onSubmit(value)}
+      slashCommands={slashCommands}
+      submitDisabled={submitDisabled}
+      footer={<button type="button">Footer action</button>}
+    />
+  );
+}
+
+describe('DescriptionComposer conversational props', () => {
+  it('lists registered slash commands, selects with keys, and dismisses with Escape', async () => {
+    installAgenticoMock();
+    const onSubmit = vi.fn();
+    const commands: readonly ComposerSlashCommand[] = [
+      { name: '/model', description: 'Change model', onExecute: vi.fn() },
+      { name: '/effort', description: 'Change effort', onExecute: vi.fn() },
+    ];
+    render(<ConversationalHarness onSubmit={onSubmit} slashCommands={commands} />);
+    const user = userEvent.setup();
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+
+    await user.type(textarea, '/');
+    const listbox = screen.getByRole('listbox', { name: 'Commands' });
+    expect(listbox).toHaveTextContent('Change model');
+    expect(listbox).toHaveTextContent('Change effort');
+    expect(screen.getByRole('option', { name: '/model Change model' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    await user.keyboard('{ArrowDown}{Tab}');
+    expect(textarea).toHaveValue('/effort ');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.clear(textarea);
+    await user.type(textarea, '/');
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull();
+    expect(textarea).toHaveValue('/');
+    await user.type(textarea, 'm');
+    expect(screen.getByRole('option', { name: '/model Change model' })).toBeVisible();
+  });
+
+  it('runs registered commands on Enter without sending a message, even when send is blocked', async () => {
+    installAgenticoMock();
+    const onSubmit = vi.fn();
+    const onModel = vi.fn();
+    const commands: readonly ComposerSlashCommand[] = [
+      { name: '/model', description: 'Change model', onExecute: onModel },
+    ];
+    render(<ConversationalHarness onSubmit={onSubmit} slashCommands={commands} submitDisabled />);
+    const user = userEvent.setup();
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+
+    await user.type(textarea, '/model Sonnet 4{Enter}');
+    expect(onModel).toHaveBeenCalledWith('Sonnet 4');
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(textarea).toHaveValue('');
+
+    await user.type(textarea, '/unknown value{Enter}');
+    expect(onModel).toHaveBeenCalledTimes(1);
+    expect(textarea).toHaveValue('/unknown value');
+    expect(runComposerSlashCommand('/model default', commands)).toBe(true);
+    expect(onModel).toHaveBeenLastCalledWith('default');
+    expect(runComposerSlashCommand('/unknown value', commands)).toBe(false);
+    expect(runComposerSlashCommand('/model other\nmessage', commands)).toBe(false);
+  });
+
+  it('leaves the wizard composer unchanged when none of the optional props are set', async () => {
+    installAgenticoMock();
+    render(<Harness />);
+    const user = userEvent.setup();
+
+    const textarea = await screen.findByLabelText('Description');
+    expect(textarea).toHaveAttribute('placeholder', 'Describe the work');
+    expect(textarea).toHaveAttribute('rows', '6');
+    expect(screen.getByText('Description')).not.toHaveClass('sr-only');
+    await user.type(textarea, 'one{Enter}two');
+    // Enter is still a newline: no submit handler exists.
+    expect(textarea).toHaveValue('one\ntwo');
+    await user.clear(textarea);
+    await user.type(textarea, '/');
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull();
+  });
+
+  it('submits on Enter, keeps Shift+Enter a newline, and honours the blocked state', async () => {
+    installAgenticoMock();
+    const onSubmit = vi.fn();
+    const { rerender } = render(<ConversationalHarness onSubmit={onSubmit} />);
+    const user = userEvent.setup();
+
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+    await user.type(textarea, 'hello{Shift>}{Enter}{/Shift}there');
+    expect(textarea).toHaveValue('hello\nthere');
+    await user.keyboard('{Enter}');
+    expect(onSubmit).toHaveBeenCalledWith('hello\nthere');
+
+    rerender(
+      <ConversationalHarness onSubmit={onSubmit} submitDisabled placeholderOverride="Not yet" />,
+    );
+    expect(textarea).toHaveAttribute('placeholder', 'Not yet');
+    await user.keyboard('{Enter}');
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+    // Typing stays allowed while the submit is blocked.
+    await user.type(textarea, '!');
+    expect(textarea).toHaveValue('hello\nthere!');
+  });
+
+  it('hides the upload affordances, ignores dropped files, and renders the footer slot', async () => {
+    const mock = installAgenticoMock();
+    render(<ConversationalHarness onSubmit={vi.fn()} />);
+
+    const textarea = screen.getByRole('textbox', { name: 'Message' });
+    expect(screen.getByText('Message')).toHaveClass('sr-only');
+    expect(screen.queryByRole('button', { name: 'Attach files or photos' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Footer action' })).toBeVisible();
+
+    fireEvent.drop(textarea.closest('.composer')!, { dataTransfer: { files: [IMAGE_FILE()] } });
+    expect(mock.api.importDroppedCreationFiles).not.toHaveBeenCalled();
+    expect(screen.queryByRole('list', { name: 'Attached files' })).toBeNull();
   });
 });

@@ -36,6 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
@@ -57,12 +58,11 @@ const (
 // AskUserQuestion control request has no readable question of its own.
 const agentQuestionPrompt = "Agent has a question"
 
-// HelpQueue.Kind values. "question" and "input" both await the user; only
-// "coordinating" is a byproduct of a phase session parking between turns, which
-// no human needs to answer.
+// HelpQueue.Kind values. "question" awaits the user; "coordinating" is a
+// byproduct of a phase session parking between turns, which no human needs
+// to answer.
 const (
 	helpKindQuestion     = "question"
-	helpKindInput        = "input"
 	helpKindCoordinating = "coordinating"
 )
 
@@ -1294,6 +1294,7 @@ func (h *apiHandler) modelCatalogSnapshot() ModelCatalogResponse {
 		ProviderModels:      map[string][]Model{},
 		PhaseProviderModels: map[string]map[string][]string{},
 		PhaseDefaults:       h.configOrDefault().Defaults.Models,
+		ChatDefaultEffort:   map[string]string{},
 	}
 	if h.registry != nil {
 		defaults := h.registry.CatalogDefaultModels()
@@ -1302,6 +1303,7 @@ func (h *apiHandler) modelCatalogSnapshot() ModelCatalogResponse {
 		}
 		for _, provider := range h.registry.DetectedProviders() {
 			name := provider.Name()
+			resp.ChatDefaultEffort[name] = string(llm.EffortLow)
 			resp.ProviderOrder = append(resp.ProviderOrder, name)
 			for _, model := range h.registry.ModelsForProvider(name) {
 				resp.ProviderModels[name] = append(resp.ProviderModels[name], modelDTO(model))
@@ -1632,19 +1634,17 @@ func (h *apiHandler) featureQueues() ([]HelpQueue, []NeedUserInputGate, error) {
 			if sess == nil || sess.Status() != ports.SessionWaitingHelp || sessionHasPendingAskUserControl(sess) {
 				continue
 			}
-			// A chat session waiting between turns has delivered its reply and
-			// rests until the next message — clients surface that in the chat
-			// panel, not as blocking attention. A phase session in the same
-			// state is mid-coordination and needs no human.
-			kind := helpKindCoordinating
-			if sess.Kind() == ports.KindChat {
-				kind = helpKindInput
+			// A phase session waiting between turns is mid-coordination and
+			// needs no human. The supervisor's between-turn rest is its
+			// page's idle state, never an inbox entry.
+			if sess.Kind() == ports.KindSupervisor {
+				continue
 			}
 			help = append(help, orderedHelpQueue{
 				dto: HelpQueue{
 					FeatureID: sess.FeatureID(),
 					Question:  agentQuestionPrompt,
-					Kind:      kind,
+					Kind:      helpKindCoordinating,
 					Pending:   true,
 					Time:      sess.WaitingSince(),
 				},
@@ -2089,6 +2089,8 @@ func controlRequestDTO(sess ports.SessionView, req *llm.ControlRequestMessage) C
 		WaitingSince: req.WaitingSince,
 		Summary:      safeControlSummary(req),
 	}
+	origin, child := supervisor.RequestOrigin(req.Origin)
+	dto.Origin, dto.ChildSessionID = RequestOrigin(origin), child
 	if req.Request.ToolName == toolNameAskUserQuestion {
 		dto.Questions = safeAskUserQuestions(sess, req)
 	} else {

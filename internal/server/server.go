@@ -105,6 +105,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		Updates:                     opts.Updates,
 		Admission:                   opts.Admission,
 		ProbeActivity:               opts.ProbeActivity,
+		Supervisor:                  opts.Supervisor,
 		RuntimePolicy:               policy,
 	})
 	lifetime := opts.Lifetime

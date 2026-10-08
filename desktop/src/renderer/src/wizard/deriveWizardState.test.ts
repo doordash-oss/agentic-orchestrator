@@ -17,7 +17,12 @@ limitations under the License.
 import { describe, expect, it } from 'vitest';
 import type { ReadinessIssue, ReadinessSnapshot } from '../../../shared/ipc';
 import { readySnapshot, unreadySnapshot } from '../test/agenticoMock';
-import { WIZARD_STEPS, deriveWizardState } from './deriveWizardState';
+import {
+  WIZARD_STEPS,
+  deriveWizardState,
+  readinessGateMode,
+  setupBannerIssue,
+} from './deriveWizardState';
 
 const canonicalIssue = (
   code: ReadinessIssue['code'],
@@ -161,5 +166,85 @@ describe('deriveWizardState', () => {
   it('is a pure projection: identical snapshots produce identical states', () => {
     const snapshot: ReadinessSnapshot = unreadySnapshot();
     expect(deriveWizardState(snapshot)).toEqual(deriveWizardState(snapshot));
+  });
+});
+
+describe('readinessGateMode', () => {
+  it('keeps the full-page wizard while no provider is ready, whatever else fails', () => {
+    expect(readinessGateMode(unreadySnapshot())).toBe('wizard');
+    expect(
+      readinessGateMode(
+        unreadySnapshot({
+          configuration: {
+            valid: false,
+            issue: canonicalIssue('invalid_configuration', 'Invalid configuration', 'bad'),
+          },
+        }),
+      ),
+    ).toBe('wizard');
+  });
+
+  it('is partial with one ready provider and any outstanding gate', () => {
+    const modelsMissing = unreadySnapshot({
+      providers: [{ name: 'claude', installed: true, ready: true }],
+    });
+    expect(readinessGateMode(modelsMissing)).toBe('partial');
+    expect(
+      readinessGateMode(
+        readySnapshot({
+          ready: false,
+          configuration: {
+            valid: false,
+            issue: canonicalIssue('invalid_configuration', 'Invalid configuration', 'bad'),
+          },
+        }),
+      ),
+    ).toBe('partial');
+    // Every gate passes but the server still says unready.
+    expect(readinessGateMode(readySnapshot({ ready: false }))).toBe('partial');
+  });
+
+  it('is complete only when the projection is complete', () => {
+    expect(readinessGateMode(readySnapshot())).toBe('complete');
+  });
+});
+
+describe('setupBannerIssue', () => {
+  const configIssue = canonicalIssue('invalid_configuration', 'Invalid configuration', 'bad');
+  const modelsIssue = canonicalIssue('models_unavailable', 'Models unavailable', 'no models');
+
+  it('leads with the configuration issue', () => {
+    const snapshot = unreadySnapshot({
+      providers: [{ name: 'claude', installed: true, ready: true }],
+      configuration: { valid: false, issue: configIssue },
+      issues: [modelsIssue, configIssue],
+    });
+    expect(setupBannerIssue(snapshot)).toEqual(configIssue);
+  });
+
+  it("falls back to the active step's first blocker", () => {
+    const snapshot = unreadySnapshot({
+      providers: [{ name: 'claude', installed: true, ready: true }],
+      issues: [modelsIssue],
+    });
+    expect(setupBannerIssue(snapshot)).toEqual(modelsIssue);
+  });
+
+  it("uses the models gate's own issue when the issue list omits it", () => {
+    const snapshot = unreadySnapshot({
+      providers: [{ name: 'claude', installed: true, ready: true }],
+      models: { available: false, issue: modelsIssue },
+      issues: [],
+    });
+    expect(setupBannerIssue(snapshot)).toEqual(modelsIssue);
+  });
+
+  it('mirrors the catalog not_ready entry when nothing more specific is known', () => {
+    expect(setupBannerIssue(readySnapshot({ ready: false }))).toEqual({
+      code: 'not_ready',
+      class: 'needs_action',
+      title: 'Runtime not ready',
+      summary: 'The runtime is not ready to create features.',
+    });
   });
 });

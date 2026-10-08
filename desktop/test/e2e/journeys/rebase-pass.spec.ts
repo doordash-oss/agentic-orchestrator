@@ -163,9 +163,9 @@ test('rebase pass: behind feature → card click → pass workspace → completi
     transcript.step('advanced local main so the feature is behind its target');
 
     handle = await launchApp(world, testInfo, { traceName: 'rebase-pass-seeded' });
-    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
-    await overviewOption.click();
+    const supervisorOption = handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+    await expect(supervisorOption).toBeVisible({ timeout: 60_000 });
+    await supervisorOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });
@@ -294,9 +294,9 @@ test('rebase pass dirty parent: one attention card, chip focuses it, retry compl
     transcript.step('advanced local main so the feature is behind its target');
 
     handle = await launchApp(world, testInfo, { traceName: 'rebase-pass-dirty-seeded' });
-    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
-    await overviewOption.click();
+    const supervisorOption = handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+    await expect(supervisorOption).toBeVisible({ timeout: 60_000 });
+    await supervisorOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });
@@ -451,9 +451,9 @@ test('rebase pass up-to-date: card click renders inline notice, stays in afterca
     transcript.step('seeded feature to Published status (repo is up to date)');
 
     handle = await launchApp(world, testInfo, { traceName: 'rebase-pass-uptodate-seeded' });
-    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
-    await overviewOption.click();
+    const supervisorOption = handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+    await expect(supervisorOption).toBeVisible({ timeout: 60_000 });
+    await supervisorOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });

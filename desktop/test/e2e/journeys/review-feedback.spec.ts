@@ -252,9 +252,9 @@ test('multi-repo review-feedback triage: sections → filtered bulk clear → re
         AGENTICO_GITHUB_API_BASE: apiBase,
       },
     });
-    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
-    await overviewOption.click();
+    const supervisorOption = handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+    await expect(supervisorOption).toBeVisible({ timeout: 60_000 });
+    await supervisorOption.click();
     await expect(handle.page.getByRole('button', { name: 'New feature' })).toBeVisible({
       timeout: 10_000,
     });
@@ -603,9 +603,9 @@ test('review-feedback recovery: failed-save Retry/Reload → conflict convergenc
       traceName: 'review-feedback-recovery-seeded',
       env: { AGENTICO_GITHUB_API_BASE: serverBaseUrl(fake.server) },
     });
-    const overviewOption = handle.page.getByRole('option', { name: 'Overview' });
-    await expect(overviewOption).toBeVisible({ timeout: 60_000 });
-    await overviewOption.click();
+    const supervisorOption = handle.page.getByRole('option', { name: 'Supervisor', exact: true });
+    await expect(supervisorOption).toBeVisible({ timeout: 60_000 });
+    await supervisorOption.click();
     await handle.page.getByRole('option', { name: featureName }).click();
     const seededCockpit = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(seededCockpit).toBeVisible({ timeout: 30_000 });

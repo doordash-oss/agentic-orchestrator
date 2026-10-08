@@ -324,7 +324,16 @@ describe('routeWindowPurpose', () => {
   });
 
   it('sends every other route to the main window', () => {
-    const targets = ['home', 'attention', 'ama', 'bulk', 'palette', 'help'] as const;
+    const targets = [
+      'home',
+      'attention',
+      'supervisor',
+      'bulk',
+      'recovery',
+      'setup',
+      'palette',
+      'help',
+    ] as const;
     for (const target of targets) {
       expect(routeWindowPurpose({ target }), target).toBe('main');
     }
@@ -344,7 +353,16 @@ describe('routeSettingsPane', () => {
   });
 
   it('returns null for every non-settings route, even one carrying a section', () => {
-    const targets = ['home', 'attention', 'ama', 'bulk', 'palette', 'help'] as const;
+    const targets = [
+      'home',
+      'attention',
+      'supervisor',
+      'bulk',
+      'recovery',
+      'setup',
+      'palette',
+      'help',
+    ] as const;
     for (const target of targets) {
       expect(routeSettingsPane({ target }), target).toBeNull();
       const event: AppRouteEvent = { target, settingsSection: 'updates' };

@@ -29,13 +29,13 @@ import type { CompatibilityFailure } from '../../shared/errors';
 export type { BuildIdentity };
 
 /** The client schema series this desktop build implements. */
-export const DESKTOP_SCHEMA_VERSION = 1;
+export const DESKTOP_SCHEMA_VERSION = 2;
 
 /** Server REST API majors this desktop build speaks. */
 export const SUPPORTED_SERVER_API_VERSIONS: readonly string[] = ['v1'];
 
 /** Server schema contract series this desktop build supports. */
-export const SUPPORTED_SERVER_SCHEMA_VERSIONS: readonly number[] = [1];
+export const SUPPORTED_SERVER_SCHEMA_VERSIONS: readonly number[] = [2];
 
 /**
  * Runtime security/ownership policy contracts this desktop build supports:

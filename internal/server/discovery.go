@@ -169,6 +169,53 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 	return DiscoveryDecision{AlreadyRunning: true, Reason: "matching healthy server", Record: rec}, nil
 }
 
+// ErrDiscoveryMissing marks a runtime directory that holds no discovery
+// file.
+var ErrDiscoveryMissing = errors.New("discovery file missing")
+
+// ErrDiscoveryUntrusted marks a discovery file that a client must not trust:
+// not an owner-only regular file owned by the caller, or unusable.
+var ErrDiscoveryUntrusted = errors.New("discovery file untrusted")
+
+// ReadTrustedDiscovery reads runtimeDir's discovery record for a client that
+// will send its bearer token, applying the same security check the server
+// applies before trusting a record. Failures wrap ErrDiscoveryMissing or
+// ErrDiscoveryUntrusted and never carry the token.
+func ReadTrustedDiscovery(runtimeDir string) (DiscoveryRecord, error) {
+	path := DiscoveryPath(runtimeDir)
+	untrusted := func(reason string) (DiscoveryRecord, error) {
+		return DiscoveryRecord{}, fmt.Errorf("%w: %s: %s", ErrDiscoveryUntrusted, path, reason)
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return DiscoveryRecord{}, fmt.Errorf("%w: %s", ErrDiscoveryMissing, path)
+	}
+	if err != nil {
+		return untrusted(err.Error())
+	}
+	if !info.Mode().IsRegular() {
+		return untrusted("not a regular file")
+	}
+	if err := validateDiscoveryFileSecurity(path); err != nil {
+		return untrusted(err.Error())
+	}
+	rec, err := ReadDiscovery(runtimeDir)
+	if err != nil {
+		return untrusted(err.Error())
+	}
+	if strings.TrimSpace(rec.AuthToken) == "" {
+		return untrusted("discovery record carries no auth token")
+	}
+	if !isPlainHTTPBaseURL(rec.BaseURL) {
+		return untrusted("discovery record carries no usable base_url")
+	}
+	return rec, nil
+}
+
+// discoveryOwnerUID is the uid a trusted discovery file must be owned by;
+// a seam so tests can simulate a foreign owner without chown.
+var discoveryOwnerUID = os.Geteuid
+
 func validateDiscoveryFileSecurity(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -184,7 +231,7 @@ func validateDiscoveryFileSecurity(path string) error {
 	if !ok {
 		return fmt.Errorf("discovery owner metadata unavailable")
 	}
-	if int(stat.Uid) != os.Geteuid() {
+	if int(stat.Uid) != discoveryOwnerUID() {
 		return fmt.Errorf("discovery file is owned by uid %d", stat.Uid)
 	}
 	return nil

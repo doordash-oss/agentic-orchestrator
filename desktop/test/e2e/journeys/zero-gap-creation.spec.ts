@@ -109,6 +109,7 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
 
     await app.page.setViewportSize({ width: 1440, height: 900 });
     await app.page.getByRole('button', { name: 'New feature' }).click();
+    const creationSheet = app.page.getByRole('dialog', { name: 'New feature' });
     await app.page.getByRole('checkbox', { name: /creation-lab/ }).check();
     await expect(
       app.page.getByRole('checkbox', { name: /creation-lab.*Source: main/ }),
@@ -152,9 +153,9 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     await expect(
       app.page.getByRole('button', { name: /Remove reference creation-lab/ }),
     ).toBeVisible();
-    await app.page.getByRole('button', { name: 'Attach files or photos' }).click();
+    await creationSheet.getByRole('button', { name: 'Attach files or photos' }).click();
     await app.page.getByRole('menuitem', { name: 'Add photos' }).click();
-    await app.page.getByRole('button', { name: 'Attach files or photos' }).click();
+    await creationSheet.getByRole('button', { name: 'Attach files or photos' }).click();
     await app.page.getByRole('menuitem', { name: 'Add files' }).click();
     await setTheme(app, 'light');
     await evidenceShot(app, SHOTS.describe);
@@ -171,7 +172,6 @@ test('the creation sheet covers scoped files, initialization, the contract, setu
     // substring, and a randomly generated server name (e.g. "frisky-lungo")
     // can otherwise collide with the sidebar server control's aria-label and
     // trip strict mode.
-    const creationSheet = app.page.getByRole('dialog', { name: 'New feature' });
     await creationSheet.getByLabel('Risk').selectOption('high');
     await creationSheet.getByLabel('Inquireness').selectOption('high');
     await creationSheet

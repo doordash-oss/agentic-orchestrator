@@ -52,6 +52,7 @@ import {
   type ExternalRoute,
 } from './externalRoutes';
 import { AccentController, type AccentColorSource } from './accent';
+import { WindowFocusSignal } from './windowFocus';
 import {
   resolveTestOutputFile,
   resolveTestPackagedResourcesDir,
@@ -67,6 +68,8 @@ import { RecoveryService } from './recovery';
 import { BulkService } from './bulk';
 import { AttentionService } from './attention';
 import { SessionService } from './serverClient';
+import { SupervisorService } from './supervisor';
+import { SupervisorStreamRunner } from './supervisorStream';
 import { ServerUpdateService } from './serverUpdates';
 import { UploadService } from './uploads';
 import { randomUUID } from 'node:crypto';
@@ -87,12 +90,10 @@ import { CreationFilesService } from './creationFiles';
 import { ThemeController } from './theme';
 import {
   actionableAttentionCount,
-  CHAT_SESSION_ID,
   DEFAULT_RUNTIME_ID,
   disabledMainWindowUiState,
   CREATION_IMAGE_FORMATS,
   IPC_EVENTS,
-  isActiveChatSession,
   SETTINGS_WINDOW_DEFAULT_HEIGHT,
   SETTINGS_WINDOW_DEFAULT_WIDTH,
   SETTINGS_WINDOW_MIN_HEIGHT,
@@ -101,7 +102,6 @@ import {
   type AppEvent,
   type AppRouteEvent,
   type ConnectionState,
-  type FeatureSnapshot,
   type FeaturesListResult,
   type RemoteServerAddRequest,
   type RemoteServerAddResult,
@@ -123,6 +123,10 @@ import {
   installRendererProtocol,
 } from './rendererProtocol';
 import { AttentionNotificationCoordinator, electronNotificationSink } from './notifications';
+import {
+  forwardSupervisorEvent,
+  SupervisorNotificationCoordinator,
+} from './supervisorNotifications';
 import { NativeCommandController, type NativeCommandSnapshot } from './nativeCommands';
 import { DiagnosticsService } from './diagnostics';
 import { armHardExitGuard } from './exitGuard';
@@ -143,11 +147,16 @@ import {
 } from './updateInstaller';
 import {
   QuitCoordinator,
+  SUPERVISOR_UNRESOLVED_ID,
+  SUPERVISOR_UNRESOLVED_LABEL,
   activeWorkDialog,
-  hasActiveWork,
+  detectActiveWork as detectActiveWorkFrom,
+  endWaitingSupervisor as endWaitingSupervisorWith,
   quitAnywayDialog,
   shouldRequestQuitOnMainWindowClose,
+  stopActiveWork as stopActiveWorkWith,
   stopFailureDialog,
+  supervisorGrade,
   type ActiveWorkCheck,
   type ActiveWorkDecision,
   type QuitDialogOptions,
@@ -648,15 +657,25 @@ if (!hasSingleInstanceLock) {
     });
     const recovery = new RecoveryService(gateway);
     const bulk = new BulkService(features);
-    const sessions = new SessionService(gateway, randomUUID, () => gateway.connectedLocality);
+    const sessions = new SessionService(gateway);
+    // The supervisor conversation is fenced by server identity and connection
+    // generation like the other per-server services: a reply crossing a
+    // switch is discarded rather than shown against the new server.
+    const supervisor = new SupervisorService({
+      transport: gateway,
+      identity: () => ({
+        serverKey: gateway.connectedServerKey,
+        generation: gateway.connectionGeneration,
+      }),
+      makeClientMessageId: randomUUID,
+      locality: () => gateway.connectedLocality,
+    });
     const reviews = new ReviewService(gateway);
     const configService = new ConfigService(gateway);
     const attention = new AttentionService(gateway);
     const runHistory = new RunHistoryService(gateway);
     let nativeCommands: NativeCommandController | null = null;
     let featureLabels = new Map<string, string>();
-    let mainWindowAttentionFocused = false;
-    let mainWindowAttentionFocusOverride: boolean | undefined;
     let stopStreams = (): void => {};
 
     // The main window's ready-to-show normally enters the gateway's standard
@@ -747,6 +766,24 @@ if (!hasSingleInstanceLock) {
     const mainWindowOrNull = (): BrowserWindow | null => {
       const window = windows.peek('main');
       return window !== null && !window.isDestroyed() ? window : null;
+    };
+
+    // The main window's effective focus — visible and focused, with the
+    // packaged-test override applied. The notification gate reads it and
+    // every change is pushed to the main window, so one hook drives both
+    // notifications and the renderer's supervisor unread rules.
+    const mainWindowFocus = new WindowFocusSignal({
+      isVisible: () => mainWindowOrNull()?.isVisible() ?? false,
+      publish: (focused) => {
+        const window = mainWindowOrNull();
+        if (window !== null) {
+          window.webContents.send(IPC_EVENTS.windowFocusChanged, { focused });
+        }
+      },
+    });
+    const setMainWindowFocused = (focused: boolean): void => {
+      mainWindowFocus.setFocused(focused);
+      publishMainWindowFocusTestState(focused);
     };
 
     // The switcher popover's server list: union of registry scan and
@@ -910,46 +947,42 @@ if (!hasSingleInstanceLock) {
           });
           crashRecovery.crashed(details.reason);
         });
+        window.webContents.on('did-finish-load', () => mainWindowFocus.emit());
         window.on('closed', () => {
-          mainWindowAttentionFocused = false;
-          publishMainWindowFocusTestState(mainWindowAttentionFocused);
+          setMainWindowFocused(false);
           // No main window, no renderer to own the menu's state: every
           // window- and feature-scoped verb goes back to disabled.
           nativeCommands?.resetUiState();
           publishNativeCommandTestState(nativeCommands);
         });
-        window.on('focus', () => {
-          mainWindowAttentionFocused = true;
-          publishMainWindowFocusTestState(mainWindowAttentionFocused);
-        });
-        window.on('blur', () => {
-          mainWindowAttentionFocused = false;
-          publishMainWindowFocusTestState(mainWindowAttentionFocused);
-        });
-        window.on('hide', () => {
-          mainWindowAttentionFocused = false;
-          publishMainWindowFocusTestState(mainWindowAttentionFocused);
-        });
+        window.on('focus', () => setMainWindowFocused(true));
+        window.on('blur', () => setMainWindowFocused(false));
+        window.on('hide', () => setMainWindowFocused(false));
+        window.on('show', () => mainWindowFocus.emit());
       }
-      mainWindowAttentionFocused = true;
-      publishMainWindowFocusTestState(mainWindowAttentionFocused);
+      setMainWindowFocused(true);
       return window;
     };
 
     const notifications = new AttentionNotificationCoordinator({
       sink: electronNotificationSink,
-      shouldNotify: () => {
-        const window = mainWindowOrNull();
-        return (
-          window === null ||
-          !window.isVisible() ||
-          !(mainWindowAttentionFocusOverride ?? mainWindowAttentionFocused)
-        );
-      },
+      shouldNotify: () => !mainWindowFocus.effective(),
       show: () => {
         showMainWindow();
       },
     });
+    // Turn-end notifications share the attention sink, focus gate and preview
+    // setting; focusing the main window drops a pending settle.
+    const supervisorNotifications = new SupervisorNotificationCoordinator({
+      sink: electronNotificationSink,
+      shouldNotify: () => !mainWindowFocus.effective(),
+      previewEnabled: () => settings.get().notifications.previewEnabled,
+      show: () => {
+        showMainWindow();
+      },
+      route,
+    });
+    mainWindowFocus.subscribe((focused) => supervisorNotifications.focusChanged(focused));
 
     const quitLog = (line: string): void => {
       console.warn(`[agentico-quit] ${line}`);
@@ -1110,35 +1143,15 @@ if (!hasSingleInstanceLock) {
       if (forced !== null) {
         return forced;
       }
-      const featureIds: string[] = [];
-      let detectionFailed = false;
-      try {
-        const list = await features.listFeatures();
-        featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
-        const snapshots = await Promise.allSettled(
-          list.features.map((summary) => features.getFeature(summary.id)),
-        );
-        for (const result of snapshots) {
-          if (result.status === 'rejected') {
-            detectionFailed = true;
-            continue;
-          }
-          if (stoppableFeature(result.value)) {
-            featureIds.push(result.value.id);
-          }
-        }
-      } catch {
-        detectionFailed = true;
-      }
-
-      let chatActive = false;
-      try {
-        chatActive = (await sessions.list()).some(isActiveChatSession);
-      } catch {
-        detectionFailed = true;
-      }
-
-      return { featureIds: [...new Set(featureIds)], chatActive, detectionFailed };
+      return detectActiveWorkFrom({
+        listFeatures: async () => {
+          const list = await features.listFeatures();
+          featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
+          return list;
+        },
+        getFeature: (featureId) => features.getFeature(featureId),
+        getSupervisorState: () => supervisor.getState(),
+      });
     }
 
     function handleWindowClose(event: ElectronEvent, window: BrowserWindow): void {
@@ -1157,67 +1170,17 @@ if (!hasSingleInstanceLock) {
       if (forcedFailure !== null) {
         return forcedFailure;
       }
-
-      const stopFailures = new Map<string, string>();
-      const stops = active.featureIds.map(async (featureId) => {
-        try {
+      return stopActiveWorkWith(active, {
+        stopFeature: async (featureId) => {
           await features.dispatchAction({ featureId, action: 'pause-stop' });
-        } catch (error) {
-          stopFailures.set(`feature:${featureId}`, safeStopReason(error));
-        }
+        },
+        endSupervisor: async () => {
+          await supervisor.end();
+        },
+        detectActiveWork,
+        featureLabel: (featureId) => featureLabels.get(featureId) ?? `Feature ${featureId}`,
+        describeStopFailure: safeStopReason,
       });
-      if (active.chatActive) {
-        stops.push(
-          sessions
-            .endChat()
-            .then(() => undefined)
-            .catch((error: unknown) => {
-              stopFailures.set('ama', safeStopReason(error));
-            }),
-        );
-      }
-      await Promise.all(stops);
-
-      const deadline = Date.now() + 10_000;
-      let latest = await detectActiveWork();
-      while (!latest.detectionFailed && hasActiveWork(latest) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 250));
-        latest = await detectActiveWork();
-      }
-      if (!hasActiveWork(latest)) {
-        return { unresolved: [] };
-      }
-
-      const unresolved: UnresolvedWorkItem[] = [];
-      if (latest.detectionFailed) {
-        unresolved.push({
-          kind: 'detection',
-          id: 'active-work-detection',
-          label: 'Active work check',
-          reason: 'Agentico could not verify whether all work stopped.',
-        });
-      }
-      for (const featureId of latest.featureIds) {
-        unresolved.push({
-          kind: 'feature',
-          id: featureId,
-          label: featureLabels.get(featureId) ?? `Feature ${featureId}`,
-          reason:
-            stopFailures.get(`feature:${featureId}`) ??
-            'The server did not report a terminal state before the timeout.',
-        });
-      }
-      if (latest.chatActive) {
-        unresolved.push({
-          kind: 'ama',
-          id: CHAT_SESSION_ID,
-          label: 'AMA session',
-          reason:
-            stopFailures.get('ama') ??
-            'The server did not report that AMA ended before the timeout.',
-        });
-      }
-      return { unresolved };
     }
 
     const updatePackageFormat = detectPackageFormat(process.platform, process.env, runtimeExecPath);
@@ -1252,7 +1215,8 @@ if (!hasSingleInstanceLock) {
         const active = await detectActiveWork();
         return {
           featureCount: active.featureIds.length,
-          amaActive: active.chatActive,
+          supervisorActive: active.supervisorActive,
+          supervisorWaiting: active.supervisorWaiting,
           detectionFailed: active.detectionFailed,
         };
       },
@@ -1269,6 +1233,16 @@ if (!hasSingleInstanceLock) {
                   .join('\n'),
               }),
         };
+      },
+      endWaitingSupervisor: async () => {
+        const result = await endWaitingSupervisorWith({
+          endSupervisor: async () => {
+            await supervisor.end();
+          },
+          detectActiveWork,
+          describeStopFailure: safeStopReason,
+        });
+        return result.ended ? { ended: true } : { ended: false, message: result.reason };
       },
       restart: async (update) => {
         // Ask for quit consent BEFORE touching disk. requestQuitDecision may
@@ -1307,17 +1281,20 @@ if (!hasSingleInstanceLock) {
 
     async function refreshBackgroundState(): Promise<void> {
       if (gateway.getState().status !== 'ready') {
-        nativeCommands?.update({ attentionCount: 0, amaActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorGrade: 'idle' });
         publishNativeCommandTestState(nativeCommands);
         return;
       }
       try {
-        const [snapshot, list, sessionList] = await Promise.all([
+        const [snapshot, list, supervisorStatusGrade] = await Promise.all([
           attention.getSnapshot(),
           features
             .listFeatures()
             .catch(() => ({ features: [], warnings: [] }) as FeaturesListResult),
-          sessions.list().catch(() => []),
+          supervisor
+            .getState()
+            .then((state) => supervisorGrade(state.lifecycle))
+            .catch(() => 'idle' as const),
         ]);
         featureLabels = new Map(list.features.map((feature) => [feature.id, feature.name]));
         notifications.update(snapshot, {
@@ -1326,12 +1303,12 @@ if (!hasSingleInstanceLock) {
         });
         nativeCommands?.update({
           attentionCount: actionableAttentionCount(snapshot.items),
-          amaActive: sessionList.some(isActiveChatSession),
+          supervisorGrade: supervisorStatusGrade,
         });
         publishNativeCommandTestState(nativeCommands);
         await updates.reconcileScheduledInstall();
       } catch {
-        nativeCommands?.update({ attentionCount: 0, amaActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorGrade: 'idle' });
         publishNativeCommandTestState(nativeCommands);
       }
     }
@@ -1342,19 +1319,20 @@ if (!hasSingleInstanceLock) {
         __agenticoSetMainWindowAttentionFocusOverride?: (focused: boolean) => void;
       };
       global.__agenticoRefreshBackgroundState = () => {
-        mainWindowAttentionFocused = false;
+        mainWindowFocus.setFocused(false);
         void refreshBackgroundState();
       };
       // Packaged journeys share one Linux display across workers. Let tests
       // pin the notification-facing focus signal so another app window's
       // ambient focus event cannot rewrite the scenario under assertion.
       global.__agenticoSetMainWindowAttentionFocusOverride = (focused) => {
-        mainWindowAttentionFocusOverride = focused;
+        mainWindowFocus.setOverride(focused);
       };
       // A seeded item may be observed before a journey installs its capture
       // sink. Clearing the snapshot resets delivery memory without exposing
       // mutable coordinator internals or affecting production startup.
       global.__agenticoResetAttentionNotificationDelivery = () => {
+        supervisorNotifications.reset();
         notifications.update(
           { items: [] },
           {
@@ -1380,8 +1358,32 @@ if (!hasSingleInstanceLock) {
         }
       },
     });
+    // The supervisor conversation stream runs beside the global stream while
+    // the gateway is ready, pushing validated records, deltas, state, and
+    // pending requests to every window.
+    const supervisorStream = new SupervisorStreamRunner({
+      source: gateway,
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      log: (line) => console.warn(`[agentico-supervisor-events] ${line}`),
+      onPush: (event) => {
+        for (const window of windows.all()) {
+          if (!window.isDestroyed()) {
+            window.webContents.send(IPC_EVENTS.supervisorEvent, event);
+          }
+        }
+        // A new supervisor permission or question changes the badge counts
+        // (and notifies at once through the attention path), a lifecycle
+        // change moves the tray and a waiting install, and a completed turn
+        // arms the turn-end settle.
+        forwardSupervisorEvent(event, {
+          turnEnd: supervisorNotifications,
+          refreshAttention: () => void refreshBackgroundState(),
+        });
+      },
+    });
     stopStreams = () => {
       eventSupervisor.stop();
+      supervisorStream.stop();
       sessions.cancelAll();
       serverList.dispose();
     };
@@ -1394,11 +1396,21 @@ if (!hasSingleInstanceLock) {
     // re-keys them to the connecting server's identity. Drafts belonging to a
     // different identity are never touched.
     let legacyDraftsRekeyed = false;
+    // The renderer's focus flag is re-sent once per entry into ready, so a
+    // shell mounting against a freshly attached server starts from the
+    // current value rather than whatever it last heard.
+    let focusPublishedForReady = false;
     gateway.subscribe((state) => {
       if (state.status === 'ready') {
+        if (!focusPublishedForReady) {
+          focusPublishedForReady = true;
+          mainWindowFocus.emit();
+        }
         const key = state.serverKey ?? null;
         if (key !== streamServerKey) {
           eventSupervisor.resetCursor();
+          supervisorStream.resetCursor();
+          supervisorNotifications.reset();
           streamServerKey = key;
         }
         if (!legacyDraftsRekeyed && key !== null) {
@@ -1412,12 +1424,16 @@ if (!hasSingleInstanceLock) {
           }
         }
         eventSupervisor.start();
+        supervisorStream.start();
         updates.startAutomaticChecks();
         void refreshBackgroundState();
       } else {
+        focusPublishedForReady = false;
+        supervisorNotifications.reset();
         eventSupervisor.stop();
+        supervisorStream.stop();
         sessions.cancelAll();
-        nativeCommands?.update({ attentionCount: 0, amaActive: false });
+        nativeCommands?.update({ attentionCount: 0, supervisorGrade: 'idle' });
         publishNativeCommandTestState(nativeCommands);
       }
       if (state.status === 'launch-failed' || state.status === 'crashed') {
@@ -1528,21 +1544,32 @@ if (!hasSingleInstanceLock) {
       resolveGate: (request) => attention.resolveGate(request),
       waiveTestingContract: (request) => attention.waiveTestingContract(request),
       getTestingContract: (request) => attention.getTestingContract(request),
-      startChat: async (request) => {
-        const result = await sessions.startChat(request);
-        void updates.refreshActiveWorkSummary();
-        return result;
-      },
-      endChat: async () => {
-        const result = await sessions.endChat();
-        void updates.reconcileScheduledInstall();
-        return result;
-      },
       listSessions: () => sessions.list(),
       getSession: (sessionId) => sessions.get(sessionId),
       getSessionTranscript: (request) => sessions.transcript(request),
       openSessionOutput: (request, emit) => sessions.subscribe(request, emit),
       cancelSessionOutput: (subscriptionId) => sessions.cancel(subscriptionId),
+      getSupervisorState: () => supervisor.getState(),
+      updateSupervisorSettings: (request) => supervisor.updateSettings(request),
+      cancelSupervisorPendingChange: (request) => supervisor.cancelPendingChange(request),
+      dismissSupervisorPersistFailure: () => supervisor.dismissPersistFailure(),
+      getSupervisorTranscript: (request) => supervisor.getTranscript(request),
+      sendSupervisorMessage: async (request) => {
+        const result = await supervisor.sendMessage(request);
+        void updates.refreshActiveWorkSummary();
+        return result;
+      },
+      interruptSupervisor: () => supervisor.interrupt(),
+      endSupervisor: async () => {
+        const result = await supervisor.end();
+        void updates.reconcileScheduledInstall();
+        return result;
+      },
+      resetSupervisor: async () => {
+        const result = await supervisor.reset();
+        void updates.reconcileScheduledInstall();
+        return result;
+      },
       getCreationDefaults: () => features.creationDefaults(),
       inspectRepositorySources: (request) => features.inspectRepositorySources(request),
       checkRepositoryOriginStatus: (request) => features.checkRepositoryOriginStatus(request),
@@ -1669,10 +1696,6 @@ app.on('window-all-closed', () => {
   }
 });
 
-function stoppableFeature(snapshot: FeatureSnapshot): boolean {
-  return snapshot.actions.some((action) => action.id === 'pause-stop' && action.enabled);
-}
-
 function publishNativeCommandTestState(nativeCommands: NativeCommandController | null): void {
   if (testUserData === null) {
     return;
@@ -1682,7 +1705,7 @@ function publishNativeCommandTestState(nativeCommands: NativeCommandController |
   };
   global.__agenticoNativeCommandState = nativeCommands?.snapshot() ?? {
     attentionCount: 0,
-    amaActive: false,
+    supervisorGrade: 'idle',
     trayInstalled: false,
     trayFallbackActive: true,
     platform: process.platform,
@@ -1722,11 +1745,11 @@ function consumeForcedStopFailure(
     label: featureLabels.get(featureId) ?? `Feature ${featureId}`,
     reason: 'Packaged E2E forced one unresolved stop outcome.',
   }));
-  if (active.chatActive) {
+  if (active.supervisorActive) {
     unresolved.push({
-      kind: 'ama',
-      id: CHAT_SESSION_ID,
-      label: 'AMA session',
+      kind: 'supervisor',
+      id: SUPERVISOR_UNRESOLVED_ID,
+      label: SUPERVISOR_UNRESOLVED_LABEL,
       reason: 'Packaged E2E forced one unresolved stop outcome.',
     });
   }
@@ -1749,7 +1772,8 @@ function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkC
     __agenticoForcedActiveWork?: {
       featureIds?: string[];
       featureLabels?: Record<string, string>;
-      chatActive?: boolean;
+      supervisorActive?: boolean;
+      supervisorWaiting?: boolean;
       detectionFailed?: boolean;
     };
   };
@@ -1762,7 +1786,8 @@ function forcedActiveWorkForE2E(featureLabels: Map<string, string>): ActiveWorkC
   }
   return {
     featureIds: forced.featureIds ?? [],
-    chatActive: forced.chatActive ?? false,
+    supervisorActive: (forced.supervisorActive ?? false) || (forced.supervisorWaiting ?? false),
+    supervisorWaiting: forced.supervisorWaiting ?? false,
     detectionFailed: forced.detectionFailed ?? false,
   };
 }

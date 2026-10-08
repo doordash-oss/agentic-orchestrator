@@ -99,13 +99,20 @@ export const IPC_CHANNELS = {
   attentionResolveGate: 'agentico:attention:resolve-gate',
   attentionWaiveTestingContract: 'agentico:attention:waive-testing-contract',
   attentionGetTestingContract: 'agentico:attention:get-testing-contract',
-  chatStart: 'agentico:chat:start',
-  chatEnd: 'agentico:chat:end',
   sessionsList: 'agentico:sessions:list',
   sessionsGet: 'agentico:sessions:get',
   sessionsTranscript: 'agentico:sessions:transcript',
   sessionsOutputOpen: 'agentico:sessions:output-open',
   sessionsOutputCancel: 'agentico:sessions:output-cancel',
+  supervisorStateGet: 'agentico:supervisor:state-get',
+  supervisorSettingsUpdate: 'agentico:supervisor:settings-update',
+  supervisorPendingChangeCancel: 'agentico:supervisor:pending-change-cancel',
+  supervisorPersistFailureDismiss: 'agentico:supervisor:persist-failure-dismiss',
+  supervisorTranscriptGet: 'agentico:supervisor:transcript-get',
+  supervisorMessageSend: 'agentico:supervisor:message-send',
+  supervisorInterrupt: 'agentico:supervisor:interrupt',
+  supervisorEnd: 'agentico:supervisor:end',
+  supervisorReset: 'agentico:supervisor:reset',
   creationDefaults: 'agentico:creation:defaults',
   creationSources: 'agentico:creation:sources',
   creationOriginStatus: 'agentico:creation:origin-status',
@@ -183,7 +190,9 @@ export const IPC_EVENTS = {
   serversChanged: 'agentico:servers:changed',
   appEvent: 'agentico:events:app',
   sessionOutput: 'agentico:sessions:output',
+  supervisorEvent: 'agentico:supervisor:event',
   routeRequested: 'agentico:route:requested',
+  windowFocusChanged: 'agentico:window:focus-changed',
 } as const;
 
 // --- Error shapes crossing the boundary -------------------------------------
@@ -848,6 +857,18 @@ export const AppEventSchema = z.discriminatedUnion('type', [
 export type AppEvent = z.output<typeof AppEventSchema>;
 
 /**
+ * The main window's effective focus (main → renderer on
+ * `IPC_EVENTS.windowFocusChanged`): visible and focused, with the
+ * packaged-test override applied — the same value the notification gate
+ * reads. Pushed on every focus, blur, show, hide and override change, on
+ * load and on gateway ready.
+ */
+export const WindowFocusEventSchema = z.strictObject({
+  focused: z.boolean(),
+});
+export type WindowFocusEvent = z.output<typeof WindowFocusEventSchema>;
+
+/**
  * The deep-linkable Settings destinations. Every value is also a Settings
  * pane id (`SETTINGS_PANES`), so a section name selects a pane directly.
  */
@@ -966,8 +987,18 @@ export const AppRouteEventSchema = z
       'home',
       'settings',
       'attention',
-      'ama',
+      // Selects the Supervisor page and focuses its composer, optionally
+      // drafting `draft` (with its `errorReference`) into it unsent.
+      'supervisor',
+      // Selects the Supervisor page and asks it to start a new conversation;
+      // the page applies its own confirmation rule.
+      'new-conversation',
+      // Opens the Recovery sheet; 'bulk' opens the same sheet with its bulk
+      // preview loading.
+      'recovery',
       'bulk',
+      // Opens the setup wizard sheet while the runtime is partially ready.
+      'setup',
       'new-feature',
       'toggle-sidebar',
       'toggle-inspector',
@@ -986,23 +1017,21 @@ export const AppRouteEventSchema = z
     settingsFocus: SettingsFocusSchema.optional(),
     /** The `feature.*` command id a 'feature-command' route asks the renderer to run. */
     command: z.string().min(1).max(64).optional(),
-    /** Pre-filled AMA composer text; accepted only on an 'ama' route. */
+    /** Text drafted into the Supervisor composer unsent; 'supervisor' routes only. */
     draft: z.string().min(1).max(2000).optional(),
-    /** Submits `draft` directly with its own optimistic bubble; 'ama' routes only. */
-    autoSubmit: z.boolean().optional(),
-    /** Error-home reference the routed draft's turn carries; 'ama' routes only. */
-    chatContext: ErrorReferenceSchema.optional(),
+    /** Error-home reference the drafted message carries hidden; 'supervisor' routes only. */
+    errorReference: ErrorReferenceSchema.optional(),
   })
   .superRefine((event, ctx) => {
-    // The chat-draft fields are ama-target-only: any other route smuggling one
-    // fails closed at the preload boundary, exactly like a foreign field.
-    if (event.target === 'ama') return;
-    for (const field of ['draft', 'autoSubmit', 'chatContext'] as const) {
+    // The draft fields are supervisor-target-only: any other route smuggling
+    // one fails closed at the preload boundary, exactly like a foreign field.
+    if (event.target === 'supervisor') return;
+    for (const field of ['draft', 'errorReference'] as const) {
       if (event[field] !== undefined) {
         ctx.addIssue({
           code: 'custom',
           path: [field],
-          message: 'Chat draft fields are only valid on an ama route.',
+          message: 'Draft fields are only valid on a supervisor route.',
         });
       }
     }
@@ -2248,6 +2277,24 @@ export type RewindExecuteRequest = z.output<typeof RewindExecuteRequestSchema>;
 
 const AttentionIDSchema = z.string().min(1).max(200);
 const AttentionTextSchema = z.string().max(64 * 1024);
+/**
+ * The non-feature navigation target of an attention item. `supervisor`
+ * marks a permission or question raised by the supervisor conversation: it
+ * carries no feature id, its context label is "Supervisor", and opening it
+ * navigates to the Supervisor page instead of a feature tab.
+ */
+export const AttentionTargetSchema = z.enum(['supervisor']);
+export type AttentionTarget = z.output<typeof AttentionTargetSchema>;
+/** The context label renderer surfaces show for a supervisor-targeted item. */
+export const SUPERVISOR_CONTEXT_LABEL = 'Supervisor';
+/**
+ * Who raised a supervisor permission or question: `root` is the
+ * conversation's own agent, `child` one of its sub-agents.
+ */
+export const RequestOriginSchema = z.enum(['root', 'child']);
+export type RequestOrigin = z.output<typeof RequestOriginSchema>;
+/** The tag renderer surfaces show on a request a sub-agent raised. */
+export const SUBAGENT_ORIGIN_LABEL = 'Sub-agent';
 export const AttentionOptionSchema = z.strictObject({
   // The server preserves provider-visible option labels up to 1,000 chars.
   label: z.string().max(1000),
@@ -2267,6 +2314,8 @@ export const AttentionPermissionSchema = z.strictObject({
   /** Set when the prompt belongs to a refactor pass: the parent tab owns it. */
   parentFeatureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
+  /** Set when the request belongs to the supervisor conversation (no feature owns it). */
+  target: AttentionTargetSchema.optional(),
   phase: z.string().max(200).optional(),
   toolName: z.string().max(500),
   summary: AttentionTextSchema.optional(),
@@ -2291,6 +2340,10 @@ export const AttentionPermissionSchema = z.strictObject({
       retryAt: z.string().optional(),
     })
     .optional(),
+  /** Set on supervisor requests: who raised it. */
+  origin: RequestOriginSchema.optional(),
+  /** The sub-agent's session id; set only when `origin` is `child`. */
+  childSessionId: AttentionIDSchema.optional(),
 });
 export const AutoApproveScopeSchema = z.enum(['feature', 'workspace']);
 export type AutoApproveScope = z.output<typeof AutoApproveScopeSchema>;
@@ -2301,9 +2354,15 @@ export const AttentionQuestionBundleSchema = z.strictObject({
   /** Set when the prompt belongs to a refactor pass: the parent tab owns it. */
   parentFeatureId: FeatureIdSchema.optional(),
   sessionId: AttentionIDSchema.optional(),
+  /** Set when the request belongs to the supervisor conversation (no feature owns it). */
+  target: AttentionTargetSchema.optional(),
   phase: z.string().max(200).optional(),
   waitingSince: z.string().max(100),
   questions: z.array(AttentionQuestionSchema).min(1).max(100),
+  /** Set on supervisor requests: who raised it. */
+  origin: RequestOriginSchema.optional(),
+  /** The sub-agent's session id; set only when `origin` is `child`. */
+  childSessionId: AttentionIDSchema.optional(),
 });
 export const AttentionHelpSchema = z.strictObject({
   kind: z.literal('help'),
@@ -2315,12 +2374,8 @@ export const AttentionHelpSchema = z.strictObject({
   phase: z.string().max(200).optional(),
   waitingSince: z.string().max(100),
   prompt: AttentionTextSchema,
-  /**
-   * 'input': the turn ended with no readable question and the user's message is
-   * what continues it (chat). 'coordinating': a phase session parked between
-   * turns — a harness wait no human answers.
-   */
-  waitingKind: z.enum(['question', 'input', 'coordinating']).optional(),
+  /** 'coordinating': a phase session parked between turns — a harness wait no human answers. */
+  waitingKind: z.enum(['question', 'coordinating']).optional(),
   /** Descriptions of the session's still-running background tasks. */
   runningTasks: z.array(z.string().max(500)).max(100).optional(),
 });
@@ -2429,17 +2484,25 @@ export function attentionOwnerFeatureId(item: AttentionItem): string | undefined
   if ('parentFeatureId' in item && item.parentFeatureId !== undefined) return item.parentFeatureId;
   return item.featureId;
 }
+/** True for a permission or question raised by the supervisor conversation. */
+export function isSupervisorAttentionItem(item: AttentionItem): boolean {
+  return (item.kind === 'permission' || item.kind === 'questions') && item.target === 'supervisor';
+}
+/** A supervisor permission or question one of the conversation's sub-agents raised. */
+export function isSubagentAttentionItem(item: AttentionItem): boolean {
+  return (
+    (item.kind === 'permission' || item.kind === 'questions') &&
+    item.target === 'supervisor' &&
+    item.origin === 'child'
+  );
+}
 /**
- * A synthetic help item: a session idling between turns. 'coordinating' is a
- * phase session parked mid-coordination; 'input' is the chat session resting
- * after a reply, which the AMA panel surfaces (an idle chat is its normal
- * state, not a request). Neither is blocking input — synthetic items never
- * badge, notify, appear as inbox rows, or hold the phase rail.
+ * A synthetic help item: a phase session parked mid-coordination between
+ * turns. It is not blocking input — synthetic items never badge, notify,
+ * appear as inbox rows, or hold the phase rail.
  */
 export function isSyntheticHelpItem(item: AttentionItem): boolean {
-  return (
-    item.kind === 'help' && (item.waitingKind === 'coordinating' || item.waitingKind === 'input')
-  );
+  return item.kind === 'help' && item.waitingKind === 'coordinating';
 }
 
 /**
@@ -2564,22 +2627,14 @@ export const TestingContractSnapshotSchema = z.discriminatedUnion('available', [
 ]);
 export type TestingContractSnapshot = z.output<typeof TestingContractSnapshotSchema>;
 
-// --- Singleton AMA chat -----------------------------------------------------
+// --- Staged uploads ---------------------------------------------------------
 
 /** An opaque, single-use staged-upload handle the server returned. */
 export const UploadReferenceSchema = z.string().min(1).max(128);
 
-export const CHAT_SESSION_ID = '__chat__';
-
-export const ChatStartRequestSchema = z.strictObject({
-  message: AttentionTextSchema.refine((value) => value.trim() !== ''),
-  images: z.array(AbsolutePathSchema).max(12).optional(),
-  /** Server-staged image upload references (remote connections; images only). */
-  imageUploads: z.array(UploadReferenceSchema).max(12).optional(),
-  /** Error-home reference the server resolves into hidden turn context. */
-  context: ErrorReferenceSchema.optional(),
-});
-export type ChatStartRequest = z.output<typeof ChatStartRequestSchema>;
+/** Per-submission caps on images and files, local paths and staged refs combined. */
+export const CREATION_IMAGE_LIMIT = 12;
+export const CREATION_ATTACHMENT_LIMIT = 24;
 
 // --- Sessions and bounded transcript/output operations ---------------------
 
@@ -2588,12 +2643,6 @@ export const SESSION_ID_SEGMENT_PATTERN = '[a-z0-9._-]{1,200}';
 
 export const SessionIdSchema = z.string().regex(new RegExp(`^${SESSION_ID_SEGMENT_PATTERN}$`, 'i'));
 export type SessionId = z.output<typeof SessionIdSchema>;
-
-export const ChatActionResultSchema = z.strictObject({
-  sessionId: SessionIdSchema,
-  result: z.string().max(500),
-});
-export type ChatActionResult = z.output<typeof ChatActionResultSchema>;
 
 const BoundedTextSchema = z.string().max(1024 * 1024);
 const OptionalBoundedTextSchema = BoundedTextSchema.optional();
@@ -2644,34 +2693,6 @@ export const SessionSummarySchema = z.strictObject({
   usage: SessionUsageSchema,
 });
 export type SessionSummary = z.output<typeof SessionSummarySchema>;
-
-export const TERMINAL_CHAT_STATUSES = [
-  'complete',
-  'completed',
-  'done',
-  'ended',
-  'failed',
-  'cancelled',
-  'canceled',
-  'stopped',
-  'not_active',
-] as const;
-
-const TERMINAL_CHAT_STATUS_SET = new Set<string>(TERMINAL_CHAT_STATUSES);
-
-export function isTerminalChatStatus(status: string): boolean {
-  return TERMINAL_CHAT_STATUS_SET.has(status.toLocaleLowerCase());
-}
-
-export function isActiveChatSession(
-  session: Pick<SessionSummary, 'id' | 'featureId' | 'kind' | 'status'>,
-): boolean {
-  const isChat =
-    session.id === CHAT_SESSION_ID ||
-    session.featureId === CHAT_SESSION_ID ||
-    session.kind.toLocaleLowerCase() === 'chat';
-  return isChat && !isTerminalChatStatus(session.status);
-}
 
 export const RunSessionsListResultSchema = z.strictObject({
   runNumber: z.number().int().positive(),
@@ -2813,10 +2834,436 @@ export const SessionOutputEventSchema = z.discriminatedUnion('type', [
 ]);
 export type SessionOutputEvent = z.output<typeof SessionOutputEventSchema>;
 
+// --- Supervisor conversation -------------------------------------------------
+//
+// Renderer-facing mirrors of the server's `/api/v1/supervisor/*` DTOs. Like
+// every other IPC type they are camelCase; the main process maps the
+// snake_case wire shapes and re-validates here before anything crosses.
+
+/** The supervisor's reserved feature id on session-manager reads. */
+export const SUPERVISOR_FEATURE_ID = '__supervisor__';
+/** Supervisor session ids are `__supervisor__.<conversation-uuid>.<generation>`. */
+export const SUPERVISOR_SESSION_ID_PREFIX = `${SUPERVISOR_FEATURE_ID}.`;
+/** The session-manager kind string supervisor sessions report. */
+export const SUPERVISOR_SESSION_KIND = 'supervisor';
+
+/** True when a session id belongs to a supervisor generation. */
+export function isSupervisorSessionId(sessionId: string | undefined): boolean {
+  return sessionId !== undefined && sessionId.startsWith(SUPERVISOR_SESSION_ID_PREFIX);
+}
+
+/** Upper bound for one supervisor message's text (the server's maxLength). */
+export const SUPERVISOR_MESSAGE_MAX_CHARS = 100_000;
+/** Largest transcript page the server returns. */
+export const SUPERVISOR_TRANSCRIPT_MAX_LIMIT = 500;
+
+const SupervisorSeqSchema = z.number().int().nonnegative();
+const SupervisorIdentifierSchema = z.string().max(200);
+/** Opaque resume epoch; restricted to URL-safe characters so it can never smuggle query syntax. */
+export const SupervisorStreamEpochSchema = z
+  .string()
+  .max(200)
+  .regex(/^[A-Za-z0-9._:~+/=-]*$/);
+
+export const SupervisorLifecycleSchema = z.enum([
+  'stopped',
+  'starting',
+  'idle',
+  'running',
+  'waiting_permission',
+  'waiting_question',
+  'failed',
+]);
+export type SupervisorLifecycle = z.output<typeof SupervisorLifecycleSchema>;
+export const SupervisorStartingStepSchema = z.enum(['rebuilding', 'launching', 'handshake']);
+export type SupervisorStartingStep = z.output<typeof SupervisorStartingStepSchema>;
+export const SupervisorTurnOutcomeSchema = z.enum(['none', 'completed', 'interrupted', 'failed']);
+export type SupervisorTurnOutcome = z.output<typeof SupervisorTurnOutcomeSchema>;
+/** Who cut the most recent turn; meaningful when the outcome is `interrupted`. */
+export const SupervisorInterruptedBySchema = z.enum(['none', 'user', 'shutdown']);
+export type SupervisorInterruptedBy = z.output<typeof SupervisorInterruptedBySchema>;
+
+/** Permission mode asked for versus the one the running harness reported. */
+export const SupervisorPermissionModeSchema = z.strictObject({
+  requested: z.string().max(100),
+  /** Empty until a process reports its mode. */
+  effective: z.string().max(100),
+  restrictedByPolicy: z.boolean(),
+});
+export type SupervisorPermissionMode = z.output<typeof SupervisorPermissionModeSchema>;
+
+/** Committed harness choice; empty harness or model means unset, empty effort the harness default. */
+export const SupervisorSettingsSchema = z.strictObject({
+  harness: z.string().max(100),
+  model: z.string().max(200),
+  effort: z.string().max(40),
+});
+export type SupervisorSettings = z.output<typeof SupervisorSettingsSchema>;
+
+export const SupervisorPendingChangeSchema = z.strictObject({
+  requestId: z.string().min(1).max(128),
+  kind: z.enum(['model', 'effort', 'harness']),
+  target: SupervisorSettingsSchema,
+  requestedAt: z.string().max(100),
+});
+export type SupervisorPendingChange = z.output<typeof SupervisorPendingChangeSchema>;
+
+/**
+ * One pending supervisor permission or question, in exactly the attention
+ * item shape the inbox already renders (always `target: 'supervisor'`, no
+ * feature id). Answers go through the existing attention submit paths keyed
+ * by `sessionId`.
+ */
+export const SupervisorPendingRequestSchema = z.discriminatedUnion('kind', [
+  AttentionPermissionSchema,
+  AttentionQuestionBundleSchema,
+]);
+export type SupervisorPendingRequest = z.output<typeof SupervisorPendingRequestSchema>;
+
+export const SupervisorBackgroundTaskSchema = z.strictObject({
+  activity: z
+    .array(z.strictObject({ at: z.string().max(100), detail: z.string().max(1000) }))
+    .max(8)
+    .optional(),
+  id: z.string().max(500),
+  providerId: z.string().max(200),
+  generation: z.number().int().nonnegative(),
+  kind: z.enum(['scheduled', 'monitor', 'task']),
+  title: z.string().max(500),
+  state: z.enum(['watching', 'running', 'completed', 'failed', 'stopped', 'interrupted']),
+  schedule: z.string().max(500),
+  detail: z.string().max(1000),
+  startedAt: z.string().max(100),
+  updatedAt: z.string().max(100),
+  expiresAt: z.string().max(100),
+});
+export type SupervisorBackgroundTask = z.output<typeof SupervisorBackgroundTaskSchema>;
+
+export const SupervisorStateSchema = z.strictObject({
+  backgroundTasks: z.array(SupervisorBackgroundTaskSchema).optional(),
+  conversationId: SupervisorIdentifierSchema,
+  /** Number of provider process launches; increments on every launch. */
+  generation: SupervisorSeqSchema,
+  /** Session-manager id of the current generation; empty when no process exists. */
+  sessionId: z.string().max(200),
+  lifecycle: SupervisorLifecycleSchema,
+  /** Present only while the lifecycle is `starting`. */
+  startingStep: SupervisorStartingStepSchema.optional(),
+  lastTurnOutcome: SupervisorTurnOutcomeSchema,
+  /** Who cut the most recent turn; `shutdown` means a server restart cut it. */
+  interruptedBy: SupervisorInterruptedBySchema,
+  settings: SupervisorSettingsSchema,
+  pendingChange: SupervisorPendingChangeSchema.optional(),
+  /** Model the running harness reports; empty when no process exists. */
+  effectiveModel: z.string().max(200),
+  permissionMode: SupervisorPermissionModeSchema,
+  /** Canonical error of the most recent launch failure; present only while `failed`. */
+  failure: CanonicalErrorSchema.extend({
+    attemptedSettings: SupervisorSettingsSchema.optional(),
+  }).optional(),
+  /**
+   * Canonical `supervisor_history_incomplete` error for the latest write
+   * that failed, whatever the lifecycle; stays until dismissed or reset.
+   */
+  persistFailure: CanonicalErrorSchema.optional(),
+  pendingRequests: z.array(SupervisorPendingRequestSchema).max(100),
+  contextUsage: z
+    .strictObject({
+      percent: z.number().min(0).max(100),
+      usedTokens: z.number().int().nonnegative(),
+      windowTokens: z.number().int().positive(),
+    })
+    .nullable(),
+  /** Seq of the newest committed transcript record; 0 when empty. */
+  headSeq: SupervisorSeqSchema,
+  /** Resume epoch for the supervisor event stream. */
+  streamEpoch: SupervisorStreamEpochSchema,
+});
+export type SupervisorState = z.output<typeof SupervisorStateSchema>;
+
+export const SupervisorRecordKindSchema = z.enum([
+  'user',
+  'assistant',
+  'tool_use',
+  'tool_result',
+  'permission',
+  'question',
+  'marker',
+  'note',
+  'checkpoint',
+]);
+export type SupervisorRecordKind = z.output<typeof SupervisorRecordKindSchema>;
+export const SupervisorRecordVisibilitySchema = z.enum(['content', 'model_only', 'display_only']);
+export type SupervisorRecordVisibility = z.output<typeof SupervisorRecordVisibilitySchema>;
+
+/** The request or verdict carried by `permission` and `question` records. */
+export const SupervisorRequestVerdictSchema = z.strictObject({
+  requestId: AttentionIDSchema,
+  toolName: z.string().max(500),
+  stage: z.enum(['requested', 'resolved']),
+  outcome: z.enum(['pending', 'allowed', 'denied', 'answered', 'interrupted']),
+  summary: AttentionTextSchema.optional(),
+  /** Who raised the request; absent reads as `root`. */
+  origin: RequestOriginSchema.optional(),
+  /** The sub-agent's session id; set only when `origin` is `child`. */
+  childSessionId: AttentionIDSchema.optional(),
+});
+export type SupervisorRequestVerdict = z.output<typeof SupervisorRequestVerdictSchema>;
+
+export const SupervisorMarkerKindSchema = z.enum([
+  'interrupted',
+  'error',
+  'history_not_restored',
+  'permission_restricted',
+  'settings_changed',
+  'harness_change',
+  'settings_reverted',
+  'compacted',
+  'transcript_recovered',
+]);
+export type SupervisorMarkerKind = z.output<typeof SupervisorMarkerKindSchema>;
+
+/**
+ * The display-only notice carried by `marker` records: a turn cut by a
+ * server restart, a launch failure, history that could not be restored, or a
+ * permission mode restricted by policy. `code` is an error marker's catalog code.
+ */
+export const SupervisorMarkerSchema = z.strictObject({
+  marker: SupervisorMarkerKindSchema,
+  text: AttentionTextSchema,
+  code: z.string().max(200).optional(),
+  summary: z
+    .string()
+    .max(16 * 1024)
+    .optional(),
+  truncated: z.boolean().optional(),
+});
+export type SupervisorMarker = z.output<typeof SupervisorMarkerSchema>;
+
+export const SupervisorCheckpointSchema = z.strictObject({
+  coversThroughSeq: SupervisorSeqSchema,
+  reason: z.literal('native_auto'),
+  model: z.string().max(200),
+  summary: z.string().max(16 * 1024),
+  truncated: z.boolean(),
+  hasNativeBaseline: z.boolean(),
+});
+
+/** Images plus files one supervisor message may carry. */
+const SUPERVISOR_ATTACHMENT_MAX = CREATION_IMAGE_LIMIT + CREATION_ATTACHMENT_LIMIT;
+
+/** One attachment of a committed user record: the server's conversation copy. */
+export const SupervisorAttachmentSchema = z.strictObject({
+  /** Absolute server-local path of the copy (display and dedupe only). */
+  path: z.string().min(1).max(4096),
+  kind: z.enum(['image', 'file']),
+  /** Original file name, for display. */
+  name: z.string().max(1024),
+  size: z.number().int().nonnegative(),
+});
+export type SupervisorAttachment = z.output<typeof SupervisorAttachmentSchema>;
+
+/** One committed transcript record; its `messages` rows carry `index = seq`. */
+export const SupervisorRecordSchema = z.strictObject({
+  seq: z.number().int().positive(),
+  id: SupervisorIdentifierSchema,
+  conversationId: SupervisorIdentifierSchema,
+  generation: SupervisorSeqSchema,
+  turnId: SupervisorIdentifierSchema,
+  kind: SupervisorRecordKindSchema,
+  visibility: SupervisorRecordVisibilitySchema,
+  createdAt: z.string().max(100),
+  clientMessageId: z.string().max(128).optional(),
+  streamMessageId: SupervisorIdentifierSchema.optional(),
+  messages: z.array(TranscriptMessageSchema).max(500),
+  request: SupervisorRequestVerdictSchema.optional(),
+  marker: SupervisorMarkerSchema.optional(),
+  checkpoint: SupervisorCheckpointSchema.optional(),
+  /** User records only: the conversation copies of the message's attachments. */
+  attachments: z.array(SupervisorAttachmentSchema).max(SUPERVISOR_ATTACHMENT_MAX).optional(),
+});
+export type SupervisorRecord = z.output<typeof SupervisorRecordSchema>;
+
+/** One page of the durable supervisor transcript, ordered by `seq`. */
+export const SupervisorTranscriptPageSchema = z.strictObject({
+  conversationId: SupervisorIdentifierSchema,
+  items: z.array(SupervisorRecordSchema).max(SUPERVISOR_TRANSCRIPT_MAX_LIMIT),
+  /** Seq of the first returned record; 0 for an empty page. */
+  firstSeq: SupervisorSeqSchema,
+  /** Seq of the last returned record; 0 for an empty page. */
+  lastSeq: SupervisorSeqSchema,
+  hasMoreBefore: z.boolean(),
+  hasMoreAfter: z.boolean(),
+  headSeq: SupervisorSeqSchema,
+});
+export type SupervisorTranscriptPage = z.output<typeof SupervisorTranscriptPageSchema>;
+
+/** Neither cursor reads the newest page; `before` and `after` are mutually exclusive. */
+export const SupervisorTranscriptRequestSchema = z
+  .strictObject({
+    before: z.number().int().positive().optional(),
+    after: z.number().int().nonnegative().optional(),
+    limit: z.number().int().min(1).max(SUPERVISOR_TRANSCRIPT_MAX_LIMIT).optional(),
+  })
+  .refine((request) => request.before === undefined || request.after === undefined, {
+    message: 'before and after are mutually exclusive.',
+  });
+export type SupervisorTranscriptRequest = z.output<typeof SupervisorTranscriptRequestSchema>;
+
+export const SupervisorSettingsRequestSchema = z.strictObject({
+  harness: z.string().min(1).max(100),
+  model: z.string().min(1).max(200).optional(),
+  effort: z.string().max(40).optional(),
+  requestId: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9._-]+$/),
+  expectedGeneration: SupervisorSeqSchema,
+});
+export type SupervisorSettingsRequest = z.output<typeof SupervisorSettingsRequestSchema>;
+
+export const SupervisorPendingChangeCancelRequestSchema = z.strictObject({
+  requestId: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(/^[A-Za-z0-9._-]+$/),
+});
+export type SupervisorPendingChangeCancelRequest = z.output<
+  typeof SupervisorPendingChangeCancelRequestSchema
+>;
+
+/**
+ * The renderer supplies the text and, for an explain draft, the error-home
+ * reference whose context reaches the harness hidden; the main process mints
+ * `client_message_id`.
+ */
+export const SupervisorMessageRequestSchema = z
+  .strictObject({
+    /** The visible text; may be blank when the message carries an attachment. */
+    text: z.string().max(SUPERVISOR_MESSAGE_MAX_CHARS),
+    errorReference: ErrorReferenceSchema.optional(),
+    /**
+     * Native-picker approved local paths (local connections) and
+     * server-staged upload references (remote connections), with the
+     * creation schemas and combined caps. The main process refuses local
+     * paths while remote, exactly as feature creation does.
+     */
+    images: z.array(AbsolutePathSchema).max(CREATION_IMAGE_LIMIT).optional(),
+    attachments: z.array(AbsolutePathSchema).max(CREATION_ATTACHMENT_LIMIT).optional(),
+    imageUploads: z.array(UploadReferenceSchema).max(CREATION_IMAGE_LIMIT).optional(),
+    attachmentUploads: z.array(UploadReferenceSchema).max(CREATION_ATTACHMENT_LIMIT).optional(),
+  })
+  .refine(
+    (request) =>
+      (request.images?.length ?? 0) + (request.imageUploads?.length ?? 0) <= CREATION_IMAGE_LIMIT,
+    { message: `At most ${CREATION_IMAGE_LIMIT} images per message.` },
+  )
+  .refine(
+    (request) =>
+      (request.attachments?.length ?? 0) + (request.attachmentUploads?.length ?? 0) <=
+      CREATION_ATTACHMENT_LIMIT,
+    { message: `At most ${CREATION_ATTACHMENT_LIMIT} files per message.` },
+  )
+  .refine((request) => request.text.trim() !== '' || supervisorAttachmentCount(request) > 0, {
+    message: 'A message needs text or an attachment.',
+  });
+
+/** How many images and files a supervisor message request carries. */
+export function supervisorAttachmentCount(request: {
+  images?: readonly string[];
+  attachments?: readonly string[];
+  imageUploads?: readonly string[];
+  attachmentUploads?: readonly string[];
+}): number {
+  return (
+    (request.images?.length ?? 0) +
+    (request.attachments?.length ?? 0) +
+    (request.imageUploads?.length ?? 0) +
+    (request.attachmentUploads?.length ?? 0)
+  );
+}
+export type SupervisorMessageRequest = z.output<typeof SupervisorMessageRequestSchema>;
+
+export const SupervisorMessageResultSchema = z.strictObject({
+  record: SupervisorRecordSchema,
+  /** True when this send launched the supervisor process. */
+  launched: z.boolean(),
+  /** True when the send matched an already-committed message; nothing was appended. */
+  deduplicated: z.boolean(),
+});
+export type SupervisorMessageResult = z.output<typeof SupervisorMessageResultSchema>;
+
+export const SupervisorActionResultSchema = z.strictObject({
+  result: z.enum(['accepted', 'ended', 'not_active']),
+  state: SupervisorStateSchema,
+});
+export type SupervisorActionResult = z.output<typeof SupervisorActionResultSchema>;
+
+/**
+ * New-conversation outcome: `reset` opened a fresh conversation (its id is
+ * `state.conversationId`); `noop` left an already-empty idle one in place.
+ */
+export const SupervisorResetResultSchema = z.strictObject({
+  result: z.enum(['reset', 'noop']),
+  previousConversationId: SupervisorIdentifierSchema,
+  state: SupervisorStateSchema,
+});
+export type SupervisorResetResult = z.output<typeof SupervisorResetResultSchema>;
+
+/** Non-persisted streaming text for a provisional assistant row. */
+export const SupervisorDeltaSchema = z.strictObject({
+  turnId: SupervisorIdentifierSchema,
+  streamMessageId: SupervisorIdentifierSchema,
+  chunkIndex: z.number().int().nonnegative(),
+  text: BoundedTextSchema,
+});
+export type SupervisorDelta = z.output<typeof SupervisorDeltaSchema>;
+
+const SupervisorEventEnvelopeShape = {
+  conversationId: SupervisorIdentifierSchema,
+  generation: SupervisorSeqSchema,
+  streamEpoch: SupervisorStreamEpochSchema,
+};
+
+/**
+ * Supervisor stream pushes (main → renderer on `IPC_EVENTS.supervisorEvent`).
+ * `reset` means the stream cursor was dropped and the renderer must
+ * re-snapshot state and transcript; `stream-status` mirrors the global
+ * stream's live/stale signal for this stream alone.
+ */
+export const SupervisorEventSchema = z.discriminatedUnion('type', [
+  z.strictObject({
+    type: z.literal('record'),
+    ...SupervisorEventEnvelopeShape,
+    record: SupervisorRecordSchema,
+  }),
+  z.strictObject({
+    type: z.literal('delta'),
+    ...SupervisorEventEnvelopeShape,
+    delta: SupervisorDeltaSchema,
+  }),
+  z.strictObject({
+    type: z.literal('state'),
+    ...SupervisorEventEnvelopeShape,
+    state: SupervisorStateSchema,
+  }),
+  z.strictObject({
+    type: z.literal('request'),
+    ...SupervisorEventEnvelopeShape,
+    request: SupervisorPendingRequestSchema,
+  }),
+  z.strictObject({ type: z.literal('reset') }),
+  z.strictObject({
+    type: z.literal('stream-status'),
+    status: z.enum(['live', 'stale']),
+  }),
+]);
+export type SupervisorEvent = z.output<typeof SupervisorEventSchema>;
+
 // --- Feature creation ---------------------------------------------------------
 
-export const CREATION_IMAGE_LIMIT = 12;
-export const CREATION_ATTACHMENT_LIMIT = 24;
 export const CREATION_REPOSITORY_FILE_LIMIT = 24;
 export const CREATION_FILE_SEARCH_RESULT_LIMIT = 50;
 export const CREATION_IMAGE_FORMATS = [
@@ -3287,7 +3734,7 @@ export type CreationFileSearchResult = z.output<typeof CreationFileSearchResultS
 // attachment metadata only (identity key, name, base URL, runtime
 // dir, last-seen) — never a token.
 
-export const SETTINGS_SCHEMA_VERSION = 5;
+export const SETTINGS_SCHEMA_VERSION = 6;
 
 /**
  * Hard bound on the persisted known-servers list. The list is ordered
@@ -3492,58 +3939,6 @@ export function defaultWizardPrefs(): WizardPrefs {
   return { collapsedHelp: false };
 }
 
-/** The floating AMA panel's default footprint and its inset from the corner. */
-export const AMA_PANEL_DEFAULT_WIDTH = 404;
-export const AMA_PANEL_DEFAULT_HEIGHT = 560;
-export const AMA_PANEL_DEFAULT_INSET = 20;
-/** Header + one turn + composer: the smallest panel that is still usable. */
-export const AMA_PANEL_MIN_WIDTH = 320;
-export const AMA_PANEL_MIN_HEIGHT = 240;
-
-/**
- * The floating AMA panel's placement, stored as offsets from the main
- * window's bottom-right corner plus its size, so the panel keeps its distance
- * to that corner as the window resizes. Values are bounded but not
- * window-relative here: the renderer clamps them into the current window on
- * restore, so a document written on a larger display degrades to a visible
- * panel instead of resetting the preference.
- */
-export const AmaGeometrySchema = z.strictObject({
-  right: z.number().int().min(0).max(100000),
-  bottom: z.number().int().min(0).max(100000),
-  width: z.number().int().min(1).max(100000),
-  height: z.number().int().min(1).max(100000),
-});
-
-export type AmaGeometry = z.output<typeof AmaGeometrySchema>;
-
-export function defaultAmaGeometry(): AmaGeometry {
-  return {
-    right: AMA_PANEL_DEFAULT_INSET,
-    bottom: AMA_PANEL_DEFAULT_INSET,
-    width: AMA_PANEL_DEFAULT_WIDTH,
-    height: AMA_PANEL_DEFAULT_HEIGHT,
-  };
-}
-
-/**
- * AMA presentation preferences ONLY. Transcript rows and chat archive live on
- * the server; the app stores only whether the panel is closed (`compact`) or
- * open (`expanded`) and where the user left it. `geometry` is defaulted, so a
- * settings document written before the floating panel existed loads without
- * resetting any preference.
- */
-export const AmaPrefsSchema = z.strictObject({
-  drawer: z.enum(['compact', 'expanded']),
-  geometry: AmaGeometrySchema.default(defaultAmaGeometry()),
-});
-
-export type AmaPrefs = z.output<typeof AmaPrefsSchema>;
-
-export function defaultAmaPrefs(): AmaPrefs {
-  return { drawer: 'compact', geometry: defaultAmaGeometry() };
-}
-
 /**
  * Native notification presentation preference ONLY. Preview is off by default
  * so OS notifications contain no domain content unless explicitly enabled.
@@ -3662,8 +4057,13 @@ export const MainWindowUiStateSchema = z.strictObject({
   runtimeReady: z.boolean(),
   sidebarCollapsed: z.boolean(),
   inspectorOpen: z.boolean(),
-  /** False with Overview selected: there is no inspector to show or hide. */
+  /** False with Supervisor selected: there is no inspector to show or hide. */
   inspectorAvailable: z.boolean(),
+  /**
+   * True while the shell is mounted over a runtime with a ready provider but
+   * incomplete setup — the only time the Navigate menu's Setup… item is live.
+   */
+  setupIncomplete: z.boolean(),
   /** `feature.*` command id → enabled, from the same catalogue the palette reads. */
   featureCommands: z.record(z.string().min(1).max(64), z.boolean()),
 });
@@ -3681,7 +4081,8 @@ export function sameMainWindowUiState(a: MainWindowUiState, b: MainWindowUiState
     a.runtimeReady !== b.runtimeReady ||
     a.sidebarCollapsed !== b.sidebarCollapsed ||
     a.inspectorOpen !== b.inspectorOpen ||
-    a.inspectorAvailable !== b.inspectorAvailable
+    a.inspectorAvailable !== b.inspectorAvailable ||
+    a.setupIncomplete !== b.setupIncomplete
   ) {
     return false;
   }
@@ -3703,6 +4104,7 @@ export function disabledMainWindowUiState(): MainWindowUiState {
     sidebarCollapsed: false,
     inspectorOpen: false,
     inspectorAvailable: false,
+    setupIncomplete: false,
     featureCommands: {},
   };
 }
@@ -3789,7 +4191,6 @@ export const SettingsSchema = z.strictObject({
   }),
   theme: ThemePreferenceSchema,
   wizard: WizardPrefsSchema.default(defaultWizardPrefs()),
-  ama: AmaPrefsSchema.default(defaultAmaPrefs()),
   notifications: NotificationPrefsSchema.default(defaultNotificationPrefs()),
   shell: ShellPrefsSchema.default(defaultShellPrefs()),
   settingsWindow: SettingsWindowPrefsSchema.default(defaultSettingsWindowPrefs()),
@@ -3803,7 +4204,6 @@ export const SettingsPatchSchema = z.strictObject({
   window: z.strictObject({ bounds: WindowBoundsSchema.optional() }).optional(),
   theme: ThemePreferenceSchema.optional(),
   wizard: WizardPrefsSchema.optional(),
-  ama: AmaPrefsSchema.optional(),
   notifications: NotificationPrefsSchema.optional(),
   shell: ShellPatchSchema.optional(),
   settingsWindow: SettingsWindowPrefsSchema.optional(),
@@ -3819,7 +4219,6 @@ export function defaultSettings(): Settings {
     window: {},
     theme: 'system',
     wizard: defaultWizardPrefs(),
-    ama: defaultAmaPrefs(),
     notifications: defaultNotificationPrefs(),
     shell: defaultShellPrefs(),
     settingsWindow: defaultSettingsWindowPrefs(),
@@ -4055,6 +4454,7 @@ export type CatalogueModel = z.output<typeof CatalogueModelSchema>;
 
 export const ModelCatalogueSchema = z.strictObject({
   providerOrder: z.array(z.string().max(100)).max(20),
+  chatDefaultEffort: z.record(z.string().max(100), EffortLevelSchema).optional(),
   providerModels: z.record(z.string().max(100), z.array(CatalogueModelSchema).max(200)),
   /** Recommended model per phase field (keys match PhaseModels). */
   phaseDefaults: PhaseModelsSchema,
@@ -4273,14 +4673,6 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
     request: z.tuple([TestingContractRequestSchema]),
     response: TestingContractSnapshotSchema,
   },
-  [IPC_CHANNELS.chatStart]: {
-    request: z.tuple([ChatStartRequestSchema]),
-    response: ChatActionResultSchema,
-  },
-  [IPC_CHANNELS.chatEnd]: {
-    request: z.tuple([]),
-    response: ChatActionResultSchema,
-  },
   [IPC_CHANNELS.sessionsList]: {
     request: z.tuple([]),
     response: z.array(SessionSummarySchema).max(1000),
@@ -4300,6 +4692,42 @@ export const ipcContracts: Record<IpcChannel, IpcContract> = {
   [IPC_CHANNELS.sessionsOutputCancel]: {
     request: z.tuple([SessionOutputCancelRequestSchema]),
     response: SessionOutputCancelResultSchema,
+  },
+  [IPC_CHANNELS.supervisorStateGet]: {
+    request: z.tuple([]),
+    response: SupervisorStateSchema,
+  },
+  [IPC_CHANNELS.supervisorSettingsUpdate]: {
+    request: z.tuple([SupervisorSettingsRequestSchema]),
+    response: SupervisorStateSchema,
+  },
+  [IPC_CHANNELS.supervisorPendingChangeCancel]: {
+    request: z.tuple([SupervisorPendingChangeCancelRequestSchema]),
+    response: SupervisorStateSchema,
+  },
+  [IPC_CHANNELS.supervisorPersistFailureDismiss]: {
+    request: z.tuple([]),
+    response: SupervisorStateSchema,
+  },
+  [IPC_CHANNELS.supervisorTranscriptGet]: {
+    request: z.tuple([SupervisorTranscriptRequestSchema]),
+    response: SupervisorTranscriptPageSchema,
+  },
+  [IPC_CHANNELS.supervisorMessageSend]: {
+    request: z.tuple([SupervisorMessageRequestSchema]),
+    response: SupervisorMessageResultSchema,
+  },
+  [IPC_CHANNELS.supervisorInterrupt]: {
+    request: z.tuple([]),
+    response: SupervisorActionResultSchema,
+  },
+  [IPC_CHANNELS.supervisorEnd]: {
+    request: z.tuple([]),
+    response: SupervisorActionResultSchema,
+  },
+  [IPC_CHANNELS.supervisorReset]: {
+    request: z.tuple([]),
+    response: SupervisorResetResultSchema,
   },
   [IPC_CHANNELS.creationDefaults]: {
     request: z.tuple([]),
@@ -4682,14 +5110,47 @@ export interface AgenticoApi {
   resolveGate(request: GateResumeRequest): Promise<AttentionActionResult>;
   waiveTestingContract(request: TestingContractWaiveRequest): Promise<TestingContractWaiveResult>;
   getTestingContract(request: TestingContractRequest): Promise<TestingContractSnapshot>;
-  startChat(request: ChatStartRequest): Promise<ChatActionResult>;
-  endChat(): Promise<ChatActionResult>;
   listSessions(): Promise<SessionSummary[]>;
   getSession(sessionId: string): Promise<SessionDetail>;
   getSessionTranscript(request: SessionTranscriptRequest): Promise<SessionTranscript>;
   openSessionOutput(request: SessionOutputOpenRequest): Promise<SessionOutputOpenResult>;
   cancelSessionOutput(subscriptionId: string): Promise<boolean>;
   onSessionOutput(listener: (event: SessionOutputEvent) => void): () => void;
+  /** Reads the supervisor conversation's lifecycle read model. */
+  getSupervisorState(): Promise<SupervisorState>;
+  /**
+   * Commits the supervisor harness, model, and effort. Refused with the
+   * server's canonical `supervisor_settings_invalid` (unknown choice) or
+   * `supervisor_settings_locked` (a supervisor process exists).
+   */
+  updateSupervisorSettings(request: SupervisorSettingsRequest): Promise<SupervisorState>;
+  cancelSupervisorPendingChange(
+    request: SupervisorPendingChangeCancelRequest,
+  ): Promise<SupervisorState>;
+  /** Dismisses the retained history-write failure (`persistFailure`). */
+  dismissSupervisorPersistFailure(): Promise<SupervisorState>;
+  /** Reads one transcript page: newest with no cursor, else before/after a seq. */
+  getSupervisorTranscript(request: SupervisorTranscriptRequest): Promise<SupervisorTranscriptPage>;
+  /**
+   * Sends one user message (launching the supervisor when stopped or
+   * failed). The main process mints the idempotency key; the renderer
+   * supplies only the text.
+   */
+  sendSupervisorMessage(request: SupervisorMessageRequest): Promise<SupervisorMessageResult>;
+  /** Interrupts the current turn; `accepted` returns immediately. */
+  interruptSupervisor(): Promise<SupervisorActionResult>;
+  /** Stops the supervisor process, keeping the transcript and settings. */
+  endSupervisor(): Promise<SupervisorActionResult>;
+  /**
+   * Starts a new conversation: stops any live turn or process the way End
+   * does and opens a fresh conversation id, keeping settings and the old
+   * transcript on disk. `noop` when the conversation was already empty.
+   */
+  resetSupervisor(): Promise<SupervisorResetResult>;
+  /** Schema-validated supervisor stream pushes; returns the exact unsubscribe. */
+  onSupervisorEvent(listener: (event: SupervisorEvent) => void): () => void;
+  /** Schema-validated main-window focus pushes; returns the exact unsubscribe. */
+  onWindowFocusChanged(listener: (event: WindowFocusEvent) => void): () => void;
   getCreationDefaults(): Promise<CreationDefaults>;
   inspectRepositorySources(request: RepositorySourcesRequest): Promise<RepositorySourcesResult>;
   checkRepositoryOriginStatus(

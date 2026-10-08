@@ -1,0 +1,267 @@
+// Copyright 2026 DoorDash, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package testutil
+
+// Markers a supervisor test puts in a user message to script the fake
+// interactive Claude's next turn. A message without a marker gets a
+// streamed reply.
+const (
+	// FakeSupervisorPermBash requests a blocking Bash permission and
+	// replies once the control response arrives.
+	FakeSupervisorPermBash = "SUPERVISOR_PERM_BASH"
+	// FakeSupervisorPermEdit requests a blocking Edit permission.
+	FakeSupervisorPermEdit = "SUPERVISOR_PERM_EDIT"
+	// FakeSupervisorPermAgent requests a blocking sub-agent (Task)
+	// permission.
+	FakeSupervisorPermAgent = "SUPERVISOR_PERM_AGENT"
+	// FakeSupervisorPermRead requests a read-only tool the supervisor
+	// handler auto-allows; the request must never surface.
+	FakeSupervisorPermRead = "SUPERVISOR_PERM_READ"
+	// FakeSupervisorAsk asks an AskUserQuestion question.
+	FakeSupervisorAsk = "SUPERVISOR_ASK"
+	// FakeSupervisorHold holds a long-running tool until an interrupt
+	// arrives, then reports an interrupted result without exiting.
+	FakeSupervisorHold = "SUPERVISOR_HOLD"
+	// FakeSupervisorStubborn holds the turn and ignores interrupts.
+	FakeSupervisorStubborn = "SUPERVISOR_STUBBORN"
+	// FakeSupervisorPartial commits partial assistant text and a Bash tool
+	// call, then holds the turn like FakeSupervisorHold.
+	FakeSupervisorPartial = "SUPERVISOR_PARTIAL"
+	// FakeSupervisorSubagentPermBash starts a sub-agent task whose Bash
+	// call raises a blocking permission tagged with the sub-agent's
+	// agent_id, then replies "Sub-agent allowed" or "Sub-agent denied"
+	// from the control response.
+	FakeSupervisorSubagentPermBash = "SUPERVISOR_SUBAGENT_PERM_BASH"
+	// FakeSupervisorSubagentAsk starts a sub-agent task that asks an
+	// AskUserQuestion question tagged with its agent_id, then replies
+	// "Sub-agent answered <label>" with the chosen branch label.
+	FakeSupervisorSubagentAsk = "SUPERVISOR_SUBAGENT_ASK"
+	FakeSupervisorCompact     = "SUPERVISOR_COMPACT"
+	FakeSupervisorCompactExit = "SUPERVISOR_COMPACT_EXIT"
+	FakeSupervisorUsageHigh   = "SUPERVISOR_USAGE_HIGH"
+)
+
+// FakeSupervisorSubagentID is the agent_id the fake's sub-agent requests
+// carry.
+const FakeSupervisorSubagentID = "agent_sub_1"
+
+// History recall prompts let cross-harness journeys prove both ends of a rebuilt transcript.
+const (
+	FakeSupervisorRecallFirst = "SUPERVISOR_RECALL_FIRST"
+	FakeSupervisorRecallLast  = "SUPERVISOR_RECALL_LAST"
+)
+
+// FakeSupervisorPartialText is the assistant text a FakeSupervisorPartial
+// turn commits before holding.
+const FakeSupervisorPartialText = "Partial answer before the cut"
+
+// FakeSupervisorArgvFile is the file, next to the script, that each fake
+// interactive Claude launch overwrites with its argv, one argument per line.
+const FakeSupervisorArgvFile = "argv"
+
+// FakeSupervisorInvocationsFile is the file, next to the script, that each
+// fake interactive Claude launch appends one line to.
+const FakeSupervisorInvocationsFile = "invocations"
+
+// FakeSupervisorUserInputsFile is the file, next to the script, that the
+// fake interactive Claude appends each user stdin line to verbatim, so a
+// test can inspect exactly what reached the harness.
+const FakeSupervisorUserInputsFile = "user_inputs"
+
+// FakeSupervisorSystemPromptFile is the file, next to the script, that each
+// fake interactive Claude launch overwrites with the value it received on
+// the --append-system-prompt launch flag (empty when none was passed).
+const FakeSupervisorSystemPromptFile = "system_prompt"
+
+// fakeSupervisorLaunchPrologue records the launch, its argv and its system
+// prompt, and notes the session id passed on --resume.
+const fakeSupervisorLaunchPrologue = `printf 'x\n' >> "$(dirname "$0")/` + FakeSupervisorInvocationsFile + `"
+printf '%s\n' "$@" > "$(dirname "$0")/` + FakeSupervisorArgvFile + `"
+sysprompt=""
+resume=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--append-system-prompt" ]; then sysprompt="$arg"; fi
+  if [ "$prev" = "--resume" ]; then resume="$arg"; fi
+  prev="$arg"
+done
+printf '%s' "$sysprompt" > "$(dirname "$0")/` + FakeSupervisorSystemPromptFile + `"
+`
+
+// fakeSupervisorResumeLines read the rebuilt session file a --resume launch
+// names, under the Claude configuration directory and the physical cwd's
+// encoded project directory, into the reply for the first prompt.
+const fakeSupervisorResumeLines = `resumed=""
+history_first=""
+history_last_user=""
+history_last_assistant=""
+session_id="s"
+if [ -n "$resume" ]; then
+  session_id="$resume"
+  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+  enc=$(pwd -P | tr '/.' '--')
+  file="$cfg/projects/$enc/$resume.jsonl"
+  if [ -f "$file" ]; then
+    count=$(grep -c '"role":"user","content":"' "$file")
+    first=$(grep -m1 '"role":"user","content":"' "$file" | sed 's/.*"role":"user","content":"\([^"]*\)".*/\1/')
+    resumed="Resumed with $count prior messages: $first"
+    if grep -q '"subtype":"compact_boundary"' "$file"; then
+      count=$(sed -n '/"subtype":"compact_boundary"/,$p' "$file" | grep -c '"role":"user"')
+      summary=$(sed -n '/"subtype":"compact_boundary"/,$p' "$file" | grep -m1 '"isCompactSummary":true' | sed 's/.*"text":"\([^"]*\)".*/\1/')
+      resumed="Resumed after compaction with $count prior messages: $summary"
+    fi
+    history_first="$first"
+    history_last_user=$(grep '"role":"user","content":"' "$file" | grep -v 'Agentico note:' | tail -1 | sed 's/.*"role":"user","content":"\([^"]*\)".*/\1/')
+    history_last_assistant=$(grep '"type":"assistant"' "$file" | grep '"type":"text","text":"' | tail -1 | sed 's/.*"type":"text","text":"\([^"]*\)".*/\1/')
+    if [ -z "$history_last_assistant" ]; then
+      history_last_assistant=$(grep '"role":"assistant","content":"' "$file" | tail -1 | sed 's/.*"role":"assistant","content":"\([^"]*\)".*/\1/')
+    fi
+  else
+    resumed="Resume file missing: $file"
+  fi
+fi
+`
+
+// FakeClaudeInteractiveScriptBody returns a long-lived stream-json harness:
+// it answers the initialize handshake, then serves one turn per user
+// message (stream deltas, one assistant message with a message id, and a
+// result) and stays alive reading stdin between turns. Markers in the user
+// text script permission requests, questions and interrupt handling. Every
+// user line is recorded in FakeSupervisorUserInputsFile.
+func FakeClaudeInteractiveScriptBody() string {
+	return FakeClaudeInteractiveScriptBodyWithPermissionMode("default")
+}
+
+// FakeClaudeInteractiveScriptBodyWithPermissionMode is the interactive
+// harness reporting permissionMode in its init message, as a policy that
+// restricts the requested mode would make the real CLI do. A --resume
+// launch answers its first prompt with "Resumed with <n> prior messages:
+// <first prior prompt>" read from the rebuilt session file.
+func FakeClaudeInteractiveScriptBodyWithPermissionMode(permissionMode string) string {
+	return fakeSupervisorLaunchPrologue + fakeSupervisorResumeLines + `turn=0
+mode=""
+permission_mode="` + permissionMode + `"
+reply() {
+  used=$((1000 * turn))
+  case "$line" in
+    *` + FakeSupervisorUsageHigh + `*) used=170000 ;;
+    *` + FakeSupervisorCompact + `*) used=1000 ;;
+  esac
+  case "$line" in
+    *` + FakeSupervisorCompactExit + `*)
+      printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":170000}}'
+      exit 0
+      ;;
+    *` + FakeSupervisorCompact + `*)
+      printf '%s\n' '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":170000}}'
+      printf '%s\n' "{\"type\":\"user\",\"isCompactSummary\":true,\"message\":{\"role\":\"user\",\"content\":\"Summary of SUPERVISOR_COMPACT prompt on turn $turn\"}}"
+      ;;
+  esac
+  case "$line" in
+    *` + FakeSupervisorRecallFirst + `*) text="First user prompt: $history_first" ;;
+    *` + FakeSupervisorRecallLast + `*) text="Last exchange: $history_last_user | $history_last_assistant" ;;
+    *) text="" ;;
+  esac
+  if [ -n "$text" ]; then
+    printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+    printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
+    return
+  fi
+  if [ -n "$resumed" ]; then
+    text="$resumed"
+    resumed=""
+    printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"msg_$turn\"}}}"
+    printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+    printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
+    return
+  fi
+  printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"msg_$turn\"}}}"
+  printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Hello "}}}'
+  printf '%s\n' "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"from turn $turn\"}}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello from turn $turn\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+  printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
+}
+partial() {
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"` + FakeSupervisorPartialText + `\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_tool_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_partial_$turn\",\"name\":\"Bash\",\"input\":{\"command\":\"sleep 600\"}}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+}
+request() {
+  printf '%s\n' "{\"type\":\"control_request\",\"request_id\":\"req_$turn\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"$1\",\"input\":$2}}"
+}
+subagent_request() {
+  printf '%s\n' "{\"type\":\"system\",\"subtype\":\"task_started\",\"task_id\":\"task_$turn\",\"tool_use_id\":\"toolu_task_$turn\",\"description\":\"delegated work\",\"session_id\":\"$session_id\"}"
+  printf '%s\n' "{\"type\":\"control_request\",\"request_id\":\"req_sub_$turn\",\"request\":{\"subtype\":\"can_use_tool\",\"tool_name\":\"$1\",\"input\":$2,\"tool_use_id\":\"toolu_sub_$turn\",\"agent_id\":\"` + FakeSupervisorSubagentID + `\"}}"
+}
+subagent_reply() {
+  printf '%s\n' "{\"type\":\"system\",\"subtype\":\"task_notification\",\"task_id\":\"task_$turn\",\"tool_use_id\":\"toolu_task_$turn\",\"status\":\"completed\",\"session_id\":\"$session_id\"}"
+  printf '%s\n' "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_$turn\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"$1\"}],\"usage\":{\"input_tokens\":$used,\"output_tokens\":10}}}"
+  printf '%s\n' "{\"type\":\"result\",\"subtype\":\"success\",\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
+}
+while IFS= read -r line; do
+  case "$line" in
+    *'"subtype":"initialize"'*)
+      printf '%s\n' '{"type":"control_response","response":{"subtype":"success","request_id":"init"}}'
+      printf '%s\n' "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"$session_id\",\"model\":\"haiku[200K]\",\"permissionMode\":\"$permission_mode\"}"
+      ;;
+    *'"subtype":"interrupt"'*)
+      if [ "$mode" = hold ]; then
+        mode=""
+        printf '%s\n' "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"usage\":{\"input_tokens\":$used,\"output_tokens\":10},\"modelUsage\":{\"haiku\":{\"contextWindow\":200000}}}"
+      fi
+      ;;
+    *'"control_response"'*)
+      if [ "$mode" = wait ]; then
+        mode=""
+        reply
+      elif [ "$mode" = subwait ]; then
+        mode=""
+        case "$line" in
+          *'"Which branch?":"main"'*) subagent_reply "Sub-agent answered main" ;;
+          *'"Which branch?":"dev"'*) subagent_reply "Sub-agent answered dev" ;;
+          *'"behavior":"allow"'*) subagent_reply "Sub-agent allowed" ;;
+          *) subagent_reply "Sub-agent denied" ;;
+        esac
+      fi
+      ;;
+    *'"type":"user"'*)
+      turn=$((turn+1))
+      used=$((1000 * turn))
+      printf '%s\n' "$line" >> "$(dirname "$0")/` + FakeSupervisorUserInputsFile + `"
+      case "$line" in
+        *` + FakeSupervisorSubagentPermBash + `*) mode=subwait; subagent_request Bash '{"command":"echo codeword"}' ;;
+        *` + FakeSupervisorSubagentAsk + `*) mode=subwait; subagent_request AskUserQuestion '{"questions":[{"question":"Which branch?","header":"Branch","options":[{"label":"main","description":"default"},{"label":"dev","description":"work"}],"multiSelect":false}]}' ;;
+        *` + FakeSupervisorHold + `*) mode=hold ;;
+        *` + FakeSupervisorPartial + `*) mode=hold; partial ;;
+        *` + FakeSupervisorStubborn + `*) mode=stubborn ;;
+        *` + FakeSupervisorPermBash + `*) mode=wait; request Bash '{"command":"make test"}' ;;
+        *` + FakeSupervisorPermEdit + `*) mode=wait; request Edit '{"file_path":"main.go","old_string":"a","new_string":"b"}' ;;
+        *` + FakeSupervisorPermAgent + `*) mode=wait; request Task '{"description":"explore","prompt":"look around"}' ;;
+        *` + FakeSupervisorPermRead + `*) mode=wait; request Read '{"file_path":"README.md"}' ;;
+        *` + FakeSupervisorAsk + `*) mode=wait; request AskUserQuestion '{"questions":[{"question":"Which branch?","header":"Branch","options":[{"label":"main","description":"default"},{"label":"dev","description":"work"}],"multiSelect":false}]}' ;;
+        *) reply ;;
+      esac
+      ;;
+  esac
+done
+`
+}
+
+// FakeClaudeLaunchFailureScriptBody returns a harness that exits before
+// answering the handshake.
+func FakeClaudeLaunchFailureScriptBody() string {
+	return `printf 'x\n' >> "$(dirname "$0")/` + FakeSupervisorInvocationsFile + `"
+exit 3
+`
+}

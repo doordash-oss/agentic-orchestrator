@@ -158,29 +158,37 @@ test('zero-gap operations: dismissible watch, live inspection, bounded files, an
     );
 
     // The sidebar has no "close tab" affordance — every feature always has a
-    // row. Navigating to Overview unmounts the cockpit (resetting transient
-    // view state) without removing the feature from the sidebar; reopening
-    // via the Overview feature list's "Open" button is the equivalent of the
-    // old reopen-a-closed-tab path.
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
+    // row. Going home to the Supervisor page unmounts the cockpit (resetting
+    // transient view state) without removing the feature from the sidebar;
+    // reselecting its sidebar row is the equivalent of the old
+    // reopen-a-closed-tab path.
+    await handle.page.getByRole('option', { name: 'Supervisor', exact: true }).click();
+    await expect(handle.page.getByLabel(`Feature ${featureName}`)).toHaveCount(0);
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
 
-    const list = handle.page.getByRole('region', { name: 'Existing features' });
-    const row = list.locator('li').filter({ hasText: featureName });
-    await row.getByRole('button', { name: 'Open' }).click();
+    await handle.page.getByRole('option', { name: featureName }).click();
     const reopened = handle.page.getByLabel(`Feature ${featureName}`);
     await expect(reopened.getByRole('region', { name: 'Current run inspection' })).toBeVisible({
       timeout: 60_000,
     });
     await expect(reopened.getByRole('region', { name: 'Live agent transcript' })).toBeVisible();
 
-    await handle.page.getByRole('option', { name: 'Overview' }).click();
-    const bulk = handle.page.getByRole('region', { name: 'Bulk resume and retry' });
+    // Bulk resume/retry lives in the Recovery sheet, opened from the toolbar
+    // over the feature page; it previews only when asked.
+    await handle.page
+      .locator('header.toolbar')
+      .getByRole('button', { name: 'Recovery', exact: true })
+      .click();
+    const recoverySheet = handle.page.getByRole('dialog', { name: 'Recovery', exact: true });
+    await expect(recoverySheet).toBeVisible({ timeout: 10_000 });
+    const bulk = recoverySheet.getByRole('region', { name: 'Bulk resume and retry' });
     await bulk.getByRole('button', { name: 'Fresh preview' }).click();
     await expect(bulk.getByText(/No features are eligible/)).toBeVisible({
       timeout: 30_000,
     });
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
+    await recoverySheet.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(recoverySheet).toHaveCount(0);
 
     await handle.page.getByRole('option', { name: featureName }).click();
     await handle.page.getByRole('button', { name: 'Stop', exact: true }).click();

@@ -43,11 +43,6 @@ func RoleSystemPrompt(in RoleSystemInput) string {
 	return MustRender("system", in)
 }
 
-// ChatSystemPrompt renders the persistent AMA chat system prompt.
-func ChatSystemPrompt(in ChatSystemInput) string {
-	return MustRender("chat.system", in)
-}
-
 // AutoReviewUserPrompt renders the hidden automatic Bash safety-review prompt.
 func AutoReviewUserPrompt(in AutoReviewUserInput) string {
 	return MustRender("autoreview.user", in)
@@ -160,6 +155,12 @@ func ImplementationReviewAxisUserPrompt(in any) string {
 // (summary.user.tmpl).
 func SummaryUserPrompt(in SummaryUserInput) string {
 	return MustRender("summary.user", in)
+}
+
+// SupervisorSystemPrompt renders the supervisor conversation's launch-channel
+// system prompt (supervisor.system.tmpl).
+func SupervisorSystemPrompt(in SupervisorSystemInput) string {
+	return strings.TrimSpace(MustRender("supervisor.system", in)) + "\n"
 }
 
 // PRDescriptionUserPrompt renders the Publish-phase PR-description prompt

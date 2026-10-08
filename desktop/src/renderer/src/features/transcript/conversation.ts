@@ -17,15 +17,15 @@ limitations under the License.
 import type { SessionTaskActivity, TranscriptMessage } from '../../../../shared/ipc';
 import type { VerificationTone } from '../verificationModel';
 
-/** Upper bound on retained rows; keeps the live preview and AMA memory-safe. */
+/** Upper bound on retained rows; keeps the live preview memory-safe. */
 export const MAX_TRANSCRIPT_MESSAGES = 200;
 
 /** Row types that are machinery, never shown as conversation. */
-const SUPPRESSED_TYPES = ['usage_update', 'success', 'result', 'system', 'prompt'];
+const SUPPRESSED_TYPES = ['usage_update', 'success', 'result', 'system', 'prompt', 'tool_result'];
 
 export type ConversationMode = 'chat' | 'assistant-only';
 
-export type SubagentState = 'running' | 'done' | 'failed' | 'cancelled';
+export type SubagentState = 'running' | 'done' | 'failed' | 'cancelled' | 'unknown';
 
 /** Live view of one delegated sub-agent, folded from its task lifecycle rows. */
 export interface SubagentActivity {
@@ -37,8 +37,26 @@ export interface SubagentActivity {
   summary?: string;
 }
 
+/** The tone of a one-line notice row: a cut turn, a failure, or a caveat. */
+export type ConversationNoticeTone = 'interrupted' | 'failed' | 'caveat' | 'neutral';
+
+/** A file a user message carried, shown as a chip under its text. */
+export interface ConversationAttachment {
+  kind: 'image' | 'file';
+  name: string;
+}
+
 export type ConversationItem =
-  | { kind: 'message'; key: string; role: 'user' | 'assistant'; text: string }
+  | {
+      kind: 'message';
+      key: string;
+      role: 'user' | 'assistant';
+      text: string;
+      /** A quiet trailing note on the message, e.g. "Interrupted" for a cut reply. */
+      footer?: string;
+      /** The message's attachments, one chip each under the text. */
+      attachments?: readonly ConversationAttachment[];
+    }
   | {
       kind: 'auto-pick';
       key: string;
@@ -58,6 +76,31 @@ export type ConversationItem =
       name: string;
       tone: VerificationTone;
       symbol: string;
+    }
+  | {
+      /**
+       * An answered permission or question collapsed to one line. Never
+       * produced by `buildConversation`: surfaces that keep durable request
+       * records (the supervisor transcript) interleave these themselves.
+       */
+      kind: 'verdict';
+      key: string;
+      outcome: 'allowed' | 'denied' | 'answered' | 'interrupted';
+      text: string;
+    }
+  | {
+      /**
+       * A display-only notice in the stream (a turn cut by a restart, a
+       * launch failure, a caveat about the session). Like `verdict`, never
+       * produced by `buildConversation`; the supervisor interleaves these
+       * from its durable marker records.
+       */
+      kind: 'notice';
+      key: string;
+      tone: ConversationNoticeTone;
+      text: string;
+      summary?: string;
+      summaryTruncated?: boolean;
     };
 
 /** Stable identity for a row, unique across multi-block responses. */
@@ -110,6 +153,8 @@ export function activityLabel(entry: TranscriptMessage): string | null {
   // Redaction hides row text, not the server-sanitized tool/task metadata —
   // most live tool rows arrive redacted, so label them before blanking.
   const tool = entry.tool ?? entry.task?.lastToolName;
+  if (entry.toolCall?.summary?.trim())
+    return `${tool ? friendlyToolName(tool) + ' · ' : ''}${entry.toolCall.summary.trim()}`;
   if (tool !== undefined && tool.trim() !== '') return `Using ${friendlyToolName(tool)}`;
   if (entry.task?.description?.trim()) return entry.task.description.trim();
   if (entry.toolCall?.summary?.trim()) return entry.toolCall.summary.trim();
@@ -316,7 +361,7 @@ export function buildConversation(
     if (label === null) continue;
     const previous = items.at(-1);
     if (previous?.kind === 'activity') {
-      if (label !== '' && !previous.labels.includes(label)) previous.labels.push(label);
+      if (label !== '') previous.labels.push(label);
     } else {
       items.push({
         kind: 'activity',

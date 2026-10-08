@@ -613,11 +613,10 @@ describe('PublishModal', () => {
     await user.click(within(card).getByRole('button', { name: 'Explain in chat' }));
     expect(requestRoute).toHaveBeenCalledTimes(1);
     expect(requestRoute).toHaveBeenCalledWith({
-      target: 'ama',
+      target: 'supervisor',
       draft:
         'Explain the "Pull-request creation failed" error (publish_pull_request_failed) and what I should do next.',
-      autoSubmit: true,
-      chatContext: {
+      errorReference: {
         scope: 'repository',
         code: 'publish_pull_request_failed',
         featureId,

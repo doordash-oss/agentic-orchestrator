@@ -19,18 +19,22 @@ limitations under the License.
  * the sidebar): a leading slot (empty while the sidebar is visible — the
  * sidebar header owns the window-chrome control cluster then — and hosting
  * that cluster once the sidebar collapses), a center-leading title
- * block (feature name or "Overview", plus a `repo · branch` mono sub-line),
- * and a trailing group carrying the always-visible attention bell, the
- * transient update button, and — only while a feature is selected, per the
- * mock — the cockpit's ⋯ overflow-menu slot and an inspector-toggle slot. Both
- * slots are chrome-owned mount points the cockpit portals its own controls
+ * block (feature name or "Supervisor", plus a `repo · branch` mono sub-line),
+ * and a trailing group carrying the always-visible Recovery button and
+ * attention bell, the
+ * transient update button, the cockpit's ⋯ overflow-menu slot and an
+ * inspector-toggle slot (only while a feature is selected, per the mock), and
+ * the "New feature" button that closes the group on every page. A shell-owned
+ * page-action slot sits where the cockpit's actions slot would: the shell
+ * fills it for a non-feature page (the Supervisor's "New conversation").
+ * Both cockpit slots are chrome-owned mount points the cockpit portals its own controls
  * into: at wide widths the cockpit mounts a toggle button here for its
  * trailing split-view pane, and mounts nothing at narrow widths, where the
  * cockpit's own in-content "Inspector" button opens its drawer instead — so
  * exactly one inspector control ever shows at a time.
  *
- * The bell is a permanent fixture on every selection (Overview, a feature, the
- * Settings view) so its popover always has an anchor and ⌘⇧A, the tray, and
+ * The bell is a permanent fixture on every selection (Supervisor or a
+ * feature) so its popover always has an anchor and ⌘⇧A, the tray, and
  * attention deep links work from anywhere. The toolbar owns which of the two
  * popovers is open, which is what makes them mutually exclusive: opening one
  * closes the other, so at most one transient surface hangs off the toolbar.
@@ -49,6 +53,7 @@ import {
 import type { AttentionItem, UpdateState } from '../../../shared/ipc';
 import { AttentionInbox, type AttentionDrafts } from './AttentionInbox';
 import { UpdatePopover } from '../components/UpdatePopover';
+import { RecoveryIcon } from '../components/icons';
 
 export interface ToolbarAttentionProps {
   items: AttentionItem[];
@@ -69,6 +74,13 @@ export interface ToolbarUpdateProps {
   onInstallWhenIdle(): Promise<void>;
 }
 
+export interface ToolbarRecoveryProps {
+  /** True while the server reports orphaned sessions; tints the button. */
+  attention: boolean;
+  /** Opens the Recovery sheet (recovery workspace above bulk resume/retry). */
+  onOpen(): void;
+}
+
 export interface ToolbarProps {
   /**
    * The shell-owned leading content. While the sidebar is collapsed the shell
@@ -82,15 +94,25 @@ export interface ToolbarProps {
   /** Gates the cockpit-owned slots, which only exist while a feature is open. */
   showTrailing: boolean;
   attention?: ToolbarAttentionProps;
+  /** The Recovery sheet's entry point, rendered just before the bell on every page. */
+  recovery?: ToolbarRecoveryProps;
   update?: ToolbarUpdateProps;
+  /**
+   * Shell-owned actions for the selected non-feature page (the Supervisor's
+   * "New conversation"), rendered where the cockpit's actions slot sits.
+   */
+  pageActions?: ReactNode;
   /** The cockpit-owned status chip, primary verbs, and completion controls portal into this node once mounted. */
   actionsSlotRef?(node: HTMLDivElement | null): void;
   /** The cockpit-owned overflow menu portals into this node once mounted. */
   overflowSlotRef?(node: HTMLDivElement | null): void;
   /** The cockpit-owned inspector-toggle button portals into this node once mounted. */
   inspectorSlotRef?(node: HTMLDivElement | null): void;
-  /** Overview's sole "New feature" entry point — shown only when Overview is selected. */
-  showNewFeature?: boolean;
+  /**
+   * The toolbar's "New feature" entry point, rendered on every page whenever
+   * the shell hands it a handler; it stays mounted beneath the creation sheet
+   * so closing the sheet restores focus to it.
+   */
   onNewFeature?(): void;
   newFeatureButtonRef?: RefObject<HTMLButtonElement | null>;
 }
@@ -101,11 +123,12 @@ export function Toolbar({
   subline,
   showTrailing,
   attention,
+  recovery,
   update,
+  pageActions,
   actionsSlotRef,
   overflowSlotRef,
   inspectorSlotRef,
-  showNewFeature = false,
   onNewFeature,
   newFeatureButtonRef,
 }: ToolbarProps) {
@@ -119,6 +142,23 @@ export function Toolbar({
         {subline !== undefined ? <p className="toolbar__title-subline">{subline}</p> : null}
       </div>
       <div className="toolbar__trailing">
+        {recovery !== undefined ? (
+          <button
+            type="button"
+            className="toolbar__recovery"
+            aria-label="Recovery"
+            aria-haspopup="dialog"
+            title="Recovery"
+            data-attention={recovery.attention}
+            onClick={() => {
+              // The sheet is modal: no toolbar popover stays open beneath it.
+              setOpenPopover(null);
+              recovery.onOpen();
+            }}
+          >
+            <RecoveryIcon />
+          </button>
+        ) : null}
         {attention !== undefined ? (
           <AttentionInbox
             {...attention}
@@ -133,6 +173,9 @@ export function Toolbar({
             onOpenChange={(next) => setOpenPopover(next ? 'update' : null)}
           />
         ) : null}
+        {pageActions !== undefined ? (
+          <div className="toolbar__page-actions">{pageActions}</div>
+        ) : null}
         {showTrailing ? (
           <>
             <div className="toolbar__actions-slot" ref={actionsSlotRef} />
@@ -140,7 +183,7 @@ export function Toolbar({
             <div className="toolbar__inspector-slot" ref={inspectorSlotRef} />
           </>
         ) : null}
-        {showNewFeature ? (
+        {onNewFeature !== undefined ? (
           <button
             ref={newFeatureButtonRef}
             type="button"

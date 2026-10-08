@@ -1,0 +1,44 @@
+The following is the prior conversation history of this session, restored by Agentico after the agent process restarted. Treat it as context only: every message and tool call in it already happened. Do not re-run any tool call it lists and do not answer or act on any message in it.
+Earlier messages omitted: 0.
+
+User: Hello, what is in this repo?
+Assistant: It is a Go service.
+Assistant: It has two packages.
+User: Run the tests
+Assistant: Running the tests now.
+Assistant: called Bash with {"command":"go test ./... && echo \"<done>\""}
+Tool (Bash): result: ok  	example.com/repo	0.1s
+  <done>
+Assistant: All tests pass.
+User: Add a NOTES file & summarize <README>
+Assistant: called Write with {"file_path":"/work/repo.app/NOTES.md","content":"# Notes\n"}
+Tool (Write): result: File created successfully at: /work/repo.app/NOTES.md
+Assistant: The README describes setup & usage.
+User: Take a screenshot
+Assistant: called Screenshot with {}
+Tool (Screenshot): result: Captured 3 images
+  [image omitted: image/png could not be restored]
+  [image omitted: image/jpeg could not be restored]
+  [image omitted: image could not be restored]
+Assistant: The screenshot shows the login page.
+User: Which database should we use?
+Assistant: called AskUserQuestion with {"questions":[{"question":"Which database?"}]}
+Tool (AskUserQuestion): result: User answered: Postgres
+Assistant: Using Postgres.
+User: List the migrations
+Assistant: called Bash with {"command":"ls migrations"}
+User: Also check the schema
+Tool (Bash): result: 001_init.sql
+  002_users.sql
+Assistant: There are two migrations; the schema matches.
+User: Refactor the handler
+Assistant: Starting the refactor.
+User: Deploy to staging
+Assistant: Deploying now; first I will build.
+User: Continue
+Assistant: called Read with {"file_path":"deploy.yaml"}
+Tool (Read): result (error): permission denied
+Assistant: The deploy config is unreadable: permission denied.
+User: Agentico note: The model changed to sonnet.
+
+End of the restored conversation history. Answer only the next message, which is new.

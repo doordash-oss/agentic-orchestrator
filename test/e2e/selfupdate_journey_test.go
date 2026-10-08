@@ -37,6 +37,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 // The selfupdate journeys boot real, deliberately built agentico binaries as
@@ -59,6 +60,8 @@ var selfupdateBuildDir string
 // TestMain owns the shared build directory so each deliberate binary is
 // built at most once per test-binary run and cleaned up afterwards.
 func TestMain(m *testing.M) {
+	testutil.RunFakeCodexIfRequested()
+	testutil.RunFakeOpenCodeIfRequested()
 	dir, err := os.MkdirTemp("", "agentico-selfupdate-e2e-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "selfupdate e2e: create build dir: %v\n", err)

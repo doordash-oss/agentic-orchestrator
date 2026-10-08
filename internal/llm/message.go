@@ -68,6 +68,12 @@ type SDKMessage struct {
 	// These messages are ephemeral — they drive UI activity indicators but
 	// are NOT stored in the message log.
 	StreamDeltaType string `json:"-"`
+	// StreamDeltaText is the text carried by a "text" stream delta.
+	StreamDeltaText string `json:"-"`
+	// StreamMessageID is the provider message id announced by a
+	// message_start stream event; it matches the committed assistant
+	// message's ConversationMsg.ID.
+	StreamMessageID string `json:"-"`
 
 	// LocallyAppended is true for messages synthetically added by the desktop app
 	// (e.g. user-typed chat input in the attach view).
@@ -96,6 +102,7 @@ func (m *SDKMessage) UnmarshalJSON(data []byte) error {
 	switch envelope.Type {
 	case "stream_event":
 		m.StreamDeltaType = extractStreamDeltaType(data)
+		m.StreamDeltaText, m.StreamMessageID = extractStreamDeltaPayload(data)
 		return nil
 	case "system":
 		switch envelope.Subtype {
@@ -171,6 +178,33 @@ func extractStreamDeltaType(data []byte) string {
 	return ev.Event.Delta.Type
 }
 
+// extractStreamDeltaPayload pulls the text of a text delta and the message
+// id of a message_start event from a stream_event envelope.
+func extractStreamDeltaPayload(data []byte) (text, messageID string) {
+	var ev struct {
+		Event struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID string `json:"id"`
+			} `json:"message"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		} `json:"event"`
+	}
+	if json.Unmarshal(data, &ev) != nil {
+		return "", ""
+	}
+	if ev.Event.Delta.Type == "text_delta" {
+		text = ev.Event.Delta.Text
+	}
+	if ev.Event.Type == "message_start" {
+		messageID = ev.Event.Message.ID
+	}
+	return text, messageID
+}
+
 // --- Concrete message types ---
 
 // SystemInitMessage is the first message emitted by the CLI.
@@ -182,7 +216,20 @@ type SystemInitMessage struct {
 	Tools          []string        `json:"tools,omitempty"`
 	MCPServers     []MCPServerInfo `json:"mcp_servers,omitempty"`
 	PermissionMode string          `json:"permissionMode,omitempty"`
+	// ResumeOutcome reports how a resumed launch started: ResumeOutcomeResumed,
+	// ResumeOutcomeFallback, or empty for a fresh session. Providers that
+	// cannot tell leave it empty.
+	ResumeOutcome string `json:"resume_outcome,omitempty"`
 }
+
+// Resume outcomes carried by SystemInitMessage.ResumeOutcome.
+const (
+	// ResumeOutcomeResumed means the requested session was resumed.
+	ResumeOutcomeResumed = "resumed"
+	// ResumeOutcomeFallback means the provider could not read the requested
+	// session and started a fresh one instead.
+	ResumeOutcomeFallback = "fallback"
+)
 
 // MCPServerInfo describes an MCP server connected to the session.
 type MCPServerInfo struct {
@@ -200,10 +247,44 @@ type AssistantMessage struct {
 
 // ConversationMsg is a message in the conversation (assistant or user role).
 type ConversationMsg struct {
+	// ID is the provider message id when the provider reports one.
+	ID      string         `json:"id,omitempty"`
 	Role    string         `json:"role"`
 	Content []ContentBlock `json:"content"`
 	Model   string         `json:"model,omitempty"`
 	Usage   *Usage         `json:"usage,omitempty"`
+}
+
+// UnmarshalJSON accepts Claude's compact summary content as a plain string.
+func (m *ConversationMsg) UnmarshalJSON(data []byte) error {
+	type plain ConversationMsg
+	var raw struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var decoded plain
+	if len(raw.Content) > 0 && raw.Content[0] == '"' {
+		var value string
+		if err := json.Unmarshal(raw.Content, &value); err != nil {
+			return err
+		}
+		var withoutContent struct {
+			ID    string `json:"id"`
+			Role  string `json:"role"`
+			Model string `json:"model"`
+			Usage *Usage `json:"usage"`
+		}
+		if err := json.Unmarshal(data, &withoutContent); err != nil {
+			return err
+		}
+		decoded = plain{ID: withoutContent.ID, Role: withoutContent.Role, Model: withoutContent.Model, Usage: withoutContent.Usage, Content: []ContentBlock{{Type: "text", Text: value}}}
+	} else if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*m = ConversationMsg(decoded)
+	return nil
 }
 
 // ContentBlock is a polymorphic block within a message.
@@ -278,10 +359,11 @@ type Usage struct {
 
 // UserMessage is an echoed user message or tool result.
 type UserMessage struct {
-	Type      string          `json:"type"`
-	Subtype   string          `json:"subtype,omitempty"`
-	Message   ConversationMsg `json:"message"`
-	SessionID string          `json:"session_id,omitempty"`
+	Type             string          `json:"type"`
+	Subtype          string          `json:"subtype,omitempty"`
+	IsCompactSummary bool            `json:"isCompactSummary,omitempty"`
+	Message          ConversationMsg `json:"message"`
+	SessionID        string          `json:"session_id,omitempty"`
 }
 
 // ModelUsageEntry holds per-model usage metadata from the result message.
@@ -356,6 +438,10 @@ type ControlRequestMessage struct {
 	// session but would have handled this request had it been on.
 	AutoApproveOffer *AutoApproveOffer      `json:"-"`
 	AutomaticReview  *AutomaticReviewStatus `json:"-"`
+	// DeferralReason is the permission handler's explanation when it left
+	// this request to the user. It is relayed to the model only if the user
+	// denies the request, so the model can retry in an allowed shape.
+	DeferralReason string `json:"-"`
 }
 
 // AutomaticReviewStatus explains a human deferral without exposing provider output.
@@ -383,6 +469,9 @@ type ControlRequest struct {
 	Input      json.RawMessage `json:"input,omitempty"`
 	HookName   string          `json:"hook_name,omitempty"`
 	CallbackID string          `json:"callback_id,omitempty"`
+	// AgentID names the sub-agent a Claude can_use_tool request came from;
+	// empty for the root agent.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // ControlResponse is the wire format for responding to control_request messages.
@@ -626,8 +715,28 @@ type HookResponseMessage struct {
 
 // CompactBoundaryMessage indicates context compaction occurred.
 type CompactBoundaryMessage struct {
-	Type    string `json:"type"`
-	Subtype string `json:"subtype"`
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype"`
+	ItemID    string `json:"-"`
+	Trigger   string `json:"-"`
+	PreTokens int    `json:"-"`
+}
+
+func (m *CompactBoundaryMessage) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Type            string `json:"type"`
+		Subtype         string `json:"subtype"`
+		CompactMetadata struct {
+			Trigger   string `json:"trigger"`
+			PreTokens int    `json:"pre_tokens"`
+		} `json:"compact_metadata"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	m.Type, m.Subtype = raw.Type, raw.Subtype
+	m.Trigger, m.PreTokens = raw.CompactMetadata.Trigger, raw.CompactMetadata.PreTokens
+	return nil
 }
 
 // TaskUsage is the per-subagent cumulative usage payload carried inside

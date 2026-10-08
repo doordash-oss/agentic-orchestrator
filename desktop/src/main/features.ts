@@ -24,13 +24,7 @@ limitations under the License.
  * separate, explicitly allowlisted operations dispatched through
  * `dispatchAction`.
  */
-import {
-  CanonicalErrorException,
-  isRequestTimeout,
-  redactText,
-  redactedCanonicalError,
-  requiresLocalServerError,
-} from '../shared/errors';
+import { isRequestTimeout, redactText, redactedCanonicalError } from '../shared/errors';
 import {
   FeatureActionResponseSchema,
   ServerFeatureOperationalActionResponseSchema,
@@ -113,7 +107,7 @@ import {
   type SetupTaskView,
 } from '../shared/ipc';
 import type { ApiRequestInit } from './gateway/runtimeGateway';
-import { alwaysLocal, type LocalitySource } from './locality';
+import { alwaysLocal, assertNoLocalPathsRemotely, type LocalitySource } from './locality';
 import { serverRequest, type ServerTransport } from './serverClient';
 import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
 
@@ -161,21 +155,6 @@ const EFFORT_LEVELS = new Set<EffortLevel>([
   'max',
   'ultra',
 ]);
-
-/**
- * Remote submit guard: while remotely connected, a locally shaped path
- * payload (images/attachments/repository-file refs) fails with the locality
- * error rather than leaking a path the server cannot read. Local payloads
- * and staged upload references pass through untouched.
- */
-function assertNoLocalPathsRemotely(remote: boolean, ...groups: readonly string[][]): void {
-  if (!remote) return;
-  for (const group of groups) {
-    if (group.length > 0) {
-      throw new CanonicalErrorException(requiresLocalServerError());
-    }
-  }
-}
 
 // Description generation is a synchronous utility LLM session. Its session
 // idle bounds are five minutes, so leave transport cleanup time beyond that

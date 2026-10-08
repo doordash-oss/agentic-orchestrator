@@ -69,12 +69,12 @@ func TestClosedRefusesAcquire(t *testing.T) {
 	if c.Closed() != true {
 		t.Fatal("closed flag not set")
 	}
-	_, err := c.Acquire(CategoryChat)
+	_, err := c.Acquire(CategorySupervisor)
 	closed, ok := AsClosed(err)
 	if !ok {
 		t.Fatalf("expected ClosedError, got %v", err)
 	}
-	if closed.Category != CategoryChat {
+	if closed.Category != CategorySupervisor {
 		t.Fatalf("category = %q", closed.Category)
 	}
 	// A second close attempt is a no-op returning false.
@@ -82,7 +82,7 @@ func TestClosedRefusesAcquire(t *testing.T) {
 		t.Fatal("double close must return false")
 	}
 	c.Open()
-	if _, err := c.Acquire(CategoryChat); err != nil {
+	if _, err := c.Acquire(CategorySupervisor); err != nil {
 		t.Fatalf("acquire after open: %v", err)
 	}
 }
@@ -175,13 +175,13 @@ func TestDetectMergesAndFailsClosed(t *testing.T) {
 	t.Parallel()
 	c := New(Options{Detectors: []Detector{
 		func(context.Context) (Activity, error) { return Activity{Features: 2}, nil },
-		func(context.Context) (Activity, error) { return Activity{ChatActive: true, Clones: 1}, nil },
+		func(context.Context) (Activity, error) { return Activity{SupervisorActive: true, Clones: 1}, nil },
 	}})
 	activity, err := c.Detect(context.Background())
 	if err != nil {
 		t.Fatalf("detect: %v", err)
 	}
-	if activity.Features != 2 || !activity.ChatActive || activity.Clones != 1 || !activity.Busy() {
+	if activity.Features != 2 || !activity.SupervisorActive || activity.Clones != 1 || !activity.Busy() {
 		t.Fatalf("merged activity = %+v", activity)
 	}
 
@@ -270,15 +270,15 @@ func TestWaitForIdleContextCancel(t *testing.T) {
 }
 
 // TestActivityProtectedBusy pins the protected-work predicate beside Busy:
-// repository activity of every class is protected, while feature and chat
+// repository activity of every class is protected, while feature and supervisor
 // activity alone — the work an explicit-stop install may interrupt — never
 // is.
 func TestActivityProtectedBusy(t *testing.T) {
 	t.Parallel()
 	for _, activity := range []Activity{
 		{Features: 3},
-		{ChatActive: true},
-		{Features: 1, ChatActive: true},
+		{SupervisorActive: true},
+		{Features: 1, SupervisorActive: true},
 		{},
 	} {
 		if activity.ProtectedBusy() {
@@ -298,6 +298,92 @@ func TestActivityProtectedBusy(t *testing.T) {
 		if !activity.Busy() {
 			t.Fatalf("protected activity %+v must also be busy", activity)
 		}
+	}
+}
+
+// TestActivityBlocksIdleInstall pins the unattended-install predicate
+// beside Busy: a supervisor waiting on the user is still active work, but
+// it no longer holds up an idle install, while a working supervisor and
+// every other class of activity still does.
+func TestActivityBlocksIdleInstall(t *testing.T) {
+	t.Parallel()
+	waiting := Activity{SupervisorActive: true, SupervisorWaiting: true}
+	if !waiting.Busy() || waiting.BlocksIdleInstall() || waiting.SupervisorWorking() {
+		t.Fatalf("waiting supervisor %+v: busy=%v blocks=%v working=%v, want busy only",
+			waiting, waiting.Busy(), waiting.BlocksIdleInstall(), waiting.SupervisorWorking())
+	}
+	for _, activity := range []Activity{
+		{SupervisorActive: true},
+		{Features: 1},
+		{Features: 1, SupervisorActive: true, SupervisorWaiting: true},
+		{SupervisorActive: true, SupervisorWaiting: true, Clones: 1},
+		{Uploads: 1},
+		{OriginChecks: 1},
+		{RepositoryWork: 1},
+	} {
+		if !activity.BlocksIdleInstall() || !activity.Busy() {
+			t.Fatalf("activity %+v must block an idle install and be busy", activity)
+		}
+	}
+	if (Activity{}).BlocksIdleInstall() {
+		t.Fatal("no activity must not block an idle install")
+	}
+}
+
+// TestDetectMergesSupervisorWaiting proves a merged observation reads the
+// supervisor as waiting only when no detector reports it working.
+func TestDetectMergesSupervisorWaiting(t *testing.T) {
+	t.Parallel()
+	waiting := func(context.Context) (Activity, error) {
+		return Activity{SupervisorActive: true, SupervisorWaiting: true}, nil
+	}
+	working := func(context.Context) (Activity, error) { return Activity{SupervisorActive: true}, nil }
+	idle := func(context.Context) (Activity, error) { return Activity{}, nil }
+	for _, tc := range []struct {
+		name        string
+		detectors   []Detector
+		wantWaiting bool
+	}{
+		{"waiting alone", []Detector{idle, waiting}, true},
+		{"working wins", []Detector{waiting, working}, false},
+		{"working alone", []Detector{working}, false},
+	} {
+		activity, err := New(Options{Detectors: tc.detectors}).Detect(context.Background())
+		if err != nil {
+			t.Fatalf("%s: detect: %v", tc.name, err)
+		}
+		if !activity.SupervisorActive || activity.SupervisorWaiting != tc.wantWaiting {
+			t.Fatalf("%s: merged %+v, want active and waiting=%v", tc.name, activity, tc.wantWaiting)
+		}
+	}
+}
+
+// TestWaitForIdleIgnoresWaitingSupervisor proves the idle wait returns while
+// the only activity is a supervisor waiting on the user, and keeps waiting
+// while the supervisor works.
+func TestWaitForIdleIgnoresWaitingSupervisor(t *testing.T) {
+	var current atomic.Value
+	current.Store(Activity{SupervisorActive: true})
+	c := New(Options{
+		Detectors:    []Detector{func(context.Context) (Activity, error) { return current.Load().(Activity), nil }},
+		FallbackPoll: time.Hour,
+	})
+	done := make(chan error, 1)
+	go func() { done <- c.WaitForIdle(context.Background()) }()
+	select {
+	case err := <-done:
+		t.Fatalf("waiter returned while the supervisor works: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	current.Store(Activity{SupervisorActive: true, SupervisorWaiting: true})
+	c.NotifyChanged()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("wait for idle: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a waiting supervisor held up the idle wait")
 	}
 }
 
@@ -334,7 +420,7 @@ func TestDetectRunsOutsideMutex(t *testing.T) {
 
 // TestCloseForStoppingRefusesProtectedReservations proves the stopping
 // closure is refused — with admission left open — when any reservation
-// outside the stoppable categories is held, while feature and chat
+// outside the stoppable categories is held, while feature and supervisor
 // reservations alone permit the closure and persist under it.
 func TestCloseForStoppingRefusesProtectedReservations(t *testing.T) {
 	for _, cat := range []Category{CategoryClone, CategoryUpload, CategoryOrigin, CategoryRepository, Category("unknown")} {
@@ -343,7 +429,7 @@ func TestCloseForStoppingRefusesProtectedReservations(t *testing.T) {
 		if err != nil {
 			t.Fatalf("acquire %s: %v", cat, err)
 		}
-		if c.CloseForStopping(CategoryFeature, CategoryChat) {
+		if c.CloseForStopping(CategoryFeature, CategorySupervisor) {
 			t.Fatalf("closure with held %s reservation must be refused", cat)
 		}
 		if c.Closed() {
@@ -357,7 +443,7 @@ func TestCloseForStoppingRefusesProtectedReservations(t *testing.T) {
 	}
 }
 
-// TestCloseForStoppingAdmitsStoppableReservations proves feature and chat
+// TestCloseForStoppingAdmitsStoppableReservations proves feature and supervisor
 // reservations survive the stopping closure, settle through Release while
 // closed, and every new reservation — stoppable or not — is refused once
 // the boundary is closed.
@@ -367,24 +453,24 @@ func TestCloseForStoppingAdmitsStoppableReservations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire feature: %v", err)
 	}
-	chatRes, err := c.Acquire(CategoryChat)
+	supervisorRes, err := c.Acquire(CategorySupervisor)
 	if err != nil {
-		t.Fatalf("acquire chat: %v", err)
+		t.Fatalf("acquire supervisor: %v", err)
 	}
-	if !c.CloseForStopping(CategoryFeature, CategoryChat) {
+	if !c.CloseForStopping(CategoryFeature, CategorySupervisor) {
 		t.Fatal("closure with only stoppable reservations must succeed")
 	}
 	if !c.Closed() {
 		t.Fatal("admission must be closed after a successful stopping closure")
 	}
-	for _, cat := range []Category{CategoryFeature, CategoryChat, CategoryClone, CategoryRepository, Category("unknown")} {
+	for _, cat := range []Category{CategoryFeature, CategorySupervisor, CategoryClone, CategoryRepository, Category("unknown")} {
 		if _, err := c.Acquire(cat); err == nil {
 			t.Fatalf("acquire %s under closed admission must fail", cat)
 		}
 	}
 	// Settling stoppable work releases its reservations while closed.
 	featureRes.Release()
-	chatRes.Release()
+	supervisorRes.Release()
 	total, _ := c.Held()
 	if total != 0 {
 		t.Fatalf("held after settle = %d, want 0", total)
@@ -414,7 +500,7 @@ func TestCloseForStoppingSynchronizesWithAcquisition(t *testing.T) {
 		acquireDone := make(chan error, 1)
 		go func() {
 			<-start
-			closureDone <- c.CloseForStopping(CategoryFeature, CategoryChat)
+			closureDone <- c.CloseForStopping(CategoryFeature, CategorySupervisor)
 		}()
 		go func() {
 			<-start

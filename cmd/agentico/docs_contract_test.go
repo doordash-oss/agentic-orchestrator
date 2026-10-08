@@ -28,7 +28,7 @@ func TestUserFacingDocsDescribeLaunchSurface(t *testing.T) {
 
 	for _, rel := range []string{
 		"README.md",
-		filepath.Join("skills", "chat", "user-guide", "configuration.md"),
+		filepath.Join("skills", "supervisor", "user-guide", "configuration.md"),
 	} {
 		body, err := os.ReadFile(filepath.Join(repoRoot, rel))
 		if err != nil {
@@ -73,28 +73,28 @@ func TestUserFacingDocsAdvertiseRenamedProduct(t *testing.T) {
 			"go build -o bin/agentico ./cmd/agentico",
 			"~/.agentic-orchestrator/",
 		},
-		filepath.Join("skills", "chat", "user-guide", "getting-started.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "getting-started.md"): {
 			"Agentic Orchestrator",
 			"agentico",
 			"github.com/doordash-oss/agentic-orchestrator/cmd/agentico",
 			"go build -o bin/agentico ./cmd/agentico",
 			"~/.agentic-orchestrator/",
 		},
-		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "configuration.md"): {
 			"Agentic Orchestrator",
 			"agentico",
 			"~/.agentic-orchestrator/",
 			"agentico.log",
 		},
-		filepath.Join("skills", "chat", "user-guide", "permissions.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "permissions.md"): {
 			"Agentic Orchestrator",
 			"agentico",
 			"~/.agentic-orchestrator/permissions/",
 		},
-		filepath.Join("skills", "chat", "user-guide", "index.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "index.md"): {
 			"Agentic Orchestrator",
 		},
-		filepath.Join("skills", "chat", "SKILL.md"): {
+		filepath.Join("skills", "supervisor", "SKILL.md"): {
 			"Agentic Orchestrator",
 			"agentico",
 		},
@@ -145,7 +145,7 @@ func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
 			"--providers opencode",
 			"global OpenCode configuration",
 		},
-		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "configuration.md"): {
 			"Provider Selection",
 			"opencode:anthropic/claude-sonnet-4-5",
 			"opencode models --verbose",
@@ -154,15 +154,20 @@ func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
 			"--providers opencode",
 			"1.17.9",
 			"zero cost",
+			"Supervisor conversation on OpenCode",
+			"Sub-agent permission bridge",
+			"OPENCODE_ENABLE_QUESTION_TOOL",
+			"noReply",
 		},
-		filepath.Join("skills", "chat", "user-guide", "permissions.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "permissions.md"): {
 			"OpenCode tool mediation",
 			"session/request_permission",
 			"--dangerously-skip-permissions",
 			"still pauses for you",
 			"managed per-session config",
+			"sub-agent permission bridge",
 		},
-		filepath.Join("skills", "chat", "user-guide", "getting-started.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "getting-started.md"): {
 			"co-equal",
 			"opencode` CLI >= 1.17.9",
 			"opencode auth login",
@@ -188,7 +193,7 @@ func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
 		"README.md": {
 			"read-only Claude session",
 		},
-		filepath.Join("skills", "chat", "user-guide", "getting-started.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "getting-started.md"): {
 			"the primary AI agent backend",
 		},
 	}
@@ -218,7 +223,7 @@ func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
 			"bare slash-form",
 			"provider-neutral per-phase defaults",
 		},
-		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "configuration.md"): {
 			"plain alias",
 			"bare slash-form",
 			"provider-neutral per-phase defaults",
@@ -246,7 +251,7 @@ func TestUserFacingDocsDescribeOpenCodeProviderPath(t *testing.T) {
 			"selected only through the explicit",
 			"never silently routes to OpenCode",
 		},
-		filepath.Join("skills", "chat", "user-guide", "configuration.md"): {
+		filepath.Join("skills", "supervisor", "user-guide", "configuration.md"): {
 			"selected only through the explicit",
 			"never routes to OpenCode",
 			"can never be picked silently",
@@ -335,7 +340,7 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 	}
 	canonicalDocs := []string{
 		filepath.Join("docs", "testing-baseline.md"),
-		filepath.Join("skills", "chat", "user-guide", "verification.md"),
+		filepath.Join("skills", "supervisor", "user-guide", "verification.md"),
 	}
 	docs := append(append([]string{}, pointerDocs...), canonicalDocs...)
 
@@ -429,7 +434,7 @@ func TestVerificationDocsDescribeFastSuiteContract(t *testing.T) {
 		}
 	}
 
-	userGuide := filepath.Join(repoRoot, "skills", "chat", "user-guide", "verification.md")
+	userGuide := filepath.Join(repoRoot, "skills", "supervisor", "user-guide", "verification.md")
 	body, err := os.ReadFile(userGuide)
 	if err != nil {
 		t.Fatalf("ReadFile(user guide verification): %v", err)

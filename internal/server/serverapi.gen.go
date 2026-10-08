@@ -896,6 +896,24 @@ func (e RepositoryUpdateSourceResponseResult) Valid() bool {
 	}
 }
 
+// Defines values for RequestOrigin.
+const (
+	RequestOriginChild RequestOrigin = "child"
+	RequestOriginRoot  RequestOrigin = "root"
+)
+
+// Valid indicates whether the value is a known member of the RequestOrigin enum.
+func (e RequestOrigin) Valid() bool {
+	switch e {
+	case RequestOriginChild:
+		return true
+	case RequestOriginRoot:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ReviewFeedbackDraftCommentType.
 const (
 	Issue      ReviewFeedbackDraftCommentType = "issue"
@@ -956,6 +974,423 @@ func (e SSEEventErrorClass) Valid() bool {
 	case SSEEventErrorClassNeedsAction:
 		return true
 	case SSEEventErrorClassWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorActionResponseResult.
+const (
+	SupervisorActionAccepted  SupervisorActionResponseResult = "accepted"
+	SupervisorActionEnded     SupervisorActionResponseResult = "ended"
+	SupervisorActionNotActive SupervisorActionResponseResult = "not_active"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorActionResponseResult enum.
+func (e SupervisorActionResponseResult) Valid() bool {
+	switch e {
+	case SupervisorActionAccepted:
+		return true
+	case SupervisorActionEnded:
+		return true
+	case SupervisorActionNotActive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorAttachmentKind.
+const (
+	File  SupervisorAttachmentKind = "file"
+	Image SupervisorAttachmentKind = "image"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorAttachmentKind enum.
+func (e SupervisorAttachmentKind) Valid() bool {
+	switch e {
+	case File:
+		return true
+	case Image:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorBackgroundTaskKind.
+const (
+	SupervisorBackgroundTaskKindMonitor   SupervisorBackgroundTaskKind = "monitor"
+	SupervisorBackgroundTaskKindScheduled SupervisorBackgroundTaskKind = "scheduled"
+	SupervisorBackgroundTaskKindTask      SupervisorBackgroundTaskKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorBackgroundTaskKind enum.
+func (e SupervisorBackgroundTaskKind) Valid() bool {
+	switch e {
+	case SupervisorBackgroundTaskKindMonitor:
+		return true
+	case SupervisorBackgroundTaskKindScheduled:
+		return true
+	case SupervisorBackgroundTaskKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorBackgroundTaskState.
+const (
+	SupervisorBackgroundTaskStateCompleted   SupervisorBackgroundTaskState = "completed"
+	SupervisorBackgroundTaskStateFailed      SupervisorBackgroundTaskState = "failed"
+	SupervisorBackgroundTaskStateInterrupted SupervisorBackgroundTaskState = "interrupted"
+	SupervisorBackgroundTaskStateRunning     SupervisorBackgroundTaskState = "running"
+	SupervisorBackgroundTaskStateStopped     SupervisorBackgroundTaskState = "stopped"
+	SupervisorBackgroundTaskStateWatching    SupervisorBackgroundTaskState = "watching"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorBackgroundTaskState enum.
+func (e SupervisorBackgroundTaskState) Valid() bool {
+	switch e {
+	case SupervisorBackgroundTaskStateCompleted:
+		return true
+	case SupervisorBackgroundTaskStateFailed:
+		return true
+	case SupervisorBackgroundTaskStateInterrupted:
+		return true
+	case SupervisorBackgroundTaskStateRunning:
+		return true
+	case SupervisorBackgroundTaskStateStopped:
+		return true
+	case SupervisorBackgroundTaskStateWatching:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorCheckpointRecordReason.
+const (
+	NativeAuto SupervisorCheckpointRecordReason = "native_auto"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorCheckpointRecordReason enum.
+func (e SupervisorCheckpointRecordReason) Valid() bool {
+	switch e {
+	case NativeAuto:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorInterruptedBy.
+const (
+	SupervisorInterruptedByNone     SupervisorInterruptedBy = "none"
+	SupervisorInterruptedByShutdown SupervisorInterruptedBy = "shutdown"
+	SupervisorInterruptedByUser     SupervisorInterruptedBy = "user"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorInterruptedBy enum.
+func (e SupervisorInterruptedBy) Valid() bool {
+	switch e {
+	case SupervisorInterruptedByNone:
+		return true
+	case SupervisorInterruptedByShutdown:
+		return true
+	case SupervisorInterruptedByUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorLifecycle.
+const (
+	SupervisorLifecycleFailed            SupervisorLifecycle = "failed"
+	SupervisorLifecycleIdle              SupervisorLifecycle = "idle"
+	SupervisorLifecycleRunning           SupervisorLifecycle = "running"
+	SupervisorLifecycleStarting          SupervisorLifecycle = "starting"
+	SupervisorLifecycleStopped           SupervisorLifecycle = "stopped"
+	SupervisorLifecycleWaitingPermission SupervisorLifecycle = "waiting_permission"
+	SupervisorLifecycleWaitingQuestion   SupervisorLifecycle = "waiting_question"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorLifecycle enum.
+func (e SupervisorLifecycle) Valid() bool {
+	switch e {
+	case SupervisorLifecycleFailed:
+		return true
+	case SupervisorLifecycleIdle:
+		return true
+	case SupervisorLifecycleRunning:
+		return true
+	case SupervisorLifecycleStarting:
+		return true
+	case SupervisorLifecycleStopped:
+		return true
+	case SupervisorLifecycleWaitingPermission:
+		return true
+	case SupervisorLifecycleWaitingQuestion:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorMarkerRecordMarker.
+const (
+	SupervisorMarkerCompacted            SupervisorMarkerRecordMarker = "compacted"
+	SupervisorMarkerError                SupervisorMarkerRecordMarker = "error"
+	SupervisorMarkerHarnessChange        SupervisorMarkerRecordMarker = "harness_change"
+	SupervisorMarkerHistoryNotRestored   SupervisorMarkerRecordMarker = "history_not_restored"
+	SupervisorMarkerInterrupted          SupervisorMarkerRecordMarker = "interrupted"
+	SupervisorMarkerPermissionRestricted SupervisorMarkerRecordMarker = "permission_restricted"
+	SupervisorMarkerSettingsChanged      SupervisorMarkerRecordMarker = "settings_changed"
+	SupervisorMarkerSettingsReverted     SupervisorMarkerRecordMarker = "settings_reverted"
+	SupervisorMarkerTranscriptRecovered  SupervisorMarkerRecordMarker = "transcript_recovered"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorMarkerRecordMarker enum.
+func (e SupervisorMarkerRecordMarker) Valid() bool {
+	switch e {
+	case SupervisorMarkerCompacted:
+		return true
+	case SupervisorMarkerError:
+		return true
+	case SupervisorMarkerHarnessChange:
+		return true
+	case SupervisorMarkerHistoryNotRestored:
+		return true
+	case SupervisorMarkerInterrupted:
+		return true
+	case SupervisorMarkerPermissionRestricted:
+		return true
+	case SupervisorMarkerSettingsChanged:
+		return true
+	case SupervisorMarkerSettingsReverted:
+		return true
+	case SupervisorMarkerTranscriptRecovered:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorPendingChangeKind.
+const (
+	SupervisorPendingChangeKindEffort  SupervisorPendingChangeKind = "effort"
+	SupervisorPendingChangeKindHarness SupervisorPendingChangeKind = "harness"
+	SupervisorPendingChangeKindModel   SupervisorPendingChangeKind = "model"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorPendingChangeKind enum.
+func (e SupervisorPendingChangeKind) Valid() bool {
+	switch e {
+	case SupervisorPendingChangeKindEffort:
+		return true
+	case SupervisorPendingChangeKindHarness:
+		return true
+	case SupervisorPendingChangeKindModel:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRecordKind.
+const (
+	SupervisorRecordKindAssistant  SupervisorRecordKind = "assistant"
+	SupervisorRecordKindCheckpoint SupervisorRecordKind = "checkpoint"
+	SupervisorRecordKindMarker     SupervisorRecordKind = "marker"
+	SupervisorRecordKindNote       SupervisorRecordKind = "note"
+	SupervisorRecordKindPermission SupervisorRecordKind = "permission"
+	SupervisorRecordKindQuestion   SupervisorRecordKind = "question"
+	SupervisorRecordKindToolResult SupervisorRecordKind = "tool_result"
+	SupervisorRecordKindToolUse    SupervisorRecordKind = "tool_use"
+	SupervisorRecordKindUser       SupervisorRecordKind = "user"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRecordKind enum.
+func (e SupervisorRecordKind) Valid() bool {
+	switch e {
+	case SupervisorRecordKindAssistant:
+		return true
+	case SupervisorRecordKindCheckpoint:
+		return true
+	case SupervisorRecordKindMarker:
+		return true
+	case SupervisorRecordKindNote:
+		return true
+	case SupervisorRecordKindPermission:
+		return true
+	case SupervisorRecordKindQuestion:
+		return true
+	case SupervisorRecordKindToolResult:
+		return true
+	case SupervisorRecordKindToolUse:
+		return true
+	case SupervisorRecordKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRecordVisibility.
+const (
+	SupervisorVisibilityContent     SupervisorRecordVisibility = "content"
+	SupervisorVisibilityDisplayOnly SupervisorRecordVisibility = "display_only"
+	SupervisorVisibilityModelOnly   SupervisorRecordVisibility = "model_only"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRecordVisibility enum.
+func (e SupervisorRecordVisibility) Valid() bool {
+	switch e {
+	case SupervisorVisibilityContent:
+		return true
+	case SupervisorVisibilityDisplayOnly:
+		return true
+	case SupervisorVisibilityModelOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRequestRecordOutcome.
+const (
+	SupervisorRequestOutcomeAllowed     SupervisorRequestRecordOutcome = "allowed"
+	SupervisorRequestOutcomeAnswered    SupervisorRequestRecordOutcome = "answered"
+	SupervisorRequestOutcomeDenied      SupervisorRequestRecordOutcome = "denied"
+	SupervisorRequestOutcomeInterrupted SupervisorRequestRecordOutcome = "interrupted"
+	SupervisorRequestOutcomePending     SupervisorRequestRecordOutcome = "pending"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRequestRecordOutcome enum.
+func (e SupervisorRequestRecordOutcome) Valid() bool {
+	switch e {
+	case SupervisorRequestOutcomeAllowed:
+		return true
+	case SupervisorRequestOutcomeAnswered:
+		return true
+	case SupervisorRequestOutcomeDenied:
+		return true
+	case SupervisorRequestOutcomeInterrupted:
+		return true
+	case SupervisorRequestOutcomePending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorRequestRecordStage.
+const (
+	SupervisorRequestStageRequested SupervisorRequestRecordStage = "requested"
+	SupervisorRequestStageResolved  SupervisorRequestRecordStage = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorRequestRecordStage enum.
+func (e SupervisorRequestRecordStage) Valid() bool {
+	switch e {
+	case SupervisorRequestStageRequested:
+		return true
+	case SupervisorRequestStageResolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorResetResponseResult.
+const (
+	SupervisorResetDone SupervisorResetResponseResult = "reset"
+	SupervisorResetNoop SupervisorResetResponseResult = "noop"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorResetResponseResult enum.
+func (e SupervisorResetResponseResult) Valid() bool {
+	switch e {
+	case SupervisorResetDone:
+		return true
+	case SupervisorResetNoop:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorStartingStep.
+const (
+	SupervisorStartingStepHandshake  SupervisorStartingStep = "handshake"
+	SupervisorStartingStepLaunching  SupervisorStartingStep = "launching"
+	SupervisorStartingStepRebuilding SupervisorStartingStep = "rebuilding"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorStartingStep enum.
+func (e SupervisorStartingStep) Valid() bool {
+	switch e {
+	case SupervisorStartingStepHandshake:
+		return true
+	case SupervisorStartingStepLaunching:
+		return true
+	case SupervisorStartingStepRebuilding:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorStreamEventKind.
+const (
+	SupervisorEventDelta       SupervisorStreamEventKind = "delta"
+	SupervisorEventHeartbeat   SupervisorStreamEventKind = "heartbeat"
+	SupervisorEventRecord      SupervisorStreamEventKind = "record"
+	SupervisorEventRequest     SupervisorStreamEventKind = "request"
+	SupervisorEventState       SupervisorStreamEventKind = "state"
+	SupervisorEventStreamReset SupervisorStreamEventKind = "stream.reset"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorStreamEventKind enum.
+func (e SupervisorStreamEventKind) Valid() bool {
+	switch e {
+	case SupervisorEventDelta:
+		return true
+	case SupervisorEventHeartbeat:
+		return true
+	case SupervisorEventRecord:
+		return true
+	case SupervisorEventRequest:
+		return true
+	case SupervisorEventState:
+		return true
+	case SupervisorEventStreamReset:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupervisorTurnOutcome.
+const (
+	SupervisorTurnOutcomeCompleted   SupervisorTurnOutcome = "completed"
+	SupervisorTurnOutcomeFailed      SupervisorTurnOutcome = "failed"
+	SupervisorTurnOutcomeInterrupted SupervisorTurnOutcome = "interrupted"
+	SupervisorTurnOutcomeNone        SupervisorTurnOutcome = "none"
+)
+
+// Valid indicates whether the value is a known member of the SupervisorTurnOutcome enum.
+func (e SupervisorTurnOutcome) Valid() bool {
+	switch e {
+	case SupervisorTurnOutcomeCompleted:
+		return true
+	case SupervisorTurnOutcomeFailed:
+		return true
+	case SupervisorTurnOutcomeInterrupted:
+		return true
+	case SupervisorTurnOutcomeNone:
 		return true
 	default:
 		return false
@@ -1550,36 +1985,6 @@ func (e AnswerAskUserPromptParamsXAgenticoClient) Valid() bool {
 	}
 }
 
-// Defines values for EndChatPromptParamsXAgenticoClient.
-const (
-	EndChatPromptParamsXAgenticoClientLocal EndChatPromptParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the EndChatPromptParamsXAgenticoClient enum.
-func (e EndChatPromptParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case EndChatPromptParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for StartChatPromptParamsXAgenticoClient.
-const (
-	StartChatPromptParamsXAgenticoClientLocal StartChatPromptParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the StartChatPromptParamsXAgenticoClient enum.
-func (e StartChatPromptParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case StartChatPromptParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for SendHelpPromptParamsXAgenticoClient.
 const (
 	SendHelpPromptParamsXAgenticoClientLocal SendHelpPromptParamsXAgenticoClient = "local"
@@ -1634,6 +2039,111 @@ const (
 func (e ExecuteRecoveryActionsParamsXAgenticoClient) Valid() bool {
 	switch e {
 	case ExecuteRecoveryActionsParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EndSupervisorParamsXAgenticoClient.
+const (
+	EndSupervisorParamsXAgenticoClientLocal EndSupervisorParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the EndSupervisorParamsXAgenticoClient enum.
+func (e EndSupervisorParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case EndSupervisorParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for InterruptSupervisorParamsXAgenticoClient.
+const (
+	InterruptSupervisorParamsXAgenticoClientLocal InterruptSupervisorParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the InterruptSupervisorParamsXAgenticoClient enum.
+func (e InterruptSupervisorParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case InterruptSupervisorParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SendSupervisorMessageParamsXAgenticoClient.
+const (
+	SendSupervisorMessageParamsXAgenticoClientLocal SendSupervisorMessageParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the SendSupervisorMessageParamsXAgenticoClient enum.
+func (e SendSupervisorMessageParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case SendSupervisorMessageParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CancelSupervisorPendingChangeParamsXAgenticoClient.
+const (
+	CancelSupervisorPendingChangeParamsXAgenticoClientLocal CancelSupervisorPendingChangeParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the CancelSupervisorPendingChangeParamsXAgenticoClient enum.
+func (e CancelSupervisorPendingChangeParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case CancelSupervisorPendingChangeParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DismissSupervisorPersistFailureParamsXAgenticoClient.
+const (
+	DismissSupervisorPersistFailureParamsXAgenticoClientLocal DismissSupervisorPersistFailureParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the DismissSupervisorPersistFailureParamsXAgenticoClient enum.
+func (e DismissSupervisorPersistFailureParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case DismissSupervisorPersistFailureParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResetSupervisorParamsXAgenticoClient.
+const (
+	ResetSupervisorParamsXAgenticoClientLocal ResetSupervisorParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the ResetSupervisorParamsXAgenticoClient enum.
+func (e ResetSupervisorParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case ResetSupervisorParamsXAgenticoClientLocal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for UpdateSupervisorSettingsParamsXAgenticoClient.
+const (
+	UpdateSupervisorSettingsParamsXAgenticoClientLocal UpdateSupervisorSettingsParamsXAgenticoClient = "local"
+)
+
+// Valid indicates whether the value is a known member of the UpdateSupervisorSettingsParamsXAgenticoClient enum.
+func (e UpdateSupervisorSettingsParamsXAgenticoClient) Valid() bool {
+	switch e {
+	case UpdateSupervisorSettingsParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -1852,13 +2362,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
+	case Local:
 		return true
 	default:
 		return false
@@ -1928,8 +2438,6 @@ type ActionInput struct {
 type ActionResponse struct {
 	APIVersion                  string                      `json:"api_version"`
 	AskUserAnswerResponse       AskUserAnswerResponse       `json:"ask_user_answer_response,omitempty"`
-	ChatEndResponse             ChatEndResponse             `json:"chat_end_response,omitempty"`
-	ChatStartResponse           ChatStartResponse           `json:"chat_start_response,omitempty"`
 	CleanupFeatureResponse      CleanupFeatureResponse      `json:"cleanup_feature_response,omitempty"`
 	CreateFeatureResponse       CreateFeatureResponse       `json:"create_feature_response,omitempty"`
 	DeleteFeatureResponse       DeleteFeatureResponse       `json:"delete_feature_response,omitempty"`
@@ -2037,30 +2545,6 @@ type BuildIdentity struct {
 
 // CascadeDiagnostic defines model for CascadeDiagnostic.
 type CascadeDiagnostic = feature.CascadeDiagnostic
-
-// ChatEndResponse defines model for ChatEndResponse.
-type ChatEndResponse struct {
-	APIVersion string       `json:"api_version"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-	SessionID  string       `json:"session_id"`
-}
-
-// ChatStartRequest defines model for ChatStartRequest.
-type ChatStartRequest struct {
-	Context      ErrorReference `json:"context,omitempty"`
-	ImageUploads []string       `json:"image_uploads,omitempty"`
-	Images       []string       `json:"images,omitempty"`
-	Message      string         `json:"message"`
-}
-
-// ChatStartResponse defines model for ChatStartResponse.
-type ChatStartResponse struct {
-	APIVersion string       `json:"api_version"`
-	Meta       ResponseMeta `json:"meta,omitempty"`
-	Result     string       `json:"result"`
-	SessionID  string       `json:"session_id"`
-}
 
 // Checkpoints defines model for Checkpoints.
 type Checkpoints struct {
@@ -2294,17 +2778,23 @@ type ControlRequest struct {
 
 	// AutomaticReview Sanitized explanation of a failed automatic review; retry never grants permission by itself.
 	AutomaticReview *PermissionAutomaticReview `json:"automatic_review,omitempty"`
-	FeatureID       string                     `json:"feature_id,omitempty"`
-	Input           map[string]interface{}     `json:"input,omitempty"`
-	Phase           string                     `json:"phase,omitempty"`
-	Questions       []AskUserQuestion          `json:"questions,omitempty"`
-	Remember        *PermissionRememberPreview `json:"remember,omitempty"`
-	RequestID       string                     `json:"request_id"`
-	SessionID       string                     `json:"session_id,omitempty"`
-	Status          string                     `json:"status"`
-	Summary         string                     `json:"summary,omitempty"`
-	ToolName        string                     `json:"tool_name"`
-	WaitingSince    time.Time                  `json:"waiting_since"`
+
+	// ChildSessionID The sub-agent's session id; present only when `origin` is `child`.
+	ChildSessionID string                 `json:"child_session_id,omitempty"`
+	FeatureID      string                 `json:"feature_id,omitempty"`
+	Input          map[string]interface{} `json:"input,omitempty"`
+
+	// Origin Who raised a permission or question: `root` for the session's own agent, `child` for one of its sub-agents. Supervisor requests always carry it; a supervisor record written before origins existed reads as `root`.
+	Origin       RequestOrigin              `json:"origin,omitempty"`
+	Phase        string                     `json:"phase,omitempty"`
+	Questions    []AskUserQuestion          `json:"questions,omitempty"`
+	Remember     *PermissionRememberPreview `json:"remember,omitempty"`
+	RequestID    string                     `json:"request_id"`
+	SessionID    string                     `json:"session_id,omitempty"`
+	Status       string                     `json:"status"`
+	Summary      string                     `json:"summary,omitempty"`
+	ToolName     string                     `json:"tool_name"`
+	WaitingSince time.Time                  `json:"waiting_since"`
 }
 
 // Cost defines model for Cost.
@@ -2424,6 +2914,9 @@ type EffortConfig = config.EffortConfig
 
 // Error Canonical catalog-rendered error.
 type Error struct {
+	// AttemptedSettings Settings attempted before a supervisor launch failure restored the previous choice.
+	AttemptedSettings *SupervisorSettings `json:"attempted_settings,omitempty"`
+
 	// Class Severity treatment class.
 	Class ErrorClass `json:"class"`
 
@@ -2914,6 +3407,7 @@ type Model struct {
 // ModelCatalogResponse defines model for ModelCatalogResponse.
 type ModelCatalogResponse struct {
 	APIVersion          string                         `json:"api_version"`
+	ChatDefaultEffort   map[string]string              `json:"chat_default_effort"`
 	Meta                ResponseMeta                   `json:"meta,omitempty"`
 	PhaseDefaults       ModelDefaults                  `json:"phase_defaults"`
 	PhaseProviderModels map[string]map[string][]string `json:"phase_provider_models"`
@@ -3753,6 +4247,9 @@ type RepositoryUpdateSourceResponseReason string
 // RepositoryUpdateSourceResponseResult updated: the branch advanced — by compare-and-swap for an unoccupied branch, or by the working-tree-aware fast-forward for a branch held only by the original checkout. already_up_to_date: equality no-op after revalidation, including a completed original-checkout replay. stale: a displayed expectation no longer matches or the original checkout is not provably safe; nothing was mutated.
 type RepositoryUpdateSourceResponseResult string
 
+// RequestOrigin Who raised a permission or question: `root` for the session's own agent, `child` for one of its sub-agents. Supervisor requests always carry it; a supervisor record written before origins existed reads as `root`.
+type RequestOrigin string
+
 // Resource defines model for Resource.
 type Resource struct {
 	// ChildID Direct child feature id for a relationship lifecycle event.
@@ -4327,6 +4824,353 @@ type StageUploadResponse struct {
 	Size       int64  `json:"size"`
 }
 
+// SupervisorActionResponse defines model for SupervisorActionResponse.
+type SupervisorActionResponse struct {
+	APIVersion string                         `json:"api_version"`
+	Result     SupervisorActionResponseResult `json:"result"`
+	State      SupervisorState                `json:"state"`
+}
+
+// SupervisorActionResponseResult defines model for SupervisorActionResponse.Result.
+type SupervisorActionResponseResult string
+
+// SupervisorAttachment defines model for SupervisorAttachment.
+type SupervisorAttachment struct {
+	Kind SupervisorAttachmentKind `json:"kind"`
+
+	// Name Original file name, for display.
+	Name string `json:"name"`
+
+	// Path Absolute server-local path of the conversation copy.
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// SupervisorAttachmentKind defines model for SupervisorAttachment.Kind.
+type SupervisorAttachmentKind string
+
+// SupervisorBackgroundActivity defines model for SupervisorBackgroundActivity.
+type SupervisorBackgroundActivity struct {
+	At     string `json:"at"`
+	Detail string `json:"detail"`
+}
+
+// SupervisorBackgroundTask defines model for SupervisorBackgroundTask.
+type SupervisorBackgroundTask struct {
+	Activity   []SupervisorBackgroundActivity `json:"activity,omitempty"`
+	Detail     string                         `json:"detail"`
+	ExpiresAt  string                         `json:"expires_at"`
+	Generation int64                          `json:"generation"`
+	ID         string                         `json:"id"`
+	Kind       SupervisorBackgroundTaskKind   `json:"kind"`
+	ProviderID string                         `json:"provider_id"`
+	Schedule   string                         `json:"schedule"`
+	StartedAt  string                         `json:"started_at"`
+	State      SupervisorBackgroundTaskState  `json:"state"`
+	Title      string                         `json:"title"`
+	UpdatedAt  string                         `json:"updated_at"`
+}
+
+// SupervisorBackgroundTaskKind defines model for SupervisorBackgroundTask.Kind.
+type SupervisorBackgroundTaskKind string
+
+// SupervisorBackgroundTaskState defines model for SupervisorBackgroundTask.State.
+type SupervisorBackgroundTaskState string
+
+// SupervisorCheckpointRecord Model-only checkpoint projection; native baseline is never sent to clients.
+type SupervisorCheckpointRecord struct {
+	CoversThroughSeq  int64                            `json:"covers_through_seq"`
+	HasNativeBaseline bool                             `json:"has_native_baseline"`
+	Model             string                           `json:"model"`
+	Reason            SupervisorCheckpointRecordReason `json:"reason"`
+	Summary           string                           `json:"summary"`
+	Truncated         bool                             `json:"truncated"`
+}
+
+// SupervisorCheckpointRecordReason defines model for SupervisorCheckpointRecord.Reason.
+type SupervisorCheckpointRecordReason string
+
+// SupervisorContextUsage defines model for SupervisorContextUsage.
+type SupervisorContextUsage struct {
+	Percent      int `json:"percent"`
+	UsedTokens   int `json:"used_tokens"`
+	WindowTokens int `json:"window_tokens"`
+}
+
+// SupervisorDelta Non-persisted streaming text for a provisional assistant row.
+type SupervisorDelta struct {
+	ChunkIndex      int    `json:"chunk_index"`
+	StreamMessageID string `json:"stream_message_id"`
+	Text            string `json:"text"`
+	TurnID          string `json:"turn_id"`
+}
+
+// SupervisorInterruptedBy Who cut the most recent turn; meaningful when `last_turn_outcome` is `interrupted`. `user` is Stop or End, `shutdown` is a server shutdown or crash detected at boot.
+type SupervisorInterruptedBy string
+
+// SupervisorLifecycle defines model for SupervisorLifecycle.
+type SupervisorLifecycle string
+
+// SupervisorMarkerRecord Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, a permission mode restricted by policy, or a transcript recovered from a corrupt line (`transcript_recovered`, whose text names the unread record count and the preserved original). `code` is the catalog code of an `error` marker.
+type SupervisorMarkerRecord struct {
+	Code string `json:"code,omitempty"`
+
+	// FromHarness Source harness for a harness_change marker.
+	FromHarness string                       `json:"from_harness,omitempty"`
+	Marker      SupervisorMarkerRecordMarker `json:"marker"`
+
+	// Summary Display-bounded readable compaction summary, when available.
+	Summary string `json:"summary,omitempty"`
+	Text    string `json:"text"`
+
+	// ToHarness Destination harness for a harness_change marker.
+	ToHarness string `json:"to_harness,omitempty"`
+
+	// Truncated Whether the display summary was truncated at 16 KiB.
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// SupervisorMarkerRecordMarker defines model for SupervisorMarkerRecord.Marker.
+type SupervisorMarkerRecordMarker string
+
+// SupervisorMessageRequest One user message. `text` may be blank only when at least one attachment is present. Attachments arrive as absolute server-local paths (`images`, `attachments`) or as staged upload references (`image_uploads`, `attachment_uploads`); the combined caps are 12 images and 24 files, at most 10 MiB per image and 25 MiB per file. Every attached file is copied into the conversation's `attachments/` directory and the committed user record references only those copies; staged references are consumed only when the user record is committed, so a refused or failed send leaves them valid for a retry.
+type SupervisorMessageRequest struct {
+	// AttachmentUploads Staged attachment upload references.
+	AttachmentUploads []string `json:"attachment_uploads,omitempty"`
+
+	// Attachments Absolute server-local file paths.
+	Attachments     []string       `json:"attachments,omitempty"`
+	ClientMessageID string         `json:"client_message_id"`
+	ErrorReference  ErrorReference `json:"error_reference,omitempty"`
+
+	// ImageUploads Staged image upload references.
+	ImageUploads []string `json:"image_uploads,omitempty"`
+
+	// Images Absolute server-local image paths.
+	Images []string `json:"images,omitempty"`
+	Text   string   `json:"text"`
+}
+
+// SupervisorMessageResponse defines model for SupervisorMessageResponse.
+type SupervisorMessageResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// Deduplicated True when the `client_message_id` was already committed with the same text, error reference and attachments; nothing was appended or delivered.
+	Deduplicated bool `json:"deduplicated"`
+
+	// Launched True when this send launched the supervisor process.
+	Launched bool `json:"launched"`
+
+	// Record One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
+	Record SupervisorRecord `json:"record"`
+}
+
+// SupervisorPendingChange defines model for SupervisorPendingChange.
+type SupervisorPendingChange struct {
+	Kind        SupervisorPendingChangeKind `json:"kind"`
+	RequestID   string                      `json:"request_id"`
+	RequestedAt time.Time                   `json:"requested_at"`
+
+	// Target Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default.
+	Target SupervisorSettings `json:"target"`
+}
+
+// SupervisorPendingChangeKind defines model for SupervisorPendingChange.Kind.
+type SupervisorPendingChangeKind string
+
+// SupervisorPermissionMode Permission mode the supervisor asked the harness for and the mode the running harness reported. `effective` is empty until a process reports it.
+type SupervisorPermissionMode struct {
+	Effective string `json:"effective"`
+	Requested string `json:"requested"`
+
+	// RestrictedByPolicy True when the harness reported a mode other than the requested one.
+	RestrictedByPolicy bool `json:"restricted_by_policy"`
+}
+
+// SupervisorRecord One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
+type SupervisorRecord struct {
+	// Attachments Files attached to a user record, in harness order (images, then files); each path names the copy under the conversation's `attachments/` directory.
+	Attachments []SupervisorAttachment `json:"attachments,omitempty"`
+
+	// Checkpoint Model-only checkpoint projection; native baseline is never sent to clients.
+	Checkpoint      *SupervisorCheckpointRecord `json:"checkpoint,omitempty"`
+	ClientMessageID string                      `json:"client_message_id,omitempty"`
+	ConversationID  string                      `json:"conversation_id"`
+	CreatedAt       time.Time                   `json:"created_at"`
+	Generation      int64                       `json:"generation"`
+	ID              string                      `json:"id"`
+	Kind            SupervisorRecordKind        `json:"kind"`
+
+	// Marker Display-only notice carried by `marker` records: a turn cut by a server restart, a launch failure, history that could not be restored, a permission mode restricted by policy, or a transcript recovered from a corrupt line (`transcript_recovered`, whose text names the unread record count and the preserved original). `code` is the catalog code of an `error` marker.
+	Marker   *SupervisorMarkerRecord `json:"marker,omitempty"`
+	Messages []TranscriptMessage     `json:"messages"`
+
+	// Note Bounded text of a model-only Agentico note.
+	Note string `json:"note,omitempty"`
+
+	// Request Request or verdict carried by `permission` and `question` records.
+	Request         *SupervisorRequestRecord   `json:"request,omitempty"`
+	Seq             int64                      `json:"seq"`
+	StreamMessageID string                     `json:"stream_message_id,omitempty"`
+	TurnID          string                     `json:"turn_id"`
+	Visibility      SupervisorRecordVisibility `json:"visibility"`
+}
+
+// SupervisorRecordKind defines model for SupervisorRecordKind.
+type SupervisorRecordKind string
+
+// SupervisorRecordVisibility defines model for SupervisorRecordVisibility.
+type SupervisorRecordVisibility string
+
+// SupervisorRequestRecord Request or verdict carried by `permission` and `question` records.
+type SupervisorRequestRecord struct {
+	// ChildSessionID The sub-agent's session id; present only when `origin` is `child`.
+	ChildSessionID string `json:"child_session_id,omitempty"`
+
+	// Origin Who raised a permission or question: `root` for the session's own agent, `child` for one of its sub-agents. Supervisor requests always carry it; a supervisor record written before origins existed reads as `root`.
+	Origin    RequestOrigin                  `json:"origin,omitempty"`
+	Outcome   SupervisorRequestRecordOutcome `json:"outcome"`
+	RequestID string                         `json:"request_id"`
+	Stage     SupervisorRequestRecordStage   `json:"stage"`
+	Summary   string                         `json:"summary,omitempty"`
+	ToolName  string                         `json:"tool_name"`
+}
+
+// SupervisorRequestRecordOutcome defines model for SupervisorRequestRecord.Outcome.
+type SupervisorRequestRecordOutcome string
+
+// SupervisorRequestRecordStage defines model for SupervisorRequestRecord.Stage.
+type SupervisorRequestRecordStage string
+
+// SupervisorResetResponse defines model for SupervisorResetResponse.
+type SupervisorResetResponse struct {
+	APIVersion string `json:"api_version"`
+
+	// PreviousConversationID The conversation current when the request arrived; equals `state.conversation_id` for `noop`.
+	PreviousConversationID string `json:"previous_conversation_id"`
+
+	// Result `reset` when a new conversation was opened; `noop` when there was no process, no launch and an empty transcript.
+	Result SupervisorResetResponseResult `json:"result"`
+	State  SupervisorState               `json:"state"`
+}
+
+// SupervisorResetResponseResult `reset` when a new conversation was opened; `noop` when there was no process, no launch and an empty transcript.
+type SupervisorResetResponseResult string
+
+// SupervisorSettings Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default.
+type SupervisorSettings struct {
+	Effort  string `json:"effort"`
+	Harness string `json:"harness"`
+	Model   string `json:"model"`
+}
+
+// SupervisorSettingsRequest Optional fields merge into the committed settings. When harness changes, omitted model selects the destination's first chat-eligible model and omitted effort selects its default (empty) effort.
+type SupervisorSettingsRequest struct {
+	Effort             *string `json:"effort,omitempty"`
+	ExpectedGeneration int64   `json:"expected_generation"`
+	Harness            *string `json:"harness,omitempty"`
+	Model              *string `json:"model,omitempty"`
+	RequestID          string  `json:"request_id"`
+}
+
+// SupervisorStartingStep Present only while the lifecycle is `starting`: `rebuilding` while the harness's native session is rebuilt from the transcript, `launching` while the process spawns, `handshake` until it first answers.
+type SupervisorStartingStep string
+
+// SupervisorState defines model for SupervisorState.
+type SupervisorState struct {
+	// BackgroundTasks Confirmed background work across turns, plus recent terminal tasks. Rebuilt from durable history; independent of transcript pagination.
+	BackgroundTasks []SupervisorBackgroundTask `json:"background_tasks,omitempty"`
+
+	// ContextUsage Live context fill; null until the current process reports usage.
+	ContextUsage   *SupervisorContextUsage `json:"context_usage"`
+	ConversationID string                  `json:"conversation_id"`
+
+	// EffectiveModel Model the running harness reports; empty when no process exists.
+	EffectiveModel string `json:"effective_model"`
+
+	// Failure Canonical error of the most recent launch failure; present only while the lifecycle is `failed`. attempted_settings is present when a relaunch change was reverted.
+	Failure *Error `json:"failure,omitempty"`
+
+	// Generation Number of provider process launches; increments on every launch.
+	Generation int64 `json:"generation"`
+
+	// HeadSeq Seq of the newest committed transcript record; 0 when empty.
+	HeadSeq int64 `json:"head_seq"`
+
+	// InterruptedBy Who cut the most recent turn; meaningful when `last_turn_outcome` is `interrupted`. `user` is Stop or End, `shutdown` is a server shutdown or crash detected at boot.
+	InterruptedBy   SupervisorInterruptedBy  `json:"interrupted_by"`
+	LastTurnOutcome SupervisorTurnOutcome    `json:"last_turn_outcome"`
+	Lifecycle       SupervisorLifecycle      `json:"lifecycle"`
+	PendingChange   *SupervisorPendingChange `json:"pending_change,omitempty"`
+	PendingRequests []ControlRequest         `json:"pending_requests"`
+
+	// PermissionMode Permission mode the supervisor asked the harness for and the mode the running harness reported. `effective` is empty until a process reports it.
+	PermissionMode SupervisorPermissionMode `json:"permission_mode"`
+
+	// PersistFailure Canonical `supervisor_history_incomplete` error for the most recent transcript or state write that failed, whatever the lifecycle. A later successful turn does not clear it; it stays until dismissed through `DELETE /api/v1/supervisor/persist-failure` or the conversation is reset.
+	PersistFailure *Error `json:"persist_failure,omitempty"`
+
+	// SessionID Session-manager id of the current generation (`__supervisor__.<conversation>.<generation>`); empty when no process exists.
+	SessionID string `json:"session_id"`
+
+	// Settings Committed harness choice. Empty `harness` or `model` means unset; empty `effort` means the harness default.
+	Settings SupervisorSettings `json:"settings"`
+
+	// StartingStep Present only while the lifecycle is `starting`: `rebuilding` while the harness's native session is rebuilt from the transcript, `launching` while the process spawns, `handshake` until it first answers.
+	StartingStep SupervisorStartingStep `json:"starting_step,omitempty"`
+
+	// StreamEpoch Resume epoch for the supervisor event stream.
+	StreamEpoch string `json:"stream_epoch"`
+}
+
+// SupervisorStateResponse defines model for SupervisorStateResponse.
+type SupervisorStateResponse struct {
+	APIVersion string          `json:"api_version"`
+	State      SupervisorState `json:"state"`
+}
+
+// SupervisorStreamEvent defines model for SupervisorStreamEvent.
+type SupervisorStreamEvent struct {
+	ConversationID string `json:"conversation_id"`
+
+	// Delta Non-persisted streaming text for a provisional assistant row.
+	Delta      *SupervisorDelta          `json:"delta,omitempty"`
+	Generation int64                     `json:"generation"`
+	Kind       SupervisorStreamEventKind `json:"kind"`
+
+	// Record One committed transcript record projected with the same redaction the session transcript applies; `messages` rows carry `index = seq`.
+	Record  *SupervisorRecord `json:"record,omitempty"`
+	Request *ControlRequest   `json:"request,omitempty"`
+
+	// Seq Record seq for `record` events; the head seq otherwise.
+	Seq              int64            `json:"seq,omitempty"`
+	SnapshotRequired bool             `json:"snapshot_required,omitempty"`
+	State            *SupervisorState `json:"state,omitempty"`
+	StreamEpoch      string           `json:"stream_epoch"`
+}
+
+// SupervisorStreamEventKind defines model for SupervisorStreamEvent.Kind.
+type SupervisorStreamEventKind string
+
+// SupervisorTranscriptResponse defines model for SupervisorTranscriptResponse.
+type SupervisorTranscriptResponse struct {
+	APIVersion     string `json:"api_version"`
+	ConversationID string `json:"conversation_id"`
+
+	// FirstSeq Seq of the first returned record; 0 for an empty page.
+	FirstSeq      int64              `json:"first_seq"`
+	HasMoreAfter  bool               `json:"has_more_after"`
+	HasMoreBefore bool               `json:"has_more_before"`
+	HeadSeq       int64              `json:"head_seq"`
+	Items         []SupervisorRecord `json:"items"`
+
+	// LastSeq Seq of the last returned record; 0 for an empty page.
+	LastSeq int64 `json:"last_seq"`
+}
+
+// SupervisorTurnOutcome defines model for SupervisorTurnOutcome.
+type SupervisorTurnOutcome string
+
 // Task defines model for Task.
 type Task struct {
 	Description  string `json:"description,omitempty"`
@@ -4482,9 +5326,6 @@ type TranscriptResponse struct {
 
 // UpdateActiveWorkSummary Truthful current activity counts that gate an immediate install. Counts are advisory reads of live work, never reservations.
 type UpdateActiveWorkSummary struct {
-	// ChatActive Whether any feature chat turn is active.
-	ChatActive bool `json:"chat_active"`
-
 	// CloneCount Number of in-flight repository clone operations.
 	CloneCount int `json:"clone_count"`
 
@@ -4506,6 +5347,12 @@ type UpdateActiveWorkSummary struct {
 	// QuiescingSince When the runtime began quiescing work for an accepted install; never set in this phase.
 	QuiescingSince *time.Time `json:"quiescing_since,omitempty"`
 
+	// SupervisorActive Whether the supervisor is active work: its lifecycle is starting, running, waiting_permission or waiting_question.
+	SupervisorActive bool `json:"supervisor_active"`
+
+	// SupervisorWaiting Whether the active supervisor is waiting on the user: its lifecycle is waiting_permission or waiting_question. A waiting supervisor still counts in supervisor_active, but it does not hold up an install-when-idle; the install's own shutdown ends it and resolves the open request as interrupted.
+	SupervisorWaiting bool `json:"supervisor_waiting"`
+
 	// UploadCount Number of in-flight staged uploads.
 	UploadCount int `json:"upload_count"`
 }
@@ -4515,7 +5362,7 @@ type UpdateInstallRequest struct {
 	// Consent Explicit user consent to install a release. Must be true; any other value is refused with update_consent_required.
 	Consent bool `json:"consent"`
 
-	// StopActiveWork Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the singleton chat through the existing pause-stop and chat-end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted.
+	// StopActiveWork Stop-work permission for an immediate install; valid only with when now. Authorizes interrupting feature sessions and the supervisor through the existing pause-stop and supervisor end semantics. Repository work, protected or unknown admission reservations, and failed activity detection still refuse, and any stop failure or timeout aborts the install with update_blocked_active_work while already-stopped work stays interrupted.
 	StopActiveWork *bool `json:"stop_active_work,omitempty"`
 
 	// Version Explicit target version selector. Must name the currently discovered latest stable version; any other version is refused.
@@ -5004,27 +5851,6 @@ type AnswerAskUserPromptParams struct {
 // AnswerAskUserPromptParamsXAgenticoClient defines parameters for AnswerAskUserPrompt.
 type AnswerAskUserPromptParamsXAgenticoClient string
 
-// EndChatPromptJSONBody defines parameters for EndChatPrompt.
-type EndChatPromptJSONBody map[string]interface{}
-
-// EndChatPromptParams defines parameters for EndChatPrompt.
-type EndChatPromptParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient EndChatPromptParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// EndChatPromptParamsXAgenticoClient defines parameters for EndChatPrompt.
-type EndChatPromptParamsXAgenticoClient string
-
-// StartChatPromptParams defines parameters for StartChatPrompt.
-type StartChatPromptParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient StartChatPromptParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// StartChatPromptParamsXAgenticoClient defines parameters for StartChatPrompt.
-type StartChatPromptParamsXAgenticoClient string
-
 // SendHelpPromptJSONBody defines parameters for SendHelpPrompt.
 type SendHelpPromptJSONBody map[string]interface{}
 
@@ -5094,6 +5920,94 @@ type StreamSessionOutputParams struct {
 type GetSessionTranscriptParams struct {
 	Offset int64 `form:"offset,omitempty" json:"offset,omitempty"`
 	Limit  Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// EndSupervisorJSONBody defines parameters for EndSupervisor.
+type EndSupervisorJSONBody map[string]interface{}
+
+// EndSupervisorParams defines parameters for EndSupervisor.
+type EndSupervisorParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient EndSupervisorParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// EndSupervisorParamsXAgenticoClient defines parameters for EndSupervisor.
+type EndSupervisorParamsXAgenticoClient string
+
+// StreamSupervisorEventsParams defines parameters for StreamSupervisorEvents.
+type StreamSupervisorEventsParams struct {
+	After       int64  `form:"after,omitempty" json:"after,omitempty"`
+	Epoch       string `form:"epoch,omitempty" json:"epoch,omitempty"`
+	HeartbeatMs int    `form:"heartbeat_ms,omitempty" json:"heartbeat_ms,omitempty"`
+}
+
+// InterruptSupervisorJSONBody defines parameters for InterruptSupervisor.
+type InterruptSupervisorJSONBody map[string]interface{}
+
+// InterruptSupervisorParams defines parameters for InterruptSupervisor.
+type InterruptSupervisorParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient InterruptSupervisorParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// InterruptSupervisorParamsXAgenticoClient defines parameters for InterruptSupervisor.
+type InterruptSupervisorParamsXAgenticoClient string
+
+// SendSupervisorMessageParams defines parameters for SendSupervisorMessage.
+type SendSupervisorMessageParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient SendSupervisorMessageParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// SendSupervisorMessageParamsXAgenticoClient defines parameters for SendSupervisorMessage.
+type SendSupervisorMessageParamsXAgenticoClient string
+
+// CancelSupervisorPendingChangeParams defines parameters for CancelSupervisorPendingChange.
+type CancelSupervisorPendingChangeParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient CancelSupervisorPendingChangeParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// CancelSupervisorPendingChangeParamsXAgenticoClient defines parameters for CancelSupervisorPendingChange.
+type CancelSupervisorPendingChangeParamsXAgenticoClient string
+
+// DismissSupervisorPersistFailureParams defines parameters for DismissSupervisorPersistFailure.
+type DismissSupervisorPersistFailureParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient DismissSupervisorPersistFailureParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// DismissSupervisorPersistFailureParamsXAgenticoClient defines parameters for DismissSupervisorPersistFailure.
+type DismissSupervisorPersistFailureParamsXAgenticoClient string
+
+// ResetSupervisorJSONBody defines parameters for ResetSupervisor.
+type ResetSupervisorJSONBody map[string]interface{}
+
+// ResetSupervisorParams defines parameters for ResetSupervisor.
+type ResetSupervisorParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient ResetSupervisorParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// ResetSupervisorParamsXAgenticoClient defines parameters for ResetSupervisor.
+type ResetSupervisorParamsXAgenticoClient string
+
+// UpdateSupervisorSettingsParams defines parameters for UpdateSupervisorSettings.
+type UpdateSupervisorSettingsParams struct {
+	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
+	XAgenticoClient UpdateSupervisorSettingsParamsXAgenticoClient `json:"X-Agentico-Client"`
+}
+
+// UpdateSupervisorSettingsParamsXAgenticoClient defines parameters for UpdateSupervisorSettings.
+type UpdateSupervisorSettingsParamsXAgenticoClient string
+
+// GetSupervisorTranscriptParams defines parameters for GetSupervisorTranscript.
+type GetSupervisorTranscriptParams struct {
+	Before int64 `form:"before,omitempty" json:"before,omitempty"`
+	After  int64 `form:"after,omitempty" json:"after,omitempty"`
+
+	// Limit Page size, default 100 and maximum 500.
+	Limit int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // CheckForUpdateJSONBody defines parameters for CheckForUpdate.
@@ -5303,12 +6217,6 @@ type AnswerPermissionJSONRequestBody = PermissionAnswerSchema
 // AnswerAskUserPromptJSONRequestBody defines body for AnswerAskUserPrompt for application/json ContentType.
 type AnswerAskUserPromptJSONRequestBody AnswerAskUserPromptJSONBody
 
-// EndChatPromptJSONRequestBody defines body for EndChatPrompt for application/json ContentType.
-type EndChatPromptJSONRequestBody EndChatPromptJSONBody
-
-// StartChatPromptJSONRequestBody defines body for StartChatPrompt for application/json ContentType.
-type StartChatPromptJSONRequestBody = ChatStartRequest
-
 // SendHelpPromptJSONRequestBody defines body for SendHelpPrompt for application/json ContentType.
 type SendHelpPromptJSONRequestBody SendHelpPromptJSONBody
 
@@ -5320,6 +6228,21 @@ type RefreshRuntimeReadinessJSONRequestBody RefreshRuntimeReadinessJSONBody
 
 // ExecuteRecoveryActionsJSONRequestBody defines body for ExecuteRecoveryActions for application/json ContentType.
 type ExecuteRecoveryActionsJSONRequestBody ExecuteRecoveryActionsJSONBody
+
+// EndSupervisorJSONRequestBody defines body for EndSupervisor for application/json ContentType.
+type EndSupervisorJSONRequestBody EndSupervisorJSONBody
+
+// InterruptSupervisorJSONRequestBody defines body for InterruptSupervisor for application/json ContentType.
+type InterruptSupervisorJSONRequestBody InterruptSupervisorJSONBody
+
+// SendSupervisorMessageJSONRequestBody defines body for SendSupervisorMessage for application/json ContentType.
+type SendSupervisorMessageJSONRequestBody = SupervisorMessageRequest
+
+// ResetSupervisorJSONRequestBody defines body for ResetSupervisor for application/json ContentType.
+type ResetSupervisorJSONRequestBody ResetSupervisorJSONBody
+
+// UpdateSupervisorSettingsJSONRequestBody defines body for UpdateSupervisorSettings for application/json ContentType.
+type UpdateSupervisorSettingsJSONRequestBody = SupervisorSettingsRequest
 
 // CheckForUpdateJSONRequestBody defines body for CheckForUpdate for application/json ContentType.
 type CheckForUpdateJSONRequestBody CheckForUpdateJSONBody

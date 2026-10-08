@@ -18,14 +18,24 @@ limitations under the License.
  * Shared description composer for the creation and refactor wizards: one
  * textarea that accepts pasted or dropped images and documents, an attach
  * menu, removable file chips, and @-mention search over repository files.
+ *
+ * Conversational hosts (the Supervisor page) reuse it through the optional
+ * props: an Enter-to-send submit handler with its own blocked state, a
+ * placeholder override, a hidden label, uploads switched off, and a footer
+ * slot for the host's own controls, and a focus handle so a routed draft
+ * can land the caret in the textarea. Every optional prop defaults to the
+ * wizard behaviour, so the creation and refactor flows are unchanged.
  */
 import {
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
   type ClipboardEvent,
   type DragEvent,
   type KeyboardEvent,
+  type ReactNode,
+  type Ref,
 } from 'react';
 import {
   CREATION_ATTACHMENT_LIMIT,
@@ -88,6 +98,32 @@ function isResolvedReference(
   );
 }
 
+/** The programmatic handle a host holds through `composerRef`. */
+export interface DescriptionComposerHandle {
+  /** Focuses the textarea with the caret after its last character. */
+  focus(): void;
+}
+
+export interface ComposerSlashCommand {
+  /** Command name including the leading slash, such as `/model`. */
+  name: string;
+  description: string;
+  onExecute(argument: string): void;
+}
+
+/** Also used by host-owned Send buttons, which submit outside the textarea. */
+export function runComposerSlashCommand(
+  value: string,
+  commands: readonly ComposerSlashCommand[],
+): boolean {
+  const match = /^(\/[a-z][a-z0-9-]*)(?:[ \t]+([^\r\n]*))?$/i.exec(value.trim());
+  if (match === null) return false;
+  const command = commands.find((candidate) => candidate.name === match[1]);
+  if (command === undefined) return false;
+  command.onExecute((match[2] ?? '').trim());
+  return true;
+}
+
 export interface DescriptionComposerProps {
   id: string;
   label: string;
@@ -120,6 +156,38 @@ export interface DescriptionComposerProps {
     update: (files: readonly RepositoryFileRef[]) => readonly RepositoryFileRef[],
   ): void;
   onError(error: CanonicalError): void;
+  /**
+   * Enter (without Shift, outside an open @-mention list and IME
+   * composition) submits through this handler; Shift+Enter keeps inserting a
+   * newline. Omitted, Enter types a newline as before.
+   */
+  onSubmit?(): void;
+  /** Optional commands offered when the draft starts with `/`. */
+  slashCommands?: readonly ComposerSlashCommand[];
+  /** Blocks the Enter submit while typing stays allowed. */
+  submitDisabled?: boolean;
+  /** Disables the textarea itself. */
+  disabled?: boolean;
+  /** Replaces `placeholder` while set (e.g. a reason the host cannot send yet). */
+  placeholderOverride?: string;
+  /** Keeps the label as the textarea's accessible name without showing it. */
+  hideLabel?: boolean;
+  /** False hides the attach affordances and ignores pasted or dropped files. */
+  allowUploads?: boolean;
+  /**
+   * What the attach hint calls the drop target ("anywhere in the …"): the
+   * feature-description surfaces keep the default, a conversation host says
+   * "message".
+   */
+  attachmentTargetNoun?: string;
+  /** Short numbered tokens beside the attach button, preserving room for the draft. */
+  compactAttachments?: boolean;
+  /** Host-owned controls rendered beneath the textarea (e.g. a Send button). */
+  footer?: ReactNode;
+  rows?: number;
+  maxLength?: number;
+  /** Receives the focus handle (e.g. for a host routing a draft in). */
+  composerRef?: Ref<DescriptionComposerHandle>;
 }
 
 export function DescriptionComposer({
@@ -140,17 +208,46 @@ export function DescriptionComposer({
   onAttachmentUploadsChange,
   onRepositoryFilesChange,
   onError,
+  onSubmit,
+  slashCommands = [],
+  submitDisabled = false,
+  disabled = false,
+  placeholderOverride,
+  hideLabel = false,
+  allowUploads = true,
+  attachmentTargetNoun = 'description',
+  compactAttachments = false,
+  footer,
+  rows = 6,
+  maxLength = 10000,
+  composerRef,
 }: DescriptionComposerProps) {
   const [mention, setMention] = useState<MentionToken | null>(null);
   const [mentionResults, setMentionResults] = useState<readonly RepositoryFileRef[]>([]);
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentionStatus, setMentionStatus] = useState<'idle' | 'searching'>('idle');
+  const [slashQuery, setSlashQuery] = useState<string | null>(null);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   const [attachMenuOpen, setAttachMenuOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
+  useImperativeHandle(
+    composerRef,
+    () => ({
+      focus() {
+        const element = textareaRef.current;
+        if (element === null) return;
+        element.focus();
+        const end = element.value.length;
+        element.setSelectionRange(end, end);
+      },
+    }),
+    [],
+  );
   // Locality follows the live connection: remote connections stage files
   // through the upload channel; only the @-mention repository search stays
-  // local-only (its copy is shared with the AMA panel via localServerCopy).
+  // local-only (its copy lives in localServerCopy).
   const connection = useConnectionState();
   const remote = connection.status === 'ready' && connection.kind === 'remote';
   const serverKey = connection.status === 'ready' ? (connection.serverKey ?? null) : null;
@@ -288,6 +385,29 @@ export function DescriptionComposer({
     setMention(detectMention(element.value, element.selectionStart));
   };
 
+  const syncSlash = (element: HTMLTextAreaElement): void => {
+    const beforeCaret = element.value.slice(0, element.selectionStart);
+    setSlashQuery(/^\/[a-z0-9-]*$/i.test(beforeCaret) ? beforeCaret.toLowerCase() : null);
+    setSlashIndex(0);
+  };
+
+  const matchingSlashCommands =
+    slashQuery === null || slashDismissed
+      ? []
+      : slashCommands.filter((command) => command.name.toLowerCase().startsWith(slashQuery));
+
+  const applySlashCommand = (command: ComposerSlashCommand): void => {
+    onValueChange(`${command.name} `);
+    setSlashQuery(null);
+    requestAnimationFrame(() => {
+      const element = textareaRef.current;
+      if (element !== null) {
+        element.focus();
+        element.setSelectionRange(element.value.length, element.value.length);
+      }
+    });
+  };
+
   const applyMention = (file: RepositoryFileRef): void => {
     if (mention === null) return;
     const reference = `@${file.repoKey}/${file.path}`;
@@ -311,7 +431,44 @@ export function DescriptionComposer({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (mention === null || mentionResults.length === 0) return;
+    if (!event.nativeEvent.isComposing && matchingSlashCommands.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setSlashIndex((index) => (index + 1) % matchingSlashCommands.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setSlashIndex(
+          (index) => (index - 1 + matchingSlashCommands.length) % matchingSlashCommands.length,
+        );
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        const command = matchingSlashCommands[slashIndex];
+        if (command !== undefined) applySlashCommand(command);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+    }
+    if (mention === null || mentionResults.length === 0) {
+      if (
+        onSubmit !== undefined &&
+        event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        if (runComposerSlashCommand(value, slashCommands)) onValueChange('');
+        else if (!submitDisabled) onSubmit();
+      }
+      return;
+    }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       setMentionIndex((index) => (index + 1) % mentionResults.length);
@@ -323,12 +480,15 @@ export function DescriptionComposer({
       const file = mentionResults[mentionIndex];
       if (file !== undefined) applyMention(file);
     } else if (event.key === 'Escape') {
+      // Claimed here, so a host's own Escape (the Supervisor's Stop) stays out.
+      event.preventDefault();
       setMention(null);
       setMentionResults([]);
     }
   };
 
   const onPaste = (event: ClipboardEvent): void => {
+    if (!allowUploads) return;
     const hasImage = Array.from(event.clipboardData.items ?? []).some((item) =>
       item.type.startsWith('image/'),
     );
@@ -353,27 +513,118 @@ export function DescriptionComposer({
 
   const onDrop = (event: DragEvent): void => {
     event.preventDefault();
-    if (event.dataTransfer.files.length === 0) return;
+    if (!allowUploads || event.dataTransfer.files.length === 0) return;
     importFiles(event.dataTransfer.files);
   };
+
+  const attachmentChips =
+    images.length > 0 ||
+    attachments.length > 0 ||
+    imageUploads.length > 0 ||
+    attachmentUploads.length > 0 ? (
+      <ol
+        className={`composer__chips${compactAttachments ? ' composer__chips--inline' : ''}`}
+        aria-label="Attached files"
+      >
+        {images.map((path, index) => (
+          <li key={path} className="composer__chip" data-kind="image">
+            <span title={basename(path)}>
+              {compactAttachments ? `Image ${index + 1}` : `🖼 ${basename(path)}`}
+            </span>
+            <button
+              type="button"
+              aria-label={`Remove ${basename(path)}`}
+              onClick={() => onImagesChange((items) => items.filter((item) => item !== path))}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+        {attachments.map((path, index) => (
+          <li key={path} className="composer__chip" data-kind="attachment">
+            <span title={basename(path)}>
+              {compactAttachments ? `File ${index + 1}` : `📎 ${basename(path)}`}
+            </span>
+            <button
+              type="button"
+              aria-label={`Remove ${basename(path)}`}
+              onClick={() => onAttachmentsChange((items) => items.filter((item) => item !== path))}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+        {[...imageUploads, ...attachmentUploads].map((item, index) => (
+          <li
+            key={item.id}
+            className="composer__chip"
+            data-kind={item.kind}
+            data-state={item.state}
+          >
+            <span title={item.name}>
+              {compactAttachments
+                ? item.kind === 'image'
+                  ? `Image ${images.length + index + 1}`
+                  : `File ${attachments.length + index - imageUploads.length + 1}`
+                : `${item.kind === 'image' ? '🖼' : '📎'} ${item.name}`}
+            </span>
+            {item.state === 'uploading' ? (
+              <span className="composer__chip-state">Uploading…</span>
+            ) : null}
+            {item.state === 'failed' ? (
+              <>
+                <span className="composer__chip-message" title={item.message}>
+                  {item.message ?? 'Upload failed.'}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Retry ${item.name}`}
+                  onClick={() => retryUpload(item)}
+                >
+                  ↻ Retry
+                </button>
+              </>
+            ) : null}
+            {isStagedOnOtherServer(item, serverKey) ? (
+              <span className="composer__chip-badge">{STAGED_ON_OTHER_SERVER}</span>
+            ) : null}
+            <button
+              type="button"
+              aria-label={`Remove ${item.name}`}
+              onClick={() => removeUploadItem(item)}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ol>
+    ) : null;
 
   return (
     <div className="composer" onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
       <label className="form-field">
-        <span className="form-field__label">{label}</span>
+        <span className={hideLabel ? 'form-field__label sr-only' : 'form-field__label'}>
+          {label}
+        </span>
         <textarea
           ref={textareaRef}
           id={id}
           className="form-field__input form-field__input--multiline"
           value={value}
-          maxLength={10000}
-          rows={6}
-          placeholder={placeholder}
+          maxLength={maxLength}
+          rows={rows}
+          disabled={disabled}
+          placeholder={placeholderOverride ?? placeholder}
           onChange={(event) => {
             onValueChange(event.target.value);
             syncMention(event.target);
+            setSlashDismissed(false);
+            syncSlash(event.target);
           }}
-          onSelect={(event) => syncMention(event.currentTarget)}
+          onSelect={(event) => {
+            syncMention(event.currentTarget);
+            if (!slashDismissed) syncSlash(event.currentTarget);
+          }}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
         />
@@ -411,107 +662,62 @@ export function DescriptionComposer({
           )}
         </div>
       ) : null}
-      <div className="composer__toolbar">
-        <div className="composer__attach" ref={attachMenuRef}>
-          <button
-            type="button"
-            className="composer__attach-button"
-            aria-label="Attach files or photos"
-            aria-haspopup="menu"
-            aria-expanded={attachMenuOpen}
-            onClick={() => setAttachMenuOpen((open) => !open)}
-          >
-            +
-          </button>
-          {attachMenuOpen ? (
-            <div className="composer__attach-menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => void pickFiles('image')}>
-                Add photos
-              </button>
-              <button type="button" role="menuitem" onClick={() => void pickFiles('attachment')}>
-                Add files
-              </button>
-            </div>
-          ) : null}
-        </div>
-        <span className="composer__hint">
-          {remote
-            ? 'Paste or drop images and documents anywhere in the description; files upload to the server.'
-            : 'Paste or drop images and documents anywhere in the description.'}
-        </span>
-      </div>
-      {images.length > 0 ||
-      attachments.length > 0 ||
-      imageUploads.length > 0 ||
-      attachmentUploads.length > 0 ? (
-        <ol className="composer__chips" aria-label="Attached files">
-          {images.map((path) => (
-            <li key={path} className="composer__chip" data-kind="image">
-              <span>🖼 {basename(path)}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${basename(path)}`}
-                onClick={() => onImagesChange((items) => items.filter((item) => item !== path))}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-          {attachments.map((path) => (
-            <li key={path} className="composer__chip" data-kind="attachment">
-              <span>📎 {basename(path)}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${basename(path)}`}
-                onClick={() =>
-                  onAttachmentsChange((items) => items.filter((item) => item !== path))
-                }
-              >
-                ×
-              </button>
-            </li>
-          ))}
-          {[...imageUploads, ...attachmentUploads].map((item) => (
-            <li
-              key={item.id}
-              className="composer__chip"
-              data-kind={item.kind}
-              data-state={item.state}
+      {matchingSlashCommands.length > 0 ? (
+        <div className="composer__mentions" role="listbox" aria-label="Commands">
+          {matchingSlashCommands.map((command, index) => (
+            <button
+              key={command.name}
+              type="button"
+              role="option"
+              aria-label={`${command.name} ${command.description}`}
+              aria-selected={index === slashIndex}
+              data-active={index === slashIndex}
+              className="composer__mention-option"
+              onMouseEnter={() => setSlashIndex(index)}
+              onClick={() => applySlashCommand(command)}
             >
-              <span>
-                {item.kind === 'image' ? '🖼' : '📎'} {item.name}
-              </span>
-              {item.state === 'uploading' ? (
-                <span className="composer__chip-state">Uploading…</span>
-              ) : null}
-              {item.state === 'failed' ? (
-                <>
-                  <span className="composer__chip-message" title={item.message}>
-                    {item.message ?? 'Upload failed.'}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label={`Retry ${item.name}`}
-                    onClick={() => retryUpload(item)}
-                  >
-                    ↻ Retry
-                  </button>
-                </>
-              ) : null}
-              {isStagedOnOtherServer(item, serverKey) ? (
-                <span className="composer__chip-badge">{STAGED_ON_OTHER_SERVER}</span>
-              ) : null}
-              <button
-                type="button"
-                aria-label={`Remove ${item.name}`}
-                onClick={() => removeUploadItem(item)}
-              >
-                ×
-              </button>
-            </li>
+              <b>{command.name}</b>
+              <span>{command.description}</span>
+            </button>
           ))}
-        </ol>
+        </div>
       ) : null}
+      {allowUploads ? (
+        <div className="composer__toolbar">
+          <div className="composer__attach" ref={attachMenuRef}>
+            <button
+              type="button"
+              className="composer__attach-button"
+              aria-label="Attach files or photos"
+              aria-haspopup="menu"
+              aria-expanded={attachMenuOpen}
+              onClick={() => setAttachMenuOpen((open) => !open)}
+            >
+              +
+            </button>
+            {attachMenuOpen ? (
+              <div className="composer__attach-menu" role="menu">
+                <button type="button" role="menuitem" onClick={() => void pickFiles('image')}>
+                  Add photos
+                </button>
+                <button type="button" role="menuitem" onClick={() => void pickFiles('attachment')}>
+                  Add files
+                </button>
+              </div>
+            ) : null}
+          </div>
+          {compactAttachments && attachmentChips !== null ? (
+            attachmentChips
+          ) : (
+            <span className="composer__hint">
+              {remote
+                ? `Paste or drop images and documents anywhere in the ${attachmentTargetNoun}; files upload to the server.`
+                : `Paste or drop images and documents anywhere in the ${attachmentTargetNoun}.`}
+            </span>
+          )}
+        </div>
+      ) : null}
+      {!compactAttachments || !allowUploads ? attachmentChips : null}
       {repositoryFiles.length > 0 ? (
         <ol className="composer__chips" aria-label="Referenced repository files">
           {repositoryFiles.map((file) => {
@@ -552,6 +758,7 @@ export function DescriptionComposer({
           })}
         </ol>
       ) : null}
+      {footer !== undefined ? <div className="composer__footer">{footer}</div> : null}
     </div>
   );
 }

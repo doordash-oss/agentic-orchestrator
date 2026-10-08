@@ -38,7 +38,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
-	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
@@ -222,6 +221,9 @@ func TestServerMutationTargetAnswerPermissionAllowRememberPersistsBeforeAnswer(t
 	}
 	if len(sess.controlCalls) != 1 || !sess.controlCalls[0].allow {
 		t.Fatalf("RespondToControl calls = %+v, want one allow", sess.controlCalls)
+	}
+	if len(sess.rememberedCalls) != 1 || sess.rememberedCalls[0] != testPermRequestID {
+		t.Fatalf("native remembered approvals = %v, want request %s", sess.rememberedCalls, testPermRequestID)
 	}
 	if result.Decision != decisionAllowRemember || result.Result != resultAnswered {
 		t.Fatalf("AnswerPermission() result = %+v, want remembered answer", result)
@@ -781,240 +783,6 @@ func TestServerMutationTargetSendHelpAnswersFeatureHelpQueueWhenNoSessionIsActiv
 		t.Fatalf("SendHelp() result = %+v; want feature-scoped sent", result)
 	}
 	assertJSONDoesNotContain(t, result, "Continue from the feature cockpit.")
-}
-
-func TestServerMutationTargetStartChatStartsInteractiveUtilitySessionWithoutSubagents(t *testing.T) {
-	runtimeRoot := t.TempDir()
-	stateDir := filepath.Join(runtimeRoot, "features")
-	skillsDir := filepath.Join(runtimeRoot, "skills")
-	configPath := filepath.Join(runtimeRoot, "config.yaml")
-	var captured []agent.BuildSessionOpts
-	phaseRunner := &agent.PhaseRunner{
-		StateDir:  stateDir,
-		SkillsDir: skillsDir,
-		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			captured = append(captured, opts)
-			return []string{"agent"}, []string{"AGENT_TEST=1"}, &ports.SessionOpts{}, nil
-		},
-	}
-	cfg := config.NewDefault()
-	cfg.Defaults.Models.Utilities = "cheap-chat"
-	sessions := &mutationTargetSessionManager{}
-	target := serverMutationTarget{
-		cfg:          cfg,
-		configPath:   configPath,
-		sessions:     sessions,
-		phaseRunner:  phaseRunner,
-		workspaceDir: testWorkspaceDir,
-	}
-
-	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "What is running?"}, "")
-	if err != nil {
-		t.Fatalf("StartChat() error = %v", err)
-	}
-
-	if result.SessionID != serverChatSessionID || result.Result != resultStarted {
-		t.Fatalf("StartChat() result = %+v, want chat session started", result)
-	}
-	if len(captured) != 1 {
-		t.Fatalf("BuildSession calls = %d, want 1", len(captured))
-	}
-	build := captured[0]
-	if build.Model != "cheap-chat" || build.WorkDir != testWorkspaceDir || build.Phase != utilskill.PhaseAll || build.TurnMode != ports.TurnModeInteractive {
-		t.Fatalf("BuildSession opts = %+v, want utility interactive chat in workspace", build)
-	}
-	if !build.Interactive {
-		t.Fatalf("BuildSession Interactive = false, want true so text-parsed AskUserQuestion providers skip the whole picker-synthesis pipeline for AMA")
-	}
-	if build.EffortLevel != llm.EffortLow {
-		t.Fatalf("BuildSession EffortLevel = %q, want low for AMA utility chat", build.EffortLevel)
-	}
-	if !reflect.DeepEqual(build.DisallowedTools, []string{"Task"}) {
-		t.Fatalf("BuildSession DisallowedTools = %v, want only Task disabled for AMA", build.DisallowedTools)
-	}
-	if _, ok := build.PermHandler.(*permission.AMAHandler); !ok {
-		t.Fatalf("BuildSession PermHandler = %T, want *permission.AMAHandler", build.PermHandler)
-	}
-	for _, want := range []string{
-		"Agentic Orchestrator Expert Assistant",
-		"Answer directly whenever the user's request is clear enough",
-		filepath.Join(skillsDir, chatName, "SKILL.md"),
-		"Runtime root: `" + runtimeRoot + "`",
-		"Feature state directory: `" + stateDir + "`",
-		"Config file: `" + configPath + "`",
-		"Workspace: `" + testWorkspaceDir + "`",
-		"Do not substitute the default paths from the user guide",
-	} {
-		if !strings.Contains(build.SystemPrompt, want) {
-			t.Fatalf("BuildSession SystemPrompt missing %q:\n%s", want, build.SystemPrompt)
-		}
-	}
-	if !strings.Contains(build.Prompt, "What is running?") || !strings.Contains(build.Prompt, filepath.Join(skillsDir, chatName, "SKILL.md")) {
-		t.Fatalf("BuildSession prompt = %q, want chat skill instruction and user message", build.Prompt)
-	}
-	if len(sessions.startCalls) != 1 {
-		t.Fatalf("StartSession calls = %d, want 1", len(sessions.startCalls))
-	}
-	start := sessions.startCalls[0]
-	if start.id != serverChatSessionID || start.featureID != serverChatSessionID || start.phase != feature.PhaseResearch || start.workdir != testWorkspaceDir {
-		t.Fatalf("StartSession call = %+v, want chat utility identity and research session in workspace", start)
-	}
-	if start.opts == nil || start.opts.Kind != ports.KindChat || start.opts.TurnMode != ports.TurnModeInteractive || start.opts.Label != chatName || start.opts.InitialPrompt != "What is running?" {
-		t.Fatalf("StartSession opts = %+v, want chat-kind interactive session with the user-visible prompt", start.opts)
-	}
-	if start.opts.StderrPath != filepath.Join(stateDir, chatName, "stderr.log") {
-		t.Fatalf("StartSession StderrPath = %q, want chat stderr capture", start.opts.StderrPath)
-	}
-	assertJSONDoesNotContain(t, result, "What is running?")
-}
-
-// TestServerMutationTargetStartChatFreshSessionCarriesHiddenContext pins
-// the fresh-session split: the wire prompt is skill instruction, hidden
-// bundle, then visible message, while the stored initial prompt stays the
-// visible message alone and the response never carries bundle text.
-func TestServerMutationTargetStartChatFreshSessionCarriesHiddenContext(t *testing.T) {
-	runtimeRoot := t.TempDir()
-	stateDir := filepath.Join(runtimeRoot, "features")
-	skillsDir := filepath.Join(runtimeRoot, "skills")
-	var captured []agent.BuildSessionOpts
-	phaseRunner := &agent.PhaseRunner{
-		StateDir:  stateDir,
-		SkillsDir: skillsDir,
-		BuildSessionFn: func(opts agent.BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			captured = append(captured, opts)
-			return []string{"agent"}, []string{"AGENT_TEST=1"}, &ports.SessionOpts{}, nil
-		},
-	}
-	sessions := &mutationTargetSessionManager{}
-	target := serverMutationTarget{
-		cfg:         config.NewDefault(),
-		sessions:    sessions,
-		phaseRunner: phaseRunner,
-	}
-
-	const bundle = "Chat context — run error on feature \"Fix login\" (abcd1234)"
-	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "Explain this failure"}, bundle)
-	if err != nil {
-		t.Fatalf("StartChat() error = %v", err)
-	}
-	if result.Result != resultStarted {
-		t.Fatalf("StartChat() result = %+v, want chat session started", result)
-	}
-	if len(captured) != 1 || len(sessions.startCalls) != 1 {
-		t.Fatalf("BuildSession/StartSession calls = %d/%d, want 1/1", len(captured), len(sessions.startCalls))
-	}
-	prompt := captured[0].Prompt
-	skillIdx := strings.Index(prompt, filepath.Join(skillsDir, chatName, "SKILL.md"))
-	bundleIdx := strings.Index(prompt, bundle)
-	messageIdx := strings.Index(prompt, "Explain this failure")
-	if skillIdx < 0 || bundleIdx < 0 || messageIdx < 0 {
-		t.Fatalf("BuildSession prompt missing pieces:\n%s", prompt)
-	}
-	if !(skillIdx < bundleIdx && bundleIdx < messageIdx) {
-		t.Fatalf("BuildSession prompt order = skill %d, bundle %d, message %d; want skill, bundle, message", skillIdx, bundleIdx, messageIdx)
-	}
-	start := sessions.startCalls[0]
-	if start.opts == nil || start.opts.InitialPrompt != "Explain this failure" {
-		t.Fatalf("StartSession opts.InitialPrompt = %+v, want the visible message only", start.opts)
-	}
-	assertJSONDoesNotContain(t, result, bundle)
-}
-
-// TestServerMutationTargetStartChatLiveSessionSendsBundleAsHiddenContext
-// pins the live-session split: the visible message is the echo and the
-// bundle rides as hidden context, while a turn without a bundle keeps the
-// plain send path.
-func TestServerMutationTargetStartChatLiveSessionSendsBundleAsHiddenContext(t *testing.T) {
-	sess := &mutationTargetSessionView{id: serverChatSessionID, status: ports.SessionRunning, active: true}
-	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
-	target := serverMutationTarget{cfg: config.NewDefault(), sessions: sessions}
-
-	const bundle = "Chat context — run error on feature \"Fix login\" (abcd1234)"
-	result, err := target.StartChat(serverruntime.ChatStartRequest{Message: "Explain this failure"}, bundle)
-	if err != nil {
-		t.Fatalf("StartChat() error = %v", err)
-	}
-	if result.Result != resultSent || result.SessionID != serverChatSessionID {
-		t.Fatalf("StartChat() result = %+v, want sent to the live chat session", result)
-	}
-	if !reflect.DeepEqual(sess.sentMessages, []string{"Explain this failure"}) {
-		t.Fatalf("SendUserMessage echoes = %v, want only the visible message", sess.sentMessages)
-	}
-	if len(sess.hiddenContextTurns) != 1 || sess.hiddenContextTurns[0].hidden != bundle || sess.hiddenContextTurns[0].visible != "Explain this failure" {
-		t.Fatalf("hidden-context turns = %+v, want the bundle as hidden context", sess.hiddenContextTurns)
-	}
-
-	result, err = target.StartChat(serverruntime.ChatStartRequest{Message: "Follow up"}, "")
-	if err != nil {
-		t.Fatalf("StartChat() follow-up error = %v", err)
-	}
-	if !reflect.DeepEqual(sess.sentMessages, []string{"Explain this failure", "Follow up"}) {
-		t.Fatalf("SendUserMessage echoes = %v, want plain sends without a bundle", sess.sentMessages)
-	}
-	if len(sess.hiddenContextTurns) != 1 {
-		t.Fatalf("hidden-context turns = %d after a plain turn, want unchanged", len(sess.hiddenContextTurns))
-	}
-	assertJSONDoesNotContain(t, result, bundle)
-}
-
-func TestChatMessageWithImagesAddsInspectableLocalPaths(t *testing.T) {
-	got := chatMessageWithImages("What is shown?", []string{"/tmp/screenshot one.png", "/tmp/detail.png"})
-	for _, want := range []string{
-		"What is shown?",
-		"Attached images (inspect these local files):",
-		`"/tmp/screenshot one.png"`,
-		`"/tmp/detail.png"`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("chatMessageWithImages() missing %q:\n%s", want, got)
-		}
-	}
-	if plain := chatMessageWithImages("No image", nil); plain != "No image" {
-		t.Fatalf("chatMessageWithImages() without images = %q, want unchanged message", plain)
-	}
-}
-
-func TestServerMutationTargetEndChatStopsOnlySingletonChat(t *testing.T) {
-	sessions := &mutationTargetSessionManager{
-		sessions: []ports.SessionView{
-			&mutationTargetSessionView{id: "feature-session", featureID: "feature-1", status: ports.SessionRunning, active: true},
-			&mutationTargetSessionView{id: serverChatSessionID, featureID: serverChatSessionID, status: ports.SessionRunning, active: true},
-		},
-	}
-	target := serverMutationTarget{sessions: sessions}
-
-	result, err := target.EndChat()
-	if err != nil {
-		t.Fatalf("EndChat() error = %v", err)
-	}
-
-	if result.SessionID != serverChatSessionID || result.Result != "ended" {
-		t.Fatalf("EndChat() = %+v, want singleton chat ended", result)
-	}
-	if !reflect.DeepEqual(sessions.stopCalls, []string{serverChatSessionID}) {
-		t.Fatalf("StopSession calls = %v, want only singleton chat", sessions.stopCalls)
-	}
-}
-
-func TestServerMutationTargetEndChatIsIdempotentWhenInactive(t *testing.T) {
-	sessions := &mutationTargetSessionManager{
-		sessions: []ports.SessionView{
-			&mutationTargetSessionView{id: serverChatSessionID, featureID: serverChatSessionID, status: ports.SessionDone, active: false},
-		},
-	}
-	target := serverMutationTarget{sessions: sessions}
-
-	result, err := target.EndChat()
-	if err != nil {
-		t.Fatalf("EndChat() error = %v", err)
-	}
-
-	if result.SessionID != serverChatSessionID || result.Result != "not_active" {
-		t.Fatalf("EndChat() = %+v, want not_active singleton chat", result)
-	}
-	if len(sessions.stopCalls) != 0 {
-		t.Fatalf("StopSession calls = %v, want none", sessions.stopCalls)
-	}
 }
 
 func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPromptAndIndex(t *testing.T) {
@@ -2748,36 +2516,12 @@ func mutationTargetOrchestrator(sessions ports.SessionManager) *orchestrator.Orc
 }
 
 type mutationTargetSessionManager struct {
-	sessions   []ports.SessionView
-	stopCalls  []string
-	startCalls []mutationTargetStartSessionCall
-	onStop     func(string)
+	sessions  []ports.SessionView
+	stopCalls []string
+	onStop    func(string)
 }
 
-type mutationTargetStartSessionCall struct {
-	id        string
-	featureID string
-	phase     feature.Phase
-	command   []string
-	workdir   string
-	env       []string
-	opts      *ports.SessionOpts
-}
-
-func (m *mutationTargetSessionManager) StartSession(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
-	var opt *ports.SessionOpts
-	if len(opts) > 0 {
-		opt = opts[0]
-	}
-	m.startCalls = append(m.startCalls, mutationTargetStartSessionCall{
-		id:        id,
-		featureID: featureID,
-		phase:     phase,
-		command:   append([]string(nil), command...),
-		workdir:   workdir,
-		env:       append([]string(nil), env...),
-		opts:      opt,
-	})
+func (m *mutationTargetSessionManager) StartSession(id, featureID string, phase feature.Phase, _ []string, _ string, _ []string, _ ...*ports.SessionOpts) (ports.SessionHandle, error) {
 	sess := &mutationTargetSessionView{id: id, featureID: featureID, phase: phase, status: ports.SessionRunning, active: true}
 	m.sessions = append(m.sessions, sess)
 	return sess, nil
@@ -2825,24 +2569,18 @@ func (m *mutationTargetSessionManager) Shutdown()            {}
 func (m *mutationTargetSessionManager) IsShuttingDown() bool { return false }
 
 type mutationTargetSessionView struct {
-	id                 string
-	featureID          string
-	phase              feature.Phase
-	status             ports.SessionStatus
-	active             bool
-	permCacheScope     string
-	pending            []*llm.ControlRequestMessage
-	sentMessages       []string
-	hiddenContextTurns []mutationTargetHiddenTurn
-	controlCalls       []mutationTargetControlCall
-	askCalls           []mutationTargetAskUserCall
-	onRespondControl   func() error
-}
-
-// mutationTargetHiddenTurn records one hidden-context user turn.
-type mutationTargetHiddenTurn struct {
-	visible string
-	hidden  string
+	id               string
+	featureID        string
+	phase            feature.Phase
+	status           ports.SessionStatus
+	active           bool
+	permCacheScope   string
+	pending          []*llm.ControlRequestMessage
+	sentMessages     []string
+	controlCalls     []mutationTargetControlCall
+	rememberedCalls  []string
+	askCalls         []mutationTargetAskUserCall
+	onRespondControl func() error
 }
 
 type mutationTargetControlCall struct {
@@ -2920,11 +2658,6 @@ func (s *mutationTargetSessionView) SendUserMessage(text string) error {
 	s.sentMessages = append(s.sentMessages, text)
 	return nil
 }
-func (s *mutationTargetSessionView) SendUserMessageWithHiddenContext(visible, hiddenContext string) error {
-	s.sentMessages = append(s.sentMessages, visible)
-	s.hiddenContextTurns = append(s.hiddenContextTurns, mutationTargetHiddenTurn{visible: visible, hidden: hiddenContext})
-	return nil
-}
 func (s *mutationTargetSessionView) RespondToControl(requestID string, allow bool, reason string) error {
 	if s.onRespondControl != nil {
 		if err := s.onRespondControl(); err != nil {
@@ -2944,6 +2677,14 @@ func (s *mutationTargetSessionView) RespondToControl(requestID string, allow boo
 		reason:        reason,
 		originalInput: original,
 	})
+	return nil
+}
+
+func (s *mutationTargetSessionView) RespondToControlRemember(requestID string) error {
+	if err := s.RespondToControl(requestID, true, ""); err != nil {
+		return err
+	}
+	s.rememberedCalls = append(s.rememberedCalls, requestID)
 	return nil
 }
 func (s *mutationTargetSessionView) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {

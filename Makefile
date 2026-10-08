@@ -92,7 +92,7 @@ test-fast:
 	echo "Fast suite wall time: $${elapsed}s"; \
 	exit $$test_status
 
-.PHONY: test-e2e test-selfupdate-native test-selfupdate-driver
+.PHONY: test-e2e test-selfupdate-native test-selfupdate-driver opencode-min-bin
 
 # Instrument the child binaries too: go test -race alone covers only the harness.
 test-e2e:
@@ -106,6 +106,12 @@ test-selfupdate-native:
 test-selfupdate-driver:
 	go test -tags agentico_selfupdate_driver ./cmd/agentico -short -count=1 -run '^TestSelfUpdateDriver'
 	go vet -tags agentico_selfupdate_driver ./cmd/agentico
+
+# Fetch the OpenCode release matching the provider's MinVersion() into
+# .cache/opencode/<version>/opencode for the pinned-minimum live spike
+# (TestOpenCodeChildPermissionSpikeLiveMinVersion). The CLI on PATH is untouched.
+opencode-min-bin:
+	go run ./tools/opencode-min-bin
 
 # ---------- Jaeger (local OTel collector + trace UI) ----------
 JAEGER_CONTAINER := agentic-jaeger

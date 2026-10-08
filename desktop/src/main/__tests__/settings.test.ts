@@ -22,8 +22,6 @@ import { SettingsStore } from '../settings';
 import {
   MAX_KNOWN_REMOTE_SERVERS,
   MAX_KNOWN_SERVERS,
-  defaultAmaGeometry,
-  defaultAmaPrefs,
   defaultServersPrefs,
   defaultSettings,
   defaultSettingsWindowPrefs,
@@ -151,12 +149,11 @@ describe('SettingsStore', () => {
     store.update({ window: { bounds: { x: 1, y: 2, width: 800, height: 600 } } });
     const reloaded = makeStore();
     expect(reloaded.get()).toEqual({
-      schemaVersion: 5,
+      schemaVersion: 6,
       runtime: { selection: null },
       window: { bounds: { x: 1, y: 2, width: 800, height: 600 } },
       theme: 'dark',
       wizard: { collapsedHelp: false },
-      ama: defaultAmaPrefs(),
       notifications: { previewEnabled: false },
       shell: { featureByServer: {}, sidebarCollapsed: false },
       settingsWindow: defaultSettingsWindowPrefs(),
@@ -164,18 +161,7 @@ describe('SettingsStore', () => {
     });
   });
 
-  it('persists the AMA panel geometry and open state across a reload', () => {
-    const store = makeStore();
-    store.update({
-      ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
-    });
-    expect(makeStore().get().ama).toEqual({
-      drawer: 'expanded',
-      geometry: { right: 96, bottom: 48, width: 520, height: 400 },
-    });
-  });
-
-  it('loads a v2 document written before the panel geometry existed without resetting', () => {
+  it('loads a v2 document whose AMA section predates the panel geometry without resetting', () => {
     fs.writeFileSync(
       settingsPath(),
       JSON.stringify({
@@ -191,7 +177,7 @@ describe('SettingsStore', () => {
     );
     const store = makeStore();
 
-    expect(store.get().ama).toEqual({ drawer: 'expanded', geometry: defaultAmaGeometry() });
+    expect(store.get()).not.toHaveProperty('ama');
     expect(store.get().theme).toBe('dark');
     // The global active id has no server to scope to (no last-used pointer):
     // the v3→v4 migration drops it.
@@ -223,12 +209,11 @@ describe('SettingsStore', () => {
     expect(store.get().settingsWindow.pane).toBe('workspace-roots');
     // No other preference is reset by the additive field.
     expect(store.get()).toEqual({
-      schemaVersion: 5,
+      schemaVersion: 6,
       runtime: { selection: 'claude' },
       window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
       theme: 'dark',
       wizard: { collapsedHelp: true },
-      ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
       notifications: { previewEnabled: true },
       shell: { featureByServer: {}, sidebarCollapsed: true },
       settingsWindow: defaultSettingsWindowPrefs(),
@@ -236,8 +221,8 @@ describe('SettingsStore', () => {
     });
     expect(warnings).toEqual([]);
     expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
-    // The v2 document is migrated through and rewritten on disk as v5.
-    expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).schemaVersion).toBe(5);
+    // The v2 document is migrated through and rewritten on disk as v6.
+    expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8')).schemaVersion).toBe(6);
   });
 
   it('persists the Settings window bounds and pane across a reload', () => {
@@ -272,13 +257,12 @@ describe('SettingsStore', () => {
     expect(fs.existsSync(settingsPath())).toBe(false);
   });
 
-  it('rejects an AMA patch carrying unknown fields', () => {
+  it('rejects a patch carrying the retired ama key and persists nothing', () => {
     const store = makeStore();
-    expect(() =>
-      store.update({
-        ama: { drawer: 'expanded', geometry: defaultAmaGeometry(), docked: true } as never,
-      }),
-    ).toThrow(CanonicalErrorException);
+    expect(() => store.update({ ama: { drawer: 'expanded' } } as never)).toThrow(
+      CanonicalErrorException,
+    );
+    expect(fs.existsSync(settingsPath())).toBe(false);
   });
 
   it('persists shell presentation prefs and restores them on reload', () => {
@@ -383,7 +367,7 @@ describe('SettingsStore', () => {
     const upgraded = makeStore();
     expect(upgraded.get().theme).toBe('dark');
     expect(upgraded.get().wizard).toEqual({ collapsedHelp: false });
-    expect(upgraded.get().ama).toEqual(defaultAmaPrefs());
+    expect(upgraded.get()).not.toHaveProperty('ama');
     expect(upgraded.get().notifications).toEqual({ previewEnabled: false });
   });
 
@@ -439,12 +423,11 @@ describe('SettingsStore', () => {
       const store = makeStore();
 
       expect(store.get()).toEqual({
-        schemaVersion: 5,
+        schemaVersion: 6,
         runtime: { selection: 'claude' },
         window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
         theme: 'dark',
         wizard: { collapsedHelp: true },
-        ama: { drawer: 'expanded', geometry: defaultAmaGeometry() },
         notifications: { previewEnabled: true },
         // No last-used pointer exists to scope the v1 selection to.
         shell: { featureByServer: {}, sidebarCollapsed: false },
@@ -455,7 +438,7 @@ describe('SettingsStore', () => {
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
 
       const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-      expect(onDisk.schemaVersion).toBe(5);
+      expect(onDisk.schemaVersion).toBe(6);
       expect(onDisk.shell).toEqual({
         featureByServer: {},
         sidebarCollapsed: false,
@@ -546,14 +529,16 @@ describe('SettingsStore', () => {
       };
     }
 
-    it('rewrites a v2 file as v5 and preserves every pre-existing field exactly', () => {
+    it('rewrites a v2 file as v6 and preserves every surviving field exactly', () => {
       fs.writeFileSync(settingsPath(), JSON.stringify(v2Fixture()));
       const store = makeStore();
       // The v2 global active id has no last-used pointer to scope to: the
-      // v3→v4 step drops it while carrying everything else byte-for-byte.
+      // v3→v4 step drops it and the v5→v6 step drops `ama`, while everything
+      // else is carried byte-for-byte.
+      const { ama: _ama, ...surviving } = v2Fixture();
       const migrated = {
-        ...v2Fixture(),
-        schemaVersion: 5,
+        ...surviving,
+        schemaVersion: 6,
         shell: { featureByServer: {}, sidebarCollapsed: true },
         servers: defaultServersPrefs(),
       };
@@ -616,7 +601,7 @@ describe('SettingsStore', () => {
       expect(warnings).toEqual([]);
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
       const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-      expect(onDisk.schemaVersion).toBe(5);
+      expect(onDisk.schemaVersion).toBe(6);
       expect(onDisk.shell).toEqual({
         featureByServer: { [lastUsed]: 'abcd1234ef567890' },
         sidebarCollapsed: true,
@@ -692,7 +677,7 @@ describe('SettingsStore', () => {
       };
     }
 
-    it('tags every v4 known server as local and persists as v5, order and lastUsed intact', () => {
+    it('tags every v4 known server as local and persists as v6, order and lastUsed intact', () => {
       fs.writeFileSync(settingsPath(), JSON.stringify(v4Fixture()));
       const store = makeStore();
 
@@ -715,7 +700,8 @@ describe('SettingsStore', () => {
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
 
       const onDisk = JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
-      expect(onDisk.schemaVersion).toBe(5);
+      expect(onDisk.schemaVersion).toBe(6);
+      expect(onDisk).not.toHaveProperty('ama');
       expect(onDisk.servers).toEqual({
         known: [
           { ...v4KnownServer(2), kind: 'local' },
@@ -723,7 +709,7 @@ describe('SettingsStore', () => {
         ],
         lastUsed: v4KnownServer(2).serverKey,
       });
-      // A fresh load reads the persisted v5 document directly (no re-migration).
+      // A fresh load reads the persisted v6 document directly (no re-migration).
       expect(makeStore().get().servers).toEqual(servers);
     });
 
@@ -734,7 +720,7 @@ describe('SettingsStore', () => {
       fs.writeFileSync(settingsPath(), JSON.stringify(partial));
       const store = makeStore();
       expect(store.get().wizard).toEqual({ collapsedHelp: false });
-      expect(store.get().ama).toEqual(defaultAmaPrefs());
+      expect(store.get()).not.toHaveProperty('ama');
       expect(store.get().servers.known.every((entry) => entry.kind === 'local')).toBe(true);
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
     });
@@ -744,6 +730,90 @@ describe('SettingsStore', () => {
         settingsPath(),
         JSON.stringify(v4Fixture({ servers: { known: [{ serverKey: 'x' }], rogue: true } })),
       );
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+  });
+
+  describe('schema v5 -> v6 migration', () => {
+    function v5Fixture(overrides: Record<string, unknown> = {}) {
+      return {
+        schemaVersion: 5,
+        runtime: { selection: 'claude' },
+        window: { bounds: { x: 10, y: 20, width: 1024, height: 768 } },
+        theme: 'dark',
+        wizard: { collapsedHelp: true },
+        ama: { drawer: 'expanded', geometry: { right: 96, bottom: 48, width: 520, height: 400 } },
+        notifications: { previewEnabled: true },
+        shell: {
+          featureByServer: { ['a'.repeat(64)]: 'abcd1234ef567890' },
+          sidebarCollapsed: true,
+          sidebarWidth: 320,
+        },
+        settingsWindow: {
+          bounds: { x: 40, y: 60, width: 900, height: 640 },
+          pane: 'diagnostics',
+        },
+        servers: {
+          known: [
+            {
+              serverKey: 'a'.repeat(64),
+              kind: 'remote',
+              name: 'frothy-macchiato',
+              nickname: 'Shared box',
+              baseUrl: 'http://10.0.0.5:9001',
+              lastSeenAt: '2026-08-10T00:00:00.000Z',
+            },
+          ],
+          lastUsed: 'a'.repeat(64),
+        },
+        ...overrides,
+      };
+    }
+
+    it('drops the ama section and carries every other field byte-for-byte', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v5Fixture()));
+      const store = makeStore();
+      const { ama: _ama, ...surviving } = v5Fixture();
+      const migrated = { ...surviving, schemaVersion: 6 };
+
+      expect(store.get()).toEqual(migrated);
+      expect(warnings).toEqual([]);
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+      expect(JSON.parse(fs.readFileSync(settingsPath(), 'utf8'))).toEqual(migrated);
+      // A fresh load reads the persisted v6 document directly.
+      expect(makeStore().get()).toEqual(migrated);
+    });
+
+    it('migrates a v5 file that never wrote an ama section', () => {
+      const partial = v5Fixture();
+      delete (partial as Record<string, unknown>).ama;
+      fs.writeFileSync(settingsPath(), JSON.stringify(partial));
+      const store = makeStore();
+      expect(store.get()).toEqual({ ...partial, schemaVersion: 6 });
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(false);
+    });
+
+    it('still resets to defaults for a v5 document with a malformed ama section', () => {
+      fs.writeFileSync(
+        settingsPath(),
+        JSON.stringify(v5Fixture({ ama: { drawer: 'expanded', docked: true } })),
+      );
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    it('still resets to defaults for a v5 document carrying a foreign field', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v5Fixture({ apiToken: 'x' })));
+      const store = makeStore();
+      expect(store.get()).toEqual(defaultSettings());
+      expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);
+    });
+
+    it('still resets to defaults for a v6 document that carries an ama section', () => {
+      fs.writeFileSync(settingsPath(), JSON.stringify(v5Fixture({ schemaVersion: 6 })));
       const store = makeStore();
       expect(store.get()).toEqual(defaultSettings());
       expect(fs.existsSync(`${settingsPath()}.bak-1`)).toBe(true);

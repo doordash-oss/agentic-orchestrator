@@ -14,10 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { disabledMainWindowUiState } from '../../shared/ipc';
+import { DEFAULT_RUNTIME_ID, disabledMainWindowUiState } from '../../shared/ipc';
 import type { AppRouteEvent, AttentionItem, RoutedRequest, UpdateState } from '../../shared/ipc';
 import { ConnectionShell } from './components/ConnectionShell';
-import { AmaPanel } from './components/AmaPanel';
 import { CommandPalette } from './components/CommandPalette';
 import { HelpOverlay } from './components/HelpOverlay';
 import { ReadinessGate } from './components/ReadinessGate';
@@ -33,6 +32,15 @@ import { emptyAttentionDrafts, type AttentionDrafts } from './features/Attention
 import { useConnectionState, useSystemAccentMirror, useTheme } from './hooks';
 import { ExplainChatProvider } from './explainChat';
 import { CreationDraftsContext, CreationDraftsStore } from './features/creationDrafts';
+import {
+  SupervisorDraftsContext,
+  SupervisorDraftsStore,
+} from './features/supervisor/supervisorDrafts';
+import {
+  createSupervisorStatusStore,
+  SupervisorStatusProvider,
+  type SupervisorStatusStore,
+} from './features/supervisor/supervisorStatus';
 
 export default function App() {
   // Called purely for its side effect (mirroring the resolved theme onto
@@ -46,7 +54,7 @@ export default function App() {
   const serverKey = connection.serverKey ?? null;
   const [serverAttentionItems, setServerAttentionItems] = useState<AttentionItem[]>([]);
   /**
-   * Attention/Ama drafts are scoped to the connected server's identity: this
+   * Attention drafts are scoped to the connected server's identity: this
    * component deliberately does NOT unmount during a connection flip, so the
    * map keeps each server's in-progress drafts and nothing bleeds across.
    * Entries live for the app session only; nothing is persisted.
@@ -81,10 +89,11 @@ export default function App() {
   } | null>(null);
   const [routeRequest, setRouteRequest] = useState<RoutedRequest | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState | null>(null);
-  // A reply that landed while the panel was closed, echoed on the Ask chip.
-  const [amaUnread, setAmaUnread] = useState(false);
   const [updateDismissedVersion, setUpdateDismissedVersion] = useState<string | null>(null);
   const [schedulingUpdate, setSchedulingUpdate] = useState(false);
+  // Reported by the readiness gate: the shell is mounted over a runtime whose
+  // setup is incomplete, so the palette offers Setup….
+  const [setupIncomplete, setSetupIncomplete] = useState(false);
   const routeSequence = useRef(0);
   /**
    * Creation drafts are scoped per server exactly like attention drafts, but
@@ -95,6 +104,24 @@ export default function App() {
   const creationDraftsStore = useRef<CreationDraftsStore | null>(null);
   if (creationDraftsStore.current === null) {
     creationDraftsStore.current = new CreationDraftsStore();
+  }
+  /**
+   * Supervisor composer drafts (text, error reference, attachments, queue)
+   * per server, beside the creation drafts and just as in-memory: they
+   * survive opening a feature and switching servers, never a relaunch.
+   */
+  const supervisorDraftsStore = useRef<SupervisorDraftsStore | null>(null);
+  if (supervisorDraftsStore.current === null) {
+    supervisorDraftsStore.current = new SupervisorDraftsStore();
+  }
+  /**
+   * The supervisor's lifecycle, the window's focus and the Supervisor row's
+   * unread flag per server, beside the drafts and just as in-memory: the
+   * sidebar row, update surfaces and setup banner read it from any page.
+   */
+  const supervisorStatusStore = useRef<SupervisorStatusStore | null>(null);
+  if (supervisorStatusStore.current === null) {
+    supervisorStatusStore.current = createSupervisorStatusStore();
   }
 
   /**
@@ -213,64 +240,65 @@ export default function App() {
 
   return (
     // The explain-in-chat provider rides at the renderer root so every
-    // ErrorSurface — in the shell tree or the AMA panel — can route a
-    // question without prop drilling the root requester through panels.
+    // ErrorSurface can route a question to the Supervisor without prop
+    // drilling the root requester through panels.
     <ExplainChatProvider requestRoute={runtimeReady ? requestRoute : null}>
       <CreationDraftsContext.Provider value={creationDraftsStore.current}>
-        <div className="app-frame">
-          {runtimeReady ? (
-            <>
-              <ReadinessGate
-                key={serverKey}
-                attentionItems={attentionItems}
-                refreshAttention={refreshAttention}
-                attentionDrafts={attentionDrafts}
-                setAttentionDrafts={setAttentionDrafts}
-                attentionJump={attentionJump}
-                onAttentionJumpHandled={() => setAttentionJump(null)}
-                routeRequest={routeRequest}
-                onAttentionJump={(featureId, attentionId) => {
-                  routeSequence.current += 1;
-                  setAttentionJump({
-                    requestId: routeSequence.current,
-                    featureId,
-                    ...(attentionId === undefined ? {} : { attentionId }),
-                  });
-                }}
-                updateState={updateState}
-                updateDismissedVersion={updateDismissedVersion}
-                schedulingUpdate={schedulingUpdate}
-                onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
-                onOpenUpdatesSettings={() =>
-                  requestRoute({ target: 'settings', settingsSection: 'updates' })
-                }
-                onOpenAma={() => requestRoute({ target: 'ama' })}
-                onOpenPalette={() => requestRoute({ target: 'palette' })}
-                amaUnread={amaUnread}
-                onInstallUpdateWhenIdle={async () => {
-                  try {
-                    setSchedulingUpdate(true);
-                    setUpdateState(await window.agentico.installUpdateWhenIdle());
-                  } finally {
-                    setSchedulingUpdate(false);
+        <SupervisorDraftsContext.Provider value={supervisorDraftsStore.current}>
+          <SupervisorStatusProvider
+            store={supervisorStatusStore.current}
+            serverKey={runtimeReady ? (serverKey ?? DEFAULT_RUNTIME_ID) : null}
+          >
+            <div className="app-frame">
+              {runtimeReady ? (
+                <ReadinessGate
+                  key={serverKey}
+                  attentionItems={attentionItems}
+                  refreshAttention={refreshAttention}
+                  attentionDrafts={attentionDrafts}
+                  setAttentionDrafts={setAttentionDrafts}
+                  attentionJump={attentionJump}
+                  onAttentionJumpHandled={() => setAttentionJump(null)}
+                  routeRequest={routeRequest}
+                  onAttentionJump={(featureId, attentionId) => {
+                    routeSequence.current += 1;
+                    setAttentionJump({
+                      requestId: routeSequence.current,
+                      featureId,
+                      ...(attentionId === undefined ? {} : { attentionId }),
+                    });
+                  }}
+                  updateState={updateState}
+                  updateDismissedVersion={updateDismissedVersion}
+                  schedulingUpdate={schedulingUpdate}
+                  onDismissUpdate={(version) => setUpdateDismissedVersion(version)}
+                  onOpenUpdatesSettings={() =>
+                    requestRoute({ target: 'settings', settingsSection: 'updates' })
                   }
-                }}
-              />
-              <AmaPanel
-                attentionItems={attentionItems}
-                refreshAttention={refreshAttention}
-                attentionDrafts={attentionDrafts}
-                setAttentionDrafts={setAttentionDrafts}
+                  onOpenPalette={() => requestRoute({ target: 'palette' })}
+                  onSetupIncompleteChange={setSetupIncomplete}
+                  onInstallUpdateWhenIdle={async () => {
+                    try {
+                      setSchedulingUpdate(true);
+                      setUpdateState(await window.agentico.installUpdateWhenIdle());
+                    } finally {
+                      setSchedulingUpdate(false);
+                    }
+                  }}
+                />
+              ) : (
+                <ConnectionShell />
+              )}
+              <CommandPalette
+                ready={runtimeReady}
+                setupIncomplete={runtimeReady && setupIncomplete}
                 routeRequest={routeRequest}
-                onUnreadChange={setAmaUnread}
+                onRoute={requestRoute}
               />
-            </>
-          ) : (
-            <ConnectionShell />
-          )}
-          <CommandPalette ready={runtimeReady} routeRequest={routeRequest} onRoute={requestRoute} />
-          <HelpOverlay routeRequest={routeRequest} />
-        </div>
+              <HelpOverlay routeRequest={routeRequest} />
+            </div>
+          </SupervisorStatusProvider>
+        </SupervisorDraftsContext.Provider>
       </CreationDraftsContext.Provider>
     </ExplainChatProvider>
   );

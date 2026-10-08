@@ -107,7 +107,7 @@ describe('CommandPalette feature group', () => {
     expect(within(group).getByRole('option', { name: /^Merge/ })).toBeDisabled();
   });
 
-  it('disables the whole group with the no-active-feature reason on Overview', async () => {
+  it('disables the whole group with the no-active-feature reason on Supervisor', async () => {
     installAgenticoMock({
       settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
     });
@@ -372,7 +372,7 @@ describe('CommandPalette global entries', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
     expect(within(dialog).getByRole('option', { name: /^New Feature/ })).toBeEnabled();
     expect(within(dialog).getByRole('option', { name: /^Show\/Hide Sidebar/ })).toBeEnabled();
-    // Overview has no inspector to show or hide.
+    // The Supervisor page has no inspector to show or hide.
     expect(within(dialog).getByRole('option', { name: /^Show\/Hide Inspector/ })).toBeDisabled();
     expect(within(dialog).queryByText('Close Window')).toBeNull();
     expect(within(dialog).queryByText('Quit Agentico')).toBeNull();
@@ -395,6 +395,79 @@ describe('CommandPalette global entries', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
     await userEvent.click(within(dialog).getByRole('option', { name: /^New Feature/ }));
     expect(onRoute).toHaveBeenCalledWith({ target: 'new-feature' });
+  });
+
+  it('lists New conversation under the assistant group and routes its target', async () => {
+    installAgenticoMock({
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
+    });
+    const onRoute = vi.fn();
+    render(
+      <CommandPalette
+        ready
+        routeRequest={{ id: 1, event: { target: 'palette' } }}
+        onRoute={onRoute}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
+    const assistant = within(dialog).getByRole('region', { name: 'Assistant' });
+    const option = within(assistant).getByRole('option', { name: /^New conversation/ });
+    expect(option).toBeEnabled();
+    await userEvent.click(option);
+    expect(onRoute).toHaveBeenCalledWith({ target: 'new-conversation' });
+  });
+
+  it('omits Setup… while the runtime is fully set up', async () => {
+    installAgenticoMock({
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
+    });
+    renderPalette();
+
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
+    expect(within(dialog).getByRole('option', { name: /^New Feature/ })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('option', { name: /^Setup…/ })).toBeNull();
+  });
+
+  it('lists Setup… under Navigation while setup is incomplete and routes its target', async () => {
+    installAgenticoMock({
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
+    });
+    const onRoute = vi.fn();
+    render(
+      <CommandPalette
+        ready
+        setupIncomplete
+        routeRequest={{ id: 1, event: { target: 'palette' } }}
+        onRoute={onRoute}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
+    const navigation = within(dialog).getByRole('region', { name: 'Navigation' });
+    const option = within(navigation).getByRole('option', { name: /^Setup…/ });
+    expect(option).toBeEnabled();
+    await userEvent.click(option);
+    expect(onRoute).toHaveBeenCalledWith({ target: 'setup' });
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+  });
+
+  it('keeps Setup… enabled even while runtime-gated entries are disabled', async () => {
+    installAgenticoMock({
+      settings: { ...defaultSettings(), shell: { featureByServer: {}, sidebarCollapsed: false } },
+    });
+    render(
+      <CommandPalette
+        ready={false}
+        setupIncomplete
+        routeRequest={{ id: 1, event: { target: 'palette' } }}
+        onRoute={() => undefined}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog', { name: 'Command palette' });
+    expect(within(dialog).getByRole('option', { name: /^New Feature/ })).toBeDisabled();
+    expect(within(dialog).getByRole('option', { name: /^Setup…/ })).toBeEnabled();
   });
 
   it('enables Show/Hide Inspector once a feature is selected', async () => {

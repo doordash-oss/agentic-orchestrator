@@ -57,7 +57,7 @@ type InstallAdmission interface {
 	WaitForIdle(ctx context.Context) error
 	CloseIfQuiesced() bool
 	// CloseForStopping closes the boundary for the stopping interval while
-	// stoppable feature/chat reservations persist; it refuses the closure
+	// stoppable feature/supervisor reservations persist; it refuses the closure
 	// when any reservation outside the stoppable categories is held.
 	CloseForStopping(stoppable ...workadmission.Category) bool
 	Open()
@@ -765,10 +765,10 @@ func (c *updateCoordinator) enterStopInterval(op *installOperation, ctx context.
 	c.mu.Unlock()
 	// Gate closure synchronizes with reservation acquisition: new work
 	// of every category is refused from the single critical section,
-	// while already-admitted feature/chat work keeps its reservations.
+	// while already-admitted feature/supervisor work keeps its reservations.
 	// A repository reservation that won the race refuses the closure
 	// with admission left open and aborts the operation before any
-	// feature or chat work is stopped.
+	// feature or supervisor work is stopped.
 	if !admission.CloseForStopping(stoppableAdmissionCategories...) {
 		blockers := c.installStopBlockers(admission)
 		if blockers == nil {
@@ -874,7 +874,15 @@ func (c *updateCoordinator) guardedCommit(op *installOperation, ctx context.Cont
 		// Recovery may release this same lock before Replace returns.
 		// Exactly-once release keeps the caller's failure cleanup safe.
 		release = sync.OnceFunc(release)
-		blockers := c.installBlockers(admission)
+		// The lock-held recheck reads the same predicate the idle wait
+		// did: an idle operation proceeds past a supervisor waiting on
+		// the user, an immediate one never does.
+		var blockers []errcat.Option
+		if op.when == updateInstallWhenIdle {
+			blockers = c.idleInstallBlockers(admission)
+		} else {
+			blockers = c.installBlockers(admission)
+		}
 		if blockers != nil || !c.installHeldNone(admission) {
 			release()
 			c.admissionOpen()
@@ -1039,9 +1047,10 @@ func waitResponseDone(responseDone <-chan struct{}) {
 }
 
 // awaitIdleForInstall closes the admission boundary once the runtime is
-// observed idle: activity events and the bounded fallback poll drive
-// reevaluation, and the atomic closure re-checks the reservation count
-// under the boundary's own mutex. When work races in first, the caller
+// observed idle for an unattended install (a supervisor waiting on the
+// user counts as idle here): activity events and the bounded fallback poll
+// drive reevaluation, and the atomic closure re-checks the reservation
+// count under the boundary's own mutex. When work races in first, the caller
 // keeps waiting. An already-closed boundary is idle by construction.
 func (c *updateCoordinator) awaitIdleForInstall(ctx context.Context, op *installOperation, admission InstallAdmission) error {
 	for {
@@ -1076,6 +1085,23 @@ func (c *updateCoordinator) installBlockers(admission InstallAdmission) []errcat
 		return detectionFailedBlockers()
 	}
 	return blockedActiveWorkOptions(activity, held, nil, false)
+}
+
+// idleInstallBlockers reports the canonical active-work blockers for an
+// unattended install's lock-held recheck, or nil when nothing observed
+// blocks it. It narrows installBlockers exactly as the idle wait does: a
+// supervisor waiting on the user does not block, since the install's own
+// shutdown ends it and resolves the open request as interrupted. Failed or
+// incomplete detection always blocks.
+func (c *updateCoordinator) idleInstallBlockers(admission InstallAdmission) []errcat.Option {
+	activity, held, _, ok := detectAdmissionActivity(admission)
+	if !ok {
+		return detectionFailedBlockers()
+	}
+	if held > 0 || activity.BlocksIdleInstall() {
+		return []errcat.Option{errcat.WithParams(activeWorkParams(activity, held))}
+	}
+	return nil
 }
 
 // installHeldNone reports whether no admission reservations are held.
@@ -1161,7 +1187,8 @@ func (c *updateCoordinator) activeWorkSummary() UpdateActiveWorkSummary {
 	}
 	activity, detectionFailed, pending := c.opts.Activity(context.Background())
 	summary.FeatureCount = activity.Features
-	summary.ChatActive = activity.ChatActive
+	summary.SupervisorActive = activity.SupervisorActive
+	summary.SupervisorWaiting = activity.SupervisorActive && activity.SupervisorWaiting
 	summary.CloneCount = activity.Clones
 	summary.UploadCount = activity.Uploads
 	summary.OriginCheckCount = activity.OriginChecks
@@ -1292,7 +1319,7 @@ func (h *apiHandler) handleUpdateInstallPost(w http.ResponseWriter, r *http.Requ
 	// An immediate install refuses work before staging. Without stop
 	// permission any active work or pending reservation refuses; with stop
 	// permission only repository work, protected or unknown reservations,
-	// and failed or incomplete detection refuse — feature and chat activity
+	// and failed or incomplete detection refuse — feature and supervisor activity
 	// is exactly what the permission authorizes stopping. An already active
 	// operation owns the retry decision: a retry must not mistake the
 	// operation's own closed stopping gate for a new request's blocker, so
@@ -1335,7 +1362,7 @@ func (c *updateCoordinator) installActive() bool {
 // install, or nil when the request may proceed to staging. Without stop
 // permission any active work or pending reservation blocks; with stop
 // permission only repository activity, reservations outside the stoppable
-// feature/chat categories, and failed or incomplete detection block.
+// feature/supervisor categories, and failed or incomplete detection block.
 func (c *updateCoordinator) installRequestBlockers(ctx context.Context, admission InstallAdmission, stopPermitted bool) []errcat.Option {
 	activity, err := admission.Detect(ctx)
 	if err != nil {

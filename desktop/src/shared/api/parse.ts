@@ -155,6 +155,8 @@ export const ServerRememberPreviewSchema = z.object({
   scope: z.string().max(4096),
   scope_display: z.string().max(4096),
 });
+/** Who raised a permission or question: the session's own agent or one of its sub-agents. */
+export const ServerRequestOriginSchema = z.enum(['root', 'child']);
 export const ServerControlRequestSchema = z.object({
   request_id: AttentionIDSchema,
   session_id: AttentionIDSchema.optional(),
@@ -178,12 +180,14 @@ export const ServerControlRequestSchema = z.object({
     })
     .optional(),
   waiting_since: z.string().max(100).optional(),
+  origin: ServerRequestOriginSchema.optional(),
+  child_session_id: AttentionIDSchema.optional(),
 });
 export const ServerHelpQueueSchema = z.object({
   feature_id: AttentionIDSchema,
   session_id: AttentionIDSchema.optional(),
   question: AttentionTextSchema,
-  /** 'question' for real help requests, 'input' for a synthetic idle-session entry. */
+  /** 'question' for real help requests, 'coordinating' for a synthetic idle-session entry. */
   kind: z.string().max(100).optional(),
   pending: z.boolean(),
   time: z.string().max(100).optional(),
@@ -354,6 +358,15 @@ export const CanonicalErrorSchema = z.strictObject({
     })
     .optional(),
   diagnostics: z.string().optional(),
+  // Launch failures may include the settings that were rolled back. This
+  // field is accepted on the error response as well as on the state read model.
+  attempted_settings: z
+    .strictObject({
+      harness: z.string().max(100),
+      model: z.string().max(200),
+      effort: z.string().max(40),
+    })
+    .optional(),
 });
 
 export type CanonicalError = z.output<typeof CanonicalErrorSchema>;
@@ -1495,6 +1508,227 @@ export const LivePreviewResponseSchema = z.object({
   transcript: z.array(ServerTranscriptMessageSchema).max(500),
 });
 
+// --- Supervisor conversation (/api/v1/supervisor/*) ---------------------------
+// Bounded wire shapes; the main process maps them to the camelCase IPC types.
+
+const ServerSupervisorIdSchema = z.string().max(200);
+const ServerSupervisorSeqSchema = z.number().int().nonnegative();
+
+export const ServerSupervisorSettingsSchema = z.object({
+  harness: z.string().max(100),
+  model: z.string().max(200),
+  effort: z.string().max(40),
+});
+
+export const ServerSupervisorPermissionModeSchema = z.object({
+  requested: z.string().max(100),
+  effective: z.string().max(100),
+  restricted_by_policy: z.boolean(),
+});
+
+export const ServerSupervisorBackgroundTaskSchema = z.object({
+  activity: z
+    .array(z.object({ at: z.string().max(100), detail: z.string().max(1000) }))
+    .max(8)
+    .optional(),
+  id: z.string().max(500),
+  provider_id: z.string().max(200),
+  generation: z.number().int().nonnegative(),
+  kind: z.enum(['scheduled', 'monitor', 'task']),
+  title: z.string().max(500),
+  state: z.enum(['watching', 'running', 'completed', 'failed', 'stopped', 'interrupted']),
+  schedule: z.string().max(500),
+  detail: z.string().max(1000),
+  started_at: z.string().max(100),
+  updated_at: z.string().max(100),
+  expires_at: z.string().max(100),
+});
+
+export const ServerSupervisorStateSchema = z.object({
+  background_tasks: z.array(ServerSupervisorBackgroundTaskSchema).optional(),
+  conversation_id: ServerSupervisorIdSchema,
+  generation: ServerSupervisorSeqSchema,
+  session_id: z.string().max(200),
+  lifecycle: z.enum([
+    'stopped',
+    'starting',
+    'idle',
+    'running',
+    'waiting_permission',
+    'waiting_question',
+    'failed',
+  ]),
+  starting_step: z.enum(['rebuilding', 'launching', 'handshake']).optional(),
+  last_turn_outcome: z.enum(['none', 'completed', 'interrupted', 'failed']),
+  interrupted_by: z.enum(['none', 'user', 'shutdown']),
+  settings: ServerSupervisorSettingsSchema,
+  pending_change: z
+    .object({
+      request_id: z.string().min(1).max(128),
+      kind: z.enum(['model', 'effort', 'harness']),
+      target: ServerSupervisorSettingsSchema,
+      requested_at: z.string().max(100),
+    })
+    .optional(),
+  effective_model: z.string().max(200),
+  permission_mode: ServerSupervisorPermissionModeSchema,
+  failure: CanonicalErrorSchema.extend({
+    attempted_settings: ServerSupervisorSettingsSchema.optional(),
+  }).optional(),
+  persist_failure: CanonicalErrorSchema.optional(),
+  pending_requests: z.array(ServerControlRequestSchema).max(100),
+  context_usage: z
+    .object({
+      percent: z.number().min(0).max(100),
+      used_tokens: z.number().int().nonnegative(),
+      window_tokens: z.number().int().positive(),
+    })
+    .nullable(),
+  head_seq: ServerSupervisorSeqSchema,
+  stream_epoch: z.string().max(200),
+});
+export type ServerSupervisorState = z.output<typeof ServerSupervisorStateSchema>;
+
+export const ServerSupervisorRequestRecordSchema = z.object({
+  request_id: AttentionIDSchema,
+  tool_name: z.string().max(500),
+  stage: z.enum(['requested', 'resolved']),
+  outcome: z.enum(['pending', 'allowed', 'denied', 'answered', 'interrupted']),
+  summary: AttentionTextSchema.optional(),
+  origin: ServerRequestOriginSchema.optional(),
+  child_session_id: AttentionIDSchema.optional(),
+});
+
+export const ServerSupervisorMarkerRecordSchema = z.object({
+  marker: z.enum([
+    'interrupted',
+    'error',
+    'history_not_restored',
+    'permission_restricted',
+    'settings_changed',
+    'harness_change',
+    'settings_reverted',
+    'compacted',
+    'transcript_recovered',
+  ]),
+  text: AttentionTextSchema,
+  code: z.string().max(200).optional(),
+  summary: z
+    .string()
+    .max(16 * 1024)
+    .optional(),
+  truncated: z.boolean().optional(),
+});
+
+export const ServerSupervisorCheckpointRecordSchema = z.object({
+  covers_through_seq: ServerSupervisorSeqSchema,
+  reason: z.literal('native_auto'),
+  model: z.string().max(200),
+  summary: z.string().max(16 * 1024),
+  truncated: z.boolean(),
+  has_native_baseline: z.boolean(),
+});
+
+/** A user record's attachment: the conversation copy the server made. */
+export const ServerSupervisorAttachmentSchema = z.object({
+  path: z.string().min(1).max(4096),
+  kind: z.enum(['image', 'file']),
+  name: z.string().max(1024),
+  size: z.number().int().nonnegative(),
+});
+
+export const ServerSupervisorRecordSchema = z.object({
+  seq: z.number().int().positive(),
+  id: ServerSupervisorIdSchema,
+  conversation_id: ServerSupervisorIdSchema,
+  generation: ServerSupervisorSeqSchema,
+  turn_id: ServerSupervisorIdSchema,
+  kind: z.enum([
+    'user',
+    'assistant',
+    'tool_use',
+    'tool_result',
+    'permission',
+    'question',
+    'marker',
+    'note',
+    'checkpoint',
+  ]),
+  visibility: z.enum(['content', 'model_only', 'display_only']),
+  created_at: z.string().max(100),
+  client_message_id: z.string().max(128).optional(),
+  stream_message_id: ServerSupervisorIdSchema.optional(),
+  messages: z.array(ServerTranscriptMessageSchema).max(500),
+  request: ServerSupervisorRequestRecordSchema.optional(),
+  marker: ServerSupervisorMarkerRecordSchema.optional(),
+  checkpoint: ServerSupervisorCheckpointRecordSchema.optional(),
+  attachments: z.array(ServerSupervisorAttachmentSchema).max(36).optional(),
+});
+export type ServerSupervisorRecord = z.output<typeof ServerSupervisorRecordSchema>;
+
+export const SupervisorStateResponseSchema = z.object({
+  api_version: z.string(),
+  state: ServerSupervisorStateSchema,
+});
+export type SupervisorStateResponse = z.output<typeof SupervisorStateResponseSchema>;
+
+export const SupervisorTranscriptResponseSchema = z.object({
+  api_version: z.string(),
+  conversation_id: ServerSupervisorIdSchema,
+  items: z.array(ServerSupervisorRecordSchema).max(500),
+  first_seq: ServerSupervisorSeqSchema,
+  last_seq: ServerSupervisorSeqSchema,
+  has_more_before: z.boolean(),
+  has_more_after: z.boolean(),
+  head_seq: ServerSupervisorSeqSchema,
+});
+export type SupervisorTranscriptResponse = z.output<typeof SupervisorTranscriptResponseSchema>;
+
+export const SupervisorMessageResponseSchema = z.object({
+  api_version: z.string(),
+  record: ServerSupervisorRecordSchema,
+  launched: z.boolean(),
+  deduplicated: z.boolean(),
+});
+export type SupervisorMessageResponse = z.output<typeof SupervisorMessageResponseSchema>;
+
+export const SupervisorActionResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.enum(['accepted', 'ended', 'not_active']),
+  state: ServerSupervisorStateSchema,
+});
+export type SupervisorActionResponse = z.output<typeof SupervisorActionResponseSchema>;
+
+export const SupervisorResetResponseSchema = z.object({
+  api_version: z.string(),
+  result: z.enum(['reset', 'noop']),
+  previous_conversation_id: ServerSupervisorIdSchema,
+  state: ServerSupervisorStateSchema,
+});
+export type SupervisorResetResponse = z.output<typeof SupervisorResetResponseSchema>;
+
+export const ServerSupervisorDeltaSchema = z.object({
+  turn_id: ServerSupervisorIdSchema,
+  stream_message_id: ServerSupervisorIdSchema,
+  chunk_index: z.number().int().nonnegative(),
+  text: z.string().max(1024 * 1024),
+});
+
+/** One `/api/v1/supervisor/events` SSE payload (the JSON of a `data:` block). */
+export const ServerSupervisorStreamEventSchema = z.object({
+  kind: z.enum(['record', 'delta', 'state', 'request', 'stream.reset', 'heartbeat']),
+  conversation_id: ServerSupervisorIdSchema,
+  generation: ServerSupervisorSeqSchema,
+  stream_epoch: z.string().max(200),
+  seq: ServerSupervisorSeqSchema.optional(),
+  snapshot_required: z.boolean().optional(),
+  record: ServerSupervisorRecordSchema.optional(),
+  delta: ServerSupervisorDeltaSchema.optional(),
+  state: ServerSupervisorStateSchema.optional(),
+  request: ServerControlRequestSchema.optional(),
+});
+export type ServerSupervisorStreamEvent = z.output<typeof ServerSupervisorStreamEventSchema>;
+
 // --- Runtime config (GET /api/v1/config/runtime) — creation-defaults subset --
 
 export const ServerModelDefaultsSchema = z.object({
@@ -1885,3 +2119,29 @@ void _cloneOperationListSubset;
 type CreateRepositoryWireDTO = components['schemas']['CreateRepositoryResponse'];
 const _createRepositorySubset = (value: CreateRepositoryWireDTO): CreateRepositoryResponse => value;
 void _createRepositorySubset;
+type SupervisorStateResponseDTO = components['schemas']['SupervisorStateResponse'];
+const _supervisorStateSubset = (value: SupervisorStateResponseDTO): SupervisorStateResponse =>
+  value;
+void _supervisorStateSubset;
+type SupervisorTranscriptResponseDTO = components['schemas']['SupervisorTranscriptResponse'];
+const _supervisorTranscriptSubset = (
+  value: SupervisorTranscriptResponseDTO,
+): SupervisorTranscriptResponse => value;
+void _supervisorTranscriptSubset;
+type SupervisorMessageResponseDTO = components['schemas']['SupervisorMessageResponse'];
+const _supervisorMessageSubset = (value: SupervisorMessageResponseDTO): SupervisorMessageResponse =>
+  value;
+void _supervisorMessageSubset;
+type SupervisorActionResponseDTO = components['schemas']['SupervisorActionResponse'];
+const _supervisorActionSubset = (value: SupervisorActionResponseDTO): SupervisorActionResponse =>
+  value;
+void _supervisorActionSubset;
+type SupervisorResetResponseDTO = components['schemas']['SupervisorResetResponse'];
+const _supervisorResetSubset = (value: SupervisorResetResponseDTO): SupervisorResetResponse =>
+  value;
+void _supervisorResetSubset;
+type SupervisorStreamEventDTO = components['schemas']['SupervisorStreamEvent'];
+const _supervisorStreamEventSubset = (
+  value: SupervisorStreamEventDTO,
+): ServerSupervisorStreamEvent => value;
+void _supervisorStreamEventSubset;

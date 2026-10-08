@@ -46,6 +46,7 @@ func TestHTTPMetricsNormalizesIDsAndExcludesStreamingRoutes(t *testing.T) {
 		"/private/request/path",
 		"/api/v1/health",
 		"/api/v1/events",
+		"/api/v1/supervisor/events",
 		"/api/v1/sessions/session-secret/output/stream",
 	} {
 		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, target, nil))

@@ -60,6 +60,7 @@ type openAPISpec struct {
 
 type openAPIOperation struct {
 	OperationID string                     `yaml:"operationId"`
+	Description string                     `yaml:"description"`
 	Security    []map[string][]string      `yaml:"security"`
 	Parameters  []openAPIParameter         `yaml:"parameters"`
 	RequestBody map[string]any             `yaml:"requestBody"`
@@ -566,6 +567,8 @@ func topLevelPatternForPath(path string) string {
 		return apiPathEvents
 	case path == apiPathUploads:
 		return apiPathUploads
+	case strings.HasPrefix(path, apiPathSupervisor+"/"):
+		return apiPathSupervisor + "/"
 	default:
 		return path
 	}
@@ -647,8 +650,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: apiPathPrompts},
 		{method: httpMethodPost, path: "/api/v1/prompts/ask-user/answer", mutation: true},
 		{method: httpMethodPost, path: "/api/v1/prompts/help/send", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/prompts/chat/start", mutation: true},
-		{method: httpMethodPost, path: "/api/v1/prompts/chat/end", mutation: true},
 		{method: httpMethodGet, path: apiPathPermissions},
 		{method: httpMethodPost, path: apiPathPermissionsAnswer, mutation: true},
 		{method: httpMethodGet, path: apiPathSessions},
@@ -664,6 +665,16 @@ func documentedServerRoutes() []documentedRoute {
 		{method: "delete", path: apiPathUpdateInstall, mutation: true},
 		{method: httpMethodGet, path: apiPathEvents, sse: true},
 		{method: httpMethodPost, path: apiPathUploads, mutation: true},
+		{method: httpMethodGet, path: apiPathSupervisorState},
+		{method: "patch", path: apiPathSupervisorSettings, mutation: true},
+		{method: "delete", path: apiPathSupervisorPendingChange + "{request_id}", mutation: true},
+		{method: "delete", path: apiPathSupervisorPersistFailure, mutation: true},
+		{method: httpMethodGet, path: apiPathSupervisorTranscript},
+		{method: httpMethodPost, path: apiPathSupervisorMessages, mutation: true},
+		{method: httpMethodPost, path: apiPathSupervisorInterrupt, mutation: true},
+		{method: httpMethodPost, path: apiPathSupervisorEnd, mutation: true},
+		{method: httpMethodPost, path: apiPathSupervisorReset, mutation: true},
+		{method: httpMethodGet, path: apiPathSupervisorEvents, sse: true},
 	}
 }
 

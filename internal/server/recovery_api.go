@@ -198,8 +198,8 @@ func wireOrphanSessionError(item ports.RecoveryItem) Error {
 }
 
 // orphanSessionRenderedError classifies one orphan session exactly as the
-// recovery projection does, returning the rendered catalog error the chat
-// context resolver reuses for recovery-scope bundles.
+// recovery projection does, returning the rendered catalog error the error
+// reference resolver reuses for recovery-scope bundles.
 func orphanSessionRenderedError(item ports.RecoveryItem) errcat.Error {
 	code := errcat.OrphanSessionStale
 	if item.ProcessAlive {

@@ -323,8 +323,8 @@ export function setupProgress(setup: FeatureSetupView): SetupProgress {
 }
 
 /**
- * The running-lane phase/iteration copy shared by the sidebar and Overview
- * rows: `<Phase> · phase N/M · iteration K`, with any part the snapshot
+ * The running-lane phase/iteration copy of a sidebar row:
+ * `<Phase> · phase N/M · iteration K`, with any part the snapshot
  * carries no data for omitted rather than rendered as a placeholder (no
  * "undefined", no "phase ?/?"). Returns undefined when there is no phase
  * name to show at all.

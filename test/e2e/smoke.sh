@@ -57,6 +57,14 @@ for tmpl in create-roadmap plan-phase revise-roadmap revise-phase-plan \
     echo "PASS: skills/${tmpl}/SKILL.md exists"
 done
 
+# 6b. Supervisor skill layout: core, references and user guide; chat retired.
+for doc in SKILL.md api-reference.md recipes.md environment.md user-guide/index.md; do
+    [ -f "skills/supervisor/${doc}" ]
+    echo "PASS: skills/supervisor/${doc} exists"
+done
+[ ! -e "skills/chat" ]
+echo "PASS: retired skills/chat is absent"
+
 # 7. Default launch smoke: plain agentico hands off to the registered desktop app.
 go test ./cmd/agentico -run '^TestRunArgsLaunchesDesktopByDefault$' -race -timeout 120s
 echo "PASS: default desktop handoff (TestRunArgsLaunchesDesktopByDefault)"

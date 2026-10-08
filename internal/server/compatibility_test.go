@@ -87,16 +87,18 @@ func TestCompatibilityDeclarationFallbackBuildVersion(t *testing.T) {
 	}
 }
 
-// TestCompatibilityPinsUnchangedByServerName is a regression guard: adding
-// the optional server name to the health payload and discovery record is
-// strictly additive and must not move any compatibility pin.
-func TestCompatibilityPinsUnchangedByServerName(t *testing.T) {
+// TestCompatibilityPins is a regression guard on the declared contract.
+// Series 2 retired the chat prompt routes and renamed the update summary's
+// activity field, so neither a series-1 client nor a series-1 server may
+// attach across it. Adding the optional server name to the health payload
+// and discovery record is strictly additive and moved no pin.
+func TestCompatibilityPins(t *testing.T) {
 	t.Parallel()
-	if CompatibilitySchemaVersion != 1 {
-		t.Fatalf("CompatibilitySchemaVersion = %d; want 1", CompatibilitySchemaVersion)
+	if CompatibilitySchemaVersion != 2 {
+		t.Fatalf("CompatibilitySchemaVersion = %d; want 2", CompatibilitySchemaVersion)
 	}
-	if CompatibilityMinClientSchema != 1 {
-		t.Fatalf("CompatibilityMinClientSchema = %d; want 1", CompatibilityMinClientSchema)
+	if CompatibilityMinClientSchema != 2 {
+		t.Fatalf("CompatibilityMinClientSchema = %d; want 2", CompatibilityMinClientSchema)
 	}
 	if CompatibilityRuntimePolicy != "loopback-bearer-v1" {
 		t.Fatalf("CompatibilityRuntimePolicy = %q; want loopback-bearer-v1", CompatibilityRuntimePolicy)

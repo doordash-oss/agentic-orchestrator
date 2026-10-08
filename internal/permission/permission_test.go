@@ -225,7 +225,7 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t
 	for name, inner := range map[string]ports.PermissionHandler{
 		"BoundedHelperArtifactHandler":        &BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}},
 		"BoundedHelperArtifactHandlerGuarded": Guarded(&BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}}),
-		"AMAHandler":                          &AMAHandler{},
+		"SupervisorHandler":                   &SupervisorHandler{},
 		"ReadOnlyHandler":                     &ReadOnlyHandler{},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -237,11 +237,11 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t
 	}
 }
 
-func TestIsAutomaticReviewHandler_IncludesAMAWithoutBroadeningGeneralPolicy(t *testing.T) {
+func TestIsAutomaticReviewHandler_IncludesSupervisorWithoutBroadeningGeneralPolicy(t *testing.T) {
 	for name, handler := range map[string]ports.PermissionHandler{
-		"AMAHandler":         &AMAHandler{},
-		"AMAHandlerGuarded":  Guarded(&AMAHandler{}),
-		"AcceptEditsHandler": &AcceptEditsHandler{},
+		"SupervisorHandler":        &SupervisorHandler{},
+		"SupervisorHandlerGuarded": Guarded(&SupervisorHandler{}),
+		"AcceptEditsHandler":       &AcceptEditsHandler{},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !IsAutomaticReviewHandler(handler) {
@@ -250,8 +250,8 @@ func TestIsAutomaticReviewHandler_IncludesAMAWithoutBroadeningGeneralPolicy(t *t
 		})
 	}
 
-	if IsGeneralPhaseHandler(&AMAHandler{}) {
-		t.Fatal("IsGeneralPhaseHandler(AMAHandler) = true, want false")
+	if IsGeneralPhaseHandler(&SupervisorHandler{}) {
+		t.Fatal("IsGeneralPhaseHandler(SupervisorHandler) = true, want false")
 	}
 	if IsAutomaticReviewHandler(&ReadOnlyHandler{}) {
 		t.Fatal("IsAutomaticReviewHandler(ReadOnlyHandler) = true, want false")

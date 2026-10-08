@@ -15,19 +15,36 @@ limitations under the License.
 */
 
 /**
- * The readiness-gated main surface: a translucent Bench sidebar — a pinned
- * Overview row plus five lane-grouped sections of every feature — with
- * exactly one content pane mounted at a time. Feature creation descends over
- * that pane as a window-modal sheet reached from Overview — the pane beneath
- * stays mounted and navigable, so ⌘-digit shortcuts, routed navigation, and
- * attention deep-links change what is underneath without touching the draft.
+ * The readiness-gated main surface: a translucent Bench sidebar — the pinned
+ * Supervisor row plus five lane-grouped sections of every feature — with
+ * exactly one content pane mounted at a time: the Supervisor page (home) or
+ * one feature's cockpit. Feature creation descends over that pane as a
+ * window-modal sheet reached from the toolbar's "New feature" on every page —
+ * the pane beneath stays mounted and navigable, so ⌘-digit shortcuts, routed
+ * navigation, and attention deep-links change what is underneath without
+ * touching the draft.
+ * The Recovery sheet descends the same way from every page: it stacks the
+ * recovery workspace above bulk resume/retry and is reached from the
+ * toolbar, the Recovery and Bulk Resume / Retry commands, and the attention
+ * inbox's recovery jump.
+ * Partial readiness — a runtime with a ready provider whose setup is still
+ * incomplete — adds a compact banner between the toolbar and the pane that
+ * names the first blocking issue, and the setup wizard as a sheet that
+ * descends like Recovery: from the banner's "Open setup", the Setup…
+ * command and the `setup` route, never on its own. A snapshot that becomes
+ * complete takes both away.
  * Settings is not a state of this shell at all: it lives in its own window,
  * so every settings entry path is handled in the main process and nothing
  * here has a settings special case.
  * Local settings store ONLY the active feature id and sidebar collapse
  * state; every feature itself is always reloaded from the server, so
  * existing state survives app restarts without any local domain cache.
+ * "Home" is "no feature selected": a null persisted feature for the server
+ * renders the Supervisor page, so fresh installs, relaunches, server
+ * switches with no recorded selection, feature close and feature delete all
+ * land there, and choosing Supervisor clears the persisted feature.
  */
+import { backgroundWorkSummary } from './supervisor/SupervisorBackgroundWork';
 import {
   useCallback,
   useEffect,
@@ -45,6 +62,7 @@ import type {
   FeatureSummaryView,
   MainWindowUiState,
   RoutedRequest,
+  RuntimeReadinessSnapshot,
   ShellPrefs,
   UpdateState,
 } from '../../../shared/ipc';
@@ -68,9 +86,23 @@ import { CreateFeatureForm } from './CreateFeatureForm';
 import { useCreationDrafts, useCreationDraftEntry } from './creationDrafts';
 import { FeatureCockpit } from './FeatureCockpit';
 import { PipRail } from '../components/Pip';
-import { HouseIcon } from '../components/icons';
+import { NewConversationIcon, SupervisorIcon } from '../components/icons';
 import { updateNoticePending } from '../components/UpdatePopover';
-import { emptyAttentionDrafts, type AttentionDrafts } from './AttentionInbox';
+import {
+  emptyAttentionDrafts,
+  SUPERVISOR_ATTENTION_ROUTE,
+  type AttentionDrafts,
+} from './AttentionInbox';
+import {
+  SupervisorPage,
+  type SupervisorComposeRequest,
+  type SupervisorNewConversationRequest,
+} from './supervisor/SupervisorPage';
+import {
+  useReportSupervisorPageSelected,
+  useSupervisorStatus,
+  type SupervisorStatus,
+} from './supervisor/supervisorStatus';
 import { SidebarChromeControls } from './SidebarChromeControls';
 import { ServerSwitcher } from '../components/ServerSwitcher';
 import { Toolbar } from './Toolbar';
@@ -91,26 +123,17 @@ import {
   laneLabel,
   type Lane,
 } from './laneClassification';
-import { overviewHeadline, overviewSubline } from './overviewSummary';
-import { BulkPreviewPanel } from './BulkPreviewPanel';
-import { RecoveryWorkspace } from './RecoveryWorkspace';
+import { RecoverySheet } from './RecoverySheet';
+import { SetupWizard } from '../components/wizard/SetupWizard';
+import { setupBannerIssue } from '../wizard/deriveWizardState';
 import { retryAction, useConnectionState, useMediaQuery, type LoadState } from '../hooks';
 
-type ListState = LoadState<{
-  phase: 'loaded';
-  features: FeatureSnapshot[];
-  /** Per-feature detail failures, captured as canonical errors; the row still renders from its summary. */
-  detailFailures: ReadonlyMap<string, CanonicalError>;
-  /** List-level canonical warnings, e.g. feature files that failed to load. */
-  warnings: readonly CanonicalError[];
-}>;
+type ListState = LoadState<{ phase: 'loaded'; features: FeatureSnapshot[] }>;
 
-type Selection = { kind: 'overview' } | { kind: 'feature'; featureId: string };
-
-const NO_DETAIL_FAILURES: ReadonlyMap<string, CanonicalError> = new Map();
+type Selection = { kind: 'supervisor' } | { kind: 'feature'; featureId: string };
 
 /**
- * How many features one Home load may fetch detail for. Detail responses cost
+ * How many features one list load may fetch detail for. Detail responses cost
  * server-side git freshness probes per repository, so the list must never fan
  * out one per feature: only the selection and the active rows whose sub-line
  * and pip read detail-only fields are refined, and never more than this many.
@@ -177,9 +200,6 @@ function detailFetchIds(
   return ids;
 }
 
-/** A single addressable sidebar row, in the order ⌘2-9 count by. */
-type SidebarRowEntry = { kind: 'overview' } | { kind: 'feature'; featureId: string };
-
 export function WorkspaceShell({
   attentionItems = [],
   refreshAttention = async () => [],
@@ -195,9 +215,8 @@ export function WorkspaceShell({
   onDismissUpdate = () => {},
   onOpenUpdatesSettings = () => {},
   onInstallUpdateWhenIdle = async () => {},
-  onOpenAma = () => {},
   onOpenPalette = () => {},
-  amaUnread = false,
+  setupReadiness = null,
 }: {
   attentionItems?: AttentionItem[];
   refreshAttention?: () => Promise<AttentionItem[]>;
@@ -218,12 +237,18 @@ export function WorkspaceShell({
   onDismissUpdate?(version: string): void;
   onOpenUpdatesSettings?(): void;
   onInstallUpdateWhenIdle?(): Promise<void>;
-  /** Owned by App: dispatches the same routeRequest the ⌘⇧M accelerator does. */
-  onOpenAma?(): void;
   /** Owned by App: dispatches the same 'palette' routeRequest ⌘K resolves to. */
   onOpenPalette?(): void;
-  /** True when an AMA reply landed while the panel was closed. */
-  amaUnread?: boolean;
+  /**
+   * Owned by ReadinessGate: non-null while the runtime has a ready provider
+   * but setup is incomplete. The latest snapshot drives the banner and the
+   * wizard sheet; `onSnapshot` replaces the gate's own copy, so a recheck
+   * inside the sheet updates the banner, the sheet and the gate together.
+   */
+  setupReadiness?: {
+    snapshot: RuntimeReadinessSnapshot;
+    onSnapshot(next: RuntimeReadinessSnapshot): void;
+  } | null;
 }) {
   // null while the local shell prefs are being restored.
   const [sidebarPreviewWidth, setSidebarPreviewWidth] = useState<number | null>(null);
@@ -279,6 +304,19 @@ export function WorkspaceShell({
     attentionId?: string;
   } | null>(null);
   const handledRouteRequest = useRef<number | null>(null);
+  // A routed 'supervisor' request waits here until the Supervisor page —
+  // which may only mount after the selection switches to it — consumes it;
+  // clearing it then keeps a later remount from replaying the draft.
+  const [supervisorCompose, setSupervisorCompose] = useState<SupervisorComposeRequest | null>(null);
+  const clearSupervisorCompose = useCallback(() => setSupervisorCompose(null), []);
+  // The single "New conversation" intent the toolbar button, the palette and
+  // the Navigate menu share; held like a compose request until the Supervisor
+  // page consumes it. Ids come from one shell-local counter so every intent is
+  // distinct whichever surface raised it.
+  const [supervisorNewConversation, setSupervisorNewConversation] =
+    useState<SupervisorNewConversationRequest | null>(null);
+  const newConversationSeqRef = useRef(0);
+  const clearSupervisorNewConversation = useCallback(() => setSupervisorNewConversation(null), []);
   // Route-and-focus signal for the footer's server switcher (the menu and
   // palette "Switch Server…" command lands here).
   const [switcherRoute, setSwitcherRoute] = useState<{ id: number } | null>(null);
@@ -287,7 +325,6 @@ export function WorkspaceShell({
   // reopen the popover on the remount.
   const clearSwitcherRoute = useCallback(() => setSwitcherRoute(null), []);
   const listRequestRef = useRef(0);
-  const overviewActiveRef = useRef(false);
   // The creation sheet's open flag and retained draft live per server in a
   // store that survives this shell's unmount (a disconnect or a server
   // switch unmounts the whole ready tree; the store lives above it in App).
@@ -310,7 +347,34 @@ export function WorkspaceShell({
     inspectorOpen: boolean;
   } | null>(null);
   const pushedUiStateRef = useRef<MainWindowUiState | null>(null);
-  const [bulkPreviewRequest, setBulkPreviewRequest] = useState<number | null>(null);
+  // The Recovery sheet, null while closed. Closing unmounts it, so every open
+  // is a fresh sheet: Recovery auto-scans once per open, and a bulk-routed
+  // open's preview request (`bulkPreviewKey`) dies with that instance.
+  const [recoverySheet, setRecoverySheet] = useState<{ bulkPreviewKey: number | null } | null>(
+    null,
+  );
+  /**
+   * A plain open (`null`) keeps an already-open sheet as it is; a bulk-routed
+   * open passes its route id, which loads the preview on open — or reloads
+   * it when the sheet is already showing, since ⌘⇧B is an explicit ask.
+   */
+  const openRecoverySheet = useCallback((bulkPreviewKey: number | null) => {
+    setRecoverySheet((current) =>
+      current !== null && bulkPreviewKey === null ? current : { bulkPreviewKey },
+    );
+  }, []);
+  const closeRecoverySheet = useCallback(() => setRecoverySheet(null), []);
+  // The setup wizard sheet: opened only by an explicit ask, and only while
+  // setup is incomplete. A complete snapshot unmounts it (which hands focus
+  // back to the opener) and resets the flag, so a later regression to
+  // partial readiness never reopens it on its own.
+  const setupIncomplete = setupReadiness !== null;
+  const [setupSheetOpen, setSetupSheetOpen] = useState(false);
+  const openSetupSheet = useCallback(() => setSetupSheetOpen(true), []);
+  const closeSetupSheet = useCallback(() => setSetupSheetOpen(false), []);
+  useEffect(() => {
+    if (!setupIncomplete) setSetupSheetOpen(false);
+  }, [setupIncomplete]);
   const [selectedRuns, setSelectedRuns] = useState<Record<string, number | null>>({});
   const [creationWarnings, setCreationWarnings] = useState<
     Record<string, readonly CanonicalError[]>
@@ -331,15 +395,16 @@ export function WorkspaceShell({
   // whatever is current at the moment a shortcut actually fires instead of
   // closing over a stale render's callbacks.
   const shortcutRef = useRef<{
-    allRows: SidebarRowEntry[];
+    featureOrder: string[];
     navigateFeature(featureId: string): void;
     toggleSidebar(): void;
-  }>({ allRows: [], navigateFeature: () => {}, toggleSidebar: () => {} });
+  }>({ featureOrder: [], navigateFeature: () => {}, toggleSidebar: () => {} });
 
   // ⌘2-9: the 1st-8th feature by absolute sidebar position, counting across
   // every lane regardless of its disclosure state (unlike Arrow/Home/End,
-  // which only ever land on a visible row). ⌘1 stays entirely on the
-  // existing native-menu → routeRequest("home") path — nothing new here.
+  // which only ever land on a visible row); the pinned Supervisor row is not
+  // numbered. ⌘1 — Supervisor — stays entirely on the native-menu →
+  // routeRequest("home") path.
   // ⌘⌃S toggles the same persisted collapse the toolbar button does, and ⌘N
   // opens the creation sheet the File item and the palette entry open. All of
   // them bail out untouched when a text input, textarea, or contenteditable
@@ -363,10 +428,10 @@ export function WorkspaceShell({
         return;
       }
       if (commandKey && !event.shiftKey && !event.altKey && /^[2-9]$/.test(event.key)) {
-        const row = shortcutRef.current.allRows[Number(event.key) - 1];
-        if (row === undefined || row.kind !== 'feature') return;
+        const featureId = shortcutRef.current.featureOrder[Number(event.key) - 2];
+        if (featureId === undefined) return;
         event.preventDefault();
-        shortcutRef.current.navigateFeature(row.featureId);
+        shortcutRef.current.navigateFeature(featureId);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -398,77 +463,43 @@ export function WorkspaceShell({
   }, []);
 
   /**
-   * Refines the given features with their server detail, settling per
-   * feature: one rejected detail — an oversized payload, a parse failure —
-   * is captured as that feature's canonical error (so the row and the
-   * degradation card can render it) while every other row stays exactly as
-   * the list returned it. Requested ids that succeed drop out of the
-   * failure map, so a retry set narrows to what is still failing.
-   */
-  const fetchDetails = useCallback(async (ids: readonly string[], isCurrent: () => boolean) => {
-    if (ids.length === 0) return;
-    const settled = await Promise.allSettled(ids.map((id) => window.agentico.getFeature(id)));
-    if (!isCurrent()) return;
-    const details = new Map<string, FeatureSnapshot>();
-    const failures = new Map<string, CanonicalError>();
-    ids.forEach((id, index) => {
-      const result = settled[index];
-      if (result === undefined) return;
-      if (result.status === 'fulfilled') {
-        details.set(id, result.value);
-      } else {
-        failures.set(id, parseIpcError(result.reason));
-      }
-    });
-    setList((current) => {
-      if (current.phase !== 'loaded') return current;
-      const merged = new Map(current.detailFailures);
-      for (const id of ids) merged.delete(id);
-      for (const [id, error] of failures) merged.set(id, error);
-      return {
-        phase: 'loaded',
-        features: orderDashboardFeatures(
-          current.features.map((feature) => details.get(feature.id) ?? feature),
-        ),
-        detailFailures: merged,
-        warnings: current.warnings,
-      };
-    });
-  }, []);
-
-  /**
-   * Refines a bounded few rows with their server detail — the selection
-   * first, then the active rows whose sub-line and pip read detail-only
-   * fields. Overview renders from the list summaries alone, so the whole
-   * surface stays alive even when a single feature's detail is unusable.
+   * Refines a bounded few sidebar rows with their server detail — the
+   * selection first, then the active rows whose sub-line and pip read
+   * detail-only fields. Settles per feature: a rejected detail leaves that
+   * row rendering from its summary, one grade coarser, and every other row
+   * still refines.
    */
   const refineDetails = useCallback(
-    (rows: readonly FeatureSnapshot[], isCurrent: () => boolean) => {
+    async (rows: readonly FeatureSnapshot[], isCurrent: () => boolean) => {
       const ids = detailFetchIds(
         rows,
         shellStateRef.current?.featureByServer[scopeKeyRef.current] ?? null,
       );
-      return fetchDetails(ids, isCurrent).catch(() => {
-        // Refinement is additive; the summary-derived rows already render.
+      if (ids.length === 0) return;
+      const settled = await Promise.allSettled(ids.map((id) => window.agentico.getFeature(id)));
+      if (!isCurrent()) return;
+      const details = new Map<string, FeatureSnapshot>();
+      ids.forEach((id, index) => {
+        const result = settled[index];
+        if (result?.status === 'fulfilled') details.set(id, result.value);
       });
+      if (details.size === 0) return;
+      setList((current) =>
+        current.phase !== 'loaded'
+          ? current
+          : {
+              phase: 'loaded',
+              features: orderDashboardFeatures(
+                current.features.map((feature) => details.get(feature.id) ?? feature),
+              ),
+            },
+      );
     },
-    [fetchDetails],
-  );
-
-  /** Refetches ONLY the features whose detail failed; the healthy rows are untouched. */
-  const retryFailedDetails = useCallback(
-    (ids: readonly string[]) => {
-      // Shares the latest list load's currency, so a reload raced mid-retry discards this write.
-      const request = listRequestRef.current;
-      void fetchDetails(ids, () => request === listRequestRef.current).catch(() => {
-        // A failed retry keeps the rows flagged; the card's Retry stays available.
-      });
-    },
-    [fetchDetails],
+    [],
   );
 
   /**
-   * Overview renders from the list summaries alone, so the whole surface stays
+   * The sidebar renders from the list summaries alone, so every row stays
    * alive even when a single feature's detail is unusable.
    */
   const loadList = useCallback(() => {
@@ -478,14 +509,10 @@ export function WorkspaceShell({
       (list) => {
         if (!isCurrent()) return;
         const rows = orderDashboardFeatures(list.features.map(snapshotFromSummary));
-        setList({
-          phase: 'loaded',
-          features: rows,
-          detailFailures: NO_DETAIL_FAILURES,
-          warnings: list.warnings,
+        setList({ phase: 'loaded', features: rows });
+        void refineDetails(rows, isCurrent).catch(() => {
+          // Refinement is additive; the summary-derived rows already render.
         });
-        // Refinement is additive; its own catch keeps the summary rows rendering.
-        void refineDetails(rows, isCurrent);
       },
       (err: unknown) => {
         // Only a failed LIST is fatal: there is nothing to render without it.
@@ -494,7 +521,7 @@ export function WorkspaceShell({
     );
   }, [refineDetails]);
 
-  // The Overview feature list follows the authoritative server state: fetch
+  // The sidebar's feature list follows the authoritative server state: fetch
   // on mount and refetch on any feature-scoped invalidation or full resync.
   useEffect(() => {
     loadList();
@@ -512,23 +539,6 @@ export function WorkspaceShell({
         loadList();
       }
     });
-  }, [loadList]);
-
-  // Out-of-band changes (a delete from another window, the CLI, or a missed
-  // invalidation) can leave the queue stale. Refetch when the app regains focus
-  // while Overview is showing, so returning to the window always shows server truth.
-  useEffect(() => {
-    const refreshOverview = () => {
-      if (document.visibilityState === 'visible' && overviewActiveRef.current) {
-        loadList();
-      }
-    };
-    window.addEventListener('focus', refreshOverview);
-    document.addEventListener('visibilitychange', refreshOverview);
-    return () => {
-      window.removeEventListener('focus', refreshOverview);
-      document.removeEventListener('visibilitychange', refreshOverview);
-    };
   }, [loadList]);
 
   /** Persist failures never block the UI — the shell selection is presentation only. */
@@ -566,10 +576,21 @@ export function WorkspaceShell({
     persistPatch({ sidebarCollapsed: !base.sidebarCollapsed });
   }, [persistPatch, shell]);
 
-  const selectOverview = useCallback(() => {
-    persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId: null } });
-    loadList();
-  }, [loadList, persistPatch, scopeKey]);
+  /**
+   * Goes home: the Supervisor page is "no feature selected", so selecting it
+   * is clearing the persisted feature — written only when one is recorded.
+   */
+  const selectSupervisor = useCallback(() => {
+    if ((shellStateRef.current?.featureByServer[scopeKey] ?? null) !== null) {
+      persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId: null } });
+    }
+  }, [persistPatch, scopeKey]);
+
+  const requestNewConversation = useCallback(() => {
+    selectSupervisor();
+    newConversationSeqRef.current += 1;
+    setSupervisorNewConversation({ id: newConversationSeqRef.current });
+  }, [selectSupervisor]);
 
   const handleFeatureDeleted = useCallback(
     (featureId: string) => {
@@ -581,11 +602,11 @@ export function WorkspaceShell({
             }
           : current,
       );
-      // selectOverview() already refetches the authoritative list; a second
-      // fetch here would race it and can resurrect the just-deleted feature.
-      selectOverview();
+      selectSupervisor();
+      // One authoritative refetch; the optimistic filter above already hides the row.
+      loadList();
     },
-    [selectOverview],
+    [loadList, selectSupervisor],
   );
 
   const attentionByFeature = useMemo(() => {
@@ -639,7 +660,10 @@ export function WorkspaceShell({
     if (shell === null || handledAttentionJump.current === attentionJump.requestId) return;
     handledAttentionJump.current = attentionJump.requestId;
     if (attentionJump.featureId === '__recovery__') {
-      persistPatch({ setActiveFeature: { serverKey: scopeKey, featureId: null } });
+      // Recovery opens over whatever page is showing; the selection stays.
+      openRecoverySheet(null);
+    } else if (attentionJump.featureId === SUPERVISOR_ATTENTION_ROUTE) {
+      selectSupervisor();
     } else {
       selectFeature(attentionJump.featureId);
       setAttentionPreviewRequest({
@@ -651,7 +675,14 @@ export function WorkspaceShell({
       });
     }
     onAttentionJumpHandled();
-  }, [attentionJump, onAttentionJumpHandled, persistPatch, scopeKey, selectFeature, shell]);
+  }, [
+    attentionJump,
+    onAttentionJumpHandled,
+    openRecoverySheet,
+    selectFeature,
+    selectSupervisor,
+    shell,
+  ]);
 
   const closeAttentionPreview = useCallback(() => setAttentionPreviewRequest(null), []);
 
@@ -677,13 +708,14 @@ export function WorkspaceShell({
       runtimeReady,
       sidebarCollapsed: effectiveSidebarCollapsed,
       inspectorOpen: cockpitMatches ? cockpitUi.inspectorOpen : false,
-      // Overview has nothing to inspect, so there is no toggle to offer.
+      // The Supervisor page has nothing to inspect, so there is no toggle to offer.
       inspectorAvailable: activeFeatureId !== null,
+      setupIncomplete,
       featureCommands: featureCommandEnablement(cockpitMatches ? cockpitUi.actions : null, {
         hasSelection: activeFeatureId !== null,
       }),
     };
-  }, [cockpitUi, effectiveSidebarCollapsed, runtimeReady, scopeKey, shell]);
+  }, [cockpitUi, effectiveSidebarCollapsed, runtimeReady, scopeKey, setupIncomplete, shell]);
 
   // Push on change only: an identical summary — an unchanged snapshot refresh,
   // a re-render, a repeated readiness event — never reaches the main process.
@@ -705,10 +737,24 @@ export function WorkspaceShell({
     // Routed navigation acts on the pane beneath an open creation sheet: it
     // never closes the sheet or touches the draft.
     if (routeRequest.event.target === 'home') {
-      selectOverview();
+      selectSupervisor();
+    } else if (routeRequest.event.target === 'supervisor') {
+      selectSupervisor();
+      const { draft, errorReference } = routeRequest.event;
+      setSupervisorCompose({
+        id: routeRequest.id,
+        ...(draft === undefined ? {} : { draft }),
+        ...(errorReference === undefined ? {} : { errorReference }),
+      });
+    } else if (routeRequest.event.target === 'new-conversation') {
+      requestNewConversation();
+    } else if (routeRequest.event.target === 'recovery') {
+      openRecoverySheet(null);
     } else if (routeRequest.event.target === 'bulk') {
-      setBulkPreviewRequest(routeRequest.id);
-      selectOverview();
+      openRecoverySheet(routeRequest.id);
+    } else if (routeRequest.event.target === 'setup') {
+      // A complete runtime has nothing to set up: the route is a no-op.
+      if (setupIncomplete) openSetupSheet();
     } else if (routeRequest.event.target === 'new-feature') {
       openCreation();
     } else if (routeRequest.event.target === 'toggle-sidebar') {
@@ -731,7 +777,22 @@ export function WorkspaceShell({
         runFeatureCommand(command);
       }
     }
-  }, [routeRequest, selectFeature, selectOverview, shell]);
+  }, [
+    openRecoverySheet,
+    openSetupSheet,
+    requestNewConversation,
+    routeRequest,
+    selectFeature,
+    selectSupervisor,
+    setupIncomplete,
+    shell,
+  ]);
+
+  // The supervisor status store decides read-ness from the selected page:
+  // the Supervisor page is "no feature selected" once the shell restored.
+  useReportSupervisorPageSelected(
+    shell !== null && (shell.featureByServer[scopeKey] ?? null) === null,
+  );
 
   if (shell === null) {
     return (
@@ -751,49 +812,39 @@ export function WorkspaceShell({
   const selection: Selection =
     activeFeatureId !== null
       ? { kind: 'feature', featureId: activeFeatureId }
-      : { kind: 'overview' };
-  // Read by the focus/visibility refresh so it only refetches when Overview is shown.
-  overviewActiveRef.current = selection.kind === 'overview' && !creationOpen;
+      : { kind: 'supervisor' };
 
   const toggleLane = (lane: Lane, expanded: boolean) => {
     setExpandedLanes((current) => ({ ...current, [lane]: expanded }));
   };
 
   const features = list.phase === 'loaded' ? list.features : [];
-  const detailFailures = list.phase === 'loaded' ? list.detailFailures : NO_DETAIL_FAILURES;
   const laneGroups = classifyFeaturesByLaneWithAttention(features, attentionByFeature);
   const counts = Object.fromEntries(LANES.map((lane) => [lane, laneGroups[lane].length])) as Record<
     Lane,
     number
   >;
 
-  // The absolute sidebar order ⌘2-9 count by: Overview, then every lane in
-  // display order, every feature within it — regardless of which lanes are
-  // currently expanded. (Arrow/Home/End instead walk the DOM directly, at
-  // click time, so they only ever land on what a `<details>` disclosure
-  // state is actually showing.)
-  const allRows: SidebarRowEntry[] = [{ kind: 'overview' }];
-  for (const lane of LANES) {
-    for (const feature of laneGroups[lane]) {
-      allRows.push({ kind: 'feature', featureId: feature.id });
-    }
-  }
+  // The absolute feature order ⌘2-9 count by: every lane in display order,
+  // every feature within it — regardless of which lanes are currently
+  // expanded. (Arrow/Home/End instead walk the DOM directly, at click time,
+  // so they only ever land on what a `<details>` disclosure state is
+  // actually showing, the Supervisor row included.)
+  const featureOrder = LANES.flatMap((lane) => laneGroups[lane].map((feature) => feature.id));
 
   const selectedFeature =
     selection.kind === 'feature'
       ? features.find((feature) => feature.id === selection.featureId)
       : undefined;
   const showTrailingToolbar = selection.kind === 'feature';
-  // Stays mounted under the creation sheet so closing it restores focus here.
-  const showNewFeatureButton = selection.kind === 'overview';
   const toolbarTitle =
-    selection.kind === 'feature' ? featureLabel(selection.featureId) : 'Overview';
+    selection.kind === 'feature' ? featureLabel(selection.featureId) : 'Supervisor';
   const toolbarSubline =
     selection.kind === 'feature' ? repoBranchSubline(selectedFeature) : undefined;
 
   // Keep the global ⌘2-9/⌘⌃S listener's stale-closure guard current every
   // render — see the ref's declaration above for why it isn't itself a hook.
-  shortcutRef.current = { allRows, navigateFeature: selectFeature, toggleSidebar };
+  shortcutRef.current = { featureOrder, navigateFeature: selectFeature, toggleSidebar };
 
   /**
    * Roving tabindex: ArrowUp/ArrowDown/Home/End move focus AND selection
@@ -826,8 +877,8 @@ export function WorkspaceShell({
     if (target === undefined) return;
     event.preventDefault();
     target.focus();
-    if (target.id === 'sidebar-overview') {
-      selectOverview();
+    if (target.id === 'sidebar-supervisor') {
+      selectSupervisor();
     } else {
       selectFeature(target.id.slice('sidebar-row-'.length));
     }
@@ -888,12 +939,9 @@ export function WorkspaceShell({
           aria-label="Features"
           onKeyDown={onSidebarListKeyDown}
         >
-          <SidebarRow
-            id="sidebar-overview"
-            label="Overview"
-            glyph="house"
-            selected={selection.kind === 'overview'}
-            onSelect={selectOverview}
+          <SidebarSupervisorRow
+            selected={selection.kind === 'supervisor'}
+            onSelect={selectSupervisor}
           />
           {LANES.map((lane) => {
             const laneFeatures = laneGroups[lane];
@@ -927,6 +975,17 @@ export function WorkspaceShell({
             );
           })}
         </div>
+        {/* Only a failed LIST is surfaced: the Supervisor page stays usable
+         * beneath it, and Retry reloads the list in place. */}
+        {list.phase === 'error' ? (
+          <div className="sidebar__list-error">
+            <ErrorSurface
+              error={list.error}
+              variant="compact"
+              localAction={retryAction(loadList)}
+            />
+          </div>
+        ) : null}
         <div className="sidebar__footer" data-tone={runtimeTone}>
           {/* The runtime pill is the server control while connected; every
            * non-ready state keeps the passive pill. */}
@@ -943,13 +1002,6 @@ export function WorkspaceShell({
           {updatePending ? (
             <span className="sidebar__update-dot" role="img" aria-label="Update available" />
           ) : null}
-          <button type="button" className="sidebar__ama" onClick={onOpenAma}>
-            Ask ⌥Space
-            {/* Ambient unread marker: opening the panel is what clears it. */}
-            {amaUnread ? (
-              <span className="sidebar__ama-dot" role="img" aria-label="Unread AMA reply" />
-            ) : null}
-          </button>
         </div>
         {!effectiveSidebarCollapsed && (
           <SidebarResizeHandle
@@ -974,9 +1026,12 @@ export function WorkspaceShell({
           title={toolbarTitle}
           subline={toolbarSubline}
           showTrailing={showTrailingToolbar}
-          showNewFeature={showNewFeatureButton}
           onNewFeature={() => openCreation()}
           newFeatureButtonRef={newFeatureButtonRef}
+          recovery={{
+            attention: attentionItems.some((item) => item.kind === 'recovery'),
+            onOpen: () => openRecoverySheet(null),
+          }}
           attention={{
             items: attentionItems,
             refresh: refreshAttention,
@@ -997,23 +1052,63 @@ export function WorkspaceShell({
             onOpenSettings: onOpenUpdatesSettings,
             onInstallWhenIdle: onInstallUpdateWhenIdle,
           }}
+          pageActions={
+            selection.kind === 'supervisor' ? (
+              // Narrow windows collapse this to its icon (app.css); the label
+              // stays in the accessibility tree, so the name never changes.
+              <button
+                type="button"
+                className="toolbar__page-action"
+                title="New conversation"
+                onClick={requestNewConversation}
+              >
+                <NewConversationIcon className="toolbar__page-action-icon" />
+                <span className="toolbar__page-action-label">New conversation</span>
+              </button>
+            ) : undefined
+          }
           actionsSlotRef={setActionsSlot}
           overflowSlotRef={setOverflowSlot}
           inspectorSlotRef={setInspectorSlot}
         />
+        {setupReadiness !== null ? (
+          <section className="setup-banner" aria-label="Setup incomplete">
+            {/* The compact canonical surface takes its role from the issue's
+             * class, like every other compact error surface. */}
+            <ErrorSurface
+              error={setupBannerIssue(setupReadiness.snapshot)}
+              variant="compact"
+              localAction={{ label: 'Open setup', onAction: openSetupSheet }}
+            />
+          </section>
+        ) : null}
         <div
           className={
-            selection.kind === 'feature' ? 'content-pane content-pane--flush' : 'content-pane'
+            selection.kind === 'feature'
+              ? 'content-pane content-pane--flush'
+              : 'content-pane content-pane--conversation'
           }
         >
-          {selection.kind === 'feature' ? (
+          {selection.kind === 'supervisor' ? (
+            <SupervisorPage
+              key={scopeKey}
+              serverKey={scopeKey}
+              attentionDrafts={activeAttentionDrafts}
+              setAttentionDrafts={updateAttentionDrafts}
+              refreshAttention={refreshAttention}
+              composeRequest={supervisorCompose}
+              onComposeRequestHandled={clearSupervisorCompose}
+              newConversationRequest={supervisorNewConversation}
+              onNewConversationRequestHandled={clearSupervisorNewConversation}
+            />
+          ) : (
             <FeatureCockpit
               key={selection.featureId}
               active
               featureId={selection.featureId}
               creationWarnings={creationWarnings[selection.featureId] ?? []}
               titleHint={featureLabel(selection.featureId)}
-              onClose={selectOverview}
+              onClose={selectSupervisor}
               onDeleted={handleFeatureDeleted}
               onLoadedName={() => {}}
               attentionItems={attentionItems.filter(
@@ -1039,57 +1134,29 @@ export function WorkspaceShell({
               inspectorToggleHost={inspectorSlot}
               onUiStateChange={setCockpitUi}
             />
-          ) : (
-            <div className="overview-surface">
-              <header className="overview-surface__header">
-                <h1 className="overview-surface__headline">
-                  {overviewHeadline(counts, features.length)}
-                </h1>
-                <p className="overview-surface__subline">
-                  {overviewSubline(laneGroups, attentionItems, features.length)}
-                </p>
-                {features.length === 0 ? (
-                  <button
-                    type="button"
-                    className="overview-surface__cta"
-                    onClick={() => openCreation()}
-                  >
-                    Create a feature
-                  </button>
-                ) : null}
-              </header>
-              {list.phase === 'loaded'
-                ? list.warnings.map((warning, index) => (
-                    <ErrorSurface
-                      key={`${warning.code}:${index}`}
-                      error={warning}
-                      variant="compact"
-                    />
-                  ))
-                : null}
-              <OverviewLanes
-                state={list}
-                detailFailures={detailFailures}
-                laneGroups={laneGroups}
-                attentionItems={attentionItems}
-                attentionKindsByFeature={attentionKindsByFeature}
-                onOpen={(featureId) => selectFeature(featureId)}
-                onAnswer={(featureId, attentionId) => {
-                  if (attentionId === undefined) {
-                    selectFeature(featureId);
-                  } else {
-                    onAttentionJump(featureId, attentionId);
-                  }
-                }}
-                onRetry={loadList}
-                onRetryDetails={retryFailedDetails}
-              />
-              <RecoveryWorkspace onNavigateToFeature={(featureId) => selectFeature(featureId)} />
-              <BulkPreviewPanel autoPreviewKey={bulkPreviewRequest} />
-            </div>
           )}
         </div>
       </div>
+
+      {recoverySheet !== null ? (
+        <RecoverySheet
+          bulkPreviewKey={recoverySheet.bulkPreviewKey}
+          onClose={closeRecoverySheet}
+          onNavigateToFeature={(featureId) => {
+            closeRecoverySheet();
+            selectFeature(featureId);
+          }}
+        />
+      ) : null}
+
+      {setupSheetOpen && setupReadiness !== null ? (
+        <SetupWizard
+          host="sheet"
+          snapshot={setupReadiness.snapshot}
+          onSnapshot={setupReadiness.onSnapshot}
+          onClose={closeSetupSheet}
+        />
+      ) : null}
 
       {creationOpen ? (
         <CreateFeatureForm
@@ -1118,7 +1185,7 @@ export function WorkspaceShell({
  * (read from the matching setup task, when the server reported one), with a
  * `+N` suffix when more repositories exist beyond the first. Absent data —
  * no repos, no matching branch — is omitted outright rather than rendered as
- * "undefined" or a dangling separator. Overview never calls this.
+ * "undefined" or a dangling separator. The Supervisor page never calls this.
  */
 function repoBranchSubline(feature: FeatureSnapshot | undefined): string | undefined {
   if (feature === undefined) return undefined;
@@ -1129,13 +1196,128 @@ function repoBranchSubline(feature: FeatureSnapshot | undefined): string | undef
   return restRepos.length > 0 ? `${base} +${restRepos.length}` : base;
 }
 
-/** A single row in the Bench sidebar's listbox: Overview or a lane member. */
+type SupervisorRowMarker = 'needs-response' | 'working' | 'error' | 'none';
+
+/** What the pinned Supervisor row shows for the current server's status. */
+interface SupervisorRowView {
+  marker: SupervisorRowMarker;
+  tone?: 'attention' | 'progress' | 'danger';
+  subline?: string;
+  /** The unread dot: only at rest, never beside another marker. */
+  unread: boolean;
+}
+
+/**
+ * The Supervisor row by priority: needs response (a pending permission or
+ * question), working, error, then unread. Idle, stopped and paused rest
+ * show nothing.
+ */
+export function supervisorRowView(status: SupervisorStatus): SupervisorRowView {
+  const { state } = status;
+  const plural = (count: number) => (count === 1 ? '' : 's');
+  const pending = (kind: 'permission' | 'questions') =>
+    Math.max(1, state?.pendingRequests.filter((request) => request.kind === kind).length ?? 0);
+  switch (state?.lifecycle) {
+    case 'waiting_permission': {
+      const count = pending('permission');
+      return {
+        marker: 'needs-response',
+        tone: 'attention',
+        subline: `Approve ${count} request${plural(count)}`,
+        unread: false,
+      };
+    }
+    case 'waiting_question': {
+      const count = pending('questions');
+      return {
+        marker: 'needs-response',
+        tone: 'attention',
+        subline: `Answer ${count} question${plural(count)}`,
+        unread: false,
+      };
+    }
+    case 'starting':
+    case 'running':
+      return {
+        marker: 'working',
+        tone: 'progress',
+        subline: ['Working', backgroundWorkSummary(state.backgroundTasks)]
+          .filter(Boolean)
+          .join(' · '),
+        unread: false,
+      };
+    case 'failed':
+      return {
+        marker: 'error',
+        tone: 'danger',
+        ...(state.failure === undefined ? {} : { subline: state.failure.title }),
+        unread: false,
+      };
+    default:
+      return {
+        marker: 'none',
+        unread: status.unread,
+        ...(backgroundWorkSummary(state?.backgroundTasks) === ''
+          ? {}
+          : {
+              subline: backgroundWorkSummary(state?.backgroundTasks),
+              tone: state?.backgroundTasks?.some(
+                (task) => task.state === 'interrupted' || task.state === 'failed',
+              )
+                ? 'attention'
+                : 'progress',
+            }),
+      };
+  }
+}
+
+/**
+ * The pinned Supervisor row. Its accessible name stays exactly
+ * "Supervisor" whatever the state; the sub-line is its description, and the
+ * state rides data attributes for tests and journeys.
+ */
+function SidebarSupervisorRow({ selected, onSelect }: { selected: boolean; onSelect(): void }) {
+  const view = supervisorRowView(useSupervisorStatus());
+  return (
+    <div
+      id="sidebar-supervisor"
+      role="option"
+      aria-label="Supervisor"
+      aria-describedby={view.subline !== undefined ? 'sidebar-supervisor-subline' : undefined}
+      aria-selected={selected}
+      tabIndex={selected ? 0 : -1}
+      className="sidebar__row"
+      data-selected={selected}
+      data-supervisor-state={view.marker}
+      data-unread={view.unread}
+      onClick={onSelect}
+    >
+      <span
+        className="sidebar__row-glyph sidebar__row-glyph--supervisor"
+        data-tone={view.tone}
+        aria-hidden="true"
+      >
+        <SupervisorIcon />
+        {view.unread ? <span className="sidebar__row-unread" /> : null}
+      </span>
+      <span className="sidebar__row-body">
+        <span className="sidebar__row-name">Supervisor</span>
+        {view.subline !== undefined ? (
+          <span id="sidebar-supervisor-subline" className="sidebar__row-subline">
+            {view.subline}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+/** A single row in the Bench sidebar's listbox: a lane member. */
 function SidebarRow({
   id,
   label,
   subline,
   glyphTone,
-  glyph = 'dot',
   pip,
   selected,
   onSelect,
@@ -1143,13 +1325,8 @@ function SidebarRow({
   id: string;
   label: string;
   subline?: string;
+  /** The status dot's tone; decorative — the row's name is the label and sub-line. */
   glyphTone?: 'danger' | 'attention' | 'progress' | 'ok' | 'quiet';
-  /**
-   * Feature rows show a status dot; the pinned Overview row shows the house
-   * glyph instead, since it has no status to report. Decorative either way —
-   * the row's accessible name is the label alone.
-   */
-  glyph?: 'dot' | 'house';
   pip?: {
     stageCount: number;
     activeIndex: number;
@@ -1169,13 +1346,7 @@ function SidebarRow({
       data-selected={selected}
       onClick={onSelect}
     >
-      {glyph === 'house' ? (
-        <span className="sidebar__row-glyph sidebar__row-glyph--house" aria-hidden="true">
-          <HouseIcon />
-        </span>
-      ) : (
-        <span className="sidebar__row-glyph" data-tone={glyphTone ?? 'quiet'} aria-hidden="true" />
-      )}
+      <span className="sidebar__row-glyph" data-tone={glyphTone ?? 'quiet'} aria-hidden="true" />
       <span className="sidebar__row-body">
         <span className="sidebar__row-name">{label}</span>
         {subline !== undefined ? <span className="sidebar__row-subline">{subline}</span> : null}
@@ -1316,260 +1487,4 @@ function laneSubline(
   }
   // published / done: name + glyph only, no sub-line.
   return undefined;
-}
-
-interface OverviewLanesProps {
-  state: ListState;
-  /** Features whose detail fetch failed, keyed by id with the captured canonical error. */
-  detailFailures: ReadonlyMap<string, CanonicalError>;
-  laneGroups: Record<Lane, FeatureSnapshot[]>;
-  attentionItems: readonly AttentionItem[];
-  attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
-  onOpen(featureId: string): void;
-  onAnswer(featureId: string, attentionId?: string): void;
-  onRetry(): void;
-  /** Refetches only the features whose detail fetch failed. */
-  onRetryDetails(ids: readonly string[]): void;
-}
-
-/** The first non-recovery attention item this feature owns, if any. */
-function firstAttentionItemFor(
-  featureId: string,
-  attentionItems: readonly AttentionItem[],
-): AttentionItem | undefined {
-  return attentionItems.find(
-    (item) => item.kind !== 'recovery' && attentionOwnerFeatureId(item) === featureId,
-  );
-}
-
-/** The row's mono sub-line: the repo list, extended with the active pass name. */
-function overviewRowSubline(feature: FeatureSnapshot): string {
-  const repos = feature.repos.join(', ');
-  const childName = feature.activeChild?.name;
-  return childName !== undefined && childName !== '' ? `${repos} · ${childName}` : repos;
-}
-
-/** The lane-scoped fallback text for a lane whose sub-line cascade
- * (`laneSubline`) has nothing to report — e.g. a running row with no
- * active child and no current phase. */
-const OVERVIEW_ROW_STATE_FALLBACK: Readonly<Record<Lane, string>> = {
-  failed: 'Failed',
-  waiting: '',
-  running: 'Running',
-  'at-rest': '',
-  published: 'Shipped',
-  done: 'Done',
-};
-
-/** The row's state-cell text, one per lane per the mock: never invents a fact
- * the snapshot doesn't carry. Reuses the sidebar's own `laneSubline`
- * cascade so the two never drift apart, falling back only where the
- * sidebar's undefined sub-line (no sub-line shown there) needs Overview
- * copy instead. */
-function overviewRowStateText(
-  lane: Lane,
-  feature: FeatureSnapshot,
-  attentionKinds: Record<AttentionItem['kind'], number> | undefined,
-): string {
-  return laneSubline(lane, feature, attentionKinds) ?? OVERVIEW_ROW_STATE_FALLBACK[lane];
-}
-
-/** The row-scale pip rail: sidebar's `pipRailFor` for waiting/failed/running
- * rows, an all-done rail for the resting lanes (at-rest/published/done). Returns
- * null for a waiting/failed/running row whose status names no phase the rail can
- * place a needle on — mirroring the sidebar's `SidebarFeatureRow`, which
- * renders no pip at all in that case rather than inventing a fully-filled,
- * done-looking rail for a row that hasn't finished anything. */
-function overviewRowPip(
-  lane: Lane,
-  feature: FeatureSnapshot,
-): {
-  stageCount: number;
-  activeIndex: number;
-  atRest: boolean;
-  tone: 'progress' | 'attention' | 'danger';
-} | null {
-  if (lane === 'waiting' || lane === 'failed' || lane === 'running') {
-    const info = pipRailFor(feature);
-    return info === null
-      ? null
-      : {
-          ...info,
-          tone: lane === 'running' ? 'progress' : lane === 'failed' ? 'danger' : 'attention',
-        };
-  }
-  const stages = spineStages(feature.activeChild?.pipeline ?? feature.pipeline);
-  return {
-    stageCount: stages.length,
-    activeIndex: stages.length - 1,
-    atRest: true,
-    tone: 'progress',
-  };
-}
-
-/** Every non-empty lane rendered as its own grouped inset list, in sidebar order. */
-function OverviewLanes({
-  state,
-  detailFailures,
-  laneGroups,
-  attentionItems,
-  attentionKindsByFeature,
-  onOpen,
-  onAnswer,
-  onRetry,
-  onRetryDetails,
-}: OverviewLanesProps) {
-  const totalFeatures = LANES.reduce((sum, lane) => sum + laneGroups[lane].length, 0);
-  // One degradation card for the whole list: the first failed feature's
-  // canonical error, captioned with how many features are affected.
-  const firstFailure =
-    state.phase === 'loaded'
-      ? state.features.find((feature) => state.detailFailures.has(feature.id))
-      : undefined;
-  const failureCount = detailFailures.size;
-  return (
-    <section className="overview-lanes" aria-label="Existing features">
-      {state.phase === 'loading' ? (
-        <p role="status" className="setup-step__empty">
-          Loading features…
-        </p>
-      ) : state.phase === 'error' ? (
-        <ErrorSurface error={state.error} variant="compact" localAction={retryAction(onRetry)} />
-      ) : totalFeatures === 0 ? null : (
-        <div className="overview-lanes__groups">
-          {failureCount > 0 && firstFailure !== undefined ? (
-            <ErrorSurface
-              error={state.detailFailures.get(firstFailure.id)!}
-              variant="compact"
-              caption={`Details for ${failureCount} feature${failureCount === 1 ? '' : 's'} could not be loaded`}
-              localAction={{
-                label: 'Retry',
-                onAction: () => onRetryDetails([...detailFailures.keys()]),
-              }}
-            />
-          ) : null}
-          {LANES.map((lane) =>
-            laneGroups[lane].length === 0 ? null : (
-              <OverviewLaneSection
-                key={lane}
-                lane={lane}
-                features={laneGroups[lane]}
-                detailFailures={detailFailures}
-                attentionItems={attentionItems}
-                attentionKindsByFeature={attentionKindsByFeature}
-                onOpen={onOpen}
-                onAnswer={onAnswer}
-              />
-            ),
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function OverviewLaneSection({
-  lane,
-  features,
-  detailFailures,
-  attentionItems,
-  attentionKindsByFeature,
-  onOpen,
-  onAnswer,
-}: {
-  lane: Lane;
-  features: FeatureSnapshot[];
-  detailFailures: ReadonlyMap<string, CanonicalError>;
-  attentionItems: readonly AttentionItem[];
-  attentionKindsByFeature: ReadonlyMap<string, Record<AttentionItem['kind'], number>>;
-  onOpen(featureId: string): void;
-  onAnswer(featureId: string, attentionId?: string): void;
-}) {
-  return (
-    <section className="overview-lane" aria-labelledby={`overview-lane-${lane}`}>
-      <div className="overview-lane__head">
-        <h2 id={`overview-lane-${lane}`} className="overview-lane__title">
-          {laneLabel(lane)}
-        </h2>
-        <span className="overview-lane__count" aria-hidden="true">
-          {features.length}
-        </span>
-      </div>
-      <div className="overview-lane__group">
-        <ul className="overview-lane__rows">
-          {features.map((feature) => (
-            <OverviewRow
-              key={feature.id}
-              lane={lane}
-              feature={feature}
-              detailFailure={detailFailures.get(feature.id)}
-              attentionKinds={attentionKindsByFeature.get(feature.id)}
-              onOpen={() => onOpen(feature.id)}
-              onAnswer={() =>
-                onAnswer(feature.id, firstAttentionItemFor(feature.id, attentionItems)?.id)
-              }
-            />
-          ))}
-        </ul>
-      </div>
-    </section>
-  );
-}
-
-function OverviewRow({
-  lane,
-  feature,
-  detailFailure,
-  attentionKinds,
-  onOpen,
-  onAnswer,
-}: {
-  lane: Lane;
-  feature: FeatureSnapshot;
-  /** This row's detail fetch failed; the captured canonical error stands in for the pip. */
-  detailFailure: CanonicalError | undefined;
-  attentionKinds: Record<AttentionItem['kind'], number> | undefined;
-  onOpen(): void;
-  onAnswer(): void;
-}) {
-  const pip = overviewRowPip(lane, feature);
-  const tone = LANE_GLYPH_TONE[lane];
-  return (
-    <li className="overview-row" data-lane={lane}>
-      <button type="button" className="overview-row__hit" onClick={onOpen}>
-        <span className="overview-row__body">
-          <span className="overview-row__name">{feature.name}</span>
-          <span className="overview-row__subline">{overviewRowSubline(feature)}</span>
-        </span>
-        <span className="overview-row__state-col">
-          <span className="overview-row__state" data-tone={tone}>
-            <span className="overview-row__state-dot" data-tone={tone} aria-hidden="true" />
-            <span className="overview-row__state-text">
-              {overviewRowStateText(lane, feature, attentionKinds)}
-            </span>
-          </span>
-          {detailFailure !== undefined ? (
-            <span className="overview-row__state" data-tone="attention">
-              <span className="overview-row__state-text">{detailFailure.title}</span>
-            </span>
-          ) : pip === null ? null : (
-            <PipRail
-              stageCount={pip.stageCount}
-              activeIndex={pip.activeIndex}
-              atRest={pip.atRest}
-              tone={pip.tone}
-              label={`${feature.name} progress`}
-            />
-          )}
-        </span>
-      </button>
-      <button
-        type="button"
-        className="overview-row__action"
-        onClick={lane === 'waiting' ? onAnswer : onOpen}
-      >
-        {lane === 'waiting' ? 'Answer' : 'Open'}
-      </button>
-    </li>
-  );
 }

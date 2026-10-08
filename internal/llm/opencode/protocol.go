@@ -462,14 +462,14 @@ func (p *Protocol) sendPrompt(text string) error {
 	p.mu.Lock()
 	p.deferredPrompt = text
 	p.mu.Unlock()
-	changing, err := p.sendModelChangeIfNeeded()
+	done, err := p.sendModelChangeIfNeeded()
 	if err != nil {
 		p.mu.Lock()
 		p.deferredPrompt = ""
 		p.mu.Unlock()
 		return err
 	}
-	if changing {
+	if done != nil {
 		return nil
 	}
 	p.mu.Lock()
@@ -524,16 +524,13 @@ func (p *Protocol) ApplySettings(ctx context.Context, model, _ string) error {
 		return fmt.Errorf("OpenCode settings update requires an interactive session")
 	}
 	p.SetPromptModel(model)
-	changing, err := p.sendModelChangeIfNeeded()
+	done, err := p.sendModelChangeIfNeeded()
 	if err != nil {
 		return err
 	}
-	if !changing {
+	if done == nil {
 		return nil
 	}
-	p.mu.Lock()
-	done := p.modelChangeDone
-	p.mu.Unlock()
 	select {
 	case err := <-done:
 		return err
@@ -545,20 +542,23 @@ func (p *Protocol) ApplySettings(ctx context.Context, model, _ string) error {
 	}
 }
 
-func (p *Protocol) sendModelChangeIfNeeded() (bool, error) {
+func (p *Protocol) sendModelChangeIfNeeded() (<-chan error, error) {
 	p.mu.Lock()
 	model, current, sessionID := p.promptModel, p.model, p.acpSessionID
 	if model == "" || model == current {
 		p.mu.Unlock()
-		return false, nil
+		return nil, nil
 	}
 	if p.modelChangeID != 0 {
 		p.mu.Unlock()
-		return false, fmt.Errorf("OpenCode model switch already in flight")
+		return nil, fmt.Errorf("OpenCode model switch already in flight")
 	}
 	id := int(nextID.Add(1))
 	p.modelChangeID = id
-	p.modelChangeDone = make(chan error, 1)
+	// Retain this request's completion channel before writing: a reply can
+	// clear modelChangeDone before writeJSON returns to the waiting caller.
+	done := make(chan error, 1)
+	p.modelChangeDone = done
 	p.modelChangeTarget = model
 	p.mu.Unlock()
 	req := Request{JSONRPC: "2.0", ID: id, Method: "session/set_model", Params: map[string]string{"sessionId": sessionID, "modelId": model}}
@@ -569,9 +569,9 @@ func (p *Protocol) sendModelChangeIfNeeded() (bool, error) {
 		p.modelChangeTarget = ""
 		p.promptModel = current
 		p.mu.Unlock()
-		return false, fmt.Errorf("sending session/set_model request: %w", err)
+		return nil, fmt.Errorf("sending session/set_model request: %w", err)
 	}
-	return true, nil
+	return done, nil
 }
 
 func (p *Protocol) writeJSON(v interface{}) error {

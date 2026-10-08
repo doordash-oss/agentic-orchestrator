@@ -1080,28 +1080,62 @@ body {
   color: var(--accent);
 }
 
-.ama-panel__empty {
+/* Welcome screen: the empty transcript before the first message. The
+ * monogram sits beside a serif greeting, Claude-style, with one short line
+ * underneath; it is centred in whatever height the panel has. */
+.ama-panel__welcome {
   display: flex;
   flex: 1;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-1);
-  min-height: 120px;
+  gap: var(--space-2);
+  min-height: 160px;
   margin: 0;
-  color: var(--muted);
-  font: 12px var(--bench-font-text);
+  padding: var(--space-3);
   text-align: center;
 }
 
-.ama-panel__empty strong {
-  color: var(--text);
-  font: 500 14px var(--bench-font-serif);
+.ama-panel__welcome-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
-.ama-panel__empty span {
+.ama-panel__welcome-mark {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  color: var(--text);
+}
+
+.ama-panel__welcome-greeting {
+  margin: 0;
+  color: var(--text);
+  font: 500 24px/1.1 var(--bench-font-serif);
+  letter-spacing: -0.01em;
+}
+
+.ama-panel__welcome-line {
   max-width: 300px;
-  line-height: 1.45;
+  margin: 0;
+  color: var(--muted);
+  font: 13px/1.45 var(--bench-font-text);
+}
+
+/* Expanded, the welcome scales up with the reading surface. */
+.ama-panel[data-maximized='true'] .ama-panel__welcome-mark {
+  width: 48px;
+  height: 48px;
+}
+
+.ama-panel[data-maximized='true'] .ama-panel__welcome-greeting {
+  font-size: 36px;
+}
+
+.ama-panel[data-maximized='true'] .ama-panel__welcome-line {
+  max-width: 44ch;
+  font-size: 15px;
 }
 
 .conversation__activity {

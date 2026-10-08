@@ -154,7 +154,9 @@ describe('AmaPanel first open', () => {
     await screen.findByRole('complementary', { name: 'Ask Agentico' });
     await waitFor(() => expect(mock.api.getSessionTranscript).toHaveBeenCalled());
 
-    expect(screen.getByText('Ask anything about this workspace.')).toBeVisible();
+    expect(
+      screen.getByRole('heading', { name: /^Good (morning|afternoon|evening)\.$/ }),
+    ).toBeVisible();
     expect(screen.queryByText(/not_found/)).not.toBeInTheDocument();
     expect(screen.queryByText(/session not found/)).not.toBeInTheDocument();
   });

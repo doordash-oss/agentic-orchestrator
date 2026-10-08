@@ -226,3 +226,29 @@ export function TriangleAlertIcon(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+/**
+ * The Agentico glass monogram from the app icon, without the tile: the ivory
+ * stroke (the human) and the accent stroke (the agent) lean into each other to
+ * form the A. The human stroke follows the text colour so it reads in both
+ * themes; the accent stroke is the brand constant.
+ */
+export function AgenticoMonogram(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      width="40"
+      height="40"
+      viewBox="0 0 1024 1024"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="150"
+      strokeLinecap="round"
+      aria-hidden="true"
+      focusable="false"
+      {...props}
+    >
+      <path d="M 330 810 L 512 250" />
+      <path d="M 694 810 L 512 250" stroke="var(--accent)" />
+    </svg>
+  );
+}

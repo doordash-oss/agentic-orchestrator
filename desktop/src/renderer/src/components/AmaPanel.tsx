@@ -54,6 +54,7 @@ import {
 } from '../features/AttentionInbox';
 import { useAttentionDraftSaves } from '../features/useAttentionDraftSaves';
 import { useConnectionState } from '../hooks';
+import { greetingFor, inspirationFor } from './amaWelcome';
 import {
   failPendingUploads,
   isBlockingStagedItem,
@@ -76,7 +77,7 @@ import {
   RESIZE_EDGES,
   type ResizeEdge,
 } from './amaGeometry';
-import { CloseIcon, MaximizeIcon, MinimizeIcon } from './icons';
+import { AgenticoMonogram, CloseIcon, MaximizeIcon, MinimizeIcon } from './icons';
 import { useModalDismiss } from './useModalDismiss';
 
 type TranscriptState =
@@ -159,6 +160,12 @@ export function AmaPanel({
   const [confirmingEnd, setConfirmingEnd] = useState(false);
   const [attentionBusy, setAttentionBusy] = useState<string | null>(null);
   const [localDrafts, setLocalDrafts] = useState(emptyAttentionDrafts);
+  // Welcome copy is fixed when the panel mounts so the greeting never flips
+  // mid-conversation; it is recomputed on the next open.
+  const [welcome] = useState(() => {
+    const now = new Date();
+    return { greeting: greetingFor(now), inspiration: inspirationFor(now) };
+  });
   const [pinToBottom, setPinToBottom] = useState(0);
   const [focusToken, setFocusToken] = useState(0);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -840,12 +847,12 @@ export function AmaPanel({
               </>
             }
             emptyState={
-              <div className="ama-panel__empty">
-                <strong>Ask anything about this workspace.</strong>
-                <span>
-                  I can inspect the project, explain what is happening, and help you decide what to
-                  do next.
-                </span>
+              <div className="ama-panel__welcome">
+                <div className="ama-panel__welcome-heading">
+                  <AgenticoMonogram className="ama-panel__welcome-mark" />
+                  <h2 className="ama-panel__welcome-greeting">{welcome.greeting}</h2>
+                </div>
+                <p className="ama-panel__welcome-line">{welcome.inspiration}</p>
               </div>
             }
           />

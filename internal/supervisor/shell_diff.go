@@ -59,6 +59,14 @@ type shellDiffObserver struct {
 	stop   chan struct{}
 	turn   string
 	closed bool
+	// Native edit tools own these paths until their matching result arrives.
+	native map[string]nativeFileCall
+}
+
+type nativeFileCall struct {
+	paths []string
+	// Claude can report content in the call; Codex reports it in the result.
+	reportedPath string
 }
 
 var shellAbsolutePath = regexp.MustCompile(`/[^\s'"` + "`" + `<>;|(){}\\]+`)
@@ -256,6 +264,10 @@ func shellPatch(path string, before, after []byte, operation string) *llm.FileCh
 }
 
 func (r *shellRepository) changes() []llm.FileChangeEvent {
+	return r.changesExcept(nil)
+}
+
+func (r *shellRepository) changesExcept(native map[string]bool) []llm.FileChangeEvent {
 	next, ok := r.snapshot()
 	if !ok {
 		return nil
@@ -276,6 +288,16 @@ func (r *shellRepository) changes() []llm.FileChangeEvent {
 	for _, path := range ordered {
 		old, was := r.files[path]
 		current, is := next[path]
+		if native[filepath.Join(r.root, path)] {
+			// Keep the baseline until success. A failed native tool can leave
+			// a partial write which still needs an observed diff.
+			if was {
+				next[path] = old
+			} else {
+				delete(next, path)
+			}
+			continue
+		}
 		// A file becoming excluded, binary, symlinked or oversized is not deleted.
 		if was && !is {
 			if _, err := os.Lstat(filepath.Join(r.root, path)); !os.IsNotExist(err) {
@@ -294,6 +316,116 @@ func (r *shellRepository) changes() []llm.FileChangeEvent {
 	}
 	r.files = next
 	return changes
+}
+
+// Native tools report their own file changes. Use their call/result identity,
+// never a turn-wide path blacklist: later shell edits to the same file still emit.
+func nativeChangePaths(workDir string, block llm.ContentBlock) []string {
+	if !block.IsToolUse() {
+		return nil
+	}
+	switch block.Name {
+	case "Write", "Edit", "MultiEdit", "Delete", "Move", "Rename":
+	default:
+		return nil
+	}
+	var input map[string]any
+	if json.Unmarshal(block.Input, &input) != nil {
+		return nil
+	}
+	var paths []string
+	add := func(path string) {
+		if strings.TrimSpace(path) == "" {
+			return
+		}
+		paths = append(paths, nativeAbsolutePath(workDir, path))
+	}
+	for _, key := range []string{"file_path", "path", "target_file", "old_path", "source_path", "from", "new_path", "destination_path", "to"} {
+		if path, ok := input[key].(string); ok {
+			add(path)
+		}
+	}
+	if all, ok := input["paths"].([]any); ok {
+		for _, value := range all {
+			if path, ok := value.(string); ok {
+				add(path)
+			}
+		}
+	}
+	return paths
+}
+
+// Resolve the nearest existing parent, including when several directories
+// below a symlinked worktree root have not been created yet.
+func nativeAbsolutePath(workDir, path string) string {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+	path = filepath.Clean(path)
+	parent := filepath.Dir(path)
+	tail := filepath.Base(path)
+	for {
+		if canonical, err := filepath.EvalSymlinks(parent); err == nil {
+			return filepath.Join(canonical, tail)
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return path
+		}
+		tail = filepath.Join(filepath.Base(parent), tail)
+		parent = next
+	}
+}
+
+func nativeToolUseReportPath(workDir string, block llm.ContentBlock) string {
+	var input map[string]any
+	if json.Unmarshal(block.Input, &input) != nil {
+		return ""
+	}
+	hasContent := false
+	for _, key := range []string{"content", "new_string", "newText", "old_string", "oldText"} {
+		if block.Name == "Write" && (key == "old_string" || key == "oldText") {
+			continue
+		}
+		if _, ok := input[key].(string); ok {
+			hasContent = true
+		}
+	}
+	if edits, ok := input["edits"].([]any); block.Name == "MultiEdit" && ok && len(edits) > 0 {
+		hasContent = true
+	}
+	if !hasContent || (block.Name != "Write" && block.Name != "Edit" && block.Name != "MultiEdit") {
+		return ""
+	}
+	for _, key := range []string{"file_path", "path", "target_file"} {
+		if path, ok := input[key].(string); ok && strings.TrimSpace(path) != "" {
+			return nativeAbsolutePath(workDir, path)
+		}
+	}
+	return ""
+}
+
+func (o *generationObserver) acceptNativeChangesLocked(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	for _, repo := range o.diff.repos {
+		next, ok := repo.snapshot()
+		if !ok {
+			continue
+		}
+		for _, path := range paths {
+			relative, err := filepath.Rel(repo.root, path)
+			if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+				continue
+			}
+			if file, exists := next[relative]; exists {
+				repo.files[relative] = file
+			} else {
+				delete(repo.files, relative)
+			}
+		}
+	}
 }
 
 func (o *generationObserver) observeShellChanges(sessionID string, msg llm.SDKMessage) {
@@ -316,6 +448,14 @@ func (o *generationObserver) observeShellChanges(sessionID string, msg llm.SDKMe
 	}
 	if msg.Assistant != nil {
 		for _, block := range msg.Assistant.Message.Content {
+			if paths := nativeChangePaths(c.opts.WorkDir, block); block.ID != "" && len(paths) > 0 {
+				// Attribute earlier shell writes before the native tool takes ownership.
+				o.captureShellDiffLocked(sessionID, turn)
+				if o.diff.native == nil {
+					o.diff.native = map[string]nativeFileCall{}
+				}
+				o.diff.native[block.ID] = nativeFileCall{paths: paths, reportedPath: nativeToolUseReportPath(c.opts.WorkDir, block)}
+			}
 			if !block.IsToolUse() || (block.Name != "Bash" && block.Name != "shell_command" && block.Name != "exec_command") {
 				continue
 			}
@@ -338,6 +478,41 @@ func (o *generationObserver) observeShellChanges(sessionID string, msg llm.SDKMe
 			}
 		}
 	}
+	if msg.User != nil {
+		for _, block := range msg.User.Message.Content {
+			if !block.IsToolResult() {
+				continue
+			}
+			call := o.diff.native[block.ToolUseID]
+			if !block.IsError {
+				reported := map[string]bool{}
+				if call.reportedPath != "" {
+					reported[call.reportedPath] = true
+				}
+				for _, change := range msg.FileChanges {
+					if strings.TrimSpace(change.Path) != "" {
+						reported[nativeAbsolutePath(c.opts.WorkDir, change.Path)] = true
+					}
+					if strings.TrimSpace(change.OldPath) != "" {
+						reported[nativeAbsolutePath(c.opts.WorkDir, change.OldPath)] = true
+					}
+				}
+				var accepted []string
+				for _, path := range call.paths {
+					if reported[path] {
+						accepted = append(accepted, path)
+					}
+				}
+				o.acceptNativeChangesLocked(accepted)
+			}
+			delete(o.diff.native, block.ToolUseID)
+		}
+	}
+	if msg.Result != nil && msg.Origin.Kind != llm.EventOriginTask {
+		// A root turn may end before an interrupted native tool reports its
+		// result. Release ownership so its actual partial writes are retained.
+		o.diff.native = nil
+	}
 	if msg.User != nil || msg.Result != nil {
 		o.captureShellDiffLocked(sessionID, turn)
 	}
@@ -348,8 +523,14 @@ func (o *generationObserver) observeShellChanges(sessionID string, msg llm.SDKMe
 
 func (o *generationObserver) captureShellDiffLocked(sessionID, turn string) {
 	var changes []llm.FileChangeEvent
+	native := map[string]bool{}
+	for _, call := range o.diff.native {
+		for _, path := range call.paths {
+			native[path] = true
+		}
+	}
 	for _, repo := range o.diff.repos {
-		changes = append(changes, repo.changes()...)
+		changes = append(changes, repo.changesExcept(native)...)
 	}
 	if len(changes) == 0 {
 		return
@@ -395,6 +576,7 @@ func (o *generationObserver) stopShellDiffLocked() {
 		o.diff.stop = nil
 	}
 	o.diff.repos = nil
+	o.diff.native = nil
 }
 func (o *generationObserver) closeShellDiff() {
 	o.diff.mu.Lock()

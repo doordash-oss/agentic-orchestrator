@@ -636,7 +636,7 @@ func (c *Coordinator) Transcript(q PageQuery) (Page, error) {
 	c.mu.Lock()
 	store := c.store
 	c.mu.Unlock()
-	return store.rangedPage(q)
+	return store.displayPage(q)
 }
 
 // UpdateSettings commits a harness choice. It is accepted only while no
@@ -2205,6 +2205,7 @@ func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload a
 	if err != nil {
 		return &PersistError{Op: "append " + string(kind) + " record", ConversationID: c.conv.ConversationID, Generation: gen, TurnID: turnID, Err: err}
 	}
+	rec = c.store.displayRecord(rec)
 	c.publishLocked(Event{Kind: EventRecord, Generation: gen, Record: &rec})
 	return nil
 }

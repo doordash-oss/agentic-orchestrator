@@ -30,6 +30,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
+  evidenceShot,
   launchApp,
   persistAppLogs,
   type AppHandle,
@@ -117,6 +118,10 @@ test('supervisor composer: attachments, the queue, Escape, Send now and New conv
   fs.mkdirSync(filesDir, { recursive: true });
   const imagePath = path.join(filesDir, 'diagram.png');
   const notePath = path.join(filesDir, 'notes.txt');
+  const moreImages = [2, 3, 4].map((index) =>
+    path.join(filesDir, `clipboard-79963618-2eca-44b2-a61a-c39946ffc3b4-${index}.png`),
+  );
+  moreImages.forEach((image) => fs.writeFileSync(image, PICKER_PNG));
   fs.writeFileSync(imagePath, PICKER_PNG);
   fs.writeFileSync(notePath, `${NOTE_FIRST_LINE}\nsecond line\n`);
   const { hold } = SUPERVISOR_E2E_MARKERS;
@@ -129,12 +134,59 @@ test('supervisor composer: attachments, the queue, Escape, Send now and New conv
 
     // Attachments: an image and a text file reach the harness as copies it can read.
     const attach = page.getByRole('button', { name: 'Attach files or photos' });
-    await stubPicker(handle, { 'Choose images': [imagePath] });
+    await stubPicker(handle, { 'Choose images': [imagePath, ...moreImages] });
     await attach.click();
     await page.getByRole('menuitem', { name: 'Add photos' }).click();
+    const draftAttachments = page.getByRole('list', { name: 'Attached files' });
+    await expect(draftAttachments.getByRole('listitem')).toHaveCount(4);
+    for (let index = 1; index <= 4; index++) {
+      await expect(draftAttachments.getByText(`Image ${index}`, { exact: true })).toBeVisible();
+    }
+    await expect(draftAttachments).not.toContainText('clipboard-');
+    const draft =
+      'Compare these screenshots.\nKeep the editor comfortable.\nImage 1 shows the initial state.\nImage 2 shows the expanded activity.\nPlease preserve the writing room.';
+    await composer(page).fill(draft);
+    await composer(page).focus();
+    const previousViewport = await page.evaluate(() => ({
+      width: innerWidth,
+      height: innerHeight,
+    }));
+    await page.setViewportSize({ width: 760, height: 800 });
+    const geometry = await draftAttachments.evaluate((list) => {
+      const tokens = [...list.children].map((item) => item.getBoundingClientRect());
+      return {
+        tops: tokens.map((token) => token.top),
+        height: list.getBoundingClientRect().height,
+      };
+    });
+    expect(Math.max(...geometry.tops) - Math.min(...geometry.tops)).toBeLessThan(2);
+    expect(geometry.height).toBeLessThan(42);
+    const editorGeometry = await composer(page).evaluate((editor) => ({
+      height: editor.clientHeight,
+      contentHeight: editor.scrollHeight,
+    }));
+    expect(editorGeometry.height).toBeGreaterThan(90);
+    expect(editorGeometry.contentHeight).toBeLessThanOrEqual(editorGeometry.height + 1);
+    await testInfo.attach('compact-composer-attachments', {
+      body: await page.locator('.supervisor-composer').screenshot(),
+      contentType: 'image/png',
+    });
+    await evidenceShot(handle, 'supervisor-composer-compact');
+    for (const image of moreImages) {
+      await draftAttachments
+        .getByRole('button', { name: `Remove ${path.basename(image)}` })
+        .click();
+    }
     await stubPicker(handle, { 'Choose attachments': [notePath] });
     await attach.click();
+    const attachMenu = page.getByRole('menu');
+    await expect(attachMenu).toBeVisible();
+    const menuBounds = await attachMenu.boundingBox();
+    expect(menuBounds!.x).toBeGreaterThanOrEqual(0);
+    expect(menuBounds!.y).toBeGreaterThanOrEqual(0);
+    expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(760);
     await page.getByRole('menuitem', { name: 'Add files' }).click();
+    await page.setViewportSize(previousViewport);
     await submit(page, 'Read the attached files');
     const chips = conversation(page).getByRole('list', { name: 'Attachments' });
     await expect(chips.getByRole('listitem')).toHaveCount(2, { timeout: 30_000 });

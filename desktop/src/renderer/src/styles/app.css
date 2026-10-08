@@ -657,6 +657,12 @@ body {
   scroll-behavior: smooth;
 }
 
+/* Rows keep their natural height when expanded; the transcript scrolls
+ * instead of shrinking activity histories into the messages after them. */
+.conversation__scroll > * {
+  flex-shrink: 0;
+}
+
 /* Turns read as a conversation, not a log. Your messages sit to the right
  * in a soft bubble; the supervisor's replies are flowing prose in the
  * reading column, rendered from its Markdown. Neither carries a caption:
@@ -1182,6 +1188,38 @@ body {
   flex: 0 0 26px;
   width: 26px;
   height: 26px;
+}
+
+/* The monogram breathes into two orbiting strokes, then joins into a check.
+ * Geometry is animated on the existing paths so completion can start at any pose. */
+.agentico-activity-mark {
+  display: block;
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  overflow: visible;
+}
+
+.agentico-activity-mark path {
+  stroke: var(--text);
+  transition:
+    stroke 500ms ease,
+    stroke-width 640ms ease;
+}
+
+.agentico-activity-mark path + path {
+  stroke: var(--accent);
+}
+
+.agentico-activity-mark[data-state='complete'] path {
+  stroke: var(--ok);
+  stroke-width: 2.6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentico-activity-mark path {
+    transition: none;
+  }
 }
 
 .conversation__thinking > span {
@@ -5471,6 +5509,7 @@ body {
 }
 .composer__attach {
   position: relative;
+  flex: 0 0 auto;
 }
 .composer__attach-button {
   width: 2rem;
@@ -5531,6 +5570,27 @@ body {
   padding: 0;
   list-style: none;
 }
+/* Conversation attachments share the attach row. Long clipboard names stay
+ * in tooltips; the single scrollable row never takes space from the draft. */
+.composer__chips--inline {
+  flex: 1 1 0;
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  padding-block: 2px;
+}
+.composer__chips--inline .composer__chip {
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  padding: 0.2rem 0.45rem;
+  font-variant-numeric: tabular-nums;
+}
+.composer__chips--inline .composer__chip button {
+  min-width: 1.25rem;
+  min-height: 1.25rem;
+}
+
 .composer__chip {
   display: inline-flex;
   align-items: center;
@@ -14108,6 +14168,7 @@ body {
   grid-template-columns: minmax(0, 1fr);
   width: min(760px, calc(100% - 2 * var(--space-5)));
   margin: 0 auto;
+  padding-top: var(--space-5);
   padding-bottom: var(--space-4);
 }
 
@@ -14246,7 +14307,9 @@ body {
 /* The textarea sheds its form-field box: the composer frame is the field,
  * and its focus-within border is the focus indication. */
 .supervisor-composer .form-field__input--multiline {
-  min-height: 44px;
+  /* Let a draft grow before it scrolls; fixed rows clipped multi-line edits. */
+  field-sizing: content;
+  min-height: 64px;
   max-height: 240px;
   resize: none;
   border: 0;

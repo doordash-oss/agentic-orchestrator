@@ -25,6 +25,10 @@ import {
 } from 'react';
 import type { TranscriptMessage } from '../../../../shared/ipc';
 import { CopyIcon } from '../../components/icons';
+import {
+  AgenticoActivityMark,
+  type AgenticoActivityState,
+} from '../../components/AgenticoActivityMark';
 import { renderSanitizedMarkdown } from '../sanitizedMarkdown';
 import {
   friendlyToolName,
@@ -149,37 +153,42 @@ export function ActivityIndicator({
   idleLabel,
   startedAt,
   lastActivityAt,
+  mark,
 }: {
   labels: string[];
   active: boolean;
   idleLabel: string;
   startedAt?: string;
   lastActivityAt?: string;
+  mark?: ReactNode;
 }) {
   const latest = labels.at(-1) ?? idleLabel;
   return (
     <div className="conversation__activity" data-active={active}>
       <div className="conversation__activity-line" role={active ? 'status' : undefined}>
-        {active ? (
-          <span className="conversation__thinking" aria-hidden="true">
-            {Array.from({ length: 8 }, (_, index) => (
-              <span key={index} />
-            ))}
-          </span>
-        ) : (
-          <span className="conversation__activity-mark" aria-hidden="true">
-            ·
-          </span>
-        )}
+        {mark ??
+          (active ? (
+            <span className="conversation__thinking" aria-hidden="true">
+              {Array.from({ length: 8 }, (_, index) => (
+                <span key={index} />
+              ))}
+            </span>
+          ) : (
+            <span className="conversation__activity-mark" aria-hidden="true">
+              ·
+            </span>
+          ))}
         <div className="conversation__activity-copy">
           <strong>{active ? 'Working' : 'Worked'}</strong>
-          <span title={latest}>{latest}</span>
+          {active && latest !== '' ? <span title={latest}>{latest}</span> : null}
         </div>
       </div>
       {active ? <ActivityClock startedAt={startedAt} lastActivityAt={lastActivityAt} /> : null}
-      {labels.length > 1 ? (
+      {labels.length > 0 && (!active || labels.length > 1) ? (
         <details className="conversation__activity-history">
-          <summary>{labels.length} activity steps</summary>
+          <summary>
+            {labels.length} activity {labels.length === 1 ? 'step' : 'steps'}
+          </summary>
           <ol>
             {labels.map((label, index) => (
               <li key={`${index}:${label}`}>{label}</li>
@@ -282,6 +291,8 @@ export interface ConversationTranscriptProps {
   anchorPrepend?: boolean;
   activityStartedAt?: string;
   lastActivityAt?: string;
+  /** A stable per-turn mark; only an explicit successful outcome becomes a check. */
+  liveActivity?: { key: string; state: AgenticoActivityState };
 }
 
 interface PrependAnchor {
@@ -496,6 +507,7 @@ export function ConversationTranscript({
   anchorPrepend = false,
   activityStartedAt,
   lastActivityAt,
+  liveActivity,
 }: ConversationTranscriptProps) {
   const scrollRef = useRef<HTMLElement>(null);
   const rowsStartRef = useRef<HTMLSpanElement>(null);
@@ -620,18 +632,31 @@ export function ConversationTranscript({
           </p>
         ) : item.kind === 'notice' ? (
           <Notice key={item.key} item={item} />
-        ) : (
+        ) : liveActivity !== undefined &&
+          liveActivity.state !== 'resting' &&
+          index === items.length - 1 ? null : (
           <ActivityIndicator
             key={item.key}
             labels={item.labels}
             idleLabel={idleLabel}
-            active={waiting && index === items.length - 1}
+            active={liveActivity === undefined && waiting && index === items.length - 1}
             startedAt={activityStartedAt}
             lastActivityAt={lastActivityAt}
           />
         ),
       )}
-      {waiting && lastItem?.kind !== 'activity' ? (
+      {liveActivity !== undefined ? (
+        <div key={liveActivity.key} hidden={liveActivity.state === 'resting'}>
+          <ActivityIndicator
+            labels={lastItem?.kind === 'activity' ? lastItem.labels : []}
+            idleLabel={liveActivity.state === 'working' ? idleLabel : ''}
+            active={liveActivity.state === 'working'}
+            startedAt={activityStartedAt}
+            lastActivityAt={lastActivityAt}
+            mark={<AgenticoActivityMark state={liveActivity.state} />}
+          />
+        </div>
+      ) : waiting && lastItem?.kind !== 'activity' ? (
         <ActivityIndicator
           labels={(() => {
             const running = runningAgents.length;

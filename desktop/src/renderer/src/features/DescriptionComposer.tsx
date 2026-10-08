@@ -180,6 +180,8 @@ export interface DescriptionComposerProps {
    * "message".
    */
   attachmentTargetNoun?: string;
+  /** Short numbered tokens beside the attach button, preserving room for the draft. */
+  compactAttachments?: boolean;
   /** Host-owned controls rendered beneath the textarea (e.g. a Send button). */
   footer?: ReactNode;
   rows?: number;
@@ -214,6 +216,7 @@ export function DescriptionComposer({
   hideLabel = false,
   allowUploads = true,
   attachmentTargetNoun = 'description',
+  compactAttachments = false,
   footer,
   rows = 6,
   maxLength = 10000,
@@ -514,6 +517,89 @@ export function DescriptionComposer({
     importFiles(event.dataTransfer.files);
   };
 
+  const attachmentChips =
+    images.length > 0 ||
+    attachments.length > 0 ||
+    imageUploads.length > 0 ||
+    attachmentUploads.length > 0 ? (
+      <ol
+        className={`composer__chips${compactAttachments ? ' composer__chips--inline' : ''}`}
+        aria-label="Attached files"
+      >
+        {images.map((path, index) => (
+          <li key={path} className="composer__chip" data-kind="image">
+            <span title={basename(path)}>
+              {compactAttachments ? `Image ${index + 1}` : `🖼 ${basename(path)}`}
+            </span>
+            <button
+              type="button"
+              aria-label={`Remove ${basename(path)}`}
+              onClick={() => onImagesChange((items) => items.filter((item) => item !== path))}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+        {attachments.map((path, index) => (
+          <li key={path} className="composer__chip" data-kind="attachment">
+            <span title={basename(path)}>
+              {compactAttachments ? `File ${index + 1}` : `📎 ${basename(path)}`}
+            </span>
+            <button
+              type="button"
+              aria-label={`Remove ${basename(path)}`}
+              onClick={() => onAttachmentsChange((items) => items.filter((item) => item !== path))}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+        {[...imageUploads, ...attachmentUploads].map((item, index) => (
+          <li
+            key={item.id}
+            className="composer__chip"
+            data-kind={item.kind}
+            data-state={item.state}
+          >
+            <span title={item.name}>
+              {compactAttachments
+                ? item.kind === 'image'
+                  ? `Image ${images.length + index + 1}`
+                  : `File ${attachments.length + index - imageUploads.length + 1}`
+                : `${item.kind === 'image' ? '🖼' : '📎'} ${item.name}`}
+            </span>
+            {item.state === 'uploading' ? (
+              <span className="composer__chip-state">Uploading…</span>
+            ) : null}
+            {item.state === 'failed' ? (
+              <>
+                <span className="composer__chip-message" title={item.message}>
+                  {item.message ?? 'Upload failed.'}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Retry ${item.name}`}
+                  onClick={() => retryUpload(item)}
+                >
+                  ↻ Retry
+                </button>
+              </>
+            ) : null}
+            {isStagedOnOtherServer(item, serverKey) ? (
+              <span className="composer__chip-badge">{STAGED_ON_OTHER_SERVER}</span>
+            ) : null}
+            <button
+              type="button"
+              aria-label={`Remove ${item.name}`}
+              onClick={() => removeUploadItem(item)}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ol>
+    ) : null;
+
   return (
     <div className="composer" onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
       <label className="form-field">
@@ -620,85 +706,18 @@ export function DescriptionComposer({
               </div>
             ) : null}
           </div>
-          <span className="composer__hint">
-            {remote
-              ? `Paste or drop images and documents anywhere in the ${attachmentTargetNoun}; files upload to the server.`
-              : `Paste or drop images and documents anywhere in the ${attachmentTargetNoun}.`}
-          </span>
+          {compactAttachments && attachmentChips !== null ? (
+            attachmentChips
+          ) : (
+            <span className="composer__hint">
+              {remote
+                ? `Paste or drop images and documents anywhere in the ${attachmentTargetNoun}; files upload to the server.`
+                : `Paste or drop images and documents anywhere in the ${attachmentTargetNoun}.`}
+            </span>
+          )}
         </div>
       ) : null}
-      {images.length > 0 ||
-      attachments.length > 0 ||
-      imageUploads.length > 0 ||
-      attachmentUploads.length > 0 ? (
-        <ol className="composer__chips" aria-label="Attached files">
-          {images.map((path) => (
-            <li key={path} className="composer__chip" data-kind="image">
-              <span>🖼 {basename(path)}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${basename(path)}`}
-                onClick={() => onImagesChange((items) => items.filter((item) => item !== path))}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-          {attachments.map((path) => (
-            <li key={path} className="composer__chip" data-kind="attachment">
-              <span>📎 {basename(path)}</span>
-              <button
-                type="button"
-                aria-label={`Remove ${basename(path)}`}
-                onClick={() =>
-                  onAttachmentsChange((items) => items.filter((item) => item !== path))
-                }
-              >
-                ×
-              </button>
-            </li>
-          ))}
-          {[...imageUploads, ...attachmentUploads].map((item) => (
-            <li
-              key={item.id}
-              className="composer__chip"
-              data-kind={item.kind}
-              data-state={item.state}
-            >
-              <span>
-                {item.kind === 'image' ? '🖼' : '📎'} {item.name}
-              </span>
-              {item.state === 'uploading' ? (
-                <span className="composer__chip-state">Uploading…</span>
-              ) : null}
-              {item.state === 'failed' ? (
-                <>
-                  <span className="composer__chip-message" title={item.message}>
-                    {item.message ?? 'Upload failed.'}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label={`Retry ${item.name}`}
-                    onClick={() => retryUpload(item)}
-                  >
-                    ↻ Retry
-                  </button>
-                </>
-              ) : null}
-              {isStagedOnOtherServer(item, serverKey) ? (
-                <span className="composer__chip-badge">{STAGED_ON_OTHER_SERVER}</span>
-              ) : null}
-              <button
-                type="button"
-                aria-label={`Remove ${item.name}`}
-                onClick={() => removeUploadItem(item)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ol>
-      ) : null}
+      {!compactAttachments || !allowUploads ? attachmentChips : null}
       {repositoryFiles.length > 0 ? (
         <ol className="composer__chips" aria-label="Referenced repository files">
           {repositoryFiles.map((file) => {

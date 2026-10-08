@@ -153,11 +153,26 @@ describe('conversation turns', () => {
 
     const line = screen.getByText('Worked').closest('.conversation__activity')!;
     expect(line).toHaveTextContent('Worked');
-    expect(line.querySelector('.conversation__activity-copy')).toHaveTextContent('Using read');
+    expect(line.querySelector('.conversation__activity-copy')).toHaveTextContent(/^Worked$/);
     fireEvent.click(screen.getByText('2 activity steps'));
     expect(screen.getByText('Using bash')).toBeVisible();
+    expect(screen.getByText('Using read')).toBeVisible();
     expect(line.querySelector('.conversation__thinking')).toBeNull();
     expect(line.querySelector('.conversation__activity-mark')).not.toBeNull();
+  });
+
+  it('keeps a single completed tool available in history without crowding the summary', () => {
+    const { rerender } = render(
+      <ActivityIndicator labels={['Using bash']} active idleLabel="Idle" />,
+    );
+    expect(screen.getByRole('status')).toHaveTextContent('WorkingUsing bash');
+    expect(screen.queryByText('1 activity step')).not.toBeInTheDocument();
+
+    rerender(<ActivityIndicator labels={['Using bash']} active={false} idleLabel="Idle" />);
+    const line = screen.getByText('Worked').closest('.conversation__activity')!;
+    expect(line.querySelector('.conversation__activity-copy')).toHaveTextContent(/^Worked$/);
+    fireEvent.click(screen.getByText('1 activity step'));
+    expect(screen.getByText('Using bash')).toBeVisible();
   });
 });
 

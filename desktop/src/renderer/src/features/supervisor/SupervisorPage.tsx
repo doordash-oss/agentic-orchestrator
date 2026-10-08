@@ -638,6 +638,13 @@ export function SupervisorPage({
   const waitingOnRequest = isWaitingOnRequest(lifecycle);
   const transcriptWaiting =
     sending || (turnActive && !waitingOnRequest && !requestPending && provisional.size === 0);
+  const latestUserRecord = records.findLast((record) => record.kind === 'user');
+  const activityState =
+    sending || (turnActive && !waitingOnRequest && !requestPending)
+      ? 'working'
+      : lifecycle === 'idle' && state?.lastTurnOutcome === 'completed'
+        ? 'complete'
+        : 'resting';
   const statusInput = {
     lifecycle,
     startingStep: state?.startingStep,
@@ -1114,7 +1121,11 @@ export function SupervisorPage({
         assistantName={SUPERVISOR_COPY.title}
         items={conversation}
         waiting={transcriptWaiting}
-        activityStartedAt={records.findLast((record) => record.kind === 'user')?.createdAt}
+        activityStartedAt={latestUserRecord?.createdAt}
+        liveActivity={{
+          key: `${state?.conversationId ?? ''}:${latestUserRecord?.turnId ?? ''}`,
+          state: activityState,
+        }}
         lastActivityAt={records.at(-1)?.createdAt}
         idleLabel="Working through your message"
         pinToBottomToken={pinToBottom}
@@ -1279,6 +1290,7 @@ export function SupervisorPage({
             maxLength={SUPERVISOR_MESSAGE_MAX_CHARS}
             composerRef={composerRef}
             allowUploads
+            compactAttachments
             attachmentTargetNoun="message"
             searchRepositories={NO_REPOSITORIES}
             images={draftItems.images}

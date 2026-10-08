@@ -228,6 +228,10 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
       'the answered supervisor request to leave the inbox',
     );
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
+    await expect(conversation(page).locator('.agentico-activity-mark')).toHaveAttribute(
+      'data-state',
+      'complete',
+    );
     await evidenceShot(handle, 'supervisor-first-run-verdict');
     transcript.step('approved inline: one-line verdict, completed turn, inbox cleared');
 
@@ -238,6 +242,27 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     await expect(status(page)).toHaveText('Working…');
     await expect(stopButton(page)).toBeEnabled();
     await expect(conversation(page).getByText(/elapsed/)).toBeVisible();
+    const workingMark = conversation(page).locator('.agentico-activity-mark');
+    await expect(workingMark).toHaveAttribute('data-state', 'working');
+    await conversation(page).evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    const workingClearance = await workingMark.evaluate((mark) => {
+      const activity = mark.closest('.conversation__activity')!;
+      const composer = document.querySelector('.supervisor-page__dock .composer')!;
+      return composer.getBoundingClientRect().top - activity.getBoundingClientRect().bottom;
+    });
+    expect(workingClearance).toBeGreaterThanOrEqual(32);
+    const pathsBefore = await workingMark
+      .locator('path')
+      .evaluateAll((paths) => paths.map((path) => getComputedStyle(path).d));
+    await expect
+      .poll(() =>
+        workingMark
+          .locator('path')
+          .evaluateAll((paths) => paths.map((path) => getComputedStyle(path).d)),
+      )
+      .not.toEqual(pathsBefore);
     await evidenceShot(handle, 'supervisor-first-run-working');
     await stopButton(page).click();
     await waitForProviderLog(world, 'interrupted:4');
@@ -248,6 +273,8 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     expect(stoppedState.sessionId).toBe(firstState.sessionId);
     expect(stoppedState.lifecycle).toBe('idle');
     expect(providerInvocationCount(world.providerInvocationLog)).toBe(1);
+    await expect(workingMark).not.toBeVisible();
+    await expect(workingMark).toHaveAttribute('data-state', 'resting');
     await evidenceShot(handle, 'supervisor-first-run-stopped');
     transcript.step('Stop returned the supervisor to Ready; the provider ran exactly once');
 

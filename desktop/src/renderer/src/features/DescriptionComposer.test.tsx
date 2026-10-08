@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -48,7 +48,7 @@ const REMOTE_CONNECTION: ConnectionState = {
 };
 
 /** A controlled host so staged images/attachments/references render as chips. */
-function Harness() {
+function Harness({ compactAttachments = false }: { compactAttachments?: boolean }) {
   const [value, setValue] = useState('');
   const [images, setImages] = useState<readonly string[]>([]);
   const [attachments, setAttachments] = useState<readonly string[]>([]);
@@ -60,6 +60,7 @@ function Harness() {
       id="description"
       label="Description"
       placeholder="Describe the work"
+      compactAttachments={compactAttachments}
       value={value}
       searchRepositories={[{ key: 'repo-a' }]}
       images={images}
@@ -372,6 +373,83 @@ describe('DescriptionComposer on a local server', () => {
     expect(screen.queryByText(FILE_SEARCH_REQUIRES_LOCAL_SERVER)).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Remove reference repo-a/src/app.ts' }));
     expect(screen.queryByText('@repo-a/src/app.ts')).not.toBeInTheDocument();
+  });
+});
+
+describe('DescriptionComposer compact attachments', () => {
+  it('keeps numbered image and file tokens beside Attach while preserving names and draft editing', async () => {
+    const mock = installAgenticoMock({ connection: LOCAL_CONNECTION });
+    const first = 'clipboard-79963618-2eca-44b2-a61a-c39946ffc3b4.png';
+    const second = 'clipboard-f5c1973c-5f82-401b-954d-83b7d6e4b066.png';
+    mock.api.pickCreationFiles.mockImplementation((kind: string) =>
+      Promise.resolve({
+        paths: kind === 'image' ? [`/safe/${first}`, `/safe/${second}`] : ['/safe/design.pdf'],
+      }),
+    );
+    render(<Harness compactAttachments />);
+    const user = userEvent.setup();
+    const textarea = await screen.findByLabelText('Description');
+    await user.type(textarea, 'Compare these screenshots');
+    const attach = screen.getByRole('button', { name: 'Attach files or photos' });
+    await user.click(attach);
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    await user.click(attach);
+    await user.click(screen.getByRole('menuitem', { name: 'Add files' }));
+
+    const files = screen.getByRole('list', { name: 'Attached files' });
+    expect(within(files).getByText('Image 1')).toHaveAttribute('title', first);
+    expect(within(files).getByText('Image 2')).toHaveAttribute('title', second);
+    expect(within(files).getByText('File 1')).toHaveAttribute('title', 'design.pdf');
+    expect(files.closest('.composer__toolbar')).toContainElement(attach);
+    expect(screen.queryByText(/Paste or drop/)).not.toBeInTheDocument();
+    expect(textarea).toHaveValue('Compare these screenshots');
+    expect(files).not.toHaveTextContent('clipboard-');
+
+    const remove = within(files).getByRole('button', { name: `Remove ${first}` });
+    remove.focus();
+    await user.keyboard('{Enter}');
+    expect(within(files).getByText('Image 1')).toHaveAttribute('title', second);
+    expect(within(files).queryByText('Image 2')).not.toBeInTheDocument();
+    await user.click(textarea);
+    await user.type(textarea, ' please');
+    expect(textarea).toHaveValue('Compare these screenshots please');
+  });
+
+  it('keeps remote tokens and their numbers through upload completion and failure', async () => {
+    const mock = installAgenticoMock({ connection: REMOTE_CONNECTION });
+    let release: (result: unknown) => void = () => undefined;
+    mock.api.uploadCreationFiles.mockImplementation(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    mock.api.pickCreationFiles.mockResolvedValue({
+      paths: ['/shots/first.png', '/shots/second.png'],
+    });
+    render(<Harness compactAttachments />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Attach files or photos' }));
+    await user.click(screen.getByRole('menuitem', { name: 'Add photos' }));
+    expect(screen.getByText('Image 1')).toHaveAttribute('title', 'first.png');
+    expect(screen.getByText('Image 2')).toHaveAttribute('title', 'second.png');
+    expect(screen.getAllByText('Uploading…')).toHaveLength(2);
+    await act(async () =>
+      release({
+        results: [
+          {
+            ok: true,
+            upload: { id: 'first', name: 'first.png', kind: 'image', serverKey: 'server-key-1' },
+          },
+          { ok: false, error: { code: 'internal', summary: 'Upload failed. Try again.' } },
+        ],
+      }),
+    );
+    expect(screen.getByText('Image 1')).toHaveAttribute('title', 'first.png');
+    expect(screen.getByText('Image 2')).toHaveAttribute('title', 'second.png');
+    expect(screen.queryByText('Uploading…')).not.toBeInTheDocument();
+    expect(screen.getByText('Upload failed. Try again.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retry second.png' })).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Remove second.png' }));
+    expect(screen.queryByText('Image 2')).not.toBeInTheDocument();
+    expect(screen.getByText('Image 1')).toBeVisible();
   });
 });
 

@@ -158,10 +158,11 @@ type transcriptStore struct {
 	index     *os.File
 	indexBody int64
 	// offsets[i] is the byte offset of the record with seq i+1.
-	offsets []int64
-	size    int64
-	byCMID  map[string]int64
-	byID    map[string]int64
+	offsets         []int64
+	size            int64
+	byCMID          map[string]int64
+	byID            map[string]int64
+	creationDisplay creationDisplayIndex
 	// recovery is set when open preserved a corrupt transcript; the
 	// coordinator turns it into a marker once.
 	recovery *RecoveryNote
@@ -233,6 +234,7 @@ func (s *transcriptStore) load() error {
 	s.offsets = scan.offsets
 	s.size = scan.size
 	for _, rec := range scan.records {
+		s.creationDisplay.observe(rec)
 		if rec.Kind == KindUser && rec.ClientMessageID != "" {
 			s.byCMID[rec.ClientMessageID] = rec.Seq
 		}
@@ -491,6 +493,7 @@ func (s *transcriptStore) appendRecord(rec Record) (Record, bool, error) {
 		s.byCMID[rec.ClientMessageID] = rec.Seq
 	}
 	s.byID[rec.ID] = rec.Seq
+	s.creationDisplay.observe(rec)
 	if isHistoryContent(rec) {
 		s.content = true
 	}
@@ -603,6 +606,9 @@ func (s *transcriptStore) replayAfter(seq int64) ([]Record, bool, error) {
 		return nil, false, nil
 	}
 	recs, err := s.afterLocked(seq)
+	for i := range recs {
+		recs[i] = s.creationDisplay.project(recs[i])
+	}
 	return recs, err == nil, err
 }
 

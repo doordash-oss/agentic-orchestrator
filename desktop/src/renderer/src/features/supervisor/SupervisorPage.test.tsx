@@ -487,6 +487,46 @@ describe('SupervisorPage conversation', () => {
     expect(status()).toHaveTextContent('Ready');
   });
 
+  it('keeps one logo through streamed content and only checks successful completion', async () => {
+    const state = supervisorState({ settings: CHOSEN, lifecycle: 'running' });
+    const mock = await renderPage({ supervisorState: state });
+    const mark = () => transcript().querySelector('.agentico-activity-mark');
+    const original = mark();
+    expect(original).toHaveAttribute('data-state', 'working');
+    emit(mock, {
+      type: 'record',
+      ...envelope(state),
+      record: supervisorRecord({
+        seq: 1,
+        kind: 'assistant',
+        messages: [{ index: 1, role: 'assistant', type: 'text', text: 'A progress update' }],
+      }),
+    });
+    expect(mark()).toBe(original);
+    expect(mark()).toHaveAttribute('data-state', 'working');
+    const pushState = (overrides: Partial<SupervisorState>) =>
+      emit(mock, { type: 'state', ...envelope(state), state: { ...state, ...overrides } });
+    for (const lifecycle of [
+      'waiting_permission',
+      'waiting_question',
+      'failed',
+      'stopped',
+    ] as const) {
+      pushState({ lifecycle });
+      expect(mark()).toBe(original);
+      expect(mark()).not.toBeVisible();
+      expect(mark()).toHaveAttribute('data-state', 'resting');
+    }
+    pushState({ lifecycle: 'idle', lastTurnOutcome: 'interrupted' });
+    expect(mark()).not.toBeVisible();
+    pushState({ lifecycle: 'running' });
+    expect(mark()).toBeVisible();
+    pushState({ lifecycle: 'idle', lastTurnOutcome: 'completed' });
+    expect(mark()).toBe(original);
+    expect(mark()).toBeVisible();
+    expect(mark()).toHaveAttribute('data-state', 'complete');
+  });
+
   it('keeps a streamed idle state over a refresh that was fetched before it', async () => {
     const idle = supervisorState({ settings: CHOSEN, lifecycle: 'idle', sessionId: SESSION_ID });
     const mock = await renderPage({ supervisorState: idle });
@@ -1884,8 +1924,8 @@ describe('SupervisorPage composer attachments', () => {
     });
     await attach('Add photos', ['/shots/one.png'], mock);
     await attach('Add files', ['/notes/plan.txt'], mock);
-    expect(await screen.findByText(/one\.png/)).toBeVisible();
-    expect(screen.getByText(/plan\.txt/)).toBeVisible();
+    expect(await screen.findByText('Image 1')).toHaveAttribute('title', 'one.png');
+    expect(screen.getByText('File 1')).toHaveAttribute('title', 'plan.txt');
 
     const user = userEvent.setup();
     await user.type(composer(), 'Read these{Enter}');
@@ -1941,7 +1981,7 @@ describe('SupervisorPage composer attachments', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
 
     await attach('Add photos', ['/shots/one.png'], mock);
-    expect(await screen.findByText(/one\.png/)).toBeVisible();
+    expect(await screen.findByText('Image 1')).toHaveAttribute('title', 'one.png');
     act(() => mock.emitConnection({ ...REMOTE_READY, serverKey: 'server-key-2' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled());
     await user.type(composer(), '{Enter}');
@@ -1964,19 +2004,19 @@ describe('SupervisorPage drafts store', () => {
       },
     });
     await attach('Add photos', ['/shots/one.png'], mock);
-    expect(await screen.findByText(/one\.png/)).toBeVisible();
+    expect(await screen.findByText('Image 1')).toHaveAttribute('title', 'one.png');
     mock.view.unmount();
 
     render(<Harness store={store} serverKey="server-b" />);
     await screen.findByTestId('supervisor-model-chip');
     expect(composer()).toHaveValue('');
-    expect(screen.queryByText(/one\.png/)).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Attached files' })).toBeNull();
     cleanup();
 
     render(<Harness store={store} serverKey="server-a" />);
     await screen.findByTestId('supervisor-model-chip');
     expect(composer()).toHaveValue('Explain this');
-    expect(screen.getByText(/one\.png/)).toBeVisible();
+    expect(screen.getByText('Image 1')).toHaveAttribute('title', 'one.png');
     expect(store.entry('server-a').errorReference).not.toBeNull();
   });
 
@@ -1994,7 +2034,7 @@ describe('SupervisorPage drafts store', () => {
       { store, serverKey: 'server-a' },
     );
     expect(composer()).toHaveValue('Keep me');
-    expect(screen.getByText(/one\.png/)).toBeVisible();
+    expect(screen.getByText('Image 1')).toHaveAttribute('title', 'one.png');
     expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull();
     expect(store.entry('server-a').conversationId).toBe('supervisor-conversation-1');
     expect(store.entry('server-a').queue).toHaveLength(0);
@@ -2116,7 +2156,7 @@ describe('SupervisorPage message queue', () => {
     const rows = within(queueStrip()).getAllByRole('listitem');
     await user.click(within(rows[0]!).getByRole('button', { name: 'Edit' }));
     expect(composer()).toHaveValue('Already typed\n\nEdit me');
-    expect(screen.getByText(/plan\.txt/)).toBeVisible();
+    expect(screen.getByText('File 1')).toHaveAttribute('title', 'plan.txt');
     await user.click(within(queueStrip()).getByRole('button', { name: 'Remove' }));
     expect(screen.queryByRole('region', { name: 'Queued messages' })).toBeNull();
     expect(mock.api.sendSupervisorMessage).not.toHaveBeenCalled();

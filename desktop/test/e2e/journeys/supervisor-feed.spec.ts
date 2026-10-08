@@ -41,6 +41,7 @@ test('supervisor feed replays Markdown and every completed file diff in both the
     visibility: 'content',
     created_at: '2026-01-01T00:00:00Z',
   };
+  const createdPath = path.join(world.workspaceRoot, 'created.ts');
   const records = [
     { kind: 'user', data: { text: 'Make the welcome message clearer.' } },
     {
@@ -95,6 +96,70 @@ test('supervisor feed replays Markdown and every completed file diff in both the
         ],
       },
     },
+    // Older transcripts can contain the observed patch immediately before
+    // the native result for the same creation. Replay keeps one creation,
+    // while the subsequent legitimate edit remains a separate card.
+    {
+      kind: 'tool_use',
+      data: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'create-1',
+            name: 'Write',
+            input: { paths: [createdPath] },
+          },
+        ],
+      },
+    },
+    {
+      kind: 'tool_result',
+      visibility: 'display_only',
+      data: {
+        observed_files: true,
+        file_changes: [
+          {
+            Path: createdPath,
+            Operation: 'add',
+            Detail: '@@ -0,0 +1 @@\n+export const answer = 1;',
+            HasDiffPatch: true,
+            AddedLines: 1,
+          },
+        ],
+      },
+    },
+    {
+      kind: 'tool_result',
+      data: {
+        content: [{ type: 'tool_result', tool_use_id: 'create-1', content: 'Created file' }],
+        file_changes: [
+          {
+            Path: createdPath,
+            Operation: 'write',
+            Detail: 'export const answer = 1;\n',
+            HasDiffPatch: true,
+            AddedLines: 1,
+          },
+        ],
+      },
+    },
+    {
+      kind: 'tool_result',
+      visibility: 'display_only',
+      data: {
+        observed_files: true,
+        file_changes: [
+          {
+            Path: createdPath,
+            Operation: 'update',
+            Detail: '-export const answer = 1;\n+export const answer = 2;',
+            HasDiffPatch: true,
+            AddedLines: 1,
+            RemovedLines: 1,
+          },
+        ],
+      },
+    },
     {
       kind: 'assistant',
       data: {
@@ -128,7 +193,13 @@ test('supervisor feed replays Markdown and every completed file diff in both the
     );
     await expect(feed.locator('.conversation__markdown strong')).toHaveText('Done.');
     await expect(feed.locator('.conversation__markdown li')).toHaveCount(2);
-    await expect(feed.locator('.conversation__file-change')).toHaveCount(2);
+    await expect(feed.locator('.conversation__file-change')).toHaveCount(4);
+    const creationCards = feed
+      .locator('.conversation__file-change')
+      .filter({ hasText: 'created.ts' });
+    await expect(creationCards).toHaveCount(2);
+    await expect(creationCards.first()).toContainText('created');
+    await expect(creationCards.last()).toContainText('answer = 2');
     await expect(feed.getByText('Welcome screen reviewed')).toBeVisible();
     await expect(feed.getByText('Completed', { exact: true })).toBeVisible();
     await evidenceShotBothThemes(handle, 'supervisor-feed');

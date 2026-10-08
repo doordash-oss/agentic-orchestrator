@@ -25,7 +25,7 @@ const SUPPRESSED_TYPES = ['usage_update', 'success', 'result', 'system', 'prompt
 
 export type ConversationMode = 'chat' | 'assistant-only';
 
-export type SubagentState = 'running' | 'done' | 'failed' | 'cancelled';
+export type SubagentState = 'running' | 'done' | 'failed' | 'cancelled' | 'unknown';
 
 /** Live view of one delegated sub-agent, folded from its task lifecycle rows. */
 export interface SubagentActivity {
@@ -153,6 +153,8 @@ export function activityLabel(entry: TranscriptMessage): string | null {
   // Redaction hides row text, not the server-sanitized tool/task metadata —
   // most live tool rows arrive redacted, so label them before blanking.
   const tool = entry.tool ?? entry.task?.lastToolName;
+  if (entry.toolCall?.summary?.trim())
+    return `${tool ? friendlyToolName(tool) + ' · ' : ''}${entry.toolCall.summary.trim()}`;
   if (tool !== undefined && tool.trim() !== '') return `Using ${friendlyToolName(tool)}`;
   if (entry.task?.description?.trim()) return entry.task.description.trim();
   if (entry.toolCall?.summary?.trim()) return entry.toolCall.summary.trim();
@@ -359,7 +361,7 @@ export function buildConversation(
     if (label === null) continue;
     const previous = items.at(-1);
     if (previous?.kind === 'activity') {
-      if (label !== '' && !previous.labels.includes(label)) previous.labels.push(label);
+      if (label !== '') previous.labels.push(label);
     } else {
       items.push({
         kind: 'activity',

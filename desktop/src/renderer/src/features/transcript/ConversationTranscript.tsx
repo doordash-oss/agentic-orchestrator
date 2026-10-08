@@ -114,37 +114,79 @@ function CopyMessageButton({ text }: { text: string }) {
   );
 }
 
+function ActivityClock({
+  startedAt,
+  lastActivityAt,
+}: {
+  startedAt?: string;
+  lastActivityAt?: string;
+}) {
+  const [mountedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const start = startedAt === undefined ? mountedAt : Date.parse(startedAt);
+  const last = lastActivityAt === undefined ? start : Date.parse(lastActivityAt);
+  const elapsed = Math.max(
+    0,
+    Math.floor((now - (Number.isFinite(start) ? start : mountedAt)) / 1000),
+  );
+  const quiet = Math.max(0, Math.floor((now - (Number.isFinite(last) ? last : mountedAt)) / 1000));
+  const duration = (seconds: number) =>
+    seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return (
+    <span className="conversation__activity-time" aria-live="off">
+      {duration(elapsed)} elapsed{quiet >= 30 ? ` · No new update for ${duration(quiet)}` : ''}
+    </span>
+  );
+}
+
 export function ActivityIndicator({
   labels,
   active,
   idleLabel,
+  startedAt,
+  lastActivityAt,
 }: {
   labels: string[];
   active: boolean;
   idleLabel: string;
+  startedAt?: string;
+  lastActivityAt?: string;
 }) {
-  const shownLabels = labels.slice(-3);
+  const latest = labels.at(-1) ?? idleLabel;
   return (
-    <div
-      className="conversation__activity"
-      data-active={active}
-      role={active ? 'status' : undefined}
-    >
-      {active ? (
-        <span className="conversation__thinking" aria-hidden="true">
-          {Array.from({ length: 8 }, (_, index) => (
-            <span key={index} />
-          ))}
-        </span>
-      ) : (
-        <span className="conversation__activity-mark" aria-hidden="true">
-          ✓
-        </span>
-      )}
-      <div className="conversation__activity-copy">
-        <strong>{active ? 'Working' : 'Worked'}</strong>
-        <span>{shownLabels.length > 0 ? shownLabels.join(' · ') : idleLabel}</span>
+    <div className="conversation__activity" data-active={active}>
+      <div className="conversation__activity-line" role={active ? 'status' : undefined}>
+        {active ? (
+          <span className="conversation__thinking" aria-hidden="true">
+            {Array.from({ length: 8 }, (_, index) => (
+              <span key={index} />
+            ))}
+          </span>
+        ) : (
+          <span className="conversation__activity-mark" aria-hidden="true">
+            ·
+          </span>
+        )}
+        <div className="conversation__activity-copy">
+          <strong>{active ? 'Working' : 'Worked'}</strong>
+          <span title={latest}>{latest}</span>
+        </div>
       </div>
+      {active ? <ActivityClock startedAt={startedAt} lastActivityAt={lastActivityAt} /> : null}
+      {labels.length > 1 ? (
+        <details className="conversation__activity-history">
+          <summary>{labels.length} activity steps</summary>
+          <ol>
+            {labels.map((label, index) => (
+              <li key={`${index}:${label}`}>{label}</li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -153,8 +195,9 @@ function subagentDetail(agent: SubagentActivity): string {
   if (agent.state === 'running') {
     return agent.lastTool !== undefined && agent.lastTool !== ''
       ? `using ${friendlyToolName(agent.lastTool)}`
-      : 'starting up';
+      : 'In progress';
   }
+  if (agent.state === 'unknown') return 'Turn ended without a final task update';
   if (agent.summary?.trim()) return agent.summary.trim();
   if (agent.state === 'failed') return 'Failed';
   return agent.state === 'cancelled' ? 'Cancelled' : 'Finished';
@@ -163,9 +206,11 @@ function subagentDetail(agent: SubagentActivity): string {
 function subagentTally(agents: SubagentActivity[]): string {
   const running = agents.filter((agent) => agent.state === 'running').length;
   const failed = agents.filter((agent) => agent.state === 'failed').length;
+  const unknown = agents.filter((agent) => agent.state === 'unknown').length;
   const cancelled = agents.filter((agent) => agent.state === 'cancelled').length;
   if (running > 0) return `${running} of ${agents.length} running`;
   if (failed > 0) return `${failed} of ${agents.length} failed`;
+  if (unknown > 0) return `${unknown} status unavailable`;
   return cancelled > 0 ? `${cancelled} of ${agents.length} cancelled` : 'all finished';
 }
 
@@ -187,10 +232,23 @@ export function SubagentGroupCard({ agents }: { agents: SubagentActivity[] }) {
         {agents.map((agent) => (
           <li key={agent.id} className="conversation__subagent" data-state={agent.state}>
             <span className="conversation__subagent-lamp" aria-hidden="true" />
-            <span className="conversation__subagent-desc">
-              {agent.description ?? agent.taskType ?? 'Delegated task'}
+            <div className="conversation__subagent-copy">
+              <span className="conversation__subagent-desc">
+                {agent.description ?? agent.taskType ?? 'Delegated task'}
+              </span>
+              <span className="conversation__subagent-detail">{subagentDetail(agent)}</span>
+            </div>
+            <span className="conversation__subagent-state">
+              {agent.state === 'done'
+                ? 'Completed'
+                : agent.state === 'running'
+                  ? 'Running'
+                  : agent.state === 'failed'
+                    ? 'Failed'
+                    : agent.state === 'unknown'
+                      ? 'No final update'
+                      : 'Cancelled'}
             </span>
-            <span className="conversation__subagent-detail">{subagentDetail(agent)}</span>
           </li>
         ))}
       </ul>
@@ -222,6 +280,8 @@ export interface ConversationTranscriptProps {
   onNearTop?(): void;
   /** Holds the first visible row in place when rows are prepended above it. */
   anchorPrepend?: boolean;
+  activityStartedAt?: string;
+  lastActivityAt?: string;
 }
 
 interface PrependAnchor {
@@ -425,11 +485,16 @@ export function ConversationTranscript({
   top,
   onNearTop,
   anchorPrepend = false,
+  activityStartedAt,
+  lastActivityAt,
 }: ConversationTranscriptProps) {
   const scrollRef = useRef<HTMLElement>(null);
   const rowsStartRef = useRef<HTMLSpanElement>(null);
   const stickToBottom = useRef(true);
   const lastItem = items.at(-1);
+  const runningAgents = items.flatMap((item) =>
+    item.kind === 'subagents' ? item.agents.filter((agent) => agent.state === 'running') : [],
+  );
   const hasTrailing = trailing !== undefined && trailing !== null;
   const captureAnchor = usePrependAnchor(scrollRef, rowsStartRef, items[0]?.key, anchorPrepend);
 
@@ -552,20 +617,21 @@ export function ConversationTranscript({
             labels={item.labels}
             idleLabel={idleLabel}
             active={waiting && index === items.length - 1}
+            startedAt={activityStartedAt}
+            lastActivityAt={lastActivityAt}
           />
         ),
       )}
       {waiting && lastItem?.kind !== 'activity' ? (
         <ActivityIndicator
           labels={(() => {
-            const running =
-              lastItem?.kind === 'subagents'
-                ? lastItem.agents.filter((agent) => agent.state === 'running').length
-                : 0;
+            const running = runningAgents.length;
             return running > 0
               ? [`waiting on ${running} sub-agent${running === 1 ? '' : 's'}`]
               : [];
           })()}
+          startedAt={activityStartedAt}
+          lastActivityAt={lastActivityAt}
           idleLabel={idleLabel}
           active
         />

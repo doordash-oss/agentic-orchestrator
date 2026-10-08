@@ -607,8 +607,11 @@ export function SupervisorPage({
         optimistic: optimistic?.text ?? null,
         optimisticAttachments: optimistic?.attachments ?? [],
         provisional: [...provisional.values()],
+        activeTurnId: isTurnActive(state?.lifecycle ?? 'stopped')
+          ? (records.findLast((record) => record.kind === 'user')?.turnId ?? '')
+          : '',
       }),
-    [committedConversation, optimistic, provisional],
+    [committedConversation, optimistic, provisional, state?.lifecycle, records],
   );
 
   const lifecycle = state?.lifecycle ?? 'stopped';
@@ -1111,6 +1114,8 @@ export function SupervisorPage({
         assistantName={SUPERVISOR_COPY.title}
         items={conversation}
         waiting={transcriptWaiting}
+        activityStartedAt={records.findLast((record) => record.kind === 'user')?.createdAt}
+        lastActivityAt={records.at(-1)?.createdAt}
         idleLabel="Working through your message"
         pinToBottomToken={pinToBottom}
         trailing={trailing}

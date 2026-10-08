@@ -528,7 +528,12 @@ func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCall {
 	switch block.Name {
 	case "Agent", "Task", "TaskCreate":
 	default:
-		return nil
+		fields := transcriptJSONFields(block.Input)
+		summary := firstTranscriptString(fields, "description", "summary", "title")
+		if summary == "" {
+			summary = safeControlSummary(&llm.ControlRequestMessage{Request: llm.ControlRequest{ToolName: block.Name, Input: block.Input}})
+		}
+		return &ToolCall{Summary: SafeDisplayText(summary, 180)}
 	}
 	fields := transcriptJSONFields(block.Input)
 	summary := firstTranscriptString(fields, "description", "summary", "title")
@@ -539,10 +544,7 @@ func toolCallDTOFromToolUse(block llm.ContentBlock) *ToolCall {
 	if summary == "" && prompt == "" {
 		return nil
 	}
-	return &ToolCall{
-		Summary: SafeDisplayText(summary, 500),
-		Prompt:  safeTranscriptPrompt(prompt),
-	}
+	return &ToolCall{Summary: SafeDisplayText(summary, 500), Prompt: safeTranscriptPrompt(prompt)}
 }
 
 func taskDTOFromStarted(msg *llm.TaskStartedMessage) *Task {

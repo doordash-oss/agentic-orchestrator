@@ -379,11 +379,13 @@ export interface SupervisorConversationOptions {
   /** The just-sent message's attachments, chips under the optimistic row. */
   optimisticAttachments?: readonly ConversationAttachment[];
   provisional?: readonly ProvisionalReply[];
+  activeTurnId?: string;
 }
 
 /** The folded committed history plus the stream ids it already holds. */
 export interface CommittedConversation {
   items: readonly ConversationItem[];
+  itemTurns?: readonly string[];
   /** `streamKey(generation, streamMessageId)` of every committed assistant record. */
   committedStreams: ReadonlySet<string>;
 }
@@ -411,9 +413,30 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
   const items: ConversationItem[] = [];
   // The turn each item belongs to, index-aligned with `items`.
   const itemTurns: string[] = [];
+  // Permission verdicts split transcript segments. Keep one task card across
+  // those seams, updating its original row when the task reports again.
+  const tasks = new Map<
+    string,
+    Extract<ConversationItem, { kind: 'subagents' }>['agents'][number]
+  >();
   const push = (turnId: string, produced: readonly ConversationItem[]): void => {
-    items.push(...produced);
-    itemTurns.push(...produced.map(() => turnId));
+    for (const item of produced) {
+      if (item.kind === 'subagents') {
+        item.agents = item.agents.filter((agent) => {
+          const key = `${turnId}:${agent.id}`;
+          const previous = tasks.get(key);
+          if (previous !== undefined) {
+            Object.assign(previous, agent);
+            return false;
+          }
+          tasks.set(key, agent);
+          return true;
+        });
+        if (item.agents.length === 0) continue;
+      }
+      items.push(item);
+      itemTurns.push(turnId);
+    }
   };
   let segment: TranscriptMessage[] = [];
   let segmentTurn = '';
@@ -512,7 +535,7 @@ function buildCommittedConversation(records: readonly SupervisorRecord[]): Commi
         : [streamKey(record.generation, record.streamMessageId)],
     ),
   );
-  return { items, committedStreams };
+  return { items, itemTurns, committedStreams };
 }
 
 /**
@@ -532,7 +555,20 @@ export function supervisorConversationTail(
   committed: CommittedConversation,
   options: SupervisorConversationOptions = {},
 ): ConversationItem[] {
-  const items: ConversationItem[] = [...committed.items];
+  const items: ConversationItem[] = committed.items.map((item, index) => {
+    if (
+      item.kind !== 'subagents' ||
+      options.activeTurnId === undefined ||
+      committed.itemTurns?.[index] === options.activeTurnId
+    )
+      return item;
+    return {
+      ...item,
+      agents: item.agents.map((agent) =>
+        agent.state === 'running' ? { ...agent, state: 'unknown' as const } : agent,
+      ),
+    };
+  });
   for (const reply of options.provisional ?? []) {
     if (committed.committedStreams.has(streamKey(reply.generation, reply.streamMessageId))) {
       continue;

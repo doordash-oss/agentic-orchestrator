@@ -488,6 +488,9 @@ func supervisorRecordDTO(rec supervisor.Record, workDir string) SupervisorRecord
 		var data supervisor.ContentData
 		_ = json.Unmarshal(rec.Data, &data)
 		dto.Messages = conversationDTOs(index, roleAssistant, data.Content, workDir, false, false, "", 0)
+		if data.TaskStarted != nil || data.TaskProgress != nil || data.TaskNotification != nil {
+			dto.Messages = transcriptDTOs([]llm.SDKMessage{{TaskStarted: data.TaskStarted, TaskProgress: data.TaskProgress, TaskNotification: data.TaskNotification}}, index, workDir)
+		}
 	case supervisor.KindToolResult:
 		var data supervisor.ContentData
 		_ = json.Unmarshal(rec.Data, &data)

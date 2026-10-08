@@ -14808,3 +14808,79 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Activity remains readable during long tool runs and quiet provider periods. */
+.conversation__activity {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  width: 100%;
+}
+.conversation__activity-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.conversation__activity-copy {
+  flex: 1;
+}
+.conversation__activity-time {
+  margin-left: 24px;
+  color: var(--muted);
+  font: 11px var(--bench-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.conversation__activity-history {
+  margin-left: 24px;
+  font: 12px/1.5 var(--bench-font-text);
+}
+.conversation__activity-history summary {
+  cursor: pointer;
+  width: fit-content;
+  color: var(--muted);
+}
+.conversation__activity-history summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 3px;
+}
+.conversation__activity-history ol {
+  max-height: 220px;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding-left: 20px;
+  border-left: 1px solid var(--hairline);
+}
+.conversation__activity-history li {
+  padding: 3px 8px;
+  overflow-wrap: anywhere;
+}
+.conversation__subagent-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.conversation__subagent-desc {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.conversation__subagent-detail {
+  max-width: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.conversation__subagent-state {
+  font: 11px var(--bench-font-text);
+  color: var(--muted);
+}
+.conversation__subagent[data-state='running'] .conversation__subagent-state {
+  color: var(--accent);
+}
+.conversation__subagent[data-state='failed'] .conversation__subagent-state {
+  color: var(--bad);
+}
+
+.conversation__subagent[data-state='unknown'] .conversation__subagent-lamp {
+  background: var(--muted);
+}

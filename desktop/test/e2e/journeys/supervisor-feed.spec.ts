@@ -45,6 +45,27 @@ test('supervisor feed replays Markdown and every completed file diff in both the
     { kind: 'user', data: { text: 'Make the welcome message clearer.' } },
     {
       kind: 'tool_use',
+      visibility: 'display_only',
+      data: { task_started: { task_id: 'reviewer', description: 'Review the welcome screen' } },
+    },
+    {
+      kind: 'tool_use',
+      visibility: 'display_only',
+      data: { task_progress: { task_id: 'reviewer', last_tool_name: 'Read' } },
+    },
+    {
+      kind: 'tool_use',
+      visibility: 'display_only',
+      data: {
+        task_notification: {
+          task_id: 'reviewer',
+          status: 'completed',
+          summary: 'Welcome screen reviewed',
+        },
+      },
+    },
+    {
+      kind: 'tool_use',
       data: {
         content: [
           { type: 'tool_use', id: 'edit-1', name: 'Write', input: { file_path: 'src/welcome.ts' } },
@@ -108,6 +129,8 @@ test('supervisor feed replays Markdown and every completed file diff in both the
     await expect(feed.locator('.conversation__markdown strong')).toHaveText('Done.');
     await expect(feed.locator('.conversation__markdown li')).toHaveCount(2);
     await expect(feed.locator('.conversation__file-change')).toHaveCount(2);
+    await expect(feed.getByText('Welcome screen reviewed')).toBeVisible();
+    await expect(feed.getByText('Completed', { exact: true })).toBeVisible();
     await evidenceShotBothThemes(handle, 'supervisor-feed');
   } finally {
     if (handle !== null) await closeApp(handle);

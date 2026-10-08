@@ -15,9 +15,13 @@ limitations under the License.
 */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { installTranscriptLayout, viewportOffset } from '../../test/transcriptLayout';
-import { ConversationTranscript, FileChangeCard } from './ConversationTranscript';
+import {
+  ActivityIndicator,
+  ConversationTranscript,
+  FileChangeCard,
+} from './ConversationTranscript';
 import type { ConversationItem } from './conversation';
 
 afterEach(cleanup);
@@ -147,7 +151,9 @@ describe('conversation turns', () => {
 
     const line = screen.getByText('Worked').closest('.conversation__activity')!;
     expect(line).toHaveTextContent('Worked');
-    expect(line).toHaveTextContent('Using bash · Using read');
+    expect(line.querySelector('.conversation__activity-copy')).toHaveTextContent('Using read');
+    fireEvent.click(screen.getByText('2 activity steps'));
+    expect(screen.getByText('Using bash')).toBeVisible();
     expect(line.querySelector('.conversation__thinking')).toBeNull();
     expect(line.querySelector('.conversation__activity-mark')).not.toBeNull();
   });
@@ -263,5 +269,39 @@ describe('ConversationTranscript', () => {
       />,
     );
     expect(onNearTop).toHaveBeenCalled();
+  });
+});
+
+describe('long running activity', () => {
+  it('advances elapsed time and explains quiet periods without changing tool labels', () => {
+    vi.useFakeTimers();
+    try {
+      const now = new Date('2026-10-08T12:00:00Z');
+      vi.setSystemTime(now);
+      const props = {
+        labels: ['bash · Run tests'],
+        idleLabel: 'Waiting',
+        active: true,
+        startedAt: now.toISOString(),
+        lastActivityAt: now.toISOString(),
+      };
+      const view = render(<ActivityIndicator {...props} />);
+      act(() => vi.advanceTimersByTime(31000));
+      expect(screen.getByText(/31s elapsed/)).toHaveTextContent('No new update for 31s');
+      view.rerender(
+        <ActivityIndicator
+          {...props}
+          lastActivityAt={new Date().toISOString()}
+          labels={['bash · Run tests', 'read · Inspect results']}
+        />,
+      );
+      expect(screen.getByText('31s elapsed')).toBeVisible();
+      expect(screen.queryByText(/No new update/)).toBeNull();
+      view.rerender(<ActivityIndicator {...props} active={false} />);
+      expect(screen.queryByText(/elapsed/)).toBeNull();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 });

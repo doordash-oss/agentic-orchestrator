@@ -395,3 +395,60 @@ describe('supervisorModel', () => {
     ]);
   });
 });
+
+it('keeps one task across verdict seams and settles missing final reports honestly', () => {
+  const records = [
+    supervisorRecord({
+      seq: 1,
+      turnId: 't',
+      kind: 'tool_use',
+      messages: [
+        {
+          index: 1,
+          role: 'system',
+          type: 'task_started',
+          task: { id: 'a', description: 'Review tests' },
+        },
+      ],
+    }),
+    supervisorRecord({
+      seq: 2,
+      turnId: 't',
+      kind: 'permission',
+      request: {
+        requestId: 'p',
+        toolName: 'Read',
+        stage: 'resolved',
+        outcome: 'allowed',
+        origin: 'root',
+      },
+      messages: [],
+    }),
+    supervisorRecord({
+      seq: 3,
+      turnId: 't',
+      kind: 'tool_use',
+      messages: [
+        {
+          index: 3,
+          role: 'system',
+          type: 'task_progress',
+          task: { id: 'a', lastToolName: 'Read' },
+        },
+      ],
+    }),
+  ];
+  const live = buildSupervisorConversation(records, { activeTurnId: 't' }).filter(
+    (item) => item.kind === 'subagents',
+  );
+  expect(live).toHaveLength(1);
+  expect(live[0]?.agents[0]).toMatchObject({
+    state: 'running',
+    description: 'Review tests',
+    lastTool: 'Read',
+  });
+  const stopped = buildSupervisorConversation(records, { activeTurnId: '' }).filter(
+    (item) => item.kind === 'subagents',
+  );
+  expect(stopped[0]?.agents[0]?.state).toBe('unknown');
+});

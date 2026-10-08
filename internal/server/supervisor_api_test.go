@@ -917,3 +917,22 @@ func TestSupervisorPendingWriteDoesNotClaimCreation(t *testing.T) {
 		t.Fatalf("pending edit should be activity: %+v", rows)
 	}
 }
+
+func TestSupervisorProjectsTaskActivity(t *testing.T) {
+	events := []supervisor.ContentData{
+		{TaskStarted: &llm.TaskStartedMessage{TaskID: "a", Description: "Review tests"}},
+		{TaskProgress: &llm.TaskProgressMessage{TaskID: "a", LastToolName: "Read"}},
+		{TaskNotification: &llm.TaskNotificationMessage{TaskID: "a", Status: "failed", Summary: "Test failed"}},
+	}
+	for i, event := range events {
+		data, _ := json.Marshal(event)
+		dto := supervisorRecordDTO(supervisor.Record{Seq: int64(i + 1), Kind: supervisor.KindToolUse, Visibility: supervisor.VisibilityDisplayOnly, Data: data}, "/work")
+		if len(dto.Messages) != 1 || dto.Messages[0].Task == nil || dto.Messages[0].Task.ID != "a" {
+			t.Fatalf("missing task: %+v", dto.Messages)
+		}
+	}
+	tool := toolCallDTOFromToolUse(llm.ContentBlock{Type: "tool_use", Name: "Bash", Input: json.RawMessage(`{"description":"Run focused tests","command":"go test ./..."}`)})
+	if tool == nil || tool.Summary != "Run focused tests" {
+		t.Fatalf("tool summary: %+v", tool)
+	}
+}

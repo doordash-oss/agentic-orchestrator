@@ -295,3 +295,33 @@ func TestCoordinator_TranscriptRefusesOutOfRangeCursor(t *testing.T) {
 		t.Fatalf("before=1 = %+v, %v", page, err)
 	}
 }
+
+func TestCoordinatorPersistsTaskActivityWithoutPrompt(t *testing.T) {
+	launcher := &fakeLauncher{}
+	c := newTestCoordinator(t, t.TempDir(), launcher)
+	chooseSettings(t, c)
+	if _, err := c.Send(context.Background(), "review", "", "cm-tasks"); err != nil {
+		t.Fatal(err)
+	}
+	sess := launcher.session(0)
+	sess.emit(llm.SDKMessage{TaskStarted: &llm.TaskStartedMessage{TaskID: "task-a", Description: "Review tests", Prompt: "private delegated instructions"}})
+	sess.emit(llm.SDKMessage{TaskProgress: &llm.TaskProgressMessage{TaskID: "task-a", LastToolName: "Read"}})
+	sess.emit(llm.SDKMessage{TaskNotification: &llm.TaskNotificationMessage{TaskID: "task-a", Status: "completed", Summary: "Tests reviewed"}})
+	sess.emit(successResult())
+	waitLifecycle(t, c, LifecycleIdle)
+	page, err := c.Transcript(PageQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 4 {
+		t.Fatalf("records = %d", len(page.Items))
+	}
+	for _, rec := range page.Items[1:] {
+		if rec.Visibility != VisibilityDisplayOnly {
+			t.Fatalf("task event entered model history: %+v", rec)
+		}
+		if bytes.Contains(rec.Data, []byte("private delegated instructions")) {
+			t.Fatal("task prompt persisted")
+		}
+	}
+}

@@ -54,7 +54,10 @@ type UserData struct {
 type ContentData struct {
 	Content []llm.ContentBlock `json:"content"`
 	// Display metadata survives replay without changing provider tool history.
-	FileChanges []llm.FileChangeEvent `json:"file_changes,omitempty"`
+	FileChanges      []llm.FileChangeEvent        `json:"file_changes,omitempty"`
+	TaskStarted      *llm.TaskStartedMessage      `json:"task_started,omitempty"`
+	TaskProgress     *llm.TaskProgressMessage     `json:"task_progress,omitempty"`
+	TaskNotification *llm.TaskNotificationMessage `json:"task_notification,omitempty"`
 }
 
 // Request stages and outcomes carried by permission and question records.
@@ -1868,6 +1871,15 @@ func (c *Coordinator) observeMessage(gen int64, sessionID string, msg llm.SDKMes
 		}
 	}
 	switch {
+	case msg.TaskStarted != nil:
+		task := *msg.TaskStarted
+		task.Prompt = ""
+		c.failWriteLocked(c.appendProviderLocked(gen, KindToolUse, ContentData{TaskStarted: &task}, "task-start/"+task.TaskID, ""))
+	case msg.TaskProgress != nil:
+		c.failWriteLocked(c.appendProviderLocked(gen, KindToolUse, ContentData{TaskProgress: msg.TaskProgress}, "", ""))
+	case msg.TaskNotification != nil:
+		task := msg.TaskNotification
+		c.failWriteLocked(c.appendProviderLocked(gen, KindToolUse, ContentData{TaskNotification: task}, "task-end/"+task.TaskID, ""))
 	case msg.Assistant != nil && msg.Subtype != "partial":
 		var text, tools []llm.ContentBlock
 		for _, block := range msg.Assistant.Message.Content {
@@ -2168,6 +2180,9 @@ func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload a
 		return &PersistError{Op: "encode " + string(kind) + " record", ConversationID: c.conv.ConversationID, Generation: gen, TurnID: turnID, Err: err}
 	}
 	visibility := VisibilityContent
+	if data, ok := payload.(ContentData); ok && (data.TaskStarted != nil || data.TaskProgress != nil || data.TaskNotification != nil) {
+		visibility = VisibilityDisplayOnly
+	}
 	if kind == KindPermission || kind == KindQuestion {
 		visibility = VisibilityDisplayOnly
 	}

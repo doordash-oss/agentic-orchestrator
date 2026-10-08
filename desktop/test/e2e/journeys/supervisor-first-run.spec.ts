@@ -237,6 +237,8 @@ test('supervisor first run: choose a model, converse, approve inline, and stop a
     await expect(status(page)).toHaveAttribute('data-lifecycle', 'running');
     await expect(status(page)).toHaveText('Working…');
     await expect(stopButton(page)).toBeEnabled();
+    await expect(conversation(page).getByText(/elapsed/)).toBeVisible();
+    await evidenceShot(handle, 'supervisor-first-run-working');
     await stopButton(page).click();
     await waitForProviderLog(world, 'interrupted:4');
     await expectReady(page);

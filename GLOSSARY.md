@@ -8,6 +8,11 @@ closed boundary refuses new work; the reservation is released when the feature
 owns no work. Not a caller concern: orchestration operations reserve and settle
 it. Lives in `internal/orchestrator`.
 
+**Answer key.** The key of one answer in an ask-user or need-user-input answer
+map: the answered question's question index as a decimal string, such as `"1"`.
+Values are an option label verbatim or free text. No other key form is
+accepted. See ADR 0009.
+
 **Ask-user turn.** The moment a provider's agent asks the operator a structured
 question: one `AskUserQuestion` envelope of questions, each with text, a header,
 a multi-select flag and options carrying a label, a description and an optional
@@ -48,6 +53,11 @@ the relationship lock, admission, and dispatch order for one feature mutation,
 such as stop, restart, retry, setup dispatch, child launch, delete, config
 update, or rewind. It is the only way callers sequence those concerns. Lives in
 `internal/orchestrator`.
+
+**Question index.** The one-based position of a question in its ask-user turn
+or need-user-input gate. The server emits it with every question and clients
+echo it back as the answer key. Gate files store it, and the gate reader rejects
+an index that is not positive or not unique.
 
 **Read model.** The server's projections from feature state to wire DTOs, such as
 the feature summary and detail shapes. Lives in `internal/server`.

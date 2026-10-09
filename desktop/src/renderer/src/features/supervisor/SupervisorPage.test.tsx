@@ -94,7 +94,8 @@ const questionRequest: SupervisorPendingRequest = {
   waitingSince: '2026-10-06T10:00:00.000Z',
   questions: [
     {
-      key: 'Which database should the service use?',
+      index: 1,
+      question: 'Which database should the service use?',
       header: 'Database',
       multiSelect: false,
       options: [{ label: 'Postgres' }, { label: 'SQLite' }],
@@ -725,7 +726,7 @@ describe('SupervisorPage pending requests', () => {
     expect(mock.api.answerQuestions).toHaveBeenCalledWith({
       requestId: questionRequest.id,
       sessionId: SESSION_ID,
-      answers: { 'Which database should the service use?': 'Postgres' },
+      answers: { '1': 'Postgres' },
     });
     await waitFor(() =>
       expect(within(transcript()).queryByRole('group', { name: 'Agent question' })).toBeNull(),

@@ -250,7 +250,7 @@ func TestOpenCodeBridgeQuestions(t *testing.T) {
 			if ctrl.Origin.Kind != wantKind {
 				t.Fatalf("origin = %+v, want %s", ctrl.Origin, wantKind)
 			}
-			if err := s.sess.RespondToAskUser(req.RequestID, req.Request.Input, map[string]string{testutil.FakeOpenCodeQuestion: "dev"}, nil); err != nil {
+			if err := s.sess.RespondToAskUser(req.RequestID, resolveAskUser(t, req.Request.Input, map[string]string{"1": "dev"})); err != nil {
 				t.Fatal(err)
 			}
 			s.obs.wait(t, "answer echo", func(m llm.SDKMessage) bool { return assistantText(m) == tc.reply })

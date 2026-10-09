@@ -316,7 +316,9 @@ func (p *Protocol) askUserControl(id int, threadID string, input json.RawMessage
 	}}, threadID)
 }
 
-func (p *Protocol) respondToAskUser(requestID string, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+// respondToAskUser sends each question's answer, keyed by question text, to
+// the question id Codex asked it under.
+func (p *Protocol) respondToAskUser(requestID string, answers map[string]string) error {
 	id, err := strconv.Atoi(requestID)
 	if err != nil {
 		return fmt.Errorf("invalid Codex request ID %q: %w", requestID, err)
@@ -328,16 +330,12 @@ func (p *Protocol) respondToAskUser(requestID string, answers map[string]string,
 		return fmt.Errorf("no pending Codex question for request %s", requestID)
 	}
 	mapped := map[string]map[string][]string{}
-	mappedAnnotations := map[string]llm.AskUserAnnotation{}
 	for question, qID := range pending.QuestionIDs {
 		answer, exists := answers[question]
 		if !exists || strings.TrimSpace(answer) == "" {
 			return fmt.Errorf("missing answer for question %q", question)
 		}
 		mapped[qID] = map[string][]string{"answers": {answer}}
-		if note, ok := annotations[question]; ok {
-			mappedAnnotations[qID] = note
-		}
 	}
 	p.mu.Lock()
 	if _, exists := p.pendingQuestions[requestID]; !exists {
@@ -349,7 +347,7 @@ func (p *Protocol) respondToAskUser(requestID string, answers map[string]string,
 	delete(p.pendingQuestions, requestID)
 	p.mu.Unlock()
 	if pending.Dynamic {
-		data, _ := json.Marshal(map[string]any{"callId": pending.CallID, "answers": mapped, "annotations": mappedAnnotations})
+		data, _ := json.Marshal(map[string]any{"callId": pending.CallID, "answers": mapped})
 		err = p.respondDynamicTool(id, true, string(data))
 	} else {
 		err = p.writeJSON(Response{JSONRPC: "2.0", ID: id, Result: map[string]any{"answers": mapped}})

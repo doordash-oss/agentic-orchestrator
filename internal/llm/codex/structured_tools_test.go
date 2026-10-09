@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 const validQuestion = `{"id":"scope","kind":"choice","question":"Which scope?","header":"Scope","options":[{"label":"Source","description":"Committed sources","confidence":0.9,"recommended":true},{"label":"Generated","description":"Include generated files","confidence":0.5,"recommended":false},{"label":"Everything","description":"Include temporary files","confidence":0.2,"recommended":false}]}`
@@ -35,6 +36,21 @@ func dynamicRequest(t *testing.T, id int, tool, arguments, thread string) []byte
 		t.Fatal(err)
 	}
 	return data
+}
+
+// resolveAnswers resolves index-keyed answers against a control request's
+// AskUserQuestion input.
+func resolveAnswers(t *testing.T, input json.RawMessage, answers map[string]string) askuser.Resolved {
+	t.Helper()
+	bundle, err := askuser.Parse(input)
+	if err != nil {
+		t.Fatalf("parse ask-user input: %v (%s)", err, input)
+	}
+	resolved, err := bundle.Resolve(answers)
+	if err != nil {
+		t.Fatalf("resolve answers: %v", err)
+	}
+	return resolved
 }
 
 func TestThreadContractSurvivesResumeAndFollowups(t *testing.T) {
@@ -121,7 +137,7 @@ func TestStructuredQuestionAfterToolsRetainsCallAndQuestionIDs(t *testing.T) {
 		t.Fatalf("pending question did not prevent completion: %+v %s %v", messages, buf.Bytes(), err)
 	}
 	buf.Reset()
-	if err := p.RespondToAskUser("41", request.Request.Input, map[string]string{"Which scope?": "Custom answer"}, map[string]llm.AskUserAnnotation{"Which scope?": {Notes: "Preserve originals"}}); err != nil {
+	if err := p.RespondToAskUser("41", resolveAnswers(t, request.Request.Input, map[string]string{"1": "Custom answer"})); err != nil {
 		t.Fatal(err)
 	}
 	var response struct {
@@ -141,17 +157,16 @@ func TestStructuredQuestionAfterToolsRetainsCallAndQuestionIDs(t *testing.T) {
 		t.Fatalf("wire response=%s", buf.Bytes())
 	}
 	var answer struct {
-		CallID      string
-		Answers     map[string]struct{ Answers []string }
-		Annotations map[string]llm.AskUserAnnotation
+		CallID  string
+		Answers map[string]struct{ Answers []string }
 	}
 	if err := json.Unmarshal([]byte(response.Result.ContentItems[0].Text), &answer); err != nil {
 		t.Fatal(err)
 	}
-	if answer.CallID != "call-1" || len(answer.Answers["scope"].Answers) != 1 || answer.Answers["scope"].Answers[0] != "Custom answer" || answer.Annotations["scope"].Notes != "Preserve originals" {
+	if answer.CallID != "call-1" || len(answer.Answers["scope"].Answers) != 1 || answer.Answers["scope"].Answers[0] != "Custom answer" {
 		t.Fatalf("answer=%+v", answer)
 	}
-	if err := p.RespondToAskUser("41", nil, map[string]string{"Which scope?": "again"}, nil); err == nil {
+	if err := p.RespondToAskUser("41", resolveAnswers(t, request.Request.Input, map[string]string{"1": "again"})); err == nil {
 		t.Fatal("answered request accepted twice")
 	}
 	messages, err = p.ParseLine(dynamicRequest(t, 43, "complete_phase", `{"status":"success","summary":"Ready"}`, "thread-1"))
@@ -203,11 +218,12 @@ func TestExplicitFreeFormBlocksAnotherQuestion(t *testing.T) {
 	if err != nil || len(messages) != 1 || messages[0].ControlRequest == nil {
 		t.Fatalf("messages=%+v err=%v", messages, err)
 	}
+	first := messages[0].ControlRequest.Request.Input
 	messages, err = p.ParseLine(dynamicRequest(t, 62, "ask_user", args, "thread-1"))
 	if err != nil || len(messages) != 0 || !strings.Contains(buf.String(), "Wait for the pending question") {
 		t.Fatalf("second question accepted: %+v %v %s", messages, err, buf.Bytes())
 	}
-	if err := p.RespondToAskUser("61", nil, map[string]string{"Exact version?": "1.2.3"}, nil); err != nil {
+	if err := p.RespondToAskUser("61", resolveAnswers(t, first, map[string]string{"1": "1.2.3"})); err != nil {
 		t.Fatal(err)
 	}
 	messages, err = p.ParseLine(dynamicRequest(t, 63, "ask_user", args, "thread-1"))
@@ -224,7 +240,7 @@ func TestNativeInteractiveQuestionUsesCurrentWireSchema(t *testing.T) {
 	if err != nil || len(messages) != 1 || messages[0].ControlRequest == nil {
 		t.Fatalf("messages=%+v err=%v", messages, err)
 	}
-	if err := p.RespondToAskUser("71", nil, map[string]string{"Which scope?": "Custom answer"}, nil); err != nil {
+	if err := p.RespondToAskUser("71", resolveAnswers(t, messages[0].ControlRequest.Request.Input, map[string]string{"1": "Custom answer"})); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(buf.String(), `"answers":{"scope":{"answers":["Custom answer"]}}`) {
@@ -377,7 +393,7 @@ func TestResponseReleasesPendingStateBeforeNextServerRequest(t *testing.T) {
 				}}
 				p.SetStdin(writer)
 				if firstTool == "ask_user" {
-					err = p.RespondToAskUser("91", nil, map[string]string{"Which scope?": "Source"}, nil)
+					err = p.RespondToAskUser("91", resolveAnswers(t, first[0].ControlRequest.Request.Input, map[string]string{"1": "Source"}))
 				} else {
 					err = p.RespondToCompletion("91", false, "Revise artifacts")
 				}
@@ -411,7 +427,7 @@ func TestResponseWriteFailureRestoresPendingRequest(t *testing.T) {
 			}
 			p.SetStdin(&responseBoundaryWriter{err: errors.New("broken pipe")})
 			if tool == "ask_user" {
-				err = p.RespondToAskUser("93", nil, map[string]string{"Which scope?": "Source"}, nil)
+				err = p.RespondToAskUser("93", resolveAnswers(t, messages[0].ControlRequest.Request.Input, map[string]string{"1": "Source"}))
 			} else {
 				err = p.RespondToCompletion("93", false, "Revise artifacts")
 			}

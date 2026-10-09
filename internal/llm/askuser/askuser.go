@@ -16,7 +16,8 @@
 // {"questions":[...]} that providers send when their agent asks the operator a
 // structured question. It parses raw input into a typed Bundle, encodes a
 // Bundle back to the wire envelope, signs a Bundle independently of option
-// confidence, and produces byte-bounded display copies.
+// confidence, produces byte-bounded display copies and resolves answers keyed
+// by one-based question index.
 //
 // The package is a leaf: it imports only the standard library so every
 // provider adapter, the session and the server can depend on it.
@@ -27,6 +28,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -246,4 +249,105 @@ func bound(s string, limit int) string {
 		return s[:limit] + "..."
 	}
 	return s
+}
+
+// Answer is one question's resolved answer.
+type Answer struct {
+	// Index is the question's one-based position in the bundle: its answer key.
+	Index    int
+	Question string
+	// Selected reports whether the answer chose options; when false the
+	// answer is free text.
+	Selected bool
+	// Labels are the chosen option labels, verbatim, in option-list order.
+	Labels []string
+	// Positions are the zero-based option-list positions of Labels.
+	Positions []int
+	// Raw is the answer string as submitted.
+	Raw string
+}
+
+// Resolved is a bundle together with one answer per question, in question
+// order.
+type Resolved struct {
+	Bundle  Bundle
+	Answers []Answer
+}
+
+// Resolve resolves answers keyed by one-based question index, as a decimal
+// string, against the bundle. Every key must name a question, no question may
+// be answered twice and every question must receive a non-blank answer. A
+// single-select answer selects the option whose label equals it after trimming
+// surrounding whitespace; a multi-select answer is split on ", " and selects
+// options only when every part equals a label. Any other answer is free text.
+func (b Bundle) Resolve(answers map[string]string) (Resolved, error) {
+	keys := make([]string, 0, len(answers))
+	for key := range answers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	byIndex := make(map[int]string, len(answers))
+	for _, key := range keys {
+		index, err := strconv.Atoi(key)
+		if err != nil || index < 1 || index > len(b.Questions) {
+			return Resolved{}, fmt.Errorf("askuser: answer key %q is not a question index", key)
+		}
+		if _, dup := byIndex[index]; dup {
+			return Resolved{}, fmt.Errorf("askuser: answer key %q answers question %d twice", key, index)
+		}
+		if strings.TrimSpace(answers[key]) == "" {
+			return Resolved{}, fmt.Errorf("askuser: answer key %q has a blank answer", key)
+		}
+		byIndex[index] = answers[key]
+	}
+	resolved := Resolved{Bundle: b, Answers: make([]Answer, len(b.Questions))}
+	for i, q := range b.Questions {
+		raw, ok := byIndex[i+1]
+		if !ok {
+			return Resolved{}, fmt.Errorf("askuser: answer key %q is missing", strconv.Itoa(i+1))
+		}
+		resolved.Answers[i] = q.resolve(i+1, raw)
+	}
+	return resolved, nil
+}
+
+func (q Question) resolve(index int, raw string) Answer {
+	answer := Answer{Index: index, Question: q.Question, Raw: raw}
+	trimmed := strings.TrimSpace(raw)
+	parts := []string{trimmed}
+	if q.MultiSelect {
+		parts = strings.Split(trimmed, ", ")
+	}
+	chosen := make(map[int]bool, len(parts))
+	for _, part := range parts {
+		position := -1
+		for j, opt := range q.Options {
+			if opt.Label == part {
+				position = j
+				break
+			}
+		}
+		if position < 0 {
+			return answer
+		}
+		chosen[position] = true
+	}
+	answer.Selected = true
+	for j, opt := range q.Options {
+		if chosen[j] {
+			answer.Labels = append(answer.Labels, opt.Label)
+			answer.Positions = append(answer.Positions, j)
+		}
+	}
+	return answer
+}
+
+// ByText returns the answers keyed by question text, valued with the raw
+// answer: the form the session observer and the supervisor transcript record.
+func (r Resolved) ByText() map[string]string {
+	out := make(map[string]string, len(r.Answers))
+	for _, a := range r.Answers {
+		out[a.Question] = a.Raw
+	}
+	return out
 }

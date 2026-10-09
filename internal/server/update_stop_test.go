@@ -991,7 +991,7 @@ func TestPromptRepliesRefusedDuringClosedAdmission(t *testing.T) {
 		path string
 		body string
 	}{
-		{"ask_user_answer", "/api/v1/prompts/ask-user/answer", `{"request_id":"r1","answers":{"q":"a"}}`},
+		{"ask_user_answer", "/api/v1/prompts/ask-user/answer", `{"request_id":"r1","answers":{"1":"a"}}`},
 		{"help_send", "/api/v1/prompts/help/send", `{"message":"more info","session_id":"s1"}`},
 		{"permissions_answer", "/api/v1/permissions/answer", `{"request_id":"r1","decision":"allow_once"}`},
 	} {

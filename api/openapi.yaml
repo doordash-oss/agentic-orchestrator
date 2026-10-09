@@ -848,6 +848,10 @@ paths:
     post:
       operationId: answerAskUserPrompt
       summary: Answer an ask-user prompt.
+      description: >-
+        The generic JSON mutation body carries `answers`, an object keyed by
+        each question's `index` rendered as a string (one-based, e.g. `"1"`),
+        valued with the chosen option label verbatim or with free text.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -6752,9 +6756,11 @@ components:
           maxLength: 65536
     NeedUserInputQuestion:
       type: object
+      required: [index]
       properties:
         index:
           type: integer
+          minimum: 1
         prompt:
           type: string
           maxLength: 65536
@@ -7339,7 +7345,12 @@ components:
           x-go-type-skip-optional-pointer: false
     AskUserQuestion:
       type: object
+      required: [index, question]
       properties:
+        index:
+          type: integer
+          minimum: 1
+          description: One-based position of the question within its prompt; answers are keyed by it.
         question:
           type: string
         header:

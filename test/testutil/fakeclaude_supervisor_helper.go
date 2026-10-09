@@ -213,9 +213,9 @@ answer() {
   asks=$(tr -d '\n' < "$dir/helper_out" | sed -e 's/.*"ask_user_questions":\[//' -e 's/],"help_queue".*//')
   rid=$(printf '%s' "$asks" | grep -o '"request_id":"[^"]*"' | head -n 1 | sed 's/^"request_id":"//; s/"$//')
   sid=$(printf '%s' "$asks" | grep -o '"session_id":"[^"]*"' | head -n 1 | sed 's/^"session_id":"//; s/"$//')
-  question=$(printf '%s' "$asks" | grep -o '"question":"[^"]*"' | head -n 1 | sed 's/^"question":"//; s/"$//')
+  idx=$(printf '%s' "$asks" | grep -o '"index":[0-9]*' | head -n 1 | sed 's/^"index"://')
   label=$(printf '%s' "$asks" | grep -o '"label":"[^"]*"' | head -n 1 | sed 's/^"label":"//; s/"$//')
-  helper "\"\$AGENTICO_BIN\" api POST /api/v1/prompts/ask-user/answer '{\"request_id\":\"$rid\",\"session_id\":\"$sid\",\"answers\":{\"$question\":\"$label\"}}'"
+  helper "\"\$AGENTICO_BIN\" api POST /api/v1/prompts/ask-user/answer '{\"request_id\":\"$rid\",\"session_id\":\"$sid\",\"answers\":{\"$idx\":\"$label\"}}'"
   final "Answered the pending question."
 }
 

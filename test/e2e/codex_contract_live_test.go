@@ -213,14 +213,14 @@ Follow this exact procedure, sequentially, every time you are asked to run it, e
 					}
 					continue
 				}
-				question := checkCodexContractQuestion(t, request.Request.Input, marker, fixtureToken)
+				checkCodexContractQuestion(t, request.Request.Input, marker, fixtureToken)
 				if answered.Swap(true) {
 					t.Fatal("model asked more than the declared single question")
 				}
 				if !sess.HasPendingRootAskUserQuestion() {
 					t.Fatal("structured question was not recorded as pending")
 				}
-				if err := sess.RespondToAskUser(request.RequestID, request.Request.Input, map[string]string{question: "Beta"}, nil); err != nil {
+				if err := sess.RespondToAskUser(request.RequestID, resolveAskUser(t, request.Request.Input, map[string]string{"1": "Beta"})); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -243,7 +243,7 @@ func checkCodexContractResult(t *testing.T, result agent.PhaseOutcomeWaitResult,
 	}
 }
 
-func checkCodexContractQuestion(t *testing.T, input json.RawMessage, marker, fixtureToken string) string {
+func checkCodexContractQuestion(t *testing.T, input json.RawMessage, marker, fixtureToken string) {
 	t.Helper()
 	bundle, err := askuser.Parse(input)
 	if err != nil {
@@ -263,7 +263,6 @@ func checkCodexContractQuestion(t *testing.T, input json.RawMessage, marker, fix
 			t.Fatalf("option %d does not match confidence/recommendation contract: %s", i, input)
 		}
 	}
-	return question.Question
 }
 
 // defaultCodexContractModels picks the first two distinct models of the
@@ -286,4 +285,17 @@ func defaultCodexContractModels(t *testing.T) string {
 		}
 	}
 	return strings.Join(models, ",")
+}
+
+func resolveAskUser(t *testing.T, input json.RawMessage, answers map[string]string) askuser.Resolved {
+	t.Helper()
+	bundle, err := askuser.Parse(input)
+	if err != nil {
+		t.Fatalf("askuser.Parse: %v", err)
+	}
+	resolved, err := bundle.Resolve(answers)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	return resolved
 }

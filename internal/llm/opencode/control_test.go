@@ -395,8 +395,7 @@ func TestRespondToAskUser_StructuredAnswerSelectsNativeOption(t *testing.T) {
 	}))
 	raw := msgs[0].ControlRequest.Request.Input
 
-	answers := map[string]string{"Pick one": "Online (Recommended)"}
-	if err := p.RespondToAskUser("91", raw, answers, nil); err != nil {
+	if err := p.RespondToAskUser("91", resolveAnswers(t, raw, map[string]string{"1": "Online (Recommended)"})); err != nil {
 		t.Fatalf("RespondToAskUser error: %v", err)
 	}
 	out := decodePermissionResponse(t, buf.lastLine(t))
@@ -418,7 +417,7 @@ func TestRespondToAskUser_StructuredFreeFormFallsBackToFollowUpTurn(t *testing.T
 	}))
 	raw := msgs[0].ControlRequest.Request.Input
 
-	if err := p.RespondToAskUser("92", raw, map[string]string{"Pick one": "Actually do C instead"}, nil); err != nil {
+	if err := p.RespondToAskUser("92", resolveAnswers(t, raw, map[string]string{"1": "Actually do C instead"})); err != nil {
 		t.Fatalf("RespondToAskUser error: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -832,8 +831,7 @@ func TestRespondToAskUser_SyntheticAnswerDeliversFollowUpTurn(t *testing.T) {
 		t.Fatalf("expected a synthetic AskUserQuestion, got %+v", msgs)
 	}
 
-	answers := map[string]string{"What release name should I use?": "phoenix"}
-	if err := p.RespondToAskUser(cr.RequestID, cr.Request.Input, answers, nil); err != nil {
+	if err := p.RespondToAskUser(cr.RequestID, resolveAnswers(t, cr.Request.Input, map[string]string{"1": "phoenix"})); err != nil {
 		t.Fatalf("RespondToAskUser(synthetic) error: %v", err)
 	}
 	var followUp Request
@@ -848,6 +846,21 @@ func TestRespondToAskUser_SyntheticAnswerDeliversFollowUpTurn(t *testing.T) {
 	if !strings.Contains(body, "phoenix") || !strings.Contains(body, "release name") {
 		t.Fatalf("follow-up turn = %q, want it to restate the question and carry the answer", body)
 	}
+}
+
+// resolveAnswers resolves index-keyed answers against a control request's
+// AskUserQuestion input.
+func resolveAnswers(t *testing.T, input json.RawMessage, answers map[string]string) askuser.Resolved {
+	t.Helper()
+	bundle, err := askuser.Parse(input)
+	if err != nil {
+		t.Fatalf("parse ask-user input: %v (%s)", err, input)
+	}
+	resolved, err := bundle.Resolve(answers)
+	if err != nil {
+		t.Fatalf("resolve answers: %v", err)
+	}
+	return resolved
 }
 
 func mustMarshal(t *testing.T, v any) []byte {

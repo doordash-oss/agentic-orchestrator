@@ -256,10 +256,18 @@ func respondToAskUser(t *testing.T, answers map[string]string) askUserControlRes
 
 func respondToAskUserInput(t *testing.T, questions json.RawMessage, answers map[string]string) askUserControlResponse {
 	t.Helper()
+	bundle, err := askuser.Parse(questions)
+	if err != nil {
+		t.Fatalf("parse questions: %v", err)
+	}
+	resolved, err := bundle.Resolve(answers)
+	if err != nil {
+		t.Fatalf("resolve answers: %v", err)
+	}
 	p := NewProtocol(llm.ProtocolOpts{})
 	var buf bytes.Buffer
 	p.SetStdin(&buf)
-	if err := p.RespondToAskUser("req-1", questions, answers, nil); err != nil {
+	if err := p.RespondToAskUser("req-1", resolved); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 	var out askUserControlResponse
@@ -268,79 +276,91 @@ func respondToAskUserInput(t *testing.T, questions json.RawMessage, answers map[
 	}
 	updated := &out.Response.Response.UpdatedInput
 	envelope := append(append([]byte(`{"questions":`), updated.RawQuestions...), '}')
-	bundle, err := askuser.Parse(envelope)
+	sent, err := askuser.Parse(envelope)
 	if err != nil {
 		t.Fatalf("parse updatedInput.questions: %v (raw=%s)", err, updated.RawQuestions)
 	}
-	updated.Questions = bundle.Questions
+	updated.Questions = sent.Questions
 	if out.Response.Response.Behavior != "allow" {
 		t.Fatalf("behavior = %q, want allow", out.Response.Response.Behavior)
 	}
 	return out
 }
 
-func TestClaudeProtocol_RespondToAskUser_ExactLabelPassesThrough(t *testing.T) {
-	out := respondToAskUser(t, map[string]string{"Which approach?": "Option B"})
-	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option B" {
-		t.Errorf("answer = %q, want Option B", got)
-	}
-	if got := len(out.Response.Response.UpdatedInput.Questions[0].Options); got != 2 {
-		t.Errorf("options len = %d, want 2 (no injection for a matched answer)", got)
-	}
-}
-
-func TestClaudeProtocol_RespondToAskUser_RecommendedSuffixNormalized(t *testing.T) {
-	out := respondToAskUser(t, map[string]string{"Which approach?": "Option A"})
-	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option A (Recommended)" {
-		t.Errorf("answer = %q, want normalized to the full label", got)
-	}
-	if got := len(out.Response.Response.UpdatedInput.Questions[0].Options); got != 2 {
-		t.Errorf("options len = %d, want 2", got)
+func TestClaudeProtocol_RespondToAskUser_SelectedLabelPassesThroughVerbatim(t *testing.T) {
+	for _, raw := range []string{"Option A (Recommended)", "  Option A (Recommended) "} {
+		out := respondToAskUser(t, map[string]string{"1": raw})
+		updated := out.Response.Response.UpdatedInput
+		if got := updated.Answers["Which approach?"]; got != "Option A (Recommended)" {
+			t.Errorf("answer for %q = %q, want the label verbatim", raw, got)
+		}
+		if got := len(updated.Questions[0].Options); got != 2 {
+			t.Errorf("options len = %d, want 2 (no injection for a selected answer)", got)
+		}
+		if got := string(out.Response.Response.UpdatedInput.RawQuestions); !strings.Contains(got, `"confidence":0.8`) {
+			t.Errorf("questions = %s, want the original envelope re-encoded", got)
+		}
 	}
 }
 
-func TestClaudeProtocol_RespondToAskUser_TruncatedAnswerMatchesLabel(t *testing.T) {
-	out := respondToAskUser(t, map[string]string{"Which approach?": "Option A (Recomm..."})
-	if got := out.Response.Response.UpdatedInput.Answers["Which approach?"]; got != "Option A (Recommended)" {
-		t.Errorf("answer = %q, want the untruncated label", got)
+func TestClaudeProtocol_RespondToAskUser_MultiSelectLabelsPassThrough(t *testing.T) {
+	questions := json.RawMessage(`{"questions":[{"question":"Which areas?","header":"Areas","multiSelect":true,"options":[{"label":"API","description":"a"},{"label":"UI","description":"b"},{"label":"Docs","description":"c"}]}]}`)
+	out := respondToAskUserInput(t, questions, map[string]string{"1": "API, Docs"})
+	updated := out.Response.Response.UpdatedInput
+	if got := updated.Answers["Which areas?"]; got != "API, Docs" {
+		t.Errorf("answer = %q, want the selected labels", got)
+	}
+	if got := len(updated.Questions[0].Options); got != 3 {
+		t.Errorf("options len = %d, want 3 (no injection for selected labels)", got)
 	}
 }
 
 func TestClaudeProtocol_RespondToAskUser_FreeTextInjectedAsOption(t *testing.T) {
-	const customAnswer = "use a third custom approach"
-	out := respondToAskUser(t, map[string]string{"Which approach?": customAnswer})
-	updated := out.Response.Response.UpdatedInput
-	if got := updated.Answers["Which approach?"]; got != customAnswer {
-		t.Errorf("answer = %q, want the free text verbatim", got)
-	}
-	opts := updated.Questions[0].Options
-	if len(opts) != 3 {
-		t.Fatalf("options len = %d, want 3", len(opts))
-	}
-	if opts[2].Label != customAnswer || opts[2].Description != "User-provided custom answer." {
-		t.Errorf("injected option = %+v, want schema-valid custom option", opts[2])
+	// "Option A" is not a label: only a verbatim label selects an option.
+	for _, customAnswer := range []string{"use a third custom approach", "Option A"} {
+		out := respondToAskUser(t, map[string]string{"1": customAnswer})
+		updated := out.Response.Response.UpdatedInput
+		if got := updated.Answers["Which approach?"]; got != customAnswer {
+			t.Errorf("answer = %q, want the free text verbatim", got)
+		}
+		opts := updated.Questions[0].Options
+		if len(opts) != 3 {
+			t.Fatalf("options len = %d, want 3", len(opts))
+		}
+		if opts[2].Label != customAnswer || opts[2].Description != "User-provided custom answer." {
+			t.Errorf("injected option = %+v, want schema-valid custom option", opts[2])
+		}
 	}
 }
 
-func TestClaudeProtocol_RespondToAskUser_FreeTextForOptionlessQuestion(t *testing.T) {
+func TestClaudeProtocol_RespondToAskUser_FreeTextForOptionlessQuestionIsPadded(t *testing.T) {
 	questions := json.RawMessage(`{"questions":[{"question":"What version?","header":"Version","multiSelect":false,"options":[]}]}`)
-	out := respondToAskUserInput(t, questions, map[string]string{"What version?": "1.2.3"})
-	opts := out.Response.Response.UpdatedInput.Questions[0].Options
-	if len(opts) != 2 {
-		t.Fatalf("options = %+v, want two schema-valid options", opts)
-	}
-	if opts[0].Label != "Other" || opts[0].Description != "Provide a different custom answer." {
-		t.Errorf("padding option = %+v, want stable schema-valid placeholder", opts[0])
-	}
-	if opts[1].Label != "1.2.3" || opts[1].Description != "User-provided custom answer." {
-		t.Errorf("custom option = %+v, want schema-valid free-text selection", opts[1])
+	for _, tc := range []struct{ answer, padding string }{
+		{answer: "1.2.3", padding: "Other"},
+		{answer: "Other", padding: "Alternative answer"},
+	} {
+		out := respondToAskUserInput(t, questions, map[string]string{"1": tc.answer})
+		updated := out.Response.Response.UpdatedInput
+		if got := updated.Answers["What version?"]; got != tc.answer {
+			t.Errorf("answer = %q, want %q", got, tc.answer)
+		}
+		opts := updated.Questions[0].Options
+		if len(opts) != 2 {
+			t.Fatalf("options = %+v, want two schema-valid options", opts)
+		}
+		if opts[0].Label != tc.padding || opts[0].Description != "Provide a different custom answer." {
+			t.Errorf("padding option = %+v, want %q placeholder", opts[0], tc.padding)
+		}
+		if opts[1].Label != tc.answer || opts[1].Description != "User-provided custom answer." {
+			t.Errorf("custom option = %+v, want schema-valid free-text selection", opts[1])
+		}
 	}
 }
 
-func TestClaudeProtocol_RespondToAskUser_FreeTextForFourOptionQuestion(t *testing.T) {
+func TestClaudeProtocol_RespondToAskUser_FreeTextForFourOptionQuestionKeepsFirstThree(t *testing.T) {
 	questions := json.RawMessage(`{"questions":[{"question":"Which approach?","header":"Scope","multiSelect":false,"options":[{"label":"A","description":"first"},{"label":"B","description":"second"},{"label":"C","description":"third"},{"label":"D","description":"fourth"}]}]}`)
 	const customAnswer = "Use a custom fifth approach"
-	out := respondToAskUserInput(t, questions, map[string]string{"Which approach?": customAnswer})
+	out := respondToAskUserInput(t, questions, map[string]string{"1": customAnswer})
 	updated := out.Response.Response.UpdatedInput
 	if got := updated.Answers["Which approach?"]; got != customAnswer {
 		t.Errorf("answer = %q, want the free text verbatim", got)

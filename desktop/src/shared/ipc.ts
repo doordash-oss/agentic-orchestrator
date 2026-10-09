@@ -2277,6 +2277,8 @@ export type RewindExecuteRequest = z.output<typeof RewindExecuteRequestSchema>;
 
 const AttentionIDSchema = z.string().min(1).max(200);
 const AttentionTextSchema = z.string().max(64 * 1024);
+/** A one-based question index as a decimal string: the key ask-user and gate answers use. */
+const QuestionIndexKeySchema = z.string().regex(/^[1-9][0-9]{0,5}$/);
 /**
  * The non-feature navigation target of an attention item. `supervisor`
  * marks a permission or question raised by the supervisor conversation: it
@@ -2302,7 +2304,11 @@ export const AttentionOptionSchema = z.strictObject({
   confidence: z.number().min(0).max(1).optional(),
 });
 export const AttentionQuestionSchema = z.strictObject({
-  key: AttentionTextSchema,
+  /** The server's one-based question index; answers are keyed by it as a decimal string. */
+  index: z.number().int().min(1),
+  /** The question text the agent asked. */
+  question: AttentionTextSchema,
+  /** The display label: the server's header, else the question text. */
   header: z.string().max(500),
   multiSelect: z.boolean(),
   options: z.array(AttentionOptionSchema).max(100),
@@ -2399,7 +2405,7 @@ export const AttentionGateSchema = z.strictObject({
   questions: z
     .array(
       z.strictObject({
-        index: z.number().int().nonnegative(),
+        index: z.number().int().min(1),
         prompt: AttentionTextSchema,
         answer: AttentionTextSchema,
       }),
@@ -2534,8 +2540,9 @@ export type PermissionDecisionRequest = z.output<typeof PermissionDecisionReques
 export const AskUserAnswerRequestSchema = z.strictObject({
   requestId: AttentionIDSchema,
   sessionId: AttentionIDSchema.optional(),
+  /** Keyed by each question's one-based index as a decimal string, e.g. {"1": "main"}. */
   answers: z
-    .record(AttentionTextSchema, AttentionTextSchema)
+    .record(QuestionIndexKeySchema, AttentionTextSchema)
     .refine((answers) => Object.keys(answers).length > 0),
 });
 export type AskUserAnswerRequest = z.output<typeof AskUserAnswerRequestSchema>;
@@ -2554,8 +2561,9 @@ export const GateTargetSchema = z.strictObject({
   repoName: z.string().max(500).optional(),
 });
 export const GateDraftRequestSchema = GateTargetSchema.extend({
+  /** Keyed by the stored gate question index as a decimal string. */
   answers: z
-    .record(AttentionTextSchema, AttentionTextSchema)
+    .record(QuestionIndexKeySchema, AttentionTextSchema)
     .refine((answers) => Object.keys(answers).length > 0),
 });
 export type GateDraftRequest = z.output<typeof GateDraftRequestSchema>;

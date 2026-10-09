@@ -2500,10 +2500,13 @@ type AskUserOption struct {
 
 // AskUserQuestion defines model for AskUserQuestion.
 type AskUserQuestion struct {
-	Header      string          `json:"header,omitempty"`
+	Header string `json:"header,omitempty"`
+
+	// Index One-based position of the question within its prompt; answers are keyed by it.
+	Index       int             `json:"index"`
 	MultiSelect bool            `json:"multi_select,omitempty"`
 	Options     []AskUserOption `json:"options,omitempty"`
-	Question    string          `json:"question,omitempty"`
+	Question    string          `json:"question"`
 }
 
 // AutomaticReviewState defines model for AutomaticReviewState.
@@ -3437,7 +3440,7 @@ type NeedUserInputGate struct {
 // NeedUserInputQuestion defines model for NeedUserInputQuestion.
 type NeedUserInputQuestion struct {
 	Answer string `json:"answer,omitempty"`
-	Index  int    `json:"index,omitempty"`
+	Index  int    `json:"index"`
 	Prompt string `json:"prompt,omitempty"`
 }
 

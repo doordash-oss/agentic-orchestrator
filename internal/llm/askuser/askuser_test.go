@@ -304,3 +304,108 @@ func TestDisplay(t *testing.T) {
 		t.Fatalf("zero limit truncated: %q", got.Questions[0].Question)
 	}
 }
+
+func TestResolve(t *testing.T) {
+	bundle := Bundle{Questions: []Question{
+		{Question: "Which branch?", Header: "Branch", Options: []Option{{Label: "main"}, {Label: "dev (Recommended)"}, {Label: "release"}}},
+		{Question: "Which checks?", Header: "Checks", MultiSelect: true, Options: []Option{{Label: "lint"}, {Label: "unit"}, {Label: "red, green"}, {Label: "e2e"}}},
+		{Question: "Anything else?", Header: "Notes"},
+	}}
+	tests := []struct {
+		name    string
+		answers map[string]string
+		want    []Answer
+		wantErr string
+	}{
+		{
+			name:    "index keys resolve in question order with exact labels and positions",
+			answers: map[string]string{"3": "ship it", "1": " main ", "2": "e2e, lint"},
+			want: []Answer{
+				{Index: 1, Question: "Which branch?", Selected: true, Labels: []string{"main"}, Positions: []int{0}, Raw: " main "},
+				{Index: 2, Question: "Which checks?", Selected: true, Labels: []string{"lint", "e2e"}, Positions: []int{0, 3}, Raw: "e2e, lint"},
+				{Index: 3, Question: "Anything else?", Raw: "ship it"},
+			},
+		},
+		{
+			name:    "label without its recommended suffix is free text",
+			answers: map[string]string{"1": "dev", "2": "lint", "3": "x"},
+			want: []Answer{
+				{Index: 1, Question: "Which branch?", Raw: "dev"},
+				{Index: 2, Question: "Which checks?", Selected: true, Labels: []string{"lint"}, Positions: []int{0}, Raw: "lint"},
+				{Index: 3, Question: "Anything else?", Raw: "x"},
+			},
+		},
+		{
+			name:    "truncated label with ellipsis is free text and one unmatched part makes the multi-select free text",
+			answers: map[string]string{"1": "rel...", "2": "lint, smoke", "3": "x"},
+			want: []Answer{
+				{Index: 1, Question: "Which branch?", Raw: "rel..."},
+				{Index: 2, Question: "Which checks?", Raw: "lint, smoke"},
+				{Index: 3, Question: "Anything else?", Raw: "x"},
+			},
+		},
+		{
+			name:    "multi-select label containing a comma splits and is free text",
+			answers: map[string]string{"1": "main", "2": "red, green", "3": "x"},
+			want: []Answer{
+				{Index: 1, Question: "Which branch?", Selected: true, Labels: []string{"main"}, Positions: []int{0}, Raw: "main"},
+				{Index: 2, Question: "Which checks?", Raw: "red, green"},
+				{Index: 3, Question: "Anything else?", Raw: "x"},
+			},
+		},
+		{name: "unknown index", answers: map[string]string{"1": "main", "2": "lint", "3": "x", "4": "y"}, wantErr: `"4"`},
+		{name: "non-numeric key", answers: map[string]string{"1": "main", "2": "lint", "Anything else?": "x"}, wantErr: `"Anything else?"`},
+		{name: "zero index", answers: map[string]string{"0": "main", "2": "lint", "3": "x"}, wantErr: `"0"`},
+		{name: "negative index", answers: map[string]string{"-1": "main", "2": "lint", "3": "x"}, wantErr: `"-1"`},
+		{name: "duplicate answer for one question", answers: map[string]string{"1": "main", "01": "dev", "2": "lint", "3": "x"}, wantErr: `"1"`},
+		{name: "missing question", answers: map[string]string{"1": "main", "3": "x"}, wantErr: `"2"`},
+		{name: "blank answer", answers: map[string]string{"1": "main", "2": "  ", "3": "x"}, wantErr: `"2"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := bundle.Resolve(tt.answers)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Resolve(%v) error = %v, want error naming %s", tt.answers, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Resolve(%v): %v", tt.answers, err)
+			}
+			if !reflect.DeepEqual(got.Answers, tt.want) {
+				t.Fatalf("Resolve(%v) answers = %+v, want %+v", tt.answers, got.Answers, tt.want)
+			}
+			if !reflect.DeepEqual(got.Bundle, bundle) {
+				t.Fatalf("Resolve carried bundle %+v, want %+v", got.Bundle, bundle)
+			}
+		})
+	}
+}
+
+func TestResolveOptionlessFreeText(t *testing.T) {
+	bundle := Bundle{Questions: []Question{{Question: "Version?", Header: "Version"}}}
+	got, err := bundle.Resolve(map[string]string{"1": "v1.2.3"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := []Answer{{Index: 1, Question: "Version?", Raw: "v1.2.3"}}
+	if !reflect.DeepEqual(got.Answers, want) {
+		t.Fatalf("answers = %+v, want %+v", got.Answers, want)
+	}
+}
+
+func TestResolvedByText(t *testing.T) {
+	bundle := Bundle{Questions: []Question{
+		{Question: "Which branch?", Options: []Option{{Label: "main"}}},
+		{Question: "Anything else?"},
+	}}
+	got, err := bundle.Resolve(map[string]string{"2": "no", "1": "main"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	want := map[string]string{"Which branch?": "main", "Anything else?": "no"}
+	if !reflect.DeepEqual(got.ByText(), want) {
+		t.Fatalf("ByText() = %v, want %v", got.ByText(), want)
+	}
+}

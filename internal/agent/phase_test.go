@@ -32,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -1335,7 +1336,7 @@ func (captureProtocol) RespondToControl(string, bool, json.RawMessage, string) e
 	return nil
 }
 func (captureProtocol) RespondToHook(string) error { return nil }
-func (captureProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+func (captureProtocol) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
 func (captureProtocol) Interrupt() error       { return llm.ErrNotSupported }

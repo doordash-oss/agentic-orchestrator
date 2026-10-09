@@ -194,7 +194,9 @@ describe('AttentionNotificationCoordinator error items', () => {
           target: 'supervisor',
           sessionId: '__supervisor__.conv-1.1',
           waitingSince: '2026-07-22T12:00:01.000Z',
-          questions: [{ key: 'Which?', header: 'Which?', multiSelect: false, options: [] }],
+          questions: [
+            { index: 1, question: 'Which?', header: 'Which?', multiSelect: false, options: [] },
+          ],
         },
       ],
     };

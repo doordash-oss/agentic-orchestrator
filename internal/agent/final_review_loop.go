@@ -803,9 +803,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 				SessionID:   sessionID,
 				Intent:      intent,
 			})
-			if err == nil && len(violations) == 0 {
-				sess.SetHasUnansweredQuestion(false)
-			}
 			return violations, err
 		},
 	})

@@ -2038,7 +2038,9 @@ describe('supervisor IPC schemas', () => {
         target: 'supervisor',
         sessionId: supervisorSessionId,
         waitingSince: '2026-10-06T10:00:00Z',
-        questions: [{ key: 'Which?', header: 'Which?', multiSelect: false, options: [] }],
+        questions: [
+          { index: 1, question: 'Which?', header: 'Which?', multiSelect: false, options: [] },
+        ],
       }),
       AttentionItemSchema.parse({
         kind: 'permission',
@@ -2096,7 +2098,9 @@ describe('supervisor IPC schemas', () => {
         id: 'ask-child',
         target: 'supervisor',
         waitingSince: '2026-10-06T10:00:00Z',
-        questions: [{ key: 'Which?', header: 'Which?', multiSelect: false, options: [] }],
+        questions: [
+          { index: 1, question: 'Which?', header: 'Which?', multiSelect: false, options: [] },
+        ],
         origin: 'child',
         childSessionId: 'agent_sub_1',
       }).success,
@@ -2239,5 +2243,42 @@ describe('supervisor IPC schemas', () => {
     expect(SupervisorStateSchema.safeParse({ ...state, streamEpoch: 'a&after=1' }).success).toBe(
       false,
     );
+  });
+});
+
+describe('ask-user and gate answer keys', () => {
+  it('carries the server index and question text on an attention question', () => {
+    const question = { index: 1, question: 'Which branch?', header: 'Branch', multiSelect: false };
+    expect(ipcModule.AttentionQuestionSchema.safeParse({ ...question, options: [] }).success).toBe(
+      true,
+    );
+    const { index: _index, ...withoutIndex } = question;
+    expect(
+      ipcModule.AttentionQuestionSchema.safeParse({ ...withoutIndex, options: [] }).success,
+    ).toBe(false);
+    expect(
+      ipcModule.AttentionQuestionSchema.safeParse({ ...question, index: 0, options: [] }).success,
+    ).toBe(false);
+    expect(
+      ipcModule.AttentionQuestionSchema.safeParse({
+        ...question,
+        key: 'Which branch?',
+        options: [],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('accepts only one-based decimal index keys on answers and gate drafts', () => {
+    const ask = (answers: Record<string, string>) =>
+      ipcModule.AskUserAnswerRequestSchema.safeParse({ requestId: 'ask-1', answers }).success;
+    const draft = (answers: Record<string, string>) =>
+      ipcModule.GateDraftRequestSchema.safeParse({ featureId: 'abcd1234', answers }).success;
+    for (const check of [ask, draft]) {
+      expect(check({ '1': 'main', '2': 'a, b' })).toBe(true);
+      expect(check({ 'Which branch?': 'main' })).toBe(false);
+      expect(check({ '0': 'main' })).toBe(false);
+      expect(check({ '01': 'main' })).toBe(false);
+      expect(check({})).toBe(false);
+    }
   });
 });

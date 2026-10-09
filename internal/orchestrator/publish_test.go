@@ -30,6 +30,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -978,11 +979,9 @@ func (s *publishDescriptionSessionHandle) SendUserMessage(text string) error { r
 func (s *publishDescriptionSessionHandle) RespondToControl(requestID string, allow bool, reason string) error {
 	return nil
 }
-func (s *publishDescriptionSessionHandle) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+func (s *publishDescriptionSessionHandle) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
-func (s *publishDescriptionSessionHandle) ClearPendingQuestion(requestID string)  {}
-func (s *publishDescriptionSessionHandle) ResetWaitingStatus()                    {}
 func (s *publishDescriptionSessionHandle) Stop() error                            { return nil }
 func (s *publishDescriptionSessionHandle) Interrupt() error                       { return nil }
 func (s *publishDescriptionSessionHandle) Wait()                                  {}

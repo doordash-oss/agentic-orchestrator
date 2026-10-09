@@ -64,7 +64,7 @@ func TestRetiredChatPromptRoutesAreNotFound(t *testing.T) {
 
 	w := postTrustedJSON(handler, "/api/v1/prompts/ask-user/answer", map[string]any{
 		"request_id": "ask-1",
-		"answers":    map[string]string{"Which cache?": "Redis"},
+		"answers":    map[string]string{"1": "Redis"},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("ask-user/answer status = %d body=%s; want 200", w.Code, w.Body.String())

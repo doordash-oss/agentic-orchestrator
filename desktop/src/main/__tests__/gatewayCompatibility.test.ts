@@ -67,14 +67,15 @@ describe('evaluateCompatibility', () => {
     }
   });
 
-  it('refuses a server from the previous release (series 2) as unsupported_schema', () => {
-    // Series 3 removed PUT on the runtime-config route, so the series-2
-    // server this desktop attached to in the previous release is never
-    // attached.
-    const verdict = evaluateCompatibility(declaration({ schema_version: 2, min_client_schema: 2 }));
+  it('refuses a server from the previous release (series 3) as unsupported_schema', () => {
+    // Series 4 keyed ask-user and need-user-input answers by each question's
+    // one-based index (ask-user questions now carry it; the gate question
+    // index is required), so the series-3 server this desktop attached to in
+    // the previous release is never attached.
+    const verdict = evaluateCompatibility(declaration({ schema_version: 3, min_client_schema: 3 }));
     expect(verdict.compatible).toBe(false);
     if (!verdict.compatible) {
-      expect(verdict).toMatchObject({ code: 'unsupported_schema', schemaVersion: '2' });
+      expect(verdict).toMatchObject({ code: 'unsupported_schema', schemaVersion: '3' });
     }
   });
 
@@ -129,8 +130,8 @@ describe('evaluateCompatibility', () => {
   });
 
   it('pins the desktop support tables so widening is a conscious change', () => {
-    expect(DESKTOP_SCHEMA_VERSION).toBe(3);
-    expect(SUPPORTED_SERVER_SCHEMA_VERSIONS).toEqual([3]);
+    expect(DESKTOP_SCHEMA_VERSION).toBe(4);
+    expect(SUPPORTED_SERVER_SCHEMA_VERSIONS).toEqual([4]);
     expect(SUPPORTED_RUNTIME_POLICIES).toEqual(['loopback-bearer-v1', 'network-bearer-v1']);
   });
 });

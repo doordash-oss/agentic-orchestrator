@@ -1550,7 +1550,9 @@ func (s *Session) tryAutoPickAskUser(req *llm.ControlRequestMessage) bool {
 	if err != nil {
 		return false
 	}
-	decision := decideAskUserAutoPick(req.Request.Input, askUserAutoPickDecisionContext{
+	// A rejected input parses to an empty bundle, which declines.
+	bundle, _ := askuser.Parse(req.Request.Input)
+	decision := decideAskUserAutoPickBundle(bundle, askUserAutoPickDecisionContext{
 		Purpose:     s.askUserAutoPick.Purpose,
 		Inquireness: inquireness,
 	})
@@ -1565,12 +1567,16 @@ func (s *Session) tryAutoPickAskUser(req *llm.ControlRequestMessage) bool {
 	if !decision.Pickable {
 		return false
 	}
-
-	confidenceByQuestion := make(map[string]float64, len(decision.Selections))
-	for _, selection := range decision.Selections {
-		confidenceByQuestion[selection.Question] = selection.Confidence
+	resolved, err := bundle.Resolve(decision.Answers)
+	if err != nil {
+		return false
 	}
-	if err := s.respondToAskUserAutoPicked(req.RequestID, req.Request.Input, decision.Answers, confidenceByQuestion); err != nil {
+
+	confidenceByIndex := make(map[int]float64, len(decision.Selections))
+	for _, selection := range decision.Selections {
+		confidenceByIndex[selection.Index] = selection.Confidence
+	}
+	if err := s.respondToAskUserAutoPicked(req.RequestID, resolved, confidenceByIndex); err != nil {
 		return false
 	}
 
@@ -2018,38 +2024,37 @@ func withDeferralReason(reason, deferral string) string {
 }
 
 // RespondToAskUser sends a control response that allows an AskUserQuestion
-// tool use and supplies the user's answers. questions is the original JSON
-// from the control request input; answers maps question text to the response;
-// annotations carries optional per-question notes/preview that ride in the
-// Claude Agent SDK `annotations` field of `updatedInput`.
+// tool use and supplies the user's answers, resolved against the request's
+// question bundle. The Q&A log, the locally echoed user messages and the
+// observer's text-keyed answers all derive from resolved, in question order.
 //
 // The request is released before the write so a follow-up question the
 // provider sends on receipt is not mistaken for the answered one. A rejected
 // write restores the request so it can be answered again.
-func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+func (s *Session) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
 	s.mu.Lock()
 	answered := s.findPendingControlRequestLocked(requestID)
 	priorStatus := s.status
 	s.mu.Unlock()
-	s.captureAskUserResponse(requestID, questions, answers, annotations, nil)
+	s.captureAskUserResponse(requestID, resolved, nil)
 
 	var err error
 	if s.protocol != nil {
-		err = s.protocol.RespondToAskUser(requestID, questions, answers, annotations)
+		err = s.protocol.RespondToAskUser(requestID, resolved)
 	} else {
-		err = s.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, annotations))
+		err = s.writeJSON(llm.NewAskUserResponse(requestID, resolved.Bundle, resolved.ByText()))
 	}
 	if err != nil {
-		s.restoreAskUserRequest(answered, priorStatus, askUserAnswerKeysInPresentedOrder(questions, answers))
+		s.restoreAskUserRequest(answered, priorStatus, resolved)
 		return err
 	}
-	s.appendAskUserMessages(questions, answers, nil)
+	s.appendAskUserMessages(resolved, nil)
 	if s.observer != nil {
 		s.observer.ObserveControlAnswer(s.id, ports.ControlAnswer{
 			RequestID: requestID,
 			ToolName:  "AskUserQuestion",
 			Allowed:   true,
-			Answers:   answers,
+			Answers:   resolved.ByText(),
 		})
 	}
 	return nil
@@ -2057,16 +2062,16 @@ func (s *Session) RespondToAskUser(requestID string, questions json.RawMessage, 
 
 // restoreAskUserRequest undoes captureAskUserResponse after the provider
 // rejected the answer, unless a newer request with the same ID has arrived.
-func (s *Session) restoreAskUserRequest(answered *llm.ControlRequestMessage, priorStatus SessionStatus, keys []string) {
+func (s *Session) restoreAskUserRequest(answered *llm.ControlRequestMessage, priorStatus SessionStatus, resolved askuser.Resolved) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if answered != nil && s.findPendingControlRequestLocked(answered.RequestID) == nil {
 		s.recordPendingControlRequestLocked(answered)
 	}
-	if n := len(s.qaLog) - len(keys); n >= 0 && len(keys) > 0 {
+	if n := len(s.qaLog) - len(resolved.Answers); n >= 0 && len(resolved.Answers) > 0 {
 		matches := true
-		for i, q := range keys {
-			if s.qaLog[n+i].Question != q {
+		for i, a := range resolved.Answers {
+			if s.qaLog[n+i].Question != a.Question {
 				matches = false
 				break
 			}
@@ -2081,48 +2086,49 @@ func (s *Session) restoreAskUserRequest(answered *llm.ControlRequestMessage, pri
 	}
 }
 
-func (s *Session) respondToAskUserAutoPicked(requestID string, questions json.RawMessage, answers map[string]string, confidenceByQuestion map[string]float64) error {
+// respondToAskUserAutoPicked delivers auto-picked answers. confidenceByIndex
+// holds each question's selection confidence keyed by one-based question
+// index.
+func (s *Session) respondToAskUserAutoPicked(requestID string, resolved askuser.Resolved, confidenceByIndex map[int]float64) error {
 	if s.protocol != nil {
-		if err := s.protocol.RespondToAskUser(requestID, questions, answers, nil); err != nil {
+		if err := s.protocol.RespondToAskUser(requestID, resolved); err != nil {
 			return err
 		}
-	} else if err := s.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, nil)); err != nil {
+	} else if err := s.writeJSON(llm.NewAskUserResponse(requestID, resolved.Bundle, resolved.ByText())); err != nil {
 		return err
 	}
-	s.captureAskUserResponse(requestID, questions, answers, nil, confidenceByQuestion)
-	s.appendAskUserMessages(questions, answers, confidenceByQuestion)
+	s.captureAskUserResponse(requestID, resolved, confidenceByIndex)
+	s.appendAskUserMessages(resolved, confidenceByIndex)
 	return nil
 }
 
 // appendAskUserMessages appends locally-recorded AskUserQuestion answers to the
-// message log, in presented order. confidenceByQuestion is non-nil for the
+// message log, in question order. confidenceByIndex is non-nil for the
 // auto-picked path (answers get tagged with auto-pick metadata) and nil for
 // the manual path.
-func (s *Session) appendAskUserMessages(questions json.RawMessage, answers map[string]string, confidenceByQuestion map[string]float64) {
-	autoPicked := confidenceByQuestion != nil
+func (s *Session) appendAskUserMessages(resolved askuser.Resolved, confidenceByIndex map[int]float64) {
+	autoPicked := confidenceByIndex != nil
 	if autoPicked {
-		if len(answers) == 0 || len(confidenceByQuestion) == 0 {
+		if len(resolved.Answers) == 0 || len(confidenceByIndex) == 0 {
 			return
 		}
-	} else if len(answers) == 0 || s.messageLog == nil {
+	} else if len(resolved.Answers) == 0 || s.messageLog == nil {
 		return
 	}
 
-	keys := askUserAnswerKeysInPresentedOrder(questions, answers)
-	if !autoPicked && (len(keys) == 0 || s.hasTrailingManualAskUserMessages(keys, answers)) {
+	if !autoPicked && s.hasTrailingManualAskUserMessages(resolved) {
 		return
 	}
 
-	for _, q := range keys {
-		answer := answers[q]
+	for _, a := range resolved.Answers {
 		var confidence float64
 		if autoPicked {
-			c, ok := confidenceByQuestion[q]
-			if !ok || answer == "" {
+			c, ok := confidenceByIndex[a.Index]
+			if !ok || a.Raw == "" {
 				continue
 			}
 			confidence = c
-		} else if answer == "" {
+		} else if a.Raw == "" {
 			continue
 		}
 
@@ -2132,27 +2138,27 @@ func (s *Session) appendAskUserMessages(questions json.RawMessage, answers map[s
 			User: &llm.UserMessage{
 				Message: llm.ConversationMsg{
 					Role:    "user",
-					Content: []llm.ContentBlock{{Type: "text", Text: answer}},
+					Content: []llm.ContentBlock{{Type: "text", Text: a.Raw}},
 				},
 			},
 		}
 		if autoPicked {
 			msg.AutoPicked = true
-			msg.AutoPickQuestion = q
+			msg.AutoPickQuestion = a.Question
 			msg.AutoPickConfidence = confidence
 		}
 		s.messageLog.Append(msg)
 	}
 }
 
-func (s *Session) hasTrailingManualAskUserMessages(keys []string, answers map[string]string) bool {
+func (s *Session) hasTrailingManualAskUserMessages(resolved askuser.Resolved) bool {
 	if s.messageLog == nil {
 		return false
 	}
-	want := make([]string, 0, len(keys))
-	for _, q := range keys {
-		if answer := answers[q]; answer != "" {
-			want = append(want, answer)
+	want := make([]string, 0, len(resolved.Answers))
+	for _, a := range resolved.Answers {
+		if a.Raw != "" {
+			want = append(want, a.Raw)
 		}
 	}
 	if len(want) == 0 {
@@ -2177,7 +2183,7 @@ func (s *Session) hasTrailingManualAskUserMessages(keys []string, answers map[st
 	return true
 }
 
-func (s *Session) captureAskUserResponse(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation, confidenceByQuestion map[string]float64) {
+func (s *Session) captureAskUserResponse(requestID string, resolved askuser.Resolved, confidenceByIndex map[int]float64) {
 	s.mu.Lock()
 	s.removePendingControlRequestLocked(requestID)
 	// hasUnansweredQuestion stays true while any other AskUserQuestion
@@ -2186,67 +2192,14 @@ func (s *Session) captureAskUserResponse(requestID string, questions json.RawMes
 	if s.status == SessionWaitingHelp && !s.hasUnansweredQuestion {
 		s.setStatusLocked(SessionRunning)
 	}
-	keys := askUserAnswerKeysInPresentedOrder(questions, answers)
-	for _, q := range keys {
-		confidence, autoPicked := confidenceByQuestion[q]
+	for _, a := range resolved.Answers {
+		confidence, autoPicked := confidenceByIndex[a.Index]
 		s.qaLog = append(s.qaLog, QAPair{
-			Question:   q,
-			Answer:     answers[q],
-			Notes:      annotations[q].Notes,
+			Question:   a.Question,
+			Answer:     a.Raw,
 			AutoPicked: autoPicked,
 			Confidence: confidence,
 		})
-	}
-	s.mu.Unlock()
-}
-
-func askUserAnswerKeysInPresentedOrder(questions json.RawMessage, answers map[string]string) []string {
-	if len(answers) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(answers))
-	seen := make(map[string]bool, len(answers))
-	appendIfAnswered := func(question string) {
-		if _, ok := answers[question]; !ok || seen[question] {
-			return
-		}
-		keys = append(keys, question)
-		seen[question] = true
-	}
-
-	// A rejected input contributes no presented order, so every answer key
-	// falls through to the sorted remainder below.
-	if bundle, err := askuser.Parse(questions); err == nil {
-		for _, q := range bundle.Questions {
-			appendIfAnswered(q.Question)
-		}
-	}
-
-	if len(keys) < len(answers) {
-		remaining := make([]string, 0, len(answers)-len(keys))
-		for q := range answers {
-			if !seen[q] {
-				remaining = append(remaining, q)
-			}
-		}
-		sort.Strings(remaining)
-		keys = append(keys, remaining...)
-	}
-	return keys
-}
-
-// ClearPendingQuestion synchronously clears the AskUserQuestion control
-// request state for a specific requestID. Call this before the async
-// goroutine that writes the control_response, so that re-attaching
-// before the write completes does not re-show the question. Other
-// concurrently pending requests (e.g. parallel AUQ calls) remain in the
-// pending list and stay visible to the desktop app.
-func (s *Session) ClearPendingQuestion(requestID string) {
-	s.mu.Lock()
-	s.removePendingControlRequestLocked(requestID)
-	s.hasUnansweredQuestion = s.hasPendingAskUserQuestionLocked()
-	if s.status == SessionWaitingHelp && !s.hasUnansweredQuestion {
-		s.setStatusLocked(SessionRunning)
 	}
 	s.mu.Unlock()
 }
@@ -2811,15 +2764,6 @@ func (s *Session) ContextPercentage() int {
 		pct = 100
 	}
 	return pct
-}
-
-// ResetWaitingStatus transitions the session out of a waiting state.
-func (s *Session) ResetWaitingStatus() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.status == SessionWaitingPermission || s.status == SessionWaitingHelp {
-		s.setStatusLocked(SessionRunning)
-	}
 }
 
 // AddCleanupFunc appends a function to be called when the session exits.

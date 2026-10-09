@@ -46,7 +46,7 @@ function questionsItem(overrides: Partial<Extract<AttentionItem, { kind: 'questi
     id: 'questions-1',
     featureId: 'abcd1234ef567890',
     waitingSince: '2026-08-06T11:50:00.000Z',
-    questions: [{ key: 'k', header: 'h', multiSelect: false, options: [] }],
+    questions: [{ index: 1, question: 'k', header: 'h', multiSelect: false, options: [] }],
     ...overrides,
   } satisfies Extract<AttentionItem, { kind: 'questions' }>;
 }

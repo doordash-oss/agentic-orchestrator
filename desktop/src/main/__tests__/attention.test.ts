@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it, vi } from 'vitest';
+import { ZodError } from 'zod';
 import { AttentionService } from '../attention';
 import type { ServerTransport } from '../serverClient';
 import { CanonicalErrorException } from '../../shared/errors';
@@ -51,7 +52,7 @@ describe('AttentionService mutations', () => {
       } satisfies ServerTransport);
 
       const err = await service
-        .answerQuestions({ requestId: 'ask-1', answers: { prompt: 'answer' } })
+        .answerQuestions({ requestId: 'ask-1', answers: { '1': 'answer' } })
         .catch((e: unknown) => e);
       expect(err).toBeInstanceOf(CanonicalErrorException);
       expect((err as CanonicalErrorException).canonical.code).toBe(code);
@@ -275,7 +276,7 @@ describe('AttentionService mutations', () => {
     } satisfies ServerTransport);
 
     await expect(
-      service.answerQuestions({ requestId: 'ask-1', answers: { prompt: 'answer' } }),
+      service.answerQuestions({ requestId: 'ask-1', answers: { '1': 'answer' } }),
     ).rejects.toThrow('conflict while submitting attention response');
   });
 });
@@ -540,13 +541,13 @@ describe('AttentionService review items', () => {
                     feature_id: 'missing-feature',
                     tool_name: 'ask-user',
                     status: 'pending',
-                    questions: [{ question: 'Should not be actionable?' }],
+                    questions: [{ index: 1, question: 'Should not be actionable?' }],
                   },
                   {
                     request_id: 'ask-runtime',
                     tool_name: 'ask-user',
                     status: 'pending',
-                    questions: [{ question: 'Runtime question remains?' }],
+                    questions: [{ index: 1, question: 'Runtime question remains?' }],
                   },
                 ],
                 help_queue: [
@@ -573,12 +574,12 @@ describe('AttentionService review items', () => {
                   {
                     feature_id: 'missing-feature',
                     open: true,
-                    questions: [{ prompt: 'orphaned gate' }],
+                    questions: [{ index: 1, prompt: 'orphaned gate' }],
                   },
                   {
                     feature_id: 'feature-1',
                     open: true,
-                    questions: [{ prompt: 'active gate' }],
+                    questions: [{ index: 1, prompt: 'active gate' }],
                     verification: {
                       blockers: [
                         {
@@ -683,6 +684,50 @@ describe('AttentionService review items', () => {
     );
   });
 
+  it.each([
+    {
+      name: 'a gate question without its stored index',
+      prompts: {
+        ask_user_questions: [],
+        need_user_inputs: [
+          { feature_id: 'feature-1', open: true, questions: [{ prompt: 'active gate' }] },
+        ],
+      },
+    },
+    {
+      name: 'an ask-user question without its index',
+      prompts: {
+        ask_user_questions: [
+          {
+            request_id: 'ask-1',
+            feature_id: 'feature-1',
+            tool_name: 'AskUserQuestion',
+            status: 'pending',
+            questions: [{ question: 'Which branch?' }],
+          },
+        ],
+        need_user_inputs: [],
+      },
+    },
+  ])('rejects $name instead of synthesizing a position', async ({ prompts }) => {
+    const service = new AttentionService({
+      apiRequest: (path) =>
+        Promise.resolve({
+          status: 200,
+          body:
+            path === '/api/v1/prompts'
+              ? { api_version: 'v1', help_queue: [], ...prompts }
+              : path === '/api/v1/permissions'
+                ? { api_version: 'v1', requests: [] }
+                : { api_version: 'v1', features: [] },
+        }),
+    } satisfies ServerTransport);
+
+    const err = await service.getSnapshot().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ZodError);
+    expect((err as ZodError).issues.map((issue) => issue.path.at(-1))).toContain('index');
+  });
+
   it("routes a refactor pass's prompts to the parent instead of dropping them", async () => {
     const longOptionLabel =
       '**Service-level row and byte caps — Recommended (High confidence).** Configure global maximum rows and decoded bytes, stop scanning as soon as either limit is exceeded, and expose classified overflow telemetry. This protects memory predictably without expanding table metadata or cross-repo configuration contracts.';
@@ -701,6 +746,7 @@ describe('AttentionService review items', () => {
                     status: 'pending',
                     questions: [
                       {
+                        index: 1,
                         question: 'What scope should control the maximum snapshot size?',
                         options: [{ label: longOptionLabel }],
                       },
@@ -716,7 +762,11 @@ describe('AttentionService review items', () => {
                   },
                 ],
                 need_user_inputs: [
-                  { feature_id: 'child-1', open: true, questions: [{ prompt: 'pass gate' }] },
+                  {
+                    feature_id: 'child-1',
+                    open: true,
+                    questions: [{ index: 1, prompt: 'pass gate' }],
+                  },
                 ],
               }
             : path === '/api/v1/permissions'
@@ -1036,7 +1086,9 @@ describe('AttentionService supervisor items', () => {
                       tool_name: 'AskUserQuestion',
                       status: 'pending',
                       waiting_since: '2026-10-06T10:00:02Z',
-                      questions: [{ question: 'Which feature first?', options: [{ label: 'A' }] }],
+                      questions: [
+                        { index: 1, question: 'Which feature first?', options: [{ label: 'A' }] },
+                      ],
                     },
                     {
                       request_id: 'ask-feature',
@@ -1045,7 +1097,7 @@ describe('AttentionService supervisor items', () => {
                       tool_name: 'AskUserQuestion',
                       status: 'pending',
                       waiting_since: '2026-10-06T10:00:03Z',
-                      questions: [{ question: 'Feature question?' }],
+                      questions: [{ index: 1, question: 'Feature question?' }],
                     },
                   ],
                   help_queue: [],
@@ -1143,7 +1195,8 @@ describe('AttentionService supervisor items', () => {
       waitingSince: '2026-10-06T10:00:02Z',
       questions: [
         {
-          key: 'Which feature first?',
+          index: 1,
+          question: 'Which feature first?',
           header: 'Which feature first?',
           multiSelect: false,
           options: [{ label: 'A' }],
@@ -1252,7 +1305,7 @@ describe('AttentionService supervisor items', () => {
     await service.answerQuestions({
       requestId: 'ask-sup',
       sessionId: SUPERVISOR_SESSION,
-      answers: { 'Which feature first?': 'A' },
+      answers: { '1': 'A' },
     });
 
     expect(apiRequest.mock.calls).toEqual([
@@ -1270,7 +1323,7 @@ describe('AttentionService supervisor items', () => {
           body: {
             request_id: 'ask-sup',
             session_id: SUPERVISOR_SESSION,
-            answers: { 'Which feature first?': 'A' },
+            answers: { '1': 'A' },
           },
         },
       ],

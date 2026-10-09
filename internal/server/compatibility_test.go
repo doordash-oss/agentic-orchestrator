@@ -94,14 +94,17 @@ func TestCompatibilityDeclarationFallbackBuildVersion(t *testing.T) {
 // and discovery record is strictly additive and moved no pin. Series 3
 // removed PUT on the runtime-config route (now 405; PATCH is the only
 // runtime-config mutation), so a series-2 client and a series-3 server
-// refuse each other.
+// refuse each other. Series 4 made ask-user questions carry a required
+// one-based index and keyed answers on both surfaces (ask-user answers and
+// need-user-input drafts) by that index, with the gate question index now
+// required, so a series-3 client and a series-4 server refuse each other.
 func TestCompatibilityPins(t *testing.T) {
 	t.Parallel()
-	if CompatibilitySchemaVersion != 3 {
-		t.Fatalf("CompatibilitySchemaVersion = %d; want 3", CompatibilitySchemaVersion)
+	if CompatibilitySchemaVersion != 4 {
+		t.Fatalf("CompatibilitySchemaVersion = %d; want 4", CompatibilitySchemaVersion)
 	}
-	if CompatibilityMinClientSchema != 3 {
-		t.Fatalf("CompatibilityMinClientSchema = %d; want 3", CompatibilityMinClientSchema)
+	if CompatibilityMinClientSchema != 4 {
+		t.Fatalf("CompatibilityMinClientSchema = %d; want 4", CompatibilityMinClientSchema)
 	}
 	if CompatibilityRuntimePolicy != "loopback-bearer-v1" {
 		t.Fatalf("CompatibilityRuntimePolicy = %q; want loopback-bearer-v1", CompatibilityRuntimePolicy)

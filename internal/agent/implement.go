@@ -650,9 +650,6 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 							SessionID:   sessionID,
 							Intent:      intent,
 						})
-						if err == nil && len(violations) == 0 {
-							sess.SetHasUnansweredQuestion(false)
-						}
 						return violations, err
 					},
 					MissingArtifacts:     []string{"progress.md"},
@@ -2232,8 +2229,19 @@ func enableTurnContinuation(sessOpts *ports.SessionOpts) *ports.SessionOpts {
 // WaitForPhaseOutcome waits for a provider turn, classifies the root-owned
 // semantic outcome, and invokes the harness commit boundary. Provider process
 // completion, AskUserQuestion, delegated-task liveness, and phase completion are
-// deliberately independent signals.
-func WaitForPhaseOutcome(sess ports.SessionView, opts PhaseOutcomeWaitOptions) PhaseOutcomeWaitResult {
+// deliberately independent signals. A clean commit also clears the session's
+// unanswered-question flag.
+func WaitForPhaseOutcome(sess ports.SessionHandle, opts PhaseOutcomeWaitOptions) PhaseOutcomeWaitResult {
+	if commit := opts.CommitOutcome; commit != nil {
+		opts.CommitOutcome = func(intent llm.CompletionIntent) ([]ProtocolViolation, error) {
+			violations, err := commit(intent)
+			if err == nil && len(violations) == 0 {
+				sess.SetHasUnansweredQuestion(false)
+			}
+			return violations, err
+		}
+	}
+
 	// Counts consecutive auto-resumes triggered by CLI truncation. Resets
 	// whenever we observe a non-truncated result, so each fresh stall has
 	// its own retry budget.

@@ -693,7 +693,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Answer an ask-user prompt. */
+        /**
+         * Answer an ask-user prompt.
+         * @description The generic JSON mutation body carries `answers`, an object keyed by each question's `index` rendered as a string (one-based, e.g. `"1"`), valued with the chosen option label verbatim or with free text.
+         */
         post: operations["answerAskUserPrompt"];
         delete?: never;
         options?: never;
@@ -3181,7 +3184,7 @@ export interface components {
             remediation: string;
         };
         NeedUserInputQuestion: {
-            index?: number;
+            index: number;
             prompt?: string;
             answer?: string;
         };
@@ -3424,7 +3427,9 @@ export interface components {
             confidence?: number;
         };
         AskUserQuestion: {
-            question?: string;
+            /** @description One-based position of the question within its prompt; answers are keyed by it. */
+            index: number;
+            question: string;
             header?: string;
             multi_select?: boolean;
             options?: components["schemas"]["AskUserOption"][];

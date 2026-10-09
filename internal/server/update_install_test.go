@@ -364,7 +364,7 @@ func (t *fakeInstallTransaction) setCancelFailures(n int) {
 }
 
 func newInstallFakes() (*fakeReleaseStager, *fakeInstallLifecycle, *fakeInstallAdmission, *fakeInstallTransaction) {
-	stager := &fakeReleaseStager{contract: &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: 3, MinClientSchema: 1}}
+	stager := &fakeReleaseStager{contract: &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: 4, MinClientSchema: 1}}
 	tx := &fakeInstallTransaction{id: "tx-install"}
 	lifecycle := &fakeInstallLifecycle{lockAcquired: true, tx: tx}
 	admission := &fakeInstallAdmission{closeQuiet: true}
@@ -1018,7 +1018,7 @@ func TestUpdateInstallWorkerTransitionsToScheduled(t *testing.T) {
 		t.Fatalf("signature = %q, want verified after staging", snapshot.Signature)
 	}
 	if snapshot.TargetContract == nil || snapshot.TargetContract.APIVersion != "2" ||
-		snapshot.TargetContract.SchemaVersion != 3 || snapshot.TargetContract.MinClientSchema != 1 {
+		snapshot.TargetContract.SchemaVersion != 4 || snapshot.TargetContract.MinClientSchema != 1 {
 		t.Fatalf("target_contract = %+v, want the stager's verified contract", snapshot.TargetContract)
 	}
 	if snapshot.TargetVersion == nil || *snapshot.TargetVersion != "2.0.0" {

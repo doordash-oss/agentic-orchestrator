@@ -29,6 +29,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -354,7 +355,7 @@ sleep 30
 	if len(crs) != 1 {
 		t.Fatalf("PendingControlRequests() len = %d, want 1", len(crs))
 	}
-	if err := sess.RespondToAskUser("req-ask-1", crs[0].Request.Input, map[string]string{"Which?": "custom free text"}, nil); err != nil {
+	if err := sess.RespondToAskUser("req-ask-1", resolveAskUser(t, crs[0].Request.Input, map[string]string{"1": "custom free text"})); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 
@@ -1181,7 +1182,7 @@ func (p *interruptTrackingProtocol) Interrupt() error {
 	p.calls++
 	return p.retErr
 }
-func (p *interruptTrackingProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+func (p *interruptTrackingProtocol) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
 func (p *interruptTrackingProtocol) SessionID() string      { return "" }
@@ -1262,28 +1263,6 @@ func TestIsActive(t *testing.T) {
 			s := &Session{status: tt.status, done: make(chan struct{})}
 			if got := s.IsActive(); got != tt.want {
 				t.Errorf("IsActive() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResetWaitingStatus(t *testing.T) {
-	tests := []struct {
-		name   string
-		status SessionStatus
-		want   SessionStatus
-	}{
-		{"from WaitingPermission", SessionWaitingPermission, SessionRunning},
-		{"from WaitingHelp", SessionWaitingHelp, SessionRunning},
-		{"from Running (no-op)", SessionRunning, SessionRunning},
-		{"from Done (no-op)", SessionDone, SessionDone},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			s := &Session{status: tt.status, done: make(chan struct{})}
-			s.ResetWaitingStatus()
-			if s.status != tt.want {
-				t.Errorf("ResetWaitingStatus() status = %v, want %v", s.status, tt.want)
 			}
 		})
 	}
@@ -1459,7 +1438,7 @@ func (p *wireRecordingProtocol) RespondToControl(string, bool, json.RawMessage, 
 }
 func (p *wireRecordingProtocol) RespondToHook(string) error { return nil }
 func (p *wireRecordingProtocol) Interrupt() error           { return nil }
-func (p *wireRecordingProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+func (p *wireRecordingProtocol) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
 func (p *wireRecordingProtocol) SessionID() string      { return "" }
@@ -2076,8 +2055,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 
 	// Send response
 	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
-	answers := map[string]string{"Which DB?": "PostgreSQL"}
-	err = s.RespondToAskUser("req-ask-1", questions, answers, nil)
+	err = s.RespondToAskUser("req-ask-1", resolveAskUser(t, questions, map[string]string{"1": "PostgreSQL"}))
 	if err != nil {
 		t.Fatalf("RespondToAskUser error: %v", err)
 	}
@@ -2576,7 +2554,7 @@ func (p *usageUpdateProtocol) RespondToControl(string, bool, json.RawMessage, st
 }
 func (p *usageUpdateProtocol) RespondToHook(string) error { return nil }
 func (p *usageUpdateProtocol) Interrupt() error           { return llm.ErrNotSupported }
-func (p *usageUpdateProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+func (p *usageUpdateProtocol) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
 func (p *usageUpdateProtocol) SessionID() string      { return p.sid }

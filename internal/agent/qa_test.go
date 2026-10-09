@@ -85,28 +85,6 @@ func TestWriteQAFileAutoPickedPair(t *testing.T) {
 	}
 }
 
-func TestWriteQAFileRendersUserNotes(t *testing.T) {
-	dir := t.TempDir()
-	qaLog := []ports.QAPair{
-		{Question: "Which scope?", Answer: "Repository only", Notes: "Keep it narrow."},
-	}
-	path, err := WriteQAFile(qaLog, dir)
-	if err != nil {
-		t.Fatalf("WriteQAFile: %v", err)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading file: %v", err)
-	}
-	content := string(data)
-	if !strings.Contains(content, "**Notes:** Keep it narrow.") {
-		t.Errorf("WriteQAFile() content missing notes:\n%s", content)
-	}
-	if strings.Contains(content, "auto-picked") {
-		t.Errorf("WriteQAFile() rendered auto-pick annotation for user answer:\n%s", content)
-	}
-}
-
 func TestWriteQAFileMultiplePairs(t *testing.T) {
 	dir := t.TempDir()
 	qaLog := []ports.QAPair{

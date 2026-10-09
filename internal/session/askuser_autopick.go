@@ -46,13 +46,16 @@ type askUserAutoPickDecisionContext struct {
 }
 
 type askUserAutoPickDecision struct {
-	Pickable   bool
+	Pickable bool
+	// Answers are keyed by one-based question index, as askuser.Resolve takes.
 	Answers    map[string]string
 	Selections []askUserAutoPickSelection
 	Reason     string
 }
 
 type askUserAutoPickSelection struct {
+	// Index is the question's one-based position in the bundle.
+	Index      int
 	Question   string
 	Answer     string
 	Confidence float64
@@ -92,12 +95,13 @@ func decideAskUserAutoPickBundle(bundle askuser.Bundle, ctx askUserAutoPickDecis
 
 	answers := make(map[string]string, len(bundle.Questions))
 	selections := make([]askUserAutoPickSelection, 0, len(bundle.Questions))
-	for _, q := range bundle.Questions {
+	for i, q := range bundle.Questions {
 		selection, ok := selectAutoPickAnswer(normalizeAutoPickQuestion(q), threshold)
 		if !ok {
 			return askUserAutoPickDecision{Reason: "question is not pickable"}
 		}
-		answers[selection.Question] = selection.Answer
+		selection.Index = i + 1
+		answers[strconv.Itoa(selection.Index)] = selection.Answer
 		selections = append(selections, selection)
 	}
 

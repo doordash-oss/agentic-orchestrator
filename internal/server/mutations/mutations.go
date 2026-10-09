@@ -21,7 +21,6 @@ package mutations
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -437,91 +436,28 @@ func (t *mutationTarget) permissionAnswerService() *permission.AnswerService {
 	return permission.NewAnswerService(t.permissionCache, audit)
 }
 
+// AnswerAskUser resolves the submitted answers, keyed by one-based question
+// index, against the pending request's question bundle and delivers the
+// resolved value to the session. An input that does not parse or answers that
+// do not resolve are rejected before anything reaches the provider; the
+// handler reports the error, which names the offending key, as bad_request.
 func (t *mutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequest) (serverruntime.AskUserAnswerResponse, error) {
 	sess, pending, err := t.findPendingControlRequest(req.SessionID, req.RequestID, true)
 	if err != nil {
 		return serverruntime.AskUserAnswerResponse{}, err
 	}
-	answers := normalizeAskUserAnswerKeys(pending.Request.Input, req.Answers)
-	if err := sess.RespondToAskUser(pending.RequestID, pending.Request.Input, answers, nil); err != nil {
+	bundle, err := askuser.Parse(pending.Request.Input)
+	if err != nil {
+		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("ask-user request %s has invalid questions: %w", pending.RequestID, err)
+	}
+	resolved, err := bundle.Resolve(req.Answers)
+	if err != nil {
+		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("invalid ask-user answers: %w", err)
+	}
+	if err := sess.RespondToAskUser(pending.RequestID, resolved); err != nil {
 		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("answer ask-user question: %w", err)
 	}
 	return serverruntime.AskUserAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Result: resultAnswered}, nil
-}
-
-func normalizeAskUserAnswerKeys(input json.RawMessage, answers map[string]string) map[string]string {
-	if len(input) == 0 || len(answers) == 0 {
-		return answers
-	}
-	bundle, err := askuser.Parse(input)
-	if err != nil {
-		return answers
-	}
-	keys := make([]string, 0, len(bundle.Questions))
-	for _, q := range bundle.Questions {
-		key := q.Question
-		if strings.TrimSpace(key) == "" {
-			key = q.Header
-		}
-		if strings.TrimSpace(key) != "" {
-			keys = append(keys, key)
-		}
-	}
-	if len(keys) == 0 {
-		return answers
-	}
-
-	normalized := make(map[string]string, len(answers))
-	remaining := make(map[string]string, len(answers))
-	for key, answer := range answers {
-		remaining[key] = answer
-	}
-	for _, originalKey := range keys {
-		if answer, ok := remaining[originalKey]; ok {
-			normalized[originalKey] = answer
-			delete(remaining, originalKey)
-			continue
-		}
-		var matchedKey string
-		for submittedKey := range remaining {
-			if askUserSubmittedKeyMatchesOriginal(submittedKey, originalKey) {
-				if matchedKey != "" {
-					matchedKey = ""
-					break
-				}
-				matchedKey = submittedKey
-			}
-		}
-		if matchedKey != "" {
-			normalized[originalKey] = remaining[matchedKey]
-			delete(remaining, matchedKey)
-		}
-	}
-	if len(keys) == 1 && len(normalized) == 0 && len(answers) == 1 {
-		for _, answer := range answers {
-			return map[string]string{keys[0]: answer}
-		}
-	}
-	for key, answer := range remaining {
-		normalized[key] = answer
-	}
-	return normalized
-}
-
-func askUserSubmittedKeyMatchesOriginal(submittedKey, originalKey string) bool {
-	submittedKey = strings.TrimSpace(submittedKey)
-	originalKey = strings.TrimSpace(originalKey)
-	if submittedKey == "" || originalKey == "" {
-		return false
-	}
-	if submittedKey == originalKey {
-		return true
-	}
-	if strings.HasSuffix(submittedKey, "...") {
-		prefix := strings.TrimSuffix(submittedKey, "...")
-		return prefix != "" && strings.HasPrefix(originalKey, prefix)
-	}
-	return false
 }
 
 func (t *mutationTarget) SendHelp(req serverruntime.HelpAnswerRequest) (serverruntime.HelpSendResponse, error) {
@@ -1009,25 +945,15 @@ func applyNeedUserInputDraftAnswers(rec *agent.NeedUserInputRecord, answers map[
 	if rec == nil {
 		return errors.New("nil need-user-input record")
 	}
-	questionByKey := make(map[string]*agent.NeedUserInputQuestion)
+	questionByKey := make(map[string]*agent.NeedUserInputQuestion, len(rec.Questions))
 	for i := range rec.Questions {
 		q := &rec.Questions[i]
-		if q.Index > 0 {
-			questionByKey[strconv.Itoa(q.Index)] = q
-			questionByKey[fmt.Sprintf("q%d", q.Index)] = q
-		} else {
-			ordinal := i + 1
-			questionByKey[strconv.Itoa(ordinal)] = q
-			questionByKey[fmt.Sprintf("q%d", ordinal)] = q
-		}
-		if prompt := strings.TrimSpace(q.Prompt); prompt != "" {
-			questionByKey[prompt] = q
-		}
+		questionByKey[strconv.Itoa(q.Index)] = q
 	}
 	for key, answer := range answers {
-		q := questionByKey[strings.TrimSpace(key)]
+		q := questionByKey[key]
 		if q == nil {
-			return fmt.Errorf("answer key %q does not match a need-user-input question", key)
+			return fmt.Errorf("answer key %q is not a need-user-input question index", key)
 		}
 		q.Answer = answer
 	}

@@ -175,55 +175,38 @@ func (p *Protocol) RespondToHook(requestID string) error {
 // RespondToAskUser sends a control response for an AskUserQuestion tool use.
 // The CLI resolves each answer against the question's option labels; an
 // answer matching no label selects nothing and the turn never receives a
-// tool_result, so answers are aligned to labels first and free-text answers
-// are injected as an extra option before being selected.
-func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
-	questions, answers = alignAskUserAnswers(questions, answers)
-	return p.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, annotations))
+// tool_result, so a selected answer is sent as its labels verbatim and a
+// free-text answer is injected as an extra option before being selected.
+func (p *Protocol) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
+	bundle, answers := presentAskUserAnswers(resolved)
+	return p.writeJSON(llm.NewAskUserResponse(requestID, bundle, answers))
 }
 
-// alignAskUserAnswers rewrites each answer to the exact option label it
-// selects (recommended-suffix and display-truncation tolerant) and injects a
-// free-text answer that matches no label as an option, so the CLI's label
-// resolution always finds a selection. The resulting option list stays within
-// Claude's required 2-4 cardinality: an optionless question receives one
-// padding choice, while a full list reserves its final slot for the custom
-// answer.
-func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (json.RawMessage, map[string]string) {
-	if len(answers) == 0 {
-		return questions, answers
-	}
-	bundle, err := askuser.Parse(questions)
-	if err != nil {
-		return questions, answers
-	}
-
-	aligned := make(map[string]string, len(answers))
-	for k, v := range answers {
-		aligned[k] = v
-	}
-	changed := false
-	for i := range bundle.Questions {
+// presentAskUserAnswers returns the bundle to echo and the answers keyed by
+// question text. A selected answer is its labels verbatim, joined with ", "
+// for multi-select; a free-text answer is injected as an option so the CLI's
+// label resolution always finds a selection. The resulting option list stays
+// within Claude's required 2-4 cardinality: an optionless question receives
+// one padding choice, while a full list reserves its final slot for the
+// custom answer.
+func presentAskUserAnswers(resolved askuser.Resolved) (askuser.Bundle, map[string]string) {
+	bundle := askuser.Bundle{Questions: append([]askuser.Question(nil), resolved.Bundle.Questions...)}
+	answers := make(map[string]string, len(resolved.Answers))
+	for _, answer := range resolved.Answers {
+		if answer.Selected {
+			answers[answer.Question] = strings.Join(answer.Labels, ", ")
+			continue
+		}
+		answers[answer.Question] = answer.Raw
+		i := answer.Index - 1
+		if i < 0 || i >= len(bundle.Questions) {
+			continue
+		}
 		q := &bundle.Questions[i]
-		answer, ok := answers[q.Question]
-		if !ok || strings.TrimSpace(answer) == "" {
-			continue
-		}
-		labels := make([]string, len(q.Options))
-		for j, opt := range q.Options {
-			labels[j] = opt.Label
-		}
-		if label, ok := llm.MatchAskUserOptionLabel(labels, answer); ok {
-			if label != answer {
-				aligned[q.Question] = label
-				changed = true
-			}
-			continue
-		}
-		opts := q.Options
+		opts := append([]askuser.Option(nil), q.Options...)
 		if len(opts) == 0 {
 			paddingLabel := "Other"
-			if _, matchesAnswer := llm.MatchAskUserOptionLabel([]string{paddingLabel}, answer); matchesAnswer {
+			if strings.TrimSpace(answer.Raw) == paddingLabel {
 				paddingLabel = "Alternative answer"
 			}
 			opts = append(opts, askuser.Option{
@@ -235,15 +218,11 @@ func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (
 			opts = opts[:3]
 		}
 		q.Options = append(opts, askuser.Option{
-			Label:       answer,
+			Label:       answer.Raw,
 			Description: "User-provided custom answer.",
 		})
-		changed = true
 	}
-	if !changed {
-		return questions, answers
-	}
-	return bundle.Encode(), aligned
+	return bundle, answers
 }
 
 // Interrupt sends a control_request with subtype "interrupt" to cancel the

@@ -1770,9 +1770,6 @@ roadmapAttemptLoop:
 							SessionID:   sessionID,
 							Intent:      intent,
 						})
-						if err == nil && len(violations) == 0 {
-							sess.SetHasUnansweredQuestion(false)
-						}
 						return violations, err
 					},
 					MissingArtifacts: []string{"roadmap.md"},
@@ -2161,9 +2158,6 @@ phasePlanAttemptLoop:
 							SessionID:   sessionID,
 							Intent:      intent,
 						})
-						if err == nil && len(violations) == 0 {
-							sess.SetHasUnansweredQuestion(false)
-						}
 						return violations, err
 					},
 					MissingArtifacts: []string{"plan.md"},

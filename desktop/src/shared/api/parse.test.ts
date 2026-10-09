@@ -54,8 +54,8 @@ const healthFixture = {
   server_time: '2026-07-14T00:00:01Z',
   compatibility: {
     api_version: 'v1',
-    schema_version: 3,
-    min_client_schema: 3,
+    schema_version: 4,
+    min_client_schema: 4,
     runtime_policy: 'loopback-bearer-v1',
     server_build: { version: 'v0.9.0' },
   },
@@ -684,6 +684,47 @@ describe('parseServerJson', () => {
     const schema = z.object({ n: z.number() });
     expect(parseServerJson('{"n": 4}', schema)).toEqual({ n: 4 });
     expect(failure(() => parseServerJson('{"n": "4"}', schema)).code).toBe('E_SCHEMA_MISMATCH');
+  });
+
+  it('requires the one-based index on ask-user and gate questions', () => {
+    const prompts = (askQuestion: object, gateQuestion: object) =>
+      JSON.stringify({
+        api_version: 'v1',
+        ask_user_questions: [
+          {
+            request_id: 'ask-1',
+            tool_name: 'AskUserQuestion',
+            status: 'pending',
+            questions: [askQuestion],
+          },
+        ],
+        help_queue: [],
+        need_user_inputs: [{ feature_id: 'feature-1', open: true, questions: [gateQuestion] }],
+      });
+    const ask = { index: 1, question: 'Which branch?', options: [{ label: 'main' }] };
+    const gate = { index: 2, prompt: 'Which window?', answer: '' };
+
+    const parsed = parseServerJson(prompts(ask, gate), PromptSnapshotResponseSchema);
+    expect(parsed.ask_user_questions[0]?.questions?.[0]).toMatchObject({
+      index: 1,
+      question: 'Which branch?',
+    });
+    expect(parsed.need_user_inputs[0]?.questions?.[0]?.index).toBe(2);
+
+    for (const [askQuestion, gateQuestion] of [
+      [{ question: 'Which branch?' }, gate],
+      [{ index: 0, question: 'Which branch?' }, gate],
+      [{ index: 1.5, question: 'Which branch?' }, gate],
+      [{ index: 1 }, gate],
+      [ask, { prompt: 'Which window?' }],
+      [ask, { index: 0, prompt: 'Which window?' }],
+    ] as const) {
+      expect(
+        failure(() =>
+          parseServerJson(prompts(askQuestion, gateQuestion), PromptSnapshotResponseSchema),
+        ).code,
+      ).toBe('E_SCHEMA_MISMATCH');
+    }
   });
 
   it('accepts bounded unknown verification actions but rejects unbounded ones', () => {

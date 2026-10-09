@@ -34,6 +34,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -333,12 +334,9 @@ func TestServerMutationTargetAnswerPermissionAllowRememberDuplicateReturnsAlread
 	}
 }
 
-func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetadata(t *testing.T) {
-	input := json.RawMessage(`{"questions":[{"question":"Which DB?"},{"question":"Rollout plan?"}]}`)
-	answers := map[string]string{
-		"Which DB?":     "Postgres with read replicas",
-		"Rollout plan?": "Dark launch first",
-	}
+// newAskUserMutationTarget returns a target whose one session holds a
+// pending AskUserQuestion request with input.
+func newAskUserMutationTarget(input json.RawMessage) (*mutationTarget, *mutationTargetSessionView) {
 	sess := &mutationTargetSessionView{
 		id:        testSessionAskID,
 		featureID: "feat-ask",
@@ -356,15 +354,23 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 		}},
 	}
 	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
-	target := mutationTarget{
+	return &mutationTarget{
 		orch:     mutationTargetOrchestrator(sessions),
 		sessions: sessions,
-	}
+	}, sess
+}
+
+func TestServerMutationTargetAnswerAskUserResolvesIndexKeyedAnswersInQuestionOrder(t *testing.T) {
+	input := json.RawMessage(`{"questions":[{"header":"DB","multiSelect":false,"options":[{"description":"d","label":"` + labelUseFullInput + `"},{"description":"s","label":"Sqlite"}],"question":"Which DB?"},{"header":"Rollout","multiSelect":false,"question":"Rollout plan?"}]}`)
+	target, sess := newAskUserMutationTarget(input)
 
 	result, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
 		RequestID: testAskRequestID,
 		SessionID: testSessionAskID,
-		Answers:   answers,
+		Answers: map[string]string{
+			"2": "Dark launch first",
+			"1": labelUseFullInput,
+		},
 	})
 	if err != nil {
 		t.Fatalf("AnswerAskUser() error = %v", err)
@@ -377,74 +383,72 @@ func TestServerMutationTargetAnswerAskUserRespondsWithOriginalInputAndSafeMetada
 	if call.requestID != testAskRequestID {
 		t.Fatalf("RespondToAskUser requestID = %q, want ask-1", call.requestID)
 	}
-	if !jsonEqual(call.questions, input) {
-		t.Fatalf("RespondToAskUser questions = %s, want original %s", call.questions, input)
+	if !jsonEqual(call.resolved.Bundle.Encode(), input) {
+		t.Fatalf("RespondToAskUser bundle = %s, want original %s", call.resolved.Bundle.Encode(), input)
 	}
-	if !reflect.DeepEqual(call.answers, answers) {
-		t.Fatalf("RespondToAskUser answers = %v, want %v", call.answers, answers)
+	want := []askuser.Answer{
+		{Index: 1, Question: "Which DB?", Selected: true, Labels: []string{labelUseFullInput}, Positions: []int{0}, Raw: labelUseFullInput},
+		{Index: 2, Question: "Rollout plan?", Raw: "Dark launch first"},
+	}
+	if !reflect.DeepEqual(call.resolved.Answers, want) {
+		t.Fatalf("RespondToAskUser answers = %+v, want %+v", call.resolved.Answers, want)
 	}
 	if result.RequestID != testAskRequestID || result.SessionID != testSessionAskID || result.Result != resultAnswered {
 		t.Fatalf("AnswerAskUser() result = %+v; want request/session answer", result)
 	}
-	assertJSONDoesNotContain(t, result, "Postgres with read replicas", "Dark launch first")
+	assertJSONDoesNotContain(t, result, labelUseFullInput, "Dark launch first")
 }
 
-func TestServerMutationTargetAnswerAskUserNormalizesTruncatedQuestionKey(t *testing.T) {
-	fullQuestion := "Which persistence strategy should the orchestrator use when an AskUserQuestion contains enough detail that the read API truncates the display projection, but the provider still requires the exact original question text as the answer-map key?"
-	truncatedQuestion := fullQuestion[:180] + "..."
-	input, err := json.Marshal(map[string]any{
-		"questions": []map[string]any{{
-			"question": fullQuestion,
-			"options": []map[string]string{{
-				"label": labelUseFullInput,
-			}},
-		}},
-	})
-	if err != nil {
-		t.Fatalf("marshal input: %v", err)
+func TestServerMutationTargetAnswerAskUserRejectsUnresolvableAnswersAsBadRequest(t *testing.T) {
+	input := json.RawMessage(`{"questions":[{"question":"Which DB?"},{"question":"Rollout plan?"}]}`)
+	tests := []struct {
+		name    string
+		answers map[string]string
+		wantKey string
+	}{
+		{name: "unknown index", answers: map[string]string{"1": "Postgres", "2": "Dark launch", "3": "extra"}, wantKey: `"3"`},
+		{name: "missing answer", answers: map[string]string{"1": "Postgres"}, wantKey: `"2"`},
+		{name: "non-numeric key", answers: map[string]string{"Which DB?": "Postgres", "2": "Dark launch"}, wantKey: `"Which DB?"`},
 	}
-	sess := &mutationTargetSessionView{
-		id:        testSessionAskID,
-		featureID: "feat-ask",
-		phase:     feature.PhaseInquire,
-		status:    ports.SessionWaitingHelp,
-		active:    true,
-		pending: []*llm.ControlRequestMessage{{
-			Type:      wireTypeControlRequest,
-			RequestID: testAskRequestID,
-			Request: llm.ControlRequest{
-				Subtype:  wireSubtypeCanUseTool,
-				ToolName: toolNameAskUserQuestion,
-				Input:    input,
-			},
-		}},
-	}
-	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
-	target := mutationTarget{
-		orch:     mutationTargetOrchestrator(sessions),
-		sessions: sessions,
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, sess := newAskUserMutationTarget(input)
+			handler := serverruntime.NewHandler(serverruntime.HandlerOptions{
+				DisableHostValidation: true,
+				Mutations:             target,
+			})
+			body, err := json.Marshal(serverruntime.AskUserAnswerRequest{
+				RequestID: testAskRequestID,
+				SessionID: testSessionAskID,
+				Answers:   tt.answers,
+			})
+			if err != nil {
+				t.Fatalf("Marshal request: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/prompts/ask-user/answer", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Agentico-Client", "local")
+			rec := httptest.NewRecorder()
 
-	_, err = target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
-		RequestID: testAskRequestID,
-		SessionID: testSessionAskID,
-		Answers: map[string]string{
-			truncatedQuestion: labelUseFullInput,
-		},
-	})
-	if err != nil {
-		t.Fatalf("AnswerAskUser() error = %v", err)
-	}
+			handler.ServeHTTP(rec, req)
 
-	if len(sess.askCalls) != 1 {
-		t.Fatalf("RespondToAskUser calls = %d, want 1", len(sess.askCalls))
-	}
-	call := sess.askCalls[0]
-	if got := call.answers[fullQuestion]; got != labelUseFullInput {
-		t.Fatalf("RespondToAskUser answers[%q] = %q; want selected answer in %v", fullQuestion, got, call.answers)
-	}
-	if _, ok := call.answers[truncatedQuestion]; ok {
-		t.Fatalf("RespondToAskUser kept truncated question key %q in %v", truncatedQuestion, call.answers)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+			var response serverruntime.ErrorResponse
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatalf("Unmarshal response: %v", err)
+			}
+			if response.Error.Code != string(errcat.BadRequest) {
+				t.Fatalf("error code = %q, want bad_request", response.Error.Code)
+			}
+			if !strings.Contains(response.Error.Diagnostics, tt.wantKey) {
+				t.Fatalf("diagnostics = %q, want the offending key %s named", response.Error.Diagnostics, tt.wantKey)
+			}
+			if len(sess.askCalls) != 0 {
+				t.Fatalf("RespondToAskUser calls = %d, want none for unresolvable answers", len(sess.askCalls))
+			}
+		})
 	}
 }
 
@@ -860,14 +864,14 @@ func TestServerMutationTargetSendHelpAnswersFeatureHelpQueueWhenNoSessionIsActiv
 	assertJSONDoesNotContain(t, result, "Continue from the feature cockpit.")
 }
 
-func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPromptAndIndex(t *testing.T) {
+func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByStoredIndex(t *testing.T) {
 	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
 	original := agent.NeedUserInputRecord{
 		Summary:   "Implementation is blocked on product choices.",
 		Iteration: 3,
 		Questions: []agent.NeedUserInputQuestion{
 			{Index: 1, Prompt: "Which database should back search?"},
-			{Prompt: "How should rollout be staged?"},
+			{Index: 3, Prompt: "How should rollout be staged?"},
 		},
 	}
 	if err := agent.WriteNeedUserInputRecord(gatePath, original); err != nil {
@@ -895,8 +899,8 @@ func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPr
 
 	result, err := target.DraftNeedUserInputAnswers("feat-need-input", serverruntime.NeedUserInputDraftRequest{
 		Answers: map[string]string{
-			"Which database should back search?": "Use Postgres first.",
-			"2":                                  "Start with one internal workspace.",
+			"1": "Use Postgres first.",
+			"3": "Start with one internal workspace.",
 		},
 	})
 	if err != nil {
@@ -917,11 +921,85 @@ func TestServerMutationTargetDraftNeedUserInputAnswersUpdatesPendingArtifactByPr
 		t.Fatalf("Prompts changed: got %+v, want %+v", updated.Questions, original.Questions)
 	}
 	if updated.Questions[0].Answer != "Use Postgres first." || updated.Questions[1].Answer != "Start with one internal workspace." {
-		t.Fatalf("Answers = %+v, want prompt and index updates", updated.Questions)
+		t.Fatalf("Answers = %+v, want stored-index updates", updated.Questions)
 	}
 	if result.FeatureID != "feat-need-input" || result.Result != "drafted" {
 		t.Fatalf("DraftNeedUserInputAnswers() result = %+v; want drafted feature", result)
 	}
+}
+
+func TestServerMutationTargetDraftNeedUserInputAnswersAcceptsOnlyStoredIndex(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "q form", key: "q1"},
+		{name: "prompt text", key: "Which database should back search?"},
+		{name: "index naming no question", key: "2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, gatePath := newNeedUserInputDraftTarget(t, []agent.NeedUserInputQuestion{
+				{Index: 1, Prompt: "Which database should back search?"},
+				{Index: 3, Prompt: "How should rollout be staged?"},
+			})
+			before, err := os.ReadFile(gatePath)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			_, err = target.DraftNeedUserInputAnswers("feat-need-input", serverruntime.NeedUserInputDraftRequest{
+				Answers: map[string]string{tt.key: "Use Postgres first."},
+			})
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("%q", tt.key)) {
+				t.Fatalf("DraftNeedUserInputAnswers(%q) error = %v, want error naming the key", tt.key, err)
+			}
+			after, err := os.ReadFile(gatePath)
+			if err != nil {
+				t.Fatalf("ReadFile() error = %v", err)
+			}
+			if string(after) != string(before) {
+				t.Fatalf("gate file rewritten after rejected key %q", tt.key)
+			}
+		})
+	}
+}
+
+func TestServerMutationTargetDraftNeedUserInputAnswersSurfacesGateReadError(t *testing.T) {
+	target, _ := newNeedUserInputDraftTarget(t, []agent.NeedUserInputQuestion{
+		{Index: 1, Prompt: "Which database should back search?"},
+		{Prompt: "How should rollout be staged?"},
+	})
+	_, err := target.DraftNeedUserInputAnswers("feat-need-input", serverruntime.NeedUserInputDraftRequest{
+		Answers: map[string]string{"1": "Use Postgres first."},
+	})
+	if err == nil || !strings.Contains(err.Error(), "How should rollout be staged?") {
+		t.Fatalf("DraftNeedUserInputAnswers() error = %v, want gate read error naming the question", err)
+	}
+}
+
+func newNeedUserInputDraftTarget(t *testing.T, questions []agent.NeedUserInputQuestion) (mutationTarget, string) {
+	t.Helper()
+	gatePath := filepath.Join(t.TempDir(), agent.NeedUserInputArtifactName)
+	if err := agent.WriteNeedUserInputRecord(gatePath, agent.NeedUserInputRecord{Summary: "Blocked on product choices.", Questions: questions}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	store := feature.NewStore(t.TempDir())
+	cfg := config.NewDefault()
+	f := &feature.Feature{
+		ID:                       "feat-need-input",
+		Name:                     "Need input",
+		Slug:                     "need-input",
+		Status:                   feature.StatusNeedUserInput,
+		PendingNeedUserInputPath: gatePath,
+		SchemaVersion:            feature.SchemaVersionCurrent,
+	}
+	if err := store.Save(f); err != nil {
+		t.Fatalf("Save feature error = %v", err)
+	}
+	return mutationTarget{
+		orch: orchestrator.New(orchestrator.Deps{Lifecycle: feature.NewManager(store, cfg), Store: store}, orchestrator.Hooks{}),
+		cfg:  cfg,
+	}, gatePath
 }
 
 func TestServerMutationTargetRuntimeConfigPersistsAllowedDefaultsChanges(t *testing.T) {
@@ -2606,8 +2684,7 @@ type mutationTargetControlCall struct {
 
 type mutationTargetAskUserCall struct {
 	requestID string
-	questions json.RawMessage
-	answers   map[string]string
+	resolved  askuser.Resolved
 }
 
 func (s *mutationTargetSessionView) ID() string                       { return s.id }
@@ -2701,30 +2778,16 @@ func (s *mutationTargetSessionView) RespondToControlRemember(requestID string) e
 	s.rememberedCalls = append(s.rememberedCalls, requestID)
 	return nil
 }
-func (s *mutationTargetSessionView) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, _ map[string]llm.AskUserAnnotation) error {
-	copied := make(map[string]string, len(answers))
-	for k, v := range answers {
-		copied[k] = v
-	}
+func (s *mutationTargetSessionView) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
 	s.askCalls = append(s.askCalls, mutationTargetAskUserCall{
 		requestID: requestID,
-		questions: append(json.RawMessage(nil), questions...),
-		answers:   copied,
+		resolved:  resolved,
 	})
 	return nil
 }
-func (s *mutationTargetSessionView) ClearPendingQuestion(requestID string) {
-	for i, pending := range s.pending {
-		if pending != nil && pending.RequestID == requestID {
-			s.pending = append(s.pending[:i], s.pending[i+1:]...)
-			return
-		}
-	}
-}
-func (s *mutationTargetSessionView) ResetWaitingStatus() {}
-func (s *mutationTargetSessionView) Stop() error         { return nil }
-func (s *mutationTargetSessionView) Interrupt() error    { return nil }
-func (s *mutationTargetSessionView) Wait()               {}
+func (s *mutationTargetSessionView) Stop() error      { return nil }
+func (s *mutationTargetSessionView) Interrupt() error { return nil }
+func (s *mutationTargetSessionView) Wait()            {}
 func (s *mutationTargetSessionView) SetStatus(status ports.SessionStatus) {
 	s.status = status
 }

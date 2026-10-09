@@ -147,7 +147,7 @@ func TestControlResponseWireFormat_AskUser(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			answers := map[string]string{"Pick a color?": "Red"}
-			resp := llm.NewAskUserResponse("ask_1", tc.questions, answers, nil)
+			resp := llm.NewAskUserResponse("ask_1", resolveAskUser(t, tc.questions, map[string]string{"1": "Red"}).Bundle, answers)
 			data, _ := json.Marshal(resp)
 
 			var wire map[string]any
@@ -596,8 +596,8 @@ func TestRespondToAskUser_CapturesQALog(t *testing.T) {
 	}
 
 	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
-	answers := map[string]string{"Which DB?": "PostgreSQL"}
-	if err := s.RespondToAskUser("req-1", questions, answers, nil); err != nil {
+	answers := map[string]string{"1": "PostgreSQL"}
+	if err := s.RespondToAskUser("req-1", resolveAskUser(t, questions, answers)); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 
@@ -609,8 +609,8 @@ func TestRespondToAskUser_CapturesQALog(t *testing.T) {
 	}
 
 	// Second call should accumulate
-	answers2 := map[string]string{"Cache?": "Redis"}
-	if err := s.RespondToAskUser("req-2", questions, answers2, nil); err != nil {
+	answers2 := map[string]string{"1": "Redis"}
+	if err := s.RespondToAskUser("req-2", resolveAskUser(t, questions, answers2)); err != nil {
 		t.Fatalf("RespondToAskUser (second): %v", err)
 	}
 	if len(s.qaLog) != 2 {
@@ -632,8 +632,8 @@ func TestQALogReturnsSnapshot(t *testing.T) {
 	}
 
 	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
-	answers := map[string]string{"Which DB?": "PostgreSQL"}
-	if err := s.RespondToAskUser("req-1", questions, answers, nil); err != nil {
+	answers := map[string]string{"1": "PostgreSQL"}
+	if err := s.RespondToAskUser("req-1", resolveAskUser(t, questions, answers)); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 
@@ -649,7 +649,7 @@ func TestQALogReturnsSnapshot(t *testing.T) {
 	}
 }
 
-func TestRespondToAskUser_CapturesQALogInPresentedOrderWithNotes(t *testing.T) {
+func TestRespondToAskUser_CapturesQALogInQuestionOrder(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("creating pipe: %v", err)
@@ -664,13 +664,10 @@ func TestRespondToAskUser_CapturesQALogInPresentedOrderWithNotes(t *testing.T) {
 
 	questions := json.RawMessage(`{"questions":[{"question":"Zeta?"},{"question":"Alpha?"}]}`)
 	answers := map[string]string{
-		"Alpha?": "second answer",
-		"Zeta?":  "first answer",
+		"2": "second answer",
+		"1": "first answer",
 	}
-	annotations := map[string]llm.AskUserAnnotation{
-		"Alpha?": {Notes: "user note"},
-	}
-	if err := s.RespondToAskUser("req-ordered", questions, answers, annotations); err != nil {
+	if err := s.RespondToAskUser("req-ordered", resolveAskUser(t, questions, answers)); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 
@@ -680,8 +677,8 @@ func TestRespondToAskUser_CapturesQALogInPresentedOrderWithNotes(t *testing.T) {
 	if s.qaLog[0].Question != "Zeta?" || s.qaLog[0].Answer != "first answer" {
 		t.Errorf("qaLog[0] = %+v, want first presented question", s.qaLog[0])
 	}
-	if s.qaLog[1].Question != "Alpha?" || s.qaLog[1].Answer != "second answer" || s.qaLog[1].Notes != "user note" {
-		t.Errorf("qaLog[1] = %+v, want second presented question with notes", s.qaLog[1])
+	if s.qaLog[1].Question != "Alpha?" || s.qaLog[1].Answer != "second answer" {
+		t.Errorf("qaLog[1] = %+v, want second presented question", s.qaLog[1])
 	}
 }
 
@@ -701,10 +698,10 @@ func TestRespondToAskUser_AppendsLocalDisplayMessagesInPresentedOrder(t *testing
 
 	questions := json.RawMessage(`{"questions":[{"question":"Zeta?"},{"question":"Alpha?"}]}`)
 	answers := map[string]string{
-		"Alpha?": "second answer",
-		"Zeta?":  "first answer",
+		"2": "second answer",
+		"1": "first answer",
 	}
-	if err := s.RespondToAskUser("req-ordered", questions, answers, nil); err != nil {
+	if err := s.RespondToAskUser("req-ordered", resolveAskUser(t, questions, answers)); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 
@@ -751,10 +748,10 @@ func TestRespondToAskUser_DoesNotDuplicateExistingLocalDisplayMessages(t *testin
 
 	questions := json.RawMessage(`{"questions":[{"question":"Zeta?"},{"question":"Alpha?"}]}`)
 	answers := map[string]string{
-		"Alpha?": "second answer",
-		"Zeta?":  "first answer",
+		"2": "second answer",
+		"1": "first answer",
 	}
-	if err := s.RespondToAskUser("req-ordered", questions, answers, nil); err != nil {
+	if err := s.RespondToAskUser("req-ordered", resolveAskUser(t, questions, answers)); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 
@@ -1090,8 +1087,7 @@ func TestRespondToAskUser_CodexProvider_SendsCodexFormat(t *testing.T) {
 	}()
 
 	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
-	answers := map[string]string{"Which DB?": "PostgreSQL"}
-	if err := s.RespondToAskUser("42", questions, answers, nil); err != nil {
+	if err := s.RespondToAskUser("42", resolveAskUser(t, questions, map[string]string{"1": "PostgreSQL"})); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
 	}
 

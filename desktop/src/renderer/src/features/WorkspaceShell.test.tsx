@@ -347,7 +347,9 @@ describe('WorkspaceShell sidebar', () => {
         id: 'q-1',
         featureId: FEATURE_ID,
         waitingSince: '2026-08-05T10:00:00Z',
-        questions: [{ key: 'Which?', header: 'Direction', multiSelect: false, options: [] }],
+        questions: [
+          { index: 1, question: 'Which?', header: 'Direction', multiSelect: false, options: [] },
+        ],
       },
     ];
     render(<WorkspaceShell attentionItems={attentionItems} />);
@@ -1697,14 +1699,24 @@ describe('WorkspaceShell ambient notices', () => {
         id: 'q-1',
         featureId: FEATURE_ID,
         waitingSince: '2026-08-05T10:00:00Z',
-        questions: [{ key: 'Which?', header: 'Direction', multiSelect: false, options: [] }],
+        questions: [
+          { index: 1, question: 'Which?', header: 'Direction', multiSelect: false, options: [] },
+        ],
       },
       {
         kind: 'questions',
         id: 'q-2',
         featureId: FEATURE_ID,
         waitingSince: '2026-08-05T10:01:00Z',
-        questions: [{ key: 'Which again?', header: 'Direction', multiSelect: false, options: [] }],
+        questions: [
+          {
+            index: 1,
+            question: 'Which again?',
+            header: 'Direction',
+            multiSelect: false,
+            options: [],
+          },
+        ],
       },
       {
         kind: 'gate',

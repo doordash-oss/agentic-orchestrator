@@ -816,7 +816,8 @@ describe('RefactorPassWorkspace', () => {
       waitingSince: '2026-08-01T10:00:00.000Z',
       questions: [
         {
-          key: 'Which language should the body keep?',
+          index: 1,
+          question: 'Which language should the body keep?',
           header: 'Body language',
           multiSelect: false,
           options: [{ label: 'Italian (fork point)' }, { label: 'English (main)' }],

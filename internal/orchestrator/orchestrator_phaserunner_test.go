@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -126,14 +127,12 @@ func (s *stubSessionHandle) SendUserMessage(text string) error { return nil }
 func (s *stubSessionHandle) RespondToControl(requestID string, allow bool, reason string) error {
 	return nil
 }
-func (s *stubSessionHandle) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+func (s *stubSessionHandle) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
-func (s *stubSessionHandle) ClearPendingQuestion(requestID string) {}
-func (s *stubSessionHandle) ResetWaitingStatus()                   {}
-func (s *stubSessionHandle) Stop() error                           { return nil }
-func (s *stubSessionHandle) Interrupt() error                      { return nil }
-func (s *stubSessionHandle) Wait()                                 {}
+func (s *stubSessionHandle) Stop() error      { return nil }
+func (s *stubSessionHandle) Interrupt() error { return nil }
+func (s *stubSessionHandle) Wait()            {}
 
 // SessionHandle mutation (no-ops).
 func (s *stubSessionHandle) SetStatus(status session.SessionStatus) {}

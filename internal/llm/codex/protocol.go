@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // nextID is an atomic counter for JSON-RPC request IDs.
@@ -411,8 +412,8 @@ func (p *Protocol) RespondToHook(_ string) error {
 }
 
 // RespondToAskUser returns the actual answer to its pending Codex tool call.
-func (p *Protocol) RespondToAskUser(requestID string, _ json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
-	return p.respondToAskUser(requestID, answers, annotations)
+func (p *Protocol) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
+	return p.respondToAskUser(requestID, resolved.ByText())
 }
 
 // Interrupt sends turn/interrupt for the running turn of an interactive

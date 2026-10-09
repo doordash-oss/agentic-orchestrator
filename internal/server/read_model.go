@@ -1712,12 +1712,8 @@ func needUserInputGateDTO(featureID, scope, repoName string, iteration int, inpu
 		if prompt == "" {
 			continue
 		}
-		questionIndex := q.Index
-		if questionIndex <= 0 {
-			questionIndex = len(dto.Questions) + 1
-		}
 		dto.Questions = append(dto.Questions, NeedUserInputQuestion{
-			Index: questionIndex,
+			Index: q.Index,
 			Prompt: agent.BoundNeedUserInputVerificationString(
 				prompt,
 				agent.NeedUserInputVerificationContextTextMaxLength,
@@ -2261,8 +2257,9 @@ func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage
 // redacting each field without truncating it again.
 func askUserQuestionDTOs(bundle askuser.Bundle) []AskUserQuestion {
 	questions := make([]AskUserQuestion, 0, len(bundle.Questions))
-	for _, q := range bundle.Questions {
+	for i, q := range bundle.Questions {
 		question := AskUserQuestion{
+			Index:       i + 1,
 			Question:    SafeDisplayText(q.Question, 0),
 			Header:      SafeDisplayText(q.Header, 0),
 			MultiSelect: q.MultiSelect,

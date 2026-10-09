@@ -2078,7 +2078,7 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 	}
 	runsBefore := countContractEvidenceRuns(t, contractPath)
 	cachedAxis := axes[0]
-	cachedAxisDir := filepath.Join(iterDir, "review", implementationReviewAxisSlug(cachedAxis.Name))
+	cachedAxisDir := filepath.Join(iterDir, "review", cachedAxis.Slug)
 	if err := os.MkdirAll(cachedAxisDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

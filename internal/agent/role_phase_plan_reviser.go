@@ -27,8 +27,8 @@ var phasePlanReviserRoleSpec = roleSpec{
 	Role:      RolePlanPhaseReviser,
 	SkillName: "revise-phase-plan",
 	OutputRoots: []outputRootSpec{
-		artifactDirOutputRoot("Shared per-phase plan artifact root. Revisions update the phase plan markdown here across attempts."),
-		attemptDirOutputRoot("Active phase-plan revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
+		iterationParentOutputRoot("artifact_dir", "Shared per-phase plan artifact root. Revisions update the phase plan markdown here across attempts."),
+		iterationOutputRoot("attempt_dir", "Active phase-plan revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
 	},
 	Artifacts: []roleArtifactSpec{
 		phasePlanMarkdownRoleArtifact(),

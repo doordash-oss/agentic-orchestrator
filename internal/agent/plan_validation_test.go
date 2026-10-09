@@ -1214,7 +1214,7 @@ func TestPlanValidatorHelperUsesIsolatedDirAndHarnessReceipt(t *testing.T) {
 		1,
 		attemptDir,
 		planArtifactPath,
-		validatorDomain{Name: "Scope", Template: "validate-roadmap-scope"},
+		testPlanValidatorAxis(t, "validate-roadmap-scope"),
 		validationArtifactPhasePlan,
 		planValidationExtras{},
 		observe.SpanContext{},
@@ -2015,7 +2015,7 @@ func TestPlanValidationSurfaces_PassExplicitEmptyAgentNames(t *testing.T) {
 				cfg.BuildSession = buildSession
 				sm := session.NewManager(make(chan interface{}, 10))
 				t.Cleanup(sm.Shutdown)
-				if _, _, _, err := runSpecializedPlanValidationForArtifact(cfg, sm, 1, artifactDir, planPath, validatorDomain{Name: "Architecture", Template: "validate-roadmap-architecture"}, validationArtifactRoadmap, planValidationExtras{}, observe.SpanContext{}); err != nil {
+				if _, _, _, err := runSpecializedPlanValidationForArtifact(cfg, sm, 1, artifactDir, planPath, testPlanValidatorAxis(t, "validate-roadmap-architecture"), validationArtifactRoadmap, planValidationExtras{}, observe.SpanContext{}); err != nil {
 					t.Fatalf("runSpecializedPlanValidationForArtifact error: %v", err)
 				}
 				return *captured
@@ -2217,7 +2217,7 @@ func TestSpecializedValidation_UsesReviewModelInBoundedSessions(t *testing.T) {
 				},
 			}
 
-			domain := validatorDomain{Name: "Architecture", Template: "validate-roadmap-architecture"}
+			domain := testPlanValidatorAxis(t, "validate-roadmap-architecture")
 			_, _, _, _ = runSpecializedPlanValidation(cfg, sm, 1, planDir, filepath.Join(planDir, "plan.md"), domain, observe.SpanContext{})
 
 			if capturedOpts.Model != tt.wantModel {
@@ -2251,6 +2251,12 @@ func TestRoadmapValidatorsForRisk(t *testing.T) {
 			wantTemplates: []string{"validate-roadmap-architecture", "validate-roadmap-scope"},
 		},
 		{
+			name:          "unset risk roadmap",
+			risk:          "",
+			wantNames:     []string{"Architecture", "Scope"},
+			wantTemplates: []string{"validate-roadmap-architecture", "validate-roadmap-scope"},
+		},
+		{
 			name:          "high risk roadmap",
 			risk:          feature.RiskHigh,
 			wantNames:     []string{"Architecture", "Security", "Performance", "Scope"},
@@ -2268,8 +2274,8 @@ func TestRoadmapValidatorsForRisk(t *testing.T) {
 				if got[i].Name != want {
 					t.Errorf("roadmapValidatorsForRisk(%s)[%d] = %q, want %q", tt.risk, i, got[i].Name, want)
 				}
-				if got[i].Template != tt.wantTemplates[i] {
-					t.Errorf("roadmapValidatorsForRisk(%s)[%d] template = %q, want %q", tt.risk, i, got[i].Template, tt.wantTemplates[i])
+				if got[i].SkillName != tt.wantTemplates[i] {
+					t.Errorf("roadmapValidatorsForRisk(%s)[%d] template = %q, want %q", tt.risk, i, got[i].SkillName, tt.wantTemplates[i])
 				}
 			}
 		})
@@ -2296,6 +2302,12 @@ func TestPhasePlanValidatorsForRisk(t *testing.T) {
 			wantTemplates: []string{"validate-phase-plan-structural", "validate-phase-plan-scope"},
 		},
 		{
+			name:          "unset risk phase plan",
+			risk:          "",
+			wantNames:     []string{"Structural", "Scope"},
+			wantTemplates: []string{"validate-phase-plan-structural", "validate-phase-plan-scope"},
+		},
+		{
 			name:          "high risk phase plan",
 			risk:          feature.RiskHigh,
 			wantNames:     []string{"Structural", "Scope", "Security", "Performance", "Testing"},
@@ -2313,8 +2325,8 @@ func TestPhasePlanValidatorsForRisk(t *testing.T) {
 				if got[i].Name != want {
 					t.Errorf("phasePlanValidatorsForRisk(%s)[%d] = %q, want %q", tt.risk, i, got[i].Name, want)
 				}
-				if got[i].Template != tt.wantTemplates[i] {
-					t.Errorf("phasePlanValidatorsForRisk(%s)[%d] template = %q, want %q", tt.risk, i, got[i].Template, tt.wantTemplates[i])
+				if got[i].SkillName != tt.wantTemplates[i] {
+					t.Errorf("phasePlanValidatorsForRisk(%s)[%d] template = %q, want %q", tt.risk, i, got[i].SkillName, tt.wantTemplates[i])
 				}
 			}
 		})
@@ -2391,10 +2403,10 @@ func TestRoadmapSpecializedValidation_UsesRoadmapValidatorSubset(t *testing.T) {
 	}
 	var hasArchitecture, hasScope bool
 	for _, v := range expectedValidators {
-		if v.Template == "validate-roadmap-architecture" {
+		if v.SkillName == "validate-roadmap-architecture" {
 			hasArchitecture = true
 		}
-		if v.Template == "validate-roadmap-scope" {
+		if v.SkillName == "validate-roadmap-scope" {
 			hasScope = true
 		}
 	}
@@ -2450,7 +2462,7 @@ func TestSpecializedValidation_UsesConfiguredReviewModel(t *testing.T) {
 		},
 	}
 
-	domain := validatorDomain{Name: "Architecture", Template: "validate-roadmap-architecture"}
+	domain := testPlanValidatorAxis(t, "validate-roadmap-architecture")
 	_, _, _, _ = runSpecializedPlanValidation(cfg, sm, 1, planDir, filepath.Join(planDir, "plan.md"), domain, observe.SpanContext{})
 
 	if capturedOpts.Model != "codex" {
@@ -2958,7 +2970,7 @@ done
 		BuildSession: buildSession,
 	}
 
-	domain := validatorDomain{Name: "Structural", Template: "validate-phase-plan-structural"}
+	domain := testPlanValidatorAxis(t, "validate-phase-plan-structural")
 	status, _, _, err := runSpecializedPlanValidationForArtifact(cfg, sm, 1, attemptDir, planPath, domain, validationArtifactPhasePlan, planValidationExtras{}, observe.SpanContext{})
 	if err != nil {
 		t.Fatalf("runSpecializedPlanValidationForArtifact: %v", err)
@@ -2986,17 +2998,17 @@ func TestBuildSpecializedValidationPrompt_OmitsPriorPhaseContext(t *testing.T) {
 
 	cases := []struct {
 		kind    validationArtifactKind
-		domains []validatorDomain
+		domains []planValidatorAxis
 	}{
 		{validationArtifactPhasePlan, phasePlanValidatorsForRisk(feature.RiskHigh)},
 		{validationArtifactRoadmap, roadmapValidatorsForRisk(feature.RiskHigh)},
 	}
 	for _, c := range cases {
 		for _, domain := range c.domains {
-			t.Run(string(c.kind)+"/"+domain.Template, func(t *testing.T) {
+			t.Run(string(c.kind)+"/"+domain.SkillName, func(t *testing.T) {
 				prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "", domain, c.kind, extras)
 				if strings.Contains(prompt, priorPath) || strings.Contains(prompt, "## Prior Phase Context") {
-					t.Errorf("%s prompt should NOT contain the prior-phase block:\n%s", domain.Template, prompt)
+					t.Errorf("%s prompt should NOT contain the prior-phase block:\n%s", domain.SkillName, prompt)
 				}
 			})
 		}
@@ -3106,7 +3118,7 @@ func TestAxisStallState_EscalatesAfterLimit(t *testing.T) {
 
 	var tracker axisStallState
 	results := []ValidatorResult{
-		{Domain: "Structural", Status: ReviewChangesRequested, Feedback: "bad"},
+		{Domain: "Structural", Axis: "structural", Status: ReviewChangesRequested, Feedback: "bad"},
 	}
 
 	if stalled, _, _, _, _ := tracker.observe(1, planPath, results); stalled {
@@ -3136,8 +3148,8 @@ func TestAxisStallState_ResetsOnApproval(t *testing.T) {
 	_ = os.WriteFile(planPath, []byte("## Tasks\n- foo\n"), 0o644)
 
 	var tracker axisStallState
-	failing := []ValidatorResult{{Domain: "Structural", Status: ReviewChangesRequested}}
-	passing := []ValidatorResult{{Domain: "Structural", Status: ReviewApproved}}
+	failing := []ValidatorResult{{Domain: "Structural", Axis: "structural", Status: ReviewChangesRequested}}
+	passing := []ValidatorResult{{Domain: "Structural", Axis: "structural", Status: ReviewApproved}}
 
 	_, _, _, _, _ = tracker.observe(1, planPath, failing)
 	_, _, _, _, _ = tracker.observe(2, planPath, failing)
@@ -3243,7 +3255,7 @@ func TestAxisStallState_ChangedSectionResetsCount(t *testing.T) {
 	_ = os.WriteFile(planPath, []byte("## Tasks\n- foo\n"), 0o644)
 
 	var tracker axisStallState
-	failing := []ValidatorResult{{Domain: "Structural", Status: ReviewChangesRequested}}
+	failing := []ValidatorResult{{Domain: "Structural", Axis: "structural", Status: ReviewChangesRequested}}
 
 	_, _, _, _, _ = tracker.observe(1, planPath, failing)
 	_, _, _, _, _ = tracker.observe(2, planPath, failing)
@@ -3544,4 +3556,15 @@ func TestPlanLoopGuardDetectsRestartDuringBackoff(t *testing.T) {
 	if !fresh.superseded() {
 		t.Fatal("guard missed the interrupted feature")
 	}
+}
+
+func testPlanValidatorAxis(t *testing.T, skillName string) planValidatorAxis {
+	t.Helper()
+	for _, axis := range planValidatorAxes {
+		if axis.SkillName == skillName {
+			return axis
+		}
+	}
+	t.Fatalf("no plan validator axis for skill %q", skillName)
+	return planValidatorAxis{}
 }

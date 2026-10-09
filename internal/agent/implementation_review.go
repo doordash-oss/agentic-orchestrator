@@ -61,9 +61,13 @@ const (
 	implementationReviewPostureLiveRun  implementationReviewExecutionPosture = "live_run"
 )
 
+// implementationReviewAxis declares one implementation-review axis. Slug
+// names the axis helper directory, session id and system-prompt prefix in the
+// per-phase and final review loops.
 type implementationReviewAxis struct {
 	Name             string
 	ShortName        string
+	Slug             string
 	SkillName        string
 	Role             Role
 	ExecutionPosture implementationReviewExecutionPosture
@@ -80,6 +84,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "Craft",
 		ShortName:        "Craft",
+		Slug:             "craft",
 		SkillName:        "review-implementation-craft",
 		Role:             RoleImplementationReviewCraft,
 		ExecutionPosture: implementationReviewPostureReadOnly,
@@ -91,6 +96,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "Functionality/Evidence",
 		ShortName:        "Func",
+		Slug:             "functionality-evidence",
 		SkillName:        "review-implementation-functionality-evidence",
 		Role:             RoleImplementationReviewFunctionalityEvidence,
 		ExecutionPosture: implementationReviewPostureReadOnly,
@@ -101,6 +107,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "Cleanliness",
 		ShortName:        "Clean",
+		Slug:             "cleanliness",
 		SkillName:        "review-implementation-cleanliness",
 		Role:             RoleImplementationReviewCleanliness,
 		ExecutionPosture: implementationReviewPostureReadOnly,
@@ -112,6 +119,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "QA",
 		ShortName:        "QA",
+		Slug:             "qa",
 		SkillName:        "review-implementation-qa",
 		Role:             RoleImplementationReviewQA,
 		ExecutionPosture: implementationReviewPostureLiveRun,
@@ -122,6 +130,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 	{
 		Name:             "Design",
 		ShortName:        "Design",
+		Slug:             "design",
 		SkillName:        "review-implementation-design",
 		Role:             RoleImplementationReviewDesign,
 		ExecutionPosture: implementationReviewPostureLiveRun,
@@ -233,7 +242,7 @@ type implementationReviewInput struct {
 }
 
 func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, iteration int, iterDir, reviewDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, input implementationReviewInput) (ReviewStatus, string, error) {
-	axisSlug := implementationReviewAxisSlug(axis.Name)
+	axisSlug := axis.Slug
 	axisDir := filepath.Join(reviewDir, axisSlug)
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
 		return ReviewFailed, "", fmt.Errorf("creating %s implementation review helper directory: %w", axis.Name, err)
@@ -369,13 +378,6 @@ func designArtifactPathForImplementationReview(f *feature.Feature) string {
 		return ""
 	}
 	return f.DesignArtifactPath()
-}
-
-func implementationReviewAxisSlug(name string) string {
-	slug := strings.ToLower(name)
-	slug = strings.ReplaceAll(slug, "/", "-")
-	slug = strings.ReplaceAll(slug, " ", "-")
-	return slug
 }
 
 func setImplementationReviewAxisStatuses(cfg ImplementConfig, axes []implementationReviewAxis) {

@@ -535,7 +535,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 }
 
 func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, cfg OrchestratorConfig) (ReviewStatus, string, error) {
-	axisSlug := implementationReviewAxisSlug(axis.Name)
+	axisSlug := axis.Slug
 	axisDir := filepath.Join(iterDir, axisSlug)
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
 		return ReviewFailed, "", fmt.Errorf("creating %s final review helper directory: %w", axis.Name, err)

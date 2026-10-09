@@ -346,9 +346,9 @@ func TestRoleSystemPromptSuppressSubagents(t *testing.T) {
 }
 
 func TestBuildValidatorSystemPromptFromRoleSpec(t *testing.T) {
-	role, ok := planValidatorRoleForSkill("validate-roadmap-architecture")
+	role, ok := lookupRoleSpec(feature.PhasePlan, RoleValidateRoadmapArchitecture)
 	if !ok {
-		t.Fatal("planValidatorRoleForSkill(validate-roadmap-architecture) ok = false, want true")
+		t.Fatal("lookupRoleSpec(plan, validate_roadmap_architecture) ok = false, want true")
 	}
 	got := buildRoleSystemPrompt(roleSystemPromptInput{
 		Spec:         role,

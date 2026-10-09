@@ -158,7 +158,7 @@ func TestValidatorPromptUsesDistilledIntent(t *testing.T) {
 		ExitCriteria: "raw criteria",
 		Artifacts:    map[string]string{feature.DesignArtifactKey: designPath},
 	}
-	scopeDomain := validatorDomain{Name: "Scope", Template: "validate-phase-plan-scope"}
+	scopeDomain := testPlanValidatorAxis(t, "validate-phase-plan-scope")
 	prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "/feedback.md", scopeDomain, validationArtifactPhasePlan, planValidationExtras{})
 	if strings.Contains(prompt, "raw criteria") || strings.Contains(prompt, "raw description") {
 		t.Fatalf("design-backed validator prompt must not inline raw intent:\n%s", prompt)

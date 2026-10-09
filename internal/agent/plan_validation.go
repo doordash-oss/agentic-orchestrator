@@ -608,12 +608,6 @@ func phasePlanPlannerRoleForAttempt(attempt int) Role {
 	return RolePlanPhaseReviser
 }
 
-// validatorDomain describes a specialized plan validator.
-type validatorDomain struct {
-	Name     string // human-readable name (e.g. "Architecture")
-	Template string // command template name (e.g. "validate-roadmap-architecture")
-}
-
 type validationArtifactKind string
 
 const (
@@ -625,19 +619,8 @@ const (
 // plans. The default axes are structural + scope; high-risk phases add
 // security/performance/testing. Phase plans no longer require a Grounding
 // table, so grounding is not part of the phase-plan gate.
-func phasePlanValidatorsForRisk(risk feature.RiskLevel) []validatorDomain {
-	validators := []validatorDomain{
-		{Name: "Structural", Template: "validate-phase-plan-structural"},
-		{Name: "Scope", Template: "validate-phase-plan-scope"},
-	}
-	if risk == feature.RiskHigh {
-		validators = append(validators,
-			validatorDomain{Name: "Security", Template: "validate-plan-security"},
-			validatorDomain{Name: "Performance", Template: "validate-plan-performance"},
-			validatorDomain{Name: "Testing", Template: "validate-plan-testing"},
-		)
-	}
-	return validators
+func phasePlanValidatorsForRisk(risk feature.RiskLevel) []planValidatorAxis {
+	return selectPlanValidators(validationArtifactPhasePlan, risk)
 }
 
 // roadmapValidatorsForRisk deliberately uses a lighter validator set than
@@ -645,20 +628,8 @@ func phasePlanValidatorsForRisk(risk feature.RiskLevel) []validatorDomain {
 // test strategy and implementation-level quality bars are validated later when
 // each phase gets its own plan. High-risk roadmaps still get early security and
 // performance review because those concerns can invalidate the overall shape.
-func roadmapValidatorsForRisk(risk feature.RiskLevel) []validatorDomain {
-	validators := []validatorDomain{
-		{Name: "Architecture", Template: "validate-roadmap-architecture"},
-		{Name: "Scope", Template: "validate-roadmap-scope"},
-	}
-	if risk == feature.RiskHigh {
-		validators = []validatorDomain{
-			{Name: "Architecture", Template: "validate-roadmap-architecture"},
-			{Name: "Security", Template: "validate-plan-security"},
-			{Name: "Performance", Template: "validate-plan-performance"},
-			{Name: "Scope", Template: "validate-roadmap-scope"},
-		}
-	}
-	return validators
+func roadmapValidatorsForRisk(risk feature.RiskLevel) []planValidatorAxis {
+	return selectPlanValidators(validationArtifactRoadmap, risk)
 }
 
 // runSpecializedPlanValidation runs a single specialized validator against the plan
@@ -669,7 +640,7 @@ func roadmapValidatorsForRisk(risk feature.RiskLevel) []validatorDomain {
 // support print mode (Claude), stdin is closed after the protocol sends the
 // prompt since it's a one-shot evaluation. For providers that don't (Codex),
 // stdin must stay open because it carries the JSON-RPC channel.
-func runSpecializedPlanValidation(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain validatorDomain, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
+func runSpecializedPlanValidation(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain planValidatorAxis, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
 	return runSpecializedPlanValidationForArtifact(cfg, sm, attempt, attemptDir, planArtifactPath, domain, validationArtifactPhasePlan, planValidationExtras{}, parentCtx)
 }
 
@@ -680,30 +651,24 @@ type planValidationExtras struct {
 	PriorPhasePlanPaths []string
 }
 
-func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain validatorDomain, kind validationArtifactKind, extras planValidationExtras, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
-	domainLower := strings.ToLower(domain.Name)
-	helperIterDir := filepath.Join(attemptDir, "validate-"+domainLower)
+func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain planValidatorAxis, kind validationArtifactKind, extras planValidationExtras, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
+	helperIterDir := filepath.Join(attemptDir, domain.helperDirName())
 	if err := os.MkdirAll(helperIterDir, 0o755); err != nil {
 		return ReviewFailed, "", ValidatorMarkers{}, fmt.Errorf("creating %s validator helper directory: %w", domain.Name, err)
 	}
 
-	feedbackPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-feedback.md", domainLower))
-	parentFeedbackPath := filepath.Join(attemptDir, fmt.Sprintf("validation-%s-feedback.md", domainLower))
+	feedbackPath := filepath.Join(helperIterDir, domain.feedbackFileName())
+	parentFeedbackPath := filepath.Join(attemptDir, domain.feedbackFileName())
 
 	validationPrompt := buildSpecializedValidationPromptForArtifact(cfg.Feature, planArtifactPath, cfg.ResearchArtifactPath, cfg.SkillsDir, feedbackPath, domain, kind, extras)
-	validatorSpec, ok := planValidatorRoleForSkill(domain.Template)
-	if !ok {
-		return ReviewFailed, "", ValidatorMarkers{}, fmt.Errorf("missing validator RoleSpec for skill %q", domain.Template)
-	}
-
-	promptPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-prompt.md", domainLower))
+	promptPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-prompt.md", domain.Axis))
 	validatorModel := resolveValidatorModel(cfg)
-	logPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-output.txt", domainLower))
+	logPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-output.txt", domain.Axis))
 	addDirs := cfg.AdditionalDirs
 	if len(addDirs) == 0 {
 		addDirs = []string{ActiveRunDir(cfg.StateDir, cfg.Feature)}
 	}
-	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domainLower, attempt)
+	reviewID := fmt.Sprintf("%s-planreview-%s-%02d", cfg.Feature.ID, domain.Axis, attempt)
 	helper := &PhaseRunner{
 		Registry:       cfg.Registry,
 		SessionManager: sm,
@@ -732,12 +697,12 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 			PromptPath:             promptPath,
 			FeedbackPath:           feedbackPath,
 			HelperIterDir:          helperIterDir,
-			Role:                   validatorSpec.Role,
+			Role:                   domain.Role,
 			WorkDir:                cfg.WorkDir,
 			RepoName:               cfg.RepoName,
 			AdditionalDirs:         addDirs,
 			LogPath:                logPath,
-			SystemPromptPrefix:     "validation-" + domainLower,
+			SystemPromptPrefix:     "validation-" + domain.Axis,
 			CompletionAskingClause: cfg.AskingClause,
 			CompletionTool:         cfg.CompletionTool,
 			EffortLevel:            validatorEffortLevel(cfg),
@@ -805,7 +770,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	return status, feedback, markers, nil
 }
 
-// axisFrozenHeading maps a validator axis name (lowercased) to the plan
+// axisFrozenHeading maps a validator axis string to the plan
 // heading whose content that axis is responsible for. Used by axisStallState
 // to fingerprint the relevant section across attempts and detect when the
 // same axis keeps failing without the plan section changing.
@@ -844,7 +809,7 @@ func (s *axisStallState) observe(attempt int, planPath string, results []Validat
 	verdicts = make(map[string]string, len(results))
 	digests = make(map[string]string, len(results))
 	for _, r := range results {
-		axisName := strings.ToLower(r.Domain)
+		axisName := r.Axis
 		verdict := r.Status.String()
 		if r.Error != nil {
 			verdict = "ERROR"
@@ -1030,7 +995,7 @@ func writeAxisApprovalArtifact(attemptDir string, attempt int, markers Validator
 //
 // The prose lives in
 // internal/agent/prompts/templates/validate_specialized.user.tmpl.
-func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, researchPath, skillsDir, feedbackPath string, domain validatorDomain, kind validationArtifactKind, extras planValidationExtras) string {
+func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, researchPath, skillsDir, feedbackPath string, domain planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) string {
 	_ = skillsDir
 
 	intent := resolvePromptIntent(f)
@@ -1047,7 +1012,7 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 		IsRoadmapKind:             kind == validationArtifactRoadmap,
 		ResearchPath:              researchPath,
 		FeedbackPath:              feedbackPath,
-		AxisLabel:                 strings.ToLower(domain.Name),
+		AxisLabel:                 domain.Axis,
 		AutomatedVerificationOnly: kind != validationArtifactRoadmap && !f.EffectivePipeline().ShouldContractAgentEvidence(),
 	})
 }
@@ -1060,6 +1025,7 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 // ParseValidatorMarkers.
 type ValidatorResult struct {
 	Domain         string
+	Axis           string
 	Status         ReviewStatus
 	Feedback       string
 	Error          error
@@ -1159,7 +1125,7 @@ func waitForValidationBackoff(guard planLoopGuard, d time.Duration) error {
 // reached. A protocol violation or any other helper outcome returns at once,
 // so a plan is never revised because a model was busy, and a rejection is
 // never lost because a sibling validator was retried.
-func runValidatorSetWithInfrastructureRetry(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []validatorDomain, kind validationArtifactKind, extras planValidationExtras) ([]ValidatorResult, ReviewStatus, string, error) {
+func runValidatorSetWithInfrastructureRetry(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) ([]ValidatorResult, ReviewStatus, string, error) {
 	guard := newPlanLoopGuard(cfg)
 	results, status, feedback, err := runValidatorSet(cfg, sm, attempt, attemptDir, planArtifactPath, validators, kind, extras)
 	for round := 1; err != nil && round < maxValidationInfrastructureRounds; round++ {
@@ -1170,7 +1136,7 @@ func runValidatorSetWithInfrastructureRetry(cfg PlanLoopConfig, sm ports.Session
 		if waitErr := waitForValidationBackoff(guard, validationInfrastructureBackoff(round)); waitErr != nil {
 			return results, ReviewFailed, feedback, waitErr
 		}
-		subset := make([]validatorDomain, 0, len(retry))
+		subset := make([]planValidatorAxis, 0, len(retry))
 		for _, idx := range retry {
 			subset = append(subset, validators[idx])
 		}
@@ -1223,7 +1189,7 @@ func runPhasePlanMultiValidatorValidation(cfg PhasePlanLoopConfig, sm ports.Sess
 	return runValidatorSetWithInfrastructureRetry(cfg.PlanLoopConfig, sm, attempt, attemptDir, planArtifactPath, validators, validationArtifactPhasePlan, extras)
 }
 
-func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []validatorDomain, kind validationArtifactKind, extras planValidationExtras) ([]ValidatorResult, ReviewStatus, string, error) {
+func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) ([]ValidatorResult, ReviewStatus, string, error) {
 	// Validation span — child of phase span
 	validationCtx := cfg.PhaseSpanCtx.Child()
 	validationStart := time.Now()
@@ -1252,16 +1218,16 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 
 	type pendingValidator struct {
 		index  int
-		domain validatorDomain
+		domain planValidatorAxis
 	}
 	var pending []pendingValidator
 	for i, v := range validators {
-		axisName := strings.ToLower(v.Name)
-		if approval, ok := priorApprovals[axisName]; ok && approval.ApprovedDigest != "" {
+		if approval, ok := priorApprovals[v.Axis]; ok && approval.ApprovedDigest != "" {
 			currentDigest := frozenSectionsDigest(planArtifactPath, approval.FrozenSections)
 			if currentDigest != "" && currentDigest == approval.ApprovedDigest {
 				results[i] = ValidatorResult{
 					Domain:         v.Name,
+					Axis:           v.Axis,
 					Status:         ReviewApproved,
 					AxisApproved:   approval.Axis,
 					FrozenSections: approval.FrozenSections,
@@ -1294,6 +1260,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 		status, feedback, markers, err := runSpecializedPlanValidationForArtifact(cfg, sm, attempt, attemptDir, planArtifactPath, v, kind, extras, validatorCtx)
 		results[i] = ValidatorResult{
 			Domain:         v.Name,
+			Axis:           v.Axis,
 			Status:         status,
 			Feedback:       feedback,
 			Error:          err,
@@ -1337,7 +1304,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 }
 
 // setValidatorStatuses initializes the validator status map for desktop app display.
-func setValidatorStatuses(cfg PlanLoopConfig, validators []validatorDomain, results []ValidatorResult) {
+func setValidatorStatuses(cfg PlanLoopConfig, validators []planValidatorAxis, results []ValidatorResult) {
 	if cfg.Feature == nil {
 		return
 	}

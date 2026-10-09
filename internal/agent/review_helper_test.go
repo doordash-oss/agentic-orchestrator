@@ -507,7 +507,7 @@ func TestPlanValidatorUsesReviewProviderProtocol(t *testing.T) {
 					return nil, nil, nil, errors.New("stop after validator launch capture")
 				},
 			}
-			_, _, _, _ = runSpecializedPlanValidation(cfg, mocks.NewMockSessionManager(), 1, root, filepath.Join(root, "plan.md"), validatorDomain{Name: "Architecture", Template: "validate-roadmap-architecture"}, observe.SpanContext{})
+			_, _, _, _ = runSpecializedPlanValidation(cfg, mocks.NewMockSessionManager(), 1, root, filepath.Join(root, "plan.md"), testPlanValidatorAxis(t, "validate-roadmap-architecture"), observe.SpanContext{})
 			if captured.Model != tt.reviewer {
 				t.Fatalf("model=%q, want %q", captured.Model, tt.reviewer)
 			}

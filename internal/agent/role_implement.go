@@ -14,11 +14,7 @@
 
 package agent
 
-import (
-	"path/filepath"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-)
+import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
 // RoleImplementer is the phase implementer session.
 const RoleImplementer Role = "implementer"
@@ -28,20 +24,8 @@ var implementRoleSpec = roleSpec{
 	Role:      RoleImplementer,
 	SkillName: "implement",
 	OutputRoots: []outputRootSpec{
-		{
-			Name:        "phase_dir",
-			Description: "Phase-level implement artifact root shared across iterations.",
-			ResolvePath: func(rt roleRuntime) string {
-				return filepath.Dir(rt.IterationDir)
-			},
-		},
-		{
-			Name:        "iteration_dir",
-			Description: "Active iteration artifact directory.",
-			ResolvePath: func(rt roleRuntime) string {
-				return rt.IterationDir
-			},
-		},
+		iterationParentOutputRoot("phase_dir", "Phase-level implement artifact root shared across iterations."),
+		iterationOutputRoot("iteration_dir", "Active iteration artifact directory."),
 	},
 	Artifacts: []roleArtifactSpec{
 		{

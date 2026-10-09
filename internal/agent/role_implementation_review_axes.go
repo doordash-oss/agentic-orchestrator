@@ -29,27 +29,21 @@ const (
 	RoleImplementationReviewDesign Role = "implementation_review_design"
 )
 
-var implementationReviewAxisRoleSpecs = []roleSpec{
-	implementationReviewAxisRoleSpec(RoleImplementationReviewCraft, "review-implementation-craft"),
-	implementationReviewAxisRoleSpec(RoleImplementationReviewFunctionalityEvidence, "review-implementation-functionality-evidence"),
-	implementationReviewAxisRoleSpec(RoleImplementationReviewCleanliness, "review-implementation-cleanliness"),
-	implementationReviewAxisRoleSpec(RoleImplementationReviewQA, "review-implementation-qa"),
-	implementationReviewAxisRoleSpec(RoleImplementationReviewDesign, "review-implementation-design"),
-}
+var implementationReviewAxisRoleSpecs = func() []roleSpec {
+	specs := make([]roleSpec, 0, len(implementationReviewAxisRegistry))
+	for _, axis := range implementationReviewAxisRegistry {
+		specs = append(specs, implementationReviewAxisRoleSpec(axis))
+	}
+	return specs
+}()
 
-func implementationReviewAxisRoleSpec(role Role, skillName string) roleSpec {
+func implementationReviewAxisRoleSpec(axis implementationReviewAxis) roleSpec {
 	return roleSpec{
 		Phase:     feature.PhaseReview,
-		Role:      role,
-		SkillName: skillName,
+		Role:      axis.Role,
+		SkillName: axis.SkillName,
 		OutputRoots: []outputRootSpec{
-			{
-				Name:        "helper_dir",
-				Description: "Implementation review axis helper artifact directory.",
-				ResolvePath: func(rt roleRuntime) string {
-					return rt.IterationDir
-				},
-			},
+			iterationOutputRoot("helper_dir", "Implementation review axis helper artifact directory."),
 		},
 		Artifacts:            []roleArtifactSpec{reviewFeedbackRoleArtifact("helper_dir")},
 		ReadOnlyOutsideRoots: true,

@@ -29,25 +29,12 @@ import (
 // RoleContract declares the artifacts a role must emit before requesting a
 // completion commit.
 type RoleContract struct {
-	Role       Role
-	Required   []RequiredArtifact
-	Optional   []OptionalArtifact
-	NoOp       bool
-	NoOpReason string
+	Role     Role
+	Required []RequiredArtifact
 }
 
 // RequiredArtifact describes one artifact in a role's completion contract.
 type RequiredArtifact struct {
-	Name          string
-	DisplayPath   string
-	HideFromSkill bool
-	ResolvePath   func(iterDir string) string
-	Validate      func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error)
-}
-
-// OptionalArtifact describes an artifact that is valid for a role but not
-// required. If present, it must parse cleanly.
-type OptionalArtifact struct {
 	Name          string
 	DisplayPath   string
 	HideFromSkill bool
@@ -71,7 +58,6 @@ type Outcome struct {
 	PlanAttemptMeta    *PlanAttemptMeta
 	PlanMarkdownPath   string
 	PhaseArtifactPath  string
-	AxisApproval       *AxisApproval
 }
 
 // Lookup returns the registered contract for a phase and role.
@@ -91,10 +77,6 @@ func Validate(phase feature.Phase, role Role, iterDir string) (Outcome, []Protoc
 	if !ok {
 		return Outcome{}, []ProtocolViolation{{Artifact: string(role), Reason: "no contract registered"}}, nil
 	}
-	if contract.NoOp {
-		return Outcome{OK: true}, nil, nil
-	}
-
 	return validateContractArtifacts(contract, iterDir, true)
 }
 
@@ -106,26 +88,6 @@ func validateContractArtifacts(contract RoleContract, iterDir string, includeHid
 			continue
 		}
 		path := artifact.ResolvePath(iterDir)
-		v, err := artifact.Validate(iterDir, path, &out)
-		if err != nil {
-			return out, nil, err
-		}
-		violations = append(violations, v...)
-	}
-	for _, artifact := range contract.Optional {
-		if artifact.HideFromSkill && !includeHidden {
-			continue
-		}
-		path := artifact.ResolvePath(iterDir)
-		if path == "" {
-			continue
-		}
-		if _, err := os.Stat(path); err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return out, nil, fmt.Errorf("checking optional artifact %s: %w", artifact.DisplayPath, err)
-		}
 		v, err := artifact.Validate(iterDir, path, &out)
 		if err != nil {
 			return out, nil, err
@@ -146,24 +108,13 @@ func ValidateArtifactsPreflight(phase feature.Phase, role Role, iterDir string) 
 	if !ok {
 		return Outcome{}, []ProtocolViolation{{Artifact: string(role), Reason: "no contract registered"}}, nil
 	}
-	if contract.NoOp {
-		return Outcome{OK: true}, nil, nil
-	}
-
 	var violations []ProtocolViolation
 	for _, artifact := range contract.Required {
 		if artifact.HideFromSkill {
 			continue
 		}
 		path := artifact.ResolvePath(iterDir)
-		violations = append(violations, validateYAMLArtifactSyntax(artifact.DisplayPath, path, true)...)
-	}
-	for _, artifact := range contract.Optional {
-		if artifact.HideFromSkill {
-			continue
-		}
-		path := artifact.ResolvePath(iterDir)
-		violations = append(violations, validateYAMLArtifactSyntax(artifact.DisplayPath, path, false)...)
+		violations = append(violations, validateYAMLArtifactSyntax(artifact.DisplayPath, path)...)
 	}
 	if len(violations) > 0 {
 		return Outcome{OK: false}, violations, nil
@@ -230,17 +181,14 @@ func implementerTestingContractPathCandidates(iterDir string) []string {
 	return candidates
 }
 
-func validateYAMLArtifactSyntax(displayPath, path string, required bool) []ProtocolViolation {
+func validateYAMLArtifactSyntax(displayPath, path string) []ProtocolViolation {
 	if !isYAMLArtifact(displayPath, path) {
 		return nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if required {
-				return []ProtocolViolation{{Artifact: displayPath, Reason: missingArtifactReason(displayPath, filepath.Dir(path))}}
-			}
-			return nil
+			return []ProtocolViolation{{Artifact: displayPath, Reason: missingArtifactReason(displayPath, filepath.Dir(path))}}
 		}
 		return []ProtocolViolation{{Artifact: displayPath, Reason: fmt.Sprintf("reading %s: %v", displayPath, err)}}
 	}
@@ -265,12 +213,6 @@ func phasePlanArtifactDir(attemptDir string) string {
 	return filepath.Dir(attemptDir)
 }
 
-func planValidatorAxis(iterDir string) (string, bool) {
-	axis, ok := strings.CutPrefix(filepath.Base(iterDir), "validate-")
-	axis = strings.TrimSpace(axis)
-	return axis, ok && axis != ""
-}
-
 // missingArtifactReason builds a "missing artifact" reason that names the
 // directory the validator looked in. Spelling out the expected directory
 // turns "X is missing" into actionable feedback the next attempt can act
@@ -282,7 +224,7 @@ func missingArtifactReason(artifactLabel, expectedDir string) string {
 	return fmt.Sprintf("%s is missing — expected at %s/", artifactLabel, expectedDir)
 }
 
-func validateRoadmapArtifact(iterDir string, path string, out *Outcome) ([]ProtocolViolation, error) {
+func validateRoadmapArtifact(_ roleArtifactSpec, iterDir string, path string, out *Outcome) ([]ProtocolViolation, error) {
 	if path == "" {
 		return []ProtocolViolation{{Artifact: "roadmap markdown", Reason: missingArtifactReason("roadmap markdown", filepath.Dir(iterDir))}}, nil
 	}
@@ -301,7 +243,7 @@ func validateRoadmapArtifact(iterDir string, path string, out *Outcome) ([]Proto
 	return nil, nil
 }
 
-func validatePlanAttemptMetaArtifact(_ string, path string, out *Outcome) ([]ProtocolViolation, error) {
+func validatePlanAttemptMetaArtifact(_ roleArtifactSpec, _ string, path string, out *Outcome) ([]ProtocolViolation, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -317,7 +259,7 @@ func validatePlanAttemptMetaArtifact(_ string, path string, out *Outcome) ([]Pro
 	return nil, nil
 }
 
-func validatePhasePlanMarkdownArtifact(iterDir string, path string, _ *Outcome) ([]ProtocolViolation, error) {
+func validatePhasePlanMarkdownArtifact(_ roleArtifactSpec, iterDir string, path string, _ *Outcome) ([]ProtocolViolation, error) {
 	if path == "" {
 		return []ProtocolViolation{{Artifact: "phase plan markdown", Reason: missingArtifactReason("phase plan markdown", phasePlanArtifactDir(iterDir))}}, nil
 	}
@@ -685,7 +627,7 @@ func hasMarkdownHeading(body, heading string) bool {
 	return false
 }
 
-func validateKnowledgeBaseIndexArtifact(_ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
+func validateKnowledgeBaseIndexArtifact(_ roleArtifactSpec, _ string, path string, _ *Outcome) ([]ProtocolViolation, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -720,7 +662,7 @@ func newestPhaseMarkdownArtifact(dir string) string {
 	return bestPath
 }
 
-func validateProgressArtifact(iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
+func validateProgressArtifact(_ roleArtifactSpec, iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
 	parsed, err := ParseProgressMd(path)
 	if err != nil {
 		return nil, err
@@ -732,7 +674,7 @@ func validateProgressArtifact(iterDir, path string, out *Outcome) ([]ProtocolVio
 	return nil, nil
 }
 
-func validateReviewFeedbackArtifactWithDisplay(_ string, path, displayPath string, out *Outcome) ([]ProtocolViolation, error) {
+func validateReviewFeedbackArtifact(artifact roleArtifactSpec, _ string, path string, out *Outcome) ([]ProtocolViolation, error) {
 	parsed, err := ParseReviewFeedback(path)
 	if err != nil {
 		return nil, err
@@ -743,33 +685,9 @@ func validateReviewFeedbackArtifactWithDisplay(_ string, path, displayPath strin
 	}
 	violations := make([]ProtocolViolation, 0, len(parsed.ProtocolViolations))
 	for _, reason := range parsed.ProtocolViolations {
-		violations = append(violations, ProtocolViolation{Artifact: displayPath, Reason: reason})
+		violations = append(violations, ProtocolViolation{Artifact: artifact.DisplayPath, Reason: reason})
 	}
 	return violations, nil
-}
-
-func validatePlanValidatorAxisApprovalArtifact(iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
-	axis, ok := planValidatorAxis(iterDir)
-	displayPath := "axis-approved-<axis>.md"
-	if ok {
-		displayPath = fmt.Sprintf("axis-approved-%s.md", axis)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading %s: %w", displayPath, err)
-	}
-	approval := parseAxisApprovalArtifact(string(data))
-	if approval.Axis == "" {
-		return []ProtocolViolation{{Artifact: displayPath, Reason: "axis approval artifact is unparseable"}}, nil
-	}
-	if ok && approval.Axis != axis {
-		return []ProtocolViolation{{Artifact: displayPath, Reason: fmt.Sprintf("axis approval declares axis %q, want %q", approval.Axis, axis)}}, nil
-	}
-	out.AxisApproval = &approval
-	return nil, nil
 }
 
 func progressViolations(parsed *ParsedProgress) []ProtocolViolation {

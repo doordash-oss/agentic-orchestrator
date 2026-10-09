@@ -27,7 +27,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -422,7 +422,7 @@ func HasKBChanges(ctx context.Context, runner ports.CommandRunner, kbDir, repoPa
 //
 // The prose lives in internal/agent/prompts/templates/kb_build.user.tmpl.
 func BuildKBPrompt(repoName, repoPath, kbDir string, existingKBPath string, lastCommit string) string {
-	return roles.BuildKBBuildPrompt(roles.KBBuildUserInput{
+	return prompts.KBBuildUserPrompt(kbBuildUserInput{
 		RepoName:       repoName,
 		RepoPath:       repoPath,
 		KBRootDir:      KBRootDir(kbDir),

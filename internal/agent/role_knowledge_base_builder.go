@@ -12,54 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
-import (
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-)
+import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
 // RoleKnowledgeBaseBuilder is the per-repo KnowledgeBase builder session.
 const RoleKnowledgeBaseBuilder Role = "knowledge_base_builder"
 
-var knowledgeBaseBuilderRoleSpec = RoleSpec{
-	Phase:        feature.PhaseKnowledgeBase,
-	Role:         RoleKnowledgeBaseBuilder,
-	SkillName:    "build-knowledge-base",
-	UserTemplate: "kb_build.user",
-	OutputRoots: []OutputRootSpec{
+var knowledgeBaseBuilderRoleSpec = roleSpec{
+	Phase:     feature.PhaseKnowledgeBase,
+	Role:      RoleKnowledgeBaseBuilder,
+	SkillName: "build-knowledge-base",
+	OutputRoots: []outputRootSpec{
 		singleShotPhaseDirOutputRoot("Repository-scoped knowledge-base root. The KB graph entrypoint is written here."),
 	},
-	Artifacts: []RoleArtifactSpec{
+	Artifacts: []roleArtifactSpec{
 		{
 			Name:         "knowledge_base_index",
 			DisplayPath:  "index.md",
 			RootName:     "phase_dir",
 			RelativePath: "index.md",
-			Presence:     ArtifactRequired,
 			Description:  "top-level knowledge-base graph index markdown",
-			Validate:     ValidatorKnowledgeBaseIndex,
+			Validate:     validateKnowledgeBaseIndexArtifact,
 		},
 	},
 }
 
-// KnowledgeBaseBuilderRoleSpec returns the RoleSpec-backed knowledge-base
-// builder role.
-func KnowledgeBaseBuilderRoleSpec() RoleSpec {
-	return CloneRoleSpec(knowledgeBaseBuilderRoleSpec)
-}
-
-// KBBuildUserInput is the data passed to kb_build.user.tmpl.
-type KBBuildUserInput struct {
+// kbBuildUserInput is the data passed to kb_build.user.tmpl.
+type kbBuildUserInput struct {
 	RepoName       string
 	RepoPath       string
 	KBRootDir      string
 	KBIndexPath    string
 	ExistingKBPath string
 	LastCommit     string
-}
-
-// BuildKBBuildPrompt renders the knowledge-base builder prompt.
-func BuildKBBuildPrompt(in KBBuildUserInput) string {
-	return prompts.KBBuildUserPrompt(in)
 }

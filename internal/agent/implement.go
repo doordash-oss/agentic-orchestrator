@@ -28,7 +28,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -510,7 +510,7 @@ func RunImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 
 			// Build the RoleSpec-backed system prompt with the iteration-specific
 			// completion protocol and output roots.
-			implProtocol := BuildImplementSystemPrompt(BuildImplementSystemPromptInput{
+			implProtocol := buildImplementSystemPrompt(implementSystemPromptInput{
 				IterationDir:   iterDir,
 				SkillsDir:      cfg.SkillsDir,
 				GuidelinesDir:  cfg.GuidelinesDir,
@@ -1720,7 +1720,7 @@ func phaseReposForImplementationContract(f *feature.Feature, planPath string) []
 // verification discovery live in the RoleSpec-backed system prompt, the
 // pre-seeded verification report, and skills/implement/SKILL.md.
 func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int) string {
-	return roles.BuildImplementPrompt(roles.ImplementUserInput{
+	return prompts.ImplementUserPrompt(implementUserInput{
 		PlanPath:             planPath,
 		ExitCriteria:         exitCriteria,
 		Feedback:             feedback,

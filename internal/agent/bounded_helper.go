@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -490,7 +489,7 @@ func boundedHelperRetryAllowed(cfg boundedHelperRunConfig) bool {
 	if !ok {
 		return false
 	}
-	return roles.RoleSpec(spec).SupportsRetryOutcome()
+	return spec.IterationState
 }
 
 // isRetryableProviderNetworkFailure recognizes transient provider transport

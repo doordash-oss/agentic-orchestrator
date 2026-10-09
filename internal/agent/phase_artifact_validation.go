@@ -19,39 +19,46 @@ import (
 	"os"
 	"regexp"
 	"strings"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 )
 
-func phaseMarkdownValidator(artifact RoleArtifactSpec) func(string, string, *Outcome) ([]ProtocolViolation, error) {
-	return func(_ string, dir string, out *Outcome) ([]ProtocolViolation, error) {
-		path := newestPhaseMarkdownArtifact(dir)
-		if path == "" {
-			return []ProtocolViolation{{Artifact: artifact.DisplayPath, Reason: missingArtifactReason(artifact.DisplayPath, dir)}}, nil
-		}
-		if artifact.Validate != roles.ValidatorPhaseMarkdown {
-			body, err := os.ReadFile(path)
-			if err != nil {
-				return nil, fmt.Errorf("reading %s: %w", artifact.DisplayPath, err)
-			}
-			var reasons []string
-			switch artifact.Validate {
-			case roles.ValidatorInquiryQuestions:
-				reasons = inquiryQuestionsViolations(string(body))
-			case roles.ValidatorDesignDocument:
-				reasons = designDocumentViolations(string(body))
-			}
-			if len(reasons) > 0 {
-				violations := make([]ProtocolViolation, 0, len(reasons))
-				for _, reason := range reasons {
-					violations = append(violations, ProtocolViolation{Artifact: artifact.DisplayPath, Reason: reason})
-				}
-				return violations, nil
-			}
-		}
-		out.PhaseArtifactPath = path
-		return nil, nil
+// validatePhaseMarkdownArtifact accepts the newest non-excluded markdown
+// artifact in the phase directory without checking its structure.
+func validatePhaseMarkdownArtifact(artifact roleArtifactSpec, _ string, dir string, out *Outcome) ([]ProtocolViolation, error) {
+	return validatePhaseMarkdownStructure(artifact, dir, out, nil)
+}
+
+// validateInquiryQuestionsArtifact requires the newest phase markdown
+// artifact to carry the inquiry research-question sections.
+func validateInquiryQuestionsArtifact(artifact roleArtifactSpec, _ string, dir string, out *Outcome) ([]ProtocolViolation, error) {
+	return validatePhaseMarkdownStructure(artifact, dir, out, inquiryQuestionsViolations)
+}
+
+// validateDesignDocumentArtifact requires the newest phase markdown artifact
+// to carry every design document section.
+func validateDesignDocumentArtifact(artifact roleArtifactSpec, _ string, dir string, out *Outcome) ([]ProtocolViolation, error) {
+	return validatePhaseMarkdownStructure(artifact, dir, out, designDocumentViolations)
+}
+
+func validatePhaseMarkdownStructure(artifact roleArtifactSpec, dir string, out *Outcome, structureViolations func(string) []string) ([]ProtocolViolation, error) {
+	path := newestPhaseMarkdownArtifact(dir)
+	if path == "" {
+		return []ProtocolViolation{{Artifact: artifact.DisplayPath, Reason: missingArtifactReason(artifact.DisplayPath, dir)}}, nil
 	}
+	if structureViolations != nil {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", artifact.DisplayPath, err)
+		}
+		if reasons := structureViolations(string(body)); len(reasons) > 0 {
+			violations := make([]ProtocolViolation, 0, len(reasons))
+			for _, reason := range reasons {
+				violations = append(violations, ProtocolViolation{Artifact: artifact.DisplayPath, Reason: reason})
+			}
+			return violations, nil
+		}
+	}
+	out.PhaseArtifactPath = path
+	return nil, nil
 }
 
 var numberedQuestionRE = regexp.MustCompile(`^[0-9]{1,9}[.)][ \t]+\S`)

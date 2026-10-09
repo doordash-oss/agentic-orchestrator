@@ -201,7 +201,7 @@ func TestStructuredCompletionPlainTurnFailsWithoutSuccessNudge(t *testing.T) {
 }
 
 func TestStructuredCompletionPromptAndHandoffUseTools(t *testing.T) {
-	prompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{Spec: InquirerRoleSpec(), IterationDir: t.TempDir(), CompletionTool: "complete_phase"})
+	prompt := buildRoleSystemPrompt(roleSystemPromptInput{Spec: inquirerRoleSpec, IterationDir: t.TempDir(), CompletionTool: "complete_phase"})
 	if strings.Contains(prompt, "<agentico-outcome>") || !strings.Contains(prompt, "call `complete_phase`") {
 		t.Fatalf("wrong completion transport: %s", prompt)
 	}

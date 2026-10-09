@@ -93,15 +93,15 @@ func TestBuildInquirePromptLeavesKBResourcesToSystemPrompt(t *testing.T) {
 		}
 	}
 
-	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:         InquirerRoleSpec(),
+	systemPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
+		Spec:         inquirerRoleSpec,
 		IterationDir: "/tmp/feature/runs/run-001/inquire",
 		SkillsDir:    "/tmp/skills",
 		KBInfos:      []KBInfo{kb},
 	})
 	for _, want := range []string{"# Useful Resources", "## Knowledge Base", "**myrepo**", "/tmp/kb/index.md", "/tmp/kb"} {
 		if !strings.Contains(systemPrompt, want) {
-			t.Fatalf("BuildRoleSystemPrompt() missing %q:\n%s", want, systemPrompt)
+			t.Fatalf("buildRoleSystemPrompt() missing %q:\n%s", want, systemPrompt)
 		}
 	}
 }

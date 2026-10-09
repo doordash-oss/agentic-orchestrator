@@ -13,6 +13,10 @@ map: the answered question's question index as a decimal string, such as `"1"`.
 Values are an option label verbatim or free text. No other key form is
 accepted. See ADR 0009.
 
+**Artifact validator.** The function bound to one artifact in a role spec. It
+reads the artifact from its resolved path and reports protocol violations and
+parsed outcome fields. Lives in `internal/agent`.
+
 **Ask-user turn.** The moment a provider's agent asks the operator a structured
 question: one `AskUserQuestion` envelope of questions, each with text, a header,
 a multi-select flag and options carrying a label, a description and an optional
@@ -66,6 +70,18 @@ the feature summary and detail shapes. Lives in `internal/server`.
 creation (write) against relationship-guarded mutations (read), so no guard can
 pass while a child is being created. Not a public concept: orchestration
 operations take it. Lives in `internal/orchestrator`.
+
+**Role.** The identity an agent session runs under, named by a phase and a
+role. The harness validates the session's completion artifacts against it.
+Lives in `internal/agent`.
+
+**Role contract.** The derived set of required artifacts, each with its
+resolved path and validator, that lookup by phase and role returns and validate
+checks. Lives in `internal/agent`.
+
+**Role spec.** The single declaration of one phase-and-role pairing: its skill,
+output roots, artifacts with bound validators, and prompt posture flags. Lives
+in `internal/agent`.
 
 **Schema series.** The monotonic REST contract series within the API major,
 declared on `/api/v1/health` together with the minimum client series the

@@ -58,6 +58,11 @@ const testRebaseTargetMaster = "master"
 // wherever the specific axis doesn't matter.
 const testAxisGrounding = "grounding"
 
+// testGroundingSectionHeading is the fixture plan heading tests use wherever
+// a frozen or extracted section is needed and the specific heading doesn't
+// matter.
+const testGroundingSectionHeading = "## Grounding"
+
 // testRepoNameAPI, testRepoNameWeb, and testRepoNameInfra are the fixture
 // repo names tests use across this package wherever a repo (often multiple,
 // alongside each other) is needed but the specific name doesn't matter.

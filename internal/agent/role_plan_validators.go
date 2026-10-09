@@ -29,8 +29,6 @@ const (
 	RoleValidatePhasePlanStructural Role = "validate_phase_plan_structural"
 	// RoleValidatePhasePlanScope validates phase-plan scope.
 	RoleValidatePhasePlanScope Role = "validate_phase_plan_scope"
-	// RoleValidatePhasePlanGrounding validates phase-plan grounding.
-	RoleValidatePhasePlanGrounding Role = "validate_phase_plan_grounding"
 	// RoleValidatePlanSecurity validates security for roadmap or phase-plan artifacts.
 	RoleValidatePlanSecurity Role = "validate_plan_security"
 	// RoleValidatePlanPerformance validates performance for roadmap or phase-plan artifacts.
@@ -44,7 +42,6 @@ var planValidatorRoleSpecs = []roleSpec{
 	planValidatorRoleSpec(RoleValidateRoadmapScope, "validate-roadmap-scope", "scope"),
 	planValidatorRoleSpec(RoleValidatePhasePlanStructural, "validate-phase-plan-structural", "structural"),
 	planValidatorRoleSpec(RoleValidatePhasePlanScope, "validate-phase-plan-scope", "scope"),
-	planValidatorRoleSpec(RoleValidatePhasePlanGrounding, "validate-phase-plan-grounding", "grounding"),
 	planValidatorRoleSpec(RoleValidatePlanSecurity, "validate-plan-security", "security"),
 	planValidatorRoleSpec(RoleValidatePlanPerformance, "validate-plan-performance", "performance"),
 	planValidatorRoleSpec(RoleValidatePlanTesting, "validate-plan-testing", "testing"),

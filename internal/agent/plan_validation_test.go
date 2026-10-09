@@ -1879,7 +1879,7 @@ func TestWriteAxisApprovalArtifactRoundTrip(t *testing.T) {
 			t.Fatalf("write plan: %v", err)
 		}
 
-		markers := ValidatorMarkers{AxisApproved: testAxisGrounding, FrozenSections: []string{groundingSectionHeading}}
+		markers := ValidatorMarkers{AxisApproved: testAxisGrounding, FrozenSections: []string{testGroundingSectionHeading}}
 		writeAxisApprovalArtifact(attemptDir, 1, markers, planPath)
 
 		data, err := os.ReadFile(filepath.Join(attemptDir, "axis-approved-grounding.md"))
@@ -1925,8 +1925,8 @@ func TestFrozenSectionsDigest(t *testing.T) {
 	planPath := filepath.Join(dir, "plan.md")
 	_ = os.WriteFile(planPath, []byte("## Grounding\n\nrow a\nrow b\n\n## Changes Required\n\nedit x\n"), 0o644)
 
-	d1 := frozenSectionsDigest(planPath, []string{groundingSectionHeading})
-	d2 := frozenSectionsDigest(planPath, []string{groundingSectionHeading})
+	d1 := frozenSectionsDigest(planPath, []string{testGroundingSectionHeading})
+	d2 := frozenSectionsDigest(planPath, []string{testGroundingSectionHeading})
 	if d1 == "" || d1 != d2 {
 		t.Errorf("digest not stable: %q vs %q", d1, d2)
 	}
@@ -1934,14 +1934,14 @@ func TestFrozenSectionsDigest(t *testing.T) {
 	// Changing an unrelated section leaves the grounding-only digest unchanged —
 	// this is the property the short-circuit relies on.
 	_ = os.WriteFile(planPath, []byte("## Grounding\n\nrow a\nrow b\n\n## Changes Required\n\nedit y\n"), 0o644)
-	d3 := frozenSectionsDigest(planPath, []string{groundingSectionHeading})
+	d3 := frozenSectionsDigest(planPath, []string{testGroundingSectionHeading})
 	if d3 != d1 {
 		t.Errorf("grounding digest changed when only Changes Required changed: %q vs %q", d1, d3)
 	}
 
 	// Editing the frozen section changes the digest.
 	_ = os.WriteFile(planPath, []byte("## Grounding\n\nrow a\n\n## Changes Required\n\nedit y\n"), 0o644)
-	d4 := frozenSectionsDigest(planPath, []string{groundingSectionHeading})
+	d4 := frozenSectionsDigest(planPath, []string{testGroundingSectionHeading})
 	if d4 == d1 {
 		t.Errorf("grounding digest did not change after frozen-section edit")
 	}
@@ -2902,36 +2902,6 @@ func TestPhasePlanLoopStallEscalationPersistsReviewArtifact(t *testing.T) {
 	}
 }
 
-// TestBuildSpecializedValidationPrompt_GroundingIncludesPriorPhaseContext verifies
-// that when PriorPhasePlanPaths is populated, the Grounding axis prompt
-// contains a "Prior Phase Context" block listing each plan path so the
-// critic doesn't flag legitimate prior-phase symbols as ungrounded.
-func TestBuildSpecializedValidationPrompt_GroundingIncludesPriorPhaseContext(t *testing.T) {
-	f := &feature.Feature{Name: "Test", Description: "desc",
-		SchemaVersion: feature.SchemaVersionCurrent}
-	domain := validatorDomain{Name: "Grounding", Template: "validate-phase-plan-grounding"}
-	extras := planValidationExtras{
-		PriorPhasePlanPaths: []string{
-			"/state/features/f1/phase-01/plan/phase-01-plan.md",
-			"/state/features/f1/phase-02/plan/phase-02-plan.md",
-		},
-	}
-
-	prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "", domain, validationArtifactPhasePlan, extras)
-
-	if !strings.Contains(prompt, "## Prior Phase Context") {
-		t.Errorf("grounding prompt missing '## Prior Phase Context' section:\n%s", prompt)
-	}
-	for _, want := range extras.PriorPhasePlanPaths {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("grounding prompt missing prior-phase path %q", want)
-		}
-	}
-	if !strings.Contains(prompt, "Phase 1 plan") || !strings.Contains(prompt, "Phase 2 plan") {
-		t.Errorf("grounding prompt missing phase numbering")
-	}
-}
-
 // TestRunSpecializedPlanValidation_NoStickyOnChangesRequested covers Fix A:
 // when a critic emits a `## Sticky Approval` block alongside a
 // `## Verdict\nCHANGES_REQUESTED` (SKILL contract violation), the harness
@@ -2956,13 +2926,13 @@ func TestRunSpecializedPlanValidation_NoStickyOnChangesRequested(t *testing.T) {
 	// Critic emits CHANGES_REQUESTED but also includes a `## Sticky Approval`
 	// block (the contract violation this test guards against).
 	violationBody := testutil.StructuredReviewFeedbackWithSticky(
-		"- **High**: Grounding FAIL", "", agentStatusChangesRequested,
-		testAxisGrounding, []string{groundingSectionHeading},
+		"- **High**: Structural FAIL", "", agentStatusChangesRequested,
+		"structural", []string{"## Tasks"},
 	)
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh", fmt.Sprintf(`%s
-for _prompt in $(find %s -name 'validation-grounding-prompt.md' -type f 2>/dev/null); do
+for _prompt in $(find %s -name 'validation-structural-prompt.md' -type f 2>/dev/null); do
   _dir=$(dirname "$_prompt")
-  cat > "$_dir/validation-grounding-feedback.md" << 'REVIEWEOF'
+  cat > "$_dir/validation-structural-feedback.md" << 'REVIEWEOF'
 %s
 REVIEWEOF
 done
@@ -2970,7 +2940,7 @@ done
 `, testutil.JSONLInit, tmpDir, strings.TrimRight(violationBody, "\n"), testutil.JSONLSuccess))
 
 	planPath := filepath.Join(planDir, "plan.md")
-	_ = os.WriteFile(planPath, []byte("# Plan\n## Grounding\nplaceholder\n"), 0o644)
+	_ = os.WriteFile(planPath, []byte("# Plan\n## Tasks\nplaceholder\n"), 0o644)
 
 	buildSession, _ := capturingBuildSession("", criticScript)
 	eventCh := make(chan interface{}, 10)
@@ -2988,7 +2958,7 @@ done
 		BuildSession: buildSession,
 	}
 
-	domain := validatorDomain{Name: "Grounding", Template: "validate-phase-plan-grounding"}
+	domain := validatorDomain{Name: "Structural", Template: "validate-phase-plan-structural"}
 	status, _, _, err := runSpecializedPlanValidationForArtifact(cfg, sm, 1, attemptDir, planPath, domain, validationArtifactPhasePlan, planValidationExtras{}, observe.SpanContext{})
 	if err != nil {
 		t.Fatalf("runSpecializedPlanValidationForArtifact: %v", err)
@@ -2997,16 +2967,16 @@ done
 		t.Fatalf("status = %v, want CHANGES_REQUESTED", status)
 	}
 	// The sticky artifact must NOT exist for a rejected verdict.
-	stickyPath := filepath.Join(attemptDir, "axis-approved-grounding.md")
+	stickyPath := filepath.Join(attemptDir, "axis-approved-structural.md")
 	if _, statErr := os.Stat(stickyPath); !os.IsNotExist(statErr) {
-		t.Errorf("axis-approved-grounding.md should not be written when verdict is CHANGES_REQUESTED; statErr=%v", statErr)
+		t.Errorf("axis-approved-structural.md should not be written when verdict is CHANGES_REQUESTED; statErr=%v", statErr)
 	}
 }
 
-// TestBuildSpecializedValidationPrompt_NonGroundingOmitsPriorPhaseContext
-// verifies the prior-phase block is grounding-only — other axes don't need
-// the context and adding it would just add noise.
-func TestBuildSpecializedValidationPrompt_NonGroundingOmitsPriorPhaseContext(t *testing.T) {
+// TestBuildSpecializedValidationPrompt_OmitsPriorPhaseContext verifies no
+// production validator domain renders the prior-phase block, even when the
+// phase-plan flow forwards prior plan paths.
+func TestBuildSpecializedValidationPrompt_OmitsPriorPhaseContext(t *testing.T) {
 	f := &feature.Feature{Name: "Test", Description: "desc",
 		SchemaVersion: feature.SchemaVersionCurrent}
 	priorPath := "/marker/prior-phase-plan.md"
@@ -3014,33 +2984,22 @@ func TestBuildSpecializedValidationPrompt_NonGroundingOmitsPriorPhaseContext(t *
 		PriorPhasePlanPaths: []string{priorPath},
 	}
 
-	for _, template := range []string{"validate-phase-plan-structural", "validate-phase-plan-scope"} {
-		t.Run(template, func(t *testing.T) {
-			domain := validatorDomain{Name: template, Template: template}
-			prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "", domain, validationArtifactPhasePlan, extras)
-			// Detect the actual block (unique prior-phase path) rather than
-			// the "## Prior Phase Context" heading substring, since the
-			// grounding SKILL body itself mentions that heading by name.
-			if strings.Contains(prompt, priorPath) {
-				t.Errorf("%s prompt should NOT contain prior-phase path %q:\n%s", template, priorPath, prompt)
-			}
-		})
+	cases := []struct {
+		kind    validationArtifactKind
+		domains []validatorDomain
+	}{
+		{validationArtifactPhasePlan, phasePlanValidatorsForRisk(feature.RiskHigh)},
+		{validationArtifactRoadmap, roadmapValidatorsForRisk(feature.RiskHigh)},
 	}
-}
-
-// TestBuildSpecializedValidationPrompt_GroundingWithoutPriorPhases_NoBlock
-// verifies the Prior Phase Context block is only emitted when there are
-// actually prior phases to reference. We look for a "- Phase N plan:" bullet
-// since that string only appears when the block is actually emitted.
-func TestBuildSpecializedValidationPrompt_GroundingWithoutPriorPhases_NoBlock(t *testing.T) {
-	f := &feature.Feature{Name: "Test", Description: "desc",
-		SchemaVersion: feature.SchemaVersionCurrent}
-	domain := validatorDomain{Name: "Grounding", Template: "validate-phase-plan-grounding"}
-
-	prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "", domain, validationArtifactPhasePlan, planValidationExtras{})
-
-	if strings.Contains(prompt, "- Phase 1 plan:") {
-		t.Errorf("grounding prompt should NOT emit a Phase-N plan bullet when no prior phases:\n%s", prompt)
+	for _, c := range cases {
+		for _, domain := range c.domains {
+			t.Run(string(c.kind)+"/"+domain.Template, func(t *testing.T) {
+				prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "", domain, c.kind, extras)
+				if strings.Contains(prompt, priorPath) || strings.Contains(prompt, "## Prior Phase Context") {
+					t.Errorf("%s prompt should NOT contain the prior-phase block:\n%s", domain.Template, prompt)
+				}
+			})
+		}
 	}
 }
 
@@ -3066,7 +3025,7 @@ func TestExtractPlanSection(t *testing.T) {
 	}
 
 	t.Run("grounding section", func(t *testing.T) {
-		got := string(extractPlanSection(path, groundingSectionHeading))
+		got := string(extractPlanSection(path, testGroundingSectionHeading))
 		for _, want := range []string{"| Ref | Status |", "| foo.go | EXISTS |"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("expected %q in grounding section, got:\n%s", want, got)
@@ -3117,10 +3076,10 @@ func TestPlanSectionDigest_StableAndSensitive(t *testing.T) {
 	b := write("b.md", "## Grounding\n- foo.go   \n- bar.go\t\n\n## Next\n")
 	c := write("c.md", "## Grounding\n- foo.go\n- baz.go\n\n## Next\n")
 
-	if planSectionDigest(a, groundingSectionHeading) != planSectionDigest(b, groundingSectionHeading) {
+	if planSectionDigest(a, testGroundingSectionHeading) != planSectionDigest(b, testGroundingSectionHeading) {
 		t.Error("digest changed on trailing-whitespace-only diff")
 	}
-	if planSectionDigest(a, groundingSectionHeading) == planSectionDigest(c, groundingSectionHeading) {
+	if planSectionDigest(a, testGroundingSectionHeading) == planSectionDigest(c, testGroundingSectionHeading) {
 		t.Error("digest stayed the same after content change")
 	}
 	if planSectionDigest(a, "## Missing") != "" {

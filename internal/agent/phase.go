@@ -850,7 +850,7 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, phase RoadmapPhase, qaFilePaths []string, priorPhasePlanPaths []string, kbInfos ...KBInfo) (chan *PlanLoopResult, error) {
 	// Use the shared resolver so per-phase planning runs in the feature worktree
 	// (same as roadmap planning and implementation). Previously this function
-	// used f.Repos[0].Path unconditionally, which pointed the Grounding critic
+	// used f.Repos[0].Path unconditionally, which pointed the plan validators
 	// at the base repo clone on master and made every prior-phase symbol look
 	// missing.
 	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)

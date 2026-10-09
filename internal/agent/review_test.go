@@ -254,7 +254,7 @@ func TestParseReviewFeedback(t *testing.T) {
 			wantStat: ReviewApproved,
 			wantMarkers: ValidatorMarkers{
 				AxisApproved:   testAxisGrounding,
-				FrozenSections: []string{groundingSectionHeading, "## Changes Required"},
+				FrozenSections: []string{testGroundingSectionHeading, "## Changes Required"},
 			},
 		},
 	}

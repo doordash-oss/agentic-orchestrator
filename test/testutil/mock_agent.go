@@ -535,7 +535,7 @@ done`, artifactBase, body, body)
 // WriteValidatorApproved returns a shell snippet that writes a minimal APPROVED
 // validation-<axis>-feedback.md to attemptDir. axis is the lowercase axis name
 // the harness uses to compute the path (architecture, scope, structural,
-// grounding, security, performance, testing).
+// security, performance, testing).
 func WriteValidatorApproved(attemptDir, axis string) string {
 	return writeValidatorFeedback(attemptDir, axis, StructuredReviewFeedback("", "", "APPROVED"))
 }

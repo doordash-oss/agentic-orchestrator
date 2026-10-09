@@ -354,7 +354,7 @@ type deferralsYAMLDoc struct {
 // contract spelled out in skills/implement/SKILL.md.
 // The function is conservative: every defect it can name deterministically
 // becomes a separate ProtocolViolations entry so the synthesized feedback
-// enumerates all of them in one pass — same shape as the grounding gate.
+// enumerates all of them in one pass.
 // Callers MUST inspect ProtocolViolations before trusting State.
 func ParseProgressMd(path string) (*ParsedProgress, error) {
 	if path == "" {

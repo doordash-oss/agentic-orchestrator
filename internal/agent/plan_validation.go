@@ -675,28 +675,12 @@ func runSpecializedPlanValidation(cfg PlanLoopConfig, sm ports.SessionManager, a
 
 // planValidationExtras carries optional prompt augmentations that only some
 // validators consume. Roadmap and single-phase flows pass the zero value;
-// per-phase plan validation populates PriorPhasePlanPaths so the Grounding
-// critic knows which prior-phase symbols legitimately exist on the current
-// worktree.
+// per-phase plan validation populates PriorPhasePlanPaths.
 type planValidationExtras struct {
 	PriorPhasePlanPaths []string
 }
 
 func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain validatorDomain, kind validationArtifactKind, extras planValidationExtras, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
-	// Deterministic pre-check for the Grounding axis. When the plan's
-	// `## Grounding` table has mechanically decidable defects (illegal
-	// classification, EXISTS row pointing at a missing path, WILL-BE-CREATED
-	// row contradicting an already-present file), short-circuit to
-	// CHANGES_REQUESTED with a synthesized exhaustive feedback document
-	// instead of paying for a 100KB+ LLM transcript that would land on the
-	// same verdict. The feedback file path mirrors what the LLM judge would
-	// write so downstream code (UI, log readers) is unaffected.
-	if domain.Template == "validate-phase-plan-grounding" {
-		if shortCircuit, status, fb := runGroundingPreCheck(cfg, attempt, attemptDir, planArtifactPath); shortCircuit {
-			return status, fb, ValidatorMarkers{}, nil
-		}
-	}
-
 	domainLower := strings.ToLower(domain.Name)
 	helperIterDir := filepath.Join(attemptDir, "validate-"+domainLower)
 	if err := os.MkdirAll(helperIterDir, 0o755); err != nil {
@@ -819,97 +803,6 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	}
 
 	return status, feedback, markers, nil
-}
-
-// runGroundingPreCheck runs the deterministic Grounding-table check before the
-// LLM judge spins up. Returns shortCircuit=true when the check found defects;
-// in that case it has already persisted the synthesized feedback to the same
-// `validation-grounding-feedback.md` / `validation-grounding-output.txt` paths
-// the LLM path would have written, and the caller MUST return the supplied
-// status/feedback verbatim — this axis is decided.
-//
-// Returns shortCircuit=false when the table is mechanically clean (or the
-// plan artifact cannot be read, or the worktree is missing). In that case
-// the caller proceeds to the LLM judge as normal — the pre-check is a
-// pre-filter, not a replacement.
-func runGroundingPreCheck(cfg PlanLoopConfig, attempt int, attemptDir, planArtifactPath string) (bool, ReviewStatus, string) {
-	if planArtifactPath == "" || cfg.WorkDir == "" {
-		return false, ReviewFailed, ""
-	}
-	// resolveUnifiedWorkDir sets cfg.WorkDir to the parent of every repo's
-	// worktree (so the Claude session's cwd can see siblings via --add-dir).
-	// Plan-row references like `docs/testing-baseline.md` are repo-relative, so
-	// resolving them against the worktree-parent would mis-locate every row
-	// by one directory. Pass each repo's worktree path explicitly along with
-	// its name; the gate accepts a bare-path row when the file exists under
-	// any root, and binds a `<repo>:<path>`-prefixed row to the named root
-	// only (per the multi-repo grounding contract in plan-phase/format.md).
-	roots := groundingRootsForFeature(cfg.Feature)
-	if len(roots) == 0 {
-		// Single-repo non-worktree fallback or feature with no repos: use
-		// the legacy single-root behaviour with no name (anonymous root).
-		roots = []GroundingRoot{{Worktree: cfg.WorkDir}}
-	}
-	result := CheckGroundingTableRepos(planArtifactPath, roots)
-	if result.OK() {
-		return false, ReviewFailed, ""
-	}
-	headRev, branch := captureWorktreePreflight(cfg.WorkDir)
-	feedback := FormatGroundingPreCheckFeedback(result, headRev, branch)
-	feedbackPath := filepath.Join(attemptDir, "validation-grounding-feedback.md")
-	_ = os.WriteFile(feedbackPath, []byte(feedback), 0o644)
-	// Also write the same text to validation-grounding-output.txt so the
-	// review log readers / desktop app surface a coherent transcript even though no
-	// LLM session ran. Including the attempt number keeps grep-friendly with
-	// the LLM-written outputs.
-	outputPath := filepath.Join(attemptDir, "validation-grounding-output.txt")
-	header := fmt.Sprintf("[grounding pre-check] attempt=%d (no LLM session — deterministic gate decided this axis)\n\n", attempt)
-	_ = os.WriteFile(outputPath, []byte(header+feedback), 0o644)
-	return true, ReviewChangesRequested, feedback
-}
-
-// captureWorktreePreflight returns `git rev-parse HEAD` and
-// `git branch --show-current` for the worktree, mirroring the Pre-flight
-// block the LLM judge produces. Empty strings on any error — the feedback
-// formatter handles missing values. Uses ports.CommandRunner so the agent
-// package's "no direct exec" invariant (exec_command_regression_test.go) is
-// preserved.
-func captureWorktreePreflight(workDir string) (string, string) {
-	runner := NewExecCommandRunner()
-	run := func(args ...string) string {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		out, err := runner.Run(ctx, "git", args, ports.CommandOpts{Dir: workDir})
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(out))
-	}
-	return run("rev-parse", "HEAD"), run("branch", "--show-current")
-}
-
-// groundingRootsForFeature returns the named worktree roots the
-// deterministic grounding gate should resolve plan-row references against.
-// Prefers each repo's WorktreePath (the canonical feature-branch checkout
-// under the unified flow) and falls back to Path for non-worktree mode.
-// Each root carries the repo Name so the gate can route `<repo>:<path>`
-// references (per plan-phase/format.md) to the matching worktree. Returns
-// an empty slice when the feature has no repos so callers can supply a
-// fallback root.
-func groundingRootsForFeature(f *feature.Feature) []GroundingRoot {
-	if f == nil {
-		return nil
-	}
-	roots := make([]GroundingRoot, 0, len(f.Repos))
-	for _, r := range f.Repos {
-		switch {
-		case r.WorktreePath != "":
-			roots = append(roots, GroundingRoot{Name: r.Name, Worktree: r.WorktreePath})
-		case r.Path != "":
-			roots = append(roots, GroundingRoot{Name: r.Name, Worktree: r.Path})
-		}
-	}
-	return roots
 }
 
 // axisFrozenHeading maps a validator axis name (lowercased) to the plan
@@ -1069,7 +962,7 @@ func planSectionDigest(planPath, heading string) string {
 }
 
 // extractPlanSection returns the byte content of the Markdown section whose
-// heading line exactly matches heading (e.g. "## Grounding"). The returned
+// heading line exactly matches heading (e.g. "## Tasks"). The returned
 // bytes start at the line AFTER the heading and end before the next line
 // beginning with "## " or "# " (or EOF). Trailing whitespace on each line is
 // trimmed before return so cosmetic edits don't perturb the digest.
@@ -1129,7 +1022,7 @@ func writeAxisApprovalArtifact(attemptDir string, attempt int, markers Validator
 
 // buildSpecializedValidationPromptForArtifact constructs the prompt for a
 // per-axis specialized validator (architecture, scope, security, performance,
-// testing, grounding, structural).
+// testing, structural).
 //
 // skillsDir and feedbackPath are retained on the signature for caller
 // stability. The RoleSpec-backed system prompt and validator SKILL.md Output
@@ -1139,7 +1032,6 @@ func writeAxisApprovalArtifact(attemptDir string, attempt int, markers Validator
 // internal/agent/prompts/templates/validate_specialized.user.tmpl.
 func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, researchPath, skillsDir, feedbackPath string, domain validatorDomain, kind validationArtifactKind, extras planValidationExtras) string {
 	_ = skillsDir
-	includePriorPhase := domain.Template == "validate-phase-plan-grounding" && len(extras.PriorPhasePlanPaths) > 0
 
 	intent := resolvePromptIntent(f)
 
@@ -1151,7 +1043,6 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 		RiskLevel:                 string(f.RiskLevel),
 		DomainName:                domain.Name,
 		PlanPath:                  planPath,
-		IncludePriorPhaseContext:  includePriorPhase,
 		PriorPhasePlanPaths:       append([]string(nil), extras.PriorPhasePlanPaths...),
 		IsRoadmapKind:             kind == validationArtifactRoadmap,
 		ResearchPath:              researchPath,
@@ -1318,16 +1209,11 @@ func infrastructureFailedValidators(results []ValidatorResult) []int {
 }
 
 // runPhasePlanMultiValidatorValidation applies the per-phase axis validator set
-// (structural + grounding + scope, plus high-risk deep-dive) against a phase
+// (structural + scope, plus high-risk deep-dive) against a phase
 // plan artifact. Each axis writes a `## Sticky Approval` block into its
 // per-axis review-feedback file, which runValidatorSet persists to
 // attempt-NN/axis-approved-<axis>.md for sticky approval across revise
 // iterations.
-//
-// PriorPhasePlanPaths is forwarded via planValidationExtras so the Grounding
-// critic can tell legitimate prior-phase symbols apart from unfounded EXISTS
-// claims — without it, the critic falsely fails every reference to a symbol
-// committed by an earlier phase on the same branch.
 //
 // Returns per-axis results alongside the aggregated verdict so the phase
 // planning loop can detect per-axis stalls (see detectAxisStall).

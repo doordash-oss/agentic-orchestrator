@@ -568,7 +568,7 @@ func TestBuildPhasePlanRevisionPromptWithApprovals(t *testing.T) {
 
 	approvals := []AxisApproval{
 		{Axis: "structural", FrozenSections: []string{"Desired End State", "Changes Required"}},
-		{Axis: testAxisGrounding, FrozenSections: []string{groundingSectionHeading}},
+		{Axis: testAxisGrounding, FrozenSections: []string{testGroundingSectionHeading}},
 	}
 
 	prompt := BuildPhasePlanRevisionPrompt(f, "", "/phase-plan.md", "Scope axis flagged drift", "", phase, 3, approvals)

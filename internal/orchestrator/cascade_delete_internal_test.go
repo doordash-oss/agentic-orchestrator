@@ -97,7 +97,7 @@ func TestDeleteCascadePreservesExternallyMovedRefAndRecords(t *testing.T) {
 	}
 	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
 
-	result, err := o.DeleteCascade(parent.ID)
+	result, err := o.deleteCascade(parent.ID)
 	if err != nil {
 		t.Fatalf("DeleteCascade: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestReconcileCascadeDeletesEmitsChangedNonTerminalRelationshipState(t *test
 			}
 			o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
 
-			if err := o.ReconcileCascadeDeletes(); err != nil {
+			if err := o.reconcileCascadeDeletes(); err != nil {
 				t.Fatalf("ReconcileCascadeDeletes() error = %v", err)
 			}
 			ev := receiveCascadeEvent(t, o.Events())
@@ -187,7 +187,7 @@ func TestReconcileCascadeDeletesEmitsChangedNonTerminalRelationshipState(t *test
 				t.Fatalf("Load(child) error = %v, want retained record", err)
 			}
 
-			if err := o.ReconcileCascadeDeletes(); err != nil {
+			if err := o.reconcileCascadeDeletes(); err != nil {
 				t.Fatalf("second ReconcileCascadeDeletes() error = %v", err)
 			}
 			select {
@@ -209,7 +209,7 @@ func TestReconcileCascadeDeletesIgnoresDeletedFeatureResidue(t *testing.T) {
 	}
 	o := New(Deps{Store: store, Worktrees: &cascadeTestWorktrees{store: store}}, Hooks{})
 
-	if err := o.ReconcileCascadeDeletes(); err != nil {
+	if err := o.reconcileCascadeDeletes(); err != nil {
 		t.Fatalf("ReconcileCascadeDeletes() error = %v, want deleted residue ignored", err)
 	}
 }
@@ -231,7 +231,7 @@ func TestDeleteCascadeCleansChildrenThenParentAndConverges(t *testing.T) {
 	}
 	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
 
-	result, err := o.DeleteCascade(parent.ID)
+	result, err := o.deleteCascade(parent.ID)
 	if err != nil {
 		t.Fatalf("DeleteCascade: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestDeleteCascadeCleansChildrenThenParentAndConverges(t *testing.T) {
 		t.Fatalf("parent load error = %v, want not exist", err)
 	}
 
-	again, err := o.DeleteCascade(parent.ID)
+	again, err := o.deleteCascade(parent.ID)
 	if err != nil || again.Status != feature.CascadeDeleteCompleted {
 		t.Fatalf("repeated delete = %+v, %v", again, err)
 	}
@@ -279,7 +279,7 @@ func TestDeleteCascadeRejectsClosedChildWithRelationshipConflict(t *testing.T) {
 	}
 	o := New(Deps{Store: store}, Hooks{})
 
-	_, err := o.DeleteCascade(child.ID)
+	_, err := o.deleteCascade(child.ID)
 	if !errors.Is(err, feature.ErrChildRelationshipClosed) {
 		t.Fatalf("DeleteCascade() error = %v, want ErrChildRelationshipClosed", err)
 	}
@@ -331,7 +331,7 @@ func TestDeleteCascadeHealsSymlinkSpelledJournalPaths(t *testing.T) {
 	}
 	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
 
-	result, err := o.DeleteCascade(parent.ID)
+	result, err := o.deleteCascade(parent.ID)
 	if err != nil {
 		t.Fatalf("DeleteCascade: %v", err)
 	}
@@ -399,7 +399,7 @@ func TestDeleteCascadeHealsBrokenSymlinkSpelledCopiedInput(t *testing.T) {
 	}
 	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
 
-	result, err := o.DeleteCascade(parent.ID)
+	result, err := o.deleteCascade(parent.ID)
 	if err != nil {
 		t.Fatalf("DeleteCascade: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestDeleteCascadeStillRefusesOutOfTreeCopiedInput(t *testing.T) {
 	}
 	o := New(Deps{Store: store}, Hooks{})
 
-	result, err := o.DeleteCascade(parent.ID)
+	result, err := o.deleteCascade(parent.ID)
 	if err != nil {
 		t.Fatalf("DeleteCascade: %v", err)
 	}
@@ -685,7 +685,7 @@ func TestDeleteCascadeClassifiesSharedParentRefAcrossChildren(t *testing.T) {
 			}
 			o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
 
-			result, err := o.DeleteCascade(parent.ID)
+			result, err := o.deleteCascade(parent.ID)
 			if err != nil {
 				t.Fatalf("DeleteCascade: %v", err)
 			}
@@ -749,7 +749,7 @@ func TestDeleteCascadeRecordsRestoredEntryOnlyOnce(t *testing.T) {
 	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
 
 	// Resource cleanup fails so the journal survives with its classification.
-	result, err := o.DeleteCascade(parent.ID)
+	result, err := o.deleteCascade(parent.ID)
 	if err != nil {
 		t.Fatalf("DeleteCascade: %v", err)
 	}
@@ -800,7 +800,7 @@ func TestDeleteCascadeRecordsAdvancedRefWithoutRestoring(t *testing.T) {
 	o := New(Deps{Store: store, Worktrees: worktrees}, Hooks{})
 
 	// Resource cleanup fails so the journal survives with its classification.
-	result, err := o.DeleteCascade(parent.ID)
+	result, err := o.deleteCascade(parent.ID)
 	if err != nil {
 		t.Fatalf("DeleteCascade: %v", err)
 	}

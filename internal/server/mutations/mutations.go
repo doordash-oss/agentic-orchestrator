@@ -14,8 +14,9 @@
 
 // Package mutations implements the server's mutation target: the REST
 // feature actions, control answers, and runtime-config updates the HTTP
-// handler delegates to. It adapts wire DTOs onto the orchestrator and the
-// feature manager so neither learns REST shapes.
+// handler delegates to. It adapts wire DTOs onto single orchestrator
+// operations so the orchestrator never learns REST shapes and the module
+// never sequences locks, admission, or dispatch.
 package mutations
 
 import (
@@ -57,9 +58,6 @@ const (
 
 	dispatchNone = "none"
 
-	maxIterationsRetryDelta     = 10
-	maxPlanIterationsRetryDelta = 2
-
 	toolNameBash            = "Bash"
 	toolNameAskUserQuestion = "AskUserQuestion"
 
@@ -72,15 +70,11 @@ const (
 )
 
 // Deps names the production handles the mutation module drives. Orchestrator
-// and Features are required; the remaining fields degrade the actions that
-// need them to explicit "not available" errors.
+// is required; the remaining fields degrade the actions that need them to
+// explicit "not available" errors.
 type Deps struct {
 	Orchestrator *orchestrator.Orchestrator
-	// Features creates and persists refactor, review-feedback, and rebase
-	// children.
-	Features *feature.Manager
-	Store    *feature.Store
-	Sessions ports.SessionManager
+	Sessions     ports.SessionManager
 	// PermissionCache records "always allow" answers.
 	PermissionCache *permission.Cache
 	// Config is the loaded runtime config; ConfigPath is where config and
@@ -91,55 +85,22 @@ type Deps struct {
 
 // New returns the server mutation target backed by deps.
 func New(deps Deps) serverruntime.MutationTarget {
-	t := &mutationTarget{
+	return &mutationTarget{
 		orch:            deps.Orchestrator,
 		cfg:             deps.Config,
 		configPath:      deps.ConfigPath,
-		store:           deps.Store,
 		sessions:        deps.Sessions,
 		permissionCache: deps.PermissionCache,
 	}
-	// A nil *feature.Manager must stay a nil interface so the child actions
-	// report "not available" instead of panicking.
-	if deps.Features != nil {
-		t.childCreator = deps.Features
-		t.reviewFeedbackCreator = deps.Features
-		t.rebaseChildCreator = deps.Features
-	}
-	return t
 }
 
 type mutationTarget struct {
-	mu                    sync.Mutex
-	orch                  *orchestrator.Orchestrator
-	childCreator          featureRefactorChildCreator
-	reviewFeedbackCreator featureReviewFeedbackChildCreator
-	rebaseChildCreator    featureRebaseChildCreator
-	cfg                   *config.Config
-	configPath            string
-	store                 *feature.Store
-	sessions              ports.SessionManager
-	permissionCache       *permission.Cache
-	// dispatchAsync runs server-owned background work (durable feature
-	// setup). Nil means `go fn()`; tests inject a synchronous dispatcher.
-	dispatchAsync func(fn func())
-}
-
-// featureRefactorChildCreator is the narrow feature.Manager surface the
-// refactor action needs to atomically create and persist a refactor child.
-type featureRefactorChildCreator interface {
-	CreateRefactorChild(parentID string, spec feature.RefactorChildSpec) (*feature.Feature, error)
-}
-
-type featureReviewFeedbackChildCreator interface {
-	// LaunchReviewFeedbackChildFromDraft commits the durable pending draft:
-	// validates the expected revision, re-resolves GitHub content, creates
-	// the child from current selected comments, and clears the draft.
-	LaunchReviewFeedbackChildFromDraft(parentID string, expectedRevision int64, gate *bool) (*feature.ReviewFeedbackLaunchResult, error)
-}
-
-type featureRebaseChildCreator interface {
-	CreateRebaseChild(parentID string, spec feature.RebaseChildSpec) (*feature.Feature, error)
+	mu              sync.Mutex
+	orch            *orchestrator.Orchestrator
+	cfg             *config.Config
+	configPath      string
+	sessions        ports.SessionManager
+	permissionCache *permission.Cache
 }
 
 func (t *mutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (serverruntime.CreateFeatureResponse, error) {
@@ -251,55 +212,16 @@ func createSourceExpectations(sources []serverruntime.RepositorySource) ([]featu
 // acknowledges the dispatch.
 func (t *mutationTarget) SetupFeature(featureID string) (serverruntime.FeatureSetupResponse, error) {
 	resp := serverruntime.FeatureSetupResponse{FeatureID: featureID}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
-	if t.store == nil {
-		return resp, errors.New("feature store is not available")
-	}
-	f, err := t.store.Load(featureID)
-	if err != nil {
+	if err := t.orch.DispatchSetup(featureID); err != nil {
+		if errors.Is(err, orchestrator.ErrNoSetupWork) {
+			return resp, &serverruntime.ActionConflictError{
+				Detail: fmt.Sprintf("feature %q has no pending or failed setup work", featureID),
+			}
+		}
 		return resp, err
 	}
-	retry := isFailedSetupFeature(f)
-	if !retry && !isPendingSetupFeature(f) {
-		return resp, &serverruntime.ActionConflictError{
-			Detail: fmt.Sprintf("feature %q has no pending or failed setup work", featureID),
-		}
-	}
-	dispatch := t.dispatchAsync
-	if dispatch == nil {
-		dispatch = func(fn func()) { go fn() }
-	}
-	// The dispatched setup owns an admission reservation from before the
-	// goroutine launches; a closed boundary refuses the work-start request.
-	if err := t.orch.PrepareAsyncWork(featureID); err != nil {
-		return resp, err
-	}
-	dispatch(func() {
-		defer t.orch.SettleAsyncWork(featureID)
-		// Errors are durable: the setup runner persists per-task and failure
-		// state on the feature and emits setup events that reach the SSE
-		// stream, so the API surface reports them via the read model.
-		if retry {
-			_ = t.orch.RetrySetupOnly(featureID)
-		} else {
-			_ = t.orch.RunSetupOnly(featureID)
-		}
-	})
 	resp.Result = resultSetupStarted
 	return resp, nil
-}
-
-// isPendingSetupFeature reports whether the feature has queued durable setup
-// that has not completed yet (the state Create leaves it in with QueueSetup).
-func isPendingSetupFeature(f *feature.Feature) bool {
-	if f == nil || f.Status != feature.StatusSettingUpWorktrees {
-		return false
-	}
-	setup := f.Run().Setup
-	return setup != nil &&
-		(setup.Status == feature.SetupStatusQueued || setup.Status == feature.SetupStatusRunning)
 }
 
 func (t *mutationTarget) StartFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
@@ -310,57 +232,32 @@ func (t *mutationTarget) StartFeature(featureID string) (serverruntime.FeatureSt
 }
 
 func (t *mutationTarget) ResumeFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
-	if t.orch == nil {
-		return serverruntime.FeatureStartResponse{}, errors.New("orchestrator is not available")
-	}
 	return t.StartFeature(featureID)
 }
 
 func (t *mutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
-	if err := t.orch.WithRelationshipReadLock(func() error {
-		if err := t.orch.RelationshipGuard(featureID, orchestrator.MutationStop); err != nil {
-			return err
-		}
-		return t.orch.InterruptFeature(featureID)
-	}); err != nil {
+	if err := t.orch.StopFeature(featureID); err != nil {
 		return serverruntime.FeatureStopResponse{}, err
 	}
 	return serverruntime.FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
 }
 
 func (t *mutationTarget) RestartFeature(featureID string, req serverruntime.RestartFeatureRequest) (serverruntime.FeatureRestartResponse, error) {
-	outcome, err := t.orch.RestartPhase(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
-	if err != nil {
+	outcome, err := t.orch.RestartFeature(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
+	if err != nil && outcome.Action != orchestrator.RestartDispatchPhase {
 		return serverruntime.FeatureRestartResponse{}, err
 	}
-	resp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: "restarted"}
-	if outcome.Phase.String() != "" {
-		resp.Phase = outcome.Phase.String()
+	resp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: "restarted", Phase: outcome.Phase.String()}
+	if outcome.Action == orchestrator.RestartDispatchPhase {
+		resp.Dispatch = "phase"
+	} else {
+		resp.Dispatch = dispatchNone
 	}
-	if err := t.dispatchRestartOutcome(featureID, outcome, &resp); err != nil {
+	if err != nil {
 		resp.Result = resultFailed
 		return resp, err
 	}
 	return resp, nil
-}
-
-func (t *mutationTarget) dispatchRestartOutcome(featureID string, outcome orchestrator.RestartOutcome, resp *serverruntime.FeatureRestartResponse) error {
-	if t.orch == nil {
-		return errors.New("orchestrator is not available")
-	}
-	switch outcome.Action {
-	case orchestrator.RestartNoOp:
-		resp.Dispatch = dispatchNone
-		return nil
-	case orchestrator.RestartDispatchPhase:
-		resp.Dispatch = "phase"
-		if outcome.Phase.String() != "" {
-			resp.Phase = outcome.Phase.String()
-		}
-		return t.orch.StartFeature(featureID)
-	default:
-		return fmt.Errorf("unknown restart action %d", outcome.Action)
-	}
 }
 
 func (t *mutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) error {
@@ -376,91 +273,33 @@ func (t *mutationTarget) ReviewDecision(featureID string, req serverruntime.Revi
 }
 
 func (t *mutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
-	if t.store == nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, errors.New("feature store is not available")
+	input := orchestrator.UpdateFeatureConfigInput{
+		Models:             req.Models,
+		Effort:             req.Effort,
+		Inquireness:        feature.Inquireness(req.Inquireness),
+		Checkpoints:        req.Checkpoints,
+		InputNotifications: feature.InputNotificationsMode(req.InputNotifications),
+		Pipeline:           req.Pipeline,
 	}
-	current, err := t.store.Load(featureID)
-	if err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
-	}
-	automaticReviewMode := feature.NormalizeAutomaticReviewMode(current.AutomaticReviewMode)
 	if req.AutomaticReviewMode != nil {
-		automaticReviewMode, err = feature.ParseAutomaticReviewMode(*req.AutomaticReviewMode)
+		mode, err := feature.ParseAutomaticReviewMode(*req.AutomaticReviewMode)
 		if err != nil {
 			return serverruntime.FeatureConfigUpdateResponse{}, err
 		}
+		input.AutomaticReviewMode = &mode
 	}
-	// Detect parent/child relationship and route to paired config update
-	// when the addressed feature is either a parent with an active child
-	// or the active child itself. The submitted pipeline must match the
-	// addressed record's pipeline. The detect + update window is wrapped
-	// in the relationship read lock so a concurrent child creation cannot
-	// interleave between detection and the write.
-	if t.orch != nil {
-		var configErr error
-		var configResp serverruntime.FeatureConfigUpdateResponse
-		configErr = t.orch.WithRelationshipReadLock(func() error {
-			parentID, _, paired, dErr := t.orch.DetectPairedConfigTarget(featureID)
-			if dErr != nil {
-				return fmt.Errorf("detecting paired config target: %w", dErr)
-			}
-			if paired {
-				if err := t.orch.UpdatePairedFeatureConfig(parentID, feature.PairedConfigInput{
-					Models:              req.Models,
-					Effort:              req.Effort,
-					Inquireness:         feature.Inquireness(req.Inquireness),
-					Checkpoints:         req.Checkpoints,
-					InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
-					AutomaticReviewMode: automaticReviewMode,
-				}, feature.PipelineProfile(req.Pipeline), featureID); err != nil {
-					return err
-				}
-				f, err := t.store.Load(featureID)
-				if err != nil {
-					return err
-				}
-				pipeline := req.Pipeline
-				if pipeline == "" {
-					pipeline = f.EffectivePipeline()
-				}
-				if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
-					return err
-				}
-				configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
-				return nil
-			}
-			if err := t.orch.UpdateFeatureConfig(featureID, orchestrator.UpdateFeatureConfigInput{
-				Models:              req.Models,
-				Effort:              req.Effort,
-				Inquireness:         feature.Inquireness(req.Inquireness),
-				Checkpoints:         req.Checkpoints,
-				InputNotifications:  feature.InputNotificationsMode(req.InputNotifications),
-				AutomaticReviewMode: automaticReviewMode,
-			}); err != nil {
-				return err
-			}
-			f, err := t.store.Load(featureID)
-			if err != nil {
-				return err
-			}
-			pipeline := req.Pipeline
-			if pipeline == "" {
-				pipeline = f.EffectivePipeline()
-			}
-			if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
-				return err
-			}
-			configResp = serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}
-			return nil
-		})
-		if configErr != nil {
-			return serverruntime.FeatureConfigUpdateResponse{}, configErr
-		}
-		if configResp.Result != "" {
-			return configResp, nil
-		}
+	f, err := t.orch.UpdateFeatureConfig(featureID, input)
+	if err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
 	}
-	return serverruntime.FeatureConfigUpdateResponse{}, errors.New("orchestrator is not available")
+	pipeline := req.Pipeline
+	if pipeline == "" {
+		pipeline = f.EffectivePipeline()
+	}
+	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
+		return serverruntime.FeatureConfigUpdateResponse{}, err
+	}
+	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
 }
 
 func (t *mutationTarget) ResumeNeedUserInput(featureID string, req serverruntime.NeedUserInputResumeRequest) (serverruntime.NeedUserInputResumeResponse, error) {
@@ -471,9 +310,6 @@ func (t *mutationTarget) ResumeNeedUserInput(featureID string, req serverruntime
 }
 
 func (t *mutationTarget) WaiveTestingContractItems(featureID string, req serverruntime.TestingContractWaiveRequest) (serverruntime.TestingContractWaiveResponse, error) {
-	if t.orch == nil {
-		return serverruntime.TestingContractWaiveResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
 	result, err := t.orch.WaiveTestingContractItems(featureID, orchestrator.TestingContractWaiver{
 		ItemIDs: req.ItemIDs, Reason: req.Reason,
 		ExpectedRun: req.ActiveRun, ExpectedPhase: req.RoadmapPhase, ExpectedRevision: req.ContractRevision,
@@ -491,7 +327,7 @@ func (t *mutationTarget) WaiveTestingContractItems(featureID string, req serverr
 }
 
 func (t *mutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.NeedUserInputDraftResponse, error) {
-	gatePath, err := t.needUserInputGatePath(featureID)
+	gatePath, err := t.orch.PendingNeedUserInputGatePath(featureID)
 	if err != nil {
 		return serverruntime.NeedUserInputDraftResponse{}, err
 	}
@@ -582,24 +418,7 @@ func (t *mutationTarget) enableAutomaticReview(scope, featureID string) error {
 		if featureID == "" {
 			return errors.New("this request has no feature; enable auto-approve for the workspace instead")
 		}
-		if t.store == nil {
-			return errors.New("feature store is not available")
-		}
-		f, err := t.store.Load(featureID)
-		if err != nil {
-			return err
-		}
-		mode := string(feature.AutomaticReviewEnabled)
-		_, err = t.UpdateFeatureConfig(featureID, serverruntime.FeatureConfigMutationRequest{
-			Models:              f.Models,
-			Effort:              f.Effort,
-			Inquireness:         string(f.Inquireness),
-			Checkpoints:         f.Pipeline.NormalizeCheckpoints(f.Checkpoints, f.IsPublishable()),
-			Pipeline:            f.Pipeline,
-			InputNotifications:  string(feature.NormalizeInputNotificationsMode(f.InputNotifications)),
-			AutomaticReviewMode: &mode,
-		})
-		return err
+		return t.orch.EnableFeatureAutomaticReview(featureID)
 	default:
 		return fmt.Errorf("unknown auto_approve_scope %q", scope)
 	}
@@ -765,9 +584,6 @@ func (t *mutationTarget) ExecuteRecovery(ctx context.Context, items []ports.Reco
 }
 
 func (t *mutationTarget) PublishFeature(featureID string, req serverruntime.PublishFeatureRequest) (serverruntime.PublishFeatureResponse, error) {
-	if t.orch == nil {
-		return serverruntime.PublishFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
 		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
@@ -785,9 +601,6 @@ func (t *mutationTarget) PublishFeature(featureID string, req serverruntime.Publ
 }
 
 func (t *mutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
-	if t.orch == nil {
-		return serverruntime.PublishDescriptionResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
 	title, body, err := t.orch.GeneratePublishDescription(featureID, orchestrator.PublishDescriptionOptions{
 		Repos: req.Repos,
 	})
@@ -798,9 +611,6 @@ func (t *mutationTarget) GeneratePublishDescription(featureID string, req server
 }
 
 func (t *mutationTarget) MergeFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MergeFeatureResponse, error) {
-	if t.orch == nil {
-		return serverruntime.MergeFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
 		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
@@ -812,9 +622,6 @@ func (t *mutationTarget) MergeFeature(featureID string, req serverruntime.Guarde
 
 func (t *mutationTarget) RepositoryPath(featureID, repoName string) (serverruntime.RepositoryPathResponse, error) {
 	resp := serverruntime.RepositoryPathResponse{FeatureID: featureID, Repo: repoName}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
 	path, err := t.orch.RepositoryWorktreePath(featureID, repoName)
 	if err != nil {
 		return resp, err
@@ -837,80 +644,28 @@ func (t *mutationTarget) RewindFeature(featureID string, req serverruntime.Rewin
 		resp.Result = resultFailed
 		return resp, err
 	}
-	if t.orch == nil {
-		resp.Result = resultFailed
-		return resp, errors.New("orchestrator is not available")
-	}
-	// Stale-preview guard: when the client presents a preview's source run
-	// and revision, reject before any side effect if the active run changed
-	// or rewind-relevant state advanced since the preview was computed.
-	// Historical source runs (run number below the active run) are rejected
-	// outright — rewind executes only against the current active run.
-	current, err := t.validateRewindGuard(featureID, req)
-	if err != nil {
+	result, err := t.orch.Rewind(featureID, orchestrator.RewindInput{
+		Request:         feature.RewindRequest{TargetPhase: targetPhase, RoadmapPhase: req.RoadmapPhase},
+		UpgradePipeline: feature.PipelineProfile(req.UpgradePipeline),
+		SourceRevision:  req.SourceRevision,
+		SourceRunNumber: req.SourceRunNumber,
+	})
+	if errors.Is(err, orchestrator.ErrStaleRewindPreview) {
 		resp.Result = resultFailed
 		return resp, err
 	}
-	sourceRunNumber := 0
-	if current != nil {
-		sourceRunNumber = current.ActiveRun
+	if result.EffectivePhase != 0 || strings.EqualFold(req.TargetPhase, phaseNameResearch) {
+		resp.EffectivePhase = result.EffectivePhase.DirName()
 	}
-	warnings, effectiveTarget, err := t.orch.RewindWithUpgrade(featureID, feature.RewindRequest{
-		TargetPhase:  targetPhase,
-		RoadmapPhase: req.RoadmapPhase,
-	}, feature.PipelineProfile(req.UpgradePipeline))
-	if effectiveTarget != 0 || strings.EqualFold(req.TargetPhase, phaseNameResearch) {
-		resp.EffectivePhase = effectiveTarget.DirName()
-	}
-	resp.SourceRunNumber = sourceRunNumber
-	resp.Warnings = wireRewindWarnings(warnings)
+	resp.SourceRunNumber = result.SourceRunNumber
+	resp.Warnings = wireRewindWarnings(result.Warnings)
 	if err != nil {
 		resp.Result = resultFailed
 		return resp, err
 	}
 	resp.Result = "rewound"
-	if t.store != nil {
-		if updated, loadErr := t.store.Load(featureID); loadErr == nil {
-			resp.NewRunNumber = updated.ActiveRun
-		}
-	}
+	resp.NewRunNumber = result.NewRunNumber
 	return resp, nil
-}
-
-// staleRewindError is a sentinel for a stale/historical rewind-preview guard
-// rejection. It carries a redacted reason; no internal path or token is
-// exposed across the API boundary.
-type staleRewindError struct {
-	reason string
-}
-
-func (e staleRewindError) Error() string { return e.reason }
-
-// validateRewindGuard enforces that a rewind request was previewed against
-// the current active run and rewind-relevant state. It performs no side
-// effect and is safe to call before any mutation. It returns the current
-// feature so execution can use the same loaded snapshot for its source run.
-func (t *mutationTarget) validateRewindGuard(featureID string, req serverruntime.RewindFeatureRequest) (*feature.Feature, error) {
-	if t.store == nil {
-		if req.SourceRevision == "" {
-			return nil, nil
-		}
-		return nil, errors.New("store is not available for rewind guard")
-	}
-	current, loadErr := t.store.Load(featureID)
-	if loadErr != nil {
-		return nil, fmt.Errorf("loading feature for rewind guard: %w", loadErr)
-	}
-	if req.SourceRevision == "" {
-		return current, nil
-	}
-	if req.SourceRunNumber != 0 && req.SourceRunNumber != current.ActiveRun {
-		return nil, staleRewindError{reason: "active run changed since preview"}
-	}
-	if got := feature.RewindRevision(current); got != req.SourceRevision {
-		return nil, staleRewindError{reason: "rewind state changed since preview"}
-	}
-	return current, nil
 }
 
 // wireRewindWarnings classifies the feature manager's typed rewind warnings
@@ -975,56 +730,13 @@ func wireRepositoryDiffFailure(repoName string, failure *orchestrator.Repository
 }
 
 func (t *mutationTarget) RetryFeature(featureID string) (serverruntime.RetryFeatureResponse, error) {
-	if t.orch == nil {
-		return serverruntime.RetryFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
-	var current *feature.Feature
-	if t.store != nil {
-		f, err := t.store.Load(featureID)
-		if err == nil {
-			current = f
-			if isFailedSetupFeature(f) {
-				if err := t.orch.RetrySetup(featureID); err != nil {
-					return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
-				}
-				return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
-			}
-		}
-	}
-	maxIterationsDelta, maxPlanIterationsDelta := retryFeatureIterationDeltas(current)
-	outcome, err := t.orch.RestartPhase(featureID, maxIterationsDelta, maxPlanIterationsDelta)
-	if err != nil {
-		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
-	}
-	restartResp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: resultRetried}
-	if err := t.dispatchRestartOutcome(featureID, outcome, &restartResp); err != nil {
+	if err := t.orch.RetryFeature(featureID); err != nil {
 		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
 	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
 }
 
-func retryFeatureIterationDeltas(f *feature.Feature) (int, int) {
-	if f == nil || f.Status != feature.StatusFailed || f.FailureCode() != errcat.IterationBudgetExhausted {
-		return 0, 0
-	}
-	return maxIterationsRetryDelta, maxPlanIterationsRetryDelta
-}
-
-func isFailedSetupFeature(f *feature.Feature) bool {
-	if f == nil {
-		return false
-	}
-	setup := f.Run().Setup
-	return f.Status == feature.StatusFailed &&
-		errcat.IsSetupFailure(f.FailureCode()) &&
-		setup != nil &&
-		setup.Status == feature.SetupStatusFailed
-}
-
 func (t *mutationTarget) CompletionPreflight(featureID string) (serverruntime.CompletionPreflightResponse, error) {
-	if t.orch == nil {
-		return serverruntime.CompletionPreflightResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
 	result, err := t.orch.CompletionPreflight(featureID)
 	if err != nil {
 		return serverruntime.CompletionPreflightResponse{FeatureID: featureID}, err
@@ -1059,9 +771,6 @@ func (t *mutationTarget) CompletionPreflight(featureID string) (serverruntime.Co
 }
 
 func (t *mutationTarget) RepositoryDiff(featureID, repoName, filePath string) (serverruntime.RepositoryDiffResponse, error) {
-	if t.orch == nil {
-		return serverruntime.RepositoryDiffResponse{FeatureID: featureID, Repo: repoName}, errors.New("orchestrator is not available")
-	}
 	result, err := t.orch.RepositoryDiff(featureID, repoName, filePath)
 	if err != nil {
 		return serverruntime.RepositoryDiffResponse{FeatureID: featureID, Repo: repoName}, err
@@ -1094,72 +803,28 @@ func (t *mutationTarget) RepositoryDiff(featureID, repoName, filePath string) (s
 
 func (t *mutationTarget) RefactorFeature(featureID string, req serverruntime.RefactorFeatureRequest) (serverruntime.RefactorFeatureResponse, error) {
 	resp := serverruntime.RefactorFeatureResponse{ParentID: featureID, Result: resultFailed}
-	creator := t.childCreator
-	if creator == nil {
-		return resp, errors.New("feature manager is not available")
-	}
 	spec, err := serverruntime.RefactorChildSpecFromRequest(req)
 	if err != nil {
 		return resp, err
 	}
-	var child *feature.Feature
-	if t.orch != nil {
-		if wErr := t.orch.WithRelationshipWriteLock(func() error {
-			var cErr error
-			child, cErr = creator.CreateRefactorChild(featureID, spec)
-			return cErr
-		}); wErr != nil {
-			return resp, wErr
-		}
-	} else {
-		child, err = creator.CreateRefactorChild(featureID, spec)
-		if err != nil {
-			return resp, err
-		}
+	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{Kind: feature.ChildKindRefactor, Refactor: spec})
+	if err != nil {
+		return resp, err
 	}
-	// Setup intent is queued durably on creation; run it asynchronously so the
-	// response returns with the child identifier immediately. RunSetupAsync
-	// keeps the goroutine orchestrator-owned: its terminal errors are recorded
-	// durably and signalled, and RunSetup serializes per feature with an
-	// in-process lock. The orchestrator parks setup-complete children at
-	// Created without starting the pipeline.
-	if t.orch != nil {
-		t.orch.ChildCreated(child)
-		t.orch.RunSetupAsync(child.ID)
-	}
-	resp.FeatureID = child.ID
+	resp.FeatureID = launch.Child.ID
 	resp.Result = resultCreated
 	return resp, nil
 }
 
 func (t *mutationTarget) ReviewFeedbackFeature(featureID string, req serverruntime.ReviewFeedbackFeatureRequest) (serverruntime.ReviewFeedbackFeatureResponse, error) {
 	resp := serverruntime.ReviewFeedbackFeatureResponse{ParentID: featureID, Result: resultFailed}
-	creator := t.reviewFeedbackCreator
-	if creator == nil {
-		return resp, errors.New("feature manager is not available")
-	}
-	gate := serverruntime.ReviewFeedbackGateFromRequest(req)
-	var launch *feature.ReviewFeedbackLaunchResult
-	if t.orch != nil {
-		if lockErr := t.orch.WithRelationshipWriteLock(func() error {
-			var launchErr error
-			launch, launchErr = creator.LaunchReviewFeedbackChildFromDraft(featureID, int64(req.ExpectedRevision), gate)
-			return launchErr
-		}); lockErr != nil {
-			return resp, lockErr
-		}
-	} else {
-		var launchErr error
-		launch, launchErr = creator.LaunchReviewFeedbackChildFromDraft(featureID, int64(req.ExpectedRevision), gate)
-		if launchErr != nil {
-			return resp, launchErr
-		}
-	}
-	if t.orch != nil && !launch.Replayed {
-		// A replayed launch re-announces nothing: the child was already
-		// reported created and its durable setup intent already dispatched.
-		t.orch.ChildCreated(launch.Child)
-		t.orch.RunSetupAsync(launch.Child.ID)
+	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{
+		Kind:             feature.ChildKindReviewFeedback,
+		ExpectedRevision: int64(req.ExpectedRevision),
+		Gate:             serverruntime.ReviewFeedbackGateFromRequest(req),
+	})
+	if err != nil {
+		return resp, err
 	}
 	resp.FeatureID = launch.Child.ID
 	resp.ChildID = launch.Child.ID
@@ -1172,41 +837,16 @@ func (t *mutationTarget) ReviewFeedbackFeature(featureID string, req serverrunti
 
 func (t *mutationTarget) RebaseFeature(featureID string, _ serverruntime.RebaseFeatureRequest) (serverruntime.RebaseFeatureResponse, error) {
 	resp := serverruntime.RebaseFeatureResponse{ParentID: featureID, Result: resultFailed}
-	creator := t.rebaseChildCreator
-	if creator == nil {
-		return resp, errors.New("feature manager is not available")
-	}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
-	preflight, err := t.orch.RebaseChildPreflight(featureID)
+	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{Kind: feature.ChildKindRebase})
 	if err != nil {
 		return resp, err
 	}
-	spec := feature.RebaseChildSpec{
-		Bases:   preflight.Bases,
-		Targets: preflight.Targets,
-		Behind:  preflight.Behind,
-	}
-	var child *feature.Feature
-	if wErr := t.orch.WithRelationshipWriteLock(func() error {
-		var cErr error
-		child, cErr = creator.CreateRebaseChild(featureID, spec)
-		return cErr
-	}); wErr != nil {
-		return resp, wErr
-	}
-	t.orch.ChildCreated(child)
-	t.orch.RunSetupAsync(child.ID)
-	resp.FeatureID = child.ID
+	resp.FeatureID = launch.Child.ID
 	resp.Result = resultCreated
 	return resp, nil
 }
 
 func (t *mutationTarget) MarkDone(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MarkDoneResponse, error) {
-	if t.orch == nil {
-		return serverruntime.MarkDoneResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
 		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
@@ -1222,9 +862,6 @@ func (t *mutationTarget) CleanupFeature(featureID string, req serverruntime.Clea
 		target = cleanupTargetWorktrees
 	}
 	resp := serverruntime.CleanupFeatureResponse{FeatureID: featureID, Target: target}
-	if t.orch == nil {
-		return resp, errors.New("orchestrator is not available")
-	}
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
 		resp.Result = resultFailed
 		return resp, err
@@ -1244,20 +881,12 @@ func (t *mutationTarget) CleanupFeature(featureID string, req serverruntime.Clea
 }
 
 func (t *mutationTarget) DeleteFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.DeleteFeatureResponse, error) {
-	if t.orch == nil {
-		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
 	}
-	result, err := t.orch.DeleteCascade(featureID)
+	result, err := t.orch.Delete(featureID)
 	if err != nil {
 		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
-	}
-	// A completed cascade owns no further work; pending cleanup keeps the
-	// reservation until its retry settles.
-	if result.Status == feature.CascadeDeleteCompleted {
-		t.orch.SettleFeatureWork(featureID)
 	}
 	return serverruntime.DeleteFeatureResponse{
 		FeatureID:   result.ParentID,
@@ -1268,24 +897,15 @@ func (t *mutationTarget) DeleteFeature(featureID string, req serverruntime.Guard
 }
 
 func (t *mutationTarget) DiscardChild(featureID string) (serverruntime.DiscardChildResponse, error) {
-	if t.orch == nil {
-		return serverruntime.DiscardChildResponse{FeatureID: featureID}, errors.New("orchestrator is not available")
-	}
 	if err := t.orch.DiscardChild(featureID); err != nil {
 		return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: resultFailed}, err
 	}
-	// The discard settled: the child's reservation settles with it (any
-	// still-draining session keeps it until the completion funnel).
-	t.orch.SettleFeatureWork(featureID)
 	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: "discarded"}, nil
 }
 
 func (t *mutationTarget) rejectStaleCompletionPreflight(featureID, sourceRevision string) error {
 	if sourceRevision == "" {
 		return nil
-	}
-	if t.orch == nil {
-		return errors.New("orchestrator is not available")
 	}
 	current, err := t.orch.CompletionPreflightSourceRevision(featureID)
 	if err != nil {
@@ -1357,23 +977,11 @@ func (t *mutationTarget) findPendingControlRequest(sessionID, requestID string, 
 
 func (t *mutationTarget) sendQueuedFeatureHelp(req serverruntime.HelpAnswerRequest) (serverruntime.HelpSendResponse, bool, error) {
 	featureID := strings.TrimSpace(req.FeatureID)
-	if featureID == "" || strings.TrimSpace(req.SessionID) != "" || t.store == nil {
+	if featureID == "" || strings.TrimSpace(req.SessionID) != "" {
 		return serverruntime.HelpSendResponse{}, false, nil
 	}
-	message := strings.TrimSpace(req.Message)
-	found := false
-	if err := t.store.Modify(featureID, func(f *feature.Feature) error {
-		for i := range f.HelpQueue {
-			if !f.HelpQueue[i].Pending {
-				continue
-			}
-			f.HelpQueue[i].Answer = message
-			f.HelpQueue[i].Pending = false
-			found = true
-			return nil
-		}
-		return nil
-	}); err != nil {
+	found, err := t.orch.AnswerQueuedHelp(featureID, strings.TrimSpace(req.Message))
+	if err != nil {
 		return serverruntime.HelpSendResponse{}, true, fmt.Errorf("answer feature help queue: %w", err)
 	}
 	if !found {
@@ -1411,20 +1019,6 @@ func (t *mutationTarget) helpSession(req serverruntime.HelpAnswerRequest) (ports
 	default:
 		return nil, fmt.Errorf("multiple active sessions for feature %s; session_id is required", featureID)
 	}
-}
-
-func (t *mutationTarget) needUserInputGatePath(featureID string) (string, error) {
-	if t.store == nil {
-		return "", errors.New("feature store is not available")
-	}
-	f, err := t.store.Load(featureID)
-	if err != nil {
-		return "", err
-	}
-	if f.PendingNeedUserInputPath == "" {
-		return "", fmt.Errorf("feature %s is not paused on a need-user-input gate", featureID)
-	}
-	return f.PendingNeedUserInputPath, nil
 }
 
 func applyNeedUserInputDraftAnswers(rec *agent.NeedUserInputRecord, answers map[string]string) error {

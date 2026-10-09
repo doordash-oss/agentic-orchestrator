@@ -58,6 +58,8 @@ func persistPromotionJournal(store promotionStore, journal *feature.PromotionJou
 //
 // A promotion failure does not reopen the child; the disposable workspace
 // and exact pending progress remain available for idempotent recovery.
+// Test-reachable seam: production promotes from child integration;
+// integration tests drive it directly.
 func (o *Orchestrator) PromoteChildKBWorkspaces(childID, parentID string) error {
 	child, err := o.deps.Lifecycle.Get(childID)
 	if err != nil {
@@ -401,10 +403,10 @@ type promotionStore interface {
 	DeletePromotion(childID string) error
 }
 
-// ReconcilePromotions is the idempotent startup reconciliation pass for
+// reconcilePromotions is the idempotent startup reconciliation pass for
 // promotion journals. It runs after integration reconciliation so a merged
 // child with a pending promotion can be recovered.
-func (o *Orchestrator) ReconcilePromotions() error {
+func (o *Orchestrator) reconcilePromotions() error {
 	if o.deps.Store == nil {
 		return nil
 	}

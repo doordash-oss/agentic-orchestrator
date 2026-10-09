@@ -22,12 +22,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// UpdatePairedFeatureConfig applies a serialized, intent-backed, recoverable
+// updatePairedFeatureConfig applies a serialized, intent-backed, recoverable
 // paired Review configuration update to both the parent and its active child.
 // The submitted pipeline must match the addressed record's pipeline. On
 // success, emits refresh signals for both feature identifiers. Rejected or
 // replayed no-op writes do not emit misleading partial-success events.
-func (o *Orchestrator) UpdatePairedFeatureConfig(parentID string, input feature.PairedConfigInput, submittedPipeline feature.PipelineProfile, addressedID string) error {
+func (o *Orchestrator) updatePairedFeatureConfig(parentID string, input feature.PairedConfigInput, submittedPipeline feature.PipelineProfile, addressedID string) error {
 	type pairedConfigUpdater interface {
 		UpdatePairedConfig(parentID string, input feature.PairedConfigInput, submittedPipeline feature.PipelineProfile, addressedID string) (*feature.PairedConfigResult, error)
 	}
@@ -53,13 +53,13 @@ func (o *Orchestrator) UpdatePairedFeatureConfig(parentID string, input feature.
 	return nil
 }
 
-// DetectPairedConfigTarget determines whether a config mutation addressed to
+// detectPairedConfigTarget determines whether a config mutation addressed to
 // featureID should be routed through the paired operation. Returns the parent
 // ID, child ID, and true when the addressed feature is either a parent with
 // an active child or the active child itself. Returns an error if active-child
 // discovery fails so the caller fails closed rather than falling through to
 // the single-record update path.
-func (o *Orchestrator) DetectPairedConfigTarget(featureID string) (parentID string, childID string, paired bool, err error) {
+func (o *Orchestrator) detectPairedConfigTarget(featureID string) (parentID string, childID string, paired bool, err error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil || f == nil {
 		return "", "", false, err

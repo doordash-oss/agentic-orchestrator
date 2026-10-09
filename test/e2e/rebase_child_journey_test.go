@@ -175,7 +175,7 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 		Features:              store,
 		FeatureStore:          store,
 		Events:                serverEvents,
-		Mutations:             newJourneyMutations(t, orch, mgr, cfg, sm),
+		Mutations:             newJourneyMutations(t, orch, cfg, sm),
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)

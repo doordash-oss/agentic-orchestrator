@@ -134,7 +134,7 @@ func TestRefactorAPIJourney(t *testing.T) {
 		Features:              store,
 		FeatureStore:          store,
 		Events:                serverEvents,
-		Mutations:             newJourneyMutations(t, orch, mgr, cfg, nil),
+		Mutations:             newJourneyMutations(t, orch, cfg, nil),
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)
@@ -282,14 +282,12 @@ func TestRefactorAPIJourney(t *testing.T) {
 }
 
 // newJourneyMutations wires the production mutation module over the journey's
-// orchestrator, manager, and sessions. Config-update paths persist to a
+// orchestrator and sessions. Config-update paths persist to a
 // writable temp config path, as the runtime does with its config file.
-func newJourneyMutations(t *testing.T, orch *orchestrator.Orchestrator, mgr *feature.Manager, cfg *config.Config, sessions ports.SessionManager) server.MutationTarget {
+func newJourneyMutations(t *testing.T, orch *orchestrator.Orchestrator, cfg *config.Config, sessions ports.SessionManager) server.MutationTarget {
 	t.Helper()
 	return mutations.New(mutations.Deps{
 		Orchestrator: orch,
-		Features:     mgr,
-		Store:        mgr.Store,
 		Sessions:     sessions,
 		Config:       cfg,
 		ConfigPath:   filepath.Join(t.TempDir(), "config.yaml"),

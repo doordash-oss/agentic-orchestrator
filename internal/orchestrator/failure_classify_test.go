@@ -498,59 +498,6 @@ func TestFailureRecord_FinalReview_Failed(t *testing.T) {
 // Typed delegate boundaries
 // ---------------------------------------------------------------------------
 
-func TestFailureRecord_Delegates_ClassifyTypedBoundaries(t *testing.T) {
-	cases := []struct {
-		name     string
-		invoke   func(o *orchestrator.Orchestrator, featureID string) error
-		wantCode errcat.Code
-	}{
-		{
-			name: "publish UI failure is infrastructure",
-			invoke: func(o *orchestrator.Orchestrator, featureID string) error {
-				return o.RecordPublishUIFailure(featureID, "publish UI surfaced an error")
-			},
-			wantCode: errcat.InfrastructureFailure,
-		},
-		{
-			name: "missing artifact is artifact_missing",
-			invoke: func(o *orchestrator.Orchestrator, featureID string) error {
-				return o.ReportMissingArtifactFailure(featureID, "expected artifact absent")
-			},
-			wantCode: errcat.ArtifactMissing,
-		},
-		{
-			name: "protocol violation is protocol_violation",
-			invoke: func(o *orchestrator.Orchestrator, featureID string) error {
-				return o.ReportProtocolViolation(featureID, "root turn violated the protocol")
-			},
-			wantCode: errcat.ProtocolViolation,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			fx := newFailureRecordFixture(t, &feature.Feature{
-				ID:           "fr-delegate-" + tc.name,
-				Status:       feature.StatusImplementing,
-				CurrentPhase: feature.PhaseImplement,
-				Pipeline:     feature.PipelineMedium,
-			})
-
-			if err := tc.invoke(fx.o, fx.f.ID); err != nil {
-				t.Fatalf("delegate: %v", err)
-			}
-
-			rec := requireStoredFailureRecord(t, fx.store, fx.f.ID)
-			if rec.Code != tc.wantCode {
-				t.Errorf("record code = %q, want %q", rec.Code, tc.wantCode)
-			}
-			// delegateFailureRecord names the feature's current phase.
-			if rec.Context == nil || rec.Context.Phase == nil || rec.Context.Phase.Name != feature.PhaseImplement.FailureName() {
-				t.Errorf("record phase block = %+v, want phase %q", rec.Context, feature.PhaseImplement.FailureName())
-			}
-		})
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Restart gating on the stored record
 // ---------------------------------------------------------------------------

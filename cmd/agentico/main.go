@@ -1728,8 +1728,6 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		DomainEvents: boot.orchestrator.Events(),
 		Mutations: mutations.New(mutations.Deps{
 			Orchestrator:    boot.orchestrator,
-			Features:        boot.featureManager,
-			Store:           boot.featureManager.Store,
 			Sessions:        boot.sessionManager,
 			PermissionCache: boot.permissionCache,
 			Config:          boot.cfg,

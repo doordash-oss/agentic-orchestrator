@@ -51,7 +51,7 @@ func isTerminalForCompletion(f *feature.Feature) bool {
 }
 
 // errFinalReviewInterrupted signals that the deferred Final Review pass
-// returned because the user pressed Stop. The InterruptFeature path drives
+// returned because the user pressed Stop. The interruptFeature path drives
 // the StatusInterrupted transition and emits FeatureInterrupted; the
 // dispatch chain must NOT mark the feature Failed when this surfaces, and
 // the caller of runDeferredFinalReview must NOT proceed to MarkCodeReady /
@@ -128,14 +128,6 @@ func (o *Orchestrator) markFailedWithEvent(featureID string, failure errcat.Fail
 	return nil
 }
 
-// MarkFailed is the public wrapper for markFailedWithEvent. API callers and other
-// callers route terminal-failure transitions through this method so the
-// FeatureFailed event / OnFeatureFailed / OnFeatureSummaryNeeded hooks fire
-// from a single orchestrator-owned emission site.
-func (o *Orchestrator) MarkFailed(featureID string, failure errcat.FailureRecord) error {
-	return o.markFailedWithEvent(featureID, failure)
-}
-
 // ---------------------------------------------------------------------------
 // KB completion
 // ---------------------------------------------------------------------------
@@ -164,13 +156,13 @@ func (o *Orchestrator) onKBCompleted(featureID string, input PhaseCompletionInpu
 		if errMsg == "" {
 			errMsg = "knowledge base generation failed"
 		}
-		// When InterruptFeature has already transitioned the feature to
+		// When interruptFeature has already transitioned the feature to
 		// StatusInterrupted (user pressed Stop), the SessionDoneMsg from each
 		// killed session races into onKBCompleted and would otherwise mark
 		// the feature Failed with failure_type=session_crash, masking the
 		// interrupt. The session "error" in that case is the agent's last
 		// in-flight narration, not a real crash. Short-circuit here and let
-		// InterruptFeature own the terminal transition. Still wake KB
+		// interruptFeature own the terminal transition. Still wake KB
 		// waiters since session cleanup released this feature's kb.lock.
 		if f, _ := o.deps.Lifecycle.Get(featureID); isTerminalForCompletion(f) {
 			o.wakeKBWaiters(featureID)
@@ -531,7 +523,7 @@ func (o *Orchestrator) onPlanLoopDone(featureID string, result *agent.PlanLoopRe
 		o.emitPhaseCompleted(featureID, feature.PhasePlan, errors.New(errMsg))
 		return o.markFailedWithEvent(featureID, failureRecordWithIteration(failureRecord(errcat.ProtocolViolation, feature.PhasePlan, errMsg), result.Iterations))
 	case finalStatusInterrupted:
-		// Interrupted runs are driven by InterruptFeature; nothing to do.
+		// Interrupted runs are driven by interruptFeature; nothing to do.
 		return nil
 	default:
 		errMsg := fmt.Sprintf("unknown plan FinalStatus %q", result.FinalStatus)
@@ -630,7 +622,7 @@ func (o *Orchestrator) onPlanApproved(featureID string, f *feature.Feature) erro
 		return fmt.Errorf("start roadmap phase implementation: %w", err)
 	}
 	// The per-phase execution-order.yaml is read fresh from disk by
-	// StartMultiRepoImplementation (per SchemaVersionCurrent = 3); no
+	// startMultiRepoImplementation (per SchemaVersionCurrent = 3); no
 	// pre-flight populate step is needed.
 	o.emitPhaseCompleted(featureID, feature.PhasePlan, nil)
 	startedPhase, started, err := o.startPhase(featureID, feature.PhaseImplement)
@@ -963,7 +955,7 @@ func (o *Orchestrator) onMultiReposPassed(featureID string, f *feature.Feature) 
 	if !f.EffectivePipeline().ShouldSkipFinalReview() && reposNeedFinalReview(f) {
 		if frErr := o.runDeferredFinalReview(featureID); frErr != nil {
 			if errors.Is(frErr, errFinalReviewInterrupted) {
-				// User pressed Stop during Final Review. InterruptFeature
+				// User pressed Stop during Final Review. interruptFeature
 				// owns the terminal StatusInterrupted transition; do not
 				// proceed to MarkCodeReady / auto-publish on a feature that
 				// the user explicitly stopped.
@@ -1112,7 +1104,7 @@ func (o *Orchestrator) advanceAfterFinalReview(featureID string) error {
 	}
 	publishFn := o.publishFn
 	if publishFn == nil {
-		publishFn = o.Publish
+		publishFn = o.publish
 	}
 	if err := publishFn(featureID); err != nil {
 		return &PublishDispatchError{Err: err}

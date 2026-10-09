@@ -510,7 +510,7 @@ func TestOrchestrator_Delete_StopsSessionsAndCallsLifecycle(t *testing.T) {
 			Sessions:  sessions,
 		}, orchestrator.Hooks{})
 
-		if err := o.Delete("f1"); err != nil {
+		if _, err := o.Delete("f1"); err != nil {
 			t.Fatalf("Delete: %v", err)
 		}
 
@@ -546,7 +546,7 @@ func TestOrchestrator_Delete_StopsSessionsAndCallsLifecycle(t *testing.T) {
 			Lifecycle: lifecycle,
 		}, orchestrator.Hooks{})
 
-		err := o.Delete("f1")
+		_, err := o.Delete("f1")
 		if err == nil {
 			t.Fatal("Delete returned nil error, want wrapped")
 		}

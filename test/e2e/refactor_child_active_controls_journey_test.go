@@ -134,7 +134,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 		Features:              store,
 		FeatureStore:          store,
 		Events:                serverEvents,
-		Mutations:             newJourneyMutations(t, orch, mgr, cfg, sm),
+		Mutations:             newJourneyMutations(t, orch, cfg, sm),
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)

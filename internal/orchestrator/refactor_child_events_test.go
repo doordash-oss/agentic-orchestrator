@@ -51,7 +51,7 @@ func TestChildCreatedEmitsCorrelatedEvent(t *testing.T) {
 			lc.GetFn = func(id string) (*feature.Feature, error) { return child, nil }
 			o := New(Deps{Lifecycle: lc}, Hooks{})
 
-			o.ChildCreated(child)
+			o.childCreated(child)
 			ev := drainOrchestratorEvent(t, o)
 			if ev.Type != ports.RelationshipChildCreated || ev.FeatureID != child.ID || ev.ParentID != "parent-1" || ev.ChildID != child.ID || ev.Feature != child {
 				t.Fatalf("event = %+v, want relationship-created event for child correlated to parent", ev)
@@ -61,8 +61,8 @@ func TestChildCreatedEmitsCorrelatedEvent(t *testing.T) {
 
 	// Nil and top-level features must not emit anything.
 	o := New(Deps{Lifecycle: mocks.NewMockFeatureLifecycle()}, Hooks{})
-	o.ChildCreated(nil)
-	o.ChildCreated(&feature.Feature{ID: "top-level"})
+	o.childCreated(nil)
+	o.childCreated(&feature.Feature{ID: "top-level"})
 	select {
 	case stray := <-o.Events():
 		t.Fatalf("unexpected event for non-child input: %+v", stray)

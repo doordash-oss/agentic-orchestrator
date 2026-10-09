@@ -378,7 +378,7 @@ func (s *transcriptStore) writeIndex() error {
 	b.WriteString(indexSizePrefix)
 	b.WriteString(strconv.FormatInt(s.size, 10))
 	b.WriteByte('\n')
-	return writeFileAtomic(s.indexPath(), []byte(b.String()))
+	return WriteFileAtomic(s.indexPath(), []byte(b.String()), 0o755, 0)
 }
 
 // appendIndexLocked replaces the size line with the new record's offset and

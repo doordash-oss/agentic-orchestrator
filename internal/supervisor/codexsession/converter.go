@@ -188,7 +188,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if err := ctx.Err(); err != nil {
 		return supervisor.RebuildResult{}, err
 	}
-	if err := writeFileAtomic(path, data); err != nil {
+	if err := supervisor.WriteFileAtomic(path, data, 0o700, 0o600); err != nil {
 		return supervisor.RebuildResult{}, fmt.Errorf("write codex rollout %s: %w", path, err)
 	}
 	c.mu.Lock()
@@ -267,7 +267,7 @@ func Render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
 }
 
 func render(in supervisor.RebuildInput, opts Options) ([]byte, time.Time, error) {
-	if err := validateInput(in); err != nil {
+	if err := supervisor.ValidateNativeRebuildInput(in, "codex rollout rebuild"); err != nil {
 		return nil, time.Time{}, err
 	}
 	selection, err := supervisor.SelectCheckpoint(in.Records, Harness)
@@ -275,24 +275,11 @@ func render(in supervisor.RebuildInput, opts Options) ([]byte, time.Time, error)
 		return nil, time.Time{}, err
 	}
 	in.Records = selection.Records
-	entries, err := selectEntries(in.Records, in.WorkDir)
+	entries, err := supervisor.SelectEntries(in.Records, selectionRules(in.WorkDir))
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 	return encodeLines(in, opts, entries, selection)
-}
-
-func validateInput(in supervisor.RebuildInput) error {
-	if in.NativeSessionID == "" {
-		return errors.New("codex rollout rebuild: empty native session id")
-	}
-	if strings.ContainsAny(in.NativeSessionID, `/\`) || in.NativeSessionID == "." || in.NativeSessionID == ".." {
-		return fmt.Errorf("codex rollout rebuild: unsafe native session id %q", in.NativeSessionID)
-	}
-	if in.WorkDir == "" {
-		return errors.New("codex rollout rebuild: empty working directory")
-	}
-	return nil
 }
 
 const (
@@ -328,73 +315,21 @@ func conversionError(rec *supervisor.Record, format string, args ...any) error {
 	return &supervisor.ConversionError{Seq: rec.Seq, Reason: fmt.Sprintf(format, args...)}
 }
 
-// selectEntries applies selection and every exclusion: interrupted turns'
-// tool records, unpaired calls and outputs, and adjacent duplicates.
-func selectEntries(records []supervisor.Record, workDir string) ([]entry, error) {
-	interrupted, err := interruptedTurns(records)
-	if err != nil {
-		return nil, err
+// selectionRules wires the Codex entry and item types into the shared
+// selection algorithm; workDir reaches decodeEntry so shell commands can
+// record it. The duplicate key covers role and raw items.
+func selectionRules(workDir string) supervisor.SelectionRules[entry, item] {
+	return supervisor.SelectionRules[entry, item]{
+		Decode:         func(rec *supervisor.Record) (entry, error) { return decodeEntry(rec, workDir) },
+		Parts:          func(e *entry) []item { return e.items },
+		SetParts:       func(e *entry, parts []item) { e.items = parts },
+		PartKind:       func(t item) string { return t.kind },
+		PartID:         func(t item) string { return t.id },
+		ToolUseKind:    itemFunctionCall,
+		ToolResultKind: itemFunctionCallOutput,
+		EntryKey:       entryKey,
+		NonEmpty:       func(e entry) bool { return len(e.items) > 0 },
 	}
-	var entries []entry
-	for i := range records {
-		rec := &records[i]
-		if !selected(rec) {
-			continue
-		}
-		e, err := decodeEntry(rec, workDir)
-		if err != nil {
-			return nil, err
-		}
-		if rec.TurnID != "" && interrupted[rec.TurnID] {
-			e.items = dropKinds(e.items, itemFunctionCall, itemFunctionCallOutput)
-		}
-		entries = append(entries, e)
-	}
-	entries = pairTools(entries)
-	return collapseDuplicates(entries), nil
-}
-
-func selected(rec *supervisor.Record) bool {
-	switch rec.Visibility {
-	case supervisor.VisibilityContent, supervisor.VisibilityModelOnly:
-	default:
-		return false
-	}
-	switch rec.Kind {
-	case supervisor.KindUser, supervisor.KindAssistant, supervisor.KindToolUse, supervisor.KindToolResult, supervisor.KindNote:
-		return true
-	}
-	return false
-}
-
-// interruptedTurns collects the turns named by interrupted markers.
-func interruptedTurns(records []supervisor.Record) (map[string]bool, error) {
-	turns := map[string]bool{}
-	for i := range records {
-		rec := &records[i]
-		if rec.Kind != supervisor.KindMarker {
-			continue
-		}
-		var m supervisor.MarkerData
-		if err := decodePayload(rec, &m); err != nil {
-			return nil, err
-		}
-		if m.Marker == supervisor.MarkerInterrupted && rec.TurnID != "" {
-			turns[rec.TurnID] = true
-		}
-	}
-	return turns, nil
-}
-
-func decodePayload(rec *supervisor.Record, v any) error {
-	data := bytes.TrimSpace(rec.Data)
-	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
-		return conversionError(rec, "%s record has no payload", rec.Kind)
-	}
-	if err := json.Unmarshal(data, v); err != nil {
-		return conversionError(rec, "decode %s payload: %v", rec.Kind, err)
-	}
-	return nil
 }
 
 // Response item and event payload shapes, field order as the CLI writes them.
@@ -436,7 +371,7 @@ type agentMessageEvent struct {
 func decodeEntry(rec *supervisor.Record, workDir string) (entry, error) {
 	if rec.Kind == supervisor.KindUser || rec.Kind == supervisor.KindNote {
 		var u supervisor.UserData
-		if err := decodePayload(rec, &u); err != nil {
+		if err := supervisor.DecodeRecordPayload(rec, &u); err != nil {
 			return entry{}, err
 		}
 		e := entry{rec: rec, role: roleUser}
@@ -452,7 +387,7 @@ func decodeEntry(rec *supervisor.Record, workDir string) (entry, error) {
 	}
 
 	var cd supervisor.ContentData
-	if err := decodePayload(rec, &cd); err != nil {
+	if err := supervisor.DecodeRecordPayload(rec, &cd); err != nil {
 		return entry{}, err
 	}
 	role := roleAssistant
@@ -620,7 +555,7 @@ func toolResultOutput(content json.RawMessage) (string, error) {
 		case blockText:
 			parts = append(parts, head.Text)
 		case "image":
-			parts = append(parts, omittedImage(imageMediaType(it)))
+			parts = append(parts, supervisor.OmittedImagePlaceholder(imageMediaType(it)))
 		default:
 			return "", fmt.Errorf("unsupported %q content item %d", head.Type, i)
 		}
@@ -643,90 +578,6 @@ func imageMediaType(it json.RawMessage) string {
 		return ""
 	}
 	return img.Source.MediaType
-}
-
-func omittedImage(mediaType string) string {
-	if mediaType == "" {
-		mediaType = "image"
-	}
-	return "[image omitted: " + mediaType + " could not be restored]"
-}
-
-func dropKinds(items []item, kinds ...string) []item {
-	out := items[:0:0]
-	for _, it := range items {
-		drop := false
-		for _, k := range kinds {
-			if it.kind == k {
-				drop = true
-			}
-		}
-		if !drop {
-			out = append(out, it)
-		}
-	}
-	return out
-}
-
-// pairTools keeps a call only when a later output answers it and an output
-// only when an earlier call asked for it; the first of each per id wins so a
-// resumed thread never repeats a call id.
-func pairTools(entries []entry) []entry {
-	callsSeen := map[string]bool{}
-	answered := map[string]bool{}
-	for _, e := range entries {
-		for _, it := range e.items {
-			switch it.kind {
-			case itemFunctionCall:
-				callsSeen[it.id] = true
-			case itemFunctionCallOutput:
-				if callsSeen[it.id] {
-					answered[it.id] = true
-				}
-			}
-		}
-	}
-	keptCall := map[string]bool{}
-	keptOutput := map[string]bool{}
-	for i := range entries {
-		var kept []item
-		for _, it := range entries[i].items {
-			switch it.kind {
-			case itemFunctionCall:
-				if !answered[it.id] || keptCall[it.id] {
-					continue
-				}
-				keptCall[it.id] = true
-			case itemFunctionCallOutput:
-				if !answered[it.id] || !keptCall[it.id] || keptOutput[it.id] {
-					continue
-				}
-				keptOutput[it.id] = true
-			}
-			kept = append(kept, it)
-		}
-		entries[i].items = kept
-	}
-	return entries
-}
-
-// collapseDuplicates drops entries that yield nothing and any entry whose
-// role and items equal the previous kept entry's.
-func collapseDuplicates(entries []entry) []entry {
-	var out []entry
-	prev := ""
-	for _, e := range entries {
-		if len(e.items) == 0 {
-			continue
-		}
-		key := entryKey(e)
-		if key == prev {
-			continue
-		}
-		prev = key
-		out = append(out, e)
-	}
-	return out
 }
 
 func entryKey(e entry) string {
@@ -886,48 +737,4 @@ func marshal(v any) (json.RawMessage, error) {
 		return nil, err
 	}
 	return bytes.TrimRight(buf.Bytes(), "\n"), nil
-}
-
-// writeFileAtomic replaces path through a same-directory temp file that is
-// fsynced before the rename; the directory is fsynced after so the rename
-// survives a crash. Readers never observe a partial file.
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	fail := func(err error) error {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		return fail(err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Sync(); err != nil {
-		return fail(err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		_ = os.Remove(tmpName)
-		return err
-	}
-	// Directory fsync is best effort: some platforms reject it on a
-	// directory handle, and the rename has already replaced the file.
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
-	}
-	return nil
 }

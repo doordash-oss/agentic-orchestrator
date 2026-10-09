@@ -22,28 +22,28 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 )
 
-type ReviewStatus int
+type reviewStatus int
 
 const (
-	ReviewApproved ReviewStatus = iota
-	ReviewChangesRequested
-	ReviewFailed
+	ReviewApproved reviewStatus = iota
+	reviewChangesRequested
+	reviewFailed
 )
 
-// IsApproved reports whether the status is an exit-allowed verdict. Both
+// isApproved reports whether the status is an exit-allowed verdict. Both
 // ReviewApproved let the loop exit; only
 // ReviewChangesRequested and ReviewFailed continue iterating.
-func (s ReviewStatus) IsApproved() bool {
+func (s reviewStatus) isApproved() bool {
 	return s == ReviewApproved
 }
 
-func (s ReviewStatus) String() string {
+func (s reviewStatus) String() string {
 	switch s {
 	case ReviewApproved:
 		return agentStatusApproved
-	case ReviewChangesRequested:
+	case reviewChangesRequested:
 		return agentStatusChangesRequested
-	case ReviewFailed:
+	case reviewFailed:
 		return "FAILED"
 	default:
 		return fmt.Sprintf("ReviewStatus(%d)", int(s))
@@ -93,11 +93,11 @@ type reviewUserInput struct {
 	FeedbackPath string
 }
 
-// ImplementationReviewAxisPromptOpts carries the shared prompt context for an
+// implementationReviewAxisPromptOpts carries the shared prompt context for an
 // implementation review axis. The per-phase gate populates the phase-scoped
 // fields; the Final Review gate also supplies cumulative-diff and prior
 // implementation evidence context.
-type ImplementationReviewAxisPromptOpts struct {
+type implementationReviewAxisPromptOpts struct {
 	Gate      implementationReviewGate
 	AxisLabel string
 
@@ -117,7 +117,7 @@ type ImplementationReviewAxisPromptOpts struct {
 	ContractPath           string
 	VerificationReportPath string
 	Iteration              int
-	RequiredVerification   []RequiredVerificationItem
+	RequiredVerification   []requiredVerificationItem
 	RoadmapPath            string
 	PlanPath               string
 	PhaseType              string
@@ -128,9 +128,9 @@ type ImplementationReviewAxisPromptOpts struct {
 	PriorImplementationEvidenceArtifacts []string
 }
 
-// BuildImplementationReviewAxisPromptWithOpts renders one gate-aware
+// buildImplementationReviewAxisPromptWithOpts renders one gate-aware
 // implementation review axis prompt.
-func BuildImplementationReviewAxisPromptWithOpts(opts ImplementationReviewAxisPromptOpts) string {
+func buildImplementationReviewAxisPromptWithOpts(opts implementationReviewAxisPromptOpts) string {
 	required := make([]verificationItemView, 0, len(opts.RequiredVerification))
 	for _, item := range opts.RequiredVerification {
 		required = append(required, verificationItemView{
@@ -201,16 +201,16 @@ var reviewRequiredSections = []string{
 
 // reviewVerdictTokens is the closed set of strings the harness will route on.
 // Anything else under `## Verdict` is a protocol violation.
-var reviewVerdictTokens = map[string]ReviewStatus{
+var reviewVerdictTokens = map[string]reviewStatus{
 	agentStatusApproved:         ReviewApproved,
-	agentStatusChangesRequested: ReviewChangesRequested,
+	agentStatusChangesRequested: reviewChangesRequested,
 }
 
 // reviewStatusSkipped marks IterationMeta.ReviewStatus when the per-iteration
 // review gate was intentionally not run (e.g. SkipIterationReview).
 const reviewStatusSkipped = "skipped"
 
-// ParsedReviewFeedback is the structured view of a review-feedback.md the
+// parsedReviewFeedback is the structured view of a review-feedback.md the
 // harness uses for routing the bounded review/validation helper. Body holds
 // the entire file contents verbatim so callers can re-emit it as the next
 // implement iteration's feedback block. Markers carries the optional
@@ -219,23 +219,23 @@ const reviewStatusSkipped = "skipped"
 // On parse failure each defect is recorded in ProtocolViolations and the
 // typed Verdict / Markers fields are left zero. Callers MUST inspect
 // ProtocolViolations before trusting Verdict.
-type ParsedReviewFeedback struct {
-	Verdict            ReviewStatus
+type parsedReviewFeedback struct {
+	Verdict            reviewStatus
 	Body               string
 	Findings           string
 	Suggestions        string
-	Markers            ValidatorMarkers
+	Markers            validatorMarkers
 	ProtocolViolations []string
 }
 
-// OK reports whether the feedback file satisfies the handoff contract.
-// Callers route on Verdict only when OK() is true; otherwise they
+// ok reports whether the feedback file satisfies the handoff contract.
+// Callers route on Verdict only when ok() is true; otherwise they
 // short-circuit to a structured CHANGES_REQUESTED.
-func (p *ParsedReviewFeedback) OK() bool {
-	return p != nil && p.Verdict != ReviewFailed && len(p.ProtocolViolations) == 0
+func (p *parsedReviewFeedback) ok() bool {
+	return p != nil && p.Verdict != reviewFailed && len(p.ProtocolViolations) == 0
 }
 
-// ParseReviewFeedback reads review-feedback.md at path and validates it
+// parseReviewFeedback reads review-feedback.md at path and validates it
 // against the handoff contract spelled out in the review skills. The
 // function is conservative: every defect it can name deterministically
 // becomes a separate ProtocolViolations entry — same shape as
@@ -246,15 +246,15 @@ func (p *ParsedReviewFeedback) OK() bool {
 // returned ParsedReviewFeedback flags it as a protocol violation so the
 // short-circuit feedback path can surface a useful message to the next
 // iteration.
-func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
+func parseReviewFeedback(path string) (*parsedReviewFeedback, error) {
 	if path == "" {
 		return nil, fmt.Errorf("ParseReviewFeedback: empty path")
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &ParsedReviewFeedback{
-				Verdict: ReviewFailed,
+			return &parsedReviewFeedback{
+				Verdict: reviewFailed,
 				ProtocolViolations: []string{
 					fmt.Sprintf("review-feedback.md not found at %s — the review helper must write the structured handoff file before ending its turn", path),
 				},
@@ -266,7 +266,7 @@ func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
 	// Default to ReviewFailed so callers that forget to inspect
 	// ProtocolViolations cannot silently route a malformed file into the
 	// success path (ReviewApproved is the iota-0 zero value).
-	parsed := &ParsedReviewFeedback{Body: string(data), Verdict: ReviewFailed}
+	parsed := &parsedReviewFeedback{Body: string(data), Verdict: reviewFailed}
 	body := parsed.Body
 
 	headingPositions := findSectionHeadings(body, reviewRequiredSections)
@@ -317,7 +317,7 @@ func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
 	return parsed, nil
 }
 
-// FormatStructuredReviewFeedback wraps a free-form feedback body in the
+// formatStructuredReviewFeedback wraps a free-form feedback body in the
 // canonical `## Findings` / `## Suggestions` / `## Verdict` schema. Used by
 // deterministic gates (Report Integrity, deferral ledger) that synthesize a
 // CHANGES_REQUESTED verdict programmatically.
@@ -325,7 +325,7 @@ func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
 // findings, suggestions, and verdict are emitted verbatim under their
 // section headings. When findings or suggestions are empty, the canonical
 // `- (none)` placeholder is used so the file still parses cleanly.
-func FormatStructuredReviewFeedback(title, findings, suggestions string, verdict ReviewStatus) string {
+func formatStructuredReviewFeedback(title, findings, suggestions string, verdict reviewStatus) string {
 	var b strings.Builder
 	if title != "" {
 		fmt.Fprintf(&b, "# %s\n\n", title)
@@ -347,7 +347,7 @@ func FormatStructuredReviewFeedback(title, findings, suggestions string, verdict
 	switch verdict {
 	case ReviewApproved:
 		b.WriteString("APPROVED\n")
-	case ReviewChangesRequested:
+	case reviewChangesRequested:
 		b.WriteString("CHANGES_REQUESTED\n")
 	default:
 		// Fall back to CHANGES_REQUESTED so a downstream re-parse never
@@ -380,8 +380,8 @@ func firstNonBlankLine(body string) string {
 //
 // Returns a zero-value ValidatorMarkers when the section is empty or
 // malformed; an empty axis disables sticky-approval propagation entirely.
-func parseStickyApprovalSection(section string) ValidatorMarkers {
-	var m ValidatorMarkers
+func parseStickyApprovalSection(section string) validatorMarkers {
+	var m validatorMarkers
 	lines := strings.Split(section, "\n")
 	inFrozen := false
 	for _, line := range lines {
@@ -422,13 +422,13 @@ func parseStickyApprovalSection(section string) ValidatorMarkers {
 	return m
 }
 
-// ValidatorMarkers carries the sticky-approval signal a per-axis validator
+// validatorMarkers carries the sticky-approval signal a per-axis validator
 // emits in the `## Sticky Approval` section of its review-feedback file.
 // AxisApproved is the axis name (e.g. "architecture", "scope"); FrozenSections
 // is the byte-equal set of artifact headings the next revise attempt must
 // preserve verbatim — see the "Sticky Approval Respect" procedure in
 // skills/revise-roadmap/SKILL.md.
-type ValidatorMarkers struct {
+type validatorMarkers struct {
 	AxisApproved   string
 	FrozenSections []string
 }

@@ -39,7 +39,7 @@ func TestEnsureTestingContractBaseCommitsCapturesEveryRepo(t *testing.T) {
 		"/worktrees/web": "web-commit",
 	}
 
-	err := EnsureTestingContractBaseCommits(contract, repos, func(path string) (string, error) {
+	err := ensureTestingContractBaseCommits(contract, repos, func(path string) (string, error) {
 		return resolved[path], nil
 	})
 	if err != nil {
@@ -63,7 +63,7 @@ func TestEnsureTestingContractBaseCommitsPreservesExistingAnchors(t *testing.T) 
 		{Name: "web", WorktreePath: "/worktrees/web"},
 	}
 	var resolved []string
-	err := EnsureTestingContractBaseCommits(contract, repos, func(path string) (string, error) {
+	err := ensureTestingContractBaseCommits(contract, repos, func(path string) (string, error) {
 		resolved = append(resolved, path)
 		return "new-web-commit", nil
 	})
@@ -93,7 +93,7 @@ func TestEnsureTestingContractBaseCommitsIsAtomicOnResolutionFailure(t *testing.
 		{Name: "web", WorktreePath: "/worktrees/web"},
 	}
 	errBoom := errors.New("cannot read HEAD")
-	err := EnsureTestingContractBaseCommits(contract, repos, func(path string) (string, error) {
+	err := ensureTestingContractBaseCommits(contract, repos, func(path string) (string, error) {
 		if strings.HasSuffix(path, "/web") {
 			return "", errBoom
 		}
@@ -129,7 +129,7 @@ func TestEnsureTestingContractBaseCommitsPathlessRepos(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			contract := &TestingContract{}
-			err := EnsureTestingContractBaseCommits(contract, tt.repos, func(path string) (string, error) {
+			err := ensureTestingContractBaseCommits(contract, tt.repos, func(path string) (string, error) {
 				return "head-of-" + path, nil
 			})
 			if err != nil {

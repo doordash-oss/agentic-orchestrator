@@ -62,7 +62,7 @@ func TestBuildRoadmapPrompt_EmitsVisualReferences(t *testing.T) {
 		Description: "do a thing",
 		Images:      []string{"/tmp/mockup.png"},
 	}
-	prompt := BuildRoadmapPromptWithResearch(f, "", "", nil)
+	prompt := buildRoadmapPromptWithResearch(f, "", "", nil)
 	if !strings.Contains(prompt, "Visual References") {
 		t.Errorf("roadmap prompt missing Visual References block")
 	}
@@ -83,7 +83,7 @@ func TestBuildRoadmapPrompt_SuppressesVisualReferencesWhenDesignDocPresent(t *te
 		Description: "do a thing",
 		Images:      []string{"/tmp/mockup.png"},
 	}
-	prompt := BuildRoadmapPromptWithResearch(f, "/tmp/design.md", "", nil)
+	prompt := buildRoadmapPromptWithResearch(f, "/tmp/design.md", "", nil)
 	if strings.Contains(prompt, "Visual References") {
 		t.Errorf("roadmap prompt should suppress Visual References when a design doc is present:\n%s", prompt)
 	}
@@ -94,7 +94,7 @@ func TestBuildRoadmapPrompt_SuppressesVisualReferencesWhenDesignDocPresent(t *te
 
 func TestBuildRoadmapPrompt_NoImagesNoBlock(t *testing.T) {
 	f := &feature.Feature{Name: "X", Description: "do a thing"}
-	prompt := BuildRoadmapPromptWithResearch(f, "", "", nil)
+	prompt := buildRoadmapPromptWithResearch(f, "", "", nil)
 	if strings.Contains(prompt, "Visual References") {
 		t.Errorf("roadmap prompt unexpectedly carries Visual References for image-less feature")
 	}
@@ -111,7 +111,7 @@ func TestBuildPhasePlanPrompt_OmitsVisualReferences(t *testing.T) {
 		Description: "build a screen",
 		Images:      []string{"/tmp/screen.png"},
 	}
-	prompt := BuildPhasePlanPromptWithResearch(f, "/tmp/roadmap.md", "", RoadmapPhase{Number: 1, Type: "tracer-bullet", Name: "Setup"}, nil)
+	prompt := buildPhasePlanPromptWithResearch(f, "/tmp/roadmap.md", "", RoadmapPhase{Number: 1, Type: "tracer-bullet", Name: "Setup"}, nil)
 	if strings.Contains(prompt, "Visual References") {
 		t.Errorf("phase plan prompt should NOT carry Visual References, got:\n%s", prompt)
 	}
@@ -130,7 +130,7 @@ func TestBuildPhasePlanRevisionPrompt_OmitsVisualReferences(t *testing.T) {
 		Name:   "X",
 		Images: []string{"/tmp/screen.png"},
 	}
-	prompt := BuildPhasePlanRevisionPrompt(f, "", "/tmp/prev.md", "feedback", RoadmapPhase{Number: 1, Type: "tdd-fill-in", Name: "Fill"}, 2, nil)
+	prompt := buildPhasePlanRevisionPrompt(f, "", "/tmp/prev.md", "feedback", RoadmapPhase{Number: 1, Type: "tdd-fill-in", Name: "Fill"}, 2, nil)
 	if strings.Contains(prompt, "Visual References") {
 		t.Errorf("phase plan revision prompt should NOT carry Visual References, got:\n%s", prompt)
 	}
@@ -140,7 +140,7 @@ func TestBuildPhasePlanRevisionPrompt_OmitsVisualReferences(t *testing.T) {
 }
 
 func TestBuildFinalFixPrompt_EmitsVisualReferences(t *testing.T) {
-	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
+	prompt := buildFinalFixPrompt(finalFixPromptOpts{
 		Feedback:     "fix this",
 		ExitCriteria: "tests pass",
 		Iteration:    1,

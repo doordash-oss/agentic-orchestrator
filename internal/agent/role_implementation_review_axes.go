@@ -19,14 +19,14 @@ import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 const (
 	// RoleImplementationReviewCraft reviews implementation craft.
 	RoleImplementationReviewCraft Role = "implementation_review_craft"
-	// RoleImplementationReviewFunctionalityEvidence reviews functionality and evidence.
-	RoleImplementationReviewFunctionalityEvidence Role = "implementation_review_functionality_evidence"
-	// RoleImplementationReviewCleanliness reviews change-set cleanliness.
-	RoleImplementationReviewCleanliness Role = "implementation_review_cleanliness"
-	// RoleImplementationReviewQA performs hands-on functional QA at Final Review.
-	RoleImplementationReviewQA Role = "implementation_review_qa"
-	// RoleImplementationReviewDesign reviews visible UI design and originality.
-	RoleImplementationReviewDesign Role = "implementation_review_design"
+	// roleImplementationReviewFunctionalityEvidence reviews functionality and evidence.
+	roleImplementationReviewFunctionalityEvidence Role = "implementation_review_functionality_evidence"
+	// roleImplementationReviewCleanliness reviews change-set cleanliness.
+	roleImplementationReviewCleanliness Role = "implementation_review_cleanliness"
+	// roleImplementationReviewQA performs hands-on functional QA at Final Review.
+	roleImplementationReviewQA Role = "implementation_review_qa"
+	// roleImplementationReviewDesign reviews visible UI design and originality.
+	roleImplementationReviewDesign Role = "implementation_review_design"
 )
 
 var implementationReviewAxisRoleSpecs = func() []roleSpec {

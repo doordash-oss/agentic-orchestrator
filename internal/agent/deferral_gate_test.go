@@ -28,13 +28,13 @@ func TestValidateDeferralLedger_MissingReasonRejected(t *testing.T) {
 	deferrals := []feature.IncomingDeferral{
 		{Description: "Install Tailwind", DueByPhase: 3, Reason: ""},
 	}
-	result := ValidateDeferralLedger(deferrals, nil, nil, 0, "")
+	result := validateDeferralLedger(deferrals, nil, nil, 0, "")
 	if !result.Rejected {
 		t.Fatalf("expected rejection for reason-less deferral")
 	}
 	found := false
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralMissingReason {
+		if f.Kind == kindDeferralMissingReason {
 			found = true
 		}
 	}
@@ -60,13 +60,13 @@ func TestValidateDeferralLedger_UnclosedDueThisPhaseRejected(t *testing.T) {
 		},
 	}
 	// Phase-3 iteration emits no closure or re-defer.
-	result := ValidateDeferralLedger(nil, nil, ledger, 3, "")
+	result := validateDeferralLedger(nil, nil, ledger, 3, "")
 	if !result.Rejected {
 		t.Fatalf("expected rejection for unclosed due-this-phase deferral")
 	}
 	foundCitation := false
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralUnclosed && strings.Contains(f.Detail, id) {
+		if f.Kind == kindDeferralUnclosed && strings.Contains(f.Detail, id) {
 			foundCitation = true
 		}
 	}
@@ -83,9 +83,9 @@ func TestValidateDeferralLedger_ClosedDeferralSatisfiesGate(t *testing.T) {
 	ledger := []feature.Deferral{
 		{ID: id, Description: desc, CreatedInPhase: 1, DueByPhase: 3, Status: feature.DeferralOpen, Reason: "Scope"},
 	}
-	result := ValidateDeferralLedger(nil, []string{id}, ledger, 3, "")
+	result := validateDeferralLedger(nil, []string{id}, ledger, 3, "")
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralUnclosed {
+		if f.Kind == kindDeferralUnclosed {
 			t.Errorf("unclosed finding fired when closed_deferrals cites %s: %+v", id, f)
 		}
 	}
@@ -103,9 +103,9 @@ func TestValidateDeferralLedger_RedeferralSatisfiesGate(t *testing.T) {
 	deferrals := []feature.IncomingDeferral{
 		{Description: desc, DueByPhase: 5, Reason: "Requires coordinated migration; scope shift"},
 	}
-	result := ValidateDeferralLedger(deferrals, nil, ledger, 3, "")
+	result := validateDeferralLedger(deferrals, nil, ledger, 3, "")
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralUnclosed {
+		if f.Kind == kindDeferralUnclosed {
 			t.Errorf("unclosed finding fired when re-defer was emitted: %+v", f)
 		}
 	}
@@ -131,9 +131,9 @@ func TestValidateDeferralLedger_IDCitedRedeferWithDriftedDescription(t *testing.
 			Reason:      "Phase 5 lands the design system per roadmap",
 		},
 	}
-	result := ValidateDeferralLedger(deferrals, nil, ledger, 3, "")
+	result := validateDeferralLedger(deferrals, nil, ledger, 3, "")
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralUnclosed {
+		if f.Kind == kindDeferralUnclosed {
 			t.Errorf("ID-cited re-defer with drifted description should satisfy gate; unclosed fired: %+v", f)
 		}
 	}
@@ -146,9 +146,9 @@ func TestValidateDeferralLedger_ZeroPhaseDisablesLedgerCheck(t *testing.T) {
 	ledger := []feature.Deferral{
 		{ID: "D-1", CreatedInPhase: 1, DueByPhase: 3, Status: feature.DeferralOpen},
 	}
-	result := ValidateDeferralLedger(nil, nil, ledger, 0, "")
+	result := validateDeferralLedger(nil, nil, ledger, 0, "")
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralUnclosed {
+		if f.Kind == kindDeferralUnclosed {
 			t.Errorf("ledger check fired on currentPhase=0: %+v", f)
 		}
 	}
@@ -164,9 +164,9 @@ func TestValidateDeferralLedger_RepoScopedEntryDoesNotBlockOutOfScopeRepo(t *tes
 	ledger := []feature.Deferral{
 		{ID: id, Description: desc, CreatedInPhase: 1, DueByPhase: 3, Status: feature.DeferralOpen, Reason: "Scope", RepoScope: []string{"repo-a"}},
 	}
-	result := ValidateDeferralLedger(nil, nil, ledger, 3, "repo-b")
+	result := validateDeferralLedger(nil, nil, ledger, 3, "repo-b")
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralUnclosed {
+		if f.Kind == kindDeferralUnclosed {
 			t.Errorf("repo-b gate should not be blocked by repo-a-scoped deferral; got finding: %+v", f)
 		}
 	}
@@ -181,10 +181,10 @@ func TestValidateDeferralLedger_RepoScopedEntryBlocksScopedRepo(t *testing.T) {
 	ledger := []feature.Deferral{
 		{ID: id, Description: desc, CreatedInPhase: 1, DueByPhase: 3, Status: feature.DeferralOpen, Reason: "Scope", RepoScope: []string{"repo-a"}},
 	}
-	result := ValidateDeferralLedger(nil, nil, ledger, 3, "repo-a")
+	result := validateDeferralLedger(nil, nil, ledger, 3, "repo-a")
 	foundCitation := false
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralUnclosed && strings.Contains(f.Detail, id) {
+		if f.Kind == kindDeferralUnclosed && strings.Contains(f.Detail, id) {
 			foundCitation = true
 		}
 	}
@@ -202,10 +202,10 @@ func TestValidateDeferralLedger_FeatureWideEntryBlocksAllRepos(t *testing.T) {
 		{ID: id, Description: desc, CreatedInPhase: 1, DueByPhase: 3, Status: feature.DeferralOpen, Reason: "Scope"},
 	}
 	for _, repoName := range []string{"repo-a", "repo-b"} {
-		result := ValidateDeferralLedger(nil, nil, ledger, 3, repoName)
+		result := validateDeferralLedger(nil, nil, ledger, 3, repoName)
 		foundCitation := false
 		for _, f := range result.Findings {
-			if f.Kind == KindDeferralUnclosed && strings.Contains(f.Detail, id) {
+			if f.Kind == kindDeferralUnclosed && strings.Contains(f.Detail, id) {
 				foundCitation = true
 			}
 		}
@@ -227,10 +227,10 @@ func TestValidateDeferralLedger_EmptyRepoNameMatchesEverything(t *testing.T) {
 		{ID: wideID, Description: wideDesc, CreatedInPhase: 1, DueByPhase: 3, Status: feature.DeferralOpen, Reason: "Scope"},
 		{ID: scopedID, Description: scopedDesc, CreatedInPhase: 1, DueByPhase: 3, Status: feature.DeferralOpen, Reason: "Scope", RepoScope: []string{"repo-a"}},
 	}
-	result := ValidateDeferralLedger(nil, nil, ledger, 3, "")
+	result := validateDeferralLedger(nil, nil, ledger, 3, "")
 	wideFound, scopedFound := false, false
 	for _, f := range result.Findings {
-		if f.Kind == KindDeferralUnclosed {
+		if f.Kind == kindDeferralUnclosed {
 			if strings.Contains(f.Detail, wideID) {
 				wideFound = true
 			}
@@ -247,13 +247,13 @@ func TestValidateDeferralLedger_EmptyRepoNameMatchesEverything(t *testing.T) {
 // TestMergeGateResults_CombinesFindings ensures that schema and deferral
 // results combine cleanly so the agent sees all failure modes at once.
 func TestMergeGateResults_CombinesFindings(t *testing.T) {
-	a := ReportGateResult{
-		Findings: []ReportGateFinding{{Kind: KindEmptyEvidence, Detail: "a"}},
+	a := reportGateResult{
+		Findings: []reportGateFinding{{Kind: kindEmptyEvidence, Detail: "a"}},
 	}
-	b := ReportGateResult{
-		Findings: []ReportGateFinding{{Kind: KindDeferralUnclosed, Detail: "b"}},
+	b := reportGateResult{
+		Findings: []reportGateFinding{{Kind: kindDeferralUnclosed, Detail: "b"}},
 	}
-	merged := MergeGateResults(a, b)
+	merged := mergeGateResults(a, b)
 	if !merged.Rejected {
 		t.Errorf("merged result should be Rejected when any input has findings")
 	}

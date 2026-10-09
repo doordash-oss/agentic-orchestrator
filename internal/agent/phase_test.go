@@ -106,36 +106,6 @@ func TestAgentModuleWiresPermissionCacheIntoPhaseRunner(t *testing.T) {
 	}
 }
 
-func TestPhaseRunnerGetPhaseOutput(t *testing.T) {
-	dir := t.TempDir()
-	eventCh := make(chan any, 100)
-	sm := session.NewManager(eventCh)
-	store := feature.NewStore(dir)
-	pr := NewPhaseRunner(sm, store, dir)
-
-	f := &feature.Feature{ID: "test-feat", ActiveRun: 1, RunCount: 1}
-
-	// No output yet
-	output := pr.GetPhaseOutput(f, "research")
-	if output != "" {
-		t.Errorf("expected empty output, got %q", output)
-	}
-
-	// Write some output — run-aware path.
-	researchDir := filepath.Join(ActiveRunDir(dir, f), "research")
-	if err := os.MkdirAll(researchDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(researchDir, "output.txt"), []byte("research findings\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	output = pr.GetPhaseOutput(f, "research")
-	if output != "research findings" {
-		t.Errorf("expected 'research findings', got %q", output)
-	}
-}
-
 func TestNewPhaseRunner(t *testing.T) {
 	dir := t.TempDir()
 	eventCh := make(chan any, 100)
@@ -170,7 +140,7 @@ func TestPhaseRunnerRunResearchBuildPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildResearchFromQuestionsPrompt(f, "/state/feat-1/inquire/questions.md")
+	prompt := buildResearchFromQuestionsPrompt(f, "/state/feat-1/inquire/questions.md")
 
 	if prompt == "" {
 		t.Error("expected non-empty research prompt")
@@ -836,7 +806,7 @@ func TestRunInteractivePhase_RemovesPriorCompletionReceiptBeforeSession(t *testi
 		StateDir: stateDir,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			buildCalled = true
-			_, receiptErr := ReadCompletionReceipt(artifactDir)
+			_, receiptErr := readCompletionReceipt(artifactDir)
 			receiptPresentAtBuild = receiptErr == nil
 			return nil, nil, nil, fmt.Errorf("test: stopping after capture")
 		},
@@ -1194,7 +1164,7 @@ func TestRunKnowledgeBaseForRepo_RemovesPriorCompletionReceiptBeforeSession(t *t
 	pr := NewPhaseRunner(nil, nil, stateDir)
 	pr.BuildSessionFn = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		buildCalled = true
-		_, receiptErr := ReadCompletionReceipt(kbDir)
+		_, receiptErr := readCompletionReceipt(kbDir)
 		receiptPresentAtBuild = receiptErr == nil
 		return nil, nil, nil, fmt.Errorf("test: stopping after capture")
 	}
@@ -2846,32 +2816,6 @@ func TestBuildSession_SkillsInjection_Codex_EmptySkillsDir(t *testing.T) {
 	}
 }
 
-func TestResolveImplementArtifactDir_NoPrefix(t *testing.T) {
-	stateDir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		feature *feature.Feature
-		wantDir string
-	}{
-		{
-			"no roadmap phase",
-			&feature.Feature{ID: "f1", ActiveRun: 1},
-			filepath.Join(stateDir, "f1", "runs", "run-001", "implement"),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pr := &PhaseRunner{StateDir: stateDir}
-			got := pr.resolveImplementArtifactDir(tt.feature)
-			if got != tt.wantDir {
-				t.Errorf("resolveImplementArtifactDir() = %q, want %q", got, tt.wantDir)
-			}
-		})
-	}
-}
-
 func TestBuildSessionResolvesFeatureAutomaticReviewMode(t *testing.T) {
 	t.Parallel()
 
@@ -2994,7 +2938,7 @@ func TestSessionRuntimeConfigResolverReadsLatestFeatureModel(t *testing.T) {
 	}
 
 	pr := NewPhaseRunner(nil, store, dir)
-	resolve := pr.SessionRuntimeConfigResolver(f.ID)
+	resolve := pr.sessionRuntimeConfigResolver(f.ID)
 	if resolve == nil {
 		t.Fatal("SessionRuntimeConfigResolver() = nil")
 	}

@@ -203,7 +203,7 @@ func planAttemptSessionID(base string, sessionAttempt int) string {
 	return retrySessionID(base, sessionAttempt)
 }
 
-// AxisApproval is a sticky approval recovered from a prior validation attempt.
+// axisApproval is a sticky approval recovered from a prior validation attempt.
 // Surfaced in revise prompts so the reviser knows which sections other axes
 // have already cleared and must not rewrite (per the "Sticky Approval Respect"
 // procedure in skills/revise-roadmap/SKILL.md).
@@ -215,14 +215,14 @@ func planAttemptSessionID(base string, sessionAttempt int) string {
 // would otherwise flip an already-approved axis back to CHANGES_REQUESTED on
 // unchanged bytes. Empty for artifacts written by older binaries; in that
 // case the short-circuit is skipped and the validator runs as before.
-type AxisApproval struct {
+type axisApproval struct {
 	Axis            string
 	FrozenSections  []string
 	ApprovedDigest  string
 	ApprovedAttempt int
 }
 
-// LoadPriorAxisApprovals walks attempt-NN/ subdirectories under artifactDir
+// loadPriorAxisApprovals walks attempt-NN/ subdirectories under artifactDir
 // and returns the LATEST axis-approved-<axis>.md per axis (later attempts win).
 // Returns nil when no approvals exist. The returned slice is sorted by axis
 // name for deterministic prompt output.
@@ -235,7 +235,7 @@ type AxisApproval struct {
 //	## Frozen Sections
 //	- <heading>
 //	- <heading>
-func LoadPriorAxisApprovals(artifactDir string) []AxisApproval {
+func loadPriorAxisApprovals(artifactDir string) []axisApproval {
 	entries, err := os.ReadDir(artifactDir)
 	if err != nil {
 		return nil
@@ -263,7 +263,7 @@ func LoadPriorAxisApprovals(artifactDir string) []AxisApproval {
 	// would leave a stale approval that kept propagating to the reviser
 	// even as the axis rejected on every subsequent attempt.
 	type axisState struct {
-		approval            AxisApproval
+		approval            axisApproval
 		hasApproval         bool
 		latestVerdictAfter  int // highest attempt N where we saw a verdict after the approval was recorded
 		latestVerdictStatus string
@@ -318,12 +318,12 @@ func LoadPriorAxisApprovals(artifactDir string) []AxisApproval {
 			}
 			s.latestVerdictAfter = d.n
 			s.latestVerdictStatus = verdict
-			if verdict == ReviewChangesRequested.String() {
+			if verdict == reviewChangesRequested.String() {
 				// Regression: drop the prior approval so the reviser
 				// isn't told to treat frozen sections as no-touch while
 				// the same axis is actively asking for changes.
 				s.hasApproval = false
-				s.approval = AxisApproval{}
+				s.approval = axisApproval{}
 			}
 		}
 	}
@@ -331,7 +331,7 @@ func LoadPriorAxisApprovals(artifactDir string) []AxisApproval {
 	if len(state) == 0 {
 		return nil
 	}
-	out := make([]AxisApproval, 0, len(state))
+	out := make([]axisApproval, 0, len(state))
 	for _, s := range state {
 		if s.hasApproval {
 			out = append(out, s.approval)
@@ -350,8 +350,8 @@ func LoadPriorAxisApprovals(artifactDir string) []AxisApproval {
 // FrozenSections when the list is absent, so the revise prompt still surfaces
 // "this axis approved" without inventing a frozen list. Approved-Digest is
 // optional for backward compatibility with artifacts written before F1.
-func parseAxisApprovalArtifact(s string) AxisApproval {
-	var a AxisApproval
+func parseAxisApprovalArtifact(s string) axisApproval {
+	var a axisApproval
 	lines := strings.Split(s, "\n")
 	inList := false
 	for _, raw := range lines {
@@ -435,8 +435,8 @@ const (
 // DefaultMaxPlanAttempts is the exported default for desktop app use (e.g. extending iterations).
 const DefaultMaxPlanAttempts = maxPlanValidationAttempts
 
-// PlanLoopConfig holds configuration for the planning loop with validation.
-type PlanLoopConfig struct {
+// planLoopConfig holds configuration for the planning loop with validation.
+type planLoopConfig struct {
 	// Registry resolves each validator's prompt protocol from its own model.
 	Registry     *llm.Registry
 	Feature      *feature.Feature
@@ -534,7 +534,7 @@ type PlanLoopConfig struct {
 	PhaseSpanCtx observe.SpanContext
 }
 
-func (cfg PlanLoopConfig) initialPlanningResearchArtifactPath() string {
+func (cfg planLoopConfig) initialPlanningResearchArtifactPath() string {
 	if cfg.PlanningResearchArtifactPath != "" {
 		return cfg.PlanningResearchArtifactPath
 	}
@@ -546,7 +546,7 @@ func (cfg PlanLoopConfig) initialPlanningResearchArtifactPath() string {
 
 // planEffortLevel returns the effort level to pass to BuildSessionOpts: the
 // resolved effective effort when set, otherwise the pipeline-driven level.
-func planEffortLevel(cfg PlanLoopConfig) llm.EffortLevel {
+func planEffortLevel(cfg planLoopConfig) llm.EffortLevel {
 	if cfg.EffectiveEffort != "" {
 		return cfg.EffectiveEffort
 	}
@@ -557,7 +557,7 @@ func planEffortLevel(cfg PlanLoopConfig) llm.EffortLevel {
 // BuildSessionOpts: the resolved Review-role effort when set, otherwise the
 // planner effort level (preserving the pre-coupling fallback for callers that
 // did not resolve Review effort).
-func validatorEffortLevel(cfg PlanLoopConfig) llm.EffortLevel {
+func validatorEffortLevel(cfg planLoopConfig) llm.EffortLevel {
 	if cfg.ValidatorEffectiveEffort != "" {
 		return cfg.ValidatorEffectiveEffort
 	}
@@ -573,7 +573,7 @@ type PlanLoopResult struct {
 
 // resolveValidatorModel picks the model to use for plan validation.
 // Returns the configured review model, falling back to "sonnet" when empty.
-func resolveValidatorModel(cfg PlanLoopConfig) string {
+func resolveValidatorModel(cfg planLoopConfig) string {
 	model := cfg.Feature.Models.Review
 	if model == "" {
 		model = "sonnet"
@@ -633,10 +633,10 @@ type planValidationExtras struct {
 // support print mode (Claude), stdin is closed after the protocol sends the
 // prompt since it's a one-shot evaluation. For providers that don't (Codex),
 // stdin must stay open because it carries the JSON-RPC channel.
-func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain planValidatorAxis, kind validationArtifactKind, extras planValidationExtras, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
+func runSpecializedPlanValidationForArtifact(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain planValidatorAxis, kind validationArtifactKind, extras planValidationExtras, parentCtx observe.SpanContext) (reviewStatus, string, validatorMarkers, error) {
 	helperIterDir := filepath.Join(attemptDir, domain.helperDirName())
 	if err := os.MkdirAll(helperIterDir, 0o755); err != nil {
-		return ReviewFailed, "", ValidatorMarkers{}, fmt.Errorf("creating %s validator helper directory: %w", domain.Name, err)
+		return reviewFailed, "", validatorMarkers{}, fmt.Errorf("creating %s validator helper directory: %w", domain.Name, err)
 	}
 
 	feedbackPath := filepath.Join(helperIterDir, domain.feedbackFileName())
@@ -661,15 +661,15 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		Observer:       cfg.Observer,
 		BuildSessionFn: cfg.BuildSession,
 	}
-	var helperResult *ReviewHelperResult
+	var helperResult *reviewHelperResult
 	var err error
 	for sessionAttempt := 1; sessionAttempt <= maxValidatorInfrastructureSessionAttempts; sessionAttempt++ {
 		// Infrastructure retries stay inside the same plan attempt. Clear any
 		// synthetic artifacts from the failed session and use a distinct session
 		// ID so lifecycle bookkeeping cannot alias the completed process.
-		RemoveCompletionReceipt(helperIterDir)
+		removeCompletionReceipt(helperIterDir)
 		_ = os.Remove(feedbackPath)
-		helperResult, err = helper.runReviewHelper(context.Background(), ReviewHelperConfig{
+		helperResult, err = helper.runReviewHelper(context.Background(), reviewHelperConfig{
 			SessionID:              retrySessionID(reviewID, sessionAttempt),
 			FeatureID:              cfg.Feature.ID,
 			Phase:                  feature.PhasePlan,
@@ -699,7 +699,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	}
 	if err != nil {
 		feedback := ""
-		markers := ValidatorMarkers{}
+		markers := validatorMarkers{}
 		if helperResult != nil {
 			feedback = helperResult.Feedback
 			markers = helperResult.Markers
@@ -709,11 +709,11 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		// before producing one so downstream consumers (revise prompt,
 		// log readers) still see a parseable document.
 		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
-			stub := FormatStructuredReviewFeedback(
+			stub := formatStructuredReviewFeedback(
 				fmt.Sprintf("%s Validation — Helper Failed", domain.Name),
 				fmt.Sprintf("- **Critical**: %s validator terminated before writing %s: %v", domain.Name, filepath.Base(feedbackPath), err),
 				"",
-				ReviewChangesRequested,
+				reviewChangesRequested,
 			)
 			_ = os.WriteFile(feedbackPath, []byte(stub), 0o644)
 			feedback = stub
@@ -724,7 +724,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		if markers.AxisApproved != "" {
 			writeAxisApprovalArtifact(attemptDir, attempt, markers, planArtifactPath)
 		}
-		return ReviewFailed, feedback, markers, fmt.Errorf("running %s validation session: %w", domain.Name, err)
+		return reviewFailed, feedback, markers, fmt.Errorf("running %s validation session: %w", domain.Name, err)
 	}
 
 	status := helperResult.Status
@@ -745,7 +745,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	// contract). Persisting that anyway would leave a stale approval for
 	// an axis that is actively rejecting — forcing the reviser to treat
 	// sections it needs to edit as no-touch — so we require IsApproved() here.
-	if status.IsApproved() && markers.AxisApproved != "" {
+	if status.isApproved() && markers.AxisApproved != "" {
 		writeAxisApprovalArtifact(attemptDir, attempt, markers, planArtifactPath)
 	}
 
@@ -787,7 +787,7 @@ type axisStallState struct {
 // Also returns the per-axis verdicts and digests collected for this attempt
 // so the caller can persist them in PlanAttemptMeta (enabling replay after
 // a session restart via loadAxisStallState).
-func (s *axisStallState) observe(attempt int, planPath string, results []ValidatorResult) (stalled bool, axis string, count int, verdicts, digests map[string]string) {
+func (s *axisStallState) observe(attempt int, planPath string, results []validatorResult) (stalled bool, axis string, count int, verdicts, digests map[string]string) {
 	verdicts = make(map[string]string, len(results))
 	digests = make(map[string]string, len(results))
 	for _, r := range results {
@@ -827,7 +827,7 @@ func (s *axisStallState) observeAxis(axis, verdict, digest string) (stalled bool
 		s.lastDigest = make(map[string]string)
 		s.count = make(map[string]int)
 	}
-	if verdict != ReviewChangesRequested.String() {
+	if verdict != reviewChangesRequested.String() {
 		// Approved or errored axes reset their counter so a subsequent
 		// regression starts fresh.
 		delete(s.lastDigest, axis)
@@ -952,7 +952,7 @@ func extractPlanSection(planPath, heading string) []byte {
 // later attempt when the digest is unchanged. planPath may be empty for
 // callers that cannot compute a digest (in which case the line is omitted and
 // short-circuiting is disabled for this approval — strictly safer).
-func writeAxisApprovalArtifact(attemptDir string, attempt int, markers ValidatorMarkers, planPath string) {
+func writeAxisApprovalArtifact(attemptDir string, attempt int, markers validatorMarkers, planPath string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# AxisApproved: %s\n", markers.AxisApproved)
 	fmt.Fprintf(&b, "Attempt: %d\n", attempt)
@@ -995,16 +995,16 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 	})
 }
 
-// ValidatorResult holds the outcome of a single specialized validator.
+// validatorResult holds the outcome of a single specialized validator.
 //
 // AxisApproved / FrozenSections carry the sticky-approval signal emitted by
 // roadmap validators so the next revise attempt can preserve approved-axis
 // sections byte-equal. Populated from raw validator output via
 // ParseValidatorMarkers.
-type ValidatorResult struct {
+type validatorResult struct {
 	Domain         string
 	Axis           string
-	Status         ReviewStatus
+	Status         reviewStatus
 	Feedback       string
 	Error          error
 	AxisApproved   string
@@ -1014,7 +1014,7 @@ type ValidatorResult struct {
 // runRoadmapMultiValidatorPlanValidation applies a roadmap-specific validator
 // subset so strategic roadmaps are not forced to satisfy the full phase-plan
 // quality bar before the per-phase plans exist.
-func runRoadmapMultiValidatorPlanValidation(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]ValidatorResult, ReviewStatus, string, error) {
+func runRoadmapMultiValidatorPlanValidation(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error) {
 	validators := roadmapValidatorsForRisk(cfg.Feature.RiskLevel)
 	return runValidatorSetWithInfrastructureRetry(cfg, sm, attempt, attemptDir, planArtifactPath, validators, validationArtifactRoadmap, planValidationExtras{})
 }
@@ -1041,7 +1041,7 @@ type planLoopGuard struct {
 	phaseStart *time.Time
 }
 
-func newPlanLoopGuard(cfg PlanLoopConfig) planLoopGuard {
+func newPlanLoopGuard(cfg planLoopConfig) planLoopGuard {
 	guard := planLoopGuard{store: cfg.FeatureStore, featureID: cfg.Feature.ID}
 	if cfg.FeatureStore != nil {
 		if f, err := cfg.FeatureStore.Load(cfg.Feature.ID); err == nil {
@@ -1102,7 +1102,7 @@ func waitForValidationBackoff(guard planLoopGuard, d time.Duration) error {
 // reached. A protocol violation or any other helper outcome returns at once,
 // so a plan is never revised because a model was busy, and a rejection is
 // never lost because a sibling validator was retried.
-func runValidatorSetWithInfrastructureRetry(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) ([]ValidatorResult, ReviewStatus, string, error) {
+func runValidatorSetWithInfrastructureRetry(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) ([]validatorResult, reviewStatus, string, error) {
 	guard := newPlanLoopGuard(cfg)
 	results, status, feedback, err := runValidatorSet(cfg, sm, attempt, attemptDir, planArtifactPath, validators, kind, extras)
 	for round := 1; err != nil && round < maxValidationInfrastructureRounds; round++ {
@@ -1111,7 +1111,7 @@ func runValidatorSetWithInfrastructureRetry(cfg PlanLoopConfig, sm ports.Session
 			break
 		}
 		if waitErr := waitForValidationBackoff(guard, validationInfrastructureBackoff(round)); waitErr != nil {
-			return results, ReviewFailed, feedback, waitErr
+			return results, reviewFailed, feedback, waitErr
 		}
 		subset := make([]planValidatorAxis, 0, len(retry))
 		for _, idx := range retry {
@@ -1137,7 +1137,7 @@ func runValidatorSetWithInfrastructureRetry(cfg PlanLoopConfig, sm ports.Session
 // infrastructureFailedValidators returns the indexes to retry: every errored
 // validator when all errors are infrastructure, none when any error is a
 // verdict-bearing failure such as a protocol violation.
-func infrastructureFailedValidators(results []ValidatorResult) []int {
+func infrastructureFailedValidators(results []validatorResult) []int {
 	var retry []int
 	for i, result := range results {
 		if result.Error == nil {
@@ -1160,19 +1160,19 @@ func infrastructureFailedValidators(results []ValidatorResult) []int {
 //
 // Returns per-axis results alongside the aggregated verdict so the phase
 // planning loop can detect per-axis stalls (see detectAxisStall).
-func runPhasePlanMultiValidatorValidation(cfg PlanLoopConfig, priorPhasePlanPaths []string, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]ValidatorResult, ReviewStatus, string, error) {
+func runPhasePlanMultiValidatorValidation(cfg planLoopConfig, priorPhasePlanPaths []string, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error) {
 	validators := phasePlanValidatorsForRisk(cfg.Feature.RiskLevel)
 	extras := planValidationExtras{PriorPhasePlanPaths: priorPhasePlanPaths}
 	return runValidatorSetWithInfrastructureRetry(cfg, sm, attempt, attemptDir, planArtifactPath, validators, validationArtifactPhasePlan, extras)
 }
 
-func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) ([]ValidatorResult, ReviewStatus, string, error) {
+func runValidatorSet(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, validators []planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) ([]validatorResult, reviewStatus, string, error) {
 	// Validation span — child of phase span
 	validationCtx := cfg.PhaseSpanCtx.Child()
 	validationStart := time.Now()
 	cfg.Observer.ValidationStarted(validationCtx, "plan", len(validators))
 
-	results := make([]ValidatorResult, len(validators))
+	results := make([]validatorResult, len(validators))
 
 	// Initialize validator statuses for desktop app display
 	setValidatorStatuses(cfg, validators, nil)
@@ -1186,9 +1186,9 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 	// older binaries, or an empty FrozenSections list) returns "" from
 	// frozenSectionsDigest and disables short-circuiting for that axis —
 	// strictly safer.
-	priorApprovals := make(map[string]AxisApproval, len(validators))
+	priorApprovals := make(map[string]axisApproval, len(validators))
 	if parent := filepath.Dir(attemptDir); parent != "" && parent != "." {
-		for _, a := range LoadPriorAxisApprovals(parent) {
+		for _, a := range loadPriorAxisApprovals(parent) {
 			priorApprovals[strings.ToLower(a.Axis)] = a
 		}
 	}
@@ -1202,7 +1202,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 		if approval, ok := priorApprovals[v.Axis]; ok && approval.ApprovedDigest != "" {
 			currentDigest := frozenSectionsDigest(planArtifactPath, approval.FrozenSections)
 			if currentDigest != "" && currentDigest == approval.ApprovedDigest {
-				results[i] = ValidatorResult{
+				results[i] = validatorResult{
 					Domain:         v.Name,
 					Axis:           v.Axis,
 					Status:         ReviewApproved,
@@ -1235,7 +1235,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 		cfg.Observer.ValidatorStarted(validatorCtx, v.Name)
 
 		status, feedback, markers, err := runSpecializedPlanValidationForArtifact(cfg, sm, attempt, attemptDir, planArtifactPath, v, kind, extras, validatorCtx)
-		results[i] = ValidatorResult{
+		results[i] = validatorResult{
 			Domain:         v.Name,
 			Axis:           v.Axis,
 			Status:         status,
@@ -1260,7 +1260,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 
 	if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 		cfg.Observer.ValidationCompleted(validationCtx, "plan", "interrupted", time.Since(validationStart), len(validators))
-		return results, ReviewFailed, "", fmt.Errorf("feature interrupted during multi-validator validation")
+		return results, reviewFailed, "", fmt.Errorf("feature interrupted during multi-validator validation")
 	}
 
 	aggStatus, aggFeedback, aggErr := composeValidatorResults(results, cfg.Feature.RiskLevel)
@@ -1281,7 +1281,7 @@ func runValidatorSet(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, a
 }
 
 // setValidatorStatuses initializes the validator status map for desktop app display.
-func setValidatorStatuses(cfg PlanLoopConfig, validators []planValidatorAxis, results []ValidatorResult) {
+func setValidatorStatuses(cfg planLoopConfig, validators []planValidatorAxis, results []validatorResult) {
 	if cfg.Feature == nil {
 		return
 	}
@@ -1293,7 +1293,7 @@ func setValidatorStatuses(cfg PlanLoopConfig, validators []planValidatorAxis, re
 }
 
 // updateValidatorStatus updates a single validator's status for desktop app display.
-func updateValidatorStatus(cfg PlanLoopConfig, domain string, status ReviewStatus, err error) {
+func updateValidatorStatus(cfg planLoopConfig, domain string, status reviewStatus, err error) {
 	if cfg.Feature == nil {
 		return
 	}
@@ -1301,7 +1301,7 @@ func updateValidatorStatus(cfg PlanLoopConfig, domain string, status ReviewStatu
 }
 
 // clearValidatorStatuses removes validator statuses after validation completes.
-func clearValidatorStatuses(cfg PlanLoopConfig) {
+func clearValidatorStatuses(cfg planLoopConfig) {
 	if cfg.Feature == nil {
 		return
 	}
@@ -1315,7 +1315,7 @@ func clearValidatorStatuses(cfg PlanLoopConfig) {
 // Verdict rules:
 //   - Any validator ERROR or CHANGES_REQUESTED → overall CHANGES_REQUESTED.
 //   - All validators APPROVED → overall APPROVED.
-func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) (ReviewStatus, string, error) {
+func composeValidatorResults(results []validatorResult, risk feature.RiskLevel) (reviewStatus, string, error) {
 	var b strings.Builder
 	var validatorErrors []error
 	approvedCount := 0
@@ -1342,13 +1342,13 @@ func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) 
 	var overall string
 	overallStatus := strictMultiAxisReviewStatus(validatorResultsToMultiAxisResults(results), len(results))
 	switch overallStatus {
-	case ReviewChangesRequested:
+	case reviewChangesRequested:
 		overall = agentStatusChangesRequested
 	case ReviewApproved:
 		overall = agentStatusApproved
 	default:
 		overall = agentStatusChangesRequested
-		overallStatus = ReviewChangesRequested
+		overallStatus = reviewChangesRequested
 	}
 	b.WriteString(fmt.Sprintf("**Overall: %s** (%d/%d validators approved", overall, approvedCount, len(results)))
 	if nitsCount > 0 {
@@ -1368,7 +1368,7 @@ func composeValidatorResults(results []ValidatorResult, risk feature.RiskLevel) 
 			b.WriteString(fmt.Sprintf("## %s Validator — ERROR\n\n%v\n\n", r.Domain, r.Error))
 			continue
 		}
-		if r.Status == ReviewChangesRequested && r.Feedback != "" {
+		if r.Status == reviewChangesRequested && r.Feedback != "" {
 			b.WriteString(fmt.Sprintf("## %s Validator — CHANGES REQUESTED\n\n%s\n\n", r.Domain, r.Feedback))
 		}
 	}
@@ -1418,11 +1418,11 @@ type planArtifactKind struct {
 	reviserSpec roleSpec
 	// initialPrompt builds the first attempt's prompt; revisionPrompt builds
 	// every later one from the previous artifact and critic feedback.
-	initialPrompt  func(cfg PlanLoopConfig) string
-	revisionPrompt func(cfg PlanLoopConfig, previousPath, criticFeedback string, attempt int, approvals []AxisApproval) string
-	validate       func(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]ValidatorResult, ReviewStatus, string, error)
+	initialPrompt  func(cfg planLoopConfig) string
+	revisionPrompt func(cfg planLoopConfig, previousPath, criticFeedback string, attempt int, approvals []axisApproval) string
+	validate       func(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error)
 	// recordApproved records an approved plan on the feature.
-	recordApproved func(cfg PlanLoopConfig, planArtifactPath string) error
+	recordApproved func(cfg planLoopConfig, planArtifactPath string) error
 	// phasePlanGates enables the evidence-mode check and the per-axis stall
 	// escalation, which only phase plans have.
 	phasePlanGates bool
@@ -1454,14 +1454,14 @@ func roadmapPlanKind() planArtifactKind {
 		artifactKey:     "roadmap",
 		creatorSpec:     roadmapCreatorRoleSpec,
 		reviserSpec:     roadmapReviserRoleSpec,
-		initialPrompt: func(cfg PlanLoopConfig) string {
-			return BuildRoadmapPromptWithResearch(cfg.Feature, cfg.DesignArtifactPath, cfg.initialPlanningResearchArtifactPath(), cfg.QAFilePaths)
+		initialPrompt: func(cfg planLoopConfig) string {
+			return buildRoadmapPromptWithResearch(cfg.Feature, cfg.DesignArtifactPath, cfg.initialPlanningResearchArtifactPath(), cfg.QAFilePaths)
 		},
-		revisionPrompt: func(cfg PlanLoopConfig, previousPath, criticFeedback string, attempt int, approvals []AxisApproval) string {
-			return BuildRoadmapRevisionPrompt(cfg.SkillsDir, previousPath, criticFeedback, attempt, approvals)
+		revisionPrompt: func(cfg planLoopConfig, previousPath, criticFeedback string, attempt int, approvals []axisApproval) string {
+			return buildRoadmapRevisionPrompt(cfg.SkillsDir, previousPath, criticFeedback, attempt, approvals)
 		},
 		validate: runRoadmapMultiValidatorPlanValidation,
-		recordApproved: func(cfg PlanLoopConfig, planArtifactPath string) error {
+		recordApproved: func(cfg planLoopConfig, planArtifactPath string) error {
 			recordPlanArtifact(cfg, "roadmap", planArtifactPath)
 			return nil
 		},
@@ -1486,16 +1486,16 @@ func phasePlanKind(roadmapPath string, phase RoadmapPhase, priorPhasePlanPaths [
 		artifactKey:     artifactKey,
 		creatorSpec:     phasePlanCreatorRoleSpec,
 		reviserSpec:     phasePlanReviserRoleSpec,
-		initialPrompt: func(cfg PlanLoopConfig) string {
-			return BuildPhasePlanPromptWithResearch(cfg.Feature, roadmapPath, cfg.initialPlanningResearchArtifactPath(), phase, cfg.QAFilePaths)
+		initialPrompt: func(cfg planLoopConfig) string {
+			return buildPhasePlanPromptWithResearch(cfg.Feature, roadmapPath, cfg.initialPlanningResearchArtifactPath(), phase, cfg.QAFilePaths)
 		},
-		revisionPrompt: func(cfg PlanLoopConfig, previousPath, criticFeedback string, attempt int, approvals []AxisApproval) string {
-			return BuildPhasePlanRevisionPrompt(cfg.Feature, cfg.SkillsDir, previousPath, criticFeedback, phase, attempt, approvals)
+		revisionPrompt: func(cfg planLoopConfig, previousPath, criticFeedback string, attempt int, approvals []axisApproval) string {
+			return buildPhasePlanRevisionPrompt(cfg.Feature, cfg.SkillsDir, previousPath, criticFeedback, phase, attempt, approvals)
 		},
-		validate: func(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]ValidatorResult, ReviewStatus, string, error) {
+		validate: func(cfg planLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string) ([]validatorResult, reviewStatus, string, error) {
 			return runPhasePlanMultiValidatorValidation(cfg, priorPhasePlanPaths, sm, attempt, attemptDir, planArtifactPath)
 		},
-		recordApproved: func(cfg PlanLoopConfig, planArtifactPath string) error {
+		recordApproved: func(cfg planLoopConfig, planArtifactPath string) error {
 			return recordApprovedPhasePlanArtifact(cfg, phase.Number, planArtifactPath)
 		},
 		phasePlanGates: true,
@@ -1503,7 +1503,7 @@ func phasePlanKind(roadmapPath string, phase RoadmapPhase, priorPhasePlanPaths [
 }
 
 // runPlanningLoop creates and validates a roadmap or a per-phase plan.
-func runPlanningLoop(cfg PlanLoopConfig, kind planArtifactKind, sm ports.SessionManager) (result *PlanLoopResult, retErr error) {
+func runPlanningLoop(cfg planLoopConfig, kind planArtifactKind, sm ports.SessionManager) (result *PlanLoopResult, retErr error) {
 	// Phase lifecycle
 	featureCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun)
 	cfg.PhaseSpanCtx = featureCtx.Child()
@@ -1607,7 +1607,7 @@ attemptLoop:
 				prompt = kind.initialPrompt(cfg)
 			} else {
 				prevPlanPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
-				approvals := LoadPriorAxisApprovals(artifactDir)
+				approvals := loadPriorAxisApprovals(artifactDir)
 				prompt = kind.revisionPrompt(cfg, prevPlanPath, criticFeedback, attempt, approvals)
 			}
 
@@ -1630,7 +1630,7 @@ attemptLoop:
 			for {
 				// Clear the prior harness receipt before starting a new root
 				// session for this attempt.
-				RemoveCompletionReceipt(attemptDir)
+				removeCompletionReceipt(attemptDir)
 				cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
 					Model:                          cfg.Feature.Models.Planning,
 					Prompt:                         prompt,
@@ -1653,7 +1653,7 @@ attemptLoop:
 					sessOpts.EffectiveEffort = cfg.EffectiveEffort
 					sessOpts.EffortSource = cfg.EffortSource
 				}
-				WriteDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
+				writeDebugPrompts(attemptDir, sessOpts.DebugSystemPrompt, prompt)
 				sessOpts.PermCacheScope = cfg.RepoName
 				sessOpts.RunNumber = cfg.Feature.ActiveRun
 
@@ -1685,12 +1685,12 @@ attemptLoop:
 					providerName = sessOpts.ProviderName
 				}
 				cfg.Observer.SessionStarted(planSessionCtx, "plan", sessionID, providerName, cfg.Feature.Models.Planning, cfg.RepoName, string(cfg.EffectiveEffort), string(cfg.EffortSource))
-				(&ContextReadTracker{
+				(&contextReadTracker{
 					KBBaseDir:     filepath.Join(filepath.Dir(cfg.StateDir), "knowledge-base"),
 					SkillsDir:     cfg.SkillsDir,
 					GuidelinesDir: cfg.GuidelinesDir,
 					Observer:      cfg.Observer,
-				}).Install(sess, planSessionCtx, "plan", sessionID)
+				}).install(sess, planSessionCtx, "plan", sessionID)
 				sessionStart := time.Now()
 
 				logPath := filepath.Join(attemptDir, "output.txt")
@@ -1717,7 +1717,7 @@ attemptLoop:
 				// shared session-cost helper: only a positive USD total counts,
 				// it always lands on the kind's phase key, and it carries no
 				// cost source or credits.
-				cost := ExtractSessionCost(sess)
+				cost := extractSessionCost(sess)
 				if cfg.FeatureStore != nil && cost.TotalCostUSD > 0 {
 					_ = cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
 						f.RecordSessionCost(feature.SessionCostRecord{
@@ -1876,7 +1876,7 @@ attemptLoop:
 				return nil, err
 			}
 			return &PlanLoopResult{FinalStatus: "approved", Iterations: attempt}, nil
-		case ReviewChangesRequested:
+		case reviewChangesRequested:
 			// Per-axis stall detection: if any axis keeps failing across
 			// consecutive attempts without the plan section it freezes
 			// changing, escalate to needs_human_review rather than burning
@@ -1962,11 +1962,11 @@ const (
 // agentStatus. Go can't continue the planning loop's labeled attempt loop from
 // here, so the loop acts on the returned outcome.
 func handleCompletedPlanSession(
-	cfg PlanLoopConfig,
+	cfg planLoopConfig,
 	planSessionCtx observe.SpanContext,
 	sessionID string,
 	sess ports.SessionHandle,
-	cost SessionCost,
+	cost sessionCost,
 	sessionStart time.Time,
 	waitResult PhaseOutcomeWaitResult,
 	sm ports.SessionManager,
@@ -2026,7 +2026,7 @@ func handleCompletedPlanSession(
 }
 
 // recordPlanArtifact records planArtifactPath on the feature under key.
-func recordPlanArtifact(cfg PlanLoopConfig, key, planArtifactPath string) {
+func recordPlanArtifact(cfg planLoopConfig, key, planArtifactPath string) {
 	if cfg.FeatureStore == nil || planArtifactPath == "" {
 		return
 	}
@@ -2041,7 +2041,7 @@ func recordPlanArtifact(cfg PlanLoopConfig, key, planArtifactPath string) {
 
 // recordApprovedPhasePlanArtifact records an approved phase plan together
 // with the roadmap phase's frontend flag declared in its metadata.
-func recordApprovedPhasePlanArtifact(cfg PlanLoopConfig, phaseNumber int, planArtifactPath string) error {
+func recordApprovedPhasePlanArtifact(cfg planLoopConfig, phaseNumber int, planArtifactPath string) error {
 	if cfg.FeatureStore == nil || planArtifactPath == "" {
 		return nil
 	}
@@ -2049,7 +2049,7 @@ func recordApprovedPhasePlanArtifact(cfg PlanLoopConfig, phaseNumber int, planAr
 	if err != nil {
 		return fmt.Errorf("reading approved phase plan metadata: %w", err)
 	}
-	frontend := ParsePhasePlanFrontend(string(data))
+	frontend := parsePhasePlanFrontend(string(data))
 	artifactKey := fmt.Sprintf("phase-%d-plan", phaseNumber)
 	return cfg.FeatureStore.Modify(cfg.Feature.ID, func(f *feature.Feature) error {
 		if f.Artifacts == nil {
@@ -2070,7 +2070,7 @@ func planAttemptAwaitsValidation(meta PlanAttemptMeta) bool {
 }
 
 // setValidatingPlan persists the ValidatingPlan flag on the feature.
-func setValidatingPlan(cfg PlanLoopConfig, validating bool) {
+func setValidatingPlan(cfg planLoopConfig, validating bool) {
 	if cfg.FeatureStore == nil {
 		return
 	}
@@ -2132,9 +2132,9 @@ func resolvePlanArtifactPath(store ports.FeatureStore, featureID, artifactDir st
 	return bestPath
 }
 
-// ProtocolRetrySidecarFile names the retry-state file earlier releases wrote
+// protocolRetrySidecarFile names the retry-state file earlier releases wrote
 // into phase directories; it is never an artifact.
-const ProtocolRetrySidecarFile = ".protocol-retry.yaml"
+const protocolRetrySidecarFile = ".protocol-retry.yaml"
 
 // IsArtifactExcluded returns true if the filename should be excluded from
 // artifact resolution fallback. These are debug/infrastructure files.
@@ -2151,7 +2151,7 @@ func IsArtifactExcluded(name string) bool {
 		return true
 	case strings.HasSuffix(lower, "-prompt.md"):
 		return true
-	case lower == "qa-answers.md" || lower == ProtocolRetrySidecarFile:
+	case lower == "qa-answers.md" || lower == protocolRetrySidecarFile:
 		return true
 	case strings.HasPrefix(lower, ".protocol-retry-") && strings.HasSuffix(lower, ".yaml"):
 		return true

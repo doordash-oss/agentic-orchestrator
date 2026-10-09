@@ -53,7 +53,7 @@ type OrchestratorConfig struct {
 	// the single-repo path (feature-level overrides → config defaults → fallbacks).
 	Model                string
 	ReviewModel          string
-	ResolveSessionConfig func(llm.PhaseRole) (SessionRuntimeConfig, error)
+	ResolveSessionConfig func(llm.PhaseRole) (sessionRuntimeConfig, error)
 	MaxIterations        int
 	MaxConsecFails       int
 	MaxConsecNoProgress  int
@@ -143,12 +143,12 @@ type OrchestratorConfig struct {
 	PhaseExitGate PhaseExitGate
 }
 
-func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole) (SessionRuntimeConfig, error) {
+func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole) (sessionRuntimeConfig, error) {
 	if cfg.ResolveSessionConfig != nil {
 		return cfg.ResolveSessionConfig(role)
 	}
 	if role == llm.PhaseReview {
-		return SessionRuntimeConfig{
+		return sessionRuntimeConfig{
 			Model:           cfg.ReviewModel,
 			EffectiveEffort: cfg.ReviewEffectiveEffort,
 			EffortSource:    cfg.ReviewEffortSource,
@@ -156,7 +156,7 @@ func resolveOrchestratorSessionConfig(cfg OrchestratorConfig, role llm.PhaseRole
 			CompletionTool:  cfg.CompletionTool,
 		}, nil
 	}
-	return SessionRuntimeConfig{
+	return sessionRuntimeConfig{
 		Model:           cfg.Model,
 		EffectiveEffort: cfg.ImplEffectiveEffort,
 		EffortSource:    cfg.ImplEffortSource,
@@ -186,7 +186,7 @@ type OrchestratorResult struct {
 	PlanRevisionFeedback string
 }
 
-// RunMultiRepoOrchestrator drives the unified phase-implement loop. Under
+// runMultiRepoOrchestrator drives the unified phase-implement loop. Under
 // SchemaVersionCurrent = 4 the entire phase runs as a single Claude session
 // owning every repo in Feature.Repos; per-stage goroutine fan-out is gone.
 //
@@ -196,7 +196,7 @@ type OrchestratorResult struct {
 //
 // Returns "awaiting_final_review" when the implement loop succeeds,
 // "failed" / "need_user_input" / "interrupted" otherwise.
-func RunMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
+func runMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
 	implResult, err := RunPhaseImplementLoop(cfg, sm)
 	if err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ func RunMultiRepoOrchestrator(cfg OrchestratorConfig, sm ports.SessionManager) (
 // Final Review. Used by completion.go for per-phase implementation under
 // the "FR fires once at feature end" design.
 func RunMultiRepoImplementation(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
-	return RunMultiRepoOrchestrator(cfg, sm)
+	return runMultiRepoOrchestrator(cfg, sm)
 }
 
 // phaseLoopResultToOrchestratorResult translates the unified
@@ -262,7 +262,7 @@ func phaseRepoStatuses(repos []string, status string) map[string]string {
 // repo at Touched (staged for FR) transitions to review_passed
 // (success) or failed (LastError set) (max_iterations / safety_rail) together.
 func RunMultiRepoFinalReview(cfg OrchestratorConfig, sm ports.SessionManager) (*OrchestratorResult, error) {
-	runFR := RunFeatureFinalReviewLoop
+	runFR := runFeatureFinalReviewLoop
 	if cfg.RunFinalReviewFn != nil {
 		runFR = cfg.RunFinalReviewFn
 	}

@@ -192,8 +192,8 @@ type DeferralsDueInput struct {
 	Entries []DeferralView
 }
 
-// SummaryUserInput is the data passed to summary.user.tmpl.
-type SummaryUserInput struct {
+// summaryUserInput is the data passed to summary.user.tmpl.
+type summaryUserInput struct {
 	Name        string
 	Description string
 }
@@ -221,16 +221,16 @@ type PRDescriptionUserInput struct {
 	DiffStat           string
 }
 
-// ScoutUserInput is the data passed to scout.user.tmpl. Files carries
+// scoutUserInput is the data passed to scout.user.tmpl. Files carries
 // pre-read contents (the scout consumes them inline rather than spawning
 // exploration sub-agents).
-type ScoutUserInput struct {
+type scoutUserInput struct {
 	Query string
-	Files []ScoutFile
+	Files []scoutFile
 }
 
-// ScoutFile is a per-file entry for the scout prompt.
-type ScoutFile struct {
+// scoutFile is a per-file entry for the scout prompt.
+type scoutFile struct {
 	Path    string
 	Purpose string
 	Content string

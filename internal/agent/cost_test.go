@@ -25,7 +25,7 @@ import (
 )
 
 func TestExtractSessionCostNilSession(t *testing.T) {
-	cost := ExtractSessionCost(nil)
+	cost := extractSessionCost(nil)
 	if cost.TotalCostUSD != 0 {
 		t.Errorf("TotalCostUSD = %v, want 0 for nil session", cost.TotalCostUSD)
 	}
@@ -33,7 +33,7 @@ func TestExtractSessionCostNilSession(t *testing.T) {
 
 func TestExtractSessionCostNilResult(t *testing.T) {
 	sess := session.NewSession("test", "feat-1", 0)
-	cost := ExtractSessionCost(sess)
+	cost := extractSessionCost(sess)
 	if cost.TotalCostUSD != 0 {
 		t.Errorf("TotalCostUSD = %v, want 0 for nil result", cost.TotalCostUSD)
 	}
@@ -43,7 +43,7 @@ func TestExtractSessionCostFromResult(t *testing.T) {
 	sess := session.NewSession("test", "feat-1", 0)
 	sess.SetAccumulatedUsage(llm.Usage{CostUSD: 1.25})
 	sess.SetCost(&llm.ResultMessage{TotalCostUSD: 2.75})
-	cost := ExtractSessionCost(sess)
+	cost := extractSessionCost(sess)
 	if cost.TotalCostUSD != 2.75 {
 		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
 	}
@@ -53,7 +53,7 @@ func TestExtractSessionCostFallsBackToRunningUsageCost(t *testing.T) {
 	sess := session.NewSession("test", "feat-1", 0)
 	sess.SetAccumulatedUsage(llm.Usage{CostUSD: 0.42})
 
-	cost := ExtractSessionCost(sess)
+	cost := extractSessionCost(sess)
 
 	if cost.TotalCostUSD != 0.42 {
 		t.Errorf("TotalCostUSD = %v, want 0.42 from running usage snapshot", cost.TotalCostUSD)
@@ -82,7 +82,7 @@ func TestExtractSessionCostIncludesProviderAdditionalSessionCost(t *testing.T) {
 		},
 	}
 
-	cost := ExtractSessionCost(sess)
+	cost := extractSessionCost(sess)
 
 	if cost.TotalCostUSD != 2.75 {
 		t.Errorf("TotalCostUSD = %v, want 2.75", cost.TotalCostUSD)
@@ -174,7 +174,7 @@ func TestAccumulateSessionCostToFeatureUsesActiveTimingKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.42})
+	err := accumulateSessionCostToFeature(store, f.ID, "review", sessionCost{TotalCostUSD: 0.42})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +206,7 @@ func TestAccumulateSessionCostToFeatureRecordsIndividualSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.42}, SessionCostMetadata{
+	err := accumulateSessionCostToFeature(store, f.ID, "review", sessionCost{TotalCostUSD: 0.42}, sessionCostMetadata{
 		SessionID:     "feat-phase-02-review-01",
 		ObserverPhase: "review",
 		RepoName:      "repo-a",
@@ -257,7 +257,7 @@ func TestAccumulateSessionCostToFeatureUsesFallbackKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{TotalCostUSD: 0.31})
+	err := accumulateSessionCostToFeature(store, f.ID, "review", sessionCost{TotalCostUSD: 0.31})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func TestAccumulateSessionCostToFeatureKeyIgnoresStaleActiveTimingKey(t *testing
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeatureKey(store, f.ID, "review", SessionCost{TotalCostUSD: 0.29})
+	err := accumulateSessionCostToFeatureKey(store, f.ID, "review", sessionCost{TotalCostUSD: 0.29})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestAccumulateSessionCostToFeatureSkipsZeroCost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := accumulateSessionCostToFeature(store, f.ID, "review", SessionCost{})
+	err := accumulateSessionCostToFeature(store, f.ID, "review", sessionCost{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestExtractSessionCostWithUsage(t *testing.T) {
 	mock.AccumulatedUsageVal = llm.Usage{InputTokens: 1000, OutputTokens: 500}
 	mock.CostVal = &llm.ResultMessage{TotalCostUSD: 2.5}
 
-	sc := ExtractSessionCost(mock)
+	sc := extractSessionCost(mock)
 
 	if sc.TotalCostUSD != 2.5 {
 		t.Errorf("TotalCostUSD = %v, want 2.5", sc.TotalCostUSD)
@@ -351,7 +351,7 @@ func TestExtractSessionCostWithUsage(t *testing.T) {
 }
 
 func TestExtractSessionCostNilSessionUsage(t *testing.T) {
-	sc := ExtractSessionCost(nil)
+	sc := extractSessionCost(nil)
 	if sc.Usage != (llm.Usage{}) {
 		t.Errorf("Usage = %+v, want zero value", sc.Usage)
 	}
@@ -362,7 +362,7 @@ func TestExtractSessionCostNoUsage(t *testing.T) {
 	mock.CostVal = &llm.ResultMessage{TotalCostUSD: 3.75}
 	// AccumulatedUsageVal left at zero value
 
-	sc := ExtractSessionCost(mock)
+	sc := extractSessionCost(mock)
 
 	if sc.TotalCostUSD != 3.75 {
 		t.Errorf("TotalCostUSD = %v, want 3.75", sc.TotalCostUSD)
@@ -385,7 +385,7 @@ func TestExtractSessionCostPrefersReconciledSnapshotIncludingZero(t *testing.T) 
 		base.CostVal = &llm.ResultMessage{TotalCostUSD: 2}
 		credits := int64(987)
 		sess := &reconciledCostSession{MockSessionView: base, snapshot: &llm.Usage{CostUSD: amount, CostSource: "provider_estimate", CostCreditsMicros: &credits, CacheCreationInputTokens: 42}}
-		got := ExtractSessionCost(sess)
+		got := extractSessionCost(sess)
 		if got.TotalCostUSD != amount || got.Usage.CacheCreationInputTokens != 42 || got.Usage.CostCreditsMicros == nil || *got.Usage.CostCreditsMicros != 987 {
 			t.Fatalf("extraction retained provisional price: %+v", got)
 		}
@@ -399,8 +399,8 @@ func TestCreditOnlyCostPersistsWithoutInventingDollars(t *testing.T) {
 		t.Fatal(err)
 	}
 	credits := int64(42)
-	cost := SessionCost{Usage: llm.Usage{CostSource: "unavailable", CostCreditsMicros: &credits}}
-	if err := accumulateSessionCostToFeatureKey(store, f.ID, "implement", cost, SessionCostMetadata{SessionID: "session"}); err != nil {
+	cost := sessionCost{Usage: llm.Usage{CostSource: "unavailable", CostCreditsMicros: &credits}}
+	if err := accumulateSessionCostToFeatureKey(store, f.ID, "implement", cost, sessionCostMetadata{SessionID: "session"}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := store.Load(f.ID)
@@ -414,7 +414,7 @@ func TestCreditOnlyCostPersistsWithoutInventingDollars(t *testing.T) {
 
 func TestSessionTelemetryPreservesReconciledCostProvenance(t *testing.T) {
 	credits := int64(12345)
-	cost := SessionCost{TotalCostUSD: 1.25, Usage: llm.Usage{CostSource: "provider_estimate", CostCreditsMicros: &credits, InputTokens: 42}}
+	cost := sessionCost{TotalCostUSD: 1.25, Usage: llm.Usage{CostSource: "provider_estimate", CostCreditsMicros: &credits, InputTokens: 42}}
 	sess := session.NewSession("test", "feat-1", 0)
 	sess.SetCost(&llm.ResultMessage{Subtype: "success", NumTurns: 3, TotalCostUSD: 99})
 	usage := toSessionUsage(cost, sess)

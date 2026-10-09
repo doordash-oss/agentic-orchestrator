@@ -92,7 +92,7 @@ func TestStructuredCompletionRejectsIncompleteInquiryThenCommitsRepairedArtifact
 	if result.Status != agentStatusSuccess || responses != 2 || !sess.stopped {
 		t.Fatalf("result=%+v responses=%d stopped=%v", result, responses, sess.stopped)
 	}
-	if !HasCommittedPhaseOutcome(dir, feature.PhaseInquire, RoleInquirer) {
+	if !hasCommittedPhaseOutcome(dir, feature.PhaseInquire, RoleInquirer) {
 		t.Fatal("missing valid receipt")
 	}
 	if len(sess.messages) > 0 {
@@ -148,7 +148,7 @@ func TestStructuredCompletionRejectedThenPlainTurnReportsCommitViolations(t *tes
 	if result.Status != agentStatusProtocolViolation {
 		t.Fatalf("result=%+v", result)
 	}
-	if got := JoinProtocolViolations(result.ProtocolViolations); !strings.Contains(got, "Acceptance Criteria") || strings.Contains(got, "without exactly one structured completion outcome") {
+	if got := joinProtocolViolations(result.ProtocolViolations); !strings.Contains(got, "Acceptance Criteria") || strings.Contains(got, "without exactly one structured completion outcome") {
 		t.Fatalf("violations lost the rejected completion's reasons: %s", got)
 	}
 }
@@ -226,7 +226,7 @@ func TestStructuredCompletionAcknowledgmentFailurePreservesCommittedOutcome(t *t
 	sess := newCompletionToolSession()
 	sess.requests <- llm.PhaseCompletionRequest{RequestID: "complete", Intent: llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}}
 	sess.respond = func(_ string, accepted bool, _ string) error {
-		if !accepted || !HasCommittedPhaseOutcome(dir, feature.PhaseInquire, RoleInquirer) {
+		if !accepted || !hasCommittedPhaseOutcome(dir, feature.PhaseInquire, RoleInquirer) {
 			t.Fatal("completion response preceded durable commit")
 		}
 		return errors.New("provider pipe closed")
@@ -256,7 +256,7 @@ func TestStructuredBoundedHelperValidatesOutputBeforeCommitWithoutTerminalResult
 	sess.respond = func(_ string, accepted bool, reason string) error {
 		responses++
 		if responses == 1 {
-			if accepted || !strings.Contains(reason, "without output") || HasCommittedPhaseOutcome(dir, feature.PhaseInquire, RoleInquirer) {
+			if accepted || !strings.Contains(reason, "without output") || hasCommittedPhaseOutcome(dir, feature.PhaseInquire, RoleInquirer) {
 				t.Fatalf("empty output was committed: accepted=%v reason=%s", accepted, reason)
 			}
 			if err := os.WriteFile(outputPath, []byte("Research questions prepared."), 0600); err != nil {
@@ -264,7 +264,7 @@ func TestStructuredBoundedHelperValidatesOutputBeforeCommitWithoutTerminalResult
 			}
 			request.RequestID = "repaired-output"
 			sess.requests <- request
-		} else if !accepted || !HasCommittedPhaseOutcome(dir, feature.PhaseInquire, RoleInquirer) {
+		} else if !accepted || !hasCommittedPhaseOutcome(dir, feature.PhaseInquire, RoleInquirer) {
 			t.Fatalf("valid output not committed before response: %s", reason)
 		}
 		return nil
@@ -280,7 +280,7 @@ func TestStructuredBoundedHelperValidatesOutputBeforeCommitWithoutTerminalResult
 		sessionID: "helper", responsePath: outputPath, requireOutput: true,
 		completionDir: dir, contractPhase: feature.PhaseInquire, contractRole: RoleInquirer,
 	}, "structured helper")
-	if err != nil || retryable || result.Status != BoundedHelperStatusCompleted || result.Result != nil || responses != 2 || !sess.stopped {
+	if err != nil || retryable || result.Status != boundedHelperStatusCompleted || result.Result != nil || responses != 2 || !sess.stopped {
 		t.Fatalf("result=%+v err=%v retryable=%v responses=%d stopped=%v", result, err, retryable, responses, sess.stopped)
 	}
 }

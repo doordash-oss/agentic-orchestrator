@@ -289,7 +289,7 @@ func TestRoadmapPlanningLoopMissingRoadmapTripsProtocolViolation(t *testing.T) {
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
 	}
-	if !strings.Contains(result.LastError, string(RolePlanRoadmapReviser)) || !strings.Contains(result.LastError, "roadmap markdown") {
+	if !strings.Contains(result.LastError, string(rolePlanRoadmapReviser)) || !strings.Contains(result.LastError, "roadmap markdown") {
 		t.Fatalf("LastError = %q, want roadmap reviser contract violation", result.LastError)
 	}
 }
@@ -393,7 +393,7 @@ func TestRoadmapPlanningLoopMissingRootOutcomeTripsProtocolViolation(t *testing.
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
 	}
-	if !strings.Contains(result.LastError, string(RolePlanRoadmapReviser)) || !strings.Contains(result.LastError, "agentico-outcome") {
+	if !strings.Contains(result.LastError, string(rolePlanRoadmapReviser)) || !strings.Contains(result.LastError, "agentico-outcome") {
 		t.Fatalf("LastError = %q, want roadmap reviser missing-root-outcome violation", result.LastError)
 	}
 }
@@ -552,7 +552,7 @@ func TestRoadmapPlanningLoopUsesAttemptDirCompletionReceipt(t *testing.T) {
 		t.Fatalf("roadmap planner AgentNames = %v, want exploration set %v", planOpts.AgentNames, explorationAgentNames())
 	}
 	wantReceipt := filepath.Join(planDir, "attempt-01", PhaseCompleteFile)
-	if _, err := ReadCompletionReceipt(filepath.Dir(wantReceipt)); err != nil {
+	if _, err := readCompletionReceipt(filepath.Dir(wantReceipt)); err != nil {
 		t.Fatalf("read attempt completion receipt %q: %v", wantReceipt, err)
 	}
 	if !strings.Contains(planOpts.SystemPrompt, "Never create, edit, or delete `phase_complete`") {
@@ -576,7 +576,7 @@ func TestPhasePlanningLoopMissingPlanMarkdownTripsProtocolViolation(t *testing.T
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
 	}
-	if !strings.Contains(result.LastError, string(RolePlanPhaseReviser)) ||
+	if !strings.Contains(result.LastError, string(rolePlanPhaseReviser)) ||
 		!strings.Contains(result.LastError, "phase plan markdown") {
 		t.Fatalf("LastError = %q, want phase plan markdown violation", result.LastError)
 	}
@@ -585,7 +585,7 @@ func TestPhasePlanningLoopMissingPlanMarkdownTripsProtocolViolation(t *testing.T
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", feedbackPath, err)
 	}
-	if !strings.Contains(string(feedback), string(RolePlanPhaseReviser)) ||
+	if !strings.Contains(string(feedback), string(rolePlanPhaseReviser)) ||
 		!strings.Contains(string(feedback), "phase plan markdown") {
 		t.Fatalf("validation-feedback.md = %q, want planner role and missing artifact", feedback)
 	}
@@ -697,7 +697,7 @@ func TestPhasePlanningLoopMissingRootOutcomeTripsProtocolViolation(t *testing.T)
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2", result.Iterations)
 	}
-	if !strings.Contains(result.LastError, string(RolePlanPhaseReviser)) || !strings.Contains(result.LastError, "agentico-outcome") {
+	if !strings.Contains(result.LastError, string(rolePlanPhaseReviser)) || !strings.Contains(result.LastError, "agentico-outcome") {
 		t.Fatalf("LastError = %q, want phase-plan reviser missing-root-outcome violation", result.LastError)
 	}
 }
@@ -1002,7 +1002,7 @@ func TestPlanValidatorHelperUsesIsolatedDirAndHarnessReceipt(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatal(err)
 	}
-	cfg := PlanLoopConfig{
+	cfg := planLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     tmpDir,
@@ -1122,7 +1122,7 @@ func TestPlanValidatorMissingRootOutcomeReturnsProtocolViolation(t *testing.T) {
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
-	if !strings.Contains(result.LastError, string(RoleValidatePhasePlanStructural)) || !strings.Contains(result.LastError, "agentico-outcome") {
+	if !strings.Contains(result.LastError, string(roleValidatePhasePlanStructural)) || !strings.Contains(result.LastError, "agentico-outcome") {
 		t.Fatalf("LastError = %q, want structural validator root-outcome violation", result.LastError)
 	}
 	if _, err := os.Stat(filepath.Join(phasePlanDir, "attempt-02", "validate-structural", "validation-structural-feedback.md")); err != nil {
@@ -1186,12 +1186,12 @@ func TestIsArtifactExcluded(t *testing.T) {
 }
 
 func TestProtocolRetrySidecarExcludedFromArtifactSelection(t *testing.T) {
-	if !IsArtifactExcluded(ProtocolRetrySidecarFile) {
-		t.Fatalf("IsArtifactExcluded(%q) = false, want true", ProtocolRetrySidecarFile)
+	if !IsArtifactExcluded(protocolRetrySidecarFile) {
+		t.Fatalf("IsArtifactExcluded(%q) = false, want true", protocolRetrySidecarFile)
 	}
 
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, ProtocolRetrySidecarFile), []byte("# not an artifact\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, protocolRetrySidecarFile), []byte("# not an artifact\n"), 0o644); err != nil {
 		t.Fatalf("write sidecar: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "research.md"), []byte("# research\n"), 0o644); err != nil {
@@ -1286,7 +1286,7 @@ func TestPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T) {
 	}
 
 	var gotSessionID string
-	result, err := runPlanningLoop(PlanLoopConfig{
+	result, err := runPlanningLoop(planLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     tmpDir,
@@ -1341,7 +1341,7 @@ func TestPhasePlanningLoopRetriesEarlyInfrastructureFailureInProcess(t *testing.
 	}
 
 	var sessionIDs []string
-	result, err := runPlanningLoop(PlanLoopConfig{
+	result, err := runPlanningLoop(planLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     tmpDir,
@@ -1435,7 +1435,7 @@ func TestLoadPriorAxisApprovals(t *testing.T) {
 		write(2, "scope", "# AxisApproved: scope\nAttempt: 2\n\n## Frozen Sections\n- Deferred Work\n")
 		write(3, "architecture", "# AxisApproved: architecture\nAttempt: 3\n\n## Frozen Sections\n- Architecture Approach\n- New Phase\n")
 
-		got := LoadPriorAxisApprovals(dir)
+		got := loadPriorAxisApprovals(dir)
 		if len(got) != 2 {
 			t.Fatalf("len = %d, want 2 (%+v)", len(got), got)
 		}
@@ -1451,7 +1451,7 @@ func TestLoadPriorAxisApprovals(t *testing.T) {
 	})
 
 	t.Run("empty directory returns nil", func(t *testing.T) {
-		if got := LoadPriorAxisApprovals(t.TempDir()); got != nil {
+		if got := loadPriorAxisApprovals(t.TempDir()); got != nil {
 			t.Errorf("got %#v, want nil", got)
 		}
 	})
@@ -1463,7 +1463,7 @@ func TestLoadPriorAxisApprovals(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(attemptDir, "axis-approved-scope.md"),
 			[]byte("# AxisApproved: scope\nAttempt: 1\n"), 0o644)
 
-		got := LoadPriorAxisApprovals(dir)
+		got := loadPriorAxisApprovals(dir)
 		if len(got) != 1 || got[0].Axis != "scope" {
 			t.Fatalf("expected single scope approval, got %#v", got)
 		}
@@ -1499,7 +1499,7 @@ func TestLoadPriorAxisApprovals(t *testing.T) {
 			AxisVerdicts: map[string]string{"scope": agentStatusChangesRequested, testAxisGrounding: agentStatusChangesRequested},
 		})
 
-		got := LoadPriorAxisApprovals(dir)
+		got := loadPriorAxisApprovals(dir)
 		for _, a := range got {
 			if a.Axis == "scope" {
 				t.Fatalf("stale scope approval leaked through regression: %#v", a)
@@ -1531,7 +1531,7 @@ func TestLoadPriorAxisApprovals(t *testing.T) {
 			AxisVerdicts: map[string]string{"scope": agentStatusApproved},
 		})
 
-		got := LoadPriorAxisApprovals(dir)
+		got := loadPriorAxisApprovals(dir)
 		if len(got) != 1 || got[0].Axis != "scope" {
 			t.Fatalf("expected scope approval to resurface, got %#v", got)
 		}
@@ -1544,14 +1544,14 @@ func TestLoadPriorAxisApprovals(t *testing.T) {
 func TestComposeValidatorResults(t *testing.T) {
 	tests := []struct {
 		name       string
-		results    []ValidatorResult
-		wantStatus ReviewStatus
+		results    []validatorResult
+		wantStatus reviewStatus
 		wantInFeed string
 		wantError  bool
 	}{
 		{
 			name: "all approved → APPROVED",
-			results: []ValidatorResult{
+			results: []validatorResult{
 				{Domain: testAxisGrounding, Status: ReviewApproved},
 				{Domain: "scope", Status: ReviewApproved},
 				{Domain: "structural", Status: ReviewApproved},
@@ -1561,11 +1561,11 @@ func TestComposeValidatorResults(t *testing.T) {
 		},
 		{
 			name: "provider error is infrastructure failure",
-			results: []ValidatorResult{
-				{Domain: "architecture", Status: ReviewFailed, Error: fmt.Errorf("codex rejected turn/start")},
+			results: []validatorResult{
+				{Domain: "architecture", Status: reviewFailed, Error: fmt.Errorf("codex rejected turn/start")},
 				{Domain: "scope", Status: ReviewApproved},
 			},
-			wantStatus: ReviewChangesRequested,
+			wantStatus: reviewChangesRequested,
 			wantInFeed: "architecture Validator — ERROR",
 			wantError:  true,
 		},
@@ -1664,13 +1664,13 @@ func TestRoadmapLoopValidatorInfrastructureFailureDoesNotRevisePlan(t *testing.T
 
 // TestReviewStatusIsApproved locks in the F4↔F1 integration contract:
 func TestReviewStatusIsApproved(t *testing.T) {
-	if !ReviewApproved.IsApproved() {
+	if !ReviewApproved.isApproved() {
 		t.Error("ReviewApproved should report IsApproved() == true")
 	}
-	if ReviewChangesRequested.IsApproved() {
+	if reviewChangesRequested.isApproved() {
 		t.Error("ReviewChangesRequested should NOT report IsApproved()")
 	}
-	if ReviewFailed.IsApproved() {
+	if reviewFailed.isApproved() {
 		t.Error("ReviewFailed should NOT report IsApproved()")
 	}
 }
@@ -1688,7 +1688,7 @@ func TestWriteAxisApprovalArtifactRoundTrip(t *testing.T) {
 			t.Fatalf("write plan: %v", err)
 		}
 
-		markers := ValidatorMarkers{AxisApproved: testAxisGrounding, FrozenSections: []string{testGroundingSectionHeading}}
+		markers := validatorMarkers{AxisApproved: testAxisGrounding, FrozenSections: []string{testGroundingSectionHeading}}
 		writeAxisApprovalArtifact(attemptDir, 1, markers, planPath)
 
 		data, err := os.ReadFile(filepath.Join(attemptDir, "axis-approved-grounding.md"))
@@ -1715,7 +1715,7 @@ func TestWriteAxisApprovalArtifactRoundTrip(t *testing.T) {
 		attemptDir := filepath.Join(dir, "attempt-01")
 		_ = os.MkdirAll(attemptDir, 0o755)
 
-		markers := ValidatorMarkers{AxisApproved: "scope", FrozenSections: []string{"## Changes Required"}}
+		markers := validatorMarkers{AxisApproved: "scope", FrozenSections: []string{"## Changes Required"}}
 		writeAxisApprovalArtifact(attemptDir, 1, markers, "")
 
 		data, _ := os.ReadFile(filepath.Join(attemptDir, "axis-approved-scope.md"))
@@ -1806,7 +1806,7 @@ func TestPlanValidationSurfaces_PassExplicitEmptyAgentNames(t *testing.T) {
 	criticScript := testutil.WriteScript(t, scriptsDir, "critic.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteAnyValidatorApproved(tmpDir)+"\n"+testutil.JSONLSuccess+"\n")
 
-	baseCfg := PlanLoopConfig{
+	baseCfg := planLoopConfig{
 		Feature:  f,
 		StateDir: stateDir,
 		WorkDir:  workDir,
@@ -1996,7 +1996,7 @@ func TestSpecializedValidation_UsesReviewModelInBoundedSessions(t *testing.T) {
 			defer sm.Shutdown()
 
 			var capturedOpts BuildSessionOpts
-			cfg := PlanLoopConfig{
+			cfg := planLoopConfig{
 				Feature:      f,
 				FeatureStore: store,
 				StateDir:     stateDir,
@@ -2162,7 +2162,7 @@ func TestRoadmapSpecializedValidation_UsesRoadmapValidatorSubset(t *testing.T) {
 
 	var validationOptsMu sync.Mutex
 	var validationOpts []BuildSessionOpts
-	cfg := PlanLoopConfig{
+	cfg := planLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
@@ -2241,7 +2241,7 @@ func TestSpecializedValidation_UsesConfiguredReviewModel(t *testing.T) {
 	defer sm.Shutdown()
 
 	var capturedOpts BuildSessionOpts
-	cfg := PlanLoopConfig{
+	cfg := planLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
@@ -2704,7 +2704,7 @@ done
 	f := newTestPlanFeature(t, workDir)
 	_ = store.Save(f)
 
-	cfg := PlanLoopConfig{
+	cfg := planLoopConfig{
 		Feature:      f,
 		FeatureStore: store,
 		StateDir:     stateDir,
@@ -2717,7 +2717,7 @@ done
 	if err != nil {
 		t.Fatalf("runSpecializedPlanValidationForArtifact: %v", err)
 	}
-	if status != ReviewChangesRequested {
+	if status != reviewChangesRequested {
 		t.Fatalf("status = %v, want CHANGES_REQUESTED", status)
 	}
 	// The sticky artifact must NOT exist for a rejected verdict.
@@ -2859,8 +2859,8 @@ func TestAxisStallState_EscalatesAfterLimit(t *testing.T) {
 	write(tasksSection)
 
 	var tracker axisStallState
-	results := []ValidatorResult{
-		{Domain: "Structural", Axis: "structural", Status: ReviewChangesRequested, Feedback: "bad"},
+	results := []validatorResult{
+		{Domain: "Structural", Axis: "structural", Status: reviewChangesRequested, Feedback: "bad"},
 	}
 
 	if stalled, _, _, _, _ := tracker.observe(1, planPath, results); stalled {
@@ -2890,8 +2890,8 @@ func TestAxisStallState_ResetsOnApproval(t *testing.T) {
 	_ = os.WriteFile(planPath, []byte("## Tasks\n- foo\n"), 0o644)
 
 	var tracker axisStallState
-	failing := []ValidatorResult{{Domain: "Structural", Axis: "structural", Status: ReviewChangesRequested}}
-	passing := []ValidatorResult{{Domain: "Structural", Axis: "structural", Status: ReviewApproved}}
+	failing := []validatorResult{{Domain: "Structural", Axis: "structural", Status: reviewChangesRequested}}
+	passing := []validatorResult{{Domain: "Structural", Axis: "structural", Status: ReviewApproved}}
 
 	_, _, _, _, _ = tracker.observe(1, planPath, failing)
 	_, _, _, _, _ = tracker.observe(2, planPath, failing)
@@ -2997,7 +2997,7 @@ func TestAxisStallState_ChangedSectionResetsCount(t *testing.T) {
 	_ = os.WriteFile(planPath, []byte("## Tasks\n- foo\n"), 0o644)
 
 	var tracker axisStallState
-	failing := []ValidatorResult{{Domain: "Structural", Axis: "structural", Status: ReviewChangesRequested}}
+	failing := []validatorResult{{Domain: "Structural", Axis: "structural", Status: reviewChangesRequested}}
 
 	_, _, _, _, _ = tracker.observe(1, planPath, failing)
 	_, _, _, _, _ = tracker.observe(2, planPath, failing)
@@ -3242,7 +3242,7 @@ func TestPlanLoopGuardDetectsRestartDuringBackoff(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatal(err)
 	}
-	cfg := PlanLoopConfig{Feature: f, FeatureStore: store}
+	cfg := planLoopConfig{Feature: f, FeatureStore: store}
 	guard := newPlanLoopGuard(cfg)
 	if guard.superseded() {
 		t.Fatal("fresh guard reports superseded")

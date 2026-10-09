@@ -158,10 +158,10 @@ func (pr *PhaseRunner) modelForRole(configured string, role llm.PhaseRole) strin
 	return pr.defaultModelForRole(role)
 }
 
-// EffortCapabilitiesForModel resolves the effort capabilities for a model
+// effortCapabilitiesForModel resolves the effort capabilities for a model
 // through the provider registry. Returns nil when the model is unknown or the
 // provider has no catalog (Auto-only).
-func (pr *PhaseRunner) EffortCapabilitiesForModel(model string) []llm.EffortLevel {
+func (pr *PhaseRunner) effortCapabilitiesForModel(model string) []llm.EffortLevel {
 	if pr.Registry == nil || model == "" {
 		return nil
 	}
@@ -189,7 +189,7 @@ func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRo
 		return llm.EffortLow, llm.EffortSourceAuto
 	}
 
-	caps := pr.EffortCapabilitiesForModel(model)
+	caps := pr.effortCapabilitiesForModel(model)
 	effectiveEffort, effortSource := llm.ResolveEffortFromString(configured, caps, pipelineEffort)
 	if llm.EffortDrifted(llm.EffortLevel(configured), caps) {
 		pr.logRuntimeWarning(f, "%s effort %q is not supported by model %q; falling back to Auto (%s)",
@@ -198,24 +198,24 @@ func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRo
 	return effectiveEffort, effortSource
 }
 
-// SessionRuntimeConfigResolver returns a role-aware resolver that reloads the
+// sessionRuntimeConfigResolver returns a role-aware resolver that reloads the
 // persisted feature before each newly-created provider session.
-func (pr *PhaseRunner) SessionRuntimeConfigResolver(featureID string) func(llm.PhaseRole) (SessionRuntimeConfig, error) {
+func (pr *PhaseRunner) sessionRuntimeConfigResolver(featureID string) func(llm.PhaseRole) (sessionRuntimeConfig, error) {
 	if pr.FeatureStore == nil || strings.TrimSpace(featureID) == "" {
 		return nil
 	}
-	return func(role llm.PhaseRole) (SessionRuntimeConfig, error) {
+	return func(role llm.PhaseRole) (sessionRuntimeConfig, error) {
 		latest, err := pr.FeatureStore.Load(featureID)
 		if err != nil {
-			return SessionRuntimeConfig{}, fmt.Errorf("load feature %s: %w", featureID, err)
+			return sessionRuntimeConfig{}, fmt.Errorf("load feature %s: %w", featureID, err)
 		}
 		field := llm.ConfigFieldForRole(role)
 		if field == "" {
-			return SessionRuntimeConfig{}, fmt.Errorf("unsupported session role %q", role)
+			return sessionRuntimeConfig{}, fmt.Errorf("unsupported session role %q", role)
 		}
 		model := pr.modelForRole(config.ModelConfigFieldByName(latest.Models, field), role)
 		effort, effortSource := pr.resolveEffortForRole(latest, role, model)
-		return SessionRuntimeConfig{
+		return sessionRuntimeConfig{
 			Model:           model,
 			EffectiveEffort: effort,
 			EffortSource:    effortSource,
@@ -223,18 +223,6 @@ func (pr *PhaseRunner) SessionRuntimeConfigResolver(featureID string) func(llm.P
 			CompletionTool:  pr.completionToolForModel(model),
 		}, nil
 	}
-}
-
-// ResolveSecondaryEffort is the exported entry point for secondary session
-// launches (validators, review helpers, fix agents, utility helpers). It resolves the effective effort and source from the same
-// configured role as the selected model: Planning for planning agents, Review
-// for validators and review axes, Implementation for implementation and fix
-// workers, and Utilities for utility helpers. Capability drift projects the
-// affected role as Auto, omits unsupported provider arguments, and emits a
-// runtime warning through the standard log channel without mutating persisted
-// state.
-func (pr *PhaseRunner) ResolveSecondaryEffort(f *feature.Feature, role llm.PhaseRole, model string) (llm.EffortLevel, llm.EffortSource) {
-	return pr.resolveEffortForRole(f, role, model)
 }
 
 // logRuntimeWarning emits a warning through the standard logger channel.
@@ -249,7 +237,7 @@ func NewPhaseRunner(sm ports.SessionManager, store ports.FeatureStore, stateDir 
 	return &PhaseRunner{SessionManager: sm, FeatureStore: store, StateDir: stateDir, CommandRunner: &execCommandRunner{}}
 }
 
-func (pr *PhaseRunner) buildSessionForFeature(f *feature.Feature) BuildSessionFunc {
+func (pr *PhaseRunner) buildSessionForFeature(f *feature.Feature) buildSessionFunc {
 	return func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 		if f != nil {
 			opts.FeatureID = f.ID
@@ -291,7 +279,7 @@ type interactivePhaseConfig struct {
 func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePhaseConfig) (string, error) {
 	artifactDir := pr.resolvePhaseArtifactDir(f, cfg.DirName)
 	_ = os.MkdirAll(artifactDir, 0o755)
-	RemoveCompletionReceipt(artifactDir)
+	removeCompletionReceipt(artifactDir)
 	phaseModel := pr.modelForRole(cfg.ConfiguredModel, cfg.ModelRole)
 
 	effectiveEffort, effortSource := pr.resolveEffortForRole(f, cfg.ModelRole, phaseModel)
@@ -345,7 +333,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		sessOpts.EffortSource = effortSource
 	}
 	sessOpts.RunNumber = f.ActiveRun
-	WriteDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, cfg.Prompt)
+	writeDebugPrompts(artifactDir, sessOpts.DebugSystemPrompt, cfg.Prompt)
 	sessOpts.PermCacheScope = ""
 	sessionCtx := phaseCtx.Child()
 	sessOpts.AskUserAutoPick = askUserAutoPickConfig(
@@ -376,10 +364,10 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 
 	sessionStart := time.Now()
 	sess.AddCleanupFunc(func() {
-		cost := ExtractSessionCost(sess)
+		cost := extractSessionCost(sess)
 		usage := toSessionUsage(cost, sess)
 		duration := time.Since(sessionStart)
-		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, cfg.Phase.DirName(), cost, SessionCostMetadata{
+		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, cfg.Phase.DirName(), cost, sessionCostMetadata{
 			SessionID:     sessionID,
 			ObserverPhase: cfg.Phase.String(),
 		})
@@ -404,7 +392,7 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 		inquiryModel = f.Models.Research
 	}
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:          BuildInquirePrompt(f),
+		Prompt:          buildInquirePrompt(f),
 		Spec:            inquirerRoleSpec,
 		DirName:         "inquire",
 		SkillName:       "inquire",
@@ -421,7 +409,7 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 // Returns the session ID. The session runs asynchronously.
 func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:          BuildResearchFromQuestionsPrompt(f, questionsPath),
+		Prompt:          buildResearchFromQuestionsPrompt(f, questionsPath),
 		Spec:            researcherRoleSpec,
 		DirName:         "research",
 		SkillName:       "research-codebase",
@@ -451,7 +439,7 @@ func explorationAgentNames() []string {
 // place; the session identity, skill, and prompt template are Design-facing.
 func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:          BuildDesignPrompt(f, researchOutput, qaFilePaths),
+		Prompt:          buildDesignPrompt(f, researchOutput, qaFilePaths),
 		Spec:            designerRoleSpec,
 		DirName:         feature.PhaseDesign.DirName(),
 		SkillName:       "design",
@@ -463,17 +451,6 @@ func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFi
 		GuidelinesDir:   pr.GuidelinesDir,
 		KBInfos:         kbInfos,
 	})
-}
-
-// RunKnowledgeBase starts a knowledge base build session for a feature's primary repo.
-// Returns the session ID. The session runs asynchronously.
-// Returns ("", nil) if the KB is already fresh and no rebuild is needed.
-// This is a backward-compatible wrapper around RunKnowledgeBaseForRepo.
-func (pr *PhaseRunner) RunKnowledgeBase(f *feature.Feature) (string, error) {
-	if len(f.Repos) == 0 {
-		return "", fmt.Errorf("feature has no repos")
-	}
-	return pr.RunKnowledgeBaseForRepo(f, f.Repos[0])
 }
 
 // RunKnowledgeBaseForRepo starts a KB build for a single repo within a feature.
@@ -542,11 +519,11 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		return "", nil
 	}
 
-	var ownerStatus FeatureStatusFunc
+	var ownerStatus featureStatusFunc
 	if pr.FeatureStore != nil {
 		ownerStatus = pr.kbLockOwnerStatus
 	}
-	locked, err := AcquireKBLockWithStatus(kbDir, f.ID, ownerStatus)
+	locked, err := acquireKBLockWithStatus(kbDir, f.ID, ownerStatus)
 	if err != nil {
 		return "", fmt.Errorf("acquiring KB lock for %s: %w", repo.Name, err)
 	}
@@ -557,10 +534,10 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	// Re-check after acquiring the lock in case another process refreshed the KB
 	// immediately before we obtained ownership.
 	if IsKBFresh(context.Background(), pr.CommandRunner, kbDir, repoPath) {
-		_ = ReleaseKBLock(kbDir, f.ID)
+		_ = releaseKBLock(kbDir, f.ID)
 		return "", nil
 	}
-	RemoveCompletionReceipt(kbDir)
+	removeCompletionReceipt(kbDir)
 
 	// Determine full vs incremental build
 	var existingKBPath, lastCommit string
@@ -596,7 +573,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		}
 	}
 
-	prompt := BuildKBPrompt(repo.Name, repoPath, kbDir, existingKBPath, lastCommit)
+	prompt := buildKBPrompt(repo.Name, repoPath, kbDir, existingKBPath, lastCommit)
 
 	kbModel := pr.modelForRole(f.Models.KBBuild, llm.PhaseKBBuild)
 	kbEffectiveEffort, kbEffortSource := pr.resolveEffortForRole(f, llm.PhaseKBBuild, kbModel)
@@ -609,7 +586,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		AskingClause:   pr.askingQuestionsClauseForModel(kbModel),
 		CompletionTool: pr.completionToolForModel(kbModel),
 	})
-	sessionID := BuildKBSessionID(f.ID, repo.Name)
+	sessionID := buildKBSessionID(f.ID, repo.Name)
 
 	featureCtx := observe.SpanContextForFeature(f.ID, f.TraceID, f.Name, f.FeatureSpanID).WithRun(f.ActiveRun)
 	phaseCtx := featureCtx.Child()
@@ -658,11 +635,11 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	if sessOpts.LogPath == "" {
 		sessOpts.LogPath = logPath
 	}
-	WriteDebugPrompts(kbDir, sessOpts.DebugSystemPrompt, prompt)
+	writeDebugPrompts(kbDir, sessOpts.DebugSystemPrompt, prompt)
 
 	sess, err := pr.SessionManager.StartSession(sessionID, f.ID, feature.PhaseKnowledgeBase, cmd, workDir, env, sessOpts)
 	if err != nil {
-		_ = ReleaseKBLock(kbDir, f.ID)
+		_ = releaseKBLock(kbDir, f.ID)
 		return "", fmt.Errorf("starting KB session: %w", err)
 	}
 
@@ -672,8 +649,8 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	pr.installSubagentProgressTracker(sess, sessionCtx, feature.PhaseKnowledgeBase.String(), sessionID)
 	sessionStart := time.Now()
 	sess.AddCleanupFunc(func() {
-		cost := ExtractSessionCost(sess)
-		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, feature.PhaseKnowledgeBase.DirName(), cost, SessionCostMetadata{
+		cost := extractSessionCost(sess)
+		_ = accumulateSessionCostToFeatureKey(pr.FeatureStore, f.ID, feature.PhaseKnowledgeBase.DirName(), cost, sessionCostMetadata{
 			SessionID:     sessionID,
 			ObserverPhase: feature.PhaseKnowledgeBase.String(),
 			RepoName:      repo.Name,
@@ -685,7 +662,7 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	// KB state is only saved on confirmed success (see handlePhaseCompleted).
 	featureID := f.ID
 	sess.AddCleanupFunc(func() {
-		_ = ReleaseKBLock(kbDir, featureID)
+		_ = releaseKBLock(kbDir, featureID)
 	})
 
 	// Fallback for custom SessionManager implementations that do not honor
@@ -715,26 +692,6 @@ func (pr *PhaseRunner) kbLockOwnerStatus(featureID string) (int, bool) {
 		return 0, false
 	}
 	return int(owner.Status), true
-}
-
-// RunAllKnowledgeBuilds starts KB builds for all repos in a feature.
-// Returns a map of repoName -> sessionID for repos that started sessions.
-// Repos with fresh KBs are skipped (not in the returned map).
-func (pr *PhaseRunner) RunAllKnowledgeBuilds(f *feature.Feature) (map[string]string, error) {
-	if len(f.Repos) == 0 {
-		return nil, fmt.Errorf("feature has no repos")
-	}
-	sessions := make(map[string]string)
-	for _, repo := range f.Repos {
-		sessionID, err := pr.RunKnowledgeBaseForRepo(f, repo)
-		if err != nil {
-			return sessions, fmt.Errorf("KB build for repo %s: %w", repo.Name, err)
-		}
-		if sessionID != "" {
-			sessions[repo.Name] = sessionID
-		}
-	}
-	return sessions, nil
 }
 
 // knowledgeBaseAgentNames returns the subagents allowed in Knowledge Base sessions.
@@ -776,7 +733,7 @@ func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, 
 
 // planLoopConfig builds the planning-loop configuration shared by roadmap and
 // phase planning.
-func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFilePaths []string, kbInfos []KBInfo) PlanLoopConfig {
+func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFilePaths []string, kbInfos []KBInfo) planLoopConfig {
 	// Planning runs in the feature worktree (same as implementation), so plan
 	// validators see prior-phase symbols rather than the base repo clone.
 	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
@@ -794,7 +751,7 @@ func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFil
 	planEffort, planEffortSource := pr.resolveEffortForRole(f, llm.PhasePlanning, planningModel)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
 	validatorEffort, validatorEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
-	return PlanLoopConfig{
+	return planLoopConfig{
 		Registry:                     pr.Registry,
 		Feature:                      f,
 		FeatureStore:                 pr.FeatureStore,
@@ -824,7 +781,7 @@ func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFil
 }
 
 // startPlanningLoop runs the planning loop for kind in the background.
-func (pr *PhaseRunner) startPlanningLoop(cfg PlanLoopConfig, kind planArtifactKind) chan *PlanLoopResult {
+func (pr *PhaseRunner) startPlanningLoop(cfg planLoopConfig, kind planArtifactKind) chan *PlanLoopResult {
 	return startLoop(func() (*PlanLoopResult, error) {
 		return runPlanningLoop(cfg, kind, pr.SessionManager)
 	}, func(lastError string) *PlanLoopResult {
@@ -845,87 +802,6 @@ func startLoop[R any](loop func() (*R, error), failed func(lastError string) *R)
 		resultCh <- result
 	}()
 	return resultCh
-}
-
-// RunImplementation starts the implementation loop for a feature.
-// This runs asynchronously and returns a channel that receives the result.
-func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kbInfos ...KBInfo) (chan *LoopResult, error) {
-	workDir := pr.StateDir
-	if len(f.Repos) > 0 {
-		r := f.Repos[0]
-		if r.WorktreePath != "" {
-			workDir = r.WorktreePath
-		} else {
-			workDir = r.Path
-		}
-	}
-
-	maxIter, maxFails, maxNoProg := pr.resolveLoopLimits(f)
-	implementationModel := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
-	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
-
-	// Resolve Implementation effort from the configured value, the selected
-	// model's capabilities, and the active pipeline. Auto (or empty) preserves
-	// current pipeline behavior; a supported explicit value is used unchanged;
-	// capability drift falls back to the pipeline level with a runtime warning.
-	pipelineEffort := f.EffectivePipeline().EffortLevel()
-	effortCaps := pr.EffortCapabilitiesForModel(implementationModel)
-	effectiveEffort, effortSource := llm.ResolveEffortFromString(f.Effort.Implementation, effortCaps, pipelineEffort)
-	if llm.EffortDrifted(llm.EffortLevel(f.Effort.Implementation), effortCaps) {
-		pr.logRuntimeWarning(f, "implementation effort %q is not supported by model %q; falling back to Auto (%s)",
-			f.Effort.Implementation, implementationModel, string(pipelineEffort))
-	}
-	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
-
-	phaseType := f.RoadmapPhaseType
-	roadmapPath := f.Artifacts["roadmap"]
-
-	exitCriteria := resolvePromptIntent(f).ExitCriteria
-
-	cfg := ImplementConfig{
-		Feature:                    f,
-		FeatureStore:               pr.FeatureStore,
-		WorkDir:                    workDir,
-		PlanPath:                   planPath,
-		KBInfos:                    kbInfos,
-		MaxIterations:              maxIter,
-		MaxConsecFails:             maxFails,
-		MaxConsecNoProgress:        maxNoProg,
-		ExitCriteria:               exitCriteria,
-		Model:                      implementationModel,
-		ReviewModel:                reviewModel,
-		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
-		ArtifactDir:                pr.resolveImplementArtifactDir(f),
-		StateDir:                   filepath.Join(pr.StateDir, f.ID),
-		RunDir:                     ActiveRunDir(pr.StateDir, f),
-		PhaseType:                  phaseType,
-		RoadmapPath:                roadmapPath,
-		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
-		PermissionCache:            pr.PermissionCache,
-		CommandRunner:              pr.CommandRunner,
-		CapabilityPolicy:           pr.CapabilityPolicy,
-		BuildSession:               pr.buildSessionForFeature(f),
-		AskingClause:               pr.askingQuestionsClauseForModel(implementationModel),
-		CompletionTool:             pr.completionToolForModel(implementationModel),
-		EffortLevel:                pipelineEffort,
-		EffectiveEffort:            effectiveEffort,
-		EffortSource:               effortSource,
-		ReviewEffectiveEffort:      reviewEffort,
-		ReviewEffortSource:         reviewEffortSource,
-		SkillsDir:                  pr.SkillsDir,
-		GuidelinesDir:              pr.GuidelinesDir,
-		SkipIterationReview:        f.EffectivePipeline().ShouldSkipIterationReview(),
-		Observer:                   pr.Observer,
-		OnVerificationProgress:     pr.OnVerificationProgress,
-		RoundCommitHook:            pr.RoundCommitHook,
-		PhaseExitGate:              pr.phaseExitGate(f),
-	}
-
-	return startLoop(func() (*LoopResult, error) {
-		return RunImplementationLoop(cfg, pr.SessionManager)
-	}, func(lastError string) *LoopResult {
-		return &LoopResult{FinalStatus: "failed", LastError: lastError}
-	}), nil
 }
 
 // RunMultiRepoImplementation starts the unified phase-implement loop for a
@@ -993,7 +869,7 @@ func (pr *PhaseRunner) multiRepoOrchestratorConfig(f *feature.Feature, passRole 
 		Config:                     pr.Config,
 		Model:                      model,
 		ReviewModel:                reviewModel,
-		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
+		ResolveSessionConfig:       pr.sessionRuntimeConfigResolver(f.ID),
 		MaxIterations:              maxIter,
 		MaxConsecFails:             maxFails,
 		MaxConsecNoProgress:        maxNoProg,
@@ -1019,20 +895,6 @@ func (pr *PhaseRunner) multiRepoOrchestratorConfig(f *feature.Feature, passRole 
 		RoundCommitHook:            pr.RoundCommitHook,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
-}
-
-// GetPhaseOutput reads the output from a completed session. Paths route
-// through the feature's active run directory so sealed runs are not read.
-func (pr *PhaseRunner) GetPhaseOutput(f *feature.Feature, phase string) string {
-	if f == nil {
-		return ""
-	}
-	logPath := filepath.Join(ActiveRunDir(pr.StateDir, f), phase, "output.txt")
-	data, err := os.ReadFile(logPath)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
 }
 
 // resolveLoopLimits returns (maxIterations, maxConsecFails, maxConsecNoProgress)
@@ -1245,18 +1107,6 @@ func installAutoReviewObserver(handler ports.PermissionHandler, observer *observ
 	}
 }
 
-// resolveImplementArtifactDir returns the artifact directory for implementation
-// within the feature's active run. When in a roadmap phase, uses phase-scoped
-// directories.
-func (pr *PhaseRunner) resolveImplementArtifactDir(f *feature.Feature) string {
-	runDir := ActiveRunDir(pr.StateDir, f)
-	base := runDir
-	if f.CurrentRoadmapPhase > 0 {
-		return filepath.Join(base, fmt.Sprintf("phase-%02d", f.CurrentRoadmapPhase), "implement")
-	}
-	return filepath.Join(base, "implement")
-}
-
 // resolveUnifiedWorkDir computes the working directory and additional directories
 // for unified phases (Inquire, Research, Design, Plan).
 //
@@ -1347,9 +1197,9 @@ type BuildSessionOpts struct {
 	AutomaticReviewMode feature.AutomaticReviewMode
 }
 
-// BuildSessionFunc is the callback signature for session creation via the registry.
+// buildSessionFunc is the callback signature for session creation via the registry.
 // Used by desktop app components and loop configs that need to create sessions.
-type BuildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
+type buildSessionFunc func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
 var sessionWatchdogConfig = ports.SessionWatchdogConfig{
 	PendingToolIdleTimeout: 5 * time.Minute,
@@ -1697,11 +1547,4 @@ func currentAgenticoBinPath() string {
 		path = abs
 	}
 	return strings.TrimSpace(path)
-}
-
-// AskingClauseForModel returns the asking-questions clause for a given model.
-// Exported wrapper around the private askingQuestionsClauseForModel for use
-// by external callers (e.g. desktop app).
-func (pr *PhaseRunner) AskingClauseForModel(model string) string {
-	return pr.askingQuestionsClauseForModel(model)
 }

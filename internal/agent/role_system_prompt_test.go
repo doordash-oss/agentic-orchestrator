@@ -131,7 +131,7 @@ func TestRoleSystemPromptAdvertisesOnlyValidOutcomeVerbs(t *testing.T) {
 		t.Fatalf("implement prompt lost the retry outcome:\n%s", implementPrompt)
 	}
 
-	qaSpec, ok := lookupRoleSpec(feature.PhaseReview, RoleImplementationReviewQA)
+	qaSpec, ok := lookupRoleSpec(feature.PhaseReview, roleImplementationReviewQA)
 	if !ok {
 		t.Fatal("missing RoleSpec for the QA review axis")
 	}
@@ -197,7 +197,7 @@ func TestBuildReviewFamilySystemPromptsFromRoleSpec(t *testing.T) {
 	}{
 		{
 			name:      "final review fixer",
-			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, RoleFinalReviewFixer),
+			spec:      mustLookupRoleSpecForTest(t, feature.PhaseReview, roleFinalReviewFixer),
 			iterDir:   "/state/feat/run-001/review/iteration-01",
 			wantRoots: []string{"`iteration_dir`: /state/feat/run-001/review/iteration-01"},
 			wantSkill: "/skills/final-fix/SKILL.md",
@@ -346,7 +346,7 @@ func TestRoleSystemPromptSuppressSubagents(t *testing.T) {
 }
 
 func TestBuildValidatorSystemPromptFromRoleSpec(t *testing.T) {
-	role, ok := lookupRoleSpec(feature.PhasePlan, RoleValidateRoadmapArchitecture)
+	role, ok := lookupRoleSpec(feature.PhasePlan, roleValidateRoadmapArchitecture)
 	if !ok {
 		t.Fatal("lookupRoleSpec(plan, validate_roadmap_architecture) ok = false, want true")
 	}

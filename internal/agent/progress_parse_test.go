@@ -79,10 +79,10 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 	tests := []struct {
 		name  string
 		state string
-		want  IterationState
+		want  iterationState
 	}{
-		{testResultSuccessValue, agentStatusSuccess, StateSuccess},
-		{"retry", "RETRY", StateRetry},
+		{testResultSuccessValue, agentStatusSuccess, stateSuccess},
+		{"retry", "RETRY", stateRetry},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -94,11 +94,11 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			parsed, err := ParseProgressMd(path)
+			parsed, err := parseProgressMd(path)
 			if err != nil {
 				t.Fatalf("ParseProgressMd: %v", err)
 			}
-			if !parsed.OK() {
+			if !parsed.ok() {
 				t.Fatalf("expected OK; violations=%v", parsed.ProtocolViolations)
 			}
 			if parsed.State != tt.want {
@@ -109,11 +109,11 @@ func TestParseProgressMd_RoundTripStates(t *testing.T) {
 }
 
 func TestParseProgressMd_MissingFile(t *testing.T) {
-	parsed, err := ParseProgressMd(filepath.Join(t.TempDir(), "nope.md"))
+	parsed, err := parseProgressMd(filepath.Join(t.TempDir(), "nope.md"))
 	if err != nil {
 		t.Fatalf("expected nil err for missing file, got: %v", err)
 	}
-	if parsed.OK() {
+	if parsed.ok() {
 		t.Errorf("expected protocol violation for missing file; got OK=true")
 	}
 	if len(parsed.ProtocolViolations) == 0 {
@@ -138,11 +138,11 @@ func TestParseProgressMd_RejectsMissingSection(t *testing.T) {
 SUCCESS
 `
 	path, _ := writeTempProgress(t, body)
-	parsed, err := ParseProgressMd(path)
+	parsed, err := parseProgressMd(path)
 	if err != nil {
 		t.Fatalf("ParseProgressMd: %v", err)
 	}
-	if parsed.OK() {
+	if parsed.ok() {
 		t.Fatalf("expected protocol violation for missing Deferrals section")
 	}
 	found := false
@@ -164,11 +164,11 @@ func TestParseProgressMd_RejectsInvalidStateToken(t *testing.T) {
 	body := progressMdHappy("MAYBE", iterDir, "")
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if parsed.OK() {
+	parsed, _ := parseProgressMd(path)
+	if parsed.ok() {
 		t.Fatalf("expected violation for invalid state token")
 	}
-	if parsed.State != StateInvalid {
+	if parsed.State != stateInvalid {
 		t.Errorf("State = %v, want StateInvalid", parsed.State)
 	}
 	hit := false
@@ -217,8 +217,8 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if parsed.OK() {
+	parsed, _ := parseProgressMd(path)
+	if parsed.ok() {
 		t.Fatalf("expected violation for malformed Deferrals YAML")
 	}
 	hit := false
@@ -271,8 +271,8 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if parsed.OK() {
+	parsed, _ := parseProgressMd(path)
+	if parsed.ok() {
 		t.Fatalf("expected violation for manual-follow-up deferral shape")
 	}
 	hit := false
@@ -322,8 +322,8 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if parsed.OK() {
+	parsed, _ := parseProgressMd(path)
+	if parsed.ok() {
 		t.Fatalf("expected violation for incomplete deferral entry")
 	}
 	hitPhase := false
@@ -374,8 +374,8 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if parsed.OK() {
+	parsed, _ := parseProgressMd(path)
+	if parsed.ok() {
 		t.Fatalf("expected violation when both deferrals keys are absent")
 	}
 	hits := 0
@@ -424,8 +424,8 @@ SUCCESS
 `
 	path := filepath.Join(dir, "progress.md")
 	_ = os.WriteFile(path, []byte(body), 0o644)
-	parsed, _ := ParseProgressMd(path)
-	if !parsed.OK() {
+	parsed, _ := parseProgressMd(path)
+	if !parsed.ok() {
 		t.Fatalf("expected future-phase prose to stay out of protocol validation; got %v", parsed.ProtocolViolations)
 	}
 }
@@ -441,11 +441,11 @@ func TestParseProgressMd_RejectsAgentAuthoredQuestionGate(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := ParseProgressMd(path)
+	parsed, err := parseProgressMd(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.OK() || !strings.Contains(strings.Join(parsed.ProtocolViolations, "\n"), "AskUserQuestion") {
+	if parsed.ok() || !strings.Contains(strings.Join(parsed.ProtocolViolations, "\n"), "AskUserQuestion") {
 		t.Fatalf("violations = %v, want formal AskUserQuestion guidance", parsed.ProtocolViolations)
 	}
 }
@@ -459,8 +459,8 @@ func TestProgressFingerprint_StableAcrossIterationDirs(t *testing.T) {
 	pathB := filepath.Join(dir, "b.md")
 	_ = os.WriteFile(pathA, []byte(progressMdHappy(agentStatusSuccess, "/iter/01", "")), 0o644)
 	_ = os.WriteFile(pathB, []byte(progressMdHappy(agentStatusSuccess, "/iter/02", "")), 0o644)
-	fpA, errA := ProgressFingerprint(pathA)
-	fpB, errB := ProgressFingerprint(pathB)
+	fpA, errA := progressFingerprint(pathA)
+	fpB, errB := progressFingerprint(pathB)
 	if errA != nil || errB != nil {
 		t.Fatalf("fingerprint errors: %v / %v", errA, errB)
 	}
@@ -477,8 +477,8 @@ func TestProgressFingerprint_ChangesWhenHandoffChanges(t *testing.T) {
 	bodyB := strings.Replace(bodyA, "did the thing", "did a different thing", 1)
 	_ = os.WriteFile(pathA, []byte(bodyA), 0o644)
 	_ = os.WriteFile(pathB, []byte(bodyB), 0o644)
-	fpA, _ := ProgressFingerprint(pathA)
-	fpB, _ := ProgressFingerprint(pathB)
+	fpA, _ := progressFingerprint(pathA)
+	fpB, _ := progressFingerprint(pathB)
 	if fpA == fpB {
 		t.Errorf("fingerprints should differ when Iteration Handoff body changes")
 	}

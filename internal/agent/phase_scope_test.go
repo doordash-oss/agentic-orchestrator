@@ -33,7 +33,7 @@ func TestPhaseScope_SingleRepoUntagged(t *testing.T) {
 
 Some details.
 `
-	got := PhaseScopeFromText(feat, plan)
+	got := phaseScopeFromText(feat, plan)
 	if !got.ScopeOK() {
 		t.Fatalf("expected ScopeOK, got issues: %+v", got.Issues)
 	}
@@ -58,7 +58,7 @@ Body for api.
 
 Body for web.
 `
-	got := PhaseScopeFromText(feat, plan)
+	got := phaseScopeFromText(feat, plan)
 	if !got.ScopeOK() {
 		t.Fatalf("expected ScopeOK, got issues: %+v", got.Issues)
 	}
@@ -82,7 +82,7 @@ Body.
 
 Body.
 `
-	got := PhaseScopeFromText(feat, plan)
+	got := phaseScopeFromText(feat, plan)
 	if got.ScopeOK() {
 		t.Fatalf("expected validation failure, got OK with repos %v", got.Repos)
 	}
@@ -108,7 +108,7 @@ func TestPhaseScope_RepoNotInFeature(t *testing.T) {
 
 Body.
 `
-	got := PhaseScopeFromText(feat, plan)
+	got := phaseScopeFromText(feat, plan)
 	if got.ScopeOK() {
 		t.Fatalf("expected validation failure, got OK")
 	}
@@ -128,7 +128,7 @@ func TestPhaseScope_MultipleRepoTagsRejectedWithoutStagingEither(t *testing.T) {
 		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}, {Name: testRepoNameWeb}},
 	}
 	plan := "## Tasks\n\n### Task 1: ambiguous\n**Repo:** api\n**Repo:** web\n"
-	got := PhaseScopeFromText(feat, plan)
+	got := phaseScopeFromText(feat, plan)
 	if got.ScopeOK() || len(got.Repos) != 0 {
 		t.Fatalf("PhaseScopeFromText() = repos %v, issues %+v; want ambiguous task rejected without staging", got.Repos, got.Issues)
 	}
@@ -141,7 +141,7 @@ func TestPhaseScope_EmptyPlan(t *testing.T) {
 	feat := &feature.Feature{
 		Repos: []feature.FeatureRepo{{Name: testRepoNameAPI}},
 	}
-	got := PhaseScopeFromText(feat, "# Plan\n\nNo tasks here.\n")
+	got := phaseScopeFromText(feat, "# Plan\n\nNo tasks here.\n")
 	if got.ScopeOK() {
 		t.Fatalf("expected validation failure for empty plan")
 	}
@@ -161,7 +161,7 @@ func TestPhaseScope_PartialSubset(t *testing.T) {
 
 Body.
 `
-	got := PhaseScopeFromText(feat, plan)
+	got := phaseScopeFromText(feat, plan)
 	if !got.ScopeOK() {
 		t.Fatalf("expected OK, got %+v", got.Issues)
 	}

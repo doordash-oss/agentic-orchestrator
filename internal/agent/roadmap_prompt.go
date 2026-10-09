@@ -63,7 +63,7 @@ func roadmapFeatureViews(f *feature.Feature) []prompts.RepoView {
 }
 
 // axisApprovalViews converts []AxisApproval to []prompts.AxisApprovalView.
-func axisApprovalViews(approvals []AxisApproval) []prompts.AxisApprovalView {
+func axisApprovalViews(approvals []axisApproval) []prompts.AxisApprovalView {
 	views := make([]prompts.AxisApprovalView, 0, len(approvals))
 	for _, a := range approvals {
 		views = append(views, prompts.AxisApprovalView{
@@ -92,11 +92,11 @@ func refactorPassForkPoint(f *feature.Feature) string {
 	return strings.Join(parts, ", ")
 }
 
-// BuildRoadmapPromptWithResearch constructs the initial roadmap prompt with
+// buildRoadmapPromptWithResearch constructs the initial roadmap prompt with
 // the approved design artifact plus the research artifact as grounding context.
 //
 // The prose lives in internal/agent/prompts/templates/roadmap.user.tmpl.
-func BuildRoadmapPromptWithResearch(f *feature.Feature, designArtifactPath, researchArtifactPath string, qaFilePaths []string) string {
+func buildRoadmapPromptWithResearch(f *feature.Feature, designArtifactPath, researchArtifactPath string, qaFilePaths []string) string {
 	repos := roadmapFeatureViews(f)
 	return prompts.MustRender(prompts.TemplateRoadmapUser, roadmapUserInput{
 		Name:                  f.Name,
@@ -120,7 +120,7 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, designArtifactPath, rese
 	})
 }
 
-// BuildRoadmapRevisionPrompt constructs the prompt for roadmap revision
+// buildRoadmapRevisionPrompt constructs the prompt for roadmap revision
 // after critic feedback. When approvals is non-empty, a "Prior Axis Approvals"
 // block is injected so the reviser can apply the Sticky Approval Respect
 // procedure (documented in skills/revise-roadmap/SKILL.md).
@@ -131,7 +131,7 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, designArtifactPath, rese
 //
 // The prose lives in
 // internal/agent/prompts/templates/roadmap_revision.user.tmpl.
-func BuildRoadmapRevisionPrompt(skillsDir, previousRoadmapPath, criticFeedback string, attempt int, approvals []AxisApproval) string {
+func buildRoadmapRevisionPrompt(skillsDir, previousRoadmapPath, criticFeedback string, attempt int, approvals []axisApproval) string {
 	return prompts.MustRender(prompts.TemplateRoadmapRevisionUser, roadmapRevisionUserInput{
 		Attempt:        attempt,
 		CriticFeedback: criticFeedback,
@@ -145,7 +145,7 @@ func BuildRoadmapRevisionPrompt(skillsDir, previousRoadmapPath, criticFeedback s
 	})
 }
 
-// BuildPhasePlanPromptWithResearch constructs the initial per-phase plan prompt
+// buildPhasePlanPromptWithResearch constructs the initial per-phase plan prompt
 // with the approved roadmap plus the research artifact as grounding context.
 //
 // The prose lives in internal/agent/prompts/templates/phase_plan.user.tmpl.
@@ -158,7 +158,7 @@ func BuildRoadmapRevisionPrompt(skillsDir, previousRoadmapPath, criticFeedback s
 // omitted — the approved roadmap already incorporates them. Phase-Plan's
 // own qa-answers.md is NOT propagated to Implement (Implement reads
 // the phase-plan markdown artifact, which already encodes all decisions).
-func BuildPhasePlanPromptWithResearch(f *feature.Feature, roadmapPath, researchArtifactPath string, phase RoadmapPhase, qaFilePaths []string) string {
+func buildPhasePlanPromptWithResearch(f *feature.Feature, roadmapPath, researchArtifactPath string, phase RoadmapPhase, qaFilePaths []string) string {
 	return prompts.MustRender(prompts.TemplatePhasePlanUser, phasePlanUserInput{
 		Phase: phasePlanView{
 			Number:        phase.Number,
@@ -179,7 +179,7 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, roadmapPath, researchA
 	})
 }
 
-// BuildPhasePlanRevisionPrompt constructs the prompt for per-phase plan revision
+// buildPhasePlanRevisionPrompt constructs the prompt for per-phase plan revision
 // after critic feedback. When approvals is non-empty, a "Prior Axis Approvals"
 // block is injected so the reviser preserves sticky-approved sections across
 // attempts (see skills/revise-phase-plan/SKILL.md, rule 6).
@@ -190,7 +190,7 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, roadmapPath, researchA
 //
 // The prose lives in
 // internal/agent/prompts/templates/phase_plan_revision.user.tmpl.
-func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback string, phase RoadmapPhase, attempt int, approvals []AxisApproval) string {
+func buildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback string, phase RoadmapPhase, attempt int, approvals []axisApproval) string {
 	return prompts.MustRender(prompts.TemplatePhasePlanRevisionUser, phasePlanRevisionUserInput{
 		Attempt: attempt,
 		Phase: phasePlanView{

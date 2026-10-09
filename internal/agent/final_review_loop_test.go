@@ -129,7 +129,7 @@ func runFinalReviewWithFixScript(t *testing.T, fixBody func(artDir string) strin
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -171,7 +171,7 @@ func runFinalReviewWithReviewScriptAndResult(t *testing.T, reviewBody func(artDi
 		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": reviewScript}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -238,7 +238,7 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		},
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -291,12 +291,12 @@ func TestPriorImplementationEvidenceContextForRunListsReferencedEvidenceArtifact
 		t.Fatalf("write testing contract: %v", err)
 	}
 	implementDir := filepath.Join(phaseDir, feature.PhaseImplement.DirName())
-	am := NewArtifactManager(implementDir)
-	iterDir, err := am.CreateIterationDir(2)
+	am := newArtifactManager(implementDir)
+	iterDir, err := am.createIterationDir(2)
 	if err != nil {
 		t.Fatalf("CreateIterationDir() error = %v", err)
 	}
-	if err := am.WriteMeta(iterDir, IterationMeta{
+	if err := am.writeMeta(iterDir, iterationMeta{
 		Iteration:    2,
 		AgentStatus:  agentStatusSuccess,
 		ReviewStatus: ReviewApproved.String(),
@@ -398,7 +398,7 @@ func TestRunFeatureFinalReviewLoop_ReviewApprovedAtomicallyStampsAllRepos(t *tes
 		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": approveScript}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -475,7 +475,7 @@ done
 		},
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -525,7 +525,7 @@ func TestRunFeatureFinalReviewLoop_ReviewerRepoMutationTripsProtocolViolationAnd
 		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": reviewScript}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -624,7 +624,7 @@ fi`,
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -721,7 +721,7 @@ fi
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -794,7 +794,7 @@ fi`,
 		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
 	}
 
-	if _, err := RunFeatureFinalReviewLoop(cfg, sm); err != nil {
+	if _, err := runFeatureFinalReviewLoop(cfg, sm); err != nil {
 		t.Fatalf("loop: %v", err)
 	}
 
@@ -912,7 +912,7 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 		Observer:       observe.New(true, observeDir, false, "", false, "test"),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -1019,7 +1019,7 @@ func TestRunFeatureFinalReviewLoop_QAAxisUsesLiveRunPosture(t *testing.T) {
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
-	result, err := RunFeatureFinalReviewLoop(OrchestratorConfig{
+	result, err := runFeatureFinalReviewLoop(OrchestratorConfig{
 		Feature:        f,
 		FeatureStore:   store,
 		StateDir:       env.stateDir,
@@ -1106,7 +1106,7 @@ func TestRunFeatureFinalReviewLoop_FrontendDesignAxisUsesLiveRunPosture(t *testi
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
-	result, err := RunFeatureFinalReviewLoop(OrchestratorConfig{
+	result, err := runFeatureFinalReviewLoop(OrchestratorConfig{
 		Feature:        f,
 		FeatureStore:   store,
 		StateDir:       env.stateDir,
@@ -1253,7 +1253,7 @@ func TestRunFeatureFinalReviewLoop_MaxIterationsAtomicFailureStamp(t *testing.T)
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1316,7 +1316,7 @@ func TestRunFeatureFinalReviewLoop_ConsecutiveFailuresSafetyRail(t *testing.T) {
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1389,7 +1389,7 @@ fi`,
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
 	}
@@ -1411,11 +1411,11 @@ fi`,
 		filepath.Join(artDir, "iteration-02", "qa"),
 		filepath.Join(artDir, "iteration-02", "cleanliness"),
 	} {
-		if _, err := ReadCompletionReceipt(dir); err != nil {
+		if _, err := readCompletionReceipt(dir); err != nil {
 			t.Fatalf("harness completion receipt missing from %q: %v", dir, err)
 		}
 	}
-	if _, err := ReadCompletionReceipt(filepath.Join(artDir, "iteration-02")); err == nil {
+	if _, err := readCompletionReceipt(filepath.Join(artDir, "iteration-02")); err == nil {
 		t.Fatal("approved review iteration unexpectedly has an aggregate fixer receipt")
 	}
 }
@@ -1486,7 +1486,7 @@ fi`,
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1592,8 +1592,8 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 	if err := os.MkdirAll(iter01, 0o755); err != nil {
 		t.Fatalf("mkdir iter01: %v", err)
 	}
-	am := NewArtifactManager(artDir)
-	if err := am.WriteMeta(iter01, IterationMeta{
+	am := newArtifactManager(artDir)
+	if err := am.writeMeta(iter01, iterationMeta{
 		Iteration:    1,
 		ReviewStatus: "changes_requested",
 		StartedAt:    time.Now(),
@@ -1633,7 +1633,7 @@ func TestRunFeatureFinalReviewLoop_CrashRecoveryResumesFromInterruptedIter(t *te
 		}),
 	}
 
-	result, err := RunFeatureFinalReviewLoop(cfg, sm)
+	result, err := runFeatureFinalReviewLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1682,7 +1682,7 @@ func TestRunFeatureFinalReviewLoop_NoStagedReposShortCircuits(t *testing.T) {
 		FeatureStore: store,
 		StateDir:     env.stateDir,
 	}
-	result, err := RunFeatureFinalReviewLoop(cfg, nil)
+	result, err := runFeatureFinalReviewLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("loop: %v", err)
 	}
@@ -1726,7 +1726,7 @@ func TestRunFeatureFinalReviewLoop_DoesNotPersistReviewerTestingContract(t *test
 		BuildSession:   mockBuildSessionByModel(map[string]string{"reviewer": approveScript}),
 	}
 
-	if _, err := RunFeatureFinalReviewLoop(cfg, sm); err != nil {
+	if _, err := runFeatureFinalReviewLoop(cfg, sm); err != nil {
 		t.Fatalf("loop: %v", err)
 	}
 

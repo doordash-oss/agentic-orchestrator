@@ -53,12 +53,12 @@ type PRContext struct {
 	DiffStat           string // `git diff --stat base...HEAD`
 }
 
-// BuildPRDescriptionPrompt constructs the prompt for generating a PR description
+// buildPRDescriptionPrompt constructs the prompt for generating a PR description
 // from a lean PRContext. Empty sections are omitted so the model is not asked to
 // reason about them.
 //
 // The prose lives in internal/agent/prompts/templates/pr_description.user.tmpl.
-func BuildPRDescriptionPrompt(ctx PRContext) string {
+func buildPRDescriptionPrompt(ctx PRContext) string {
 	return prompts.MustRender(prompts.TemplatePRDescriptionUser, prompts.PRDescriptionUserInput{
 		FeatureName:        ctx.FeatureName,
 		FeatureDescription: ctx.FeatureDescription,
@@ -87,12 +87,12 @@ func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, 
 			return "", "", fmt.Errorf("generating description: running utility session: determining work dir: %w", err)
 		}
 	}
-	result, runErr := pr.RunBoundedHelper(ctx, BoundedHelperConfig{
+	result, runErr := pr.runBoundedHelper(ctx, boundedHelperConfig{
 		SessionID:     fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
 		FeatureID:     featureID,
 		Phase:         feature.PhasePublish,
 		Model:         model,
-		Prompt:        BuildPRDescriptionPrompt(prCtx),
+		Prompt:        buildPRDescriptionPrompt(prCtx),
 		SystemPrompt:  prDescriptionSystemPrompt,
 		WorkDir:       workDir,
 		EffortLevel:   llm.EffortLow,
@@ -106,20 +106,20 @@ func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, 
 		return "", "", fmt.Errorf("generating description: %w", runErr)
 	}
 
-	title, body = ParsePRDescription(result.Output)
+	title, body = parsePRDescription(result.Output)
 	if title == "" || body == "" {
 		return "", "", fmt.Errorf("generating description: model returned an incomplete title or body")
 	}
 	return title, body, nil
 }
 
-// ParsePRDescription extracts title and body from the generation output. The
+// parsePRDescription extracts title and body from the generation output. The
 // parser is intentionally lenient: output need not contain explicit TITLE:/BODY:
 // markers. When markers are absent it treats the first markdown heading (or the
 // first non-empty line) as the title and the rest as the body. Returns empty
 // strings for whichever field cannot be extracted so callers can decide to
 // fall back deterministically.
-func ParsePRDescription(output string) (title, body string) {
+func parsePRDescription(output string) (title, body string) {
 	output = strings.TrimSpace(output)
 	if output == "" {
 		return "", ""

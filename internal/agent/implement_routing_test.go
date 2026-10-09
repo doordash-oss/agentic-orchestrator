@@ -61,7 +61,7 @@ func TestImplementLoop_Routing_SUCCESS_RunsReviewGate(t *testing.T) {
 		ArtifactDir: artifactDir, StateDir: stateDir,
 		BuildSession: mockBuildSession(agentScript, reviewScript),
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
@@ -160,7 +160,7 @@ fi
 		ArtifactDir: artifactDir, StateDir: stateDir,
 		BuildSession: mockBuildSession(agentScript, reviewScript),
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
@@ -172,10 +172,10 @@ fi
 	}
 	// Each iteration's meta.yaml should record AgentStatus=RETRY,
 	// ReviewStatus=skipped_retry.
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 	for n := 1; n <= 3; n++ {
 		iterDir := filepath.Join(artifactDir, "iteration-"+padIter(n))
-		meta, err := am.ReadMeta(iterDir)
+		meta, err := am.readMeta(iterDir)
 		if err != nil {
 			t.Fatalf("read meta iter %d: %v", n, err)
 		}
@@ -209,7 +209,7 @@ func TestImplementLoop_NextIterationUsesLatestSessionConfig(t *testing.T) {
 		"old-model": oldModelScript,
 		"new-model": newModelScript,
 	})
-	current := SessionRuntimeConfig{
+	current := sessionRuntimeConfig{
 		Model:           "old-model",
 		EffectiveEffort: llm.EffortMedium,
 		EffortSource:    llm.EffortSourceExplicit,
@@ -220,7 +220,7 @@ func TestImplementLoop_NextIterationUsesLatestSessionConfig(t *testing.T) {
 		buildCalls++
 		command, env, sessionOpts, err := buildSession(opts)
 		if buildCalls == 1 {
-			current = SessionRuntimeConfig{
+			current = sessionRuntimeConfig{
 				Model:           "new-model",
 				EffectiveEffort: llm.EffortHigh,
 				EffortSource:    llm.EffortSourceExplicit,
@@ -247,7 +247,7 @@ func TestImplementLoop_NextIterationUsesLatestSessionConfig(t *testing.T) {
 		ArtifactDir:         artifactDir,
 		StateDir:            stateDir,
 		BuildSession:        buildWithConfigChange,
-		ResolveSessionConfig: func(role llm.PhaseRole) (SessionRuntimeConfig, error) {
+		ResolveSessionConfig: func(role llm.PhaseRole) (sessionRuntimeConfig, error) {
 			if role != llm.PhaseImplementation {
 				t.Fatalf("ResolveSessionConfig role = %q, want implementation", role)
 			}
@@ -256,7 +256,7 @@ func TestImplementLoop_NextIterationUsesLatestSessionConfig(t *testing.T) {
 		SkipIterationReview: true,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -364,7 +364,7 @@ fi
 		ArtifactDir: artifactDir, StateDir: stateDir,
 		BuildSession: mockBuildSession(agentScript, reviewScript),
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestImplementLoop_Routing_ProtocolViolation_BypassesReview(t *testing.T) {
 		ArtifactDir: artifactDir, StateDir: stateDir,
 		BuildSession: mockBuildSession(agentScript, reviewScript),
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}
@@ -434,10 +434,10 @@ func TestImplementLoop_Routing_ProtocolViolation_BypassesReview(t *testing.T) {
 	}
 	// Each iteration's meta should record CHANGES_REQUESTED from the
 	// deterministic protocol-violation gate.
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 	for n := 1; n <= 2; n++ {
 		iterDir := filepath.Join(artifactDir, "iteration-"+padIter(n))
-		meta, err := am.ReadMeta(iterDir)
+		meta, err := am.readMeta(iterDir)
 		if err != nil {
 			t.Fatalf("read meta iter %d: %v", n, err)
 		}
@@ -468,13 +468,13 @@ func TestImplementLoop_Routing_ProtocolViolation_ResumesFailureBudget(t *testing
 		_ = os.MkdirAll(d, 0o755)
 	}
 
-	am := NewArtifactManager(artifactDir)
+	am := newArtifactManager(artifactDir)
 	for n := 1; n <= 2; n++ {
-		iterDir, err := am.CreateIterationDir(n)
+		iterDir, err := am.createIterationDir(n)
 		if err != nil {
 			t.Fatalf("create iteration %d: %v", n, err)
 		}
-		if err := am.WriteMeta(iterDir, IterationMeta{
+		if err := am.writeMeta(iterDir, iterationMeta{
 			Iteration:    n,
 			AgentStatus:  agentStatusProtocolViolation,
 			ReviewStatus: agentStatusChangesRequested,
@@ -502,7 +502,7 @@ func TestImplementLoop_Routing_ProtocolViolation_ResumesFailureBudget(t *testing
 		ArtifactDir: artifactDir, StateDir: stateDir,
 		BuildSession: mockBuildSession(agentScript, reviewScript),
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("loop error: %v", err)
 	}

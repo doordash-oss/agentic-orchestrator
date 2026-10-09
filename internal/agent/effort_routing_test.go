@@ -32,7 +32,7 @@ func TestEffortCapabilitiesForProviderQualifiedModel(t *testing.T) {
 		}},
 	})
 
-	got := (&PhaseRunner{Registry: reg}).EffortCapabilitiesForModel("mock:sonnet")
+	got := (&PhaseRunner{Registry: reg}).effortCapabilitiesForModel("mock:sonnet")
 	if len(got) != 3 || got[0] != llm.EffortLow || got[1] != llm.EffortMedium || got[2] != llm.EffortHigh {
 		t.Fatalf("capabilities = %v, want [low medium high]", got)
 	}
@@ -191,12 +191,12 @@ func TestResolveEffortForRole(t *testing.T) {
 func TestValidatorEffortLevel(t *testing.T) {
 	cases := []struct {
 		name       string
-		cfg        PlanLoopConfig
+		cfg        planLoopConfig
 		wantEffort llm.EffortLevel
 	}{
 		{
 			name: "uses validator effort when set",
-			cfg: PlanLoopConfig{
+			cfg: planLoopConfig{
 				EffortLevel:              llm.EffortHigh,
 				EffectiveEffort:          llm.EffortHigh,
 				ValidatorEffectiveEffort: llm.EffortMedium,
@@ -205,7 +205,7 @@ func TestValidatorEffortLevel(t *testing.T) {
 		},
 		{
 			name: "falls back to planner effort when validator not set",
-			cfg: PlanLoopConfig{
+			cfg: planLoopConfig{
 				EffortLevel:     llm.EffortHigh,
 				EffectiveEffort: llm.EffortMedium,
 			},
@@ -213,7 +213,7 @@ func TestValidatorEffortLevel(t *testing.T) {
 		},
 		{
 			name: "falls back to pipeline effort when neither set",
-			cfg: PlanLoopConfig{
+			cfg: planLoopConfig{
 				EffortLevel: llm.EffortHigh,
 			},
 			wantEffort: llm.EffortHigh,

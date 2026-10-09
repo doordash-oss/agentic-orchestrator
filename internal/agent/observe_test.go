@@ -114,13 +114,13 @@ func TestContextReadTrackerEmitsProviderReportedGuidelineRead(t *testing.T) {
 	sess := &contextReadTrackerTestSession{}
 	sc := observe.SpanContextForFeature(featureID, "trace-1", "feature", "span-1").Child()
 
-	tracker := &ContextReadTracker{
+	tracker := &contextReadTracker{
 		KBBaseDir:     filepath.Join(t.TempDir(), "knowledge-base"),
 		SkillsDir:     filepath.Join(t.TempDir(), "skills"),
 		GuidelinesDir: guidelinesDir,
 		Observer:      obs,
 	}
-	tracker.Install(sess, sc, feature.PhaseImplement.String(), "session-1")
+	tracker.install(sess, sc, feature.PhaseImplement.String(), "session-1")
 	if sess.onFileRead == nil {
 		t.Fatal("onFileRead callback was not installed")
 	}
@@ -235,7 +235,7 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 		Observer:            obs,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -733,7 +733,7 @@ func TestRunKBForRepoEmitsEventsWithRepoName(t *testing.T) {
 
 	// Verify KB lock was released (cleanup func ran)
 	kbDir := KBStateDir(stateDir, repo.Name)
-	lockPath := KBLockPath(kbDir)
+	lockPath := kbLockPath(kbDir)
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Error("KB lock should have been released after session ended")
 	}
@@ -817,7 +817,7 @@ fi
 		Observer:            obs,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}
@@ -970,7 +970,7 @@ func TestImplementLoopFailurePathEmitsPhaseCompleted(t *testing.T) {
 		Observer:            obs,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}

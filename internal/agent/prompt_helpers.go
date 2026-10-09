@@ -29,18 +29,18 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/utilskill"
 )
 
-// ContextReadTracker holds the directories and observer needed to track
+// contextReadTracker holds the directories and observer needed to track
 // reads of KB, skill, and guideline files during agent sessions.
-type ContextReadTracker struct {
+type contextReadTracker struct {
 	KBBaseDir     string
 	SkillsDir     string
 	GuidelinesDir string
 	Observer      *observe.Observer
 }
 
-// Install sets an onToolAllowed callback on the session that emits
+// install sets an onToolAllowed callback on the session that emits
 // context.file_read events when the agent reads KB, skill, or guideline files.
-func (t *ContextReadTracker) Install(sess interface {
+func (t *contextReadTracker) install(sess interface {
 	SetOnToolAllowed(func(string, json.RawMessage))
 	SetOnFileRead(func(llm.FileReadEvent))
 }, sc observe.SpanContext, phase, sessionID string) {
@@ -51,7 +51,7 @@ func (t *ContextReadTracker) Install(sess interface {
 		if read.FilePath == "" {
 			return
 		}
-		category, ok := ClassifyContextRead(read.FilePath, t.KBBaseDir, t.SkillsDir, t.GuidelinesDir)
+		category, ok := classifyContextRead(read.FilePath, t.KBBaseDir, t.SkillsDir, t.GuidelinesDir)
 		if !ok {
 			return
 		}
@@ -83,31 +83,31 @@ func (pr *PhaseRunner) installContextReadTracker(sess interface {
 	SetOnToolAllowed(func(string, json.RawMessage))
 	SetOnFileRead(func(llm.FileReadEvent))
 }, sc observe.SpanContext, phase, sessionID, stateDir string) {
-	tracker := &ContextReadTracker{
+	tracker := &contextReadTracker{
 		KBBaseDir:     filepath.Join(filepath.Dir(stateDir), "knowledge-base"),
 		SkillsDir:     pr.SkillsDir,
 		GuidelinesDir: pr.GuidelinesDir,
 		Observer:      pr.Observer,
 	}
-	tracker.Install(sess, sc, phase, sessionID)
+	tracker.install(sess, sc, phase, sessionID)
 }
 
-// SubagentProgressTracker forwards subagent (Task tool) progress and
+// subagentProgressTracker forwards subagent (Task tool) progress and
 // terminal messages from a session to the Observer so they land in
 // events.jsonl. Without this, events.jsonl goes silent while the main
 // agent is blocked inside a long Task() call and the feature appears stuck.
-type SubagentProgressTracker struct {
+type subagentProgressTracker struct {
 	Observer  *observe.Observer
 	SC        observe.SpanContext
 	Phase     string
 	SessionID string
 }
 
-// Install registers an onSubagentEvent callback on the session that maps
+// install registers an onSubagentEvent callback on the session that maps
 // incoming SDKMessage task_progress / task_notification envelopes to
 // Observer.AgentTaskProgress / AgentTaskEnded. No-op on a nil tracker or
 // tracker with a nil Observer.
-func (t *SubagentProgressTracker) Install(sess interface {
+func (t *subagentProgressTracker) install(sess interface {
 	SetOnSubagentEvent(func(llm.SDKMessage))
 }) {
 	if t == nil || t.Observer == nil {
@@ -150,19 +150,19 @@ func taskUsageFields(u *llm.TaskUsage) (totalTokens, toolUses int, durationMs in
 func (pr *PhaseRunner) installSubagentProgressTracker(sess interface {
 	SetOnSubagentEvent(func(llm.SDKMessage))
 }, sc observe.SpanContext, phase, sessionID string) {
-	tracker := &SubagentProgressTracker{
+	tracker := &subagentProgressTracker{
 		Observer:  pr.Observer,
 		SC:        sc,
 		Phase:     phase,
 		SessionID: sessionID,
 	}
-	tracker.Install(sess)
+	tracker.install(sess)
 }
 
-// ClassifyContextRead determines if a file path is a KB, skill, or guideline
+// classifyContextRead determines if a file path is a KB, skill, or guideline
 // file. Returns the category ("kb", "skill", "guideline") and true, or "" and
 // false if the path doesn't match any context directory.
-func ClassifyContextRead(filePath, kbBaseDir, skillsDir, guidelinesDir string) (category string, ok bool) {
+func classifyContextRead(filePath, kbBaseDir, skillsDir, guidelinesDir string) (category string, ok bool) {
 	if kbBaseDir != "" && strings.HasPrefix(filePath, kbBaseDir) {
 		return "kb", true
 	}

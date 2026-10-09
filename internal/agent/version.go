@@ -80,7 +80,7 @@ func checkOneProviderVersion(p llm.LLMProvider) VersionResult {
 	return r
 }
 
-// BelowMinVersion reports whether a provider's installed CLI version parsed
+// belowMinVersion reports whether a provider's installed CLI version parsed
 // cleanly and is strictly below its declared MinVersion(). It is the hard
 // version gate used at startup for providers that implement llm.VersionEnforcer.
 //
@@ -90,7 +90,7 @@ func checkOneProviderVersion(p llm.LLMProvider) VersionResult {
 // version could not be determined. The returned version is the raw VersionInfo()
 // output (empty on error) and minVer echoes the provider's MinVersion(), so
 // callers can build a precise diagnostic without re-querying the provider.
-func BelowMinVersion(p llm.LLMProvider) (below bool, version string, minVer [3]int) {
+func belowMinVersion(p llm.LLMProvider) (below bool, version string, minVer [3]int) {
 	minVer = p.MinVersion()
 	version, err := p.VersionInfo()
 	if err != nil {
@@ -106,7 +106,7 @@ func BelowMinVersion(p llm.LLMProvider) (below bool, version string, minVer [3]i
 // BelowMinVersionGuidance returns the single detail/remedy pair used by both
 // startup and readiness when a provider fails its minimum-version gate.
 func BelowMinVersionGuidance(p llm.LLMProvider) (below bool, detail, remedy string) {
-	below, version, minVer := BelowMinVersion(p)
+	below, version, minVer := belowMinVersion(p)
 	if !below {
 		return false, "", ""
 	}

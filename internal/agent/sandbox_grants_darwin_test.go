@@ -56,19 +56,19 @@ func TestExecuteTestingContractEscalatesSandboxLimitedCommand(t *testing.T) {
 	command := `/usr/bin/sandbox-exec -p '(version 1) (allow default)' /usr/bin/true`
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
-		ID: "nested-sandbox", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		ID: "nested-sandbox", Source: testingContractPlanSource, Owner: testingContractOwnerHarness, Repo: "repo",
 		Name: "needs its own sandbox", Command: command,
-		Run:    &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Run:    &testingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
 		Policy: TestingContractItemPolicy{Required: true},
 	}}}
 
-	report := BuildContractVerificationReportStub(&contract, contractPath)
-	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	report := buildContractVerificationReportStub(&contract, contractPath)
+	out, err := executeTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("ExecuteTestingContract() error = %v", err)
 	}
 	result := out.Report.Results[0]
-	if result.Status != VerificationStatusPassed || len(out.BlockedItems) != 0 {
+	if result.Status != verificationStatusPassed || len(out.BlockedItems) != 0 {
 		t.Fatalf("result = %+v (blocked=%v), want ladder-proven pass", result, out.BlockedItems)
 	}
 	if !strings.Contains(result.Notes, "unsandboxed") {
@@ -82,12 +82,12 @@ func TestExecuteTestingContractEscalatesSandboxLimitedCommand(t *testing.T) {
 	}
 
 	// Second execution honors the disposition: one direct unsandboxed run.
-	report2 := BuildContractVerificationReportStub(&contract, contractPath)
-	out2, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report2, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	report2 := buildContractVerificationReportStub(&contract, contractPath)
+	out2, err := executeTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report2, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("second ExecuteTestingContract() error = %v", err)
 	}
-	if got := out2.Report.Results[0]; got.Status != VerificationStatusPassed || !strings.Contains(got.Notes, "disposition") {
+	if got := out2.Report.Results[0]; got.Status != verificationStatusPassed || !strings.Contains(got.Notes, "disposition") {
 		t.Fatalf("second run result = %+v, want direct unsandboxed pass noting the disposition", got)
 	}
 	if runs := countEvidenceRuns(t, contractPath, "nested-sandbox"); runs != 4 {
@@ -106,19 +106,19 @@ func TestExecuteTestingContractLadderAbsorbsFlakeWithoutBaseline(t *testing.T) {
 	command := "if [ -f flaky-marker ]; then exit 0; fi; touch flaky-marker; echo transient >&2; exit 1"
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
-		ID: "ladder-flake", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		ID: "ladder-flake", Source: testingContractPlanSource, Owner: testingContractOwnerHarness, Repo: "repo",
 		Name: "flaky check", Command: command,
-		Run:    &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Run:    &testingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
 		Policy: TestingContractItemPolicy{Required: true},
 	}}}
 
-	report := BuildContractVerificationReportStub(&contract, contractPath)
-	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	report := buildContractVerificationReportStub(&contract, contractPath)
+	out, err := executeTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("ExecuteTestingContract() error = %v", err)
 	}
 	result := out.Report.Results[0]
-	if result.Status != VerificationStatusPassed || !strings.Contains(result.Notes, "did not reproduce") {
+	if result.Status != verificationStatusPassed || !strings.Contains(result.Notes, "did not reproduce") {
 		t.Fatalf("result = %+v, want flake absorbed by the ladder", result)
 	}
 	if got := loadUnsandboxedDispositions(contractPath); len(got) != 0 {
@@ -139,9 +139,9 @@ func TestExecuteTestingContractLadderFailureDoublesAsRegressionConfirmation(t *t
 	}
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
 	contract := executableContract(commit)
-	report := BuildContractVerificationReportStub(&contract, contractPath)
+	report := buildContractVerificationReportStub(&contract, contractPath)
 
-	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	out, err := executeTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("ExecuteTestingContract() error = %v", err)
 	}
@@ -167,19 +167,19 @@ func TestExecuteTestingContractAutoGrantsDeniedTempPath(t *testing.T) {
 	command := fmt.Sprintf("mkdir -p %q && printf ok > %q/evidence", target, target)
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
-		ID: "grant-retry", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
+		ID: "grant-retry", Source: testingContractPlanSource, Owner: testingContractOwnerHarness, Repo: "repo",
 		Name: "writes outside sandbox roots", Command: command,
-		Run:    &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		Run:    &testingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
 		Policy: TestingContractItemPolicy{Required: true},
 	}}}
 
-	report := BuildContractVerificationReportStub(&contract, contractPath)
-	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	report := buildContractVerificationReportStub(&contract, contractPath)
+	out, err := executeTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("ExecuteTestingContract() error = %v", err)
 	}
 	result := out.Report.Results[0]
-	if result.Status != VerificationStatusPassed || len(out.BlockedItems) != 0 {
+	if result.Status != verificationStatusPassed || len(out.BlockedItems) != 0 {
 		t.Fatalf("result = %+v (blocked=%v), want auto-granted pass", result, out.BlockedItems)
 	}
 	if !strings.Contains(result.Notes, target) {
@@ -193,12 +193,12 @@ func TestExecuteTestingContractAutoGrantsDeniedTempPath(t *testing.T) {
 	// Second execution loads the persisted grant: no new denial run.
 	evidenceRoot := verificationEvidenceRoot(contractPath, "grant-retry")
 	before, _ := os.ReadDir(evidenceRoot)
-	report2 := BuildContractVerificationReportStub(&contract, contractPath)
-	out2, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report2, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	report2 := buildContractVerificationReportStub(&contract, contractPath)
+	out2, err := executeTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report2, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("second ExecuteTestingContract() error = %v", err)
 	}
-	if got := out2.Report.Results[0]; got.Status != VerificationStatusPassed || got.Notes != "" {
+	if got := out2.Report.Results[0]; got.Status != verificationStatusPassed || got.Notes != "" {
 		t.Fatalf("second run result = %+v, want clean pass with no grant note", got)
 	}
 	after, _ := os.ReadDir(evidenceRoot)

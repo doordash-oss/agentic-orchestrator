@@ -61,7 +61,7 @@ func CommitPhaseOutcome(in CompletionCommitInput) (Outcome, CompletionReceipt, [
 	if in.ArtifactDir == "" {
 		return Outcome{}, CompletionReceipt{}, nil, fmt.Errorf("committing phase outcome: empty artifact directory")
 	}
-	if err := RemoveCompletionReceipt(in.ArtifactDir); err != nil {
+	if err := removeCompletionReceipt(in.ArtifactDir); err != nil {
 		return Outcome{}, CompletionReceipt{}, nil, fmt.Errorf("committing phase outcome: clearing prior receipt: %w", err)
 	}
 	if !in.Intent.Valid() {
@@ -111,11 +111,11 @@ func completionIntentMismatch(intent llm.CompletionIntent, outcome Outcome) stri
 		return ""
 	}
 	switch outcome.Progress.State {
-	case StateSuccess:
+	case stateSuccess:
 		if intent.Status != llm.CompletionIntentSuccess {
 			return fmt.Sprintf("root outcome status %q disagrees with progress.md iteration state %q", intent.Status, outcome.Progress.State)
 		}
-	case StateRetry:
+	case stateRetry:
 		if intent.Status != llm.CompletionIntentRetry {
 			return fmt.Sprintf("root outcome status %q disagrees with progress.md iteration state %q", intent.Status, outcome.Progress.State)
 		}
@@ -161,9 +161,9 @@ func writeCompletionReceipt(path string, receipt CompletionReceipt) error {
 	return nil
 }
 
-// ReadCompletionReceipt parses and validates the harness-owned completion
+// readCompletionReceipt parses and validates the harness-owned completion
 // record. A plain or malformed phase_complete file is never accepted.
-func ReadCompletionReceipt(dir string) (CompletionReceipt, error) {
+func readCompletionReceipt(dir string) (CompletionReceipt, error) {
 	var receipt CompletionReceipt
 	data, err := os.ReadFile(filepath.Join(dir, PhaseCompleteFile))
 	if err != nil {
@@ -193,12 +193,12 @@ func ReadCompletionReceipt(dir string) (CompletionReceipt, error) {
 	return receipt, nil
 }
 
-// HasCommittedPhaseOutcome reports whether a harness receipt still matches
+// hasCommittedPhaseOutcome reports whether a harness receipt still matches
 // the expected phase/role and the current artifacts still satisfy that
 // contract. A receipt is therefore a validated restart checkpoint, not a
 // filesystem flag whose mere presence skips work.
-func HasCommittedPhaseOutcome(dir string, phase feature.Phase, role Role) bool {
-	receipt, err := ReadCompletionReceipt(dir)
+func hasCommittedPhaseOutcome(dir string, phase feature.Phase, role Role) bool {
+	receipt, err := readCompletionReceipt(dir)
 	if err != nil || receipt.Phase != phase.DirName() || receipt.Role != role {
 		return false
 	}
@@ -210,9 +210,9 @@ func HasCommittedPhaseOutcome(dir string, phase feature.Phase, role Role) bool {
 	return completionIntentMismatch(intent, outcome) == ""
 }
 
-// RemoveCompletionReceipt removes only the harness completion receipt.
+// removeCompletionReceipt removes only the harness completion receipt.
 // Missing files are not errors.
-func RemoveCompletionReceipt(dir string) error {
+func removeCompletionReceipt(dir string) error {
 	err := os.Remove(filepath.Join(dir, PhaseCompleteFile))
 	if err == nil || os.IsNotExist(err) {
 		return nil

@@ -29,7 +29,7 @@ import (
 // git adapters lets contract anchoring remain deterministic and cheap to test.
 type testingContractHeadResolver func(worktreePath string) (string, error)
 
-// EnsureTestingContractBaseCommits captures the repository HEAD for every
+// ensureTestingContractBaseCommits captures the repository HEAD for every
 // contract repository that does not already have an anchor. Existing anchors
 // are immutable: later implementation iterations preserve them even when the
 // candidate worktree HEAD advances.
@@ -37,7 +37,7 @@ type testingContractHeadResolver func(worktreePath string) (string, error)
 // Updates are transactional. If any missing anchor cannot be resolved, the
 // contract is left unchanged rather than recording a partially anchored
 // multi-repository verification scope.
-func EnsureTestingContractBaseCommits(contract *TestingContract, repos []feature.FeatureRepo, resolver testingContractHeadResolver) error {
+func ensureTestingContractBaseCommits(contract *TestingContract, repos []feature.FeatureRepo, resolver testingContractHeadResolver) error {
 	if contract == nil {
 		return fmt.Errorf("ensuring testing contract base commits: contract is nil")
 	}

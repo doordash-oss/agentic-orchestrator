@@ -112,7 +112,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	// Build the cross-repo workspace. Cwd at the active run dir, with
 	// --add-dir for every Feature.Repos worktree (and the active run).
 	stateDir := filepath.Join(cfg.StateDir, cfg.Feature.ID)
-	workspace, err := BuildWorkspace(cfg.Feature, stateDir)
+	workspace, err := buildWorkspace(cfg.Feature, stateDir)
 	if err != nil {
 		return nil, fmt.Errorf("phase implement loop: workspace setup: %w", err)
 	}
@@ -123,7 +123,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 	artifactDir := resolveUnifiedPhaseImplementDir(cfg.Feature, runDir)
 
 	// Resolve the implement loop fn so tests can inject a stub.
-	runImpl := RunImplementationLoop
+	runImpl := runImplementationLoop
 	if cfg.RunImplementFn != nil {
 		runImpl = cfg.RunImplementFn
 	}
@@ -191,7 +191,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     phaseRepos,
-			Outcome:   PhaseOutcomeFailed,
+			Outcome:   phaseOutcomeFailed,
 		})
 		return &PhaseImplementLoopResult{
 			FinalStatus: "failed",
@@ -205,7 +205,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     phaseRepos,
-			Outcome:   PhaseOutcomeReviewPassed,
+			Outcome:   phaseOutcomeReviewPassed,
 		})
 		return &PhaseImplementLoopResult{
 			FinalStatus: finalStatusReviewPassed,
@@ -217,7 +217,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     phaseRepos,
-			Outcome:   PhaseOutcomeNeedUserInput,
+			Outcome:   phaseOutcomeNeedUserInput,
 			GatePath:  loopResult.NeedUserInputPath,
 		})
 		return &PhaseImplementLoopResult{
@@ -251,7 +251,7 @@ func RunPhaseImplementLoop(cfg OrchestratorConfig, sm ports.SessionManager) (*Ph
 		_ = AtomicPhaseStamp(cfg.FeatureStore, AtomicPhaseStampInput{
 			FeatureID: cfg.Feature.ID,
 			Repos:     phaseRepos,
-			Outcome:   PhaseOutcomeFailed,
+			Outcome:   phaseOutcomeFailed,
 		})
 		return &PhaseImplementLoopResult{
 			FinalStatus: loopResult.FinalStatus,
@@ -281,7 +281,7 @@ func resolveUnifiedPhaseImplementDir(f *feature.Feature, runDir string) string {
 // through ImplementConfig.RunDir; without this filter the agent would see it
 // twice in --add-dir. The legacy stateDir comparison keeps manually constructed
 // WorkspaceSetup values compatible.
-func additionalDirsExcludingStateDir(ws WorkspaceSetup, stateDir string) []string {
+func additionalDirsExcludingStateDir(ws workspaceSetup, stateDir string) []string {
 	out := make([]string, 0, len(ws.AdditionalDirs))
 	abs, _ := filepath.Abs(stateDir)
 	for _, d := range ws.AdditionalDirs {

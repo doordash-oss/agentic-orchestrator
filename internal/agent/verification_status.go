@@ -37,7 +37,7 @@ func beginVerificationStatuses(store ports.FeatureStore, featureID string, contr
 	}
 	items := make([]feature.VerificationItemStatus, 0, len(contract.Items))
 	for _, item := range contract.Items {
-		if item.Owner != TestingContractOwnerHarness || item.Run == nil || strings.TrimSpace(item.Run.Shell) == "" {
+		if item.Owner != testingContractOwnerHarness || item.Run == nil || strings.TrimSpace(item.Run.Shell) == "" {
 			continue
 		}
 		if IsTestingContractItemWaived(item) {

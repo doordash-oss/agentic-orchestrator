@@ -26,7 +26,7 @@ import (
 )
 
 func TestBuildPRDescriptionPrompt(t *testing.T) {
-	prompt := BuildPRDescriptionPrompt(PRContext{
+	prompt := buildPRDescriptionPrompt(PRContext{
 		FeatureName:        "my-feature",
 		FeatureDescription: "feature desc",
 		Roadmap:            "plan content",
@@ -54,7 +54,7 @@ func TestBuildPRDescriptionPrompt(t *testing.T) {
 }
 
 func TestBuildPRDescriptionPrompt_EmitsOnlyPopulatedSections(t *testing.T) {
-	prompt := BuildPRDescriptionPrompt(PRContext{Roadmap: "plan only"})
+	prompt := buildPRDescriptionPrompt(PRContext{Roadmap: "plan only"})
 	if !strings.Contains(prompt, "plan only") {
 		t.Error("expected roadmap content in prompt")
 	}
@@ -69,7 +69,7 @@ func TestRunDescriptionGenerationCommand(t *testing.T) {
 	// We can't run the actual claude CLI in tests, but we can verify the
 	// prompt construction and parsing work end-to-end with known output.
 	sampleOutput := "TITLE: Add feature X\nBODY:\n## Summary\n\n- Added X\n\n## Test plan\n\n- [ ] Test X\n"
-	title, body := ParsePRDescription(sampleOutput)
+	title, body := parsePRDescription(sampleOutput)
 	if title != "Add feature X" {
 		t.Errorf("title = %q, want 'Add feature X'", title)
 	}
@@ -128,7 +128,7 @@ func TestParsePRDescription(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			title, body := ParsePRDescription(tt.output)
+			title, body := parsePRDescription(tt.output)
 			if title != tt.wantTitle {
 				t.Errorf("title = %q, want %q", title, tt.wantTitle)
 			}

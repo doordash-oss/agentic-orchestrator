@@ -124,18 +124,18 @@ func TestResolvePromptIntentMissingHeadingFallsBackToRaw(t *testing.T) {
 }
 
 func TestBuildImplementPromptOmitsEmptyExitCriteria(t *testing.T) {
-	without := BuildImplementPrompt("/plan.md", "", "", "", 1)
+	without := buildImplementPrompt("/plan.md", "", "", "", 1)
 	if strings.Contains(without, "**Exit criteria**") {
 		t.Fatalf("empty exit criteria must not render a header:\n%s", without)
 	}
-	with := BuildImplementPrompt("/plan.md", "cycle-scoped criteria", "", "", 1)
+	with := buildImplementPrompt("/plan.md", "cycle-scoped criteria", "", "", 1)
 	if !strings.Contains(with, "**Exit criteria**: cycle-scoped criteria") {
 		t.Fatalf("non-empty exit criteria must render:\n%s", with)
 	}
 }
 
 func TestFinalFixPromptCitesAcceptanceAuthority(t *testing.T) {
-	prompt := BuildFinalFixPrompt(FinalFixPromptOpts{
+	prompt := buildFinalFixPrompt(finalFixPromptOpts{
 		Feedback:         "feedback body",
 		FeedbackPath:     "/iter/review-feedback.md",
 		AcceptanceClause: "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/design.md. Judge acceptance against that section, not against any restatement of it.",
@@ -175,7 +175,7 @@ func TestValidatorPromptUsesDistilledIntent(t *testing.T) {
 }
 
 func TestFinalReviewAxisPromptCitesAcceptanceAuthority(t *testing.T) {
-	prompt := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	prompt := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:             implementationReviewGateFinal,
 		AxisLabel:        "qa",
 		AcceptanceClause: "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/design.md. Judge acceptance against that section, not against any restatement of it.",

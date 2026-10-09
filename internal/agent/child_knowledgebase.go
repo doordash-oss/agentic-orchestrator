@@ -71,7 +71,7 @@ func IsWorkspaceFresh(ctx context.Context, runner ports.CommandRunner, workspace
 	if _, err := os.Stat(KBPath(workspaceDir)); err != nil {
 		return false
 	}
-	currentCommit, err := GetCurrentCommit(ctx, runner, repoPath)
+	currentCommit, err := getCurrentCommit(ctx, runner, repoPath)
 	if err != nil {
 		return false
 	}
@@ -82,7 +82,7 @@ func IsWorkspaceFresh(ctx context.Context, runner ports.CommandRunner, workspace
 // commit as the analyzed-through commit. This should only be called by the
 // completion path after the KB builder has successfully finished.
 func MarkWorkspaceFresh(ctx context.Context, runner ports.CommandRunner, workspaceDir, repoPath string) error {
-	commit, err := GetCurrentCommit(ctx, runner, repoPath)
+	commit, err := getCurrentCommit(ctx, runner, repoPath)
 	if err != nil {
 		return fmt.Errorf("getting current commit: %w", err)
 	}
@@ -108,7 +108,7 @@ func MarkWorkspaceFresh(ctx context.Context, runner ports.CommandRunner, workspa
 	return feature.SaveWorkspaceState(workspaceDir, updated)
 }
 
-// IsAncestor checks whether ancestorCommit is an ancestor of descendantCommit
+// isAncestor checks whether ancestorCommit is an ancestor of descendantCommit
 // in the given repo path. Returns false on any error.
 //
 // This is a thin delegating wrapper over the shared git.IsAncestor primitive
@@ -117,15 +117,15 @@ func MarkWorkspaceFresh(ctx context.Context, runner ports.CommandRunner, workspa
 // intentionally not used: the shared primitive shells out directly, matching
 // the observable behavior of every existing caller (which pass a real
 // command runner) and of the direct git primitive.
-func IsAncestor(_ context.Context, _ ports.CommandRunner, repoPath, ancestorCommit, descendantCommit string) bool {
+func isAncestor(_ context.Context, _ ports.CommandRunner, repoPath, ancestorCommit, descendantCommit string) bool {
 	return git.IsAncestor(repoPath, ancestorCommit, descendantCommit)
 }
 
-// SeedWorkspaceFromOverlay copies a valid parent overlay into the child workspace
+// seedWorkspaceFromOverlay copies a valid parent overlay into the child workspace
 // directory. The overlay must be provenance-valid: its canonical commit must
 // still match the canonical KB state, and its parent HEAD must be an ancestor
 // of the child snapshot.
-func SeedWorkspaceFromOverlay(ctx context.Context, runner ports.CommandRunner, paths ChildKBWorkspacePaths, childCommit string) error {
+func seedWorkspaceFromOverlay(ctx context.Context, runner ports.CommandRunner, paths ChildKBWorkspacePaths, childCommit string) error {
 	overlayProv, err := feature.LoadOverlayProvenance(paths.OverlayDir)
 	if err != nil {
 		return fmt.Errorf("loading overlay provenance: %w", err)
@@ -143,7 +143,7 @@ func SeedWorkspaceFromOverlay(ctx context.Context, runner ports.CommandRunner, p
 		return errors.New("overlay canonical provenance is stale")
 	}
 	// Validate the overlay's parent HEAD is an ancestor of the child snapshot.
-	if !IsAncestor(ctx, runner, paths.RepoPath, overlayProv.ParentHEAD, childCommit) {
+	if !isAncestor(ctx, runner, paths.RepoPath, overlayProv.ParentHEAD, childCommit) {
 		return errors.New("overlay parent HEAD is not an ancestor of child snapshot")
 	}
 	// Copy the overlay into the workspace.
@@ -166,10 +166,10 @@ func SeedWorkspaceFromOverlay(ctx context.Context, runner ports.CommandRunner, p
 	})
 }
 
-// SeedWorkspaceFromCanonical copies the latest canonical KB into the child
+// seedWorkspaceFromCanonical copies the latest canonical KB into the child
 // workspace directory and records the canonical commit as the baseline. Only
 // the canonical-to-child commit delta needs to be analyzed afterward.
-func SeedWorkspaceFromCanonical(ctx context.Context, runner ports.CommandRunner, paths ChildKBWorkspacePaths, childCommit string) error {
+func seedWorkspaceFromCanonical(ctx context.Context, runner ports.CommandRunner, paths ChildKBWorkspacePaths, childCommit string) error {
 	canonState, err := LoadKBState(paths.CanonicalDir)
 	if err != nil {
 		return fmt.Errorf("loading canonical KB state: %w", err)
@@ -178,7 +178,7 @@ func SeedWorkspaceFromCanonical(ctx context.Context, runner ports.CommandRunner,
 		return errors.New("canonical KB state missing")
 	}
 	// The canonical commit must be an ancestor of the child snapshot.
-	if !IsAncestor(ctx, runner, paths.RepoPath, canonState.HeadCommit, childCommit) {
+	if !isAncestor(ctx, runner, paths.RepoPath, canonState.HeadCommit, childCommit) {
 		return errors.New("canonical commit is not an ancestor of child snapshot")
 	}
 	if err := os.MkdirAll(paths.WorkspaceDir, 0o755); err != nil {
@@ -198,9 +198,9 @@ func SeedWorkspaceFromCanonical(ctx context.Context, runner ports.CommandRunner,
 	})
 }
 
-// SeedWorkspaceFull creates an empty workspace directory for a full KB build.
+// seedWorkspaceFull creates an empty workspace directory for a full KB build.
 // This is used when neither a valid overlay nor a valid canonical baseline exists.
-func SeedWorkspaceFull(paths ChildKBWorkspacePaths, childCommit string) error {
+func seedWorkspaceFull(paths ChildKBWorkspacePaths, childCommit string) error {
 	if err := os.MkdirAll(paths.WorkspaceDir, 0o755); err != nil {
 		return fmt.Errorf("creating workspace dir: %w", err)
 	}
@@ -219,7 +219,7 @@ func SeedWorkspaceFull(paths ChildKBWorkspacePaths, childCommit string) error {
 // falls back to a full build only when neither is valid.
 func SeedChildKBWorkspace(ctx context.Context, runner ports.CommandRunner, paths ChildKBWorkspacePaths) error {
 	// Get the current child HEAD commit.
-	childCommit, err := GetCurrentCommit(ctx, runner, paths.RepoPath)
+	childCommit, err := getCurrentCommit(ctx, runner, paths.RepoPath)
 	if err != nil {
 		return fmt.Errorf("getting child HEAD: %w", err)
 	}
@@ -242,8 +242,8 @@ func SeedChildKBWorkspace(ctx context.Context, runner ports.CommandRunner, paths
 		if overlayProv, _ := feature.LoadOverlayProvenance(paths.OverlayDir); overlayProv != nil {
 			canonState, _ := LoadKBState(paths.CanonicalDir)
 			if canonState != nil && canonState.HeadCommit == overlayProv.CanonicalCommit &&
-				IsAncestor(ctx, runner, paths.RepoPath, overlayProv.ParentHEAD, childCommit) {
-				if err := SeedWorkspaceFromOverlay(ctx, runner, paths, childCommit); err != nil {
+				isAncestor(ctx, runner, paths.RepoPath, overlayProv.ParentHEAD, childCommit) {
+				if err := seedWorkspaceFromOverlay(ctx, runner, paths, childCommit); err != nil {
 					return fmt.Errorf("seeding from overlay: %w", err)
 				}
 				return nil
@@ -253,9 +253,9 @@ func SeedChildKBWorkspace(ctx context.Context, runner ports.CommandRunner, paths
 
 	// Try seeding from the canonical KB.
 	if canonState, _ := LoadKBState(paths.CanonicalDir); canonState != nil && canonState.HeadCommit != "" {
-		if IsAncestor(ctx, runner, paths.RepoPath, canonState.HeadCommit, childCommit) {
+		if isAncestor(ctx, runner, paths.RepoPath, canonState.HeadCommit, childCommit) {
 			if _, err := os.Stat(KBPath(paths.CanonicalDir)); err == nil {
-				if err := SeedWorkspaceFromCanonical(ctx, runner, paths, childCommit); err != nil {
+				if err := seedWorkspaceFromCanonical(ctx, runner, paths, childCommit); err != nil {
 					return fmt.Errorf("seeding from canonical: %w", err)
 				}
 				return nil
@@ -264,7 +264,7 @@ func SeedChildKBWorkspace(ctx context.Context, runner ports.CommandRunner, paths
 	}
 
 	// Fall back to a full build.
-	return SeedWorkspaceFull(paths, childCommit)
+	return seedWorkspaceFull(paths, childCommit)
 }
 
 // copyTree copies all regular files from src to dst, preserving directory

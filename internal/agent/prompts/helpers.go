@@ -20,12 +20,12 @@ import "strings"
 // review prompt (implementation_review_axis.user.tmpl), trimmed to end in
 // exactly one newline.
 func ImplementationReviewAxisUserPrompt(in any) string {
-	return strings.TrimSpace(MustRender(TemplateImplementationReviewAxisUser, in)) + "\n"
+	return strings.TrimSpace(MustRender(templateImplementationReviewAxisUser, in)) + "\n"
 }
 
 // SupervisorSystemPrompt renders the supervisor conversation's launch-channel
 // system prompt (supervisor.system.tmpl), trimmed to end in exactly one
 // newline.
 func SupervisorSystemPrompt(in SupervisorSystemInput) string {
-	return strings.TrimSpace(MustRender(TemplateSupervisorSystem, in)) + "\n"
+	return strings.TrimSpace(MustRender(templateSupervisorSystem, in)) + "\n"
 }

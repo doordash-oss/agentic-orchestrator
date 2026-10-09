@@ -22,7 +22,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// WorkspaceSetup is the bootstrap shape for any unified-flow Claude session
+// workspaceSetup is the bootstrap shape for any unified-flow Claude session
 // (phase implement, phase review, Final Review, and rebase).
 // It is the single source of truth for "where should the
 // agent run and which directories should it see?" — replacing the ad-hoc
@@ -32,7 +32,7 @@ import (
 // Construction is pure: feature → workspace. Callers may further filter the
 // AdditionalDirs slice (e.g. add a guidelines dir) but the canonical
 // "active run dir + every Feature.Repos worktree" set lives here.
-type WorkspaceSetup struct {
+type workspaceSetup struct {
 	// Cwd is the working directory the session runs in. Always set to the
 	// active run directory so relative artifact navigation cannot cross into a
 	// sealed predecessor run. Per-repo loops historically used the repo's
@@ -55,7 +55,7 @@ type WorkspaceSetup struct {
 	RepoPaths map[string]string
 }
 
-// BuildWorkspace returns the canonical workspace bootstrap for the given
+// buildWorkspace returns the canonical workspace bootstrap for the given
 // feature. The state dir argument is the per-feature root (i.e. the directory
 // that contains `feature.yaml` and `runs/`); only its active run child is
 // exposed in the returned workspace.
@@ -69,16 +69,16 @@ type WorkspaceSetup struct {
 //   - The active run dir is always present at AdditionalDirs[0].
 //   - Output is order-stable for tests: active run first, then repos sorted by
 //     name.
-func BuildWorkspace(feat *feature.Feature, stateDir string) (WorkspaceSetup, error) {
+func buildWorkspace(feat *feature.Feature, stateDir string) (workspaceSetup, error) {
 	if feat == nil {
-		return WorkspaceSetup{}, fmt.Errorf("workspace setup: feature is nil")
+		return workspaceSetup{}, fmt.Errorf("workspace setup: feature is nil")
 	}
 	if stateDir == "" {
-		return WorkspaceSetup{}, fmt.Errorf("workspace setup: state dir is empty")
+		return workspaceSetup{}, fmt.Errorf("workspace setup: state dir is empty")
 	}
 	abs, err := filepath.Abs(stateDir)
 	if err != nil {
-		return WorkspaceSetup{}, fmt.Errorf("workspace setup: state dir abs: %w", err)
+		return workspaceSetup{}, fmt.Errorf("workspace setup: state dir abs: %w", err)
 	}
 	runNumber := feat.ActiveRun
 	if runNumber <= 0 {
@@ -104,7 +104,7 @@ func BuildWorkspace(feat *feature.Feature, stateDir string) (WorkspaceSetup, err
 		}
 		ap, err := filepath.Abs(p)
 		if err != nil {
-			return WorkspaceSetup{}, fmt.Errorf("workspace setup: repo %q abs: %w", r.Name, err)
+			return workspaceSetup{}, fmt.Errorf("workspace setup: repo %q abs: %w", r.Name, err)
 		}
 		paths[r.Name] = ap
 		if !seen[ap] {
@@ -113,7 +113,7 @@ func BuildWorkspace(feat *feature.Feature, stateDir string) (WorkspaceSetup, err
 		}
 	}
 
-	return WorkspaceSetup{
+	return workspaceSetup{
 		Cwd:            activeRunDir,
 		AdditionalDirs: dirs,
 		RepoPaths:      paths,

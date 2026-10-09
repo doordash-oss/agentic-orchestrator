@@ -137,14 +137,14 @@ func TestContextReadTracker_EmitsProviderFileRead(t *testing.T) {
 	guidelinesDir := filepath.Join(stateDir, "guidelines")
 	obs := observe.New(true, stateDir, false, "", false, "agentic")
 	sc := observe.SpanContextForFeature(featureID, "", "", "").Child()
-	tracker := &ContextReadTracker{
+	tracker := &contextReadTracker{
 		KBBaseDir:     filepath.Join(stateDir, "knowledge-base"),
 		SkillsDir:     filepath.Join(stateDir, "skills"),
 		GuidelinesDir: guidelinesDir,
 		Observer:      obs,
 	}
 	fake := &fakeContextReadSession{}
-	tracker.Install(fake, sc, "implement", "sess-codex")
+	tracker.install(fake, sc, "implement", "sess-codex")
 	if fake.fileCB == nil {
 		t.Fatal("tracker did not register provider file-read callback")
 	}
@@ -184,11 +184,11 @@ func TestSubagentProgressTracker_ForwardsProgress(t *testing.T) {
 	obs := observe.New(true, stateDir, false, "", false, "agentic")
 	sc := observe.SpanContextForFeature(featureID, "", "", "").Child()
 
-	tracker := &SubagentProgressTracker{
+	tracker := &subagentProgressTracker{
 		Observer: obs, SC: sc, Phase: "Knowledge Base", SessionID: "sess-kb",
 	}
 	fake := &fakeSubagentSession{}
-	tracker.Install(fake)
+	tracker.install(fake)
 	if fake.cb == nil {
 		t.Fatal("tracker did not register a callback")
 	}
@@ -260,9 +260,9 @@ func TestSubagentProgressTracker_ForwardsProgress(t *testing.T) {
 
 func TestSubagentProgressTracker_NilObserverNoOp(t *testing.T) {
 	// Must not panic and must not install a callback when Observer is nil.
-	tracker := &SubagentProgressTracker{Observer: nil}
+	tracker := &subagentProgressTracker{Observer: nil}
 	fake := &fakeSubagentSession{}
-	tracker.Install(fake)
+	tracker.install(fake)
 	if fake.cb != nil {
 		t.Error("expected no callback when Observer is nil")
 	}

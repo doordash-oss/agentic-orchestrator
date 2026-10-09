@@ -31,7 +31,7 @@ func TestBuildInquirePrompt(t *testing.T) {
 		Inquireness: feature.InquirenessHigh,
 	}
 
-	prompt := BuildInquirePrompt(f)
+	prompt := buildInquirePrompt(f)
 
 	checks := []string{
 		"# Feature Context",
@@ -59,7 +59,7 @@ func TestBuildInquirePromptWithImages(t *testing.T) {
 		},
 		Inquireness: feature.InquirenessMedium,
 	}
-	prompt := BuildInquirePrompt(f)
+	prompt := buildInquirePrompt(f)
 	if !strings.Contains(prompt, "Attached Images:") {
 		t.Error("expected 'Attached Images' section")
 	}
@@ -73,7 +73,7 @@ func TestBuildInquirePromptUsesDescription(t *testing.T) {
 			{Name: "repo", Path: "/tmp/test"},
 		},
 	}
-	prompt := BuildInquirePrompt(f)
+	prompt := buildInquirePrompt(f)
 	if !strings.Contains(prompt, "original desc") {
 		t.Error("expected original description in inquire output")
 	}
@@ -86,7 +86,7 @@ func TestBuildInquirePromptLeavesKBResourcesToSystemPrompt(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 	}
 	kb := KBInfo{Name: "myrepo", IndexPath: "/tmp/kb/index.md", RootDir: "/tmp/kb"}
-	prompt := BuildInquirePrompt(f)
+	prompt := buildInquirePrompt(f)
 	for _, forbidden := range []string{"# Useful Resources", "## Knowledge Base", "/tmp/kb/index.md", "/tmp/kb"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("BuildInquirePrompt() contains RoleSpec-owned resource %q:\n%s", forbidden, prompt)

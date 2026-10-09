@@ -35,7 +35,7 @@ func TestMissingEvidenceRequirements_ParseStructuredMarkers(t *testing.T) {
 		agentStatusChangesRequested,
 	}, "\n")
 
-	got := MissingEvidenceRequirements(feedback)
+	got := missingEvidenceRequirements(feedback)
 	if len(got) != 2 {
 		t.Fatalf("MissingEvidenceRequirements() len = %d, want 2: %+v", len(got), got)
 	}
@@ -50,7 +50,7 @@ func TestMissingEvidenceRequirements_ParseStructuredMarkers(t *testing.T) {
 func TestMissingEvidenceRequirements_ParsePhaseQualifiedMarkers(t *testing.T) {
 	feedback := "- **Critical**: MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the onboarding CLI journey."
 
-	got := MissingEvidenceRequirements(feedback)
+	got := missingEvidenceRequirements(feedback)
 	if len(got) != 1 {
 		t.Fatalf("MissingEvidenceRequirements() len = %d, want 1: %+v", len(got), got)
 	}
@@ -95,7 +95,7 @@ func TestMissingEvidenceReviewerSkillDocumentsPerPhaseRules(t *testing.T) {
 
 func TestLatestPlanRevisionFeedbackAttemptFindsInvalidatedMissingEvidenceAttempt(t *testing.T) {
 	planDir := t.TempDir()
-	feedback := MissingEvidencePlanRevisionFeedback([]MissingEvidenceRequirement{
+	feedback := missingEvidencePlanRevisionFeedback([]missingEvidenceRequirement{
 		{Kind: testingContractVisualSource, Requirement: "Capture the setup wizard empty state."},
 	})
 	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
@@ -120,7 +120,7 @@ func TestLatestPlanRevisionFeedbackAttemptFindsInvalidatedMissingEvidenceAttempt
 
 func TestInsufficientEvidenceRequirements(t *testing.T) {
 	feedback := "prose before\nINSUFFICIENT_EVIDENCE_REQUIREMENT visual_239fdd1deecb: split into one cell per surface/state/size/theme\nINSUFFICIENT_EVIDENCE_REQUIREMENT `behavioral_739eeaabb223`: split per journey with packaged commands\nINSUFFICIENT_EVIDENCE_REQUIREMENT plan_deadbeef0000: not an evidence row\nINSUFFICIENT_EVIDENCE_REQUIREMENT visual_x:\n"
-	reqs := InsufficientEvidenceRequirements(feedback)
+	reqs := insufficientEvidenceRequirements(feedback)
 	if len(reqs) != 2 {
 		t.Fatalf("parsed %d requirements, want 2: %+v", len(reqs), reqs)
 	}
@@ -130,9 +130,9 @@ func TestInsufficientEvidenceRequirements(t *testing.T) {
 }
 
 func TestEvidencePlanRevisionFeedbackCombines(t *testing.T) {
-	out := EvidencePlanRevisionFeedback(
-		[]MissingEvidenceRequirement{{Kind: "visual", Requirement: "capture the empty state"}},
-		[]InsufficientEvidenceRequirement{{ItemID: "visual_239fdd1deecb", Requirement: "split into per-cell rows"}},
+	out := evidencePlanRevisionFeedback(
+		[]missingEvidenceRequirement{{Kind: "visual", Requirement: "capture the empty state"}},
+		[]insufficientEvidenceRequirement{{ItemID: "visual_239fdd1deecb", Requirement: "split into per-cell rows"}},
 	)
 	if !strings.Contains(out, "capture the empty state") || !strings.Contains(out, "visual_239fdd1deecb") {
 		t.Fatalf("combined feedback missing content:\n%s", out)
@@ -140,12 +140,12 @@ func TestEvidencePlanRevisionFeedbackCombines(t *testing.T) {
 }
 
 func TestMissingEvidencePlanRevisionFeedback_PreservesReviewerRequirement(t *testing.T) {
-	requirements := []MissingEvidenceRequirement{
+	requirements := []missingEvidenceRequirement{
 		{Kind: testingContractVisualSource, Requirement: "Capture the updated setup wizard empty state."},
 		{Phase: 1, Kind: testingContractBehavioralSource, Requirement: "Record the phase-one create-project CLI journey."},
 	}
 
-	got := MissingEvidencePlanRevisionFeedback(requirements)
+	got := missingEvidencePlanRevisionFeedback(requirements)
 	for _, want := range []string{
 		"MISSING_EVIDENCE_REQUIREMENT visual: Capture the updated setup wizard empty state.",
 		"MISSING_EVIDENCE_REQUIREMENT phase 1 behavioral: Record the phase-one create-project CLI journey.",

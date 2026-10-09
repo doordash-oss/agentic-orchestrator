@@ -59,7 +59,7 @@ func TestRunBoundedHelper_SuccessWithoutPhaseComplete(t *testing.T) {
 	})
 	defer cleanup()
 
-	result, err := pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	result, err := pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		SessionID:     "feature-scout-1",
 		FeatureID:     "feature-1",
 		Phase:         feature.PhaseResearch,
@@ -75,8 +75,8 @@ func TestRunBoundedHelper_SuccessWithoutPhaseComplete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunBoundedHelper() error = %v", err)
 	}
-	if result.Status != BoundedHelperStatusCompleted {
-		t.Fatalf("result.Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+	if result.Status != boundedHelperStatusCompleted {
+		t.Fatalf("result.Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 	}
 	if result.Output != "Research complete" {
 		t.Errorf("result.Output = %q, want %q", result.Output, "Research complete")
@@ -159,7 +159,7 @@ func TestRunBoundedHelperRecordsIndividualSessionCost(t *testing.T) {
 	}
 	pr.FeatureStore = store
 
-	_, err := pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	_, err := pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		SessionID:     "feature-1-planreview-architecture-01",
 		FeatureID:     "feature-1",
 		Phase:         feature.PhasePlan,
@@ -214,7 +214,7 @@ func TestRunBoundedHelper_FailsOnPendingAskUserQuestion(t *testing.T) {
 	})
 	defer cleanup()
 
-	result, err := pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	result, err := pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		SessionID:    "feature-scout-ask",
 		FeatureID:    "feature-1",
 		Phase:        feature.PhaseResearch,
@@ -232,8 +232,8 @@ func TestRunBoundedHelper_FailsOnPendingAskUserQuestion(t *testing.T) {
 	if result == nil {
 		t.Fatal("RunBoundedHelper() result = nil, want status snapshot")
 	}
-	if result.Status != BoundedHelperStatusAskedUser {
-		t.Errorf("result.Status = %q, want %q", result.Status, BoundedHelperStatusAskedUser)
+	if result.Status != boundedHelperStatusAskedUser {
+		t.Errorf("result.Status = %q, want %q", result.Status, boundedHelperStatusAskedUser)
 	}
 	if !strings.Contains(err.Error(), "asked for user input") {
 		t.Errorf("error = %q, want AskUserQuestion context", err)
@@ -248,7 +248,7 @@ func TestRunBoundedHelper_FailsOnPermissionRequest(t *testing.T) {
 	})
 	defer cleanup()
 
-	result, err := pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	result, err := pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		SessionID:    "feature-scout-perm",
 		FeatureID:    "feature-1",
 		Phase:        feature.PhaseResearch,
@@ -265,8 +265,8 @@ func TestRunBoundedHelper_FailsOnPermissionRequest(t *testing.T) {
 	if result == nil {
 		t.Fatal("RunBoundedHelper() result = nil, want status snapshot")
 	}
-	if result.Status != BoundedHelperStatusPermissionRequired {
-		t.Errorf("result.Status = %q, want %q", result.Status, BoundedHelperStatusPermissionRequired)
+	if result.Status != boundedHelperStatusPermissionRequired {
+		t.Errorf("result.Status = %q, want %q", result.Status, boundedHelperStatusPermissionRequired)
 	}
 	if !strings.Contains(err.Error(), "requested tool permission") {
 		t.Errorf("error = %q, want permission context", err)
@@ -292,7 +292,7 @@ func TestRunBoundedHelper_FailsOnEmptyRequiredOutput(t *testing.T) {
 	})
 	defer cleanup()
 
-	result, err := pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	result, err := pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		SessionID:     "feature-scout-empty",
 		FeatureID:     "feature-1",
 		Phase:         feature.PhaseResearch,
@@ -311,8 +311,8 @@ func TestRunBoundedHelper_FailsOnEmptyRequiredOutput(t *testing.T) {
 	if result == nil {
 		t.Fatal("RunBoundedHelper() result = nil, want status snapshot")
 	}
-	if result.Status != BoundedHelperStatusEmptyOutput {
-		t.Errorf("result.Status = %q, want %q", result.Status, BoundedHelperStatusEmptyOutput)
+	if result.Status != boundedHelperStatusEmptyOutput {
+		t.Errorf("result.Status = %q, want %q", result.Status, boundedHelperStatusEmptyOutput)
 	}
 	if !strings.Contains(err.Error(), "without output") {
 		t.Errorf("error = %q, want empty output context", err)
@@ -380,7 +380,7 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-contract",
@@ -407,8 +407,8 @@ func TestRunBoundedHelper_NudgeWritesContractArtifactsThenCompletes(t *testing.T
 
 	select {
 	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusCompleted {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		if result.Status != boundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bounded helper to finalize")
@@ -431,14 +431,14 @@ func TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-commit-rejection",
 			workDir:       t.TempDir(),
 			completionDir: phaseDir,
 			contractPhase: feature.PhaseReview,
-			contractRole:  RoleImplementationReviewQA,
+			contractRole:  roleImplementationReviewQA,
 		})
 		resultCh <- result
 	}()
@@ -468,13 +468,13 @@ func TestRunBoundedHelper_CommitRejectionNudgesRoleCorrectVerbs(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusCompleted {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		if result.Status != boundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bounded helper to finalize")
 	}
-	if _, err := ReadCompletionReceipt(phaseDir); os.IsNotExist(err) {
+	if _, err := readCompletionReceipt(phaseDir); os.IsNotExist(err) {
 		t.Fatal("expected a completion receipt after the corrected turn")
 	}
 }
@@ -492,7 +492,7 @@ func TestRunBoundedHelper_DoneBranchDoesNotNudge(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-done",
@@ -559,8 +559,8 @@ func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runBoundedHelperSession() error = %v", err)
 	}
-	if result.Status != BoundedHelperStatusCompleted {
-		t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+	if result.Status != boundedHelperStatusCompleted {
+		t.Fatalf("Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 	}
 	wantSessionIDs := []string{"review-helper", "review-helper-retry-02"}
 	if !reflect.DeepEqual(sessionIDs, wantSessionIDs) {
@@ -581,7 +581,7 @@ func TestRunBoundedHelper_NudgeCapThenViolation(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-cap",
@@ -656,7 +656,7 @@ func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-bg-defer",
@@ -690,8 +690,8 @@ func TestRunBoundedHelper_DefersOnLiveBackgroundTasks(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusCompleted {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		if result.Status != boundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bounded helper to finalize")
@@ -720,7 +720,7 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-bg-resume",
@@ -757,8 +757,8 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 
 	select {
 	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusCompleted {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		if result.Status != boundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bounded helper to finalize")
@@ -794,7 +794,7 @@ func TestRunBoundedHelper_RetriesOnErroredResult(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
 		result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
@@ -813,8 +813,8 @@ func TestRunBoundedHelper_RetriesOnErroredResult(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusCompleted {
-			t.Fatalf("Status = %q, want %q (err: %v)", result.Status, BoundedHelperStatusCompleted, <-errCh)
+		if result.Status != boundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q (err: %v)", result.Status, boundedHelperStatusCompleted, <-errCh)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bounded helper to finalize after an errored-result retry")
@@ -854,12 +854,12 @@ func TestRunBoundedHelper_ErroredResultRetryExhausts(t *testing.T) {
 		contractRole:  RoleImplementationReviewCraft,
 	})
 
-	if result == nil || result.Status != BoundedHelperStatusFailed {
+	if result == nil || result.Status != boundedHelperStatusFailed {
 		status := "<nil>"
 		if result != nil {
 			status = result.Status
 		}
-		t.Fatalf("Status = %q, want %q", status, BoundedHelperStatusFailed)
+		t.Fatalf("Status = %q, want %q", status, boundedHelperStatusFailed)
 	}
 	if err == nil || !strings.Contains(err.Error(), "helper returned an error result") {
 		t.Fatalf("err = %v, want an error-result failure", err)
@@ -918,7 +918,7 @@ func TestRunBoundedHelper_TruncatedTurnAutoResumes(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-truncated-resume",
@@ -951,8 +951,8 @@ func TestRunBoundedHelper_TruncatedTurnAutoResumes(t *testing.T) {
 
 	select {
 	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusCompleted {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		if result.Status != boundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bounded helper to finalize")
@@ -972,7 +972,7 @@ func TestRunBoundedHelper_TruncatedTurnResumeCapThenFails(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
 		result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
@@ -1004,8 +1004,8 @@ func TestRunBoundedHelper_TruncatedTurnResumeCapThenFails(t *testing.T) {
 	sess.statusC <- agentStatusSuccess
 	select {
 	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusFailed {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusFailed)
+		if result.Status != boundedHelperStatusFailed {
+			t.Fatalf("Status = %q, want %q", result.Status, boundedHelperStatusFailed)
 		}
 		err := <-errCh
 		if err == nil || !strings.Contains(err.Error(), "turn ended before completion") {
@@ -1037,7 +1037,7 @@ func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-bg-stall",
@@ -1074,8 +1074,8 @@ func TestRunBoundedHelper_SilentLiveTaskWaitsUntilTerminal(t *testing.T) {
 	sess.statusC <- agentStatusSuccess
 	select {
 	case result := <-resultCh:
-		if result.Status != BoundedHelperStatusCompleted {
-			t.Fatalf("Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+		if result.Status != boundedHelperStatusCompleted {
+			t.Fatalf("Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for bounded helper completion")
@@ -1098,7 +1098,7 @@ func TestRunBoundedHelper_DoneArmRejectsLiveBackgroundTasks(t *testing.T) {
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
 
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	errCh := make(chan error, 1)
 	go func() {
 		result, err := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
@@ -1125,7 +1125,7 @@ func TestRunBoundedHelper_DoneArmRejectsLiveBackgroundTasks(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runBoundedHelperSession() hung after the provider exited with live tasks")
 	}
-	if _, err := ReadCompletionReceipt(phaseDir); err == nil {
+	if _, err := readCompletionReceipt(phaseDir); err == nil {
 		t.Fatal("helper committed a receipt while delegated tasks were still live")
 	}
 }
@@ -1234,14 +1234,14 @@ func askUserControlRequest(requestID string) llm.SDKMessage {
 
 // startStalledBgTaskHelper runs a craft-review helper whose first turn ends
 // while a background task stays live forever, as a never-true poll loop does.
-func startStalledBgTaskHelper(t *testing.T, sess *boundedBgTaskSession, phaseDir string) <-chan *BoundedHelperResult {
+func startStalledBgTaskHelper(t *testing.T, sess *boundedBgTaskSession, phaseDir string) <-chan *boundedHelperResult {
 	t.Helper()
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return sess, nil
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
-	resultCh := make(chan *BoundedHelperResult, 1)
+	resultCh := make(chan *boundedHelperResult, 1)
 	go func() {
 		result, _ := pr.runBoundedHelperSession(context.Background(), boundedHelperRunConfig{
 			sessionID:     "helper-bg-stall",
@@ -1265,8 +1265,8 @@ func TestRunBoundedHelper_StalledBackgroundTasks(t *testing.T) {
 		withOutcome bool
 		wantStatus  string
 	}{
-		{name: "silent tasks past stall grace commit present outcome", grace: 20 * time.Millisecond, ceiling: time.Hour, staleStdout: true, withOutcome: true, wantStatus: BoundedHelperStatusCompleted},
-		{name: "fresh stdout past ceiling commits present outcome", grace: time.Hour, ceiling: 50 * time.Millisecond, withOutcome: true, wantStatus: BoundedHelperStatusCompleted},
+		{name: "silent tasks past stall grace commit present outcome", grace: 20 * time.Millisecond, ceiling: time.Hour, staleStdout: true, withOutcome: true, wantStatus: boundedHelperStatusCompleted},
+		{name: "fresh stdout past ceiling commits present outcome", grace: time.Hour, ceiling: 50 * time.Millisecond, withOutcome: true, wantStatus: boundedHelperStatusCompleted},
 		{name: "ceiling without outcome is a protocol violation", grace: time.Hour, ceiling: 50 * time.Millisecond, wantStatus: BoundedHelperStatusProtocolViolation},
 	}
 	for _, tt := range tests {
@@ -1517,7 +1517,7 @@ func TestRunBoundedHelper_SessionSuccess(t *testing.T) {
 	sess.statusCh <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
-	result, err := runner.pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	result, err := runner.pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		FeatureID:     "feat-1",
 		SessionID:     "summary-1",
 		Label:         "summary generation",
@@ -1535,8 +1535,8 @@ func TestRunBoundedHelper_SessionSuccess(t *testing.T) {
 	if result.Output != "Utility output" {
 		t.Errorf("result.Output = %q, want %q", result.Output, "Utility output")
 	}
-	if result.Status != BoundedHelperStatusCompleted {
-		t.Errorf("result.Status = %q, want %q", result.Status, BoundedHelperStatusCompleted)
+	if result.Status != boundedHelperStatusCompleted {
+		t.Errorf("result.Status = %q, want %q", result.Status, boundedHelperStatusCompleted)
 	}
 	if result.Usage.InputTokens != 9 || result.Usage.OutputTokens != 4 {
 		t.Errorf("result.Usage = %+v, want input=9 output=4", result.Usage)
@@ -1560,7 +1560,7 @@ func TestRunBoundedHelper_TimesOut(t *testing.T) {
 	sess := newUtilityTestSession()
 	runner := newUtilityTestPhaseRunner(t, sess)
 
-	result, err := runner.pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	result, err := runner.pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		SessionID: "summary-timeout",
 		WorkDir:   t.TempDir(),
 		Label:     "summary generation",
@@ -1578,8 +1578,8 @@ func TestRunBoundedHelper_TimesOut(t *testing.T) {
 	if result == nil {
 		t.Fatal("RunBoundedHelper() result = nil, want timeout snapshot")
 	}
-	if result.Status != BoundedHelperStatusTimedOut {
-		t.Errorf("result.Status = %q, want %q", result.Status, BoundedHelperStatusTimedOut)
+	if result.Status != boundedHelperStatusTimedOut {
+		t.Errorf("result.Status = %q, want %q", result.Status, boundedHelperStatusTimedOut)
 	}
 }
 
@@ -1594,7 +1594,7 @@ func TestRunBoundedHelper_SessionRequiresOutput(t *testing.T) {
 	sess.statusCh <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
-	result, err := runner.pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	result, err := runner.pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		SessionID:     "summary-empty",
 		WorkDir:       t.TempDir(),
 		Label:         "summary generation",
@@ -1610,8 +1610,8 @@ func TestRunBoundedHelper_SessionRequiresOutput(t *testing.T) {
 	if result == nil {
 		t.Fatal("RunBoundedHelper() result = nil, want empty-output snapshot")
 	}
-	if result.Status != BoundedHelperStatusEmptyOutput {
-		t.Errorf("result.Status = %q, want %q", result.Status, BoundedHelperStatusEmptyOutput)
+	if result.Status != boundedHelperStatusEmptyOutput {
+		t.Errorf("result.Status = %q, want %q", result.Status, boundedHelperStatusEmptyOutput)
 	}
 }
 
@@ -1620,7 +1620,7 @@ func TestRunBoundedHelper_SessionFailsOnPermissionRequest(t *testing.T) {
 	sess.attachCh <- mocks.ControlRequestMsg("perm-1", "Bash")
 
 	runner := newUtilityTestPhaseRunner(t, sess)
-	result, err := runner.pr.RunBoundedHelper(context.Background(), BoundedHelperConfig{
+	result, err := runner.pr.runBoundedHelper(context.Background(), boundedHelperConfig{
 		SessionID: "summary-perm",
 		WorkDir:   t.TempDir(),
 		Label:     "summary generation",
@@ -1635,8 +1635,8 @@ func TestRunBoundedHelper_SessionFailsOnPermissionRequest(t *testing.T) {
 	if result == nil {
 		t.Fatal("RunBoundedHelper() result = nil, want permission snapshot")
 	}
-	if result.Status != BoundedHelperStatusPermissionRequired {
-		t.Errorf("result.Status = %q, want %q", result.Status, BoundedHelperStatusPermissionRequired)
+	if result.Status != boundedHelperStatusPermissionRequired {
+		t.Errorf("result.Status = %q, want %q", result.Status, boundedHelperStatusPermissionRequired)
 	}
 }
 

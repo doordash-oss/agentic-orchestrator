@@ -19,14 +19,14 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-// BuildInquirePrompt constructs the user message for the Inquire phase.
+// buildInquirePrompt constructs the user message for the Inquire phase.
 //
 // The prose lives in internal/agent/prompts/templates/inquire.user.tmpl
 // (and the partials it references). This function is a thin adapter that
 // projects *feature.Feature into the typed input the template expects and
 // invokes the renderer. The RoleSpec system prompt owns skill discovery and
 // Useful Resources.
-func BuildInquirePrompt(f *feature.Feature) string {
+func buildInquirePrompt(f *feature.Feature) string {
 	repos := make([]prompts.RepoView, 0, len(f.Repos))
 	for _, r := range f.Repos {
 		path := r.Path

@@ -575,7 +575,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "summary_user",
 			render: func() string {
-				return MustRender(TemplateSummaryUser, SummaryUserInput{
+				return MustRender(templateSummaryUser, summaryUserInput{
 					Name:        "Add OAuth login",
 					Description: "Sign in with Google.",
 				})
@@ -696,9 +696,9 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "scout_user",
 			render: func() string {
-				return MustRender(TemplateScoutUser, ScoutUserInput{
+				return MustRender(templateScoutUser, scoutUserInput{
 					Query: "How does the auth module wrap errors?",
-					Files: []ScoutFile{
+					Files: []scoutFile{
 						{Path: "auth/login.go", Purpose: "login flow", Content: "package auth\n\nfunc Login() error { ... }"},
 					},
 				})

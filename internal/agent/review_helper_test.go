@@ -66,7 +66,7 @@ func TestRunReviewHelper_ReadOnlyUsesBoundedHelperArtifactHandler(t *testing.T) 
 	}
 	t.Cleanup(func() { pr.SessionManager.Shutdown() })
 
-	_, err := pr.runReviewHelper(context.Background(), ReviewHelperConfig{
+	_, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
 		SessionID:              "review-helper-1",
 		FeatureID:              "feature-1",
 		Phase:                  feature.PhaseReview,
@@ -168,7 +168,7 @@ func TestRunReviewHelper_LiveRunConfiguresScratchRootsEnvAndPermissions(t *testi
 		},
 	}
 
-	result, err := pr.runReviewHelper(context.Background(), ReviewHelperConfig{
+	result, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
 		Posture:       reviewPostureLiveRun,
 		SessionID:     "qa-live-run",
 		FeatureID:     "feature-1",
@@ -268,7 +268,7 @@ func TestRunReviewHelper_ReadOnlyNarrowsWritableRootsToDeclaredArtifacts(t *test
 	}
 	t.Cleanup(func() { pr.SessionManager.Shutdown() })
 
-	_, err := pr.runReviewHelper(context.Background(), ReviewHelperConfig{
+	_, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
 		SessionID:              "validator-helper-1",
 		FeatureID:              "feature-1",
 		Phase:                  feature.PhasePlan,
@@ -278,7 +278,7 @@ func TestRunReviewHelper_ReadOnlyNarrowsWritableRootsToDeclaredArtifacts(t *test
 		ResponsePath:           filepath.Join(helperDir, "validation-scope-output.txt"),
 		FeedbackPath:           feedbackPath,
 		HelperIterDir:          helperDir,
-		Role:                   RoleValidateRoadmapScope,
+		Role:                   roleValidateRoadmapScope,
 		AllowedPaths:           []string{notesPath},
 		WorkDir:                workDir,
 		RepoName:               "repo",
@@ -330,7 +330,7 @@ echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":
 	t.Cleanup(func() { pr.SessionManager.Shutdown() })
 
 	feedbackPath := filepath.Join(helperDir, "review-feedback.md")
-	result, err := pr.runReviewHelper(context.Background(), ReviewHelperConfig{
+	result, err := pr.runReviewHelper(context.Background(), reviewHelperConfig{
 		SessionID:              "review-helper-no-marker",
 		FeatureID:              "feature-1",
 		Phase:                  feature.PhaseReview,
@@ -356,8 +356,8 @@ echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":
 	if result == nil {
 		t.Fatal("runReviewHelper() result = nil, want synthesized feedback")
 	}
-	if result.Status != ReviewChangesRequested {
-		t.Fatalf("result.Status = %s, want %s", result.Status, ReviewChangesRequested)
+	if result.Status != reviewChangesRequested {
+		t.Fatalf("result.Status = %s, want %s", result.Status, reviewChangesRequested)
 	}
 	if !strings.Contains(result.Feedback, "agentico-outcome") {
 		t.Fatalf("result.Feedback missing root-outcome violation:\n%s", result.Feedback)
@@ -434,7 +434,7 @@ func TestRunReviewHelper_ErrorPrefixPerPosture(t *testing.T) {
 		{posture: reviewPostureReadOnly, want: "running review helper: missing session id"},
 		{posture: reviewPostureLiveRun, want: "running live-run review helper: missing session id"},
 	} {
-		_, err := (&PhaseRunner{}).runReviewHelper(context.Background(), ReviewHelperConfig{Posture: tt.posture})
+		_, err := (&PhaseRunner{}).runReviewHelper(context.Background(), reviewHelperConfig{Posture: tt.posture})
 		if err == nil || err.Error() != tt.want {
 			t.Errorf("posture %s error = %v, want %q", tt.posture, err, tt.want)
 		}
@@ -463,7 +463,7 @@ func TestReviewHelpersUseActualModelProtocol(t *testing.T) {
 					captured = opts
 					return nil, nil, nil, stop
 				}}
-				cfg := ReviewHelperConfig{
+				cfg := reviewHelperConfig{
 					SessionID: "review-model-protocol", Model: tt.model, Prompt: "Review repository behavior.",
 					Phase: feature.PhaseReview, Role: RoleImplementationReviewCraft,
 					WorkDir: root, HelperIterDir: root, FeedbackPath: filepath.Join(root, "review-feedback.md"),
@@ -512,7 +512,7 @@ func TestPlanValidatorUsesReviewProviderProtocol(t *testing.T) {
 			f := &feature.Feature{ID: "mixed-provider-plan"}
 			f.Models.Planning, f.Models.Review = tt.planner, tt.reviewer
 			var captured BuildSessionOpts
-			cfg := PlanLoopConfig{
+			cfg := planLoopConfig{
 				Registry: registry, Feature: f, StateDir: root, WorkDir: root,
 				AskingClause:   parent.askingQuestionsClauseForModel(tt.planner),
 				CompletionTool: parent.completionToolForModel(tt.planner),

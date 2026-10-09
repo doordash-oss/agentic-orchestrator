@@ -86,14 +86,14 @@ func TestImplementLoop_TerminalProviderErrorDoesNotCrashResume(t *testing.T) {
 		close(sess.done)
 		return sess, nil
 	}
-	_, err := RunImplementationLoop(cfg, nil)
+	_, err := runImplementationLoop(cfg, nil)
 	if err == nil || !strings.Contains(err.Error(), terminalImageError) {
 		t.Fatalf("RunImplementationLoop() error = %v, want provider diagnostic", err)
 	}
 	if builds != 1 {
 		t.Fatalf("BuildSession calls = %d, want one (no replay of failed input)", builds)
 	}
-	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	meta, err := newArtifactManager(artifactDir).readMeta(filepath.Join(artifactDir, "iteration-01"))
 	if err != nil || meta.AgentStatus != agentStatusFailed {
 		t.Fatalf("iteration metadata = %+v, err = %v, want durable FAILED outcome", meta, err)
 	}

@@ -16,12 +16,12 @@ package agent
 
 import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
-// RoleImplementer is the phase implementer session.
-const RoleImplementer Role = "implementer"
+// roleImplementer is the phase implementer session.
+const roleImplementer Role = "implementer"
 
 var implementRoleSpec = roleSpec{
 	Phase:     feature.PhaseImplement,
-	Role:      RoleImplementer,
+	Role:      roleImplementer,
 	SkillName: "implement",
 	OutputRoots: []outputRootSpec{
 		iterationParentOutputRoot("phase_dir", "Phase-level implement artifact root shared across iterations."),

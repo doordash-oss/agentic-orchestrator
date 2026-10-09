@@ -22,21 +22,21 @@ import (
 
 const missingEvidenceMarker = "MISSING_EVIDENCE_REQUIREMENT"
 
-// MissingEvidenceRequirement is one reviewer-authored evidence row request.
-type MissingEvidenceRequirement struct {
+// missingEvidenceRequirement is one reviewer-authored evidence row request.
+type missingEvidenceRequirement struct {
 	Phase       int
 	Kind        string
 	Requirement string
 }
 
-// MissingEvidenceRequirements extracts structured missing-evidence markers
+// missingEvidenceRequirements extracts structured missing-evidence markers
 // from review feedback. The marker grammar is intentionally small so reviewer
 // prose can vary while the harness still has a deterministic routing signal:
 //
 //	MISSING_EVIDENCE_REQUIREMENT visual|behavioral: <requirement>
 //	MISSING_EVIDENCE_REQUIREMENT phase <n> visual|behavioral: <requirement>
-func MissingEvidenceRequirements(feedback string) []MissingEvidenceRequirement {
-	var out []MissingEvidenceRequirement
+func missingEvidenceRequirements(feedback string) []missingEvidenceRequirement {
+	var out []missingEvidenceRequirement
 	for _, line := range strings.Split(feedback, "\n") {
 		idx := strings.Index(line, missingEvidenceMarker)
 		if idx < 0 {
@@ -58,7 +58,7 @@ func MissingEvidenceRequirements(feedback string) []MissingEvidenceRequirement {
 		if requirement == "" {
 			continue
 		}
-		out = append(out, MissingEvidenceRequirement{
+		out = append(out, missingEvidenceRequirement{
 			Phase:       phase,
 			Kind:        kind,
 			Requirement: requirement,
@@ -96,10 +96,10 @@ func parseMissingEvidenceMarkerHead(head string) (int, string, bool) {
 	}
 }
 
-// MissingEvidencePlanRevisionFeedback renders the phase-plan critic feedback
+// missingEvidencePlanRevisionFeedback renders the phase-plan critic feedback
 // used when review discovers a user-facing surface without contract-backed
 // visual or behavioral evidence coverage.
-func MissingEvidencePlanRevisionFeedback(requirements []MissingEvidenceRequirement) string {
+func missingEvidencePlanRevisionFeedback(requirements []missingEvidenceRequirement) string {
 	var b strings.Builder
 	b.WriteString("# Phase Plan Revision Required: Missing Evidence Coverage\n\n")
 	b.WriteString("The implementation reviewer found user-facing work without matching visual or behavioral testing-contract coverage. Revise the phase plan so the next implementation attempt recompiles normal contract rows from the plan instead of inventing report rows.\n\n")
@@ -132,23 +132,23 @@ func MissingEvidencePlanRevisionFeedback(requirements []MissingEvidenceRequireme
 
 const insufficientEvidenceMarker = "INSUFFICIENT_EVIDENCE_REQUIREMENT"
 
-// InsufficientEvidenceRequirement is one reviewer-authored request to
+// insufficientEvidenceRequirement is one reviewer-authored request to
 // restructure an existing evidence row whose scope is unsatisfiable as
 // written (e.g. one row contracting an entire capture matrix). Repair is a
 // phase-plan revision, not another implementer lap against the same row.
-type InsufficientEvidenceRequirement struct {
+type insufficientEvidenceRequirement struct {
 	ItemID      string
 	Requirement string
 }
 
-// InsufficientEvidenceRequirements extracts structured markers of the form:
+// insufficientEvidenceRequirements extracts structured markers of the form:
 //
 //	INSUFFICIENT_EVIDENCE_REQUIREMENT <item_id>: <revised requirement>
 //
 // Only visual_/behavioral_ item IDs are accepted — command rows already have
 // their own contract-error revision path.
-func InsufficientEvidenceRequirements(feedback string) []InsufficientEvidenceRequirement {
-	var out []InsufficientEvidenceRequirement
+func insufficientEvidenceRequirements(feedback string) []insufficientEvidenceRequirement {
+	var out []insufficientEvidenceRequirement
 	for _, line := range strings.Split(feedback, "\n") {
 		idx := strings.Index(line, insufficientEvidenceMarker)
 		if idx < 0 {
@@ -164,7 +164,7 @@ func InsufficientEvidenceRequirements(feedback string) []InsufficientEvidenceReq
 		if requirement == "" || !isEvidenceContractItemID(itemID) {
 			continue
 		}
-		out = append(out, InsufficientEvidenceRequirement{ItemID: itemID, Requirement: requirement})
+		out = append(out, insufficientEvidenceRequirement{ItemID: itemID, Requirement: requirement})
 	}
 	return out
 }
@@ -174,16 +174,16 @@ func isEvidenceContractItemID(itemID string) bool {
 		strings.HasPrefix(itemID, testingContractBehavioralSource+"_")
 }
 
-// EvidencePlanRevisionFeedback renders one combined plan-revision request for
+// evidencePlanRevisionFeedback renders one combined plan-revision request for
 // both marker kinds so the planner repairs coverage and row structure in a
 // single pass.
-func EvidencePlanRevisionFeedback(missing []MissingEvidenceRequirement, insufficient []InsufficientEvidenceRequirement) string {
+func evidencePlanRevisionFeedback(missing []missingEvidenceRequirement, insufficient []insufficientEvidenceRequirement) string {
 	if len(insufficient) == 0 {
-		return MissingEvidencePlanRevisionFeedback(missing)
+		return missingEvidencePlanRevisionFeedback(missing)
 	}
 	var b strings.Builder
 	if len(missing) > 0 {
-		b.WriteString(MissingEvidencePlanRevisionFeedback(missing))
+		b.WriteString(missingEvidencePlanRevisionFeedback(missing))
 		b.WriteString("\n")
 	}
 	b.WriteString("# Phase Plan Revision Required: Restructure Evidence Rows\n\n")

@@ -87,7 +87,7 @@ func buildImplementSystemPrompt(in implementSystemPromptInput) string {
 func buildRoleSystemPrompt(in roleSystemPromptInput) string {
 	spec := in.Spec
 	rt := roleRuntime{IterationDir: in.IterationDir}
-	roots := spec.OutputRootPaths(rt)
+	roots := spec.outputRootPaths(rt)
 	rootViews := make([]prompts.OutputRootView, 0, len(spec.OutputRoots))
 	for _, root := range spec.OutputRoots {
 		rootViews = append(rootViews, prompts.OutputRootView{

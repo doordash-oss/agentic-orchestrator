@@ -40,7 +40,7 @@ import (
 )
 
 func TestBuildImplementPrompt(t *testing.T) {
-	prompt := BuildImplementPrompt(
+	prompt := buildImplementPrompt(
 		"/tmp/plans/plan.md",
 		"Relevant tests pass",
 		"Fix the auth bug",
@@ -77,7 +77,7 @@ func TestBuildImplementPrompt(t *testing.T) {
 }
 
 func TestBuildImplementPromptMinimal(t *testing.T) {
-	prompt := BuildImplementPrompt("/tmp/plan.md", "criteria", "", "", 1)
+	prompt := buildImplementPrompt("/tmp/plan.md", "criteria", "", "", 1)
 	if !strings.Contains(prompt, "/tmp/plan.md") {
 		t.Error("expected plan path in minimal prompt")
 	}
@@ -124,7 +124,7 @@ func TestRunImplementationLoop_GrantsOnlyActiveRunState(t *testing.T) {
 	sm := session.NewManager(make(chan interface{}, 100))
 	defer sm.Shutdown()
 
-	result, err := RunImplementationLoop(ImplementConfig{
+	result, err := runImplementationLoop(ImplementConfig{
 		Feature:                    f,
 		WorkDir:                    activeRunDir,
 		PlanPath:                   planPath,
@@ -168,7 +168,7 @@ func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
 	if err := os.WriteFile(planPath, []byte("# Phase plan\n"), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
 	}
-	feedback := MissingEvidencePlanRevisionFeedback([]MissingEvidenceRequirement{{
+	feedback := missingEvidencePlanRevisionFeedback([]missingEvidenceRequirement{{
 		Phase:       1,
 		Kind:        testingContractVisualSource,
 		Requirement: "Capture actual rendered README output.",
@@ -176,7 +176,7 @@ func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
 	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
 		Attempt:      2,
 		AgentStatus:  agentStatusSuccess,
-		ReviewStatus: ReviewChangesRequested.String(),
+		ReviewStatus: reviewChangesRequested.String(),
 	}); err != nil {
 		t.Fatalf("write plan attempt meta: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestBuildImplementPromptIncludesPlanRevisionFeedback(t *testing.T) {
 		t.Fatalf("write approved plan attempt meta: %v", err)
 	}
 
-	prompt := BuildImplementPrompt(
+	prompt := buildImplementPrompt(
 		planPath,
 		"Relevant tests pass",
 		"", "", 3,
@@ -222,7 +222,7 @@ func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
 	if err := WritePlanAttemptMeta(planDir, PlanAttemptMeta{
 		Attempt:      1,
 		AgentStatus:  agentStatusSuccess,
-		ReviewStatus: ReviewChangesRequested.String(),
+		ReviewStatus: reviewChangesRequested.String(),
 	}); err != nil {
 		t.Fatalf("write rejected plan attempt meta: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestBuildImplementPromptSkipsStalePlanValidatorFeedback(t *testing.T) {
 		t.Fatalf("write approved plan attempt meta: %v", err)
 	}
 
-	prompt := BuildImplementPrompt(
+	prompt := buildImplementPrompt(
 		planPath,
 		"Relevant tests pass",
 		"", "", 2,
@@ -304,7 +304,7 @@ func TestFrontendImplementationRequiresFrontendDesignAndKeepsVisualReferences(t 
 	sm := session.NewManager(make(chan interface{}, 100))
 	defer sm.Shutdown()
 
-	result, err := RunImplementationLoop(ImplementConfig{
+	result, err := runImplementationLoop(ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               store,
 		WorkDir:                    workDir,
@@ -472,7 +472,7 @@ func TestBuildHelpAnswers(t *testing.T) {
 }
 
 func TestBuildImplementPromptWithHelpAnswers(t *testing.T) {
-	prompt := BuildImplementPrompt(
+	prompt := buildImplementPrompt(
 		"/tmp/plan.md",
 		"criteria",
 		"",
@@ -627,7 +627,7 @@ func TestImplementLoopCodexRouting(t *testing.T) {
 				BuildSession:               buildSession,
 			}
 
-			result, err := RunImplementationLoop(cfg, sm)
+			result, err := runImplementationLoop(cfg, sm)
 
 			if tt.wantCodex {
 				if err != nil {
@@ -751,7 +751,7 @@ func TestImplementLoopCodexRoutingUnit(t *testing.T) {
 				},
 			}
 
-			result, err := RunImplementationLoop(cfg, nil)
+			result, err := runImplementationLoop(cfg, nil)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -845,7 +845,7 @@ done
 	sm := session.NewManager(make(chan interface{}, 100))
 	defer sm.Shutdown()
 
-	result, err := RunImplementationLoop(ImplementConfig{
+	result, err := runImplementationLoop(ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               store,
 		WorkDir:                    workDir,
@@ -1298,7 +1298,7 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 		},
 	}
 
-	result, err := RunImplementationLoop(cfg, nil)
+	result, err := runImplementationLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -1306,7 +1306,7 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
 
-	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	meta, err := newArtifactManager(artifactDir).readMeta(filepath.Join(artifactDir, "iteration-01"))
 	if err != nil {
 		t.Fatalf("read meta: %v", err)
 	}
@@ -1418,7 +1418,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 		return resumed, nil
 	}
 
-	result, err := RunImplementationLoop(cfg, nil)
+	result, err := runImplementationLoop(cfg, nil)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -1442,7 +1442,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 		t.Errorf("start session IDs = %v, want second with -resume suffix", startIDs)
 	}
 
-	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	meta, err := newArtifactManager(artifactDir).readMeta(filepath.Join(artifactDir, "iteration-01"))
 	if err != nil {
 		t.Fatalf("read meta: %v", err)
 	}
@@ -1472,13 +1472,13 @@ func TestImplementLoop_CrashResumeNotAttemptedWithoutCapability(t *testing.T) {
 		return dead, nil
 	}
 
-	if _, err := RunImplementationLoop(cfg, nil); err != nil {
+	if _, err := runImplementationLoop(cfg, nil); err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
 	if buildCalls != 1 {
 		t.Fatalf("BuildSession calls = %d, want 1 (no resume without capability)", buildCalls)
 	}
-	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	meta, err := newArtifactManager(artifactDir).readMeta(filepath.Join(artifactDir, "iteration-01"))
 	if err != nil {
 		t.Fatalf("read meta: %v", err)
 	}
@@ -1504,13 +1504,13 @@ func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
 		return dead, nil
 	}
 
-	if _, err := RunImplementationLoop(cfg, nil); err != nil {
+	if _, err := runImplementationLoop(cfg, nil); err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
 	if buildCalls != 2 {
 		t.Fatalf("BuildSession calls = %d, want 2 (initial + one resume)", buildCalls)
 	}
-	meta, err := NewArtifactManager(artifactDir).ReadMeta(filepath.Join(artifactDir, "iteration-01"))
+	meta, err := newArtifactManager(artifactDir).readMeta(filepath.Join(artifactDir, "iteration-01"))
 	if err != nil {
 		t.Fatalf("read meta: %v", err)
 	}
@@ -1613,7 +1613,7 @@ func TestImplementLoopSkipIterationReview(t *testing.T) {
 		SkipIterationReview:        true,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1696,7 +1696,7 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 		SkipIterationReview:        false,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1760,7 +1760,7 @@ func TestImplementLoopReviewHelperUsesChildDirAndHarnessReceipt(t *testing.T) {
 	store := feature.NewStore(filepath.Join(tmpDir, "state"))
 	_ = store.Save(f)
 
-	result, err := RunImplementationLoop(ImplementConfig{
+	result, err := runImplementationLoop(ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               store,
 		WorkDir:                    workDir,
@@ -1831,7 +1831,7 @@ func TestImplementLoopReviewHelperMissingRootOutcomeCountsConsecutiveFailure(t *
 	store := feature.NewStore(filepath.Join(tmpDir, "state"))
 	_ = store.Save(f)
 
-	result, err := RunImplementationLoop(ImplementConfig{
+	result, err := runImplementationLoop(ImplementConfig{
 		Feature:                    f,
 		FeatureStore:               store,
 		WorkDir:                    workDir,
@@ -1861,7 +1861,7 @@ func TestImplementLoopReviewHelperMissingRootOutcomeCountsConsecutiveFailure(t *
 	if err != nil {
 		t.Fatalf("reading iteration-02 meta.yaml: %v", err)
 	}
-	var meta IterationMeta
+	var meta iterationMeta
 	if err := yaml.Unmarshal(metaBytes, &meta); err != nil {
 		t.Fatalf("unmarshal iteration-02 meta.yaml: %v", err)
 	}
@@ -1881,7 +1881,7 @@ func TestImplementLoopReviewHelperMissingRootOutcomeCountsConsecutiveFailure(t *
 	if !strings.Contains(string(parentFeedback), "agentico-outcome") {
 		t.Fatalf("parent review feedback missing root-outcome violation:\n%s", parentFeedback)
 	}
-	if !strings.Contains(string(parentFeedback), ReviewChangesRequested.String()) || strings.Contains(string(parentFeedback), "\n"+ReviewApproved.String()) {
+	if !strings.Contains(string(parentFeedback), reviewChangesRequested.String()) || strings.Contains(string(parentFeedback), "\n"+ReviewApproved.String()) {
 		t.Fatalf("parent review feedback did not override approved verdict:\n%s", parentFeedback)
 	}
 }
@@ -1947,7 +1947,7 @@ func runImplementLoopWithMixedFailureScript(t *testing.T, sequence []string, max
 	f := newTestFeature(t, workDir)
 	planPath := writePlanFile(t, artifactDir, "Plan")
 
-	result, err := RunImplementationLoop(ImplementConfig{
+	result, err := runImplementationLoop(ImplementConfig{
 		Feature:             f,
 		WorkDir:             workDir,
 		PlanPath:            planPath,
@@ -2045,7 +2045,7 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
 		SkipIterationReview: false, PhaseType: "collapsed",
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -2053,7 +2053,7 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 		t.Fatalf("result = %+v, want review_error park when no axis produced a verdict", result)
 	}
 	iterDir := filepath.Join(artifactDir, "iteration-01")
-	if !HasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, RoleImplementer) {
+	if !hasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, roleImplementer) {
 		t.Fatal("phase_complete missing; review-only resume would re-run the implementer")
 	}
 	if _, statErr := os.Stat(filepath.Join(iterDir, "meta.yaml")); !os.IsNotExist(statErr) {
@@ -2082,14 +2082,14 @@ func TestImplementLoopReviewInfraFailureParksForReviewOnlyResume(t *testing.T) {
 	if err := os.MkdirAll(cachedAxisDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cachedFeedback := FormatStructuredReviewFeedback(cachedAxis.Name+" Implementation Review", "- (none)", "- (none)", ReviewApproved)
+	cachedFeedback := formatStructuredReviewFeedback(cachedAxis.Name+" Implementation Review", "- (none)", "- (none)", ReviewApproved)
 	if err := os.WriteFile(filepath.Join(cachedAxisDir, "review-feedback.md"), []byte(cachedFeedback), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	writeTestCompletionReceiptFor(t, cachedAxisDir, feature.PhaseReview, RoleImplementationReviewCraft)
 	testutil.WriteScript(t, scriptsDir, "review.sh",
 		testutil.JSONLInit+"\n"+testutil.WriteReviewApproved(artifactDir)+"\n"+testutil.JSONLSuccess+"\n")
-	resumed, err := RunImplementationLoop(cfg, sm)
+	resumed, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
 	}
@@ -2289,7 +2289,7 @@ func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 		PhaseType:                  "tracer-bullet",
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2310,7 +2310,7 @@ func TestImplementLoop_WritesTestingContractForRoadmapPhase(t *testing.T) {
 	}
 
 	reportPath := filepath.Join(artifactDir, "iteration-01", "verification-report.yaml")
-	report, err := ReadVerificationReport(reportPath)
+	report, err := readVerificationReport(reportPath)
 	if err != nil {
 		t.Fatalf("ReadVerificationReport: %v", err)
 	}
@@ -2414,7 +2414,7 @@ required_checks:
 		SkipIterationReview:        false,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2438,7 +2438,7 @@ required_checks:
 	feedback := string(feedbackBytes)
 	wantSubstrings := []string{
 		"Report Integrity Gate",
-		ReviewChangesRequested.String(),
+		reviewChangesRequested.String(),
 		"caveat", // hedge phrase from the agent's own evidence
 	}
 	for _, s := range wantSubstrings {
@@ -2496,7 +2496,7 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
 		SkipIterationReview: false, PhaseType: "collapsed",
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -2531,7 +2531,7 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 	if err := ApplyNeedUserVerificationDecision(result.NeedUserInputPath, rec); err != nil {
 		t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
 	}
-	resumed, err := RunImplementationLoop(cfg, sm)
+	resumed, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
 	}
@@ -2602,7 +2602,7 @@ func TestImplementLoopPostHandoffCapabilityLossGatesSameIteration(t *testing.T) 
 		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
 		SkipIterationReview: true, PhaseType: "collapsed",
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -2613,7 +2613,7 @@ func TestImplementLoopPostHandoffCapabilityLossGatesSameIteration(t *testing.T) 
 		t.Fatalf("BuildSession calls = %d, want the implementer to have run before the post-handoff gate", len(*captured))
 	}
 	reportPath := filepath.Join(filepath.Dir(result.NeedUserInputPath), "verification-report.yaml")
-	report, err := ReadVerificationReport(reportPath)
+	report, err := readVerificationReport(reportPath)
 	if err != nil {
 		t.Fatalf("expected blocked verification report at %s: %v", reportPath, err)
 	}
@@ -2675,7 +2675,7 @@ func TestImplementLoopRetryAfterAuthReexecutesVerification(t *testing.T) {
 		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
 		SkipIterationReview: true, PhaseType: "collapsed",
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -2705,14 +2705,14 @@ func TestImplementLoopRetryAfterAuthReexecutesVerification(t *testing.T) {
 	if err := os.WriteFile(authToken, []byte("ok"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := RunImplementationLoop(cfg, sm)
+	resumed, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
 	}
 	if resumed.FinalStatus != finalStatusReviewPassed || resumed.Iterations != 1 {
 		t.Fatalf("resumed result = %+v, want iteration-1 review_passed after re-executed verification", resumed)
 	}
-	report, err := ReadVerificationReport(reportPath)
+	report, err := readVerificationReport(reportPath)
 	if err != nil {
 		t.Fatalf("ReadVerificationReport() error = %v", err)
 	}
@@ -2730,10 +2730,10 @@ func TestImplementLoopRetryAfterAuthReexecutesVerification(t *testing.T) {
 func TestImplementLoopUnauthorizedWaiverRaisesUserGate(t *testing.T) {
 	for _, tc := range []struct {
 		answer     string
-		wantStatus VerificationRunStatus
+		wantStatus verificationRunStatus
 	}{
-		{answer: NeedUserVerificationWaive, wantStatus: VerificationStatusWaived},
-		{answer: NeedUserVerificationRetryAfterAuth, wantStatus: VerificationStatusPassed},
+		{answer: NeedUserVerificationWaive, wantStatus: verificationStatusWaived},
+		{answer: NeedUserVerificationRetryAfterAuth, wantStatus: verificationStatusPassed},
 	} {
 		t.Run(tc.answer, func(t *testing.T) {
 			tmpDir := t.TempDir()
@@ -2782,14 +2782,14 @@ func TestImplementLoopUnauthorizedWaiverRaisesUserGate(t *testing.T) {
 					if err != nil {
 						t.Fatalf("reading contract before implementer session: %v", err)
 					}
-					report := BuildContractVerificationReportStub(contract, contractPath)
+					report := buildContractVerificationReportStub(contract, contractPath)
 					for i := range report.Results {
-						report.Results[i].Status = VerificationStatusWaived
+						report.Results[i].Status = verificationStatusWaived
 					}
 					if err := os.MkdirAll(iterDir, 0o755); err != nil {
 						t.Fatal(err)
 					}
-					if err := WriteVerificationReport(reportPath, report); err != nil {
+					if err := writeVerificationReport(reportPath, report); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -2806,7 +2806,7 @@ func TestImplementLoopUnauthorizedWaiverRaisesUserGate(t *testing.T) {
 				DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
 				SkipIterationReview: true, PhaseType: "collapsed",
 			}
-			result, err := RunImplementationLoop(cfg, sm)
+			result, err := runImplementationLoop(cfg, sm)
 			if err != nil {
 				t.Fatalf("RunImplementationLoop() error = %v", err)
 			}
@@ -2828,7 +2828,7 @@ func TestImplementLoopUnauthorizedWaiverRaisesUserGate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if rec.Source != NeedUserInputSourceUnauthorizedWaiver || rec.VerificationDecision == nil ||
+			if rec.Source != needUserInputSourceUnauthorizedWaiver || rec.VerificationDecision == nil ||
 				!reflect.DeepEqual(rec.VerificationDecision.ItemIDs, wantIDs) {
 				t.Fatalf("gate = %+v, want unauthorized-waiver decision for %v", rec, wantIDs)
 			}
@@ -2840,7 +2840,7 @@ func TestImplementLoopUnauthorizedWaiverRaisesUserGate(t *testing.T) {
 			if err := ApplyNeedUserVerificationDecision(result.NeedUserInputPath, rec); err != nil {
 				t.Fatalf("ApplyNeedUserVerificationDecision() error = %v", err)
 			}
-			resumed, err := RunImplementationLoop(cfg, sm)
+			resumed, err := runImplementationLoop(cfg, sm)
 			if err != nil {
 				t.Fatalf("resumed RunImplementationLoop() error = %v", err)
 			}
@@ -2850,7 +2850,7 @@ func TestImplementLoopUnauthorizedWaiverRaisesUserGate(t *testing.T) {
 			if len(*captured) != 1 {
 				t.Fatalf("BuildSession calls = %d, want the single implementer session; resume must not re-run it", len(*captured))
 			}
-			report, err := ReadVerificationReport(reportPath)
+			report, err := readVerificationReport(reportPath)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2922,15 +2922,15 @@ func TestImplementLoopHarnessContractErrorRoutesPlanRevisionKeepsSameIteration(t
 	seededContract := compileImplementationTestingContract(cfg, badPlan)
 	for i := range seededContract.Items {
 		if seededContract.Items[i].Command == "printf stable" {
-			seededContract.Items[i].Disposition = TestingContractItemDisposition{
-				Status: TestingContractDispositionWaived, Reason: "user-approved stable exception", ChangedBy: "user",
+			seededContract.Items[i].Disposition = testingContractItemDisposition{
+				Status: testingContractDispositionWaived, Reason: "user-approved stable exception", ChangedBy: "user",
 			}
 		}
 	}
 	if err := WriteTestingContract(contractPath, seededContract); err != nil {
 		t.Fatalf("seed testing contract: %v", err)
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -2952,7 +2952,7 @@ func TestImplementLoopHarnessContractErrorRoutesPlanRevisionKeepsSameIteration(t
 	if err := os.WriteFile(planPath, []byte(goodPlan), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := RunImplementationLoop(cfg, sm)
+	resumed, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("resumed RunImplementationLoop() error = %v", err)
 	}
@@ -3009,7 +3009,7 @@ func TestImplementLoopUnscopedMultiRepoVerificationRoutesPlanRevisionBeforeImple
 		t.Fatal(err)
 	}
 	buildCalls := 0
-	result, err := RunImplementationLoop(ImplementConfig{
+	result, err := runImplementationLoop(ImplementConfig{
 		Feature: f, FeatureStore: store, PlanPath: planPath, ArtifactDir: artifactDir, StateDir: stateDir,
 		MaxIterations: 1, MaxConsecFails: 3, MaxConsecNoProgress: 3,
 		BuildSession: func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
@@ -3088,7 +3088,7 @@ func TestImplementLoopSkipReviewRoutesHarnessRegressionToRetry(t *testing.T) {
 		DangerouslySkipPermissions: true, BuildSession: buildSession, CommandRunner: runner,
 		SkipIterationReview: true, PhaseType: "collapsed",
 	}
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -3099,8 +3099,8 @@ func TestImplementLoopSkipReviewRoutesHarnessRegressionToRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(meta), ReviewChangesRequested.String()) {
-		t.Fatalf("iteration meta = %s, want review status %q", meta, ReviewChangesRequested.String())
+	if !strings.Contains(string(meta), reviewChangesRequested.String()) {
+		t.Fatalf("iteration meta = %s, want review status %q", meta, reviewChangesRequested.String())
 	}
 }
 
@@ -3187,7 +3187,7 @@ func TestImplementLoop_ExternalContractAmendmentReanchorsWithoutViolation(t *tes
 		PhaseType:                  "tdd-fill-in",
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)
 	}
@@ -3266,7 +3266,7 @@ func TestImplementLoop_SkillReadInstruction(t *testing.T) {
 		SkipIterationReview:        true,
 	}
 
-	result, err := RunImplementationLoop(cfg, sm)
+	result, err := runImplementationLoop(cfg, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop error: %v", err)
 	}

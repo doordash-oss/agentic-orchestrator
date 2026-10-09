@@ -61,12 +61,12 @@ func TestValidateRegistryCapability(t *testing.T) {
 		name, arg string
 		wantErr   string
 	}{
-		{CapabilityAuthenticatedBrowser, "slack.com", ""},
-		{CapabilityAuthenticatedBrowser, "", "requires a host"},
-		{CapabilityAuthenticatedBrowser, "https://slack.com/x", "invalid host"},
-		{CapabilityNetwork, "db:5432", ""},
-		{CapabilityDisplay, "", ""},
-		{CapabilityDisplay, "x", "takes no argument"},
+		{capabilityAuthenticatedBrowser, "slack.com", ""},
+		{capabilityAuthenticatedBrowser, "", "requires a host"},
+		{capabilityAuthenticatedBrowser, "https://slack.com/x", "invalid host"},
+		{capabilityNetwork, "db:5432", ""},
+		{capabilityDisplay, "", ""},
+		{capabilityDisplay, "x", "takes no argument"},
 		{"okta-session", "", "unknown built-in capability"},
 	}
 	for _, tc := range cases {
@@ -86,11 +86,11 @@ func TestValidateRegistryCapability(t *testing.T) {
 
 func TestBrowserStateEnvNameAndPath(t *testing.T) {
 	t.Parallel()
-	if got := BrowserStateEnvName("slack.com"); got != "AGENTICO_BROWSER_STATE_SLACK_COM" {
+	if got := browserStateEnvName("slack.com"); got != "AGENTICO_BROWSER_STATE_SLACK_COM" {
 		t.Fatalf("env name = %q", got)
 	}
 	want := filepath.Join("/rt", "capabilities", "browser", "app.example-host.com", "storageState.json")
-	if got := BrowserStatePath("/rt", "App.Example-Host.com"); got != want {
+	if got := browserStatePath("/rt", "App.Example-Host.com"); got != want {
 		t.Fatalf("state path = %q, want %q", got, want)
 	}
 }
@@ -118,7 +118,7 @@ func (rt redirectingTransport) RoundTrip(req *http.Request) (*http.Response, err
 
 func writeBrowserState(t *testing.T, runtimeDir, host, body string) string {
 	t.Helper()
-	path := BrowserStatePath(runtimeDir, host)
+	path := browserStatePath(runtimeDir, host)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestAuthenticatedBrowserProbe(t *testing.T) {
 	t.Run("denied on remote servers", func(t *testing.T) {
 		t.Parallel()
 		ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{RuntimeDir: t.TempDir(), AllowBrowserState: false})
-		got := RunRegistryCapabilityProbe(ctx, CapabilityAuthenticatedBrowser, "slack.com")
+		got := RunRegistryCapabilityProbe(ctx, capabilityAuthenticatedBrowser, "slack.com")
 		if got.Available || !strings.Contains(got.Reason, "not permitted") {
 			t.Fatalf("result = %+v, want policy denial", got)
 		}
@@ -145,8 +145,8 @@ func TestAuthenticatedBrowserProbe(t *testing.T) {
 		t.Parallel()
 		rt := t.TempDir()
 		ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{RuntimeDir: rt, AllowBrowserState: true})
-		got := RunRegistryCapabilityProbe(ctx, CapabilityAuthenticatedBrowser, "slack.com")
-		if got.Available || !strings.Contains(got.Reason, BrowserStatePath(rt, "slack.com")) {
+		got := RunRegistryCapabilityProbe(ctx, capabilityAuthenticatedBrowser, "slack.com")
+		if got.Available || !strings.Contains(got.Reason, browserStatePath(rt, "slack.com")) {
 			t.Fatalf("result = %+v, want missing-state reason with path", got)
 		}
 	})
@@ -157,7 +157,7 @@ func TestAuthenticatedBrowserProbe(t *testing.T) {
 		var seen []*http.Request
 		ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{RuntimeDir: rt, AllowBrowserState: true,
 			HTTPClient: &http.Client{Transport: redirectingTransport{seen: &seen}}})
-		got := RunRegistryCapabilityProbe(ctx, CapabilityAuthenticatedBrowser, "slack.com")
+		got := RunRegistryCapabilityProbe(ctx, capabilityAuthenticatedBrowser, "slack.com")
 		if got.Available || !strings.Contains(got.Reason, "expired") || len(seen) != 0 {
 			t.Fatalf("result = %+v (requests %d), want expiry failure without liveness request", got, len(seen))
 		}
@@ -168,7 +168,7 @@ func TestAuthenticatedBrowserProbe(t *testing.T) {
 		writeBrowserState(t, rt, "slack.com", liveState)
 		ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{RuntimeDir: rt, AllowBrowserState: true,
 			HTTPClient: &http.Client{Transport: redirectingTransport{}}})
-		got := RunRegistryCapabilityProbe(ctx, CapabilityAuthenticatedBrowser, "slack.com")
+		got := RunRegistryCapabilityProbe(ctx, capabilityAuthenticatedBrowser, "slack.com")
 		if got.Available || !strings.Contains(got.Reason, "sign-in") {
 			t.Fatalf("result = %+v, want sign-in redirect failure", got)
 		}
@@ -183,7 +183,7 @@ func TestAuthenticatedBrowserProbe(t *testing.T) {
 		var seen []*http.Request
 		ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{RuntimeDir: rt, AllowBrowserState: true,
 			HTTPClient: &http.Client{Transport: redirectingTransport{signedIn: true, seen: &seen}}})
-		got := RunRegistryCapabilityProbe(ctx, CapabilityAuthenticatedBrowser, "slack.com")
+		got := RunRegistryCapabilityProbe(ctx, capabilityAuthenticatedBrowser, "slack.com")
 		if !got.Available {
 			t.Fatalf("result = %+v, want available", got)
 		}
@@ -208,17 +208,17 @@ func TestNetworkAndDockerProbesUseDialer(t *testing.T) {
 		return c1, nil
 	}
 	ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{DialContext: dial})
-	if got := RunRegistryCapabilityProbe(ctx, CapabilityNetwork, "api.example.com"); !got.Available {
+	if got := RunRegistryCapabilityProbe(ctx, capabilityNetwork, "api.example.com"); !got.Available {
 		t.Fatalf("network default port = %+v", got)
 	}
-	if got := RunRegistryCapabilityProbe(ctx, CapabilityNetwork, "db.internal:5432"); got.Available || !strings.Contains(got.Reason, "db.internal:5432") {
+	if got := RunRegistryCapabilityProbe(ctx, capabilityNetwork, "db.internal:5432"); got.Available || !strings.Contains(got.Reason, "db.internal:5432") {
 		t.Fatalf("network refused = %+v", got)
 	}
 	if dialed[0] != "tcp api.example.com:443" {
 		t.Fatalf("dialed = %v", dialed)
 	}
 	t.Setenv("DOCKER_HOST", "tcp://docker.local:2375")
-	if got := RunRegistryCapabilityProbe(ctx, CapabilityDocker, ""); !got.Available {
+	if got := RunRegistryCapabilityProbe(ctx, capabilityDocker, ""); !got.Available {
 		t.Fatalf("docker = %+v", got)
 	}
 }
@@ -243,21 +243,21 @@ func TestPlanCapabilityTagsOnEvidenceRows(t *testing.T) {
 		"- [ ] Block Kit Builder preview of the root card [agentico capability: authenticated-browser(slack.com)], light theme [size: 1280x800]",
 	}, "\n")
 
-	steps := ParsePlanVerification(plan)
+	steps := parsePlanVerification(plan)
 	if len(steps) != 2 {
 		t.Fatalf("steps = %+v", steps)
 	}
-	if steps[0].Capabilities[0] != (VerificationCapability{Name: "Okta session", Probe: "test -f /tmp/okta"}) {
+	if steps[0].Capabilities[0] != (verificationCapability{Name: "Okta session", Probe: "test -f /tmp/okta"}) {
 		t.Fatalf("explicit probe capability = %+v", steps[0].Capabilities)
 	}
-	if steps[1].Capabilities[0] != (VerificationCapability{Name: "network(db.internal:5432)"}) || steps[1].Description != "Reachable" {
+	if steps[1].Capabilities[0] != (verificationCapability{Name: "network(db.internal:5432)"}) || steps[1].Description != "Reachable" {
 		t.Fatalf("registry capability = %+v / %q", steps[1].Capabilities, steps[1].Description)
 	}
-	manual := ParsePlanManualVerification(plan)
+	manual := parsePlanManualVerification(plan)
 	if len(manual) != 1 || manual[0].Description != "Judge the Builder rendering reads naturally." || len(manual[0].Capabilities) != 1 {
 		t.Fatalf("manual = %+v", manual)
 	}
-	visual := ParsePlanVisualEvidence(plan)
+	visual := parsePlanVisualEvidence(plan)
 	if len(visual) != 1 || visual[0].Width != 1280 || strings.Contains(visual[0].Description, "capability") ||
 		visual[0].Capabilities[0].Name != "authenticated-browser(slack.com)" {
 		t.Fatalf("visual = %+v", visual)
@@ -278,11 +278,11 @@ func TestPlanCapabilityTagsOnEvidenceRows(t *testing.T) {
 	if visualItem == nil || manualItem == nil || netItem == nil {
 		t.Fatalf("items = %+v", contract.Items)
 	}
-	want := TestingContractCapability{Name: "authenticated-browser(slack.com)", Registry: CapabilityAuthenticatedBrowser, Arg: "slack.com", OnMissing: "need_user_input"}
+	want := testingContractCapability{Name: "authenticated-browser(slack.com)", Registry: capabilityAuthenticatedBrowser, Arg: "slack.com", OnMissing: "need_user_input"}
 	if visualItem.Capabilities[0] != want || manualItem.Capabilities[0] != want {
 		t.Fatalf("compiled evidence capabilities = %+v / %+v", visualItem.Capabilities, manualItem.Capabilities)
 	}
-	if netItem.Capabilities[0].Registry != CapabilityNetwork || netItem.Capabilities[0].Arg != "db.internal:5432" || netItem.Capabilities[0].Probe != "" {
+	if netItem.Capabilities[0].Registry != capabilityNetwork || netItem.Capabilities[0].Arg != "db.internal:5432" || netItem.Capabilities[0].Probe != "" {
 		t.Fatalf("network capability = %+v", netItem.Capabilities)
 	}
 	if strings.Contains(visualItem.Command, "capability") {
@@ -299,14 +299,14 @@ func TestExecuteTestingContractRegistryProbeBlocksAgentOwnedEvidence(t *testing.
 		"### Visual Evidence",
 		"- [ ] Builder preview [agentico capability: authenticated-browser(slack.com)] [size: 100x100]",
 	}, "\n"), contractPath, "collapsed")
-	report := BuildContractVerificationReportStub(&contract, contractPath)
+	report := buildContractVerificationReportStub(&contract, contractPath)
 	ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{RuntimeDir: t.TempDir(), AllowBrowserState: false})
 
-	out, err := ExecuteTestingContract(ctx, NewExecCommandRunner(), &contract, &report, contractPath, iterDir, repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	out, err := executeTestingContract(ctx, NewExecCommandRunner(), &contract, &report, contractPath, iterDir, repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("ExecuteTestingContract() error = %v", err)
 	}
-	if len(out.BlockedItems) != 1 || out.Report.Results[0].Status != VerificationStatusBlocked {
+	if len(out.BlockedItems) != 1 || out.Report.Results[0].Status != verificationStatusBlocked {
 		t.Fatalf("outcome = %+v, want the missing capture blocked rather than failed", out.Report.Results[0])
 	}
 	if !strings.Contains(out.Report.Results[0].BlockedReason, "not permitted") {
@@ -318,8 +318,8 @@ func TestExecuteTestingContractUnknownRegistryCapabilityIsContractError(t *testi
 	t.Parallel()
 	repo := t.TempDir()
 	contract := CompileTestingContract("### Automated Verification\n- [ ] Check [agentico capability: okta-session]: `printf ok`\n", "", "collapsed")
-	report := BuildContractVerificationReportStub(&contract, "")
-	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	report := buildContractVerificationReportStub(&contract, "")
+	out, err := executeTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, "", "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("ExecuteTestingContract() error = %v", err)
 	}
@@ -333,25 +333,25 @@ func TestProbeTestingContractCapabilitiesSkipsWaivedAndUndeclared(t *testing.T) 
 	repo := t.TempDir()
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{
 		{ID: "plain", Source: testingContractPlanSource, Repo: "repo", Name: "plain", Command: "exit 1",
-			Run: &TestingContractRun{Shell: "exit 1", Cwd: "."}, Policy: TestingContractItemPolicy{Required: true}},
+			Run: &testingContractRun{Shell: "exit 1", Cwd: "."}, Policy: TestingContractItemPolicy{Required: true}},
 		{ID: "blocked", Source: testingContractPlanSource, Repo: "repo", Name: "needs okta", Command: "printf ok",
-			Run:          &TestingContractRun{Shell: "printf ok", Cwd: "."},
-			Capabilities: []TestingContractCapability{{Name: "Okta session", Probe: "exit 1"}},
+			Run:          &testingContractRun{Shell: "printf ok", Cwd: "."},
+			Capabilities: []testingContractCapability{{Name: "Okta session", Probe: "exit 1"}},
 			Policy:       TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}},
 		{ID: "waived", Source: testingContractVisualSource, Repo: "repo", Name: "waived capture", Command: "visual: x",
-			Capabilities: []TestingContractCapability{{Name: "display", Registry: CapabilityDisplay}},
+			Capabilities: []testingContractCapability{{Name: "display", Registry: capabilityDisplay}},
 			Policy:       TestingContractItemPolicy{Required: true, AllowWaiver: true},
-			Disposition:  TestingContractItemDisposition{Status: TestingContractDispositionWaived, ChangedBy: "user"}},
+			Disposition:  testingContractItemDisposition{Status: testingContractDispositionWaived, ChangedBy: "user"}},
 	}}
 	finalizeTestingContractOwnership(&contract)
-	out, err := ProbeTestingContractCapabilities(context.Background(), NewExecCommandRunner(), &contract, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	out, err := probeTestingContractCapabilities(context.Background(), NewExecCommandRunner(), &contract, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("ProbeTestingContractCapabilities() error = %v", err)
 	}
 	if len(out.BlockedItems) != 1 || out.BlockedItems[0] != "blocked" {
 		t.Fatalf("BlockedItems = %v, want only the probed item", out.BlockedItems)
 	}
-	if out.Report.Results[0].Status != VerificationStatusNotRun {
+	if out.Report.Results[0].Status != verificationStatusNotRun {
 		t.Fatalf("undeclared item ran during the probe pass: %+v", out.Report.Results[0])
 	}
 }
@@ -361,10 +361,10 @@ func TestReviseTestingContractAllowSubstitutionRequiresUser(t *testing.T) {
 	contract := &TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
 		ID: "visual_1", Source: testingContractVisualSource, Policy: TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true},
 	}}}
-	if _, err := ReviseTestingContract(contract, []TestingContractChange{{ItemID: "visual_1", Action: TestingContractChangeAllowSubstitution, ChangeReason: "r", ChangedBy: "agent"}}); err == nil {
+	if _, err := ReviseTestingContract(contract, []TestingContractChange{{ItemID: "visual_1", Action: testingContractChangeAllowSubstitution, ChangeReason: "r", ChangedBy: "agent"}}); err == nil {
 		t.Fatal("agent-authored allow_substitution accepted")
 	}
-	revised, err := ReviseTestingContract(contract, []TestingContractChange{{ItemID: "visual_1", Action: TestingContractChangeAllowSubstitution, ChangeReason: "r", ChangedBy: "user"}})
+	revised, err := ReviseTestingContract(contract, []TestingContractChange{{ItemID: "visual_1", Action: testingContractChangeAllowSubstitution, ChangeReason: "r", ChangedBy: "user"}})
 	if err != nil {
 		t.Fatalf("ReviseTestingContract() error = %v", err)
 	}
@@ -377,22 +377,22 @@ func TestVerificationGateOffersSubstituteForAgentEvidence(t *testing.T) {
 	t.Parallel()
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{
-		{ID: "visual_1", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent, Name: "capture", Command: "visual: capture",
+		{ID: "visual_1", Source: testingContractVisualSource, Owner: testingContractOwnerAgent, Name: "capture", Command: "visual: capture",
 			Policy: TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}},
-		{ID: "plan_1", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Name: "cmd", Command: "printf ok",
+		{ID: "plan_1", Source: testingContractPlanSource, Owner: testingContractOwnerHarness, Name: "cmd", Command: "printf ok",
 			Policy: TestingContractItemPolicy{Required: true, AllowSubstitution: true, AllowBlocked: true, AllowWaiver: true}},
 	}}
 	if err := WriteTestingContract(contractPath, contract); err != nil {
 		t.Fatal(err)
 	}
-	report := BuildContractVerificationReportStub(&contract, contractPath)
-	report.Results[0].Status, report.Results[0].BlockedReason = VerificationStatusBlocked, "missing declared capability"
+	report := buildContractVerificationReportStub(&contract, contractPath)
+	report.Results[0].Status, report.Results[0].BlockedReason = verificationStatusBlocked, "missing declared capability"
 
-	harnessOnly := SynthesizeVerificationNeedUserInputGateWithContext(contractPath, &contract, &report, []string{"plan_1"}, 1)
+	harnessOnly := synthesizeVerificationNeedUserInputGateWithContext(contractPath, &contract, &report, []string{"plan_1"}, 1)
 	if strings.Join(harnessOnly.VerificationDecision.AllowedActions, ",") != "WAIVE,RETRY_AFTER_AUTH" {
 		t.Fatalf("harness-only actions = %v", harnessOnly.VerificationDecision.AllowedActions)
 	}
-	rec := SynthesizeVerificationNeedUserInputGateWithContext(contractPath, &contract, &report, []string{"visual_1"}, 1)
+	rec := synthesizeVerificationNeedUserInputGateWithContext(contractPath, &contract, &report, []string{"visual_1"}, 1)
 	if strings.Join(rec.VerificationDecision.AllowedActions, ",") != "WAIVE,RETRY_AFTER_AUTH,ALLOW_SUBSTITUTE" {
 		t.Fatalf("agent-evidence actions = %v", rec.VerificationDecision.AllowedActions)
 	}
@@ -569,8 +569,8 @@ func TestMultiRepoCompileKeepsEvidenceCapabilities(t *testing.T) {
 			got[item.Source] = append(got[item.Source], capability.Registry)
 		}
 	}
-	if strings.Join(got[testingContractManualSource], ",") != CapabilityAuthenticatedBrowser ||
-		strings.Join(got[testingContractVisualSource], ",") != CapabilityAuthenticatedBrowser ||
+	if strings.Join(got[testingContractManualSource], ",") != capabilityAuthenticatedBrowser ||
+		strings.Join(got[testingContractVisualSource], ",") != capabilityAuthenticatedBrowser ||
 		strings.Join(got[testingContractBehavioralSource], ",") != "display,docker" {
 		t.Fatalf("capabilities by source = %v", got)
 	}
@@ -580,11 +580,11 @@ func TestReconcilePreservesUserSubstitutionAndSkipsProbe(t *testing.T) {
 	t.Parallel()
 	plan := "### Visual Evidence\n- [ ] Builder preview [agentico capability: authenticated-browser(slack.com)] [size: 100x100]\n"
 	existing := CompileTestingContract(plan, "/tmp/phase-01/plan.md", "collapsed")
-	revised, err := ReviseTestingContract(&existing, []TestingContractChange{{ItemID: existing.Items[0].ID, Action: TestingContractChangeAllowSubstitution, ChangeReason: "r", ChangedBy: "user"}})
+	revised, err := ReviseTestingContract(&existing, []TestingContractChange{{ItemID: existing.Items[0].ID, Action: testingContractChangeAllowSubstitution, ChangeReason: "r", ChangedBy: "user"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	merged := ReconcileTestingContract(revised, CompileTestingContract(plan, "/tmp/phase-01/plan.md", "collapsed"))
+	merged := reconcileTestingContract(revised, CompileTestingContract(plan, "/tmp/phase-01/plan.md", "collapsed"))
 	if !merged.Items[0].Policy.AllowSubstitution || len(merged.Changes) != 1 || merged.Revision != revised.Revision {
 		t.Fatalf("reconciled = %+v (changes %d, revision %d)", merged.Items[0].Policy, len(merged.Changes), merged.Revision)
 	}
@@ -592,7 +592,7 @@ func TestReconcilePreservesUserSubstitutionAndSkipsProbe(t *testing.T) {
 		t.Fatal("approved substitute must not be gated by the unavailable capability")
 	}
 	ctx := WithCapabilityPolicy(context.Background(), CapabilityPolicy{AllowBrowserState: false})
-	out, err := ProbeTestingContractCapabilities(ctx, NewExecCommandRunner(), &merged, "", t.TempDir(), nil)
+	out, err := probeTestingContractCapabilities(ctx, NewExecCommandRunner(), &merged, "", t.TempDir(), nil)
 	if err != nil || len(out.BlockedItems) != 0 {
 		t.Fatalf("probe pass = %+v, %v; want no block", out, err)
 	}

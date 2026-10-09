@@ -22,38 +22,38 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RequiredVerificationItem is a verification requirement the implementation
+// requiredVerificationItem is a verification requirement the implementation
 // iteration must account for in its verification report.
-type RequiredVerificationItem struct {
+type requiredVerificationItem struct {
 	Name        string `yaml:"name,omitempty"`
 	Requirement string `yaml:"requirement"`
 }
 
-type VerificationMode string
+type verificationMode string
 
 const (
-	VerificationModeUnknown    VerificationMode = "unknown"
-	VerificationModeCommand    VerificationMode = "command"
-	VerificationModeSkill      VerificationMode = "skill"
-	VerificationModeManual     VerificationMode = "manual"
-	VerificationModeVisual     VerificationMode = "visual"
-	VerificationModeBehavioral VerificationMode = "behavioral"
-	VerificationModeOther      VerificationMode = "other"
+	verificationModeUnknown    verificationMode = "unknown"
+	verificationModeCommand    verificationMode = "command"
+	verificationModeSkill      verificationMode = "skill"
+	verificationModeManual     verificationMode = "manual"
+	verificationModeVisual     verificationMode = "visual"
+	verificationModeBehavioral verificationMode = "behavioral"
+	verificationModeOther      verificationMode = "other"
 )
 
-type VerificationRunStatus string
+type verificationRunStatus string
 
 const (
-	VerificationStatusPassed           VerificationRunStatus = "passed"
-	VerificationStatusFailed           VerificationRunStatus = "failed"
-	VerificationStatusInheritedFailure VerificationRunStatus = "inherited_failure"
-	VerificationStatusBlocked          VerificationRunStatus = "blocked"
-	VerificationStatusWaived           VerificationRunStatus = "waived"
-	VerificationStatusNotRun           VerificationRunStatus = "not_run"
-	VerificationStatusPendingHuman     VerificationRunStatus = "pending_human"
+	verificationStatusPassed           verificationRunStatus = "passed"
+	verificationStatusFailed           verificationRunStatus = "failed"
+	verificationStatusInheritedFailure verificationRunStatus = "inherited_failure"
+	verificationStatusBlocked          verificationRunStatus = "blocked"
+	verificationStatusWaived           verificationRunStatus = "waived"
+	verificationStatusNotRun           verificationRunStatus = "not_run"
+	verificationStatusPendingHuman     verificationRunStatus = "pending_human"
 )
 
-type VerificationEvidence struct {
+type verificationEvidence struct {
 	ExitCode    *int     `yaml:"exit_code,omitempty"`
 	Summary     string   `yaml:"summary,omitempty"`
 	Primary     string   `yaml:"primary,omitempty"`
@@ -61,25 +61,25 @@ type VerificationEvidence struct {
 	Attachments []string `yaml:"attachments,omitempty"`
 }
 
-type VerificationMismatch struct {
+type verificationMismatch struct {
 	ItemID               string `yaml:"item_id"`
 	ImplementationStatus string `yaml:"implementation_status"`
 	FinalReviewStatus    string `yaml:"final_review_status"`
 	Note                 string `yaml:"note,omitempty"`
 }
 
-// VerificationCheckResult captures the implementation agent's evidence for one
+// verificationCheckResult captures the implementation agent's evidence for one
 // verification requirement. Evidence keeps both the legacy scalar form and the
 // structured v2 form in-memory so the reader can normalize old and new reports.
-type VerificationCheckResult struct {
+type verificationCheckResult struct {
 	ItemID           string                `yaml:"-"`
 	Name             string                `yaml:"-"`
 	Requirement      string                `yaml:"-"`
 	Command          string                `yaml:"-"`
-	Mode             VerificationMode      `yaml:"-"`
-	Status           VerificationRunStatus `yaml:"-"`
+	Mode             verificationMode      `yaml:"-"`
+	Status           verificationRunStatus `yaml:"-"`
 	Evidence         string                `yaml:"-"`
-	EvidenceData     VerificationEvidence  `yaml:"-"`
+	EvidenceData     verificationEvidence  `yaml:"-"`
 	Notes            string                `yaml:"-"`
 	BlockedReason    string                `yaml:"-"`
 	SubstituteItemID string                `yaml:"-"`
@@ -90,15 +90,15 @@ type verificationCheckResultWire struct {
 	Name             string                `yaml:"name,omitempty"`
 	Requirement      string                `yaml:"requirement,omitempty"`
 	Command          string                `yaml:"command,omitempty"`
-	Mode             VerificationMode      `yaml:"mode,omitempty"`
-	Status           VerificationRunStatus `yaml:"status,omitempty"`
+	Mode             verificationMode      `yaml:"mode,omitempty"`
+	Status           verificationRunStatus `yaml:"status,omitempty"`
 	Evidence         any                   `yaml:"evidence,omitempty"`
 	Notes            string                `yaml:"notes,omitempty"`
 	BlockedReason    string                `yaml:"blocked_reason,omitempty"`
 	SubstituteItemID string                `yaml:"substitute_item_id,omitempty"`
 }
 
-func (r VerificationCheckResult) MarshalYAML() (any, error) {
+func (r verificationCheckResult) MarshalYAML() (any, error) {
 	wire := verificationCheckResultWire{
 		ItemID:           r.ItemID,
 		Name:             r.Name,
@@ -121,12 +121,12 @@ func (r VerificationCheckResult) MarshalYAML() (any, error) {
 	return wire, nil
 }
 
-func (r *VerificationCheckResult) UnmarshalYAML(node *yaml.Node) error {
+func (r *verificationCheckResult) UnmarshalYAML(node *yaml.Node) error {
 	var wire verificationCheckResultWire
 	if err := node.Decode(&wire); err != nil {
 		return err
 	}
-	*r = VerificationCheckResult{
+	*r = verificationCheckResult{
 		ItemID:           strings.TrimSpace(wire.ItemID),
 		Name:             wire.Name,
 		Requirement:      strings.TrimSpace(wire.Requirement),
@@ -172,7 +172,7 @@ func (r *VerificationCheckResult) UnmarshalYAML(node *yaml.Node) error {
 		}
 		return nil
 	default:
-		var structured VerificationEvidence
+		var structured verificationEvidence
 		if err := nodeDecodeEvidence(node, &structured); err == nil && hasStructuredEvidence(structured) {
 			r.EvidenceData = structured
 			r.Evidence = strings.TrimSpace(structured.Summary)
@@ -181,7 +181,7 @@ func (r *VerificationCheckResult) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
-func nodeDecodeEvidence(node *yaml.Node, out *VerificationEvidence) error {
+func nodeDecodeEvidence(node *yaml.Node, out *verificationEvidence) error {
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		if node.Content[i].Value != "evidence" {
 			continue
@@ -194,7 +194,7 @@ func nodeDecodeEvidence(node *yaml.Node, out *VerificationEvidence) error {
 	return nil
 }
 
-func hasStructuredEvidence(e VerificationEvidence) bool {
+func hasStructuredEvidence(e verificationEvidence) bool {
 	return e.ExitCode != nil ||
 		strings.TrimSpace(e.Summary) != "" ||
 		strings.TrimSpace(e.Primary) != "" ||
@@ -238,28 +238,28 @@ func toStringSlice(v any) []string {
 	}
 }
 
-// VerificationReport is written per implementation iteration. Cross-phase
+// verificationReport is written per implementation iteration. Cross-phase
 // deferrals (new and closed) live in progress.md's `## Deferrals` section,
 // not here — verification-report.yaml is purely about verification check
 // results and contract metadata.
-type VerificationReport struct {
+type verificationReport struct {
 	Version          int                       `yaml:"version"`
 	ContractPath     string                    `yaml:"contract_path,omitempty"`
 	ContractRevision int                       `yaml:"contract_revision,omitempty"`
-	Results          []VerificationCheckResult `yaml:"results,omitempty"`
-	Mismatches       []VerificationMismatch    `yaml:"mismatches,omitempty"`
-	RequiredChecks   []VerificationCheckResult `yaml:"required_checks,omitempty"`
-	AdditionalChecks []VerificationCheckResult `yaml:"additional_checks,omitempty"`
+	Results          []verificationCheckResult `yaml:"results,omitempty"`
+	Mismatches       []verificationMismatch    `yaml:"mismatches,omitempty"`
+	RequiredChecks   []verificationCheckResult `yaml:"required_checks,omitempty"`
+	AdditionalChecks []verificationCheckResult `yaml:"additional_checks,omitempty"`
 	Summary          string                    `yaml:"summary,omitempty"`
-	KnownCaveats     KnownCaveats              `yaml:"known_caveats,omitempty"`
+	KnownCaveats     knownCaveats              `yaml:"known_caveats,omitempty"`
 }
 
-// KnownCaveats is a key→prose map of out-of-phase deferrals the agent
+// knownCaveats is a key→prose map of out-of-phase deferrals the agent
 // declares. It accepts two wire formats because real-world verification
 // reports emit both.
-type KnownCaveats map[string]string
+type knownCaveats map[string]string
 
-func (kc *KnownCaveats) UnmarshalYAML(node *yaml.Node) error {
+func (kc *knownCaveats) UnmarshalYAML(node *yaml.Node) error {
 	if node == nil || node.Kind == 0 {
 		return nil
 	}
@@ -288,46 +288,46 @@ func (kc *KnownCaveats) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
-// NormalizeStatus collapses common short-form status values into their
+// normalizeStatus collapses common short-form status values into their
 // canonical long form.
-func NormalizeStatus(s VerificationRunStatus) VerificationRunStatus {
+func normalizeStatus(s verificationRunStatus) verificationRunStatus {
 	switch strings.ToLower(strings.TrimSpace(string(s))) {
 	case "pass", "passed", "ok", "success":
-		return VerificationStatusPassed
+		return verificationStatusPassed
 	case "fail", "failed", "failure", "error":
-		return VerificationStatusFailed
+		return verificationStatusFailed
 	case "inherited_failure", "inherited", "pre_existing_failure", "pre-existing-failure":
-		return VerificationStatusInheritedFailure
+		return verificationStatusInheritedFailure
 	case "blocked":
-		return VerificationStatusBlocked
+		return verificationStatusBlocked
 	case "waived", "waive":
-		return VerificationStatusWaived
+		return verificationStatusWaived
 	case "skip", "skipped", "not_run", "notrun", "pending":
-		return VerificationStatusNotRun
+		return verificationStatusNotRun
 	case "pending_human", "manual", "human":
-		return VerificationStatusPendingHuman
+		return verificationStatusPendingHuman
 	default:
 		return s
 	}
 }
 
-func BuildContractVerificationReportStub(contract *TestingContract, contractPath string) VerificationReport {
-	report := VerificationReport{
+func buildContractVerificationReportStub(contract *TestingContract, contractPath string) verificationReport {
+	report := verificationReport{
 		Version:          2,
 		ContractPath:     strings.TrimSpace(contractPath),
 		ContractRevision: contract.Revision,
 	}
 	for _, item := range contract.Items {
 		mode := verificationModeForContractItem(item)
-		status := VerificationStatusNotRun
-		evidence := VerificationEvidence{}
+		status := verificationStatusNotRun
+		evidence := verificationEvidence{}
 		notes := ""
 		if IsTestingContractItemWaived(item) {
-			status = VerificationStatusWaived
+			status = verificationStatusWaived
 			notes = strings.TrimSpace(item.Disposition.Reason)
 			evidence.Summary = "user-authorized waiver: " + notes
 		}
-		report.Results = append(report.Results, VerificationCheckResult{
+		report.Results = append(report.Results, verificationCheckResult{
 			ItemID:       item.ID,
 			Name:         item.Name,
 			Requirement:  item.Command,
@@ -342,20 +342,20 @@ func BuildContractVerificationReportStub(contract *TestingContract, contractPath
 	return report
 }
 
-func verificationModeForContractItem(item TestingContractItem) VerificationMode {
+func verificationModeForContractItem(item TestingContractItem) verificationMode {
 	switch {
 	case item.ExpectedEvidence.Kind == testingContractManualKind || item.Source == testingContractManualSource:
-		return VerificationModeManual
+		return verificationModeManual
 	case item.ExpectedEvidence.Kind == testingContractVisualKind || item.Source == testingContractVisualSource:
-		return VerificationModeVisual
+		return verificationModeVisual
 	case item.ExpectedEvidence.Kind == testingContractBehavioralKind || item.Source == testingContractBehavioralSource:
-		return VerificationModeBehavioral
+		return verificationModeBehavioral
 	default:
-		return VerificationModeCommand
+		return verificationModeCommand
 	}
 }
 
-func WriteVerificationReport(path string, report VerificationReport) error {
+func writeVerificationReport(path string, report verificationReport) error {
 	data, err := yaml.Marshal(report)
 	if err != nil {
 		return fmt.Errorf("marshaling verification report: %w", err)
@@ -366,13 +366,13 @@ func WriteVerificationReport(path string, report VerificationReport) error {
 	return nil
 }
 
-func ReadVerificationReport(path string) (*VerificationReport, error) {
+func readVerificationReport(path string) (*verificationReport, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	var report VerificationReport
+	var report verificationReport
 	if err := yaml.Unmarshal(data, &report); err != nil {
 		return nil, fmt.Errorf("parsing verification report: %w", err)
 	}
@@ -383,15 +383,15 @@ func ReadVerificationReport(path string) (*VerificationReport, error) {
 	normalizeChecks(report.RequiredChecks)
 	normalizeChecks(report.AdditionalChecks)
 	if len(report.Results) > 0 && len(report.RequiredChecks) == 0 {
-		report.RequiredChecks = append([]VerificationCheckResult(nil), report.Results...)
+		report.RequiredChecks = append([]verificationCheckResult(nil), report.Results...)
 	}
 	report.Mismatches = normalizeMismatches(report.Mismatches)
 	return &report, nil
 }
 
-func normalizeChecks(checks []VerificationCheckResult) {
+func normalizeChecks(checks []verificationCheckResult) {
 	for i := range checks {
-		checks[i].Status = NormalizeStatus(checks[i].Status)
+		checks[i].Status = normalizeStatus(checks[i].Status)
 		if checks[i].Command == "" {
 			checks[i].Command = checks[i].Requirement
 		}
@@ -415,17 +415,17 @@ func normalizeChecks(checks []VerificationCheckResult) {
 	}
 }
 
-func normalizeMismatches(in []VerificationMismatch) []VerificationMismatch {
+func normalizeMismatches(in []verificationMismatch) []verificationMismatch {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]VerificationMismatch, 0, len(in))
+	out := make([]verificationMismatch, 0, len(in))
 	for _, mismatch := range in {
 		itemID := strings.TrimSpace(mismatch.ItemID)
 		if itemID == "" {
 			continue
 		}
-		out = append(out, VerificationMismatch{
+		out = append(out, verificationMismatch{
 			ItemID:               itemID,
 			ImplementationStatus: strings.TrimSpace(mismatch.ImplementationStatus),
 			FinalReviewStatus:    strings.TrimSpace(mismatch.FinalReviewStatus),

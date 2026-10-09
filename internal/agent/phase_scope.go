@@ -39,13 +39,13 @@ type PhaseScopeResult struct {
 	Tasks []PlanTask
 	// Issues lists structural validation problems. Non-empty means the plan
 	// is malformed; ScopeOK is false.
-	Issues []PhaseScopeIssue
+	Issues []phaseScopeIssue
 }
 
-// PhaseScopeIssue is a single structural validation problem raised by
+// phaseScopeIssue is a single structural validation problem raised by
 // PhaseScope. Callers either render to a human-friendly diagnostic or feed
 // into a validator gate.
-type PhaseScopeIssue struct {
+type phaseScopeIssue struct {
 	Code    string // stable identifier ("repo-not-in-feature", "untagged-task", ...)
 	Message string // human-readable detail
 	Task    string // task heading the issue belongs to (when applicable)
@@ -81,12 +81,12 @@ func PhaseScope(feat *feature.Feature, planPath string) (PhaseScopeResult, error
 	if err != nil {
 		return PhaseScopeResult{}, fmt.Errorf("phase scope: reading plan: %w", err)
 	}
-	return PhaseScopeFromText(feat, string(planText)), nil
+	return phaseScopeFromText(feat, string(planText)), nil
 }
 
-// PhaseScopeFromText is the in-memory variant for tests and callers that
+// phaseScopeFromText is the in-memory variant for tests and callers that
 // already have the plan markdown in hand.
-func PhaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult {
+func phaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult {
 	tasks := ParsePlanTasks(planText)
 
 	known := make(map[string]bool, len(feat.Repos))
@@ -96,9 +96,9 @@ func PhaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 
 	multiRepo := len(feat.Repos) > 1
 
-	var issues []PhaseScopeIssue
+	var issues []phaseScopeIssue
 	if len(tasks) == 0 {
-		issues = append(issues, PhaseScopeIssue{
+		issues = append(issues, phaseScopeIssue{
 			Code:    "no-tasks",
 			Message: "phase plan has no '## Tasks' section or no '### Task N:' headings",
 		})
@@ -108,7 +108,7 @@ func PhaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 	for _, t := range tasks {
 		if len(t.Repos) == 0 {
 			if multiRepo {
-				issues = append(issues, PhaseScopeIssue{
+				issues = append(issues, phaseScopeIssue{
 					Code:    "untagged-task",
 					Message: "task missing required '**Repo:** <name>' tag (every task in a multi-repo phase must declare its repo)",
 					Task:    strings.TrimSpace(t.Heading),
@@ -117,7 +117,7 @@ func PhaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 			continue
 		}
 		if len(t.Repos) > 1 {
-			issues = append(issues, PhaseScopeIssue{
+			issues = append(issues, phaseScopeIssue{
 				Code:    "multiple-repo-tags",
 				Message: "task has multiple '**Repo:** <name>' tags; split cross-repo work into one task per repo",
 				Task:    strings.TrimSpace(t.Heading),
@@ -126,7 +126,7 @@ func PhaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 		}
 		repo := t.Repos[0]
 		if !known[repo] {
-			issues = append(issues, PhaseScopeIssue{
+			issues = append(issues, phaseScopeIssue{
 				Code:    "repo-not-in-feature",
 				Message: fmt.Sprintf("task tagged repo %q is not in Feature.Repos", repo),
 				Task:    strings.TrimSpace(t.Heading),

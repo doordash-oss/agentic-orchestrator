@@ -38,7 +38,7 @@ func PruneStaleReviewScratch(fm *feature.Manager, busyIDs []string) {
 		if busy[f.ID] {
 			continue
 		}
-		if err := PruneLiveRunReviewScratch(filepath.Join(fm.Store.BaseDir, f.ID)); err != nil {
+		if err := pruneLiveRunReviewScratch(filepath.Join(fm.Store.BaseDir, f.ID)); err != nil {
 			log.Printf("feature %s: pruning live-run review scratch: %v", f.ID, err)
 		}
 	}
@@ -116,10 +116,10 @@ func claimScratchPrune(helperDir string) (finish func(), ok bool) {
 	}, true
 }
 
-// PruneLiveRunReviewScratch deletes cache and temp roots that live-run reviews
+// pruneLiveRunReviewScratch deletes cache and temp roots that live-run reviews
 // left under dir, e.g. from before scratch was released or from a crash.
 // Helper directories held by a running review are skipped.
-func PruneLiveRunReviewScratch(dir string) error {
+func pruneLiveRunReviewScratch(dir string) error {
 	var errs []error
 	walkErr := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {

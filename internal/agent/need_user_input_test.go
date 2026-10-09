@@ -32,28 +32,28 @@ func TestSynthesizeVerificationNeedUserInputGateWithContextExplainsBlockedChecks
 			{
 				ID: "deploy", Name: "Deploy smoke test", Repo: "api",
 				Command:      "make deploy-smoke",
-				Capabilities: []TestingContractCapability{{Name: "Okta session", Probe: "okta auth status"}},
+				Capabilities: []testingContractCapability{{Name: "Okta session", Probe: "okta auth status"}},
 			},
 			{
 				ID: "codesign", Name: "Package signature", Command: "make package-verify",
 			},
 		},
 	}
-	report := &VerificationReport{
+	report := &verificationReport{
 		ContractRevision: 4,
-		Results: []VerificationCheckResult{
+		Results: []verificationCheckResult{
 			{
-				ItemID: "deploy", Status: VerificationStatusBlocked,
+				ItemID: "deploy", Status: verificationStatusBlocked,
 				BlockedReason: `missing declared capability "Okta session"`,
 			},
 			{
-				ItemID: "codesign", Status: VerificationStatusBlocked,
+				ItemID: "codesign", Status: verificationStatusBlocked,
 				BlockedReason: "host keychain denied access to the signing identity",
 			},
 		},
 	}
 
-	rec := SynthesizeVerificationNeedUserInputGateWithContext(
+	rec := synthesizeVerificationNeedUserInputGateWithContext(
 		"/private/testing-contract.yaml", contract, report,
 		[]string{"codesign", "deploy"}, 3,
 	)
@@ -82,13 +82,13 @@ func TestSynthesizeVerificationNeedUserInputGateWithContextExplainsBlockedChecks
 
 func TestSynthesizeVerificationNeedUserInputGateWithContextBoundsDisplayWithoutDroppingDecisionItems(t *testing.T) {
 	items := make([]TestingContractItem, 0, 101)
-	results := make([]VerificationCheckResult, 0, 101)
+	results := make([]verificationCheckResult, 0, 101)
 	itemIDs := make([]string, 0, 101)
 	for i := 0; i < 101; i++ {
 		itemID := fmt.Sprintf("check-%03d", 100-i)
-		capabilities := make([]TestingContractCapability, 0, 21)
+		capabilities := make([]testingContractCapability, 0, 21)
 		for capability := 0; capability < 21; capability++ {
-			capabilities = append(capabilities, TestingContractCapability{
+			capabilities = append(capabilities, testingContractCapability{
 				Name: fmt.Sprintf("capability-%02d", capability),
 			})
 		}
@@ -96,17 +96,17 @@ func TestSynthesizeVerificationNeedUserInputGateWithContextBoundsDisplayWithoutD
 			ID: itemID, Name: "Boundary check", Command: "make verify",
 			Capabilities: capabilities,
 		})
-		results = append(results, VerificationCheckResult{
-			ItemID: itemID, Status: VerificationStatusBlocked,
+		results = append(results, verificationCheckResult{
+			ItemID: itemID, Status: verificationStatusBlocked,
 			BlockedReason: "missing declared capability",
 		})
 		itemIDs = append(itemIDs, itemID)
 	}
 
-	rec := SynthesizeVerificationNeedUserInputGateWithContext(
+	rec := synthesizeVerificationNeedUserInputGateWithContext(
 		"/private/testing-contract.yaml",
 		&TestingContract{Version: 1, Revision: 4, Items: items},
-		&VerificationReport{ContractRevision: 4, Results: results},
+		&verificationReport{ContractRevision: 4, Results: results},
 		itemIDs,
 		3,
 	)
@@ -256,13 +256,13 @@ func TestVerificationReportHasBlockedResults(t *testing.T) {
 	if verificationReportHasBlockedResults(nil) {
 		t.Fatal("nil report reported blocked results")
 	}
-	passed := &VerificationReport{Results: []VerificationCheckResult{{ItemID: "a", Status: VerificationStatusPassed}}}
+	passed := &verificationReport{Results: []verificationCheckResult{{ItemID: "a", Status: verificationStatusPassed}}}
 	if verificationReportHasBlockedResults(passed) {
 		t.Fatalf("passed-only report reported blocked results: %+v", passed)
 	}
-	blocked := &VerificationReport{Results: []VerificationCheckResult{
-		{ItemID: "a", Status: VerificationStatusPassed},
-		{ItemID: "b", Status: VerificationStatusBlocked},
+	blocked := &verificationReport{Results: []verificationCheckResult{
+		{ItemID: "a", Status: verificationStatusPassed},
+		{ItemID: "b", Status: verificationStatusBlocked},
 	}}
 	if !verificationReportHasBlockedResults(blocked) {
 		t.Fatalf("blocked report not detected: %+v", blocked)
@@ -283,7 +283,7 @@ func TestApplyNeedUserVerificationDecisionRejectsUntrustedGenericGate(t *testing
 
 func unauthorizedWaiverTestContract() *TestingContract {
 	return &TestingContract{Version: 1, Revision: 2, Items: []TestingContractItem{
-		{ID: "visual_1", Source: testingContractVisualSource, Owner: TestingContractOwnerAgent, Name: "Settings screenshot",
+		{ID: "visual_1", Source: testingContractVisualSource, Owner: testingContractOwnerAgent, Name: "Settings screenshot",
 			Policy: TestingContractItemPolicy{Required: true, AllowBlocked: true, AllowWaiver: true}},
 		{ID: "plan_1", Source: testingContractPlanSource, Name: "Unit tests", Command: "go test ./...",
 			Policy: TestingContractItemPolicy{Required: true, AllowWaiver: true}},
@@ -296,11 +296,11 @@ func unauthorizedWaiverTestContract() *TestingContract {
 
 // forgeWaivedRows marks the named report rows waived the way an implementer
 // writing verification-report.yaml itself would.
-func forgeWaivedRows(report *VerificationReport, itemIDs ...string) {
+func forgeWaivedRows(report *verificationReport, itemIDs ...string) {
 	for i := range report.Results {
 		for _, itemID := range itemIDs {
 			if report.Results[i].ItemID == itemID {
-				report.Results[i].Status = VerificationStatusWaived
+				report.Results[i].Status = verificationStatusWaived
 				report.Results[i].Notes = "operator said waive"
 			}
 		}
@@ -310,18 +310,18 @@ func forgeWaivedRows(report *VerificationReport, itemIDs ...string) {
 func TestUnauthorizedWaiverItemIDsSplitsByWaiverPolicy(t *testing.T) {
 	contract := unauthorizedWaiverTestContract()
 	// plan_3 already carries a user waiver, so its waived row is legitimate.
-	contract.Items[3].Disposition = TestingContractItemDisposition{Status: TestingContractDispositionWaived, Reason: "user approved", ChangedBy: "user"}
-	report := BuildContractVerificationReportStub(contract, "/state/testing-contract.yaml")
+	contract.Items[3].Disposition = testingContractItemDisposition{Status: testingContractDispositionWaived, Reason: "user approved", ChangedBy: "user"}
+	report := buildContractVerificationReportStub(contract, "/state/testing-contract.yaml")
 	forgeWaivedRows(&report, "visual_1", "plan_1", "plan_2")
 
-	waivable, unwaivable := UnauthorizedWaiverItemIDs(&report, contract)
+	waivable, unwaivable := unauthorizedWaiverItemIDs(&report, contract)
 	if !reflect.DeepEqual(waivable, []string{"plan_1", "visual_1"}) {
 		t.Fatalf("waivable = %v, want [plan_1 visual_1]", waivable)
 	}
 	if !reflect.DeepEqual(unwaivable, []string{"plan_2"}) {
 		t.Fatalf("unwaivable = %v, want [plan_2]", unwaivable)
 	}
-	if w, u := UnauthorizedWaiverItemIDs(nil, contract); w != nil || u != nil {
+	if w, u := unauthorizedWaiverItemIDs(nil, contract); w != nil || u != nil {
 		t.Fatalf("nil report = %v, %v; want none", w, u)
 	}
 }
@@ -329,12 +329,12 @@ func TestUnauthorizedWaiverItemIDsSplitsByWaiverPolicy(t *testing.T) {
 func TestSynthesizeUnauthorizedWaiverGateAsksUserForExactlyTheWaivableItems(t *testing.T) {
 	contract := unauthorizedWaiverTestContract()
 	contractPath := "/state/feat/testing-contract.yaml"
-	report := BuildContractVerificationReportStub(contract, contractPath)
+	report := buildContractVerificationReportStub(contract, contractPath)
 	forgeWaivedRows(&report, "visual_1", "plan_1", "plan_2")
-	waivable, _ := UnauthorizedWaiverItemIDs(&report, contract)
+	waivable, _ := unauthorizedWaiverItemIDs(&report, contract)
 
-	rec := SynthesizeUnauthorizedWaiverGate(contractPath, contract, waivable, 5)
-	if rec.Source != NeedUserInputSourceUnauthorizedWaiver || rec.Iteration != 5 {
+	rec := synthesizeUnauthorizedWaiverGate(contractPath, contract, waivable, 5)
+	if rec.Source != needUserInputSourceUnauthorizedWaiver || rec.Iteration != 5 {
 		t.Fatalf("gate source/iteration = %q/%d", rec.Source, rec.Iteration)
 	}
 	decision := rec.VerificationDecision
@@ -369,13 +369,13 @@ func TestUnauthorizedWaiverGateWaiveMakesReportConsistent(t *testing.T) {
 	if err := WriteTestingContract(contractPath, *contract); err != nil {
 		t.Fatal(err)
 	}
-	report := BuildContractVerificationReportStub(contract, contractPath)
+	report := buildContractVerificationReportStub(contract, contractPath)
 	forgeWaivedRows(&report, "plan_1")
-	if gate := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{Contract: contract}); !gate.Rejected {
+	if gate := validateVerificationReportWithContext(&report, nil, true, verificationReportValidationContext{Contract: contract}); !gate.Rejected {
 		t.Fatalf("forged waiver accepted before the user decided: %+v", gate)
 	}
-	waivable, _ := UnauthorizedWaiverItemIDs(&report, contract)
-	rec := SynthesizeUnauthorizedWaiverGate(contractPath, contract, waivable, 1)
+	waivable, _ := unauthorizedWaiverItemIDs(&report, contract)
+	rec := synthesizeUnauthorizedWaiverGate(contractPath, contract, waivable, 1)
 	rec.Questions[0].Answer = NeedUserVerificationWaive
 	gatePath := filepath.Join(filepath.Dir(contractPath), "iteration-01", NeedUserInputArtifactName)
 	if err := ApplyNeedUserVerificationDecision(gatePath, rec); err != nil {
@@ -391,18 +391,18 @@ func TestUnauthorizedWaiverGateWaiveMakesReportConsistent(t *testing.T) {
 		t.Fatalf("plan_1 disposition = %+v, want user waiver", revised.Items[idx].Disposition)
 	}
 	// The harness rebuilds the report from the revised contract on resume.
-	regenerated := BuildContractVerificationReportStub(revised, contractPath)
+	regenerated := buildContractVerificationReportStub(revised, contractPath)
 	for i := range regenerated.Results {
-		if regenerated.Results[i].Status == VerificationStatusNotRun {
-			regenerated.Results[i].Status = VerificationStatusPassed
+		if regenerated.Results[i].Status == verificationStatusNotRun {
+			regenerated.Results[i].Status = verificationStatusPassed
 			regenerated.Results[i].Evidence = "ran"
 			regenerated.Results[i].EvidenceData.Summary = "ran"
 		}
 	}
-	if gate := ValidateVerificationReportWithContext(&regenerated, nil, true, VerificationReportValidationContext{Contract: revised}); gate.Rejected {
+	if gate := validateVerificationReportWithContext(&regenerated, nil, true, verificationReportValidationContext{Contract: revised}); gate.Rejected {
 		t.Fatalf("report after WAIVE still rejected: %+v", gate.Findings)
 	}
-	if waivable, unwaivable := UnauthorizedWaiverItemIDs(&regenerated, revised); len(waivable)+len(unwaivable) != 0 {
+	if waivable, unwaivable := unauthorizedWaiverItemIDs(&regenerated, revised); len(waivable)+len(unwaivable) != 0 {
 		t.Fatalf("unauthorized waivers after WAIVE = %v, %v", waivable, unwaivable)
 	}
 }
@@ -417,13 +417,13 @@ func TestDeclinedUnauthorizedWaiverItemsReadsAnsweredDeclines(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	declined := SynthesizeUnauthorizedWaiverGate("/c", contract, []string{"plan_1"}, 1)
+	declined := synthesizeUnauthorizedWaiverGate("/c", contract, []string{"plan_1"}, 1)
 	declined.Questions[0].Answer = NeedUserVerificationRetryAfterAuth
 	write(1, declined)
-	waived := SynthesizeUnauthorizedWaiverGate("/c", contract, []string{"plan_3"}, 2)
+	waived := synthesizeUnauthorizedWaiverGate("/c", contract, []string{"plan_3"}, 2)
 	waived.Questions[0].Answer = NeedUserVerificationWaive
 	write(2, waived)
-	unanswered := SynthesizeUnauthorizedWaiverGate("/c", contract, []string{"visual_1"}, 3)
+	unanswered := synthesizeUnauthorizedWaiverGate("/c", contract, []string{"visual_1"}, 3)
 	write(3, unanswered)
 	capability := SynthesizeVerificationNeedUserInputGate("/c", 2, []string{"plan_2"}, 4)
 	capability.Questions[0].Answer = NeedUserVerificationRetryAfterAuth
@@ -437,9 +437,9 @@ func TestDeclinedUnauthorizedWaiverItemsReadsAnsweredDeclines(t *testing.T) {
 
 func TestValidateVerificationReportExplainsDeclinedWaiver(t *testing.T) {
 	contract := unauthorizedWaiverTestContract()
-	report := BuildContractVerificationReportStub(contract, "/state/testing-contract.yaml")
+	report := buildContractVerificationReportStub(contract, "/state/testing-contract.yaml")
 	forgeWaivedRows(&report, "plan_1", "plan_2")
-	gate := ValidateVerificationReportWithContext(&report, nil, false, VerificationReportValidationContext{
+	gate := validateVerificationReportWithContext(&report, nil, false, verificationReportValidationContext{
 		Contract:              contract,
 		DeclinedWaiverItemIDs: map[string]bool{"plan_1": true},
 	})

@@ -44,9 +44,9 @@ func TestBeginVerificationStatusesSeedsOrderedItems(t *testing.T) {
 	t.Parallel()
 	store, f := verificationStatusTestStore(t)
 	contract := &TestingContract{Items: []TestingContractItem{
-		{ID: "t1", Name: "Zebra tests", Owner: TestingContractOwnerHarness, Run: &TestingContractRun{Shell: "go test ./..."}},
-		{ID: "t2", Name: "Agent evidence", Owner: TestingContractOwnerAgent},
-		{ID: "t3", Name: "Alpha build", Owner: TestingContractOwnerHarness, Run: &TestingContractRun{Shell: "go build ./..."}},
+		{ID: "t1", Name: "Zebra tests", Owner: testingContractOwnerHarness, Run: &testingContractRun{Shell: "go test ./..."}},
+		{ID: "t2", Name: "Agent evidence", Owner: testingContractOwnerAgent},
+		{ID: "t3", Name: "Alpha build", Owner: testingContractOwnerHarness, Run: &testingContractRun{Shell: "go build ./..."}},
 	}}
 
 	beginVerificationStatuses(store, f.ID, contract)
@@ -79,8 +79,8 @@ func TestUpdateVerificationStatusPreservesOrder(t *testing.T) {
 	t.Parallel()
 	store, f := verificationStatusTestStore(t)
 	contract := &TestingContract{Items: []TestingContractItem{
-		{ID: "t1", Name: "Unit tests", Owner: TestingContractOwnerHarness, Run: &TestingContractRun{Shell: "x"}},
-		{ID: "t2", Name: "Build", Owner: TestingContractOwnerHarness, Run: &TestingContractRun{Shell: "y"}},
+		{ID: "t1", Name: "Unit tests", Owner: testingContractOwnerHarness, Run: &testingContractRun{Shell: "x"}},
+		{ID: "t2", Name: "Build", Owner: testingContractOwnerHarness, Run: &testingContractRun{Shell: "y"}},
 	}}
 	beginVerificationStatuses(store, f.ID, contract)
 
@@ -106,7 +106,7 @@ func TestVerificationStatusTransitionsNotifyAfterPersistence(t *testing.T) {
 	t.Parallel()
 	store, f := verificationStatusTestStore(t)
 	contract := &TestingContract{Items: []TestingContractItem{
-		{ID: "t1", Name: "Unit tests", Owner: TestingContractOwnerHarness, Run: &TestingContractRun{Shell: "x"}},
+		{ID: "t1", Name: "Unit tests", Owner: testingContractOwnerHarness, Run: &testingContractRun{Shell: "x"}},
 	}}
 	var snapshots [][]feature.VerificationItemStatus
 	onProgress := func(featureID string) {
@@ -147,7 +147,7 @@ func TestClearVerificationStatusesRemovesItems(t *testing.T) {
 	t.Parallel()
 	store, f := verificationStatusTestStore(t)
 	contract := &TestingContract{Items: []TestingContractItem{
-		{ID: "t1", Name: "Unit tests", Owner: TestingContractOwnerHarness, Run: &TestingContractRun{Shell: "x"}},
+		{ID: "t1", Name: "Unit tests", Owner: testingContractOwnerHarness, Run: &testingContractRun{Shell: "x"}},
 	}}
 	beginVerificationStatuses(store, f.ID, contract)
 

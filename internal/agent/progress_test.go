@@ -28,7 +28,7 @@ func TestFingerprint(t *testing.T) {
 	path := filepath.Join(dir, "progress.md")
 
 	// Non-existent file returns empty
-	fp, err := Fingerprint(path)
+	fp, err := fingerprint(path)
 	if err != nil {
 		t.Fatalf("fingerprint non-existent: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestFingerprint(t *testing.T) {
 
 	// Write content
 	os.WriteFile(path, []byte("step 1 done\n"), 0o644)
-	fp1, err := Fingerprint(path)
+	fp1, err := fingerprint(path)
 	if err != nil {
 		t.Fatalf("fingerprint: %v", err)
 	}
@@ -47,104 +47,104 @@ func TestFingerprint(t *testing.T) {
 	}
 
 	// Same content = same fingerprint
-	fp2, _ := Fingerprint(path)
+	fp2, _ := fingerprint(path)
 	if fp1 != fp2 {
 		t.Error("expected same fingerprint for same content")
 	}
 
 	// Different content = different fingerprint
 	os.WriteFile(path, []byte("step 2 done\n"), 0o644)
-	fp3, _ := Fingerprint(path)
+	fp3, _ := fingerprint(path)
 	if fp1 == fp3 {
 		t.Error("expected different fingerprint for different content")
 	}
 }
 
 func TestProgressTracker(t *testing.T) {
-	pt := NewProgressTracker()
+	pt := newProgressTracker()
 
-	made := pt.ObserveVerifiedOutcomeWithWorktree(3, "")
+	made := pt.observeVerifiedOutcomeWithWorktree(3, "")
 	if !made {
 		t.Fatal("first verified outcome should establish progress baseline")
 	}
-	made = pt.ObserveVerifiedOutcomeWithWorktree(3, "")
+	made = pt.observeVerifiedOutcomeWithWorktree(3, "")
 	if made {
 		t.Fatal("same blocker count should not count as progress")
 	}
-	if pt.NoProgressCount() != 1 {
-		t.Fatalf("NoProgressCount = %d, want 1", pt.NoProgressCount())
+	if pt.consecutiveNoProgress() != 1 {
+		t.Fatalf("NoProgressCount = %d, want 1", pt.consecutiveNoProgress())
 	}
-	made = pt.ObserveVerifiedOutcomeWithWorktree(2, "")
+	made = pt.observeVerifiedOutcomeWithWorktree(2, "")
 	if !made {
 		t.Fatal("lower blocker count should count as progress")
 	}
-	if pt.NoProgressCount() != 0 {
-		t.Fatalf("NoProgressCount = %d, want reset to 0", pt.NoProgressCount())
+	if pt.consecutiveNoProgress() != 0 {
+		t.Fatalf("NoProgressCount = %d, want reset to 0", pt.consecutiveNoProgress())
 	}
-	made = pt.ObserveVerifiedOutcomeWithWorktree(3, "")
+	made = pt.observeVerifiedOutcomeWithWorktree(3, "")
 	if made {
 		t.Fatal("regressing blocker count should not count as progress")
 	}
-	made = pt.ObserveUnverifiedOutcome()
+	made = pt.observeUnverifiedOutcome()
 	if made {
 		t.Fatal("unverified outcome should not count as progress")
 	}
-	if pt.NoProgressCount() != 2 {
-		t.Fatalf("NoProgressCount = %d, want 2", pt.NoProgressCount())
+	if pt.consecutiveNoProgress() != 2 {
+		t.Fatalf("NoProgressCount = %d, want 2", pt.consecutiveNoProgress())
 	}
 }
 
 func TestProgressTrackerVerifiedOutcomeCreditsWorktreeChanges(t *testing.T) {
-	pt := NewProgressTracker()
+	pt := newProgressTracker()
 
-	if !pt.ObserveVerifiedOutcomeWithWorktree(2, "worktree-v1") {
+	if !pt.observeVerifiedOutcomeWithWorktree(2, "worktree-v1") {
 		t.Fatal("first verified outcome should establish a progress baseline")
 	}
-	if !pt.ObserveVerifiedOutcomeWithWorktree(2, "worktree-v2") {
+	if !pt.observeVerifiedOutcomeWithWorktree(2, "worktree-v2") {
 		t.Fatal("changed worktree should count as progress when blocker count is unchanged")
 	}
-	if pt.NoProgressCount() != 0 {
-		t.Fatalf("NoProgressCount = %d, want reset to 0 after a worktree change", pt.NoProgressCount())
+	if pt.consecutiveNoProgress() != 0 {
+		t.Fatalf("NoProgressCount = %d, want reset to 0 after a worktree change", pt.consecutiveNoProgress())
 	}
-	if pt.ObserveVerifiedOutcomeWithWorktree(2, "worktree-v2") {
+	if pt.observeVerifiedOutcomeWithWorktree(2, "worktree-v2") {
 		t.Fatal("unchanged blocker count and worktree should not count as progress")
 	}
-	if pt.NoProgressCount() != 1 {
-		t.Fatalf("NoProgressCount = %d, want 1 after an unchanged verified outcome", pt.NoProgressCount())
+	if pt.consecutiveNoProgress() != 1 {
+		t.Fatalf("NoProgressCount = %d, want 1 after an unchanged verified outcome", pt.consecutiveNoProgress())
 	}
 }
 
 func TestProgressTrackerRetryOutcome(t *testing.T) {
-	pt := NewProgressTracker()
+	pt := newProgressTracker()
 
-	if !pt.ObserveRetryOutcome("n1", "w1") {
+	if !pt.observeRetryOutcome("n1", "w1") {
 		t.Fatal("first RETRY observation should establish a baseline")
 	}
-	if pt.ObserveRetryOutcome("n1", "w1") {
+	if pt.observeRetryOutcome("n1", "w1") {
 		t.Fatal("RETRY with unchanged narrative and worktree should not count as progress")
 	}
-	if pt.NoProgressCount() != 1 {
-		t.Fatalf("NoProgressCount = %d, want 1", pt.NoProgressCount())
+	if pt.consecutiveNoProgress() != 1 {
+		t.Fatalf("NoProgressCount = %d, want 1", pt.consecutiveNoProgress())
 	}
-	if !pt.ObserveRetryOutcome("n1", "w2") {
+	if !pt.observeRetryOutcome("n1", "w2") {
 		t.Fatal("RETRY with changed worktree should count as progress")
 	}
-	if pt.NoProgressCount() != 1 {
-		t.Fatalf("NoProgressCount = %d, want 1 (progressing RETRY must not reset the verified-outcome counter)", pt.NoProgressCount())
+	if pt.consecutiveNoProgress() != 1 {
+		t.Fatalf("NoProgressCount = %d, want 1 (progressing RETRY must not reset the verified-outcome counter)", pt.consecutiveNoProgress())
 	}
-	if !pt.ObserveRetryOutcome("n2", "w2") {
+	if !pt.observeRetryOutcome("n2", "w2") {
 		t.Fatal("RETRY with changed narrative should count as progress")
 	}
 	// Empty fingerprints (unreadable progress.md, git failure) must not
 	// disarm the rail: treated as unchanged.
-	if pt.ObserveRetryOutcome("", "") {
+	if pt.observeRetryOutcome("", "") {
 		t.Fatal("RETRY with no fingerprint signal should not count as progress")
 	}
-	if pt.ObserveRetryOutcome("", "") {
+	if pt.observeRetryOutcome("", "") {
 		t.Fatal("repeated signal-less RETRY should keep counting no-progress")
 	}
-	if pt.NoProgressCount() != 3 {
-		t.Fatalf("NoProgressCount = %d, want 3", pt.NoProgressCount())
+	if pt.consecutiveNoProgress() != 3 {
+		t.Fatalf("NoProgressCount = %d, want 3", pt.consecutiveNoProgress())
 	}
 }
 
@@ -162,11 +162,11 @@ func TestWorktreeStateFingerprint(t *testing.T) {
 		}
 	}
 
-	fp1 := WorktreeStateFingerprint(context.Background(), nil, []string{repo})
+	fp1 := worktreeStateFingerprint(context.Background(), nil, []string{repo})
 	if fp1 == "" {
 		t.Fatal("expected a fingerprint for a valid repo")
 	}
-	if fp2 := WorktreeStateFingerprint(context.Background(), nil, []string{repo}); fp2 != fp1 {
+	if fp2 := worktreeStateFingerprint(context.Background(), nil, []string{repo}); fp2 != fp1 {
 		t.Fatal("fingerprint should be stable for an unchanged worktree")
 	}
 
@@ -174,7 +174,7 @@ func TestWorktreeStateFingerprint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	fp3 := WorktreeStateFingerprint(context.Background(), nil, []string{repo})
+	fp3 := worktreeStateFingerprint(context.Background(), nil, []string{repo})
 	if fp3 == fp1 {
 		t.Fatal("fingerprint should change when an untracked file is added")
 	}
@@ -184,12 +184,12 @@ func TestWorktreeStateFingerprint(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "new.txt"), []byte("ab"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if fp4 := WorktreeStateFingerprint(context.Background(), nil, []string{repo}); fp4 == fp3 {
+	if fp4 := worktreeStateFingerprint(context.Background(), nil, []string{repo}); fp4 == fp3 {
 		t.Fatal("fingerprint should change when an untracked file is edited")
 	}
 
 	// A non-repo path yields no signal.
-	if fp := WorktreeStateFingerprint(context.Background(), nil, []string{t.TempDir()}); fp != "" {
+	if fp := worktreeStateFingerprint(context.Background(), nil, []string{t.TempDir()}); fp != "" {
 		t.Fatalf("WorktreeStateFingerprint(non-repo) = %q, want empty", fp)
 	}
 }
@@ -201,7 +201,7 @@ func TestCountBlockingReviewFindings(t *testing.T) {
 		"- **Medium**: ignored",
 		"* **high**: third",
 	}, "\n")
-	if got := CountBlockingReviewFindings(feedback); got != 3 {
+	if got := countBlockingReviewFindings(feedback); got != 3 {
 		t.Fatalf("CountBlockingReviewFindings() = %d, want 3", got)
 	}
 }

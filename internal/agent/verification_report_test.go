@@ -25,11 +25,11 @@ func TestWriteAndReadContractVerificationReportStub(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "verification-report.yaml")
 	contract := CompileTestingContract("#### Automated Verification:\n- [ ] Agent tests: `go test ./internal/agent/... -count=1`\n", "/tmp/phase-01/plan.md", "tdd-fill-in")
 
-	if err := WriteVerificationReport(path, BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")); err != nil {
+	if err := writeVerificationReport(path, buildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
-	report, err := ReadVerificationReport(path)
+	report, err := readVerificationReport(path)
 	if err != nil {
 		t.Fatalf("ReadVerificationReport() error = %v", err)
 	}
@@ -62,14 +62,14 @@ func TestBuildContractVerificationReportStub_EvidenceModes(t *testing.T) {
 		"- [ ] Attach the workflow transcript.",
 	}, "\n"), "/tmp/phase-01/plan.md", "tdd-fill-in")
 
-	report := BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
+	report := buildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")
 
 	var sawVisual, sawBehavioral bool
 	for _, result := range report.Results {
 		switch result.Mode {
-		case VerificationModeVisual:
+		case verificationModeVisual:
 			sawVisual = true
-		case VerificationModeBehavioral:
+		case verificationModeBehavioral:
 			sawBehavioral = true
 		}
 	}
@@ -84,18 +84,18 @@ func TestBuildContractVerificationReportStub_EvidenceModes(t *testing.T) {
 func TestVerificationReportRoundTripV2(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "verification-report.yaml")
 	exitCode := 0
-	report := VerificationReport{
+	report := verificationReport{
 		Version:          2,
 		ContractPath:     "/tmp/phase-02/testing-contract.yaml",
 		ContractRevision: 3,
-		Results: []VerificationCheckResult{
+		Results: []verificationCheckResult{
 			{
 				ItemID:   "build_all",
 				Name:     "Build succeeds",
 				Command:  "go build ./...",
-				Status:   VerificationStatusPassed,
+				Status:   verificationStatusPassed,
 				Evidence: "ok github.com/doordash-oss/agentic-orchestrator/cmd/agentic",
-				EvidenceData: VerificationEvidence{
+				EvidenceData: verificationEvidence{
 					ExitCode: &exitCode,
 					Summary:  "ok github.com/doordash-oss/agentic-orchestrator/cmd/agentic",
 				},
@@ -104,7 +104,7 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 				ItemID:           "smoke_test",
 				Name:             "Smoke test",
 				Command:          "bash test/e2e/smoke.sh",
-				Status:           VerificationStatusBlocked,
+				Status:           verificationStatusBlocked,
 				BlockedReason:    "codesigning is unavailable in the sandbox",
 				SubstituteItemID: "fast_suite",
 			},
@@ -112,9 +112,9 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 				ItemID:   "fast_suite",
 				Name:     "Fast suite",
 				Command:  "go test ./... -race -short",
-				Status:   VerificationStatusPassed,
+				Status:   verificationStatusPassed,
 				Evidence: "ok github.com/doordash-oss/agentic-orchestrator/internal/agent",
-				EvidenceData: VerificationEvidence{
+				EvidenceData: verificationEvidence{
 					ExitCode: &exitCode,
 					Summary:  "ok github.com/doordash-oss/agentic-orchestrator/internal/agent",
 				},
@@ -123,27 +123,27 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 				ItemID:  "manual_signoff",
 				Name:    "Manual signoff",
 				Command: "n/a",
-				Mode:    VerificationModeManual,
-				Status:  VerificationStatusWaived,
+				Mode:    verificationModeManual,
+				Status:  verificationStatusWaived,
 			},
 			{
 				ItemID:   "visual_capture",
 				Name:     "Visual capture",
 				Command:  "visual: capture the dashboard",
-				Mode:     VerificationModeVisual,
-				Status:   VerificationStatusPassed,
+				Mode:     verificationModeVisual,
+				Status:   verificationStatusPassed,
 				Evidence: "dashboard.png exists",
 			},
 			{
 				ItemID:   "behavioral_capture",
 				Name:     "Behavioral capture",
 				Command:  "behavioral: capture the workflow",
-				Mode:     VerificationModeBehavioral,
-				Status:   VerificationStatusPassed,
+				Mode:     verificationModeBehavioral,
+				Status:   verificationStatusPassed,
 				Evidence: "workflow.txt exists",
 			},
 		},
-		Mismatches: []VerificationMismatch{
+		Mismatches: []verificationMismatch{
 			{
 				ItemID:               "smoke_test",
 				ImplementationStatus: "blocked",
@@ -154,11 +154,11 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 		Summary: "targeted verification complete",
 	}
 
-	if err := WriteVerificationReport(path, report); err != nil {
+	if err := writeVerificationReport(path, report); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
-	got, err := ReadVerificationReport(path)
+	got, err := readVerificationReport(path)
 	if err != nil {
 		t.Fatalf("ReadVerificationReport() error = %v", err)
 	}
@@ -171,11 +171,11 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 	if got.Results[0].EvidenceData.Summary != report.Results[0].EvidenceData.Summary {
 		t.Fatalf("ReadVerificationReport() first summary = %q, want %q", got.Results[0].EvidenceData.Summary, report.Results[0].EvidenceData.Summary)
 	}
-	if got.Results[4].Mode != VerificationModeVisual {
-		t.Fatalf("ReadVerificationReport() visual mode = %q, want %q", got.Results[4].Mode, VerificationModeVisual)
+	if got.Results[4].Mode != verificationModeVisual {
+		t.Fatalf("ReadVerificationReport() visual mode = %q, want %q", got.Results[4].Mode, verificationModeVisual)
 	}
-	if got.Results[5].Mode != VerificationModeBehavioral {
-		t.Fatalf("ReadVerificationReport() behavioral mode = %q, want %q", got.Results[5].Mode, VerificationModeBehavioral)
+	if got.Results[5].Mode != verificationModeBehavioral {
+		t.Fatalf("ReadVerificationReport() behavioral mode = %q, want %q", got.Results[5].Mode, verificationModeBehavioral)
 	}
 	if got.Results[1].BlockedReason != "codesigning is unavailable in the sandbox" {
 		t.Fatalf("ReadVerificationReport() blocked reason = %q", got.Results[1].BlockedReason)
@@ -188,19 +188,19 @@ func TestVerificationReportRoundTripV2(t *testing.T) {
 func TestVerificationReportRoundTripFileBackedEvidence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "verification-report.yaml")
 	exitCode := 0
-	report := VerificationReport{
+	report := verificationReport{
 		Version:          2,
 		ContractPath:     "/tmp/phase-02/testing-contract.yaml",
 		ContractRevision: 1,
-		Results: []VerificationCheckResult{
+		Results: []verificationCheckResult{
 			{
 				ItemID:   "visual_capture",
 				Name:     "Visual capture",
 				Command:  "visual: capture dashboard",
-				Mode:     VerificationModeVisual,
-				Status:   VerificationStatusPassed,
+				Mode:     verificationModeVisual,
+				Status:   verificationStatusPassed,
 				Evidence: "dashboard screenshot captured",
-				EvidenceData: VerificationEvidence{
+				EvidenceData: verificationEvidence{
 					Summary:     "dashboard screenshot captured",
 					Primary:     "screenshots/dashboard.png",
 					Attachments: []string{"screenshots/dashboard-detail.png"},
@@ -210,10 +210,10 @@ func TestVerificationReportRoundTripFileBackedEvidence(t *testing.T) {
 				ItemID:   "behavioral_capture",
 				Name:     "Behavioral capture",
 				Command:  "behavioral: capture workflow",
-				Mode:     VerificationModeBehavioral,
-				Status:   VerificationStatusPassed,
+				Mode:     verificationModeBehavioral,
+				Status:   verificationStatusPassed,
 				Evidence: "workflow transcript captured",
-				EvidenceData: VerificationEvidence{
+				EvidenceData: verificationEvidence{
 					ExitCode: &exitCode,
 					Summary:  "workflow transcript captured",
 					Primary:  "behaviors/create-feature.log",
@@ -223,10 +223,10 @@ func TestVerificationReportRoundTripFileBackedEvidence(t *testing.T) {
 				ItemID:   "visual_noisy_empty_attachments",
 				Name:     "Visual no attachments",
 				Command:  "visual: capture empty state",
-				Mode:     VerificationModeVisual,
-				Status:   VerificationStatusPassed,
+				Mode:     verificationModeVisual,
+				Status:   verificationStatusPassed,
 				Evidence: "empty state captured",
-				EvidenceData: VerificationEvidence{
+				EvidenceData: verificationEvidence{
 					Summary:     "empty state captured",
 					Primary:     "screenshots/empty.png",
 					Attachments: []string{},
@@ -235,7 +235,7 @@ func TestVerificationReportRoundTripFileBackedEvidence(t *testing.T) {
 		},
 	}
 
-	if err := WriteVerificationReport(path, report); err != nil {
+	if err := writeVerificationReport(path, report); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
@@ -247,7 +247,7 @@ func TestVerificationReportRoundTripFileBackedEvidence(t *testing.T) {
 		t.Fatalf("WriteVerificationReport() emitted noisy empty attachments:\n%s", data)
 	}
 
-	got, err := ReadVerificationReport(path)
+	got, err := readVerificationReport(path)
 	if err != nil {
 		t.Fatalf("ReadVerificationReport() error = %v", err)
 	}
@@ -283,12 +283,12 @@ known_caveats:
 		t.Fatalf("os.WriteFile() error = %v", err)
 	}
 
-	got, err := ReadVerificationReport(path)
+	got, err := readVerificationReport(path)
 	if err != nil {
 		t.Fatalf("ReadVerificationReport() error = %v", err)
 	}
-	if got.RequiredChecks[0].Status != VerificationStatusPassed {
-		t.Fatalf("ReadVerificationReport() Status = %q, want %q", got.RequiredChecks[0].Status, VerificationStatusPassed)
+	if got.RequiredChecks[0].Status != verificationStatusPassed {
+		t.Fatalf("ReadVerificationReport() Status = %q, want %q", got.RequiredChecks[0].Status, verificationStatusPassed)
 	}
 	if got.RequiredChecks[0].Evidence != "ok github.com/doordash-oss/agentic-orchestrator/internal/agent" {
 		t.Fatalf("ReadVerificationReport() legacy evidence = %q", got.RequiredChecks[0].Evidence)

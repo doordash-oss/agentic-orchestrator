@@ -173,18 +173,18 @@ func TestExecuteTestingContractBlocksProtectedPathDenial(t *testing.T) {
 	repo := t.TempDir()
 	command := `echo "touch ` + filepath.Join(home, ".ssh", "agentico-test") + `: Operation not permitted" >&2; exit 1`
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
-		ID: "protected-denial", Source: testingContractPlanSource, Owner: TestingContractOwnerHarness, Repo: "repo",
-		Name: "protected path", Command: command, Run: &TestingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
+		ID: "protected-denial", Source: testingContractPlanSource, Owner: testingContractOwnerHarness, Repo: "repo",
+		Name: "protected path", Command: command, Run: &testingContractRun{Shell: command, Cwd: ".", Timeout: "30s"},
 		Policy: TestingContractItemPolicy{Required: true},
 	}}}
 	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
-	report := BuildContractVerificationReportStub(&contract, contractPath)
+	report := buildContractVerificationReportStub(&contract, contractPath)
 
-	out, err := ExecuteTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
+	out, err := executeTestingContract(context.Background(), NewExecCommandRunner(), &contract, &report, contractPath, "", repo, []feature.FeatureRepo{{Name: "repo", Path: repo, WorktreePath: repo}})
 	if err != nil {
 		t.Fatalf("ExecuteTestingContract() error = %v", err)
 	}
-	if len(out.BlockedItems) != 1 || out.Report.Results[0].Status != VerificationStatusBlocked {
+	if len(out.BlockedItems) != 1 || out.Report.Results[0].Status != verificationStatusBlocked {
 		t.Fatalf("outcome = %+v, want protected-path denial blocked, never auto-granted", out)
 	}
 	if _, statErr := os.Stat(sandboxGrantsPath(contractPath)); !os.IsNotExist(statErr) {

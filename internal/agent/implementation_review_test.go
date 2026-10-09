@@ -141,10 +141,10 @@ func TestImplementationReviewAxesForGate(t *testing.T) {
 func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.T) {
 	wantSkills := map[string]Role{
 		"review-implementation-craft":                  RoleImplementationReviewCraft,
-		"review-implementation-functionality-evidence": RoleImplementationReviewFunctionalityEvidence,
-		"review-implementation-cleanliness":            RoleImplementationReviewCleanliness,
-		"review-implementation-qa":                     RoleImplementationReviewQA,
-		"review-implementation-design":                 RoleImplementationReviewDesign,
+		"review-implementation-functionality-evidence": roleImplementationReviewFunctionalityEvidence,
+		"review-implementation-cleanliness":            roleImplementationReviewCleanliness,
+		"review-implementation-qa":                     roleImplementationReviewQA,
+		"review-implementation-design":                 roleImplementationReviewDesign,
 	}
 	if len(implementationReviewAxisRegistry) != len(wantSkills) {
 		t.Fatalf("implementationReviewAxisRegistry length = %d, want %d", len(implementationReviewAxisRegistry), len(wantSkills))
@@ -197,7 +197,7 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 	results := []reviewAxisResult{
 		{Axis: "Craft", Status: ReviewApproved, Feedback: "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nAPPROVED\n"},
-		{Axis: "Functionality/Evidence", Status: ReviewChangesRequested, Feedback: "## Findings\n- **Critical**: missing required verification evidence\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
+		{Axis: "Functionality/Evidence", Status: reviewChangesRequested, Feedback: "## Findings\n- **Critical**: missing required verification evidence\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
 		{Axis: "Cleanliness", Status: ReviewApproved, Feedback: "## Findings\n- (none)\n\n## Suggestions\n- **Low**: tidy temporary note\n\n## Verdict\nAPPROVED\n"},
 	}
 
@@ -205,7 +205,7 @@ func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("composeImplementationReviewFeedback() error = %v", err)
 	}
-	if status != ReviewChangesRequested {
+	if status != reviewChangesRequested {
 		t.Fatalf("composeImplementationReviewFeedback() status = %s, want CHANGES_REQUESTED", status)
 	}
 	for _, want := range []string{
@@ -226,7 +226,7 @@ func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("composeImplementationReviewFeedback(fewer results) error = %v", err)
 	}
-	if status != ReviewChangesRequested {
+	if status != reviewChangesRequested {
 		t.Fatalf("composeImplementationReviewFeedback(fewer results) status = %s, want CHANGES_REQUESTED", status)
 	}
 }
@@ -234,14 +234,14 @@ func TestComposeImplementationReviewFeedbackUsesStrictAllApprove(t *testing.T) {
 func TestComposeImplementationReviewFeedbackPoolsDesignOriginalityBlock(t *testing.T) {
 	results := []reviewAxisResult{
 		{Axis: "Craft", Status: ReviewApproved, Feedback: "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nAPPROVED\n"},
-		{Axis: "Design", Status: ReviewChangesRequested, Feedback: "## Findings\n- **High**: generic card grid contradicts the approved editorial direction and violates the frontend-design review rubric's distinctiveness dimension\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
+		{Axis: "Design", Status: reviewChangesRequested, Feedback: "## Findings\n- **High**: generic card grid contradicts the approved editorial direction and violates the frontend-design review rubric's distinctiveness dimension\n\n## Suggestions\n- (none)\n\n## Verdict\nCHANGES_REQUESTED\n"},
 	}
 
 	status, feedback, err := composeImplementationReviewFeedback(results, 2)
 	if err != nil {
 		t.Fatalf("composeImplementationReviewFeedback() error = %v", err)
 	}
-	if status != ReviewChangesRequested {
+	if status != reviewChangesRequested {
 		t.Fatalf("composeImplementationReviewFeedback() status = %s, want CHANGES_REQUESTED", status)
 	}
 	for _, want := range []string{
@@ -257,7 +257,7 @@ func TestComposeImplementationReviewFeedbackPoolsDesignOriginalityBlock(t *testi
 }
 
 func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.T) {
-	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:                                 implementationReviewGateFinal,
 		AxisLabel:                            "Functionality/Evidence",
 		FeatureDescription:                   "Assembled feature intent.",
@@ -308,7 +308,7 @@ func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.
 }
 
 func TestBuildImplementationReviewAxisPromptLiveRunFinalGuidance(t *testing.T) {
-	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:             implementationReviewGateFinal,
 		AxisLabel:        "QA",
 		LiveRunAxis:      true,
@@ -335,7 +335,7 @@ func TestBuildImplementationReviewAxisPromptLiveRunFinalGuidance(t *testing.T) {
 }
 
 func TestBuildImplementationReviewAxisPromptLiveRunPerPhaseGuidance(t *testing.T) {
-	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:               implementationReviewGatePerPhase,
 		AxisLabel:          "Design",
 		FeatureDescription: "Frontend app intent.",
@@ -367,7 +367,7 @@ func TestBuildImplementationReviewAxisPromptLiveRunPerPhaseGuidance(t *testing.T
 }
 
 func TestBuildImplementationReviewAxisPromptReadOnlyOmitsLiveRunGuidance(t *testing.T) {
-	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
+	got := buildImplementationReviewAxisPromptWithOpts(implementationReviewAxisPromptOpts{
 		Gate:         implementationReviewGatePerPhase,
 		AxisLabel:    "Craft",
 		LiveRunAxis:  false,

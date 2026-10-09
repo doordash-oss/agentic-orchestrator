@@ -124,7 +124,7 @@ func TestBuildPhasePlanPrompt_OmitsDueDeferrals(t *testing.T) {
 		},
 	}
 	f.SetRun(run)
-	prompt := BuildPhasePlanPromptWithResearch(f, "/tmp/roadmap.md", "", RoadmapPhase{Number: 3, Type: "tdd-fill-in", Name: "Wizard"}, nil)
+	prompt := buildPhasePlanPromptWithResearch(f, "/tmp/roadmap.md", "", RoadmapPhase{Number: 3, Type: "tdd-fill-in", Name: "Wizard"}, nil)
 	if strings.Contains(prompt, "Deferrals Due This Phase") {
 		t.Errorf("plan prompt unexpectedly carries deferrals section")
 	}
@@ -146,7 +146,7 @@ func TestBuildPhasePlanPrompt_WrongPhaseNoBlock(t *testing.T) {
 		},
 	}
 	f.SetRun(run)
-	prompt := BuildPhasePlanPromptWithResearch(f, "/tmp/roadmap.md", "", RoadmapPhase{Number: 2, Name: "Detail"}, nil)
+	prompt := buildPhasePlanPromptWithResearch(f, "/tmp/roadmap.md", "", RoadmapPhase{Number: 2, Name: "Detail"}, nil)
 	if strings.Contains(prompt, "Deferrals Due This Phase") {
 		t.Errorf("phase-2 prompt unexpectedly carries phase-3 deferrals block")
 	}

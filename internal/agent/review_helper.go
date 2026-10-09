@@ -31,12 +31,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// ReviewHelperConfig configures a bounded review or validation run that uses
+// reviewHelperConfig configures a bounded review or validation run that uses
 // the bounded-helper artifact protocol: the helper is granted scoped write
 // permission only for declared helper-owned artifacts, and the harness routes
 // on ParseReviewFeedback(FeedbackPath) after the turn ends. FeedbackPath,
 // HelperIterDir, and Role are required.
-type ReviewHelperConfig struct {
+type reviewHelperConfig struct {
 	SessionID string
 	FeatureID string
 	Phase     feature.Phase
@@ -75,24 +75,24 @@ type ReviewHelperConfig struct {
 	Posture reviewExecutionPosture
 }
 
-// ReviewHelperResult captures the parsed verdict from a bounded helper run.
+// reviewHelperResult captures the parsed verdict from a bounded helper run.
 //
 // Feedback holds the canonical body of the structured review-feedback.md
 // (verbatim if the LLM produced a clean file and satisfied completion;
 // deterministic CHANGES_REQUESTED protocol feedback otherwise). Output retains
 // the helper's stdout for log surfaces (desktop app, debug) but is not part of the
 // wire protocol — the file is.
-type ReviewHelperResult struct {
+type reviewHelperResult struct {
 	Output   string
-	Status   ReviewStatus
+	Status   reviewStatus
 	Feedback string
-	Markers  ValidatorMarkers
+	Markers  validatorMarkers
 	Usage    llm.Usage
 }
 
 // reviewHelperEffortLevel returns the effort level to pass to BuildSessionOpts:
 // the resolved effective effort when set, otherwise the pipeline-driven level.
-func reviewHelperEffortLevel(cfg ReviewHelperConfig) llm.EffortLevel {
+func reviewHelperEffortLevel(cfg reviewHelperConfig) llm.EffortLevel {
 	if cfg.EffectiveEffort != "" {
 		return cfg.EffectiveEffort
 	}
@@ -101,7 +101,7 @@ func reviewHelperEffortLevel(cfg ReviewHelperConfig) llm.EffortLevel {
 
 // setReviewHelperEffortOnOpts records the effective effort pair on sessOpts
 // when effort resolution was performed.
-func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg ReviewHelperConfig) {
+func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg reviewHelperConfig) {
 	if sessOpts != nil && cfg.EffectiveEffort != "" {
 		sessOpts.EffectiveEffort = cfg.EffectiveEffort
 		sessOpts.EffortSource = cfg.EffortSource
@@ -110,7 +110,7 @@ func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg ReviewHelperCo
 
 // Review helpers may use a different provider from their parent planner or
 // implementer. Resolve the protocol for the model actually being launched.
-func (pr *PhaseRunner) reviewHelperSystemPrompt(spec roleSpec, cfg ReviewHelperConfig) string {
+func (pr *PhaseRunner) reviewHelperSystemPrompt(spec roleSpec, cfg reviewHelperConfig) string {
 	askingClause, completionTool := cfg.CompletionAskingClause, cfg.CompletionTool
 	if pr.Registry != nil {
 		askingClause = pr.askingQuestionsClauseForModel(cfg.Model)
@@ -143,7 +143,7 @@ const (
 // deterministically routes on the structured `## Verdict` section of that
 // file. The helper is read-only with respect to the worktree unless
 // cfg.Posture is the live-run posture.
-func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
+func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg reviewHelperConfig) (*reviewHelperResult, error) {
 	liveRun := cfg.Posture == reviewPostureLiveRun
 	label := "review helper"
 	if liveRun {
@@ -249,7 +249,7 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg ReviewHelperConf
 
 	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
 	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
-		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
+		writeValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
 	}
 	if sessOpts != nil {
 		setReviewHelperEffortOnOpts(sessOpts, cfg)
@@ -303,7 +303,7 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg ReviewHelperConf
 		return nil, runErr
 	}
 
-	result := &ReviewHelperResult{
+	result := &reviewHelperResult{
 		Output: boundedResult.Output,
 		Usage:  boundedResult.Usage,
 	}
@@ -311,31 +311,31 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg ReviewHelperConf
 	// Parse the structured handoff file; on protocol violation, overwrite
 	// it with the synthesized CHANGES_REQUESTED feedback so the on-disk
 	// artifact matches the verdict the harness routed on.
-	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath)
+	parsed, parseErr := parseReviewFeedback(cfg.FeedbackPath)
 	if parseErr != nil {
 		if runErr != nil {
 			return result, runErr
 		}
 		return result, fmt.Errorf("%s: parsing review-feedback.md: %w", errPrefix, parseErr)
 	}
-	if parsed.OK() {
+	if parsed.ok() {
 		result.Status = parsed.Verdict
 		result.Feedback = strings.TrimSpace(parsed.Body)
 		result.Markers = parsed.Markers
 	} else {
 		synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
 		_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
-		result.Status = ReviewChangesRequested
+		result.Status = reviewChangesRequested
 		result.Feedback = strings.TrimSpace(synth)
 	}
 
 	if runErr != nil {
-		if isProtocolViolationError(runErr) && parsed.OK() {
+		if isProtocolViolationError(runErr) && parsed.ok() {
 			synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
 			_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
-			result.Status = ReviewChangesRequested
+			result.Status = reviewChangesRequested
 			result.Feedback = strings.TrimSpace(synth)
-			result.Markers = ValidatorMarkers{}
+			result.Markers = validatorMarkers{}
 		}
 		return result, runErr
 	}
@@ -464,7 +464,7 @@ func mergeSessionEnv(env []string, overrides ...string) []string {
 	return out
 }
 
-func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr error) string {
+func reviewHelperProtocolViolationFeedback(parsed *parsedReviewFeedback, runErr error) string {
 	var findings []string
 	if parsed != nil {
 		for _, violation := range parsed.ProtocolViolations {
@@ -474,15 +474,15 @@ func reviewHelperProtocolViolationFeedback(parsed *ParsedReviewFeedback, runErr 
 	if runErr != nil && isProtocolViolationError(runErr) {
 		findings = append(findings, fmt.Sprintf("- **Critical**: review helper completion protocol violation: %v", runErr))
 	}
-	return FormatStructuredReviewFeedback(
+	return formatStructuredReviewFeedback(
 		"Review Helper — Handoff Protocol Violation",
 		strings.Join(findings, "\n"),
 		"",
-		ReviewChangesRequested,
+		reviewChangesRequested,
 	)
 }
 
-func boundedReviewHelperAllowedPaths(cfg ReviewHelperConfig) []string {
+func boundedReviewHelperAllowedPaths(cfg reviewHelperConfig) []string {
 	allowed := []string{cfg.FeedbackPath}
 	allowed = append(allowed, cfg.AllowedPaths...)
 	return allowed

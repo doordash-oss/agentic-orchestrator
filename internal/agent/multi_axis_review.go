@@ -23,7 +23,7 @@ import (
 
 type multiAxisReviewResult struct {
 	Axis     string
-	Status   ReviewStatus
+	Status   reviewStatus
 	Feedback string
 	Error    error
 }
@@ -40,26 +40,26 @@ func runMultiAxisReviews(count int, run func(int)) {
 	wg.Wait()
 }
 
-func strictMultiAxisReviewStatus(results []multiAxisReviewResult, selectedCount int) ReviewStatus {
+func strictMultiAxisReviewStatus(results []multiAxisReviewResult, selectedCount int) reviewStatus {
 	approved := 0
 	if len(results) < selectedCount {
-		return ReviewChangesRequested
+		return reviewChangesRequested
 	}
 	for _, result := range results {
 		if result.Error != nil {
-			return ReviewChangesRequested
+			return reviewChangesRequested
 		}
 		switch result.Status {
 		case ReviewApproved:
 			approved++
-		case ReviewChangesRequested:
-			return ReviewChangesRequested
+		case reviewChangesRequested:
+			return reviewChangesRequested
 		default:
-			return ReviewChangesRequested
+			return reviewChangesRequested
 		}
 	}
 	if approved != selectedCount {
-		return ReviewChangesRequested
+		return reviewChangesRequested
 	}
 	return ReviewApproved
 }
@@ -73,7 +73,7 @@ func firstMultiAxisReviewError(results []multiAxisReviewResult) error {
 	return nil
 }
 
-func validatorResultsToMultiAxisResults(results []ValidatorResult) []multiAxisReviewResult {
+func validatorResultsToMultiAxisResults(results []validatorResult) []multiAxisReviewResult {
 	out := make([]multiAxisReviewResult, 0, len(results))
 	for _, result := range results {
 		out = append(out, multiAxisReviewResult{
@@ -99,7 +99,7 @@ func setMultiAxisValidatorStatuses(store ports.FeatureStore, featureID string, a
 	})
 }
 
-func updateMultiAxisValidatorStatus(store ports.FeatureStore, featureID, axis string, status ReviewStatus, err error) {
+func updateMultiAxisValidatorStatus(store ports.FeatureStore, featureID, axis string, status reviewStatus, err error) {
 	if store == nil || featureID == "" {
 		return
 	}

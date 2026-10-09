@@ -162,7 +162,7 @@ func TestParsePhasePlanFrontend(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ParsePhasePlanFrontend(tt.plan)
+			got := parsePhasePlanFrontend(tt.plan)
 			if got != tt.want {
 				t.Errorf("ParsePhasePlanFrontend() = %v, want %v", got, tt.want)
 			}

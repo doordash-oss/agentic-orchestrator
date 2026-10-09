@@ -74,12 +74,12 @@ type roleSpec struct {
 	IterationState       bool
 }
 
-// ArtifactPath resolves an artifact path using the spec's named output roots.
-func (s roleSpec) ArtifactPath(rt roleRuntime, artifact roleArtifactSpec) string {
+// artifactPath resolves an artifact path using the spec's named output roots.
+func (s roleSpec) artifactPath(rt roleRuntime, artifact roleArtifactSpec) string {
 	if artifact.ResolvePath != nil {
 		return artifact.ResolvePath(rt, artifact)
 	}
-	roots := s.OutputRootPaths(rt)
+	roots := s.outputRootPaths(rt)
 	root := roots[artifact.RootName]
 	if root == "" {
 		return artifact.RelativePath
@@ -90,8 +90,8 @@ func (s roleSpec) ArtifactPath(rt roleRuntime, artifact roleArtifactSpec) string
 	return filepath.Join(root, artifact.RelativePath)
 }
 
-// OutputRootPaths resolves every named root for a runtime invocation.
-func (s roleSpec) OutputRootPaths(rt roleRuntime) map[string]string {
+// outputRootPaths resolves every named root for a runtime invocation.
+func (s roleSpec) outputRootPaths(rt roleRuntime) map[string]string {
 	roots := make(map[string]string, len(s.OutputRoots))
 	for _, root := range s.OutputRoots {
 		if root.ResolvePath == nil {
@@ -102,17 +102,17 @@ func (s roleSpec) OutputRootPaths(rt roleRuntime) map[string]string {
 	return roots
 }
 
-// Contract derives the deterministic completion contract from the spec,
+// contract derives the deterministic completion contract from the spec,
 // binding each artifact's validator and path resolver once.
-func (s roleSpec) Contract() RoleContract {
-	contract := RoleContract{Role: s.Role}
+func (s roleSpec) contract() roleContract {
+	contract := roleContract{Role: s.Role}
 	for _, artifact := range s.Artifacts {
-		contract.Required = append(contract.Required, RequiredArtifact{
+		contract.Required = append(contract.Required, requiredArtifact{
 			Name:          artifact.Name,
 			DisplayPath:   artifact.DisplayPath,
 			HideFromSkill: artifact.HideFromSkill,
 			ResolvePath: func(iterDir string) string {
-				return s.ArtifactPath(roleRuntime{IterationDir: iterDir}, artifact)
+				return s.artifactPath(roleRuntime{IterationDir: iterDir}, artifact)
 			},
 			Validate: func(iterDir, path string, out *Outcome) ([]ProtocolViolation, error) {
 				return artifact.Validate(artifact, iterDir, path, out)

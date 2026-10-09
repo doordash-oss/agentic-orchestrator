@@ -25,7 +25,7 @@ func TestStrictMultiAxisReviewStatus(t *testing.T) {
 		name          string
 		results       []multiAxisReviewResult
 		selectedCount int
-		want          ReviewStatus
+		want          reviewStatus
 	}{
 		{
 			name: "all selected axes approved",
@@ -41,11 +41,11 @@ func TestStrictMultiAxisReviewStatus(t *testing.T) {
 			name: "any changes requested blocks",
 			results: []multiAxisReviewResult{
 				{Axis: "Craft", Status: ReviewApproved},
-				{Axis: "Functionality/Evidence", Status: ReviewChangesRequested},
+				{Axis: "Functionality/Evidence", Status: reviewChangesRequested},
 				{Axis: "Cleanliness", Status: ReviewApproved},
 			},
 			selectedCount: 3,
-			want:          ReviewChangesRequested,
+			want:          reviewChangesRequested,
 		},
 		{
 			name: "any error blocks",
@@ -55,7 +55,7 @@ func TestStrictMultiAxisReviewStatus(t *testing.T) {
 				{Axis: "Cleanliness", Status: ReviewApproved},
 			},
 			selectedCount: 3,
-			want:          ReviewChangesRequested,
+			want:          reviewChangesRequested,
 		},
 		{
 			name: "fewer results than selected axes blocks",
@@ -64,17 +64,17 @@ func TestStrictMultiAxisReviewStatus(t *testing.T) {
 				{Axis: "Functionality/Evidence", Status: ReviewApproved},
 			},
 			selectedCount: 3,
-			want:          ReviewChangesRequested,
+			want:          reviewChangesRequested,
 		},
 		{
 			name: "unknown status blocks",
 			results: []multiAxisReviewResult{
 				{Axis: "Craft", Status: ReviewApproved},
-				{Axis: "Functionality/Evidence", Status: ReviewStatus(99)},
+				{Axis: "Functionality/Evidence", Status: reviewStatus(99)},
 				{Axis: "Cleanliness", Status: ReviewApproved},
 			},
 			selectedCount: 3,
-			want:          ReviewChangesRequested,
+			want:          reviewChangesRequested,
 		},
 	}
 

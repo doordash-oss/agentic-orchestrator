@@ -25,9 +25,9 @@ func TestParseReviewFeedback(t *testing.T) {
 	tests := []struct {
 		name           string
 		body           string
-		wantStat       ReviewStatus
+		wantStat       reviewStatus
 		wantViolations bool
-		wantMarkers    ValidatorMarkers
+		wantMarkers    validatorMarkers
 	}{
 		{
 			name:     "approved with no findings",
@@ -37,13 +37,13 @@ func TestParseReviewFeedback(t *testing.T) {
 		{
 			name:     "changes_requested with prose findings",
 			body:     "## Findings\n- **High**: Fix error handling in auth.go\n\n## Suggestions\n- Consider adding docs\n\n## Verdict\nCHANGES_REQUESTED\n",
-			wantStat: ReviewChangesRequested,
+			wantStat: reviewChangesRequested,
 		},
 		{
 			name:     "approved with sticky approval block",
 			body:     "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Sticky Approval\n\naxis: architecture\nfrozen_sections:\n- Phase 3: Wire the dispatcher\n- Architecture Approach\n\n## Verdict\nAPPROVED\n",
 			wantStat: ReviewApproved,
-			wantMarkers: ValidatorMarkers{
+			wantMarkers: validatorMarkers{
 				AxisApproved:   "architecture",
 				FrozenSections: []string{"Phase 3: Wire the dispatcher", "Architecture Approach"},
 			},
@@ -57,20 +57,20 @@ func TestParseReviewFeedback(t *testing.T) {
 		{
 			name:           "unknown verdict token is a protocol violation",
 			body:           "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Verdict\nMAYBE\n",
-			wantStat:       ReviewFailed,
+			wantStat:       reviewFailed,
 			wantViolations: true,
 		},
 		{
 			name:           "empty file is a protocol violation",
 			body:           "",
-			wantStat:       ReviewFailed,
+			wantStat:       reviewFailed,
 			wantViolations: true,
 		},
 		{
 			name:     "sticky approval skips angle-bracket placeholder bullets",
 			body:     "## Findings\n- (none)\n\n## Suggestions\n- (none)\n\n## Sticky Approval\n\naxis: grounding\nfrozen_sections:\n- ## Grounding\n- <any other section whose references you spot-checked>\n- ## Changes Required\n\n## Verdict\nAPPROVED\n",
 			wantStat: ReviewApproved,
-			wantMarkers: ValidatorMarkers{
+			wantMarkers: validatorMarkers{
 				AxisApproved:   testAxisGrounding,
 				FrozenSections: []string{testGroundingSectionHeading, "## Changes Required"},
 			},
@@ -83,7 +83,7 @@ func TestParseReviewFeedback(t *testing.T) {
 			if err := os.WriteFile(path, []byte(tt.body), 0o644); err != nil {
 				t.Fatalf("WriteFile: %v", err)
 			}
-			parsed, err := ParseReviewFeedback(path)
+			parsed, err := parseReviewFeedback(path)
 			if err != nil {
 				t.Fatalf("ParseReviewFeedback: %v", err)
 			}
@@ -107,11 +107,11 @@ func TestParseReviewFeedback(t *testing.T) {
 }
 
 func TestParseReviewFeedback_MissingFile(t *testing.T) {
-	parsed, err := ParseReviewFeedback(filepath.Join(t.TempDir(), "does-not-exist.md"))
+	parsed, err := parseReviewFeedback(filepath.Join(t.TempDir(), "does-not-exist.md"))
 	if err != nil {
 		t.Fatalf("ParseReviewFeedback: %v", err)
 	}
-	if parsed.Verdict != ReviewFailed {
+	if parsed.Verdict != reviewFailed {
 		t.Errorf("Verdict = %v, want ReviewFailed for missing file", parsed.Verdict)
 	}
 	if len(parsed.ProtocolViolations) == 0 {

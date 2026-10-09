@@ -65,7 +65,7 @@ type planEntryKind struct {
 	// initialPrompt and revisionPrompt call the unchanged builders with the
 	// inputs the entry point is expected to forward.
 	initialPrompt  func(f *feature.Feature) string
-	revisionPrompt func(f *feature.Feature, previousPath, feedback string, attempt int, approvals []AxisApproval) string
+	revisionPrompt func(f *feature.Feature, previousPath, feedback string, attempt int, approvals []axisApproval) string
 	// setMaxAttempts configures the attempt budget the entry point reads.
 	setMaxAttempts func(pr *PhaseRunner, f *feature.Feature, n int)
 }
@@ -101,10 +101,10 @@ func planEntryKinds() []planEntryKind {
 				return pr.RunPlanningWithValidation(f, planEntryResearchPath, nil)
 			},
 			initialPrompt: func(f *feature.Feature) string {
-				return BuildRoadmapPromptWithResearch(f, "", planEntryResearchPath, nil)
+				return buildRoadmapPromptWithResearch(f, "", planEntryResearchPath, nil)
 			},
-			revisionPrompt: func(f *feature.Feature, previousPath, feedback string, attempt int, approvals []AxisApproval) string {
-				return BuildRoadmapRevisionPrompt("", previousPath, feedback, attempt, approvals)
+			revisionPrompt: func(f *feature.Feature, previousPath, feedback string, attempt int, approvals []axisApproval) string {
+				return buildRoadmapRevisionPrompt("", previousPath, feedback, attempt, approvals)
 			},
 			setMaxAttempts: func(_ *PhaseRunner, f *feature.Feature, n int) { f.MaxPlanIterations = n },
 		},
@@ -123,10 +123,10 @@ func planEntryKinds() []planEntryKind {
 				return pr.RunPhasePlanning(f, planEntryRoadmapPath, planEntryPhase, nil, nil)
 			},
 			initialPrompt: func(f *feature.Feature) string {
-				return BuildPhasePlanPromptWithResearch(f, planEntryRoadmapPath, "", planEntryPhase, nil)
+				return buildPhasePlanPromptWithResearch(f, planEntryRoadmapPath, "", planEntryPhase, nil)
 			},
-			revisionPrompt: func(f *feature.Feature, previousPath, feedback string, attempt int, approvals []AxisApproval) string {
-				return BuildPhasePlanRevisionPrompt(f, "", previousPath, feedback, planEntryPhase, attempt, approvals)
+			revisionPrompt: func(f *feature.Feature, previousPath, feedback string, attempt int, approvals []axisApproval) string {
+				return buildPhasePlanRevisionPrompt(f, "", previousPath, feedback, planEntryPhase, attempt, approvals)
 			},
 			setMaxAttempts: func(pr *PhaseRunner, _ *feature.Feature, n int) { setPhasePlanDefaultAttempts(pr, n) },
 		},
@@ -137,7 +137,7 @@ func setPhasePlanDefaultAttempts(pr *PhaseRunner, n int) {
 	pr.Config = &config.Config{Defaults: config.DefaultsConfig{MaxPhasePlanIterations: n}}
 }
 
-func newPlanEntryRunner(sm ports.SessionManager, store ports.FeatureStore, stateDir string, buildSession BuildSessionFunc) *PhaseRunner {
+func newPlanEntryRunner(sm ports.SessionManager, store ports.FeatureStore, stateDir string, buildSession buildSessionFunc) *PhaseRunner {
 	return &PhaseRunner{
 		SessionManager:             sm,
 		FeatureStore:               store,
@@ -496,7 +496,7 @@ func (m *fakeStartSessionManager) sessionIDs() []string {
 	return append([]string(nil), m.ids...)
 }
 
-func stubPlannerBuildSession(err error) BuildSessionFunc {
+func stubPlannerBuildSession(err error) buildSessionFunc {
 	return func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 		if err != nil {
 			return nil, nil, nil, err

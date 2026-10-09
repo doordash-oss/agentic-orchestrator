@@ -178,10 +178,10 @@ func detectFenceMarker(ln string) (byte, int) {
 	return c, n
 }
 
-// ParsePhasePlanFrontend reads the plan-level frontend metadata flag.
+// parsePhasePlanFrontend reads the plan-level frontend metadata flag.
 // Missing legacy metadata, a missing field, or an unrecognized value all
 // resolve to false for backward compatibility with already-authored plans.
-func ParsePhasePlanFrontend(planMarkdown string) bool {
+func parsePhasePlanFrontend(planMarkdown string) bool {
 	metadata := extractMarkdownSection(planMarkdown, "## Metadata")
 	if metadata == "" {
 		return false

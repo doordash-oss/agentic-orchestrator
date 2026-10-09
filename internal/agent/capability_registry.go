@@ -33,10 +33,10 @@ import (
 // harness resolves each to a deterministic in-process probe so planners write
 // a name rather than a shell snippet.
 const (
-	CapabilityAuthenticatedBrowser = "authenticated-browser"
-	CapabilityDisplay              = "display"
-	CapabilityDocker               = "docker"
-	CapabilityNetwork              = "network"
+	capabilityAuthenticatedBrowser = "authenticated-browser"
+	capabilityDisplay              = "display"
+	capabilityDocker               = "docker"
+	capabilityNetwork              = "network"
 )
 
 // capabilityProbeTimeout bounds one built-in probe, matching the executor's
@@ -66,8 +66,8 @@ func WithCapabilityPolicy(ctx context.Context, policy CapabilityPolicy) context.
 	return context.WithValue(ctx, capabilityPolicyKey{}, policy)
 }
 
-// CapabilityPolicyFromContext returns the attached policy or a local default.
-func CapabilityPolicyFromContext(ctx context.Context) CapabilityPolicy {
+// capabilityPolicyFromContext returns the attached policy or a local default.
+func capabilityPolicyFromContext(ctx context.Context) CapabilityPolicy {
 	if ctx != nil {
 		if policy, ok := ctx.Value(capabilityPolicyKey{}).(CapabilityPolicy); ok {
 			return policy
@@ -102,14 +102,14 @@ func ParseCapabilityName(text string) (name, arg string, ok bool) {
 // planner defect surfaces at contract compile time rather than at probe time.
 func ValidateRegistryCapability(name, arg string) error {
 	switch name {
-	case CapabilityAuthenticatedBrowser, CapabilityNetwork:
+	case capabilityAuthenticatedBrowser, capabilityNetwork:
 		if arg == "" {
 			return fmt.Errorf("capability %q requires a host argument, e.g. %s(example.com)", name, name)
 		}
 		if _, _, err := splitHostPort(arg); err != nil {
 			return fmt.Errorf("capability %q has an invalid host %q: %v", name, arg, err)
 		}
-	case CapabilityDisplay, CapabilityDocker:
+	case capabilityDisplay, capabilityDocker:
 		if arg != "" {
 			return fmt.Errorf("capability %q takes no argument", name)
 		}
@@ -126,29 +126,29 @@ func RunRegistryCapabilityProbe(ctx context.Context, name, arg string) Capabilit
 	}
 	ctx, cancel := context.WithTimeout(ctx, capabilityProbeTimeout)
 	defer cancel()
-	policy := CapabilityPolicyFromContext(ctx)
+	policy := capabilityPolicyFromContext(ctx)
 	switch name {
-	case CapabilityAuthenticatedBrowser:
+	case capabilityAuthenticatedBrowser:
 		return probeAuthenticatedBrowser(ctx, policy, arg)
-	case CapabilityDisplay:
+	case capabilityDisplay:
 		return probeDisplay()
-	case CapabilityDocker:
+	case capabilityDocker:
 		return probeDocker(ctx, policy)
-	case CapabilityNetwork:
+	case capabilityNetwork:
 		return probeNetwork(ctx, policy, arg)
 	}
 	return CapabilityProbeResult{Reason: fmt.Sprintf("unknown built-in capability %q", name)}
 }
 
-// BrowserStatePath is the harness-owned location of Playwright storage state
+// browserStatePath is the harness-owned location of Playwright storage state
 // for host under runtimeDir.
-func BrowserStatePath(runtimeDir, host string) string {
+func browserStatePath(runtimeDir, host string) string {
 	return filepath.Join(runtimeDir, "capabilities", "browser", browserStateDirName(host), "storageState.json")
 }
 
-// BrowserStateEnvName returns the environment variable that carries the
+// browserStateEnvName returns the environment variable that carries the
 // storage-state path for host, e.g. AGENTICO_BROWSER_STATE_SLACK_COM.
-func BrowserStateEnvName(host string) string {
+func browserStateEnvName(host string) string {
 	upper := strings.ToUpper(host)
 	var b strings.Builder
 	for _, r := range upper {
@@ -216,7 +216,7 @@ func probeAuthenticatedBrowser(ctx context.Context, policy CapabilityPolicy, hos
 	if strings.TrimSpace(policy.RuntimeDir) == "" {
 		return CapabilityProbeResult{Reason: "authenticated browser state has no runtime directory configured"}
 	}
-	statePath := BrowserStatePath(policy.RuntimeDir, host)
+	statePath := browserStatePath(policy.RuntimeDir, host)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -249,7 +249,7 @@ func probeAuthenticatedBrowser(ctx context.Context, policy CapabilityPolicy, hos
 	if reason := checkBrowserLiveness(ctx, policy, host, state); reason != "" {
 		return CapabilityProbeResult{Reason: reason}
 	}
-	return CapabilityProbeResult{Available: true, Env: []string{BrowserStateEnvName(host) + "=" + statePath}}
+	return CapabilityProbeResult{Available: true, Env: []string{browserStateEnvName(host) + "=" + statePath}}
 }
 
 func checkBrowserLiveness(ctx context.Context, policy CapabilityPolicy, host string, state playwrightStorageState) string {

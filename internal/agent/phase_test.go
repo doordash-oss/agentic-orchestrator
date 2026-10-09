@@ -1240,13 +1240,13 @@ func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
 
 func newRegistryWithProviders() *llm.Registry {
 	reg := llm.NewRegistry()
-	claudeProvider := &claude.Provider{}
+	claudeProvider := claude.NewProvider("")
 	claudeProvider.SetModelCatalog([]llm.ModelInfo{
 		{ID: "opus[1M]", Category: "capable", Aliases: []string{"opus"}},
 		{ID: "sonnet[200K]", Category: "balanced", Aliases: []string{"sonnet"}},
 		{ID: "haiku[200K]", Category: "cheap", Aliases: []string{"haiku"}},
 	})
-	codexProvider := &codex.Provider{}
+	codexProvider := codex.NewProvider("")
 	codexProvider.SetModelCatalog([]llm.ModelInfo{
 		{ID: "gpt-5.4[272K]", Category: "capable", Aliases: []string{"gpt-5.4"}},
 		{ID: "gpt-5.4-mini[400K]", Category: "balanced", Aliases: []string{"gpt-5.4-mini"}},
@@ -1593,7 +1593,7 @@ func TestBuildSession_ClaudeSeedsProtocolContextWindow(t *testing.T) {
 	pr := NewPhaseRunner(sm, store, dir)
 
 	reg := llm.NewRegistry()
-	claudeProvider := &claude.Provider{}
+	claudeProvider := claude.NewProvider("")
 	claudeProvider.SetModelCatalog([]llm.ModelInfo{
 		{ID: "opus", ContextWindow: 1_000_000, Category: "capable"},
 	})

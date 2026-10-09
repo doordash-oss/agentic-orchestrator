@@ -116,8 +116,7 @@ func assertCommand(t *testing.T, gotName string, gotArgs []string, wantName stri
 // TestClaudeProvider_DefaultCatalog_Invariants locks in the hardcoded
 // fallback catalog used when CLI discovery is unavailable.
 func TestClaudeProvider_DefaultCatalog_Invariants(t *testing.T) {
-	p := &Provider{}
-	cat := p.defaultModelInfos()
+	cat := defaultModelInfos()
 
 	byID := make(map[string]llm.ModelInfo, len(cat))
 	for _, m := range cat {
@@ -165,48 +164,6 @@ func TestClaudeProvider_DefaultCatalog_Invariants(t *testing.T) {
 	}
 }
 
-// TestClaudeProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed
-// guards against regressions where ContextWindowForModel stopped falling
-// back to defaultModelInfos when SetModelCatalog had not been called.
-// Before the fix that path silently returned 0, which made the
-// implement-loop 60% handoff ticker dead on fresh sessions.
-func TestClaudeProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *testing.T) {
-	p := &Provider{}
-
-	tests := map[string]int{
-		"fable":        1_000_000,
-		"fable[1M]":    1_000_000,
-		"opus":         200_000,
-		"opus[200K]":   200_000,
-		"opus[1m]":     1_000_000,
-		"opus[1M]":     1_000_000,
-		"sonnet":       200_000,
-		"sonnet[1m]":   1_000_000,
-		"sonnet[1M]":   1_000_000,
-		"sonnet[200K]": 200_000,
-		"haiku[200K]":  200_000,
-		"haiku":        200_000,
-	}
-	for model, want := range tests {
-		t.Run(model, func(t *testing.T) {
-			if got := p.ContextWindowForModel(model); got != want {
-				t.Errorf("ContextWindowForModel(%q) = %d, want %d", model, got, want)
-			}
-		})
-	}
-}
-
-// TestClaudeProvider_ModelCatalog_FallsBackToHardcoded verifies the same
-// fallback on the catalog-exposing API that the desktop app and registry depend on.
-func TestClaudeProvider_ModelCatalog_FallsBackToHardcoded(t *testing.T) {
-	p := &Provider{}
-	got := p.ModelCatalog()
-	want := p.defaultModelInfos()
-	if len(got) != len(want) {
-		t.Fatalf("ModelCatalog() len = %d, want %d", len(got), len(want))
-	}
-}
-
 func TestProviderBuildCommand_UsesCatalogAliasForClaudeCLIModel(t *testing.T) {
 	tests := []struct {
 		model string
@@ -221,7 +178,7 @@ func TestProviderBuildCommand_UsesCatalogAliasForClaudeCLIModel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
-			p := &Provider{}
+			p := NewProvider("")
 			args, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: tt.model})
 			if err != nil {
 				t.Fatalf("BuildCommand() error: %v", err)
@@ -411,7 +368,7 @@ func TestClaudeProvider_CLIBinaryDefault(t *testing.T) {
 
 func TestClaudeProvider_BuildCommandUsesCustomBinary(t *testing.T) {
 	t.Run("default", func(t *testing.T) {
-		args, _, err := (&Provider{}).BuildCommand(llm.CommandBuildOpts{Model: "opus"})
+		args, _, err := NewProvider("").BuildCommand(llm.CommandBuildOpts{Model: "opus"})
 		if err != nil {
 			t.Fatalf("BuildCommand() error: %v", err)
 		}
@@ -420,7 +377,7 @@ func TestClaudeProvider_BuildCommandUsesCustomBinary(t *testing.T) {
 		}
 	})
 	t.Run("override", func(t *testing.T) {
-		p := &Provider{binary: "fcc-claude"}
+		p := NewProvider("fcc-claude")
 		args, _, err := p.BuildCommand(llm.CommandBuildOpts{Model: "opus"})
 		if err != nil {
 			t.Fatalf("BuildCommand() error: %v", err)

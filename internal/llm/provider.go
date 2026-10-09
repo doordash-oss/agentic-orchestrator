@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
@@ -425,15 +424,8 @@ func EffortCapabilitiesForModel(provider LLMProvider, model string) []EffortLeve
 	if !ok {
 		return nil
 	}
-	for _, entry := range cp.ModelCatalog() {
-		if strings.EqualFold(entry.ID, model) {
-			return entry.EffortCapabilities
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				return entry.EffortCapabilities
-			}
-		}
+	if entry, ok := LookupModel(cp.ModelCatalog(), model); ok {
+		return entry.EffortCapabilities
 	}
 	return nil
 }

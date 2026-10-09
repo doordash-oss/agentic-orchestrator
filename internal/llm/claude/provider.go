@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
-	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/clirun"
@@ -32,11 +31,22 @@ const defaultBinary = "claude"
 
 // Provider implements llm.LLMProvider for Claude Code CLI.
 type Provider struct {
-	mu      sync.RWMutex
-	catalog []llm.ModelInfo
-	runner  clirun.CommandRunner
+	// Catalog holds the discovered model catalog and the offline
+	// routing defaults; its promoted methods are the provider's catalog
+	// surface.
+	llm.Catalog
+	runner clirun.CommandRunner
 	// binary overrides the CLI executable name; empty means defaultBinary.
 	binary string
+}
+
+// NewProvider returns a Claude provider that launches binary instead of the
+// claude executable on PATH; empty means the default. The embedded catalog is
+// bound to the resolved CLI name and the hardcoded default entries.
+func NewProvider(binary string) *Provider {
+	p := &Provider{binary: binary}
+	p.Catalog = llm.NewCatalog(p.cliBinary(), defaultModelInfos)
+	return p
 }
 
 func (p *Provider) Name() string { return "claude" }
@@ -52,46 +62,6 @@ func (p *Provider) cliBinary() string {
 		return p.binary
 	}
 	return defaultBinary
-}
-
-func (p *Provider) MatchesModel(model string) bool {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	m := strings.ToLower(model)
-	for _, entry := range cat {
-		if strings.EqualFold(entry.ID, m) {
-			return true
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, m) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func (p *Provider) DetectCLI() bool {
-	_, err := exec.LookPath(p.cliBinary())
-	return err == nil
-}
-
-func (p *Provider) AvailableModels() []string {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	ids := make([]string, len(cat))
-	for i, m := range cat {
-		ids[i] = m.ID
-	}
-	return ids
 }
 
 func (p *Provider) BuildCommand(opts llm.CommandBuildOpts) ([]string, []string, error) {
@@ -131,30 +101,6 @@ Preferred free-text shape when the value is inherently unconstrained:
 
 func (p *Provider) ComputeCost(_ string, _, _ int64) float64 {
 	// Claude CLI reports cost in the result message TotalCostUSD field.
-	return 0
-}
-
-func (p *Provider) ContextWindowForModel(model string) int {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	for _, entry := range cat {
-		if strings.EqualFold(entry.ID, model) {
-			if entry.ContextWindow > 0 {
-				return entry.ContextWindow
-			}
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				if entry.ContextWindow > 0 {
-					return entry.ContextWindow
-				}
-			}
-		}
-	}
 	return 0
 }
 
@@ -244,27 +190,6 @@ func formatReadyAuthDetail(status authStatus) string {
 	}
 }
 
-// PhaseDefaults returns Claude's recommended models per phase.
-// SetModelCatalog sets the discovered model catalog.
-func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
-	p.mu.Lock()
-	p.catalog = models
-	p.mu.Unlock()
-}
-
-// ModelCatalog returns the current catalog. Falls back to the hardcoded
-// defaults when nothing has been set, so callers (desktop app, registry) always see
-// a populated catalog without needing an explicit seeding step.
-func (p *Provider) ModelCatalog() []llm.ModelInfo {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		return p.defaultModelInfos()
-	}
-	return cat
-}
-
 // RecommendedModels nominates the balanced Claude family as the default for
 // every role. Provider-local family knowledge stays out of shared selection
 // code; configured model_recommendations override these nominations.
@@ -313,7 +238,7 @@ func (p *Provider) CLIVersion() (string, error) {
 // defaultModelInfos supplies offline routing defaults when initialization and
 // the persisted catalog are unavailable. Discovery never filters through this
 // list, and these hints never claim to be CLI-reported capabilities.
-func (p *Provider) defaultModelInfos() []llm.ModelInfo {
+func defaultModelInfos() []llm.ModelInfo {
 	return []llm.ModelInfo{
 		{ID: "fable[1M]", DisplayName: "Claude Fable (1M)", ContextWindow: 1_000_000, Aliases: []string{"fable"}, Category: "capable"},
 		{ID: "opus[200K]", DisplayName: "Claude Opus (200K)", ContextWindow: 200_000, Aliases: []string{"opus"}, Category: "capable"},
@@ -388,21 +313,8 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 }
 
 func (p *Provider) claudeCLIModel(model string) string {
-	p.mu.RLock()
-	cat := p.catalog
-	p.mu.RUnlock()
-	if len(cat) == 0 {
-		cat = p.defaultModelInfos()
-	}
-	for _, entry := range cat {
-		if strings.EqualFold(entry.ID, model) {
-			return claudeCLIModelForCatalogEntry(entry)
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				return claudeCLIModelForCatalogEntry(entry)
-			}
-		}
+	if entry, ok := llm.LookupModel(p.ModelCatalog(), model); ok {
+		return claudeCLIModelForCatalogEntry(entry)
 	}
 	return model
 }

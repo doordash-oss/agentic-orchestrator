@@ -30,7 +30,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -57,15 +56,16 @@ const configContentEnvVar = "OPENCODE_CONFIG_CONTENT"
 //
 // runner is injectable so version/readiness/discovery probes can be exercised in
 // tests without a real OpenCode binary; production code falls back to clirun
-// helpers. catalog holds the model catalog discovered at startup (empty until
-// discovery runs); rates holds the per-model pricing parsed alongside it. Both
-// are guarded by mu because discovery, startup enrichment, and routing lookups
-// touch them from different goroutines.
+// helpers. The embedded llm.Catalog holds the model catalog discovered at
+// startup (empty until discovery runs; no default entries are fabricated);
+// rates holds the per-model pricing parsed alongside it, guarded by mu because
+// discovery, startup enrichment, and routing lookups touch it from different
+// goroutines.
 type Provider struct {
-	mu      sync.RWMutex
-	catalog []llm.ModelInfo
-	rates   map[string]modelRate
-	runner  clirun.CommandRunner
+	llm.Catalog
+	mu     sync.RWMutex
+	rates  map[string]modelRate
+	runner clirun.CommandRunner
 	// binary overrides the CLI executable name; empty means defaultBinary.
 	binary string
 }
@@ -92,14 +92,23 @@ type modelRate struct {
 	outputPerMToken float64
 }
 
+// newProvider builds a Provider around the injectable command runner and the
+// CLI binary override, binding the embedded catalog (no default entries) to
+// the resolved CLI name.
+func newProvider(binary string, runner clirun.CommandRunner) *Provider {
+	p := &Provider{runner: runner, binary: binary}
+	p.Catalog = llm.NewCatalog(p.cliBinary(), nil)
+	return p
+}
+
 // New returns a Provider with the default (production) command runner and the
 // default CLI binary name.
-func New() *Provider { return &Provider{} }
+func New() *Provider { return newProvider("", nil) }
 
 // NewWithBinary returns a Provider that invokes the supplied CLI binary name
 // (or the default when empty). It is the constructor used by the FX module to
 // honor the providers.opencode.cli config override.
-func NewWithBinary(binary string) *Provider { return &Provider{binary: binary} }
+func NewWithBinary(binary string) *Provider { return newProvider(binary, nil) }
 
 // NewWithRunner returns a Provider that uses the supplied command runner for its
 // version, readiness, and model-discovery probes instead of shelling out to the
@@ -107,7 +116,7 @@ func NewWithBinary(binary string) *Provider { return &Provider{binary: binary} }
 // the provider through the shared startup discovery and cache path; production
 // code uses New.
 func NewWithRunner(runner clirun.CommandRunner) *Provider {
-	return &Provider{runner: runner}
+	return newProvider("", runner)
 }
 
 func (p *Provider) Name() string { return providerName }
@@ -152,39 +161,15 @@ func (p *Provider) MatchesModel(model string) bool {
 }
 
 // catalogContains reports whether model names an effective-catalog entry by its
-// canonical id or one of its aliases (case-insensitive).
+// canonical id or one of its aliases (case-insensitive). Unlike the shared
+// MatchesModel, a bare OpenCode selection is trimmed first.
 func (p *Provider) catalogContains(model string) bool {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return false
 	}
-	for _, entry := range p.catalogSnapshot() {
-		if strings.EqualFold(entry.ID, model) {
-			return true
-		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// DetectCLI reports whether the OpenCode CLI binary is available in PATH.
-func (p *Provider) DetectCLI() bool {
-	_, err := exec.LookPath(p.cliBinary())
-	return err == nil
-}
-
-// AvailableModels returns only discovered or cached model IDs.
-func (p *Provider) AvailableModels() []string {
-	cat := p.catalogSnapshot()
-	ids := make([]string, len(cat))
-	for i, m := range cat {
-		ids[i] = m.ID
-	}
-	return ids
+	_, ok := llm.LookupModel(p.ModelCatalog(), model)
+	return ok
 }
 
 // BuildCommand returns the args and environment needed to launch OpenCode in
@@ -472,17 +457,19 @@ func (p *Provider) ContextWindowForModel(model string) int {
 	}
 	suffixWindow := llm.ParseModelContextWindow(model)
 	strippedModel := strings.TrimSpace(llm.StripModelContextWindow(model))
-	for _, entry := range p.catalogSnapshot() {
+	for _, entry := range p.ModelCatalog() {
 		if entry.ContextWindow <= 0 {
 			continue
 		}
-		if strings.EqualFold(entry.ID, model) || strings.EqualFold(entry.ID, strippedModel) {
+		// Each positive-window entry is probed through the shared lookup
+		// individually: a whole-catalog lookup would stop at the first
+		// matching entry even when its window is zero, which this
+		// override must skip.
+		if _, ok := llm.LookupModel([]llm.ModelInfo{entry}, model); ok {
 			return entry.ContextWindow
 		}
-		for _, alias := range entry.Aliases {
-			if strings.EqualFold(alias, model) || strings.EqualFold(alias, strippedModel) {
-				return entry.ContextWindow
-			}
+		if _, ok := llm.LookupModel([]llm.ModelInfo{entry}, strippedModel); ok {
+			return entry.ContextWindow
 		}
 	}
 	if suffixWindow > 0 {
@@ -491,22 +478,10 @@ func (p *Provider) ContextWindowForModel(model string) int {
 	return 0
 }
 
-// ModelCatalog returns an isolated snapshot of discovered or cached metadata.
-// No models or capabilities are fabricated when discovery is unavailable.
-func (p *Provider) ModelCatalog() []llm.ModelInfo {
-	return p.catalogSnapshot()
-}
-
 // ReviewPreferenceBand admits discovered text models for native toolless
 // review without guessing quality or cost from family names.
 func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
 	return 0, model.Capabilities == nil || model.Capabilities.TextOutput == nil || *model.Capabilities.TextOutput
-}
-
-func (p *Provider) catalogSnapshot() []llm.ModelInfo {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return cloneCatalog(p.catalog)
 }
 
 // RefreshCatalogOnStartup prevents a CLI-version cache from hiding changes to
@@ -514,11 +489,13 @@ func (p *Provider) catalogSnapshot() []llm.ModelInfo {
 // cache with the startup warning, but no model catalog is fabricated.
 func (p *Provider) RefreshCatalogOnStartup() bool { return true }
 
-// SetModelCatalog installs an isolated metadata snapshot and restores its
-// advertised pricing, including when the catalog was loaded from cache.
+// SetModelCatalog installs an isolated metadata snapshot (the shared catalog
+// semantics) and restores its advertised pricing, including when the catalog
+// was loaded from cache. The rates rebuild is interim: Task 7 deletes it
+// together with the rest of the rate plumbing, leaving only the promoted
+// shared set.
 func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
 	p.mu.Lock()
-	p.catalog = cloneCatalog(models)
 	p.rates = make(map[string]modelRate)
 	for _, m := range models {
 		if m.Cost != nil {
@@ -527,6 +504,7 @@ func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
 		}
 	}
 	p.mu.Unlock()
+	p.Catalog.SetModelCatalog(models)
 }
 
 // setRates replaces the discovered pricing table. Called by discovery before the

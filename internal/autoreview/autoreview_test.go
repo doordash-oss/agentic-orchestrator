@@ -499,6 +499,30 @@ func TestResolveReviewerExplicitExactProviderAndUniqueBareSelector(t *testing.T)
 	}
 }
 
+// TestResolveReviewerRejectsAmbiguousCatalogWithinProvider pins the
+// within-provider ambiguity rule in catalogModel: two entries of the SAME
+// provider's catalog matching one selector under different IDs must reject the
+// selector instead of silently picking the first entry.
+func TestResolveReviewerRejectsAmbiguousCatalogWithinProvider(t *testing.T) {
+	ambiguous := reviewerProvider(t, "claude",
+		llm.ModelInfo{ID: "claude-haiku-large", Aliases: []string{"haiku"}, Category: "cheap", ContextWindow: 200_000},
+		llm.ModelInfo{ID: "claude-haiku-small", Aliases: []string{"haiku"}, Category: "cheap", ContextWindow: 100_000},
+	)
+	if _, ok, reason := ResolveReviewer(newReviewerRegistry(t, ambiguous), "haiku"); ok {
+		t.Fatalf("ResolveReviewer(within-provider ambiguous alias) = true, want false (reason %q)", reason)
+	}
+
+	// Two entries repeating the same selector under the same ID stay resolvable.
+	stable := reviewerProvider(t, "claude",
+		llm.ModelInfo{ID: "claude-haiku", Aliases: []string{"haiku"}, Category: "cheap", ContextWindow: 200_000},
+		llm.ModelInfo{ID: "claude-haiku", Aliases: []string{"haiku"}, Category: "cheap", ContextWindow: 200_000},
+	)
+	reviewer, ok, _ := ResolveReviewer(newReviewerRegistry(t, stable), "haiku")
+	if !ok || reviewer.Model != "claude-haiku" {
+		t.Fatalf("ResolveReviewer(repeated same-ID alias) = (%v, %t), want claude-haiku", reviewer, ok)
+	}
+}
+
 func TestResolveReviewerExplicitClaudeModel(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)

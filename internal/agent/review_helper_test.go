@@ -454,8 +454,8 @@ func TestReviewHelpersUseActualModelProtocol(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/live=%t", tt.name, live), func(t *testing.T) {
 				t.Parallel()
 				registry := llm.NewRegistry()
-				registry.Register(&claude.Provider{})
-				registry.Register(&codex.Provider{})
+				registry.Register(claude.NewProvider(""))
+				registry.Register(codex.NewProvider(""))
 				root := t.TempDir()
 				stop := errors.New("stop after capturing helper launch")
 				var captured BuildSessionOpts
@@ -505,10 +505,10 @@ func TestPlanValidatorUsesReviewProviderProtocol(t *testing.T) {
 		t.Run(tt.planner+" to "+tt.reviewer, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
-			registry := llm.NewRegistry()
-			registry.Register(&claude.Provider{})
-			registry.Register(&codex.Provider{})
-			parent := &PhaseRunner{Registry: registry}
+				registry := llm.NewRegistry()
+				registry.Register(claude.NewProvider(""))
+				registry.Register(codex.NewProvider(""))
+				parent := &PhaseRunner{Registry: registry}
 			f := &feature.Feature{ID: "mixed-provider-plan"}
 			f.Models.Planning, f.Models.Review = tt.planner, tt.reviewer
 			var captured BuildSessionOpts

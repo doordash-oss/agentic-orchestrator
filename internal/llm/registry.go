@@ -241,15 +241,8 @@ func canonicalModelForProvider(p LLMProvider, model string) (string, bool) {
 	}
 	if cp, ok := p.(CatalogProvider); ok {
 		if cat := cp.ModelCatalog(); len(cat) > 0 {
-			for _, entry := range cat {
-				if strings.EqualFold(entry.ID, model) {
-					return entry.ID, true
-				}
-				for _, alias := range entry.Aliases {
-					if strings.EqualFold(alias, model) {
-						return entry.ID, true
-					}
-				}
+			if entry, ok := LookupModel(cat, model); ok {
+				return entry.ID, true
 			}
 			return "", false
 		}

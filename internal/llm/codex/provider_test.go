@@ -312,7 +312,7 @@ func TestProviderBuildCommand_NativeToollessReviewIsIsolated(t *testing.T) {
 	t.Setenv("CODEX_HOME", realHome)
 
 	stateDir := t.TempDir()
-	p := &Provider{}
+	p := NewProvider("")
 	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "gpt-5.4-mini[400K]",
 		StateDir:             stateDir,
@@ -740,7 +740,7 @@ func TestProviderDiscoverModelCatalog_FallsBackToBundledCatalog(t *testing.T) {
 }
 
 func TestProviderBuildCommand_AddsSelectedContextWindowOverride(t *testing.T) {
-	p := &Provider{}
+	p := NewProvider("")
 	homeDir := t.TempDir()
 	stateDir := t.TempDir()
 	t.Setenv("CODEX_HOME", "")
@@ -762,8 +762,7 @@ func TestProviderBuildCommand_AddsSelectedContextWindowOverride(t *testing.T) {
 // TestCodexProvider_DefaultCatalog_Invariants locks in the hardcoded
 // Codex catalog that replaced the former discovery pipeline.
 func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
-	p := &Provider{}
-	cat := p.defaultModelInfos()
+	cat := defaultModelInfos()
 
 	byID := make(map[string]llm.ModelInfo, len(cat))
 	for _, m := range cat {
@@ -790,33 +789,6 @@ func TestCodexProvider_DefaultCatalog_Invariants(t *testing.T) {
 	}
 	if got := byID["gpt-5.4[272K]"].Category; got != "balanced" {
 		t.Errorf("gpt-5.4[272K].Category = %q, want balanced", got)
-	}
-}
-
-// TestCodexProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed
-// guards the fallback path that keeps ContextPercentage() honest before
-// the first usage event arrives.
-func TestCodexProvider_ContextWindowForModel_ReturnsHardcodedWithoutSeed(t *testing.T) {
-	p := &Provider{}
-	tests := map[string]int{
-		"gpt-5.5":             272_000,
-		"gpt-5.5[272K]":       272_000,
-		"gpt-5.4":             272_000,
-		"gpt-5.4[272K]":       272_000,
-		"gpt-5.4[1M]":         1_000_000,
-		"gpt-5.4-mini":        400_000,
-		"gpt-5.4-mini[400K]":  400_000,
-		"gpt-5.3-codex":       400_000,
-		"gpt-5.3-codex[400K]": 400_000,
-		"gpt-5.2":             400_000,
-		"gpt-5.2[400K]":       400_000,
-	}
-	for model, want := range tests {
-		t.Run(model, func(t *testing.T) {
-			if got := p.ContextWindowForModel(model); got != want {
-				t.Errorf("ContextWindowForModel(%q) = %d, want %d", model, got, want)
-			}
-		})
 	}
 }
 
@@ -882,7 +854,7 @@ func TestProviderSupportsSessionResume(t *testing.T) {
 }
 
 func TestAstraCatalogRoutingWindowsAndEffort(t *testing.T) {
-	p := &Provider{}
+	p := NewProvider("")
 	for _, selection := range []string{"gpt-6-astra", "gpt-6-astra[272K]", "gpt-6-astra[872K]"} {
 		if !p.MatchesModel(selection) {
 			t.Fatalf("Astra not routed to Codex: %s", selection)

@@ -549,8 +549,8 @@ echo "# Research Output" > "%s/research.md"
 	t.Setenv("PATH", mockBinDir+":"+os.Getenv("PATH"))
 
 	reg := llm.NewRegistry()
-	reg.Register(&claude.Provider{})
-	reg.Register(&codex.Provider{})
+	reg.Register(claude.NewProvider(""))
+	reg.Register(codex.NewProvider(""))
 
 	eventCh := make(chan interface{}, 100)
 	sm := session.NewManager(eventCh)
@@ -666,9 +666,9 @@ func TestRunResearch_GlobalBashRulesAutoApproveAcrossProviders(t *testing.T) {
 				t.Fatalf("EnsureGlobalDefaults: %v", err)
 			}
 
-			reg := llm.NewRegistry()
-			reg.Register(&claude.Provider{})
-			reg.Register(&codex.Provider{})
+		reg := llm.NewRegistry()
+		reg.Register(claude.NewProvider(""))
+		reg.Register(codex.NewProvider(""))
 
 			eventCh := make(chan interface{}, 100)
 			sm := session.NewManager(eventCh)
@@ -792,8 +792,8 @@ echo '{"method":"turn/completed","params":{"threadId":"test-thread-1","turn":{"i
 	t.Setenv("PATH", mockBinDir+":"+os.Getenv("PATH"))
 
 	reg := llm.NewRegistry()
-	reg.Register(&claude.Provider{})
-	reg.Register(&codex.Provider{})
+	reg.Register(claude.NewProvider(""))
+	reg.Register(codex.NewProvider(""))
 
 	eventCh := make(chan interface{}, 100)
 	sm := session.NewManager(eventCh)

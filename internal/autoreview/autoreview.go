@@ -258,14 +258,14 @@ func reviewerCatalog(provider llm.LLMProvider) []llm.ModelInfo {
 	return catalogProvider.ModelCatalog()
 }
 
+// catalogModel resolves a selector to the single catalog entry it names by
+// ID or alias. Two catalog entries with different IDs both matching the same
+// selector are ambiguous and rejected: the scan (not the shared lookup) owns
+// that rule, so each entry is matched through the lookup one at a time.
 func catalogModel(provider llm.LLMProvider, selector string) (string, bool) {
 	var found string
 	for _, model := range reviewerCatalog(provider) {
-		matches := strings.EqualFold(model.ID, selector)
-		for _, alias := range model.Aliases {
-			matches = matches || strings.EqualFold(alias, selector)
-		}
-		if !matches {
+		if _, ok := llm.LookupModel([]llm.ModelInfo{model}, selector); !ok {
 			continue
 		}
 		if found != "" && !strings.EqualFold(found, model.ID) {

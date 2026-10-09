@@ -24,6 +24,6 @@ import (
 // optional CLI binary override from config (providers.claude.cli).
 var Module = fx.Module("llm-claude",
 	fx.Invoke(func(r *llm.Registry, cfg *config.Config) {
-		r.Register(&Provider{binary: cfg.ProviderCLI("claude", defaultBinary)})
+		r.Register(NewProvider(cfg.ProviderCLI("claude", defaultBinary)))
 	}),
 )

@@ -106,7 +106,7 @@ func buildRoleSystemPrompt(in roleSystemPromptInput) string {
 	for i := range requiredSkills {
 		requiredSkills[i].Condition = in.RequiredSkillConditions[requiredSkills[i].Name]
 	}
-	return prompts.RoleSystemPrompt(prompts.RoleSystemInput{
+	return prompts.MustRender(prompts.TemplateSystem, prompts.RoleSystemInput{
 		OutputRoots:          rootViews,
 		SkillPath:            skillPath,
 		RequiredSkills:       requiredSkills,

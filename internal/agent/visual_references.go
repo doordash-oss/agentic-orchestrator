@@ -37,7 +37,13 @@ import (
 // The literal prose lives in
 // internal/agent/prompts/partials/visual_references.tmpl.
 func visualReferencesSection(images []string, label string) string {
-	return prompts.VisualReferences(prompts.VisualReferencesInput{
+	if len(images) == 0 {
+		return ""
+	}
+	if label == "" {
+		label = "working on this feature"
+	}
+	return prompts.MustRender(prompts.TemplateVisualReferences, prompts.VisualReferencesInput{
 		Images: images,
 		Label:  label,
 	})

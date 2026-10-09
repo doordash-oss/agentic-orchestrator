@@ -716,7 +716,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 		AcceptanceClause:      intent.AcceptanceClause,
 		Iteration:             iteration,
 		Publishable:           cfg.Feature.IsPublishable(),
-		DesignArtifactPath:    cfg.Feature.DesignArtifactPath(),
 		Images:                cfg.Feature.Images,
 		RefactorPassForkPoint: refactorPassForkPoint(cfg.Feature),
 	})

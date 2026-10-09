@@ -404,7 +404,7 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 		inquiryModel = f.Models.Research
 	}
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:          BuildInquirePrompt(f, pr.SkillsDir, kbInfos...),
+		Prompt:          BuildInquirePrompt(f),
 		Spec:            inquirerRoleSpec,
 		DirName:         "inquire",
 		SkillName:       "inquire",
@@ -421,7 +421,7 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 // Returns the session ID. The session runs asynchronously.
 func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:          BuildResearchFromQuestionsPrompt(f, pr.SkillsDir, questionsPath, kbInfos...),
+		Prompt:          BuildResearchFromQuestionsPrompt(f, questionsPath),
 		Spec:            researcherRoleSpec,
 		DirName:         "research",
 		SkillName:       "research-codebase",
@@ -451,7 +451,7 @@ func explorationAgentNames() []string {
 // place; the session identity, skill, and prompt template are Design-facing.
 func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
-		Prompt:          BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
+		Prompt:          BuildDesignPrompt(f, researchOutput, qaFilePaths),
 		Spec:            designerRoleSpec,
 		DirName:         feature.PhaseDesign.DirName(),
 		SkillName:       "design",
@@ -937,7 +937,6 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		RunDir:                     ActiveRunDir(pr.StateDir, f),
 		PhaseType:                  phaseType,
 		RoadmapPath:                roadmapPath,
-		DesignArtifactPath:         f.DesignArtifactPath(),
 		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
 		PermissionCache:            pr.PermissionCache,
 		CommandRunner:              pr.CommandRunner,

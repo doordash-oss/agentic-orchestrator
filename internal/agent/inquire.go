@@ -24,11 +24,9 @@ import (
 // The prose lives in internal/agent/prompts/templates/inquire.user.tmpl
 // (and the partials it references). This function is a thin adapter that
 // projects *feature.Feature into the typed input the template expects and
-// invokes the renderer.
-//
-// skillsDir and kbInfos are retained for caller compatibility. The RoleSpec
-// system prompt now owns primary skill discovery and Useful Resources.
-func BuildInquirePrompt(f *feature.Feature, skillsDir string, kbInfos ...KBInfo) string {
+// invokes the renderer. The RoleSpec system prompt owns skill discovery and
+// Useful Resources.
+func BuildInquirePrompt(f *feature.Feature) string {
 	repos := make([]prompts.RepoView, 0, len(f.Repos))
 	for _, r := range f.Repos {
 		path := r.Path
@@ -48,5 +46,5 @@ func BuildInquirePrompt(f *feature.Feature, skillsDir string, kbInfos ...KBInfo)
 		Inquireness:  prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
 	}
 
-	return prompts.InquireUserPrompt(in)
+	return prompts.MustRender(prompts.TemplateInquireUser, in)
 }

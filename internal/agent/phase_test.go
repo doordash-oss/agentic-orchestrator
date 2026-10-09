@@ -170,7 +170,7 @@ func TestPhaseRunnerRunResearchBuildPrompt(t *testing.T) {
 		},
 	}
 
-	prompt := BuildResearchFromQuestionsPrompt(f, "", "/state/feat-1/inquire/questions.md")
+	prompt := BuildResearchFromQuestionsPrompt(f, "/state/feat-1/inquire/questions.md")
 
 	if prompt == "" {
 		t.Error("expected non-empty research prompt")

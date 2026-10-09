@@ -159,7 +159,7 @@ func TestValidatorPromptUsesDistilledIntent(t *testing.T) {
 		Artifacts:    map[string]string{feature.DesignArtifactKey: designPath},
 	}
 	scopeDomain := testPlanValidatorAxis(t, "validate-phase-plan-scope")
-	prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "/feedback.md", scopeDomain, validationArtifactPhasePlan, planValidationExtras{})
+	prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "/feedback.md", scopeDomain, validationArtifactPhasePlan, planValidationExtras{})
 	if strings.Contains(prompt, "raw criteria") || strings.Contains(prompt, "raw description") {
 		t.Fatalf("design-backed validator prompt must not inline raw intent:\n%s", prompt)
 	}
@@ -168,7 +168,7 @@ func TestValidatorPromptUsesDistilledIntent(t *testing.T) {
 	}
 
 	f.Artifacts = map[string]string{}
-	prompt = buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "/feedback.md", scopeDomain, validationArtifactPhasePlan, planValidationExtras{})
+	prompt = buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "/feedback.md", scopeDomain, validationArtifactPhasePlan, planValidationExtras{})
 	if !strings.Contains(prompt, "raw criteria") {
 		t.Fatalf("artifact-less validator prompt keeps raw intent:\n%s", prompt)
 	}

@@ -75,11 +75,6 @@ type ImplementConfig struct {
 	// Included in the review prompt so the reviewer has full context.
 	RoadmapPath string
 
-	// DesignArtifactPath is the absolute path to the design design
-	// document, if one was produced. Retained for caller compatibility;
-	// implementation prompts no longer re-inject it.
-	DesignArtifactPath string
-
 	// DangerouslySkipPermissions enables --dangerously-skip-permissions for
 	// interactive sessions, replacing the default --permission-mode flag.
 	DangerouslySkipPermissions bool
@@ -1720,7 +1715,7 @@ func phaseReposForImplementationContract(f *feature.Feature, planPath string) []
 // verification discovery live in the RoleSpec-backed system prompt, the
 // pre-seeded verification report, and skills/implement/SKILL.md.
 func BuildImplementPrompt(planPath, exitCriteria, feedback, helpAnswers string, iteration int) string {
-	return prompts.ImplementUserPrompt(implementUserInput{
+	return prompts.MustRender(prompts.TemplateImplementUser, implementUserInput{
 		PlanPath:             planPath,
 		ExitCriteria:         exitCriteria,
 		Feedback:             feedback,

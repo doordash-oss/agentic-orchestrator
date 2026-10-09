@@ -96,12 +96,9 @@ func refactorPassForkPoint(f *feature.Feature) string {
 // the approved design artifact plus the research artifact as grounding context.
 //
 // The prose lives in internal/agent/prompts/templates/roadmap.user.tmpl.
-func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir, designArtifactPath, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
-	_ = skillsDir
-	_ = guidelinesDir
-	_ = kbInfos
+func BuildRoadmapPromptWithResearch(f *feature.Feature, designArtifactPath, researchArtifactPath string, qaFilePaths []string) string {
 	repos := roadmapFeatureViews(f)
-	return prompts.RoadmapUserPrompt(roadmapUserInput{
+	return prompts.MustRender(prompts.TemplateRoadmapUser, roadmapUserInput{
 		Name:                  f.Name,
 		Description:           f.Description,
 		ExitCriteria:          f.ExitCriteria,
@@ -128,21 +125,14 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir
 // block is injected so the reviser can apply the Sticky Approval Respect
 // procedure (documented in skills/revise-roadmap/SKILL.md).
 //
-// skillsDir is retained because revision prompts still surface companion
-// format-file paths from the reconciled skills directory. The primary skill
-// directive lives in the RoleSpec-backed system prompt.
+// skillsDir locates the companion format file in the reconciled skills
+// directory. The primary skill directive lives in the RoleSpec-backed system
+// prompt.
 //
 // The prose lives in
 // internal/agent/prompts/templates/roadmap_revision.user.tmpl.
-//
-// f is currently unused by the template; retained on the signature for
-// caller stability. roadmapPath is similarly unused (the path is implicit
-// via previousRoadmapPath).
-func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, previousRoadmapPath, criticFeedback, designArtifactPath string, attempt int, approvals []AxisApproval) string {
-	_ = f
-	_ = roadmapPath
-	_ = designArtifactPath
-	return prompts.RoadmapRevisionUserPrompt(roadmapRevisionUserInput{
+func BuildRoadmapRevisionPrompt(skillsDir, previousRoadmapPath, criticFeedback string, attempt int, approvals []AxisApproval) string {
+	return prompts.MustRender(prompts.TemplateRoadmapRevisionUser, roadmapRevisionUserInput{
 		Attempt:        attempt,
 		CriticFeedback: criticFeedback,
 		PriorAxisApprovals: prompts.PriorAxisApprovalsInput{
@@ -168,11 +158,8 @@ func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, prev
 // omitted — the approved roadmap already incorporates them. Phase-Plan's
 // own qa-answers.md is NOT propagated to Implement (Implement reads
 // the phase-plan markdown artifact, which already encodes all decisions).
-func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir, roadmapPath, researchArtifactPath string, phase RoadmapPhase, qaFilePaths []string, kbInfos ...KBInfo) string {
-	_ = skillsDir
-	_ = guidelinesDir
-	_ = kbInfos
-	return prompts.PhasePlanUserPrompt(phasePlanUserInput{
+func BuildPhasePlanPromptWithResearch(f *feature.Feature, roadmapPath, researchArtifactPath string, phase RoadmapPhase, qaFilePaths []string) string {
+	return prompts.MustRender(prompts.TemplatePhasePlanUser, phasePlanUserInput{
 		Phase: phasePlanView{
 			Number:        phase.Number,
 			Name:          phase.Name,
@@ -197,15 +184,14 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesD
 // block is injected so the reviser preserves sticky-approved sections across
 // attempts (see skills/revise-phase-plan/SKILL.md, rule 6).
 //
-// skillsDir is retained because revision prompts still surface companion
-// format-file paths from the reconciled skills directory. The primary skill
-// directive lives in the RoleSpec-backed system prompt.
+// skillsDir locates the companion format file in the reconciled skills
+// directory. The primary skill directive lives in the RoleSpec-backed system
+// prompt.
 //
 // The prose lives in
 // internal/agent/prompts/templates/phase_plan_revision.user.tmpl.
-func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback, designArtifactPath string, phase RoadmapPhase, attempt int, approvals []AxisApproval) string {
-	_ = designArtifactPath
-	return prompts.PhasePlanRevisionUserPrompt(phasePlanRevisionUserInput{
+func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback string, phase RoadmapPhase, attempt int, approvals []AxisApproval) string {
+	return prompts.MustRender(prompts.TemplatePhasePlanRevisionUser, phasePlanRevisionUserInput{
 		Attempt: attempt,
 		Phase: phasePlanView{
 			Number: phase.Number,

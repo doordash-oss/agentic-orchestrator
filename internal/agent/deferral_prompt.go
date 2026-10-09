@@ -70,7 +70,7 @@ func deferralsDueThisPhaseSection(deferrals []feature.Deferral, phase int, kind 
 		})
 	}
 
-	return prompts.DeferralsDue(prompts.DeferralsDueInput{
+	return prompts.MustRender(prompts.TemplateDeferralsDue, prompts.DeferralsDueInput{
 		Phase:   phase,
 		Kind:    deferralPromptKindString(kind),
 		Entries: views,

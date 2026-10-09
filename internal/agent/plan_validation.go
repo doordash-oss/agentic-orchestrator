@@ -447,9 +447,9 @@ type PlanLoopConfig struct {
 	// PlanningResearchArtifactPath is the standalone research report path
 	// injected only into initial roadmap and phase-plan prompts.
 	PlanningResearchArtifactPath string
-	// DesignArtifactPath is the absolute path to the design design
-	// document, if one was produced. Retained for caller compatibility;
-	// downstream planning prompts no longer re-inject it.
+	// DesignArtifactPath is the absolute path to the design document, if one
+	// was produced. The initial roadmap prompt cites it, and its absence makes
+	// ResearchArtifactPath the initial planning research path.
 	DesignArtifactPath string
 	QAFilePaths        []string // paths to Q&A files from inquire/research/design
 	KBInfos            []KBInfo // repo knowledge base info
@@ -656,7 +656,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	feedbackPath := filepath.Join(helperIterDir, domain.feedbackFileName())
 	parentFeedbackPath := filepath.Join(attemptDir, domain.feedbackFileName())
 
-	validationPrompt := buildSpecializedValidationPromptForArtifact(cfg.Feature, planArtifactPath, cfg.ResearchArtifactPath, cfg.SkillsDir, feedbackPath, domain, kind, extras)
+	validationPrompt := buildSpecializedValidationPromptForArtifact(cfg.Feature, planArtifactPath, cfg.ResearchArtifactPath, feedbackPath, domain, kind, extras)
 	promptPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-prompt.md", domain.Axis))
 	validatorModel := resolveValidatorModel(cfg)
 	logPath := filepath.Join(helperIterDir, fmt.Sprintf("validation-%s-output.txt", domain.Axis))
@@ -985,18 +985,14 @@ func writeAxisApprovalArtifact(attemptDir string, attempt int, markers Validator
 // per-axis specialized validator (architecture, scope, security, performance,
 // testing, structural).
 //
-// skillsDir and feedbackPath are retained on the signature for caller
-// stability. The RoleSpec-backed system prompt and validator SKILL.md Output
-// Files section now own the skill path and per-axis feedback path.
+// The RoleSpec-backed system prompt owns the skill path.
 //
 // The prose lives in
 // internal/agent/prompts/templates/validate_specialized.user.tmpl.
-func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, researchPath, skillsDir, feedbackPath string, domain planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) string {
-	_ = skillsDir
-
+func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, researchPath, feedbackPath string, domain planValidatorAxis, kind validationArtifactKind, extras planValidationExtras) string {
 	intent := resolvePromptIntent(f)
 
-	return prompts.ValidateSpecializedUserPrompt(validateSpecializedUserInput{
+	return prompts.MustRender(prompts.TemplateValidateSpecializedUser, validateSpecializedUserInput{
 		Name:                      f.Name,
 		Description:               intent.Description,
 		ExitCriteria:              intent.ExitCriteria,
@@ -1513,12 +1509,12 @@ roadmapAttemptLoop:
 			var prompt string
 			var plannerSpec roleSpec
 			if attempt == 1 {
-				prompt = BuildRoadmapPromptWithResearch(cfg.Feature, cfg.SkillsDir, cfg.GuidelinesDir, cfg.DesignArtifactPath, cfg.initialPlanningResearchArtifactPath(), cfg.QAFilePaths, cfg.KBInfos...)
+				prompt = BuildRoadmapPromptWithResearch(cfg.Feature, cfg.DesignArtifactPath, cfg.initialPlanningResearchArtifactPath(), cfg.QAFilePaths)
 				plannerSpec = roadmapCreatorRoleSpec
 			} else {
 				prevRoadmapPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
 				approvals := LoadPriorAxisApprovals(artifactDir)
-				prompt = BuildRoadmapRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevRoadmapPath, prevRoadmapPath, criticFeedback, cfg.DesignArtifactPath, attempt, approvals)
+				prompt = BuildRoadmapRevisionPrompt(cfg.SkillsDir, prevRoadmapPath, criticFeedback, attempt, approvals)
 				plannerSpec = roadmapReviserRoleSpec
 			}
 
@@ -1901,12 +1897,12 @@ phasePlanAttemptLoop:
 			var prompt string
 			var plannerSpec roleSpec
 			if attempt == 1 {
-				prompt = BuildPhasePlanPromptWithResearch(cfg.Feature, cfg.SkillsDir, cfg.GuidelinesDir, cfg.RoadmapPath, cfg.initialPlanningResearchArtifactPath(), cfg.Phase, cfg.QAFilePaths, cfg.KBInfos...)
+				prompt = BuildPhasePlanPromptWithResearch(cfg.Feature, cfg.RoadmapPath, cfg.initialPlanningResearchArtifactPath(), cfg.Phase, cfg.QAFilePaths)
 				plannerSpec = phasePlanCreatorRoleSpec
 			} else {
 				prevPlanPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
 				approvals := LoadPriorAxisApprovals(artifactDir)
-				prompt = BuildPhasePlanRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevPlanPath, criticFeedback, cfg.DesignArtifactPath, cfg.Phase, attempt, approvals)
+				prompt = BuildPhasePlanRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevPlanPath, criticFeedback, cfg.Phase, attempt, approvals)
 				plannerSpec = phasePlanReviserRoleSpec
 			}
 

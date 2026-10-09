@@ -374,7 +374,7 @@ func GetCurrentCommit(ctx context.Context, runner ports.CommandRunner, repoPath 
 //
 // The prose lives in internal/agent/prompts/templates/kb_build.user.tmpl.
 func BuildKBPrompt(repoName, repoPath, kbDir string, existingKBPath string, lastCommit string) string {
-	return prompts.KBBuildUserPrompt(kbBuildUserInput{
+	return prompts.MustRender(prompts.TemplateKBBuildUser, kbBuildUserInput{
 		RepoName:       repoName,
 		RepoPath:       repoPath,
 		KBRootDir:      KBRootDir(kbDir),

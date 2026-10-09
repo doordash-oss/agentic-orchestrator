@@ -31,14 +31,13 @@ import (
 
 // FinalFixPromptOpts contains the parameters for building the fix agent prompt.
 type FinalFixPromptOpts struct {
-	Feedback           string
-	FeedbackPath       string
-	ExitCriteria       string
-	AcceptanceClause   string
-	Iteration          int
-	Publishable        bool
-	DesignArtifactPath string   // retained for caller compatibility; no longer re-injected
-	Images             []string // user-attached visual references, re-injected per iteration
+	Feedback         string
+	FeedbackPath     string
+	ExitCriteria     string
+	AcceptanceClause string
+	Iteration        int
+	Publishable      bool
+	Images           []string // user-attached visual references, re-injected per iteration
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
@@ -50,7 +49,7 @@ type FinalFixPromptOpts struct {
 // The prose lives in internal/agent/prompts/templates/final_fix.user.tmpl
 // (with the manual-verification-outcomes partial branched on a flag).
 func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
-	return prompts.FinalFixUserPrompt(finalFixUserInput{
+	return prompts.MustRender(prompts.TemplateFinalFixUser, finalFixUserInput{
 		VisualReferences: prompts.VisualReferencesInput{
 			Images: opts.Images,
 			Label:  "applying this fix",

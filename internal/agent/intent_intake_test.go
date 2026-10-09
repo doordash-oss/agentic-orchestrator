@@ -31,14 +31,14 @@ func intakeTestFeature() *feature.Feature {
 }
 
 func TestInquirePromptCarriesExitCriteria(t *testing.T) {
-	prompt := BuildInquirePrompt(intakeTestFeature(), "")
+	prompt := BuildInquirePrompt(intakeTestFeature())
 	if !strings.Contains(prompt, "the sample outcome is observable end to end") {
 		t.Fatalf("inquire prompt must carry exit criteria:\n%s", prompt)
 	}
 }
 
 func TestDesignPromptCarriesExitCriteria(t *testing.T) {
-	prompt := BuildDesignPrompt(intakeTestFeature(), "", "", "", nil)
+	prompt := BuildDesignPrompt(intakeTestFeature(), "", nil)
 	if !strings.Contains(prompt, "the sample outcome is observable end to end") {
 		t.Fatalf("design prompt must carry exit criteria:\n%s", prompt)
 	}
@@ -49,11 +49,11 @@ func TestDesignPromptCarriesExitCriteria(t *testing.T) {
 
 func TestRoadmapPromptExitCriteriaOnlyWithoutDesign(t *testing.T) {
 	f := intakeTestFeature()
-	noDesign := BuildRoadmapPromptWithResearch(f, "", "", "", "", nil)
+	noDesign := BuildRoadmapPromptWithResearch(f, "", "", nil)
 	if !strings.Contains(noDesign, "the sample outcome is observable end to end") {
 		t.Fatalf("design-less roadmap prompt must carry exit criteria:\n%s", noDesign)
 	}
-	withDesign := BuildRoadmapPromptWithResearch(f, "", "", "/state/design.md", "", nil)
+	withDesign := BuildRoadmapPromptWithResearch(f, "/state/design.md", "", nil)
 	if strings.Contains(withDesign, "the sample outcome is observable end to end") {
 		t.Fatalf("design-backed roadmap prompt must not inline raw exit criteria:\n%s", withDesign)
 	}

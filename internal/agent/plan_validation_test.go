@@ -3023,7 +3023,7 @@ func TestBuildSpecializedValidationPrompt_OmitsPriorPhaseContext(t *testing.T) {
 	for _, c := range cases {
 		for _, domain := range c.domains {
 			t.Run(string(c.kind)+"/"+domain.SkillName, func(t *testing.T) {
-				prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", "", domain, c.kind, extras)
+				prompt := buildSpecializedValidationPromptForArtifact(f, "/plan.md", "", "", domain, c.kind, extras)
 				if strings.Contains(prompt, priorPath) || strings.Contains(prompt, "## Prior Phase Context") {
 					t.Errorf("%s prompt should NOT contain the prior-phase block:\n%s", domain.SkillName, prompt)
 				}

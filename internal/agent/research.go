@@ -39,16 +39,14 @@ func researchFeatureViews(f *feature.Feature) (repos []prompts.RepoView, images 
 // BuildResearchFromQuestionsPrompt constructs the research prompt using
 // questions from the Inquire phase. The questions file is the only research
 // driver — the feature description is intentionally not surfaced here so
-// ticket intent does not leak into research framing.
-//
-// skillsDir and kbInfos are retained for caller compatibility. The RoleSpec
-// system prompt now owns primary skill discovery and Useful Resources.
+// ticket intent does not leak into research framing. The RoleSpec system
+// prompt owns skill discovery and Useful Resources.
 //
 // The prose lives in
 // internal/agent/prompts/templates/research_from_questions.user.tmpl.
-func BuildResearchFromQuestionsPrompt(f *feature.Feature, skillsDir, questionsPath string, kbInfos ...KBInfo) string {
+func BuildResearchFromQuestionsPrompt(f *feature.Feature, questionsPath string) string {
 	repos, _, _ := researchFeatureViews(f)
-	return prompts.ResearchFromQuestionsUserPrompt(researchFromQuestionsUserInput{
+	return prompts.MustRender(prompts.TemplateResearchFromQuestionsUser, researchFromQuestionsUserInput{
 		QuestionsPath: questionsPath,
 		Repos:         repos,
 	})

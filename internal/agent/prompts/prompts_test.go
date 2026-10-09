@@ -311,7 +311,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					Inquireness: GrillMeInquirenessInput{Level: "high"},
 				}
-				return InquireUserPrompt(in)
+				return MustRender(TemplateInquireUser, in)
 			},
 		},
 		{
@@ -323,13 +323,13 @@ func TestGoldenSnapshots(t *testing.T) {
 						{Name: "web", Path: "/state/wt/web"},
 					},
 				}
-				return ResearchFromQuestionsUserPrompt(in)
+				return MustRender(TemplateResearchFromQuestionsUser, in)
 			},
 		},
 		{
 			name: "kb_build_full",
 			render: func() string {
-				return KBBuildUserPrompt(KBBuildUserInput{
+				return MustRender(TemplateKBBuildUser, KBBuildUserInput{
 					RepoName:    "myrepo",
 					RepoPath:    "/repos/myrepo",
 					KBRootDir:   "/state/kb/myrepo",
@@ -359,7 +359,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					},
 					Inquireness: GrillMeInquirenessInput{Level: "medium"},
 				}
-				return DesignUserPrompt(in)
+				return MustRender(TemplateDesignUser, in)
 			},
 		},
 		{
@@ -385,7 +385,7 @@ func TestGoldenSnapshots(t *testing.T) {
 					MultiRepo:   true,
 					Inquireness: GrillMeInquirenessInput{Level: "medium"},
 				}
-				return RoadmapUserPrompt(in)
+				return MustRender(TemplateRoadmapUser, in)
 			},
 		},
 		{
@@ -393,7 +393,7 @@ func TestGoldenSnapshots(t *testing.T) {
 			// the worktree-confinement invariant.
 			name: "roadmap_user_refactor_pass",
 			render: func() string {
-				return RoadmapUserPrompt(RoadmapUserInput{
+				return MustRender(TemplateRoadmapUser, RoadmapUserInput{
 					Name:                  "Rebase on latest main",
 					Description:           "Reconcile the feature with its base targets.",
 					Repos:                 []RepoView{{Name: "web", Path: "/state/wt/child/web"}},
@@ -407,7 +407,7 @@ func TestGoldenSnapshots(t *testing.T) {
 			// renders, including its Exit criteria distillation guidance.
 			name: "roadmap_user_no_design",
 			render: func() string {
-				return RoadmapUserPrompt(RoadmapUserInput{
+				return MustRender(TemplateRoadmapUser, RoadmapUserInput{
 					Name:         "OAuth login",
 					Description:  "Sign in with Google.",
 					ExitCriteria: "Google sign-in works end to end and PKCE is enforced.",
@@ -419,7 +419,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "roadmap_revision_user",
 			render: func() string {
-				return RoadmapRevisionUserPrompt(RoadmapRevisionUserInput{
+				return MustRender(TemplateRoadmapRevisionUser, RoadmapRevisionUserInput{
 					Attempt:        2,
 					CriticFeedback: "The roadmap omits the PKCE flow.",
 					PriorAxisApprovals: PriorAxisApprovalsInput{
@@ -448,13 +448,13 @@ func TestGoldenSnapshots(t *testing.T) {
 					RoadmapPath: "/state/feat-x/run-1/roadmap/plan.md",
 					Inquireness: GrillMeInquirenessInput{Level: "none"},
 				}
-				return PhasePlanUserPrompt(in)
+				return MustRender(TemplatePhasePlanUser, in)
 			},
 		},
 		{
 			name: "phase_plan_revision_user",
 			render: func() string {
-				return PhasePlanRevisionUserPrompt(PhasePlanRevisionUserInput{
+				return MustRender(TemplatePhasePlanRevisionUser, PhasePlanRevisionUserInput{
 					Attempt:  2,
 					Phase:    PhasePlanView{Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in"},
 					Feedback: "Plan groundwork is fine but missing PKCE.",
@@ -482,13 +482,13 @@ func TestGoldenSnapshots(t *testing.T) {
 					Inquireness:               GrillMeInquirenessInput{Level: "none"},
 					AutomatedVerificationOnly: true,
 				}
-				return PhasePlanUserPrompt(in)
+				return MustRender(TemplatePhasePlanUser, in)
 			},
 		},
 		{
 			name: "phase_plan_revision_user_automated_verification_only",
 			render: func() string {
-				return PhasePlanRevisionUserPrompt(PhasePlanRevisionUserInput{
+				return MustRender(TemplatePhasePlanRevisionUser, PhasePlanRevisionUserInput{
 					Attempt:                   2,
 					Phase:                     PhasePlanView{Number: 2, Name: "Wire up auth UI", Type: "tdd-fill-in"},
 					Feedback:                  "Plan groundwork is fine but missing PKCE.",
@@ -502,7 +502,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "implement_system_rolespec",
 			render: func() string {
-				return RoleSystemPrompt(RoleSystemInput{
+				return MustRender(TemplateSystem, RoleSystemInput{
 					OutputRoots: []OutputRootView{
 						{Name: "phase_dir", Path: "/state/feat-x/run-1/phase-1/implement", Description: "Phase-level implement artifact root shared across iterations."},
 						{Name: "iteration_dir", Path: "/state/feat-x/run-1/phase-1/implement/iteration-02", Description: "Active iteration artifact directory."},
@@ -526,7 +526,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "design_system_rolespec",
 			render: func() string {
-				return RoleSystemPrompt(RoleSystemInput{
+				return MustRender(TemplateSystem, RoleSystemInput{
 					OutputRoots: []OutputRootView{
 						{Name: "phase_dir", Path: "/state/feat-x/run-1/design", Description: "Design phase artifact directory."},
 					},
@@ -550,7 +550,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "codex_design_system_rolespec",
 			render: func() string {
-				return RoleSystemPrompt(RoleSystemInput{
+				return MustRender(TemplateSystem, RoleSystemInput{
 					OutputRoots:        []OutputRootView{{Name: "phase_dir", Path: "/state/feat-x/run-1/design"}},
 					SkillPath:          "/skills/design/SKILL.md",
 					SubagentsAvailable: true,
@@ -563,7 +563,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "codex_implement_system_rolespec",
 			render: func() string {
-				return RoleSystemPrompt(RoleSystemInput{
+				return MustRender(TemplateSystem, RoleSystemInput{
 					OutputRoots:         []OutputRootView{{Name: "iteration_dir", Path: "/state/feat-x/run-1/implement/iteration-01"}},
 					SkillPath:           "/skills/implement/SKILL.md",
 					CompletionTool:      "complete_phase",
@@ -575,7 +575,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "summary_user",
 			render: func() string {
-				return MustRender("summary.user", SummaryUserInput{
+				return MustRender(TemplateSummaryUser, SummaryUserInput{
 					Name:        "Add OAuth login",
 					Description: "Sign in with Google.",
 				})
@@ -588,13 +588,15 @@ func TestGoldenSnapshots(t *testing.T) {
 			},
 		},
 		{
-			name:   "autoreview_format_retry",
-			render: AutoReviewFormatRetryPrompt,
+			name: "autoreview_format_retry",
+			render: func() string {
+				return MustRender(TemplateAutoReviewFormatRetry, nil)
+			},
 		},
 		{
 			name: "autoreview_user",
 			render: func() string {
-				return AutoReviewUserPrompt(AutoReviewUserInput{
+				return MustRender(TemplateAutoReviewUser, AutoReviewUserInput{
 					Nonce:                "0123456789abcdef",
 					ToolName:             "Bash",
 					Command:              "find /tmp/runtime -type f 2>/dev/null | head -20",
@@ -668,7 +670,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "pr_description_user_full",
 			render: func() string {
-				return PRDescriptionUserPrompt(PRDescriptionUserInput{
+				return MustRender(TemplatePRDescriptionUser, PRDescriptionUserInput{
 					FeatureName:        "Add OAuth login",
 					FeatureDescription: "Sign in with Google.",
 					Roadmap:            "Phase 1: scaffolding.\nPhase 2: PKCE.",
@@ -680,7 +682,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "final_fix_user_with_manual",
 			render: func() string {
-				return FinalFixUserPrompt(FinalFixUserInput{
+				return MustRender(TemplateFinalFixUser, FinalFixUserInput{
 					VisualReferences:                  VisualReferencesInput{Images: []string{"/tmp/login.png"}, Label: "applying this fix"},
 					Iteration:                         2,
 					AcceptanceClause:                  "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
@@ -694,7 +696,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "scout_user",
 			render: func() string {
-				return MustRender("scout.user", ScoutUserInput{
+				return MustRender(TemplateScoutUser, ScoutUserInput{
 					Query: "How does the auth module wrap errors?",
 					Files: []ScoutFile{
 						{Path: "auth/login.go", Purpose: "login flow", Content: "package auth\n\nfunc Login() error { ... }"},
@@ -705,7 +707,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "validate_specialized_grounding",
 			render: func() string {
-				return ValidateSpecializedUserPrompt(ValidateSpecializedUserInput{
+				return MustRender(TemplateValidateSpecializedUser, ValidateSpecializedUserInput{
 					Name:                     "OAuth login",
 					Description:              "Sign in with Google.",
 					AcceptanceClause:         "Feature acceptance is defined by the `## Acceptance Criteria` section of the approved design at /state/feat-x/run-1/design/design.md. Judge acceptance against that section, not against any restatement of it.",
@@ -721,7 +723,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "validate_specialized_automated_verification_only",
 			render: func() string {
-				return ValidateSpecializedUserPrompt(ValidateSpecializedUserInput{
+				return MustRender(TemplateValidateSpecializedUser, ValidateSpecializedUserInput{
 					Name:                      "OAuth login",
 					Description:               "Sign in with Google.",
 					ExitCriteria:              "Relevant tests pass.",
@@ -762,7 +764,7 @@ func TestGoldenSnapshots(t *testing.T) {
 }
 
 func TestImplementUserPromptDoesNotRenderRequiredVerification(t *testing.T) {
-	got := ImplementUserPrompt(ImplementUserInput{
+	got := MustRender(TemplateImplementUser, ImplementUserInput{
 		PlanPath:     "/state/feat-x/run-1/phase-1/plan.md",
 		ExitCriteria: "Relevant tests pass.",
 		Iteration:    3,
@@ -774,20 +776,20 @@ func TestImplementUserPromptDoesNotRenderRequiredVerification(t *testing.T) {
 		"Run e2e.",
 	} {
 		if strings.Contains(got, unwanted) {
-			t.Fatalf("ImplementUserPrompt() rendered static verification %q in:\n%s", unwanted, got)
+			t.Fatalf("implement.user rendered static verification %q in:\n%s", unwanted, got)
 		}
 	}
 }
 
 func TestRoleSystemPromptSuppressesUsefulResourcesWhenEmpty(t *testing.T) {
-	got := RoleSystemPrompt(RoleSystemInput{
+	got := MustRender(TemplateSystem, RoleSystemInput{
 		OutputRoots: []OutputRootView{
 			{Name: "phase_dir", Path: "/state/feat-x/inquire"},
 		},
 		SkillPath: "/skills/inquire/SKILL.md",
 	})
 	if strings.Contains(got, "# Useful Resources") {
-		t.Fatalf("RoleSystemPrompt() rendered empty Useful Resources section:\n%s", got)
+		t.Fatalf("system template rendered empty Useful Resources section:\n%s", got)
 	}
 }
 
@@ -799,13 +801,13 @@ func TestRoleSystemPromptGatesSubagentClause(t *testing.T) {
 
 	avail := base
 	avail.SubagentsAvailable = true
-	if !strings.Contains(RoleSystemPrompt(avail), clause) {
+	if !strings.Contains(MustRender(TemplateSystem, avail), clause) {
 		t.Errorf("SubagentsAvailable=true: subagent clause missing")
 	}
 
 	unavail := base
 	unavail.SubagentsAvailable = false
-	if strings.Contains(RoleSystemPrompt(unavail), clause) {
+	if strings.Contains(MustRender(TemplateSystem, unavail), clause) {
 		t.Errorf("SubagentsAvailable=false: subagent clause should be omitted (helper has no subagents)")
 	}
 }

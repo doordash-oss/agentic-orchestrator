@@ -405,7 +405,7 @@ func ClassifyDetailed(ctx context.Context, reviewer Reviewer, req ClassifyReques
 		if result.Outcome == OutcomeMalformedResponse {
 			// Only invalid decision text is retryable; broken protocol streams
 			// remain terminal. Never feed raw reviewer output into the retry.
-			prompt += agentprompts.AutoReviewFormatRetryPrompt()
+			prompt += agentprompts.MustRender(agentprompts.TemplateAutoReviewFormatRetry, nil)
 		}
 		if !waitForProviderRetry(deadlineCtx) {
 			if err := ctx.Err(); err != nil {
@@ -959,7 +959,7 @@ func reviewPromptWithNonce(req ClassifyRequest, nonce string) string {
 		writableRootsSummary += " (writes may target only these roots; reads are not limited by this field)"
 	}
 
-	return agentprompts.AutoReviewUserPrompt(agentprompts.AutoReviewUserInput{
+	return agentprompts.MustRender(agentprompts.TemplateAutoReviewUser, agentprompts.AutoReviewUserInput{
 		Nonce:                nonce,
 		ToolName:             toolName,
 		Command:              command,

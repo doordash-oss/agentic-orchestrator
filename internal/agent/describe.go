@@ -57,7 +57,7 @@ type PRContext struct {
 //
 // The prose lives in internal/agent/prompts/templates/pr_description.user.tmpl.
 func BuildPRDescriptionPrompt(ctx PRContext) string {
-	return prompts.PRDescriptionUserPrompt(prompts.PRDescriptionUserInput{
+	return prompts.MustRender(prompts.TemplatePRDescriptionUser, prompts.PRDescriptionUserInput{
 		FeatureName:        ctx.FeatureName,
 		FeatureDescription: ctx.FeatureDescription,
 		Roadmap:            ctx.Roadmap,

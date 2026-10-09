@@ -538,11 +538,7 @@ export interface paths {
         };
         /** Read runtime configuration. */
         get: operations["getRuntimeConfig"];
-        /**
-         * Replace runtime configuration.
-         * @description Replaces the runtime configuration. Submitted workspace_roots are validated the same way as for PATCH: each root must exist and resolve to a directory, otherwise the request fails with a 400 invalid_workspace_root error and nothing is persisted.
-         */
-        put: operations["putRuntimeConfig"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -4836,23 +4832,6 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["RuntimeConfigResponse"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    putRuntimeConfig: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
-                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: components["requestBodies"]["JSONMutation"];
-        responses: {
-            200: components["responses"]["ActionResponse"];
-            400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

@@ -19,8 +19,8 @@ limitations under the License.
  * presents a health response whose compatibility declaration this app does
  * not support, with a matching owner-only discovery record. Two contracts
  * are covered: a foreign one (unknown schema series + runtime policy) and
- * exactly the previous release's (schema series 1 with the real loopback
- * runtime policy). Either way the app must hard-block with guidance, offer
+ * exactly the previous release's (schema series 2 with the real loopback
+ * runtime policy; series 3 removed PUT on the runtime-config route). Either way the app must hard-block with guidance, offer
  * no way to stop the foreign process, never present credentials to it, and
  * leave it running.
  */
@@ -75,16 +75,16 @@ test('incompatible external runtime: blocked with guidance, never stopped', asyn
   });
 });
 
-test('previous-release runtime (schema series 1): blocked with guidance, never stopped', async ({}, testInfo) => {
+test('previous-release runtime (schema series 2): blocked with guidance, never stopped', async ({}, testInfo) => {
   await runIncompatibleJourney(testInfo, {
     name: 'previous',
     declaration: {
       api_version: 'v1',
-      schema_version: 1,
-      min_client_schema: 1,
+      schema_version: 2,
+      min_client_schema: 2,
       runtime_policy: 'loopback-bearer-v1',
     },
-    title: 'Journey 4 — a previous-release runtime (schema series 1) is blocked and never stopped',
+    title: 'Journey 4 — a previous-release runtime (schema series 2) is blocked and never stopped',
     slug: 'incompatible-previous',
   });
 });

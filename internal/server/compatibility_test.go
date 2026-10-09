@@ -91,14 +91,17 @@ func TestCompatibilityDeclarationFallbackBuildVersion(t *testing.T) {
 // Series 2 retired the chat prompt routes and renamed the update summary's
 // activity field, so neither a series-1 client nor a series-1 server may
 // attach across it. Adding the optional server name to the health payload
-// and discovery record is strictly additive and moved no pin.
+// and discovery record is strictly additive and moved no pin. Series 3
+// removed PUT on the runtime-config route (now 405; PATCH is the only
+// runtime-config mutation), so a series-2 client and a series-3 server
+// refuse each other.
 func TestCompatibilityPins(t *testing.T) {
 	t.Parallel()
-	if CompatibilitySchemaVersion != 2 {
-		t.Fatalf("CompatibilitySchemaVersion = %d; want 2", CompatibilitySchemaVersion)
+	if CompatibilitySchemaVersion != 3 {
+		t.Fatalf("CompatibilitySchemaVersion = %d; want 3", CompatibilitySchemaVersion)
 	}
-	if CompatibilityMinClientSchema != 2 {
-		t.Fatalf("CompatibilityMinClientSchema = %d; want 2", CompatibilityMinClientSchema)
+	if CompatibilityMinClientSchema != 3 {
+		t.Fatalf("CompatibilityMinClientSchema = %d; want 3", CompatibilityMinClientSchema)
 	}
 	if CompatibilityRuntimePolicy != "loopback-bearer-v1" {
 		t.Fatalf("CompatibilityRuntimePolicy = %q; want loopback-bearer-v1", CompatibilityRuntimePolicy)

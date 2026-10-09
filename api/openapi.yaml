@@ -722,25 +722,6 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
-    put:
-      operationId: putRuntimeConfig
-      summary: Replace runtime configuration.
-      description: >-
-        Replaces the runtime configuration. Submitted workspace_roots are
-        validated the same way as for PATCH: each root must exist and resolve
-        to a directory, otherwise the request fails with a 400
-        invalid_workspace_root error and nothing is persisted.
-      parameters:
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "400":
-          $ref: "#/components/responses/ErrorResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /api/v1/catalog/models:
     get:

@@ -689,7 +689,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 	case apiPathFeatures:
 		return []string{http.MethodPost}, true
 	case apiPathConfigRuntime:
-		return []string{http.MethodPatch, http.MethodPut}, true
+		return []string{http.MethodPatch}, true
 	case apiPathPermissionsAnswer:
 		return []string{http.MethodPost}, true
 	case apiPathRecoveryActions:
@@ -1129,7 +1129,7 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 	switch r.Method {
 	case http.MethodGet:
 		h.handleRuntimeConfig(w, r)
-	case http.MethodPatch, http.MethodPut:
+	case http.MethodPatch:
 		if !h.requireTrustedMutation(w, r) {
 			return
 		}
@@ -1154,7 +1154,7 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 			return resp, err
 		})
 	default:
-		w.Header().Set("Allow", "GET, PATCH, PUT")
+		w.Header().Set("Allow", "GET, PATCH")
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 	}
 }

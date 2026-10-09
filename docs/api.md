@@ -26,9 +26,11 @@ surfaces are strictly additive: neither the compatibility declaration nor
 the discovery schema version changes for it, so older consumers keep working
 against named servers and newer consumers tolerate name-less servers.
 
-The compatibility declaration on `/api/v1/health` reports schema series 2
-and minimum client series 2 under the `loopback-bearer-v1` runtime policy
-(`network-bearer-v1` for non-loopback listeners). Series 2 removed the chat
+The compatibility declaration on `/api/v1/health` reports schema series 3
+and minimum client series 3 under the `loopback-bearer-v1` runtime policy
+(`network-bearer-v1` for non-loopback listeners). Series 3 removed `PUT` on
+`/api/v1/config/runtime` (now `405`; `PATCH` is the only runtime-config
+mutation and keeps its partial-update semantics). Series 2 removed the chat
 prompt routes (`/api/v1/prompts/chat/start` and `/api/v1/prompts/chat/end`,
 now `404`) and renamed the update summary's `chat_active` to
 `supervisor_active`. Routes stay under `/api/v1`; a client and server from

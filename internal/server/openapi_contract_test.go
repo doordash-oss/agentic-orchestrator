@@ -627,7 +627,6 @@ func documentedServerRoutes() []documentedRoute {
 		{method: httpMethodGet, path: "/api/v1/features/{feature_id}/runs/{run_number}/logs"},
 		{method: httpMethodGet, path: apiPathConfigRuntime},
 		{method: "patch", path: apiPathConfigRuntime, mutation: true},
-		{method: "put", path: apiPathConfigRuntime, mutation: true},
 		{method: httpMethodGet, path: apiPathCatalogModels},
 		{method: httpMethodPost, path: apiPathCatalogRefresh, mutation: true},
 		{method: httpMethodGet, path: apiPathRuntimeReadiness},

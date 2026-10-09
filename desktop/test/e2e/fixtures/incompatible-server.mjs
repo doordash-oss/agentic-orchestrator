@@ -18,8 +18,8 @@ limitations under the License.
 // health probe with an EXPLICIT but unsupported compatibility declaration.
 // The default `foreign` contract (wrong schema series + runtime policy)
 // stands in for a future/foreign Agentico runtime; the `previous` contract
-// is exactly the previous release's declaration (schema series 1, the real
-// loopback runtime policy). The desktop app must refuse to use either — and
+// is exactly the previous release's declaration (schema series 2, the real
+// loopback runtime policy; series 3 removed PUT on the runtime-config route). The desktop app must refuse to use either — and
 // must never stop it.
 //
 // Usage: node incompatible-server.mjs --state-dir <dir> --log <request-log>
@@ -53,8 +53,8 @@ const contracts = {
   },
   previous: {
     api_version: 'v1',
-    schema_version: 1,
-    min_client_schema: 1,
+    schema_version: 2,
+    min_client_schema: 2,
     runtime_policy: 'loopback-bearer-v1',
     server_build: { version: 'v1.0.0', revision: 'a'.repeat(40) },
   },

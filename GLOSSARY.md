@@ -43,3 +43,10 @@ the feature summary and detail shapes. Lives in `internal/server`.
 creation (write) against relationship-guarded mutations (read), so no guard can
 pass while a child is being created. Not a public concept: orchestration
 operations take it. Lives in `internal/orchestrator`.
+
+**Schema series.** The monotonic REST contract series within the API major,
+declared on `/api/v1/health` together with the minimum client series the
+server accepts. It is bumped whenever the wire contract changes in a way
+existing clients cannot tolerate, and a client and server from different series
+refuse each other. Distinct from the discovery record's format version. Lives
+in `internal/server` and, on the desktop side, `desktop/src/main/gateway`.

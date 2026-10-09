@@ -31,6 +31,7 @@ import {
   type GatewayDeps,
   type ServerChildLike,
 } from '../../src/main/gateway/runtimeGateway';
+import { DESKTOP_SCHEMA_VERSION } from '../../src/main/gateway/compatibility';
 
 const TOKEN = 'tok-super-secret-0123456789';
 const BASE = 'http://127.0.0.1:45678';
@@ -58,8 +59,8 @@ function healthBody(): Record<string, unknown> {
     runtime: { runtime_dir: '/rt', state_dir: '/rt/features', config_path: '/rt/config.yaml' },
     compatibility: {
       api_version: 'v1',
-      schema_version: 2,
-      min_client_schema: 2,
+      schema_version: DESKTOP_SCHEMA_VERSION,
+      min_client_schema: DESKTOP_SCHEMA_VERSION,
       runtime_policy: 'loopback-bearer-v1',
       server_build: { version: 'v1.0.0' },
     },

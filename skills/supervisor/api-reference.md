@@ -190,8 +190,6 @@ Recovery lists sessions orphaned by a previous server process.
   Example: `"$AGENTICO_BIN" api GET /api/v1/config/runtime`
 - `PATCH /api/v1/config/runtime` — change runtime configuration. Send only what changes, under `defaults` (for example `models`, `effort`, `pipeline`, `inquireness`, `checkpoints`, `max_iterations`), `workspace_roots` (the complete list; each must be an existing directory) or `notifications`.
   Example: `"$AGENTICO_BIN" api PATCH /api/v1/config/runtime '{"defaults":{"pipeline":"large"}}'`
-- `PUT /api/v1/config/runtime` — same body and effect as `PATCH`; prefer `PATCH`.
-  Example: `"$AGENTICO_BIN" api PUT /api/v1/config/runtime '{"workspace_roots":["/home/me/src"]}'`
 
 ## Update
 

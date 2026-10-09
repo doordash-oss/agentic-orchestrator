@@ -20,12 +20,12 @@ const (
 	// CompatibilitySchemaVersion is the monotonic series number of the REST
 	// schema contract within the current API major. Bump it whenever the
 	// wire schema changes in a way existing clients cannot tolerate.
-	CompatibilitySchemaVersion = 2
+	CompatibilitySchemaVersion = 3
 
 	// CompatibilityMinClientSchema is the minimum client schema series a
 	// connecting client must implement for this server to consider it
 	// compatible.
-	CompatibilityMinClientSchema = 2
+	CompatibilityMinClientSchema = 3
 
 	// CompatibilityRuntimePolicy names the loopback runtime security/ownership
 	// policy contract: loopback-only listener, bearer-token auth, single-owner

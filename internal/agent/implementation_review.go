@@ -54,13 +54,6 @@ type implementationReviewGateMembership struct {
 	Applies func(implementationReviewAxisSelection) bool
 }
 
-type implementationReviewExecutionPosture string
-
-const (
-	implementationReviewPostureReadOnly implementationReviewExecutionPosture = "read_only"
-	implementationReviewPostureLiveRun  implementationReviewExecutionPosture = "live_run"
-)
-
 // implementationReviewAxis declares one implementation-review axis. Slug
 // names the axis helper directory, session id and system-prompt prefix in the
 // per-phase and final review loops.
@@ -70,7 +63,7 @@ type implementationReviewAxis struct {
 	Slug             string
 	SkillName        string
 	Role             Role
-	ExecutionPosture implementationReviewExecutionPosture
+	ExecutionPosture reviewExecutionPosture
 	Memberships      []implementationReviewGateMembership
 }
 
@@ -87,7 +80,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 		Slug:             "craft",
 		SkillName:        "review-implementation-craft",
 		Role:             RoleImplementationReviewCraft,
-		ExecutionPosture: implementationReviewPostureReadOnly,
+		ExecutionPosture: reviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 10, Applies: moonshotImplementationReviewAxis},
 			{Gate: implementationReviewGateFinal, Order: 10, Applies: allImplementationReviewProfiles},
@@ -99,7 +92,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 		Slug:             "functionality-evidence",
 		SkillName:        "review-implementation-functionality-evidence",
 		Role:             RoleImplementationReviewFunctionalityEvidence,
-		ExecutionPosture: implementationReviewPostureReadOnly,
+		ExecutionPosture: reviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 20, Applies: moonshotImplementationReviewAxis},
 		},
@@ -110,7 +103,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 		Slug:             "cleanliness",
 		SkillName:        "review-implementation-cleanliness",
 		Role:             RoleImplementationReviewCleanliness,
-		ExecutionPosture: implementationReviewPostureReadOnly,
+		ExecutionPosture: reviewPostureReadOnly,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 30, Applies: moonshotImplementationReviewAxis},
 			{Gate: implementationReviewGateFinal, Order: 20, Applies: allImplementationReviewProfiles},
@@ -122,7 +115,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 		Slug:             "qa",
 		SkillName:        "review-implementation-qa",
 		Role:             RoleImplementationReviewQA,
-		ExecutionPosture: implementationReviewPostureLiveRun,
+		ExecutionPosture: reviewPostureLiveRun,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGateFinal, Order: 30, Applies: allImplementationReviewProfiles},
 		},
@@ -133,7 +126,7 @@ var implementationReviewAxisRegistry = []implementationReviewAxis{
 		Slug:             "design",
 		SkillName:        "review-implementation-design",
 		Role:             RoleImplementationReviewDesign,
-		ExecutionPosture: implementationReviewPostureLiveRun,
+		ExecutionPosture: reviewPostureLiveRun,
 		Memberships: []implementationReviewGateMembership{
 			{Gate: implementationReviewGatePerPhase, Order: 40, Applies: moonshotFrontendImplementationReviewAxis},
 			{Gate: implementationReviewGateFinal, Order: 40, Applies: frontendFinalImplementationReviewAxis},
@@ -264,7 +257,7 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		AxisLabel:              axis.Name,
 		FeatureDescription:     intent.Description,
 		DesignArtifactPath:     designArtifactPathForImplementationReview(cfg.Feature),
-		LiveRunAxis:            axis.ExecutionPosture == implementationReviewPostureLiveRun,
+		LiveRunAxis:            axis.ExecutionPosture == reviewPostureLiveRun,
 		RefactorPassForkPoint:  refactorPassForkPoint(cfg.Feature),
 		PlanPath:               cfg.PlanPath,
 		ExitCriteria:           cfg.ExitCriteria,
@@ -332,15 +325,9 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		EffortSource:           cfg.ReviewEffortSource,
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
+		Posture:                axis.ExecutionPosture,
 	}
-	var helperResult *ReviewHelperResult
-	var err error
-	switch axis.ExecutionPosture {
-	case implementationReviewPostureLiveRun:
-		helperResult, err = helper.RunLiveRunReviewHelper(context.Background(), helperCfg)
-	default:
-		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), helperCfg)
-	}
+	helperResult, err := helper.runReviewHelper(context.Background(), helperCfg)
 	if err != nil {
 		feedback := ""
 		if helperResult != nil {

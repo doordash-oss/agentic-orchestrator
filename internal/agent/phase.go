@@ -823,18 +823,26 @@ func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFil
 	}
 }
 
-// startPlanningLoop runs the planning loop for kind in the background and
-// delivers its result, or a failed result carrying its error, on the
-// returned channel.
+// startPlanningLoop runs the planning loop for kind in the background.
 func (pr *PhaseRunner) startPlanningLoop(cfg PlanLoopConfig, kind planArtifactKind) chan *PlanLoopResult {
-	resultCh := make(chan *PlanLoopResult, 1)
+	return startLoop(func() (*PlanLoopResult, error) {
+		return runPlanningLoop(cfg, kind, pr.SessionManager)
+	}, func(lastError string) *PlanLoopResult {
+		return &PlanLoopResult{FinalStatus: "failed", LastError: lastError}
+	})
+}
+
+// startLoop runs loop in the background and delivers its result on the
+// returned channel. A loop error is delivered as the result failed builds
+// from the error text, so callers only ever read results.
+func startLoop[R any](loop func() (*R, error), failed func(lastError string) *R) chan *R {
+	resultCh := make(chan *R, 1)
 	go func() {
-		result, err := runPlanningLoop(cfg, kind, pr.SessionManager)
+		result, err := loop()
 		if err != nil {
-			resultCh <- &PlanLoopResult{FinalStatus: "failed", LastError: err.Error()}
-		} else {
-			resultCh <- result
+			result = failed(err.Error())
 		}
+		resultCh <- result
 	}()
 	return resultCh
 }
@@ -913,17 +921,11 @@ func (pr *PhaseRunner) RunImplementation(f *feature.Feature, planPath string, kb
 		PhaseExitGate:              pr.phaseExitGate(f),
 	}
 
-	resultCh := make(chan *LoopResult, 1)
-	go func() {
-		result, err := RunImplementationLoop(cfg, pr.SessionManager)
-		if err != nil {
-			resultCh <- &LoopResult{FinalStatus: "failed", LastError: err.Error()}
-		} else {
-			resultCh <- result
-		}
-	}()
-
-	return resultCh, nil
+	return startLoop(func() (*LoopResult, error) {
+		return RunImplementationLoop(cfg, pr.SessionManager)
+	}, func(lastError string) *LoopResult {
+		return &LoopResult{FinalStatus: "failed", LastError: lastError}
+	}), nil
 }
 
 // RunMultiRepoImplementation starts the unified phase-implement loop for a
@@ -939,60 +941,13 @@ func (pr *PhaseRunner) RunMultiRepoImplementation(
 	planPath string,
 	kbInfos ...KBInfo,
 ) (chan *OrchestratorResult, error) {
-	maxIter, maxFails, maxNoProg := pr.resolveLoopLimits(f)
-
-	model := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
-	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
-	implEffort, implEffortSource := pr.resolveEffortForRole(f, llm.PhaseImplementation, model)
-	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
-
-	cfg := OrchestratorConfig{
-		Feature:                    f,
-		FeatureStore:               pr.FeatureStore,
-		PlanPath:                   planPath,
-		StateDir:                   pr.StateDir,
-		Config:                     pr.Config,
-		Model:                      model,
-		ReviewModel:                reviewModel,
-		ResolveSessionConfig:       pr.SessionRuntimeConfigResolver(f.ID),
-		MaxIterations:              maxIter,
-		MaxConsecFails:             maxFails,
-		MaxConsecNoProgress:        maxNoProg,
-		KBInfos:                    kbInfos,
-		DangerouslySkipPermissions: pr.DangerouslySkipPermissions,
-		PermissionCache:            pr.PermissionCache,
-		CommandRunner:              pr.CommandRunner,
-		CapabilityPolicy:           pr.CapabilityPolicy,
-		BuildSession:               pr.buildSessionForFeature(f),
-		AskingClause:               pr.askingQuestionsClauseForModel(model),
-		CompletionTool:             pr.completionToolForModel(model),
-		EffortLevel:                f.EffectivePipeline().EffortLevel(),
-		EffectiveEffort:            implEffort,
-		EffortSource:               implEffortSource,
-		ImplEffectiveEffort:        implEffort,
-		ImplEffortSource:           implEffortSource,
-		ReviewEffectiveEffort:      reviewEffort,
-		ReviewEffortSource:         reviewEffortSource,
-		SkillsDir:                  pr.SkillsDir,
-		GuidelinesDir:              pr.GuidelinesDir,
-		Observer:                   pr.Observer,
-		OnVerificationProgress:     pr.OnVerificationProgress,
-		RoundCommitHook:            pr.RoundCommitHook,
-		PhaseExitGate:              pr.phaseExitGate(f),
-		RunImplementFn:             pr.RunImplementFn,
-		RunFinalReviewFn:           pr.RunFinalReviewFn,
-	}
-
-	resultCh := make(chan *OrchestratorResult, 1)
-	go func() {
-		result, err := RunMultiRepoImplementation(cfg, pr.SessionManager)
-		if err != nil {
-			resultCh <- &OrchestratorResult{FinalStatus: "failed", LastError: err.Error()}
-		} else {
-			resultCh <- result
-		}
-	}()
-	return resultCh, nil
+	cfg := pr.multiRepoOrchestratorConfig(f, llm.PhaseImplementation, kbInfos)
+	cfg.PlanPath = planPath
+	cfg.PhaseExitGate = pr.phaseExitGate(f)
+	cfg.RunImplementFn = pr.RunImplementFn
+	return startLoop(func() (*OrchestratorResult, error) {
+		return RunMultiRepoImplementation(cfg, pr.SessionManager)
+	}, failedOrchestratorResult), nil
 }
 
 // RunMultiRepoFinalReview spawns the deferred end-of-feature Final Review pass
@@ -1007,13 +962,31 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 	f *feature.Feature,
 	kbInfos ...KBInfo,
 ) (chan *OrchestratorResult, error) {
+	cfg := pr.multiRepoOrchestratorConfig(f, llm.PhaseReview, kbInfos)
+	return startLoop(func() (*OrchestratorResult, error) {
+		return RunMultiRepoFinalReview(cfg, pr.SessionManager)
+	}, failedOrchestratorResult), nil
+}
+
+func failedOrchestratorResult(lastError string) *OrchestratorResult {
+	return &OrchestratorResult{FinalStatus: "failed", LastError: lastError}
+}
+
+// multiRepoOrchestratorConfig builds the orchestrator config shared by the
+// multi-repo implementation and final-review passes. EffectiveEffort and
+// EffortSource carry the effort of passRole, the role that drives the pass:
+// implementation for the implementation pass, review for the final review.
+func (pr *PhaseRunner) multiRepoOrchestratorConfig(f *feature.Feature, passRole llm.PhaseRole, kbInfos []KBInfo) OrchestratorConfig {
 	maxIter, maxFails, maxNoProg := pr.resolveLoopLimits(f)
 	model := pr.modelForRole(f.Models.Implementation, llm.PhaseImplementation)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
-	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
 	implEffort, implEffortSource := pr.resolveEffortForRole(f, llm.PhaseImplementation, model)
-
-	cfg := OrchestratorConfig{
+	reviewEffort, reviewEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
+	passEffort, passEffortSource := implEffort, implEffortSource
+	if passRole == llm.PhaseReview {
+		passEffort, passEffortSource = reviewEffort, reviewEffortSource
+	}
+	return OrchestratorConfig{
 		Feature:                    f,
 		FeatureStore:               pr.FeatureStore,
 		StateDir:                   pr.StateDir,
@@ -1033,8 +1006,8 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		AskingClause:               pr.askingQuestionsClauseForModel(model),
 		CompletionTool:             pr.completionToolForModel(model),
 		EffortLevel:                f.EffectivePipeline().EffortLevel(),
-		EffectiveEffort:            reviewEffort,
-		EffortSource:               reviewEffortSource,
+		EffectiveEffort:            passEffort,
+		EffortSource:               passEffortSource,
 		ImplEffectiveEffort:        implEffort,
 		ImplEffortSource:           implEffortSource,
 		ReviewEffectiveEffort:      reviewEffort,
@@ -1046,17 +1019,6 @@ func (pr *PhaseRunner) RunMultiRepoFinalReview(
 		RoundCommitHook:            pr.RoundCommitHook,
 		RunFinalReviewFn:           pr.RunFinalReviewFn,
 	}
-
-	resultCh := make(chan *OrchestratorResult, 1)
-	go func() {
-		result, err := RunMultiRepoFinalReview(cfg, pr.SessionManager)
-		if err != nil {
-			resultCh <- &OrchestratorResult{FinalStatus: "failed", LastError: err.Error()}
-		} else {
-			resultCh <- result
-		}
-	}()
-	return resultCh, nil
 }
 
 // GetPhaseOutput reads the output from a completed session. Paths route

@@ -71,6 +71,8 @@ type ReviewHelperConfig struct {
 	// Label is a short context-specific sub-label (validator domain, review
 	// target, …) surfaced in attach-view tabs.
 	Label string
+	// Posture selects the execution posture; empty is read-only.
+	Posture reviewExecutionPosture
 }
 
 // ReviewHelperResult captures the parsed verdict from a bounded helper run.
@@ -124,37 +126,70 @@ func (pr *PhaseRunner) reviewHelperSystemPrompt(spec roleSpec, cfg ReviewHelperC
 	})
 }
 
-// RunReadOnlyReviewHelper runs a bounded review helper under the file-based
-// handoff protocol and parses ParseReviewFeedback(FeedbackPath). The helper
-// is read-only with respect to the worktree; it may only write to
-// FeedbackPath, and the harness deterministically routes on the structured
-// `## Verdict` section of that file.
-func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
+// reviewExecutionPosture selects how a review helper may touch the machine.
+type reviewExecutionPosture string
+
+const (
+	// reviewPostureReadOnly may write only its declared helper artifacts.
+	reviewPostureReadOnly reviewExecutionPosture = "read_only"
+	// reviewPostureLiveRun adds broad shell access plus harness-owned writable
+	// scratch roots, while file tools stay scoped away from the reviewed
+	// source tree.
+	reviewPostureLiveRun reviewExecutionPosture = "live_run"
+)
+
+// runReviewHelper runs a bounded review helper under the file-based handoff
+// protocol and parses ParseReviewFeedback(FeedbackPath); the harness
+// deterministically routes on the structured `## Verdict` section of that
+// file. The helper is read-only with respect to the worktree unless
+// cfg.Posture is the live-run posture.
+func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
+	liveRun := cfg.Posture == reviewPostureLiveRun
+	label := "review helper"
+	if liveRun {
+		label = "live-run review helper"
+	}
+	errPrefix := "running " + label
 	if cfg.SessionID == "" {
-		return nil, fmt.Errorf("running review helper: missing session id")
+		return nil, fmt.Errorf("%s: missing session id", errPrefix)
 	}
 	if cfg.Model == "" {
-		return nil, fmt.Errorf("running review helper: missing model")
+		return nil, fmt.Errorf("%s: missing model", errPrefix)
 	}
 	if cfg.Prompt == "" {
-		return nil, fmt.Errorf("running review helper: missing prompt")
+		return nil, fmt.Errorf("%s: missing prompt", errPrefix)
 	}
 	if cfg.WorkDir == "" {
-		return nil, fmt.Errorf("running review helper: missing work dir")
+		return nil, fmt.Errorf("%s: missing work dir", errPrefix)
 	}
 	if cfg.FeedbackPath == "" {
-		return nil, fmt.Errorf("running review helper: missing feedback path (file-based handoff is required)")
+		return nil, fmt.Errorf("%s: missing feedback path (file-based handoff is required)", errPrefix)
 	}
 	if cfg.HelperIterDir == "" {
-		return nil, fmt.Errorf("running review helper: missing helper iteration directory")
+		return nil, fmt.Errorf("%s: missing helper iteration directory", errPrefix)
 	}
 	if cfg.Role == "" {
-		return nil, fmt.Errorf("running review helper: missing helper role")
+		return nil, fmt.Errorf("%s: missing helper role", errPrefix)
 	}
 
+	prompt := cfg.Prompt
+	var scratch liveRunReviewScratch
+	if liveRun {
+		var err error
+		scratch, err = prepareLiveRunReviewScratch(cfg.HelperIterDir)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if err := scratch.release(); err != nil {
+				log.Printf("live-run review %s: %v", cfg.SessionID, err)
+			}
+		}()
+		prompt = liveRunReviewPrompt(cfg.Prompt, scratch)
+	}
 	if cfg.PromptPath != "" {
-		if err := os.WriteFile(cfg.PromptPath, []byte(cfg.Prompt), 0o644); err != nil {
-			return nil, fmt.Errorf("running review helper: writing prompt: %w", err)
+		if err := os.WriteFile(cfg.PromptPath, []byte(prompt), 0o644); err != nil {
+			return nil, fmt.Errorf("%s: writing prompt: %w", errPrefix, err)
 		}
 	}
 
@@ -169,20 +204,33 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	}
 	spec, ok := lookupRoleSpec(contractPhase, cfg.Role)
 	if !ok {
-		return nil, fmt.Errorf("running review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
+		return nil, fmt.Errorf("%s: missing RoleSpec for phase %s role %s", errPrefix, contractPhase, cfg.Role)
 	}
 	systemPrompt := pr.reviewHelperSystemPrompt(spec, cfg)
 	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
-	boundedHandler := &permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}
+	writableRoots := allowedPaths
+	var boundedHandler *permission.BoundedHelperArtifactHandler
+	var permHandler ports.PermissionHandler
+	if liveRun {
+		writableRoots = append(append([]string(nil), allowedPaths...), scratch.roots()...)
+		permHandler = permission.Guarded(&permission.LiveRunReviewHandler{
+			AllowedPaths:  allowedPaths,
+			ScratchRoots:  scratch.roots(),
+			DenyWriteHint: "live-run review may write only review-feedback.md and files under its scratch roots",
+		})
+	} else {
+		boundedHandler = &permission.BoundedHelperArtifactHandler{AllowedPaths: allowedPaths}
+		permHandler = permission.Guarded(boundedHandler)
+	}
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:                          cfg.Model,
-		Prompt:                         cfg.Prompt,
+		Prompt:                         prompt,
 		SystemPrompt:                   systemPrompt,
 		DisallowedTools:                boundedHelperDisallowedTools,
 		AdditionalDirs:                 cfg.AdditionalDirs,
-		WritableRoots:                  allowedPaths,
+		WritableRoots:                  writableRoots,
 		PIDDir:                         pidDir,
-		PermHandler:                    permission.Guarded(boundedHandler),
+		PermHandler:                    permHandler,
 		RepoName:                       cfg.RepoName,
 		WorkDir:                        cfg.WorkDir,
 		LogPath:                        cfg.LogPath,
@@ -193,8 +241,12 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		CompletionProtocol:             true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("running review helper: building session: %w", err)
+		return nil, fmt.Errorf("%s: building session: %w", errPrefix, err)
 	}
+	if liveRun {
+		env = mergeSessionEnv(env, scratch.env()...)
+	}
+
 	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
 	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
 		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
@@ -218,7 +270,9 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 	if sessOpts != nil {
 		var sandboxed bool
 		command, sandboxed, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
-		boundedHandler.Sandboxed = sandboxed
+		if boundedHandler != nil {
+			boundedHandler.Sandboxed = sandboxed
+		}
 	}
 	if sandboxCleanup != nil {
 		defer sandboxCleanup()
@@ -230,7 +284,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		sessionID:     cfg.SessionID,
 		featureID:     cfg.FeatureID,
 		phase:         cfg.Phase,
-		label:         "review helper",
+		label:         label,
 		observerPhase: "review",
 		model:         cfg.Model,
 		responsePath:  cfg.ResponsePath,
@@ -262,177 +316,7 @@ func (pr *PhaseRunner) RunReadOnlyReviewHelper(ctx context.Context, cfg ReviewHe
 		if runErr != nil {
 			return result, runErr
 		}
-		return result, fmt.Errorf("running review helper: parsing review-feedback.md: %w", parseErr)
-	}
-	if parsed.OK() {
-		result.Status = parsed.Verdict
-		result.Feedback = strings.TrimSpace(parsed.Body)
-		result.Markers = parsed.Markers
-	} else {
-		synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
-		_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
-		result.Status = ReviewChangesRequested
-		result.Feedback = strings.TrimSpace(synth)
-	}
-
-	if runErr != nil {
-		if isProtocolViolationError(runErr) && parsed.OK() {
-			synth := reviewHelperProtocolViolationFeedback(parsed, runErr)
-			_ = os.WriteFile(cfg.FeedbackPath, []byte(synth), 0o644)
-			result.Status = ReviewChangesRequested
-			result.Feedback = strings.TrimSpace(synth)
-			result.Markers = ValidatorMarkers{}
-		}
-		return result, runErr
-	}
-	return result, nil
-}
-
-// RunLiveRunReviewHelper runs a review helper with the live-run posture: broad
-// shell access plus harness-owned writable scratch roots, while file tools stay
-// scoped away from the reviewed source tree.
-func (pr *PhaseRunner) RunLiveRunReviewHelper(ctx context.Context, cfg ReviewHelperConfig) (*ReviewHelperResult, error) {
-	if cfg.SessionID == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing session id")
-	}
-	if cfg.Model == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing model")
-	}
-	if cfg.Prompt == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing prompt")
-	}
-	if cfg.WorkDir == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing work dir")
-	}
-	if cfg.FeedbackPath == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing feedback path (file-based handoff is required)")
-	}
-	if cfg.HelperIterDir == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing helper iteration directory")
-	}
-	if cfg.Role == "" {
-		return nil, fmt.Errorf("running live-run review helper: missing helper role")
-	}
-
-	scratch, err := prepareLiveRunReviewScratch(cfg.HelperIterDir)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err := scratch.release(); err != nil {
-			log.Printf("live-run review %s: %v", cfg.SessionID, err)
-		}
-	}()
-	prompt := liveRunReviewPrompt(cfg.Prompt, scratch)
-	if cfg.PromptPath != "" {
-		if err := os.WriteFile(cfg.PromptPath, []byte(prompt), 0o644); err != nil {
-			return nil, fmt.Errorf("running live-run review helper: writing prompt: %w", err)
-		}
-	}
-
-	pidDir := pr.StateDir
-	if cfg.FeatureID != "" {
-		pidDir = filepath.Join(pr.StateDir, cfg.FeatureID)
-	}
-
-	contractPhase := cfg.ContractPhase
-	if contractPhase == 0 {
-		contractPhase = cfg.Phase
-	}
-	spec, ok := lookupRoleSpec(contractPhase, cfg.Role)
-	if !ok {
-		return nil, fmt.Errorf("running live-run review helper: missing RoleSpec for phase %s role %s", contractPhase, cfg.Role)
-	}
-	systemPrompt := pr.reviewHelperSystemPrompt(spec, cfg)
-	allowedPaths := boundedReviewHelperAllowedPaths(cfg)
-	writableRoots := append([]string(nil), allowedPaths...)
-	writableRoots = append(writableRoots, scratch.roots()...)
-	liveHandler := &permission.LiveRunReviewHandler{
-		AllowedPaths:  allowedPaths,
-		ScratchRoots:  scratch.roots(),
-		DenyWriteHint: "live-run review may write only review-feedback.md and files under its scratch roots",
-	}
-	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          cfg.Model,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		DisallowedTools:                boundedHelperDisallowedTools,
-		AdditionalDirs:                 cfg.AdditionalDirs,
-		WritableRoots:                  writableRoots,
-		PIDDir:                         pidDir,
-		PermHandler:                    permission.Guarded(liveHandler),
-		RepoName:                       cfg.RepoName,
-		WorkDir:                        cfg.WorkDir,
-		LogPath:                        cfg.LogPath,
-		EffortLevel:                    reviewHelperEffortLevel(cfg),
-		AgentNames:                     explorationAgentNames(),
-		Phase:                          cfg.Phase,
-		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("running live-run review helper: building session: %w", err)
-	}
-	env = mergeSessionEnv(env, scratch.env()...)
-
-	sandboxRequested := sessOpts != nil && sessOpts.UsesBoundedHelperSandbox
-	if sessOpts != nil && cfg.SystemPromptPrefix != "" && cfg.PromptPath != "" {
-		WriteValidatorSystemPrompt(filepath.Dir(cfg.PromptPath), cfg.SystemPromptPrefix, sessOpts.DebugSystemPrompt)
-	}
-	if sessOpts != nil {
-		setReviewHelperEffortOnOpts(sessOpts, cfg)
-		if cfg.Kind != 0 {
-			sessOpts.Kind = cfg.Kind
-		} else {
-			sessOpts.Kind = ports.KindReviewHelper
-		}
-		if cfg.Label != "" {
-			sessOpts.Label = cfg.Label
-		}
-	}
-
-	var sandboxCleanup func()
-	if sessOpts != nil {
-		command, _, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
-	}
-	if sandboxCleanup != nil {
-		defer sandboxCleanup()
-	}
-
-	boundedResult, runErr := pr.runBoundedHelperSession(ctx, boundedHelperRunConfig{
-		sessionID:     cfg.SessionID,
-		featureID:     cfg.FeatureID,
-		phase:         cfg.Phase,
-		label:         "live-run review helper",
-		observerPhase: "review",
-		model:         cfg.Model,
-		responsePath:  cfg.ResponsePath,
-		repoName:      cfg.RepoName,
-		workDir:       cfg.WorkDir,
-		command:       command,
-		env:           env,
-		sessOpts:      sessOpts,
-		requireOutput: false,
-		completionDir: cfg.HelperIterDir,
-		contractPhase: contractPhase,
-		contractRole:  cfg.Role,
-		parentSpanCtx: cfg.ParentSpanCtx,
-	})
-	if boundedResult == nil {
-		return nil, runErr
-	}
-
-	result := &ReviewHelperResult{
-		Output: boundedResult.Output,
-		Usage:  boundedResult.Usage,
-	}
-
-	parsed, parseErr := ParseReviewFeedback(cfg.FeedbackPath)
-	if parseErr != nil {
-		if runErr != nil {
-			return result, runErr
-		}
-		return result, fmt.Errorf("running live-run review helper: parsing review-feedback.md: %w", parseErr)
+		return result, fmt.Errorf("%s: parsing review-feedback.md: %w", errPrefix, parseErr)
 	}
 	if parsed.OK() {
 		result.Status = parsed.Verdict

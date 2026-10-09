@@ -669,7 +669,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 		// ID so lifecycle bookkeeping cannot alias the completed process.
 		RemoveCompletionReceipt(helperIterDir)
 		_ = os.Remove(feedbackPath)
-		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), ReviewHelperConfig{
+		helperResult, err = helper.runReviewHelper(context.Background(), ReviewHelperConfig{
 			SessionID:              retrySessionID(reviewID, sessionAttempt),
 			FeatureID:              cfg.Feature.ID,
 			Phase:                  feature.PhasePlan,

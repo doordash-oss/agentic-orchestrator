@@ -139,7 +139,7 @@ func TestParsePRDescription(t *testing.T) {
 	}
 }
 
-func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
+func TestPhaseRunnerRunDescriptionGeneration_UsesBoundedHelper(t *testing.T) {
 	sess := newUtilityTestSession()
 	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n## Summary\n- Test change"))
 	sess.result = &llm.ResultMessage{
@@ -171,6 +171,12 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	}
 	if opts.Phase != feature.PhasePublish {
 		t.Errorf("BuildSessionOpts.Phase = %v, want %v", opts.Phase, feature.PhasePublish)
+	}
+	if opts.EffortLevel != llm.EffortLow {
+		t.Errorf("BuildSessionOpts.EffortLevel = %q, want low", opts.EffortLevel)
+	}
+	if opts.WorkDir != runner.pr.StateDir {
+		t.Errorf("BuildSessionOpts.WorkDir = %q, want state dir %q", opts.WorkDir, runner.pr.StateDir)
 	}
 	if !strings.Contains(opts.SystemPrompt, "complete using only the context supplied") {
 		t.Errorf("BuildSessionOpts.SystemPrompt missing tool-free completion instruction: %q", opts.SystemPrompt)
@@ -217,6 +223,29 @@ func TestPhaseRunnerRunDescriptionGeneration_ReturnsHelperErrorWithoutFallback(t
 	}
 	if title != "" || body != "" {
 		t.Errorf("RunDescriptionGeneration() = %q / %q, want empty output on error", title, body)
+	}
+}
+
+func TestPhaseRunnerRunDescriptionGeneration_RequiresText(t *testing.T) {
+	sess := newUtilityTestSession()
+	sess.result = &llm.ResultMessage{
+		Type:       testResultMessageType,
+		Subtype:    testResultSuccessValue,
+		Result:     "done",
+		StopReason: testStopReasonEndTurn,
+	}
+	sess.statusCh <- agentStatusSuccess
+
+	runner := newUtilityTestPhaseRunner(t, sess)
+	_, _, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", PRContext{FeatureName: "test"})
+	if err == nil {
+		t.Fatal("RunDescriptionGeneration() error = nil, want empty-output failure")
+	}
+	if !strings.HasPrefix(err.Error(), "generating description: running description generation session: ") {
+		t.Errorf("RunDescriptionGeneration() error = %q, want description-generation session prefix", err)
+	}
+	if !strings.Contains(err.Error(), "without output") {
+		t.Errorf("RunDescriptionGeneration() error = %q, want empty-output failure", err)
 	}
 }
 

@@ -3145,3 +3145,26 @@ func TestBuildSessionSkipPermissionsLiveOverrides(t *testing.T) {
 	}
 	check("")
 }
+
+func TestStartLoop(t *testing.T) {
+	failed := func(lastError string) *LoopResult {
+		return &LoopResult{FinalStatus: "failed", LastError: lastError}
+	}
+
+	t.Run("loop error yields failed result with the error text", func(t *testing.T) {
+		loopErr := fmt.Errorf("running implementation loop: %w", io.ErrUnexpectedEOF)
+		got := <-startLoop(func() (*LoopResult, error) {
+			return &LoopResult{FinalStatus: "all_passed"}, loopErr
+		}, failed)
+		if got.FinalStatus != "failed" || got.LastError != loopErr.Error() {
+			t.Fatalf("result = %+v, want failed with LastError %q", got, loopErr.Error())
+		}
+	})
+
+	t.Run("loop result is forwarded", func(t *testing.T) {
+		want := &LoopResult{FinalStatus: "all_passed"}
+		if got := <-startLoop(func() (*LoopResult, error) { return want, nil }, failed); got != want {
+			t.Fatalf("result = %+v, want the loop's result %+v", got, want)
+		}
+	})
+}

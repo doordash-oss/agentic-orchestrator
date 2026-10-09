@@ -338,3 +338,47 @@ func TestFinalReviewEffortRouting(t *testing.T) {
 		})
 	}
 }
+
+func TestMultiRepoOrchestratorConfigEffortRouting(t *testing.T) {
+	reg := llm.NewRegistry()
+	reg.Register(&effortCatalogProvider{
+		models: []llm.ModelInfo{{
+			ID:                 "sonnet",
+			EffortCapabilities: []llm.EffortLevel{llm.EffortLow, llm.EffortMedium, llm.EffortHigh},
+		}},
+	})
+	pr := &PhaseRunner{Registry: reg}
+	f := &feature.Feature{
+		ID:       "test-feature",
+		Pipeline: feature.PipelineMedium,
+		Models:   config.ModelConfig{Implementation: "mock:sonnet", Review: "mock:sonnet"},
+		Effort:   config.EffortConfig{Implementation: "high"},
+	}
+
+	cases := []struct {
+		name       string
+		passRole   llm.PhaseRole
+		wantEffort llm.EffortLevel
+		wantSource llm.EffortSource
+	}{
+		{name: "implementation pass uses implementation effort", passRole: llm.PhaseImplementation, wantEffort: llm.EffortHigh, wantSource: llm.EffortSourceExplicit},
+		{name: "final review pass uses review effort", passRole: llm.PhaseReview, wantEffort: llm.EffortMedium, wantSource: llm.EffortSourceAuto},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := pr.multiRepoOrchestratorConfig(f, tc.passRole, nil)
+			if cfg.EffectiveEffort != tc.wantEffort || cfg.EffortSource != tc.wantSource {
+				t.Errorf("effective effort = %q/%q, want %q/%q", cfg.EffectiveEffort, cfg.EffortSource, tc.wantEffort, tc.wantSource)
+			}
+			if cfg.ImplEffectiveEffort != llm.EffortHigh || cfg.ImplEffortSource != llm.EffortSourceExplicit {
+				t.Errorf("impl effort = %q/%q, want high/explicit", cfg.ImplEffectiveEffort, cfg.ImplEffortSource)
+			}
+			if cfg.ReviewEffectiveEffort != llm.EffortMedium || cfg.ReviewEffortSource != llm.EffortSourceAuto {
+				t.Errorf("review effort = %q/%q, want medium/auto", cfg.ReviewEffectiveEffort, cfg.ReviewEffortSource)
+			}
+			if cfg.EffortLevel != llm.EffortMedium {
+				t.Errorf("pipeline effort = %q, want medium", cfg.EffortLevel)
+			}
+		})
+	}
+}

@@ -553,7 +553,7 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		AxisLabel:                            axis.Name,
 		FeatureDescription:                   intent.Description,
 		DesignArtifactPath:                   cfg.Feature.DesignArtifactPath(),
-		LiveRunAxis:                          axis.ExecutionPosture == implementationReviewPostureLiveRun,
+		LiveRunAxis:                          axis.ExecutionPosture == reviewPostureLiveRun,
 		ExitCriteria:                         intent.ExitCriteria,
 		AcceptanceClause:                     intent.AcceptanceClause,
 		DiffBase:                             diffBase,
@@ -615,15 +615,9 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		EffortSource:           finalReviewAxisEffortSource(cfg),
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
+		Posture:                axis.ExecutionPosture,
 	}
-	var helperResult *ReviewHelperResult
-	var err error
-	switch axis.ExecutionPosture {
-	case implementationReviewPostureLiveRun:
-		helperResult, err = helper.RunLiveRunReviewHelper(context.Background(), helperCfg)
-	default:
-		helperResult, err = helper.RunReadOnlyReviewHelper(context.Background(), helperCfg)
-	}
+	helperResult, err := helper.runReviewHelper(context.Background(), helperCfg)
 	if err != nil {
 		feedback := ""
 		if helperResult != nil {

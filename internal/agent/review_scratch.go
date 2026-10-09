@@ -143,7 +143,7 @@ func PruneLiveRunReviewScratch(dir string) error {
 }
 
 // isLiveRunReviewHelperDir matches the layout prepareLiveRunReviewScratch
-// and RunLiveRunReviewHelper produce.
+// and the live-run review helper produce.
 func isLiveRunReviewHelperDir(path string) bool {
 	if info, err := os.Stat(newLiveRunReviewScratch(path).EvidenceRoot); err != nil || !info.IsDir() {
 		return false

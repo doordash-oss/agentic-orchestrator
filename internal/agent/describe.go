@@ -17,11 +17,13 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -74,26 +76,37 @@ func truncateTitle(s string, n int) string {
 	return strings.TrimRight(string(runes[:n-1]), " ") + "…"
 }
 
-// RunDescriptionGeneration runs the bounded utility helper to generate a PR
-// title/body from a structured PRContext. It is tool-free and returns errors
-// without synthesizing replacement content.
+// RunDescriptionGeneration runs a bounded helper to generate a PR title/body
+// from a structured PRContext. It is tool-free and returns errors without
+// synthesizing replacement content.
 func (pr *PhaseRunner) RunDescriptionGeneration(ctx context.Context, featureID, model string, prCtx PRContext) (title, body string, err error) {
-	result, runErr := pr.RunUtilitySession(ctx, UtilityRunConfig{
-		SessionID:    fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
-		FeatureID:    featureID,
-		Label:        "description generation",
-		Model:        model,
-		Prompt:       BuildPRDescriptionPrompt(prCtx),
-		SystemPrompt: prDescriptionSystemPrompt,
-		Phase:        feature.PhasePublish,
-		PermHandler:  &prDescriptionPermissionHandler{},
-		RequireText:  true,
+	// The helper reads no repository, so it runs in the state directory.
+	workDir := pr.StateDir
+	if workDir == "" {
+		if workDir, err = os.Getwd(); err != nil {
+			return "", "", fmt.Errorf("generating description: running utility session: determining work dir: %w", err)
+		}
+	}
+	result, runErr := pr.RunBoundedHelper(ctx, BoundedHelperConfig{
+		SessionID:     fmt.Sprintf("publish-description-%d", time.Now().UnixNano()),
+		FeatureID:     featureID,
+		Phase:         feature.PhasePublish,
+		Model:         model,
+		Prompt:        BuildPRDescriptionPrompt(prCtx),
+		SystemPrompt:  prDescriptionSystemPrompt,
+		WorkDir:       workDir,
+		EffortLevel:   llm.EffortLow,
+		PermHandler:   &prDescriptionPermissionHandler{},
+		RequireOutput: true,
 	})
 	if runErr != nil {
+		if result != nil {
+			runErr = fmt.Errorf("running description generation session: %w", runErr)
+		}
 		return "", "", fmt.Errorf("generating description: %w", runErr)
 	}
 
-	title, body = ParsePRDescription(result.Text)
+	title, body = ParsePRDescription(result.Output)
 	if title == "" || body == "" {
 		return "", "", fmt.Errorf("generating description: model returned an incomplete title or body")
 	}

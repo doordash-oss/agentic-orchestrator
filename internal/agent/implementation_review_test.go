@@ -119,12 +119,12 @@ func TestImplementationReviewAxesForGate(t *testing.T) {
 				got = append(got, axis.Name)
 				switch axis.Name {
 				case "QA", "Design":
-					if axis.ExecutionPosture != implementationReviewPostureLiveRun {
-						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, implementationReviewPostureLiveRun)
+					if axis.ExecutionPosture != reviewPostureLiveRun {
+						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, reviewPostureLiveRun)
 					}
 				default:
-					if axis.ExecutionPosture != implementationReviewPostureReadOnly {
-						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, implementationReviewPostureReadOnly)
+					if axis.ExecutionPosture != reviewPostureReadOnly {
+						t.Errorf("axis %s ExecutionPosture = %q, want %q", axis.Name, axis.ExecutionPosture, reviewPostureReadOnly)
 					}
 				}
 				if axis.SkillName == "" || axis.ShortName == "" || axis.Role == "" {

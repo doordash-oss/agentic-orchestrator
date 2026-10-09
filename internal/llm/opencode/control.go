@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // syntheticAskUserPrefix marks AskUserQuestion request ids the tracer
@@ -346,15 +347,9 @@ func (p *Protocol) writePermissionOutcome(id int, outcome, optionID string) erro
 // recommended markers, and confidence scores. It records the answer-label ->
 // optionId map so the user's selection resolves to the native ACP outcome.
 func (p *Protocol) buildQuestionControl(reqID string, pp RequestPermissionParams) llm.SDKMessage {
-	type claudeOption struct {
-		Label       string   `json:"label"`
-		Description string   `json:"description"`
-		Confidence  *float64 `json:"confidence,omitempty"`
-	}
-
 	labelToOption := make(map[string]string, len(pp.Options))
 	seen := make(map[string]int)
-	opts := make([]claudeOption, 0, len(pp.Options))
+	opts := make([]askuser.Option, 0, len(pp.Options))
 	for _, o := range pp.Options {
 		label := o.Name
 		if o.Recommended && !strings.Contains(label, "(Recommended)") {
@@ -365,7 +360,7 @@ func (p *Protocol) buildQuestionControl(reqID string, pp RequestPermissionParams
 			label = fmt.Sprintf("%s (#%d)", label, seen[label])
 		}
 		labelToOption[label] = o.OptionID
-		opts = append(opts, claudeOption{Label: label, Description: o.Description, Confidence: o.Confidence})
+		opts = append(opts, askuser.Option{Label: label, Description: o.Description, Confidence: o.Confidence})
 	}
 
 	p.mu.Lock()
@@ -379,16 +374,7 @@ func (p *Protocol) buildQuestionControl(reqID string, pp RequestPermissionParams
 	if question == "" {
 		question = "OpenCode is asking for your input."
 	}
-	inputJSON, _ := json.Marshal(map[string]any{
-		"questions": []map[string]any{
-			{
-				"question":    question,
-				"header":      "Agent Question",
-				"multiSelect": false,
-				"options":     opts,
-			},
-		},
-	})
+	inputJSON := askuser.Bundle{Questions: []askuser.Question{{Question: question, Header: "Agent Question", Options: opts}}}.Encode()
 
 	return llm.SDKMessage{
 		Type:    "control_request",
@@ -578,25 +564,11 @@ func (p *Protocol) synthesizeAskUser(text string, options []parsedOption) llm.SD
 	seq := p.synthSeq
 	p.mu.Unlock()
 
-	opts := make([]map[string]any, 0, len(options))
+	opts := make([]askuser.Option, 0, len(options))
 	for _, o := range options {
-		opt := map[string]any{"label": o.Label, "description": o.Description}
-		if o.Confidence != nil {
-			opt["confidence"] = *o.Confidence
-		}
-		opts = append(opts, opt)
+		opts = append(opts, askuser.Option{Label: o.Label, Description: o.Description, Confidence: o.Confidence})
 	}
-
-	inputJSON, _ := json.Marshal(map[string]any{
-		"questions": []map[string]any{
-			{
-				"question":    strings.TrimSpace(text),
-				"header":      "Agent Question",
-				"multiSelect": false,
-				"options":     opts,
-			},
-		},
-	})
+	inputJSON := askuser.Bundle{Questions: []askuser.Question{{Question: strings.TrimSpace(text), Header: "Agent Question", Options: opts}}}.Encode()
 
 	return llm.SDKMessage{
 		Type:    "control_request",
@@ -856,27 +828,14 @@ func questionFormatReminder(violating string) string {
 
 const askingFormatReminder = `[Reminder] When you ask your next question, follow the asking-questions format from your system prompt.`
 
-// askUserOptionView is the subset of an AskUserQuestion option the answer
-// envelope restates to the agent.
-type askUserOptionView struct {
-	Label       string `json:"label"`
-	Description string `json:"description,omitempty"`
-}
-
-// askUserQuestionView is the subset of an AskUserQuestion entry the answer
-// envelope restates to the agent.
-type askUserQuestionView struct {
-	Question string              `json:"question"`
-	Options  []askUserOptionView `json:"options,omitempty"`
-}
-
 // buildAskUserAnswerEnvelope frames the user's answer as a follow-up turn. A
 // bare answer is indistinguishable from a fresh directive in the prompt channel,
 // so it is wrapped with the original question and options for context.
 func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]string) string {
-	parsed := parseAskUserQuestions(questions)
-	byText := make(map[string]askUserQuestionView, len(parsed))
-	for _, q := range parsed {
+	// A question set the parser rejects restates no options.
+	bundle, _ := askuser.Parse(questions)
+	byText := make(map[string]askuser.Question, len(bundle.Questions))
+	for _, q := range bundle.Questions {
 		byText[q.Question] = q
 	}
 
@@ -912,21 +871,4 @@ func buildAskUserAnswerEnvelope(questions json.RawMessage, answers map[string]st
 	sb.WriteString("\n")
 	sb.WriteString(askingFormatReminder)
 	return strings.TrimSpace(sb.String())
-}
-
-func parseAskUserQuestions(raw json.RawMessage) []askUserQuestionView {
-	if len(raw) == 0 {
-		return nil
-	}
-	var envelope struct {
-		Questions []askUserQuestionView `json:"questions"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err == nil && len(envelope.Questions) > 0 {
-		return envelope.Questions
-	}
-	var bare []askUserQuestionView
-	if err := json.Unmarshal(raw, &bare); err == nil && len(bare) > 0 {
-		return bare
-	}
-	return nil
 }

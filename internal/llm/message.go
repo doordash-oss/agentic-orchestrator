@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // SDKMessage is the envelope for all JSON messages from LLM CLI tools.
@@ -531,17 +533,12 @@ type AskUserAnnotation struct {
 // per-question notes/preview; the key is omitted from the payload when no
 // annotation entry carries a non-empty field.
 func NewAskUserResponse(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]AskUserAnnotation) ControlResponse {
-	var questionsVal any
-	if err := json.Unmarshal(questions, &questionsVal); err != nil {
-		questionsVal = questions
-	}
 	// Production callers pass the entire tool input ({"questions":[...]}),
 	// while the SDK expects updatedInput.questions to be the inner array.
-	// Unwrap the envelope so the CLI's response handler can iterate it.
-	if envelope, ok := questionsVal.(map[string]any); ok {
-		if inner, ok := envelope["questions"].([]any); ok {
-			questionsVal = inner
-		}
+	// Input the parser rejects is passed through unchanged.
+	var questionsVal any = questions
+	if bundle, err := askuser.Parse(questions); err == nil {
+		questionsVal = bundle.Questions
 	}
 	updated := map[string]any{
 		"questions": questionsVal,

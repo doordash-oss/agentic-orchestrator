@@ -1160,7 +1160,7 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: question,
 			headerFieldKey:   "Orthography",
-			"multi_select":   true,
+			"multiSelect":    true,
 			optionsFieldKey: []map[string]any{
 				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0]},
 				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1]},
@@ -1172,7 +1172,7 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: question,
 			headerFieldKey:   "Orthography",
-			"multi_select":   true,
+			"multiSelect":    true,
 			optionsFieldKey: []map[string]any{
 				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0], confidenceFieldKey: 0.72},
 				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1], confidenceFieldKey: 0.21},

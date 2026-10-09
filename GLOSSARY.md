@@ -8,6 +8,19 @@ closed boundary refuses new work; the reservation is released when the feature
 owns no work. Not a caller concern: orchestration operations reserve and settle
 it. Lives in `internal/orchestrator`.
 
+**Ask-user turn.** The moment a provider's agent asks the operator a structured
+question: one `AskUserQuestion` envelope of questions, each with text, a header,
+a multi-select flag and options carrying a label, a description and an optional
+confidence. The `askuser` module parses, encodes, signs and bounds it. Lives in
+`internal/llm/askuser`.
+
+**Auto-pick signature.** The confidence-free identity of an ask-user turn,
+derived from each question's text, header and multi-select flag and each
+option's label and description. A control request and the assistant tool-use
+block that carried option confidence share it, which is how the session's
+auto-pick and the read model recover missing confidence. Lives in
+`internal/llm/askuser`.
+
 **Chokepoint.** The orchestrator as the single path through which feature state
 changes: every mutation goes through it so guards, hooks, and events apply
 uniformly. Lives in `internal/orchestrator`.

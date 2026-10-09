@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // TestNormalizePermissionInput_EditFilepathLowercase guards the bug where the
@@ -316,33 +317,18 @@ func decodePermissionResponse(t *testing.T, line []byte) PermissionResponse {
 
 // --- question helpers + structured-question tests (Task 3) ---
 
-type renderedOption struct {
-	Label       string   `json:"label"`
-	Description string   `json:"description"`
-	Confidence  *float64 `json:"confidence"`
-}
-
-type renderedQuestion struct {
-	Question    string           `json:"question"`
-	Header      string           `json:"header"`
-	MultiSelect bool             `json:"multiSelect"`
-	Options     []renderedOption `json:"options"`
-}
-
-// askUserQuestionsFrom decodes the {"questions":[...]} envelope an AskUserQuestion
-// control request carries in its Input.
-func askUserQuestionsFrom(t *testing.T, cr *llm.ControlRequestMessage) []renderedQuestion {
+// askUserQuestionsFrom parses the {"questions":[...]} envelope an
+// AskUserQuestion control request carries in its Input.
+func askUserQuestionsFrom(t *testing.T, cr *llm.ControlRequestMessage) []askuser.Question {
 	t.Helper()
 	if cr == nil || cr.Request.ToolName != "AskUserQuestion" {
 		t.Fatalf("control request is not an AskUserQuestion: %+v", cr)
 	}
-	var env struct {
-		Questions []renderedQuestion `json:"questions"`
+	bundle, err := askuser.Parse(cr.Request.Input)
+	if err != nil {
+		t.Fatalf("AskUserQuestion input not parseable: %v (%s)", err, cr.Request.Input)
 	}
-	if err := json.Unmarshal(cr.Request.Input, &env); err != nil {
-		t.Fatalf("AskUserQuestion input not decodable: %v (%s)", err, cr.Request.Input)
-	}
-	return env.Questions
+	return bundle.Questions
 }
 
 // structuredQuestionLine builds a session/request_permission request whose tool

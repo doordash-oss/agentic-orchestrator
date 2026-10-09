@@ -33,6 +33,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -1554,8 +1555,8 @@ func (s *Session) tryAutoPickAskUser(req *llm.ControlRequestMessage) bool {
 		Inquireness: inquireness,
 	})
 	if !decision.Pickable {
-		if toolUseInput, ok := s.matchingAskUserToolUseInput(req.Request.Input); ok {
-			decision = decideAskUserAutoPick(toolUseInput, askUserAutoPickDecisionContext{
+		if merged, ok := s.mergeAskUserToolUseConfidence(req.Request.Input); ok {
+			decision = decideAskUserAutoPickBundle(merged, askUserAutoPickDecisionContext{
 				Purpose:     s.askUserAutoPick.Purpose,
 				Inquireness: inquireness,
 			})
@@ -1581,23 +1582,29 @@ func (s *Session) tryAutoPickAskUser(req *llm.ControlRequestMessage) bool {
 	return true
 }
 
-func (s *Session) matchingAskUserToolUseInput(controlInput json.RawMessage) (json.RawMessage, bool) {
-	controlSignature, ok := askUserAutoPickSignature(controlInput)
-	if !ok {
-		return nil, false
+// mergeAskUserToolUseConfidence finds the latest assistant AskUserQuestion
+// tool-use block with the control request's auto-pick signature and returns
+// the control request's bundle with the option confidence the tool-use block
+// carried, which the Claude CLI strips from the control request.
+func (s *Session) mergeAskUserToolUseConfidence(controlInput json.RawMessage) (askuser.Bundle, bool) {
+	control, err := askuser.Parse(controlInput)
+	if err != nil {
+		return askuser.Bundle{}, false
 	}
+	signature := control.Signature()
 	blocks := s.messageLog.ToolUseBlocks()
 	for i := len(blocks) - 1; i >= 0; i-- {
 		block := blocks[i]
 		if block.Name != "AskUserQuestion" || len(block.Input) == 0 {
 			continue
 		}
-		toolUseSignature, ok := askUserAutoPickSignature(block.Input)
-		if ok && toolUseSignature == controlSignature {
-			return block.Input, true
+		toolUse, err := askuser.Parse(block.Input)
+		if err != nil || toolUse.Signature() != signature {
+			continue
 		}
+		return control.MergeConfidence(toolUse)
 	}
-	return nil, false
+	return askuser.Bundle{}, false
 }
 
 // respondToControlViaProtocol sends a control response through the protocol or direct writeJSON.
@@ -2207,24 +2214,11 @@ func askUserAnswerKeysInPresentedOrder(questions json.RawMessage, answers map[st
 		seen[question] = true
 	}
 
-	var bundle struct {
-		Questions []struct {
-			Question string `json:"question"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal(questions, &bundle); err == nil {
+	// A rejected input contributes no presented order, so every answer key
+	// falls through to the sorted remainder below.
+	if bundle, err := askuser.Parse(questions); err == nil {
 		for _, q := range bundle.Questions {
 			appendIfAnswered(q.Question)
-		}
-	}
-	if len(keys) == 0 {
-		var direct []struct {
-			Question string `json:"question"`
-		}
-		if err := json.Unmarshal(questions, &direct); err == nil {
-			for _, q := range direct {
-				appendIfAnswered(q.Question)
-			}
 		}
 	}
 

@@ -32,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/codex"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -244,17 +245,8 @@ func checkCodexContractResult(t *testing.T, result agent.PhaseOutcomeWaitResult,
 
 func checkCodexContractQuestion(t *testing.T, input json.RawMessage, marker, fixtureToken string) string {
 	t.Helper()
-	var bundle struct {
-		Questions []struct {
-			Question string `json:"question"`
-			Options  []struct {
-				Label       string   `json:"label"`
-				Confidence  *float64 `json:"confidence"`
-				Recommended bool     `json:"recommended"`
-			} `json:"options"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal(input, &bundle); err != nil {
+	bundle, err := askuser.Parse(input)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(bundle.Questions) != 1 {
@@ -267,7 +259,7 @@ func checkCodexContractQuestion(t *testing.T, input json.RawMessage, marker, fix
 	for i, option := range question.Options {
 		wantConfidence := []float64{0.9, 0.6, 0.2}[i]
 		wantLabel := []string{"Alpha (Recommended)", "Beta", "Gamma"}[i]
-		if option.Label != wantLabel || option.Confidence == nil || *option.Confidence != wantConfidence || option.Recommended != (i == 0) {
+		if option.Label != wantLabel || option.Confidence == nil || *option.Confidence != wantConfidence {
 			t.Fatalf("option %d does not match confidence/recommendation contract: %s", i, input)
 		}
 	}

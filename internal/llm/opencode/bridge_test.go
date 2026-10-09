@@ -15,12 +15,14 @@
 package opencode
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 func TestBuildCommand_InteractiveAddsServerBridge(t *testing.T) {
@@ -227,11 +229,17 @@ func TestParseLine_BridgeLines(t *testing.T) {
 		if len(msgs) != 1 || msgs[0].ControlRequest.Request.ToolName != "AskUserQuestion" || msgs[0].Origin.Kind != llm.EventOriginRoot {
 			t.Fatalf("question msgs = %+v", msgs)
 		}
-		input := string(msgs[0].ControlRequest.Request.Input)
-		for _, want := range []string{`"multiSelect":true`, `"custom":false`, `"header":"Agent Question"`, `"label":"a"`} {
-			if !strings.Contains(input, want) {
-				t.Fatalf("question input %s lacks %s", input, want)
-			}
+		input := msgs[0].ControlRequest.Request.Input
+		bundle, err := askuser.Parse(input)
+		if err != nil {
+			t.Fatalf("question input %s: %v", input, err)
+		}
+		want := askuser.Bundle{Questions: []askuser.Question{{Question: "Pick", Header: "Agent Question", MultiSelect: true, Options: []askuser.Option{{Label: "a", Description: "A"}}}}}
+		if !reflect.DeepEqual(bundle, want) {
+			t.Fatalf("question bundle = %+v, want %+v", bundle, want)
+		}
+		if !bytes.Equal(input, want.Encode()) {
+			t.Fatalf("question input %s is not the canonical envelope %s", input, want.Encode())
 		}
 	})
 }

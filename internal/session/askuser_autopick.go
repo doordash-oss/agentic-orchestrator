@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -57,32 +58,6 @@ type askUserAutoPickSelection struct {
 	Confidence float64
 }
 
-type autoPickQuestion struct {
-	Question    string
-	MultiSelect bool
-	Options     []autoPickOption
-}
-
-type autoPickOption struct {
-	Label      string
-	Confidence *float64
-}
-
-type autoPickQuestionSignature struct {
-	Questions []autoPickQuestionSignatureQuestion `json:"questions"`
-}
-
-type autoPickQuestionSignatureQuestion struct {
-	Question    string                            `json:"question"`
-	MultiSelect bool                              `json:"multiSelect"`
-	Options     []autoPickQuestionSignatureOption `json:"options,omitempty"`
-}
-
-type autoPickQuestionSignatureOption struct {
-	Label       string `json:"label"`
-	Description string `json:"description,omitempty"`
-}
-
 func askUserAutoPickPurposeCanPick(purpose ports.AskUserAutoPickPurpose) bool {
 	switch purpose {
 	case ports.AskUserAutoPickPurposeInquire,
@@ -96,6 +71,14 @@ func askUserAutoPickPurposeCanPick(purpose ports.AskUserAutoPickPurpose) bool {
 }
 
 func decideAskUserAutoPick(input json.RawMessage, ctx askUserAutoPickDecisionContext) askUserAutoPickDecision {
+	// Parse returns an empty bundle for a rejected input, which declines.
+	bundle, _ := askuser.Parse(input)
+	return decideAskUserAutoPickBundle(bundle, ctx)
+}
+
+// decideAskUserAutoPickBundle runs the auto-pick heuristics over a parsed
+// ask-user turn. An empty bundle, as for a rejected input, is not pickable.
+func decideAskUserAutoPickBundle(bundle askuser.Bundle, ctx askUserAutoPickDecisionContext) askUserAutoPickDecision {
 	if !askUserAutoPickPurposeCanPick(ctx.Purpose) {
 		return askUserAutoPickDecision{Reason: "purpose not allowlisted"}
 	}
@@ -103,16 +86,14 @@ func decideAskUserAutoPick(input json.RawMessage, ctx askUserAutoPickDecisionCon
 	if !ok {
 		return askUserAutoPickDecision{Reason: "inquireness disabled or invalid"}
 	}
-
-	questions, ok := parseAutoPickQuestions(input)
-	if !ok || len(questions) == 0 {
+	if len(bundle.Questions) == 0 {
 		return askUserAutoPickDecision{Reason: "invalid question bundle"}
 	}
 
-	answers := make(map[string]string, len(questions))
-	selections := make([]askUserAutoPickSelection, 0, len(questions))
-	for _, q := range questions {
-		selection, ok := selectAutoPickAnswer(q, threshold)
+	answers := make(map[string]string, len(bundle.Questions))
+	selections := make([]askUserAutoPickSelection, 0, len(bundle.Questions))
+	for _, q := range bundle.Questions {
+		selection, ok := selectAutoPickAnswer(normalizeAutoPickQuestion(q), threshold)
 		if !ok {
 			return askUserAutoPickDecision{Reason: "question is not pickable"}
 		}
@@ -143,96 +124,28 @@ func askUserAutoPickThreshold(purpose ports.AskUserAutoPickPurpose, inquireness 
 	}
 }
 
-func parseAutoPickQuestions(input json.RawMessage) ([]autoPickQuestion, bool) {
-	if len(input) == 0 {
-		return nil, false
-	}
-	var parsed struct {
-		Questions []struct {
-			Question    string `json:"question"`
-			MultiSelect bool   `json:"multiSelect"`
-			Options     []struct {
-				Label       string   `json:"label"`
-				Description string   `json:"description"`
-				Confidence  *float64 `json:"confidence"`
-			} `json:"options"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal(input, &parsed); err != nil || len(parsed.Questions) == 0 {
-		return nil, false
-	}
-
-	questions := make([]autoPickQuestion, 0, len(parsed.Questions))
-	for _, q := range parsed.Questions {
-		question := autoPickQuestion{
-			Question:    q.Question,
-			MultiSelect: q.MultiSelect,
+// normalizeAutoPickQuestion returns a copy of q with confidence recovered
+// from option prose where the structured field is absent and, when q carries
+// no options, with options inferred from numbered lines in its text.
+func normalizeAutoPickQuestion(q askuser.Question) askuser.Question {
+	out := askuser.Question{Question: q.Question, MultiSelect: q.MultiSelect}
+	for _, opt := range q.Options {
+		label, confidence := opt.Label, opt.Confidence
+		if confidence == nil {
+			label, confidence = inferAutoPickOptionConfidence(label, opt.Description)
 		}
-		for _, opt := range q.Options {
-			label, confidence := opt.Label, opt.Confidence
-			if confidence == nil {
-				label, confidence = inferAutoPickOptionConfidence(label, opt.Description)
-			}
-			question.Options = append(question.Options, autoPickOption{
-				Label:      label,
-				Confidence: confidence,
-			})
-		}
-		if len(question.Options) == 0 {
-			cleaned, inferred, ok := inferAutoPickOptionsFromQuestionText(q.Question)
-			if ok {
-				question.Question = cleaned
-				question.Options = inferred
-			}
-		}
-		questions = append(questions, question)
+		out.Options = append(out.Options, askuser.Option{Label: label, Confidence: confidence})
 	}
-	return questions, true
+	if len(out.Options) == 0 {
+		if cleaned, inferred, ok := inferAutoPickOptionsFromQuestionText(q.Question); ok {
+			out.Question = cleaned
+			out.Options = inferred
+		}
+	}
+	return out
 }
 
-func askUserAutoPickSignature(input json.RawMessage) (string, bool) {
-	if len(input) == 0 {
-		return "", false
-	}
-	var parsed struct {
-		Questions []struct {
-			Question    string `json:"question"`
-			MultiSelect bool   `json:"multiSelect"`
-			Options     []struct {
-				Label       string `json:"label"`
-				Description string `json:"description"`
-			} `json:"options"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal(input, &parsed); err != nil || len(parsed.Questions) == 0 {
-		return "", false
-	}
-
-	signature := autoPickQuestionSignature{
-		Questions: make([]autoPickQuestionSignatureQuestion, 0, len(parsed.Questions)),
-	}
-	for _, q := range parsed.Questions {
-		sq := autoPickQuestionSignatureQuestion{
-			Question:    q.Question,
-			MultiSelect: q.MultiSelect,
-			Options:     make([]autoPickQuestionSignatureOption, 0, len(q.Options)),
-		}
-		for _, opt := range q.Options {
-			sq.Options = append(sq.Options, autoPickQuestionSignatureOption{
-				Label:       opt.Label,
-				Description: opt.Description,
-			})
-		}
-		signature.Questions = append(signature.Questions, sq)
-	}
-	data, err := json.Marshal(signature)
-	if err != nil {
-		return "", false
-	}
-	return string(data), true
-}
-
-func selectAutoPickAnswer(q autoPickQuestion, threshold float64) (askUserAutoPickSelection, bool) {
+func selectAutoPickAnswer(q askuser.Question, threshold float64) (askUserAutoPickSelection, bool) {
 	if strings.TrimSpace(q.Question) == "" || len(q.Options) == 0 {
 		return askUserAutoPickSelection{}, false
 	}
@@ -262,7 +175,7 @@ func selectAutoPickAnswer(q autoPickQuestion, threshold float64) (askUserAutoPic
 	}, true
 }
 
-func selectAutoPickMultiAnswer(q autoPickQuestion, threshold float64) (askUserAutoPickSelection, bool) {
+func selectAutoPickMultiAnswer(q askuser.Question, threshold float64) (askUserAutoPickSelection, bool) {
 	selectedLabels := make([]string, 0, len(q.Options))
 	selectedConfidence := 1.0
 	for _, opt := range q.Options {
@@ -286,7 +199,7 @@ func selectAutoPickMultiAnswer(q autoPickQuestion, threshold float64) (askUserAu
 	}, true
 }
 
-func inferAutoPickOptionsFromQuestionText(question string) (string, []autoPickOption, bool) {
+func inferAutoPickOptionsFromQuestionText(question string) (string, []askuser.Option, bool) {
 	lines := strings.Split(strings.ReplaceAll(question, "\r\n", "\n"), "\n")
 	stem := make([]string, 0, len(lines))
 	rawOptions := make([]string, 0, 4)
@@ -353,13 +266,13 @@ func inferAutoPickOptionsFromQuestionText(question string) (string, []autoPickOp
 		return "", nil, false
 	}
 
-	options := make([]autoPickOption, 0, len(rawOptions))
+	options := make([]askuser.Option, 0, len(rawOptions))
 	for _, raw := range rawOptions {
 		label, confidence := splitAutoPickOption(raw)
 		if label == "" {
 			return "", nil, false
 		}
-		options = append(options, autoPickOption{Label: label, Confidence: confidence})
+		options = append(options, askuser.Option{Label: label, Confidence: confidence})
 	}
 
 	cleaned := strings.TrimSpace(strings.Join(stem, "\n"))

@@ -27,6 +27,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/claudeconfig"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // interruptSeq gives each interrupt control_request a unique ID so the CLI
@@ -192,12 +193,8 @@ func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (
 	if len(answers) == 0 {
 		return questions, answers
 	}
-	var root any
-	if err := json.Unmarshal(questions, &root); err != nil {
-		return questions, answers
-	}
-	list := askUserQuestionList(root)
-	if len(list) == 0 {
+	bundle, err := askuser.Parse(questions)
+	if err != nil {
 		return questions, answers
 	}
 
@@ -206,77 +203,47 @@ func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (
 		aligned[k] = v
 	}
 	changed := false
-	for _, item := range list {
-		q, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		text, _ := q["question"].(string)
-		answer, ok := answers[text]
+	for i := range bundle.Questions {
+		q := &bundle.Questions[i]
+		answer, ok := answers[q.Question]
 		if !ok || strings.TrimSpace(answer) == "" {
 			continue
 		}
-		opts, _ := q["options"].([]any)
-		if label, ok := llm.MatchAskUserOptionLabel(askUserOptionLabels(opts), answer); ok {
+		labels := make([]string, len(q.Options))
+		for j, opt := range q.Options {
+			labels[j] = opt.Label
+		}
+		if label, ok := llm.MatchAskUserOptionLabel(labels, answer); ok {
 			if label != answer {
-				aligned[text] = label
+				aligned[q.Question] = label
 				changed = true
 			}
 			continue
 		}
+		opts := q.Options
 		if len(opts) == 0 {
 			paddingLabel := "Other"
 			if _, matchesAnswer := llm.MatchAskUserOptionLabel([]string{paddingLabel}, answer); matchesAnswer {
 				paddingLabel = "Alternative answer"
 			}
-			opts = append(opts, map[string]any{
-				"label":       paddingLabel,
-				"description": "Provide a different custom answer.",
+			opts = append(opts, askuser.Option{
+				Label:       paddingLabel,
+				Description: "Provide a different custom answer.",
 			})
 		}
 		if len(opts) >= 4 {
 			opts = opts[:3]
 		}
-		q["options"] = append(opts, map[string]any{
-			"label":       answer,
-			"description": "User-provided custom answer.",
+		q.Options = append(opts, askuser.Option{
+			Label:       answer,
+			Description: "User-provided custom answer.",
 		})
 		changed = true
 	}
 	if !changed {
 		return questions, answers
 	}
-	out, err := json.Marshal(root)
-	if err != nil {
-		return questions, answers
-	}
-	return out, aligned
-}
-
-// askUserQuestionList returns the questions array from either the tool input
-// envelope ({"questions":[...]}) or a bare array.
-func askUserQuestionList(root any) []any {
-	switch v := root.(type) {
-	case map[string]any:
-		list, _ := v["questions"].([]any)
-		return list
-	case []any:
-		return v
-	default:
-		return nil
-	}
-}
-
-func askUserOptionLabels(opts []any) []string {
-	labels := make([]string, 0, len(opts))
-	for _, opt := range opts {
-		if m, ok := opt.(map[string]any); ok {
-			if label, ok := m["label"].(string); ok {
-				labels = append(labels, label)
-			}
-		}
-	}
-	return labels
+	return bundle.Encode(), aligned
 }
 
 // Interrupt sends a control_request with subtype "interrupt" to cancel the

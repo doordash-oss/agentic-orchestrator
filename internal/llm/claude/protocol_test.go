@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // Compile-time check that *Protocol satisfies llm.Protocol.
@@ -241,14 +242,9 @@ type askUserControlResponse struct {
 		Response  struct {
 			Behavior     string `json:"behavior"`
 			UpdatedInput struct {
-				Questions []struct {
-					Question string `json:"question"`
-					Options  []struct {
-						Label       string `json:"label"`
-						Description string `json:"description"`
-					} `json:"options"`
-				} `json:"questions"`
-				Answers map[string]string `json:"answers"`
+				RawQuestions json.RawMessage    `json:"questions"`
+				Questions    []askuser.Question `json:"-"`
+				Answers      map[string]string  `json:"answers"`
 			} `json:"updatedInput"`
 		} `json:"response"`
 	} `json:"response"`
@@ -270,6 +266,13 @@ func respondToAskUserInput(t *testing.T, questions json.RawMessage, answers map[
 	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &out); err != nil {
 		t.Fatalf("unmarshal control response: %v (raw=%q)", err, buf.String())
 	}
+	updated := &out.Response.Response.UpdatedInput
+	envelope := append(append([]byte(`{"questions":`), updated.RawQuestions...), '}')
+	bundle, err := askuser.Parse(envelope)
+	if err != nil {
+		t.Fatalf("parse updatedInput.questions: %v (raw=%s)", err, updated.RawQuestions)
+	}
+	updated.Questions = bundle.Questions
 	if out.Response.Response.Behavior != "allow" {
 		t.Fatalf("behavior = %q, want allow", out.Response.Response.Behavior)
 	}

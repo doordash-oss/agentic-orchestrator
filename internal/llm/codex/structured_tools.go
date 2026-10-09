@@ -26,6 +26,7 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // Dynamic tools are the experimental app-server contract. Keep their wire
@@ -225,14 +226,13 @@ func (p *Protocol) handleDynamicToolCall(id int, raw json.RawMessage) (llm.SDKMe
 		if err := question.validate(); err != nil {
 			return p.rejectDynamicTool(id, "Invalid ask_user arguments: "+err.Error())
 		}
-		options := make([]questionOption, len(question.Options))
-		copy(options, question.Options)
-		for i := range options {
-			if *options[i].Recommended {
-				options[i].Label += " (Recommended)"
+		bundle := askuser.Bundle{Questions: []askuser.Question{{Question: question.Question, Header: question.Header, Options: askUserOptions(question.Options)}}}
+		for i, o := range question.Options {
+			if *o.Recommended {
+				bundle.Questions[0].Options[i].Label += " (Recommended)"
 			}
 		}
-		input, _ := json.Marshal(map[string]any{"questions": []map[string]any{{"question": question.Question, "header": question.Header, "multiSelect": false, "options": options}}})
+		input := bundle.Encode()
 		p.rememberQuestions(id, pendingQuestionRequest{Dynamic: true, CallID: call.CallID, QuestionIDs: map[string]string{question.Question: question.ID}})
 		return p.askUserControl(id, call.ThreadID, input), true
 	case llm.CompletePhaseToolName:
@@ -388,7 +388,7 @@ func (p *Protocol) handleNativeUserInput(id int, raw json.RawMessage) (llm.SDKMe
 	}
 	seen := map[string]int{}
 	ids := map[string]string{}
-	questions := []map[string]any{}
+	bundle := askuser.Bundle{Questions: make([]askuser.Question, 0, len(params.Questions))}
 	for _, question := range params.Questions {
 		display := question.Question
 		seen[display]++
@@ -396,15 +396,20 @@ func (p *Protocol) handleNativeUserInput(id int, raw json.RawMessage) (llm.SDKMe
 			display = fmt.Sprintf("%s (#%d)", display, seen[display])
 		}
 		ids[display] = question.ID
-		options := question.Options
-		if options == nil {
-			options = []questionOption{}
-		}
-		questions = append(questions, map[string]any{"question": display, "header": question.Header, "options": options, "multiSelect": false})
+		bundle.Questions = append(bundle.Questions, askuser.Question{Question: display, Header: question.Header, Options: askUserOptions(question.Options)})
 	}
 	p.rememberQuestions(id, pendingQuestionRequest{QuestionIDs: ids})
-	input, _ := json.Marshal(map[string]any{"questions": questions})
-	return p.askUserControl(id, params.ThreadID, input), true
+	return p.askUserControl(id, params.ThreadID, bundle.Encode()), true
+}
+
+// askUserOptions converts decoded Codex options to envelope options. The result
+// is never nil, so the envelope always carries an explicit options list.
+func askUserOptions(options []questionOption) []askuser.Option {
+	out := make([]askuser.Option, 0, len(options))
+	for _, o := range options {
+		out = append(out, askuser.Option{Label: o.Label, Description: o.Description, Confidence: o.Confidence})
+	}
+	return out
 }
 
 // Dynamic tools are persisted by Codex at thread creation, and cannot be added

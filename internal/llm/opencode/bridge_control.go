@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // Request-id prefixes for bridged control requests. ACP request ids are
@@ -66,9 +67,6 @@ type openCodeQuestion struct {
 		Description string `json:"description"`
 	} `json:"options"`
 	Multiple bool `json:"multiple"`
-	// Custom defaults to true in OpenCode: a free-text answer is allowed
-	// unless the question turns it off.
-	Custom *bool `json:"custom"`
 }
 
 // requestResolved is the properties of permission.replied,
@@ -172,25 +170,19 @@ func (p *Protocol) bridgeQuestion(ev questionAsked) []llm.SDKMessage {
 		go func() { _ = p.respondBridged(reqID, replyReject, nil) }()
 		return nil
 	}
-	questions := make([]map[string]any, 0, len(ev.Questions))
+	bundle := askuser.Bundle{Questions: make([]askuser.Question, 0, len(ev.Questions))}
 	for _, q := range ev.Questions {
-		options := make([]map[string]string, 0, len(q.Options))
+		options := make([]askuser.Option, 0, len(q.Options))
 		for _, o := range q.Options {
-			options = append(options, map[string]string{"label": o.Label, "description": o.Description})
+			options = append(options, askuser.Option{Label: o.Label, Description: o.Description})
 		}
 		header := strings.TrimSpace(q.Header)
 		if header == "" {
 			header = "Agent Question"
 		}
-		questions = append(questions, map[string]any{
-			"question":    q.Question,
-			"header":      header,
-			"multiSelect": q.Multiple,
-			"custom":      q.Custom == nil || *q.Custom,
-			"options":     options,
-		})
+		bundle.Questions = append(bundle.Questions, askuser.Question{Question: q.Question, Header: header, MultiSelect: q.Multiple, Options: options})
 	}
-	input, _ := json.Marshal(map[string]any{"questions": questions})
+	input := bundle.Encode()
 	return []llm.SDKMessage{p.bridgedControl(reqID, ev.SessionID, "AskUserQuestion", input)}
 }
 

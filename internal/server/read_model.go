@@ -34,6 +34,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
@@ -2148,16 +2149,10 @@ func safeControlSummary(req *llm.ControlRequestMessage) string {
 		return ""
 	}
 	if req.Request.ToolName == toolNameAskUserQuestion {
-		var envelope struct {
-			Questions []struct {
-				Question string `json:"question"`
-				Header   string `json:"header"`
-			} `json:"questions"`
-		}
-		if json.Unmarshal(req.Request.Input, &envelope) == nil && len(envelope.Questions) > 0 {
-			q := envelope.Questions[0].Question
+		if bundle, err := askuser.Parse(req.Request.Input); err == nil {
+			q := bundle.Questions[0].Question
 			if q == "" {
-				q = envelope.Questions[0].Header
+				q = bundle.Questions[0].Header
 			}
 			return SafeDisplayText(q, 180)
 		}
@@ -2247,61 +2242,45 @@ func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage
 	if req == nil || req.Request.ToolName != toolNameAskUserQuestion {
 		return nil
 	}
-	questions := safeAskUserQuestionsFromInput(req.Request.Input)
-	if !askUserQuestionDTOsNeedConfidence(questions) || sess == nil || sess.MessageLog() == nil {
-		return questions
+	bundle, err := askuser.Parse(req.Request.Input)
+	if err != nil {
+		return nil
 	}
-	return enrichAskUserQuestionDTOConfidence(questions, sess.MessageLog())
+	if askUserBundleNeedsConfidence(bundle) && sess != nil && sess.MessageLog() != nil {
+		bundle = recoverAskUserConfidence(bundle, sess.MessageLog())
+	}
+	return askUserQuestionDTOs(bundle.Display(askuser.Limits{
+		Question:    askUserQuestionDisplayLimit,
+		Header:      askUserHeaderDisplayLimit,
+		Label:       askUserOptionLabelDisplayLimit,
+		Description: askUserOptionDescriptionDisplayLimit,
+	}))
 }
 
-func safeAskUserQuestionsFromInput(input json.RawMessage) []AskUserQuestion {
-	if len(input) == 0 {
-		return nil
-	}
-	var envelope struct {
-		Questions []struct {
-			Question         string `json:"question"`
-			Header           string `json:"header"`
-			MultiSelect      bool   `json:"multiSelect"`
-			MultiSelectSnake bool   `json:"multi_select"`
-			Options          []struct {
-				Label       string   `json:"label"`
-				Description string   `json:"description"`
-				Confidence  *float64 `json:"confidence"`
-			} `json:"options"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal(input, &envelope); err != nil || len(envelope.Questions) == 0 {
-		return nil
-	}
-	questions := make([]AskUserQuestion, 0, len(envelope.Questions))
-	for _, rawQuestion := range envelope.Questions {
+// askUserQuestionDTOs maps an already bounded bundle to the generated DTO,
+// redacting each field without truncating it again.
+func askUserQuestionDTOs(bundle askuser.Bundle) []AskUserQuestion {
+	questions := make([]AskUserQuestion, 0, len(bundle.Questions))
+	for _, q := range bundle.Questions {
 		question := AskUserQuestion{
-			Question:    SafeDisplayText(rawQuestion.Question, askUserQuestionDisplayLimit),
-			Header:      SafeDisplayText(rawQuestion.Header, askUserHeaderDisplayLimit),
-			MultiSelect: rawQuestion.MultiSelect || rawQuestion.MultiSelectSnake,
+			Question:    SafeDisplayText(q.Question, 0),
+			Header:      SafeDisplayText(q.Header, 0),
+			MultiSelect: q.MultiSelect,
 		}
-		for _, rawOption := range rawQuestion.Options {
-			option := AskUserOption{
-				Label:       SafeDisplayText(rawOption.Label, askUserOptionLabelDisplayLimit),
-				Description: SafeDisplayText(rawOption.Description, askUserOptionDescriptionDisplayLimit),
-				Confidence:  rawOption.Confidence,
-			}
-			if option.Label == "" && option.Description == "" && option.Confidence == nil {
-				continue
-			}
-			question.Options = append(question.Options, option)
-		}
-		if question.Question == "" && question.Header == "" && len(question.Options) == 0 {
-			continue
+		for _, opt := range q.Options {
+			question.Options = append(question.Options, AskUserOption{
+				Label:       SafeDisplayText(opt.Label, 0),
+				Description: SafeDisplayText(opt.Description, 0),
+				Confidence:  opt.Confidence,
+			})
 		}
 		questions = append(questions, question)
 	}
 	return questions
 }
 
-func askUserQuestionDTOsNeedConfidence(questions []AskUserQuestion) bool {
-	for _, q := range questions {
+func askUserBundleNeedsConfidence(bundle askuser.Bundle) bool {
+	for _, q := range bundle.Questions {
 		for _, opt := range q.Options {
 			if opt.Confidence == nil {
 				return true
@@ -2311,58 +2290,24 @@ func askUserQuestionDTOsNeedConfidence(questions []AskUserQuestion) bool {
 	return false
 }
 
-func enrichAskUserQuestionDTOConfidence(questions []AskUserQuestion, log ports.MessageLog) []AskUserQuestion {
-	if log == nil {
-		return questions
-	}
+// recoverAskUserConfidence merges option confidence from the newest assistant
+// AskUserQuestion tool-use block whose auto-pick signature matches bundle.
+func recoverAskUserConfidence(bundle askuser.Bundle, log ports.MessageLog) askuser.Bundle {
 	blocks := log.ToolUseBlocks()
 	for i := len(blocks) - 1; i >= 0; i-- {
 		block := blocks[i]
 		if block.Name != toolNameAskUserQuestion || len(block.Input) == 0 {
 			continue
 		}
-		source := safeAskUserQuestionsFromInput(block.Input)
-		if !askUserQuestionDTOBundlesMatch(questions, source) {
+		source, err := askuser.Parse(block.Input)
+		if err != nil {
 			continue
 		}
-		return copyAskUserQuestionDTOConfidence(questions, source)
-	}
-	return questions
-}
-
-func askUserQuestionDTOBundlesMatch(a, b []AskUserQuestion) bool {
-	if len(a) == 0 || len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if strings.TrimSpace(a[i].Question) != strings.TrimSpace(b[i].Question) ||
-			strings.TrimSpace(a[i].Header) != strings.TrimSpace(b[i].Header) ||
-			a[i].MultiSelect != b[i].MultiSelect ||
-			len(a[i].Options) != len(b[i].Options) {
-			return false
-		}
-		for j := range a[i].Options {
-			if strings.TrimSpace(a[i].Options[j].Label) != strings.TrimSpace(b[i].Options[j].Label) ||
-				strings.TrimSpace(a[i].Options[j].Description) != strings.TrimSpace(b[i].Options[j].Description) {
-				return false
-			}
+		if merged, ok := bundle.MergeConfidence(source); ok {
+			return merged
 		}
 	}
-	return true
-}
-
-func copyAskUserQuestionDTOConfidence(questions, source []AskUserQuestion) []AskUserQuestion {
-	enriched := make([]AskUserQuestion, len(questions))
-	for i := range questions {
-		enriched[i] = questions[i]
-		enriched[i].Options = append([]AskUserOption(nil), questions[i].Options...)
-		for j := range enriched[i].Options {
-			if enriched[i].Options[j].Confidence == nil {
-				enriched[i].Options[j].Confidence = source[i].Options[j].Confidence
-			}
-		}
-	}
-	return enriched
+	return bundle
 }
 
 func SafeDisplayText(s string, limit int) string {

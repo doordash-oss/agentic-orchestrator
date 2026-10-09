@@ -143,10 +143,6 @@ func TestControlResponseWireFormat_AskUser(t *testing.T) {
 			name:      "production envelope",
 			questions: json.RawMessage(`{"questions":[{"question":"Pick a color?","options":[{"label":"Red"},{"label":"Blue"}]}]}`),
 		},
-		{
-			name:      "bare array",
-			questions: json.RawMessage(`[{"question":"Pick a color?","options":[{"label":"Red"},{"label":"Blue"}]}]`),
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -599,7 +595,7 @@ func TestRespondToAskUser_CapturesQALog(t *testing.T) {
 		done:   make(chan struct{}),
 	}
 
-	questions := json.RawMessage(`[{"question":"Which DB?"}]`)
+	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
 	answers := map[string]string{"Which DB?": "PostgreSQL"}
 	if err := s.RespondToAskUser("req-1", questions, answers, nil); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
@@ -635,7 +631,7 @@ func TestQALogReturnsSnapshot(t *testing.T) {
 		done:   make(chan struct{}),
 	}
 
-	questions := json.RawMessage(`[{"question":"Which DB?"}]`)
+	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
 	answers := map[string]string{"Which DB?": "PostgreSQL"}
 	if err := s.RespondToAskUser("req-1", questions, answers, nil); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)
@@ -1093,7 +1089,7 @@ func TestRespondToAskUser_CodexProvider_SendsCodexFormat(t *testing.T) {
 		}
 	}()
 
-	questions := json.RawMessage(`[{"question":"Which DB?"}]`)
+	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
 	answers := map[string]string{"Which DB?": "PostgreSQL"}
 	if err := s.RespondToAskUser("42", questions, answers, nil); err != nil {
 		t.Fatalf("RespondToAskUser: %v", err)

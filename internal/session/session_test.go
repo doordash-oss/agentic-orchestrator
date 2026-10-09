@@ -2075,7 +2075,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	}
 
 	// Send response
-	questions := json.RawMessage(`[{"question":"Which DB?"}]`)
+	questions := json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`)
 	answers := map[string]string{"Which DB?": "PostgreSQL"}
 	err = s.RespondToAskUser("req-ask-1", questions, answers, nil)
 	if err != nil {

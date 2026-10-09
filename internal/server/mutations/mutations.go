@@ -37,6 +37,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -452,17 +453,12 @@ func normalizeAskUserAnswerKeys(input json.RawMessage, answers map[string]string
 	if len(input) == 0 || len(answers) == 0 {
 		return answers
 	}
-	var envelope struct {
-		Questions []struct {
-			Question string `json:"question"`
-			Header   string `json:"header"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal(input, &envelope); err != nil || len(envelope.Questions) == 0 {
+	bundle, err := askuser.Parse(input)
+	if err != nil {
 		return answers
 	}
-	keys := make([]string, 0, len(envelope.Questions))
-	for _, q := range envelope.Questions {
+	keys := make([]string, 0, len(bundle.Questions))
+	for _, q := range bundle.Questions {
 		key := q.Question
 		if strings.TrimSpace(key) == "" {
 			key = q.Header

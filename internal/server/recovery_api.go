@@ -60,7 +60,7 @@ func (h *apiHandler) handleRecoveryActionRoute(w http.ResponseWriter, r *http.Re
 	if !h.requireTrustedMutation(w, r) {
 		return
 	}
-	var req RecoveryActionRequest
+	var req recoveryActionRequest
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
@@ -87,9 +87,6 @@ func (h *apiHandler) handleRecoveryActionRoute(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		writeMutationError(w, err)
 		return
-	}
-	if resp.Result == "" {
-		resp.Result = resultRecovered
 	}
 	writeActionJSON(w, http.StatusOK, &resp)
 }

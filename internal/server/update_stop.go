@@ -38,11 +38,11 @@ const updateStopWorkBudget = 10 * time.Second
 // admitted work settles.
 const installStopConfirmPoll = 200 * time.Millisecond
 
-// InstallStopper performs the authorized interruption of feature and
+// installStopper performs the authorized interruption of feature and
 // supervisor work for an immediate install. The handler implements it over
 // the same surfaces the REST pause-stop and supervisor end actions use; tests
-// inject deterministic fakes through UpdateOptions.Stopper.
-type InstallStopper interface {
+// inject deterministic fakes through UpdateOptions.stopper.
+type installStopper interface {
 	// StoppableFeatures lists feature identities matching the enabled
 	// pause-stop projection (running or need-user-input features and active
 	// children), deepest children first so parent/child relationship guards
@@ -61,7 +61,7 @@ type InstallStopper interface {
 	EndSupervisor(ctx context.Context) error
 }
 
-// handlerInstallStopper is the production InstallStopper: the pause-stop
+// handlerInstallStopper is the production installStopper: the pause-stop
 // projection over the feature store, the supervisor lifecycle, and dispatch
 // through the trusted mutation surface.
 type handlerInstallStopper struct {
@@ -320,7 +320,7 @@ func (c *updateCoordinator) stopBlockersNow(admission InstallAdmission) []errcat
 // Previously admitted work that becomes visible during stopping is
 // accounted for by dispatching stops for it within the same budget;
 // reservations in categories that cannot be stopped block the install.
-func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admission InstallAdmission, stopper InstallStopper) *installStopFailure {
+func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admission InstallAdmission, stopper installStopper) *installStopFailure {
 	budget := c.opts.StopWorkTimeout
 	if budget <= 0 {
 		budget = updateStopWorkBudget

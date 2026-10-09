@@ -186,7 +186,7 @@ func newStopTestCoordinator(t *testing.T, stopper *fakeInstallStopper, opts ...f
 		Stager:    stager,
 		Install:   lifecycle,
 		Admission: admission,
-		Stopper:   stopper,
+		stopper:   stopper,
 	}
 	for _, opt := range opts {
 		opt(&updateOpts)

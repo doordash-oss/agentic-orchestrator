@@ -533,6 +533,50 @@ func TestServerMutationTargetStartFeatureBlocksChildren(t *testing.T) {
 	})
 }
 
+// TestServerMutationTargetStartFeatureStartsOrResumes pins that the one start
+// method fronts both REST arms: it starts a created feature and resumes one
+// paused on a stopped run, answering the started result for the feature
+// either way.
+func TestServerMutationTargetStartFeatureStartsOrResumes(t *testing.T) {
+	store, manager, f := newMutationTestFeature(t, "start or resume", feature.CreateOptions{Pipeline: feature.PipelineLarge}, feature.StatusCreated, 0)
+	target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
+	want := serverruntime.FeatureStartResponse{FeatureID: f.ID, Result: resultStarted}
+
+	started, err := target.StartFeature(f.ID)
+	if err != nil {
+		t.Fatalf("StartFeature(created) error = %v", err)
+	}
+	if !reflect.DeepEqual(started, want) {
+		t.Fatalf("StartFeature(created) = %+v; want %+v", started, want)
+	}
+
+	if _, err := target.StopFeature(f.ID); err != nil {
+		t.Fatalf("StopFeature() error = %v", err)
+	}
+	stopped, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load stopped feature: %v", err)
+	}
+	if stopped.Status != feature.StatusInterrupted {
+		t.Fatalf("stopped status = %s; want Interrupted", stopped.Status)
+	}
+
+	resumed, err := target.StartFeature(f.ID)
+	if err != nil {
+		t.Fatalf("StartFeature(stopped) error = %v", err)
+	}
+	if !reflect.DeepEqual(resumed, want) {
+		t.Fatalf("StartFeature(stopped) = %+v; want %+v", resumed, want)
+	}
+	updated, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("Load resumed feature: %v", err)
+	}
+	if updated.Status == feature.StatusInterrupted || updated.Status == feature.StatusCreated {
+		t.Fatalf("resumed status = %s; want a running phase status", updated.Status)
+	}
+}
+
 // TestServerMutationTargetRefactorFeatureMapsBriefToSpec verifies the typed
 // wizard brief maps onto a RefactorChildSpec and that the response carries
 // the child identifier returned by the orchestrator's child launch.
@@ -1898,8 +1942,8 @@ func TestServerMutationTargetPublishActionMapsConflictToRebaseConflictCode(t *te
 	if !errors.As(err, &actionConflict) {
 		t.Fatalf("publishAction() error = %T %v; want ActionConflictError", err, err)
 	}
-	if result.FeatureID != f.ID || result.Result != resultConflict {
-		t.Fatalf("PublishFeature() result = %+v; want conflict feature", result)
+	if !reflect.DeepEqual(result, serverruntime.PublishFeatureResponse{}) {
+		t.Fatalf("PublishFeature() result = %+v; want the zero response on conflict", result)
 	}
 	if actionConflict.Code != errcat.PublishRebaseConflict {
 		t.Fatalf("ActionConflictError.Code = %q; want %q", actionConflict.Code, errcat.PublishRebaseConflict)
@@ -1977,8 +2021,8 @@ func TestServerMutationTargetPublishActionMapsRemoteSafetyConflicts(t *testing.T
 			if conflict.Code != tc.wantCode {
 				t.Fatalf("ActionConflictError.Code = %q; want %q", conflict.Code, tc.wantCode)
 			}
-			if result.Result != resultConflict {
-				t.Fatalf("PublishFeature() result = %q; want %q", result.Result, resultConflict)
+			if !reflect.DeepEqual(result, serverruntime.PublishFeatureResponse{}) {
+				t.Fatalf("PublishFeature() result = %+v; want the zero response on conflict", result)
 			}
 			rendered := errcat.New(tc.wantCode, conflict.Options...)
 			if rendered.Summary != tc.wantSummary {
@@ -2039,9 +2083,6 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 			name: "delete",
 			run: func(target *mutationTarget, featureID, staleRevision string) (string, error) {
 				result, err := target.DeleteFeature(featureID, serverruntime.GuardedFeatureActionRequest{SourceRevision: staleRevision})
-				if err != nil {
-					return resultFailed, err
-				}
 				return string(result.Status), err
 			},
 		},
@@ -2068,8 +2109,8 @@ func TestServerMutationTargetCompletionActionsRejectStaleSourceRevision(t *testi
 			if !errors.As(err, &conflict) {
 				t.Fatalf("completion action error = %T %v; want ActionConflictError", err, err)
 			}
-			if result != resultFailed {
-				t.Fatalf("result = %q; want %q", result, resultFailed)
+			if result != "" {
+				t.Fatalf("result = %q; want the zero response on stale preflight", result)
 			}
 			if !errors.Is(conflict.Err, orchestrator.ErrStalePreflight) {
 				t.Fatalf("conflict err = %v; want stale preflight sentinel", conflict.Err)
@@ -2227,8 +2268,8 @@ func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testi
 	if updated.Pipeline != feature.PipelineMoonshot || updated.Status != feature.StatusImplementing {
 		t.Fatalf("feature pipeline/status = %s/%s, want unchanged moonshot/implementing", updated.Pipeline, updated.Status)
 	}
-	if result.FeatureID != f.ID || result.TargetPhase != phaseNameInquire || result.UpgradePipeline != "large" || result.Result != resultFailed {
-		t.Fatalf("RewindFeature() failure result = %+v; want failed upgrade response", result)
+	if !reflect.DeepEqual(result, serverruntime.RewindFeatureResponse{}) {
+		t.Fatalf("RewindFeature() failure result = %+v; want the zero response", result)
 	}
 }
 
@@ -2324,8 +2365,8 @@ func TestServerMutationTargetCleanupAndDeleteActionsMutateFeatureState(t *testin
 		if err == nil {
 			t.Fatalf("CleanupFeature(cycles) error = nil; want unknown target error")
 		}
-		if result.FeatureID != f.ID || result.Target != "cycles" || result.Result != resultFailed {
-			t.Fatalf("CleanupFeature(cycles) result = %+v; want failed cycles", result)
+		if !reflect.DeepEqual(result, serverruntime.CleanupFeatureResponse{}) {
+			t.Fatalf("CleanupFeature(cycles) result = %+v; want the zero response", result)
 		}
 		if !strings.Contains(err.Error(), "unknown cleanup target") {
 			t.Fatalf("CleanupFeature(cycles) error = %v; want unknown cleanup target", err)

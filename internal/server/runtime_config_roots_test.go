@@ -39,7 +39,7 @@ type runtimeConfigRecorder struct {
 
 func (r *runtimeConfigRecorder) RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
 	r.calls.Add(1)
-	return RuntimeConfigUpdateResponse{Result: resultUpdated}, nil
+	return RuntimeConfigUpdateResponse{Result: "updated"}, nil
 }
 
 func newRuntimeConfigHandler(t *testing.T, recorder *runtimeConfigRecorder) http.Handler {

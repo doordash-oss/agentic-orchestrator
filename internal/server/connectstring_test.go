@@ -15,9 +15,37 @@
 package server
 
 import (
+	"fmt"
+	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// parsedConnectionString is the round-trip view of a generated connection
+// string. Clients own the parser; these tests only confirm what generation
+// encodes.
+type parsedConnectionString struct {
+	Token string
+	Host  string
+	Port  int
+	Name  string
+}
+
+func parseConnectionString(raw string) (parsedConnectionString, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return parsedConnectionString{}, err
+	}
+	if u.Scheme != connectionStringScheme || u.User == nil {
+		return parsedConnectionString{}, fmt.Errorf("connection string %q lacks the scheme or token", raw)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		return parsedConnectionString{}, err
+	}
+	return parsedConnectionString{Token: u.User.Username(), Host: u.Hostname(), Port: port, Name: u.Query().Get("name")}, nil
+}
 
 func TestConnectionStringGenerateParseRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -35,17 +63,17 @@ func TestConnectionStringGenerateParseRoundTrip(t *testing.T) {
 		{"ipv6", "tok", "fe80::1", 8080, ""},
 	}
 	for _, tc := range cases {
-		raw, err := GenerateConnectionString(tc.token, tc.host, tc.port, tc.sname)
+		raw, err := generateConnectionString(tc.token, tc.host, tc.port, tc.sname)
 		if err != nil {
-			t.Errorf("%s: GenerateConnectionString() error = %v", tc.name, err)
+			t.Errorf("%s: generateConnectionString() error = %v", tc.name, err)
 			continue
 		}
 		if !strings.HasPrefix(raw, "agentico://") {
 			t.Errorf("%s: %q lacks the agentico:// scheme", tc.name, raw)
 		}
-		parsed, err := ParseConnectionString(raw)
+		parsed, err := parseConnectionString(raw)
 		if err != nil {
-			t.Errorf("%s: ParseConnectionString(%q) error = %v", tc.name, raw, err)
+			t.Errorf("%s: parseConnectionString(%q) error = %v", tc.name, raw, err)
 			continue
 		}
 		if parsed.Token != tc.token || parsed.Host != tc.host || parsed.Port != tc.port || parsed.Name != tc.sname {
@@ -70,45 +98,10 @@ func TestGenerateConnectionStringStrict(t *testing.T) {
 		{"wildcard v6", "tok", "::", 8080, "wildcard"},
 		{"bad port", "tok", "10.1.2.3", 0, "out of range"},
 	} {
-		if _, err := GenerateConnectionString(tc.token, tc.host, tc.port, ""); err == nil ||
+		if _, err := generateConnectionString(tc.token, tc.host, tc.port, ""); err == nil ||
 			!strings.Contains(err.Error(), tc.wantErr) {
-			t.Errorf("%s: GenerateConnectionString() error = %v; want %q", tc.name, err, tc.wantErr)
+			t.Errorf("%s: generateConnectionString() error = %v; want %q", tc.name, err, tc.wantErr)
 		}
-	}
-}
-
-func TestParseConnectionStringMalformed(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name    string
-		raw     string
-		wantErr string
-	}{
-		{"wrong scheme", "http://tok@10.1.2.3:8080", "agentico://"},
-		{"missing token", "agentico://10.1.2.3:8080", "bearer token"},
-		{"missing host", "agentico://tok@", "host"},
-		{"wildcard v4 host", "agentico://tok@0.0.0.0:8080", "wildcard"},
-		{"wildcard v6 host", "agentico://tok@[::]:8080", "wildcard"},
-		{"missing port", "agentico://tok@10.1.2.3", "explicit port"},
-		{"bad port", "agentico://tok@10.1.2.3:99999", "unparseable or out of range"},
-	} {
-		if _, err := ParseConnectionString(tc.raw); err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-			t.Errorf("%s: ParseConnectionString(%q) error = %v; want token %q", tc.name, tc.raw, err, tc.wantErr)
-		}
-	}
-}
-
-func TestParseConnectionStringNameOptional(t *testing.T) {
-	t.Parallel()
-	parsed, err := ParseConnectionString("agentico://tok@10.1.2.3:8080")
-	if err != nil {
-		t.Fatalf("ParseConnectionString() error = %v", err)
-	}
-	if parsed.Name != "" {
-		t.Fatalf("Name = %q; want empty when omitted", parsed.Name)
-	}
-	if got := parsed.BaseURL(); got != "http://10.1.2.3:8080" {
-		t.Fatalf("BaseURL() = %q; want http://10.1.2.3:8080", got)
 	}
 }
 
@@ -118,9 +111,9 @@ func TestConnectionStringFromBaseURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConnectionStringFromBaseURL() error = %v", err)
 	}
-	parsed, err := ParseConnectionString(raw)
+	parsed, err := parseConnectionString(raw)
 	if err != nil {
-		t.Fatalf("ParseConnectionString(%q) error = %v", raw, err)
+		t.Fatalf("parseConnectionString(%q) error = %v", raw, err)
 	}
 	if parsed.Token != "tok" || parsed.Host != "10.9.8.7" || parsed.Port != 8080 || parsed.Name != "my server" {
 		t.Fatalf("round-trip = %+v; want tok@10.9.8.7:8080 name=my server", parsed)

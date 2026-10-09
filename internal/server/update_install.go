@@ -622,7 +622,7 @@ func (c *updateCoordinator) runInstall(op *installOperation, ctx context.Context
 			errcat.WithDiagnostics("this runtime cannot install updates"))
 		return
 	}
-	if op.stopActiveWork && c.opts.Stopper == nil {
+	if op.stopActiveWork && c.opts.stopper == nil {
 		c.failInstall(op, errcat.UpdateInstallFailed, "install_unsupported",
 			errcat.WithDiagnostics("this runtime cannot stop work for installs"))
 		return
@@ -787,7 +787,7 @@ func (c *updateCoordinator) enterStopInterval(op *installOperation, ctx context.
 	// The existing draining status represents the non-cancellable
 	// stop/drain interval from stop entry through replacement.
 	c.applyInstallStatus(op, updateStatusDraining, "install_stopping")
-	if failure := c.dispatchAndConfirmStops(op, admission, c.opts.Stopper); failure != nil {
+	if failure := c.dispatchAndConfirmStops(op, admission, c.opts.stopper); failure != nil {
 		// Any stop error, timeout, unresolved activity or reservation,
 		// or detection failure aborts the installation even if another
 		// stop succeeded: the current binary keeps serving, owned

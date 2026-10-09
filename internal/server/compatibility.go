@@ -38,13 +38,13 @@ const (
 	CompatibilityNetworkRuntimePolicy = "network-bearer-v1"
 )
 
-// NewCompatibilityDeclaration builds the explicit compatibility contract
+// newCompatibilityDeclaration builds the explicit compatibility contract
 // served on /api/v1/health. buildVersion is the server build's version
 // string (the instance-lock owner version); an empty value falls back to
 // "dev" so the declaration always carries a non-empty build identity.
 // runtimePolicy is the bind-mode policy from the resolved listen address;
 // an empty value falls back to the loopback policy.
-func NewCompatibilityDeclaration(buildVersion, runtimePolicy string) CompatibilityDeclaration {
+func newCompatibilityDeclaration(buildVersion, runtimePolicy string) CompatibilityDeclaration {
 	if buildVersion == "" {
 		buildVersion = "dev"
 	}

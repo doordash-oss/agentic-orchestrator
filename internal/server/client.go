@@ -27,7 +27,7 @@ import (
 	"time"
 )
 
-const DefaultClientTimeout = 10 * time.Second
+const defaultClientTimeout = 10 * time.Second
 
 type ClientOptions struct {
 	BaseURL    string
@@ -42,9 +42,9 @@ type Client struct {
 	token   string
 }
 
-// APIError is the typed client's decoded canonical error value. Code, class,
+// apiError is the typed client's decoded canonical error value. Code, class,
 // title, and summary always come from the server's catalog rendering.
-type APIError struct {
+type apiError struct {
 	Status      int
 	Code        string
 	Class       string
@@ -57,7 +57,7 @@ type APIError struct {
 	Path        string
 }
 
-func (e *APIError) Error() string {
+func (e *apiError) Error() string {
 	if e == nil {
 		return ""
 	}
@@ -102,7 +102,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 
 func clientTimeout(timeout time.Duration) time.Duration {
 	if timeout <= 0 {
-		return DefaultClientTimeout
+		return defaultClientTimeout
 	}
 	return timeout
 }
@@ -204,7 +204,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 }
 
 func decodeAPIError(resp *http.Response, method, path string) error {
-	apiErr := &APIError{Status: resp.StatusCode, Method: method, Path: path}
+	apiErr := &apiError{Status: resp.StatusCode, Method: method, Path: path}
 	var errResp ErrorResponse
 	if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error.Code != "" {
 		body := errResp.Error

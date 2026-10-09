@@ -475,7 +475,7 @@ func (h *apiHandler) relationshipChildrenOf(parentID string, loaded []*feature.F
 	if parentID == "" {
 		return &feature.RelationshipChildren{}, nil
 	}
-	if reader, ok := h.store.(RelationshipReader); ok {
+	if reader, ok := h.store.(relationshipReader); ok {
 		children, err := reader.RelationshipChildren(parentID)
 		if err != nil {
 			return nil, fmt.Errorf("reading children of parent %s: %w", parentID, err)

@@ -105,7 +105,7 @@ func newCloneHandler(t *testing.T, svc *fakeCloneService) http.Handler {
 		AuthToken:             testAuthToken,
 		DisableHostValidation: true,
 		Mutations:             &preflightMutationTarget{},
-		Clones:                svc,
+		clones:                svc,
 	})
 }
 

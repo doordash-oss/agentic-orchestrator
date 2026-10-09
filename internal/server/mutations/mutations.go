@@ -42,20 +42,35 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// Wire-level result/status/action strings shared across mutation handlers (and
-// reused by their tests) to avoid duplicated literals.
+// Result strings are the server's success vocabulary: the module owns them
+// and fills the result of every response that has one. Error paths return
+// the zero response, which the handler never writes.
 const (
-	resultFailed       = "failed"
 	resultAnswered     = "answered"
-	resultConflict     = "conflict"
 	resultCleaned      = "cleaned"
-	resultStarted      = "started"
-	resultUpdated      = "updated"
-	resultSent         = "sent"
-	resultRetried      = "retried"
-	resultSetupStarted = "setup_started"
 	resultCreated      = "created"
+	resultDiscarded    = "discarded"
+	resultDone         = "done"
+	resultDrafted      = "drafted"
+	resultGenerated    = "generated"
+	resultMerged       = "merged"
+	resultPublished    = "published"
+	resultRecovered    = "recovered"
+	resultRestarted    = "restarted"
+	resultResumed      = "resumed"
+	resultRetried      = "retried"
+	resultReviewed     = "reviewed"
+	resultRewound      = "rewound"
+	resultSent         = "sent"
+	resultSetupStarted = "setup_started"
+	resultStarted      = "started"
+	resultStopped      = "stopped"
+	resultUnchanged    = "unchanged"
+	resultUpdated      = "updated"
+	resultWaived       = "waived"
+)
 
+const (
 	dispatchNone = "none"
 
 	toolNameBash            = "Bash"
@@ -157,7 +172,7 @@ func (t *mutationTarget) CreateFeature(req serverruntime.CreateFeatureRequest) (
 		return serverruntime.CreateFeatureResponse{}, err
 	}
 	return serverruntime.CreateFeatureResponse{
-		FeatureID: f.ID, Result: "created", Warnings: wireCreationWarnings(f.CreationWarnings),
+		FeatureID: f.ID, Result: resultCreated, Warnings: wireCreationWarnings(f.CreationWarnings),
 	}, nil
 }
 
@@ -211,17 +226,15 @@ func createSourceExpectations(sources []serverruntime.RepositorySource) ([]featu
 // setup state and surfaced through setup events, so the HTTP response only
 // acknowledges the dispatch.
 func (t *mutationTarget) SetupFeature(featureID string) (serverruntime.FeatureSetupResponse, error) {
-	resp := serverruntime.FeatureSetupResponse{FeatureID: featureID}
 	if err := t.orch.DispatchSetup(featureID); err != nil {
 		if errors.Is(err, orchestrator.ErrNoSetupWork) {
-			return resp, &serverruntime.ActionConflictError{
+			return serverruntime.FeatureSetupResponse{}, &serverruntime.ActionConflictError{
 				Detail: fmt.Sprintf("feature %q has no pending or failed setup work", featureID),
 			}
 		}
-		return resp, err
+		return serverruntime.FeatureSetupResponse{}, err
 	}
-	resp.Result = resultSetupStarted
-	return resp, nil
+	return serverruntime.FeatureSetupResponse{FeatureID: featureID, Result: resultSetupStarted}, nil
 }
 
 func (t *mutationTarget) StartFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
@@ -231,31 +244,23 @@ func (t *mutationTarget) StartFeature(featureID string) (serverruntime.FeatureSt
 	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
 }
 
-func (t *mutationTarget) ResumeFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
-	return t.StartFeature(featureID)
-}
-
 func (t *mutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
 	if err := t.orch.StopFeature(featureID); err != nil {
 		return serverruntime.FeatureStopResponse{}, err
 	}
-	return serverruntime.FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
+	return serverruntime.FeatureStopResponse{FeatureID: featureID, Result: resultStopped}, nil
 }
 
 func (t *mutationTarget) RestartFeature(featureID string, req serverruntime.RestartFeatureRequest) (serverruntime.FeatureRestartResponse, error) {
 	outcome, err := t.orch.RestartFeature(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
-	if err != nil && outcome.Action != orchestrator.RestartDispatchPhase {
+	if err != nil {
 		return serverruntime.FeatureRestartResponse{}, err
 	}
-	resp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: "restarted", Phase: outcome.Phase.String()}
+	resp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: resultRestarted, Phase: outcome.Phase.String()}
 	if outcome.Action == orchestrator.RestartDispatchPhase {
 		resp.Dispatch = "phase"
 	} else {
 		resp.Dispatch = dispatchNone
-	}
-	if err != nil {
-		resp.Result = resultFailed
-		return resp, err
 	}
 	return resp, nil
 }
@@ -267,7 +272,6 @@ func (t *mutationTarget) ReviewDecision(featureID string, req serverruntime.Revi
 		IsRewind:    req.IsRewind,
 		PhasePlan:   req.PhasePlan,
 		Roadmap:     req.Roadmap,
-		Comment:     req.Comment,
 	}
 	return t.orch.HandleReviewDecision(featureID, decision)
 }
@@ -302,11 +306,11 @@ func (t *mutationTarget) UpdateFeatureConfig(featureID string, req serverruntime
 	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
 }
 
-func (t *mutationTarget) ResumeNeedUserInput(featureID string, req serverruntime.NeedUserInputResumeRequest) (serverruntime.NeedUserInputResumeResponse, error) {
+func (t *mutationTarget) ResumeNeedUserInput(featureID string) (serverruntime.NeedUserInputResumeResponse, error) {
 	if err := t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{}); err != nil {
 		return serverruntime.NeedUserInputResumeResponse{}, err
 	}
-	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
+	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: resultResumed}, nil
 }
 
 func (t *mutationTarget) WaiveTestingContractItems(featureID string, req serverruntime.TestingContractWaiveRequest) (serverruntime.TestingContractWaiveResponse, error) {
@@ -318,10 +322,10 @@ func (t *mutationTarget) WaiveTestingContractItems(featureID string, req serverr
 		if errors.Is(err, orchestrator.ErrStaleTestingContract) {
 			err = &serverruntime.ActionConflictError{Err: err, Code: errcat.Conflict}
 		}
-		return serverruntime.TestingContractWaiveResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.TestingContractWaiveResponse{}, err
 	}
 	return serverruntime.TestingContractWaiveResponse{
-		FeatureID: featureID, Result: "waived",
+		FeatureID: featureID, Result: resultWaived,
 		ContractRevision: result.Revision, WaivedItems: result.WaivedItems,
 	}, nil
 }
@@ -341,7 +345,7 @@ func (t *mutationTarget) DraftNeedUserInputAnswers(featureID string, req serverr
 	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
 		return serverruntime.NeedUserInputDraftResponse{}, fmt.Errorf("write need-user-input gate: %w", err)
 	}
-	return serverruntime.NeedUserInputDraftResponse{FeatureID: featureID, Result: "drafted"}, nil
+	return serverruntime.NeedUserInputDraftResponse{FeatureID: featureID, Result: resultDrafted}, nil
 }
 
 func (t *mutationTarget) AnswerPermission(req serverruntime.PermissionAnswerRequest) (serverruntime.PermissionAnswerResponse, error) {
@@ -360,7 +364,7 @@ func (t *mutationTarget) AnswerPermission(req serverruntime.PermissionAnswerRequ
 		if err := retry.RetryAutomaticReview(pending.RequestID); err != nil {
 			return serverruntime.PermissionAnswerResponse{}, err
 		}
-		return serverruntime.PermissionAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Decision: req.Decision, Result: "reviewed"}, nil
+		return serverruntime.PermissionAnswerResponse{SessionID: sess.ID(), RequestID: pending.RequestID, Decision: req.Decision, Result: resultReviewed}, nil
 	}
 	if req.AutoApproveScope != "" {
 		if err := t.enableAutomaticReview(req.AutoApproveScope, sess.FeatureID()); err != nil {
@@ -565,7 +569,7 @@ func (t *mutationTarget) RuntimeConfig(req serverruntime.RuntimeConfigMutationRe
 		return serverruntime.RuntimeConfigUpdateResponse{}, err
 	}
 	t.cfg = cfg
-	status := "unchanged"
+	status := resultUnchanged
 	if changed {
 		status = resultUpdated
 	}
@@ -580,12 +584,12 @@ func (t *mutationTarget) ExecuteRecovery(ctx context.Context, items []ports.Reco
 	if err := t.orch.ExecuteRecovery(ctx, items, actions); err != nil {
 		return serverruntime.RecoveryActionResponse{}, err
 	}
-	return serverruntime.RecoveryActionResponse{Result: "recovered"}, nil
+	return serverruntime.RecoveryActionResponse{Result: resultRecovered}, nil
 }
 
 func (t *mutationTarget) PublishFeature(featureID string, req serverruntime.PublishFeatureRequest) (serverruntime.PublishFeatureResponse, error) {
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
-		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.PublishFeatureResponse{}, err
 	}
 	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
 		Repos: req.Repos,
@@ -593,11 +597,11 @@ func (t *mutationTarget) PublishFeature(featureID string, req serverruntime.Publ
 		Body:  req.Body,
 	}); err != nil {
 		if conflict := actionConflictError(err); conflict != nil {
-			return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultConflict}, conflict
+			return serverruntime.PublishFeatureResponse{}, conflict
 		}
-		return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.PublishFeatureResponse{}, err
 	}
-	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
+	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultPublished}, nil
 }
 
 func (t *mutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
@@ -605,44 +609,33 @@ func (t *mutationTarget) GeneratePublishDescription(featureID string, req server
 		Repos: req.Repos,
 	})
 	if err != nil {
-		return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, err
+		return serverruntime.PublishDescriptionResponse{}, err
 	}
-	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: "generated"}, nil
+	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: resultGenerated}, nil
 }
 
 func (t *mutationTarget) MergeFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MergeFeatureResponse, error) {
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
-		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.MergeFeatureResponse{}, err
 	}
 	if err := t.orch.MergeFeatureLocal(featureID); err != nil {
-		return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.MergeFeatureResponse{}, err
 	}
-	return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: "merged"}, nil
+	return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultMerged}, nil
 }
 
 func (t *mutationTarget) RepositoryPath(featureID, repoName string) (serverruntime.RepositoryPathResponse, error) {
-	resp := serverruntime.RepositoryPathResponse{FeatureID: featureID, Repo: repoName}
 	path, err := t.orch.RepositoryWorktreePath(featureID, repoName)
 	if err != nil {
-		return resp, err
+		return serverruntime.RepositoryPathResponse{}, err
 	}
-	resp.Path = path
-	return resp, nil
+	return serverruntime.RepositoryPathResponse{FeatureID: featureID, Repo: repoName, Path: path}, nil
 }
 
 func (t *mutationTarget) RewindFeature(featureID string, req serverruntime.RewindFeatureRequest) (serverruntime.RewindFeatureResponse, error) {
-	requestedTarget := strings.ToLower(strings.TrimSpace(req.TargetPhase))
 	targetPhase, err := feature.ParsePhaseName(req.TargetPhase)
-	resp := serverruntime.RewindFeatureResponse{FeatureID: featureID, TargetPhase: requestedTarget, RoadmapPhase: req.RoadmapPhase}
-	if err == nil {
-		resp.TargetPhase = targetPhase.DirName()
-	}
-	if req.UpgradePipeline != "" {
-		resp.UpgradePipeline = string(req.UpgradePipeline)
-	}
 	if err != nil {
-		resp.Result = resultFailed
-		return resp, err
+		return serverruntime.RewindFeatureResponse{}, err
 	}
 	result, err := t.orch.Rewind(featureID, orchestrator.RewindInput{
 		Request:         feature.RewindRequest{TargetPhase: targetPhase, RoadmapPhase: req.RoadmapPhase},
@@ -650,21 +643,22 @@ func (t *mutationTarget) RewindFeature(featureID string, req serverruntime.Rewin
 		SourceRevision:  req.SourceRevision,
 		SourceRunNumber: req.SourceRunNumber,
 	})
-	if errors.Is(err, orchestrator.ErrStaleRewindPreview) {
-		resp.Result = resultFailed
-		return resp, err
+	if err != nil {
+		return serverruntime.RewindFeatureResponse{}, err
+	}
+	resp := serverruntime.RewindFeatureResponse{
+		FeatureID:       featureID,
+		Result:          resultRewound,
+		TargetPhase:     targetPhase.DirName(),
+		RoadmapPhase:    req.RoadmapPhase,
+		UpgradePipeline: string(req.UpgradePipeline),
+		SourceRunNumber: result.SourceRunNumber,
+		NewRunNumber:    result.NewRunNumber,
+		Warnings:        wireRewindWarnings(result.Warnings),
 	}
 	if result.EffectivePhase != 0 || strings.EqualFold(req.TargetPhase, phaseNameResearch) {
 		resp.EffectivePhase = result.EffectivePhase.DirName()
 	}
-	resp.SourceRunNumber = result.SourceRunNumber
-	resp.Warnings = wireRewindWarnings(result.Warnings)
-	if err != nil {
-		resp.Result = resultFailed
-		return resp, err
-	}
-	resp.Result = "rewound"
-	resp.NewRunNumber = result.NewRunNumber
 	return resp, nil
 }
 
@@ -731,7 +725,7 @@ func wireRepositoryDiffFailure(repoName string, failure *orchestrator.Repository
 
 func (t *mutationTarget) RetryFeature(featureID string) (serverruntime.RetryFeatureResponse, error) {
 	if err := t.orch.RetryFeature(featureID); err != nil {
-		return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.RetryFeatureResponse{}, err
 	}
 	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
 }
@@ -739,7 +733,7 @@ func (t *mutationTarget) RetryFeature(featureID string) (serverruntime.RetryFeat
 func (t *mutationTarget) CompletionPreflight(featureID string) (serverruntime.CompletionPreflightResponse, error) {
 	result, err := t.orch.CompletionPreflight(featureID)
 	if err != nil {
-		return serverruntime.CompletionPreflightResponse{FeatureID: featureID}, err
+		return serverruntime.CompletionPreflightResponse{}, err
 	}
 	resp := serverruntime.CompletionPreflightResponse{
 		APIVersion:      serverruntime.APIVersion,
@@ -773,7 +767,7 @@ func (t *mutationTarget) CompletionPreflight(featureID string) (serverruntime.Co
 func (t *mutationTarget) RepositoryDiff(featureID, repoName, filePath string) (serverruntime.RepositoryDiffResponse, error) {
 	result, err := t.orch.RepositoryDiff(featureID, repoName, filePath)
 	if err != nil {
-		return serverruntime.RepositoryDiffResponse{FeatureID: featureID, Repo: repoName}, err
+		return serverruntime.RepositoryDiffResponse{}, err
 	}
 	resp := serverruntime.RepositoryDiffResponse{
 		APIVersion:      serverruntime.APIVersion,
@@ -802,58 +796,53 @@ func (t *mutationTarget) RepositoryDiff(featureID, repoName, filePath string) (s
 }
 
 func (t *mutationTarget) RefactorFeature(featureID string, req serverruntime.RefactorFeatureRequest) (serverruntime.RefactorFeatureResponse, error) {
-	resp := serverruntime.RefactorFeatureResponse{ParentID: featureID, Result: resultFailed}
 	spec, err := serverruntime.RefactorChildSpecFromRequest(req)
 	if err != nil {
-		return resp, err
+		return serverruntime.RefactorFeatureResponse{}, err
 	}
 	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{Kind: feature.ChildKindRefactor, Refactor: spec})
 	if err != nil {
-		return resp, err
+		return serverruntime.RefactorFeatureResponse{}, err
 	}
-	resp.FeatureID = launch.Child.ID
-	resp.Result = resultCreated
-	return resp, nil
+	return serverruntime.RefactorFeatureResponse{FeatureID: launch.Child.ID, ParentID: featureID, Result: resultCreated}, nil
 }
 
 func (t *mutationTarget) ReviewFeedbackFeature(featureID string, req serverruntime.ReviewFeedbackFeatureRequest) (serverruntime.ReviewFeedbackFeatureResponse, error) {
-	resp := serverruntime.ReviewFeedbackFeatureResponse{ParentID: featureID, Result: resultFailed}
 	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{
 		Kind:             feature.ChildKindReviewFeedback,
 		ExpectedRevision: int64(req.ExpectedRevision),
 		Gate:             serverruntime.ReviewFeedbackGateFromRequest(req),
 	})
 	if err != nil {
-		return resp, err
+		return serverruntime.ReviewFeedbackFeatureResponse{}, err
 	}
-	resp.FeatureID = launch.Child.ID
-	resp.ChildID = launch.Child.ID
-	resp.Changed = launch.Changed
-	resp.Omitted = launch.Omitted
-	resp.Deferred = launch.Deferred
-	resp.Result = resultCreated
-	return resp, nil
+	return serverruntime.ReviewFeedbackFeatureResponse{
+		FeatureID: launch.Child.ID,
+		ParentID:  featureID,
+		ChildID:   launch.Child.ID,
+		Result:    resultCreated,
+		Changed:   launch.Changed,
+		Omitted:   launch.Omitted,
+		Deferred:  launch.Deferred,
+	}, nil
 }
 
-func (t *mutationTarget) RebaseFeature(featureID string, _ serverruntime.RebaseFeatureRequest) (serverruntime.RebaseFeatureResponse, error) {
-	resp := serverruntime.RebaseFeatureResponse{ParentID: featureID, Result: resultFailed}
+func (t *mutationTarget) RebaseFeature(featureID string) (serverruntime.RebaseFeatureResponse, error) {
 	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{Kind: feature.ChildKindRebase})
 	if err != nil {
-		return resp, err
+		return serverruntime.RebaseFeatureResponse{}, err
 	}
-	resp.FeatureID = launch.Child.ID
-	resp.Result = resultCreated
-	return resp, nil
+	return serverruntime.RebaseFeatureResponse{FeatureID: launch.Child.ID, ParentID: featureID, Result: resultCreated}, nil
 }
 
 func (t *mutationTarget) MarkDone(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MarkDoneResponse, error) {
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
-		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.MarkDoneResponse{}, err
 	}
 	if err := t.orch.MarkDone(featureID); err != nil {
-		return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.MarkDoneResponse{}, err
 	}
-	return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: "done"}, nil
+	return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultDone}, nil
 }
 
 func (t *mutationTarget) CleanupFeature(featureID string, req serverruntime.CleanupActionRequest) (serverruntime.CleanupFeatureResponse, error) {
@@ -861,35 +850,34 @@ func (t *mutationTarget) CleanupFeature(featureID string, req serverruntime.Clea
 	if target == "" {
 		target = cleanupTargetWorktrees
 	}
-	resp := serverruntime.CleanupFeatureResponse{FeatureID: featureID, Target: target}
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
-		resp.Result = resultFailed
-		return resp, err
+		return serverruntime.CleanupFeatureResponse{}, err
 	}
 	switch target {
 	case cleanupTargetWorktrees:
 		if err := t.orch.CleanWorktree(featureID); err != nil {
-			resp.Result = resultFailed
-			return resp, err
+			return serverruntime.CleanupFeatureResponse{}, err
 		}
 	default:
-		resp.Result = resultFailed
-		return resp, fmt.Errorf("unknown cleanup target %q", req.Target)
+		return serverruntime.CleanupFeatureResponse{}, fmt.Errorf("unknown cleanup target %q", req.Target)
 	}
-	resp.Result = resultCleaned
-	return resp, nil
+	return serverruntime.CleanupFeatureResponse{FeatureID: featureID, Target: target, Result: resultCleaned}, nil
 }
 
 func (t *mutationTarget) DeleteFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.DeleteFeatureResponse, error) {
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
-		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
+		return serverruntime.DeleteFeatureResponse{}, err
 	}
 	result, err := t.orch.Delete(featureID)
 	if err != nil {
-		return serverruntime.DeleteFeatureResponse{FeatureID: featureID}, err
+		return serverruntime.DeleteFeatureResponse{}, err
+	}
+	deletedID := result.ParentID
+	if deletedID == "" {
+		deletedID = featureID
 	}
 	return serverruntime.DeleteFeatureResponse{
-		FeatureID:   result.ParentID,
+		FeatureID:   deletedID,
 		OperationID: result.OperationID,
 		Status:      result.Status,
 		Diagnostics: result.Diagnostics,
@@ -898,9 +886,9 @@ func (t *mutationTarget) DeleteFeature(featureID string, req serverruntime.Guard
 
 func (t *mutationTarget) DiscardChild(featureID string) (serverruntime.DiscardChildResponse, error) {
 	if err := t.orch.DiscardChild(featureID); err != nil {
-		return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: resultFailed}, err
+		return serverruntime.DiscardChildResponse{}, err
 	}
-	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: "discarded"}, nil
+	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: resultDiscarded}, nil
 }
 
 func (t *mutationTarget) rejectStaleCompletionPreflight(featureID, sourceRevision string) error {

@@ -32,12 +32,12 @@ type promptRouteTarget struct {
 
 func (t *promptRouteTarget) AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error) {
 	t.askUser = append(t.askUser, req)
-	return AskUserAnswerResponse{RequestID: req.RequestID, SessionID: "sess-1"}, nil
+	return AskUserAnswerResponse{RequestID: req.RequestID, SessionID: "sess-1", Result: "answered"}, nil
 }
 
 func (t *promptRouteTarget) SendHelp(req HelpAnswerRequest) (HelpSendResponse, error) {
 	t.help = append(t.help, req)
-	return HelpSendResponse{FeatureID: "feat-1", SessionID: req.SessionID}, nil
+	return HelpSendResponse{FeatureID: "feat-1", SessionID: req.SessionID, Result: "sent"}, nil
 }
 
 // TestRetiredChatPromptRoutesAreNotFound pins the chat surface removal: the

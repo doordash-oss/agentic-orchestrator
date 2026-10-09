@@ -22,9 +22,9 @@ import (
 	"strings"
 )
 
-// DefaultListenAddr is the bind address used when no explicit loopback
+// defaultListenAddr is the bind address used when no explicit loopback
 // address is requested: an ephemeral port on 127.0.0.1.
-const DefaultListenAddr = "127.0.0.1:0"
+const defaultListenAddr = "127.0.0.1:0"
 
 // ListenResolution is the full result of normalizing a --listen value: the
 // TCP bind address, the host advertised to clients (which differs from the
@@ -86,7 +86,7 @@ func resolveListen(value string, probe func() (string, error)) (ListenResolution
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
 		return ListenResolution{
-			BindAddr:      DefaultListenAddr,
+			BindAddr:      defaultListenAddr,
 			AdvertiseHost: "127.0.0.1",
 			Policy:        CompatibilityRuntimePolicy,
 		}, nil

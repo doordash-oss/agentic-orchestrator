@@ -19,12 +19,16 @@ mutation target. Lives in `internal/server`.
 **Mutation module.** The sub-package that implements the mutation target by
 translating server request DTOs into orchestration operations. It holds no
 feature store or feature manager handle and sequences no locks, admission, or
-dispatch. It is the only production implementation. Lives in
-`internal/server/mutations`.
+dispatch. It owns the server's result vocabulary (`started`, `created`,
+`updated`, and the rest) and returns the zero response on error. It is the only
+production implementation. Lives in `internal/server/mutations`.
 
 **Mutation target.** The server's `MutationTarget` interface, which the HTTP
-handler calls for every REST mutation. Server tests fake it; production wires
-the mutation module. Lives in `internal/server`.
+handler calls for every REST mutation. On success the target fills the feature
+id and result of every response that has those fields; the handler only stamps
+the API version and discards the response on error. Server tests fake it, and a
+fake must fill those fields too; production wires the mutation module. Lives in
+`internal/server`.
 
 **Orchestration operation.** A single exported orchestrator method that owns
 the relationship lock, admission, and dispatch order for one feature mutation,

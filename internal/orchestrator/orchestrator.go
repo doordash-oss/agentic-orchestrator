@@ -746,12 +746,6 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 	}
 
 	if allFresh {
-		// Refresh codebase indexes for all repos, then skip to Inquire.
-		if o.deps.PhaseRunner != nil {
-			for _, repo := range f.Repos {
-				_ = o.deps.PhaseRunner.RunCodebaseIndexForRepo(repo)
-			}
-		}
 		if err := o.finalizeKBForSkip(f); err != nil {
 			return PhaseStartResult{}, err
 		}
@@ -776,9 +770,8 @@ func (o *Orchestrator) startKB(featureID string) (PhaseStartResult, error) {
 				continue
 			}
 			if freshness[repo.Name] {
-				// Fresh repo in the mixed case: refresh codebase index,
-				// immediately mark completed in per-repo tracking.
-				_ = o.deps.PhaseRunner.RunCodebaseIndexForRepo(repo)
+				// Fresh repo in the mixed case: immediately mark completed in
+				// per-repo tracking.
 				_ = o.deps.Lifecycle.MarkRepoKBCompleted(featureID, repo.Name)
 				continue
 			}

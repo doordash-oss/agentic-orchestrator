@@ -465,42 +465,6 @@ func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFi
 	})
 }
 
-// RunCodebaseIndex builds structural codebase indexes for all repos in a feature.
-// This is pure Go (no LLM) and runs quickly. It checks freshness first and
-// skips repos whose indexes are already up-to-date with HEAD.
-func (pr *PhaseRunner) RunCodebaseIndex(f *feature.Feature) error {
-	if len(f.Repos) == 0 {
-		return nil
-	}
-	for _, repo := range f.Repos {
-		if err := pr.RunCodebaseIndexForRepo(repo); err != nil {
-			log.Printf("codebase index for %s: %v", repo.Name, err)
-			// Non-fatal — continue with other repos
-		}
-	}
-	return nil
-}
-
-// RunCodebaseIndexForRepo builds a codebase index for a single repo.
-func (pr *PhaseRunner) RunCodebaseIndexForRepo(repo feature.FeatureRepo) error {
-	kbDir := KBStateDir(pr.StateDir, repo.Name)
-
-	if IsCodebaseIndexFresh(context.Background(), pr.CommandRunner, kbDir, repo.Path) {
-		return nil
-	}
-
-	index, err := BuildCodebaseIndex(repo.Path, 10*time.Second)
-	if err != nil {
-		return fmt.Errorf("building codebase index for %s: %w", repo.Name, err)
-	}
-
-	if err := SaveCodebaseIndex(kbDir, index); err != nil {
-		return fmt.Errorf("saving codebase index for %s: %w", repo.Name, err)
-	}
-
-	return MarkCodebaseIndexFresh(context.Background(), pr.CommandRunner, kbDir, repo.Path, len(index.Symbols), len(index.Summaries))
-}
-
 // RunKnowledgeBase starts a knowledge base build session for a feature's primary repo.
 // Returns the session ID. The session runs asynchronously.
 // Returns ("", nil) if the KB is already fresh and no rebuild is needed.

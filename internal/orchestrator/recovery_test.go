@@ -609,7 +609,7 @@ func TestExecuteRecovery_Resume_InquiringFeature_RealManager_NoInvalidTransition
 // inquiring" error here. Mock-based tests do NOT catch this class of bug.
 //
 // Test shape:
-//   - Real git repo + matching head commit → fresh KB + fresh codebase index.
+//   - Real git repo + matching head commit → fresh KB.
 //   - BuildSessionFn short-circuits RunInquire *after* StartInquire's
 //     transition has been applied, so we can observe that Inquiring was
 //     reached without needing a live claude CLI.
@@ -652,34 +652,9 @@ func TestExecuteRecovery_Resume_BuildingKBFeature_AllFresh_RealManager_NoInvalid
 		t.Fatalf("write KB index: %v", err)
 	}
 
-	// Seed fresh codebase index state too — startKB's allFresh branch calls
-	// RunCodebaseIndexForRepo, which short-circuits when the index is fresh.
-	// If this were missing, RunCodebaseIndexForRepo would call BuildCodebaseIndex
-	// against the real repo and add nondeterministic I/O to the test; the
-	// transition rules we're exercising would still be covered, but leaving
-	// the codebase index fresh keeps the test purely focused on the
-	// orchestrator's transition bridging.
-	idxDir := agent.IndexDir(kbDir)
-	if err := os.MkdirAll(idxDir, 0o755); err != nil {
-		t.Fatalf("mkdir index: %v", err)
-	}
-	idxState, _ := json.Marshal(map[string]any{
-		"head_commit":  headCommit,
-		"last_updated": time.Now().UTC().Format(time.RFC3339),
-		"version":      1,
-		"symbol_count": 0,
-		"file_count":   0,
-	})
-	if err := os.WriteFile(filepath.Join(idxDir, "index-state.json"), idxState, 0o644); err != nil {
-		t.Fatalf("write index state: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(idxDir, "index.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write index.json: %v", err)
-	}
-
 	// MockCommandRunner returning the real HEAD commit for any git invocation.
-	// IsKBFresh and IsCodebaseIndexFresh both call GetCurrentCommit via this
-	// runner — matching the seeded head_commit makes both checks succeed.
+	// IsKBFresh calls GetCurrentCommit via this runner — matching the seeded
+	// head_commit makes the check succeed.
 	cmd := mocks.NewMockCommandRunner()
 	cmd.RunFn = func(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
 		return []byte(headCommit + "\n"), nil

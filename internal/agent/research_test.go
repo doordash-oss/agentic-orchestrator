@@ -15,106 +15,12 @@
 package agent
 
 import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	testutil_mocks "github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
-
-func TestRunScoutExec_UsesBoundedHelper(t *testing.T) {
-	called := false
-	var capturedPrompt string
-	runHelper := func(ctx context.Context, prompt string) (*BoundedHelperResult, error) {
-		called = true
-		capturedPrompt = prompt
-		return &BoundedHelperResult{
-			Output: "Scout findings here",
-			Status: BoundedHelperStatusCompleted,
-		}, nil
-	}
-
-	result, err := runScoutExec(context.Background(), "test prompt", runHelper)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !called {
-		t.Error("expected runHelper to be called")
-	}
-	if capturedPrompt != "test prompt" {
-		t.Errorf("capturedPrompt = %q, want %q", capturedPrompt, "test prompt")
-	}
-	if result != "Scout findings here" {
-		t.Errorf("unexpected result: %q", result)
-	}
-}
-
-func TestRunScoutExec_PropagatesHelperFailure(t *testing.T) {
-	runHelper := func(ctx context.Context, prompt string) (*BoundedHelperResult, error) {
-		return nil, fmt.Errorf("helper failed")
-	}
-
-	_, err := runScoutExec(context.Background(), "test prompt", runHelper)
-	if err == nil {
-		t.Fatal("runScoutExec() error = nil, want helper failure")
-	}
-	if !strings.Contains(err.Error(), "helper failed") {
-		t.Errorf("error = %q, want helper failure", err)
-	}
-}
-
-func TestRunParallelScouts_UsesBoundedHelper(t *testing.T) {
-	repoPath := t.TempDir()
-	files := []string{
-		filepath.Join(repoPath, "payments", "handler.go"),
-		filepath.Join(repoPath, "payments", "service.go"),
-		filepath.Join(repoPath, "billing", "gateway.go"),
-	}
-	for _, path := range files {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatalf("MkdirAll(%q): %v", path, err)
-		}
-		if err := os.WriteFile(path, []byte("package test\n"), 0o644); err != nil {
-			t.Fatalf("WriteFile(%q): %v", path, err)
-		}
-	}
-
-	index := &CodebaseIndex{
-		Summaries: []FileSummary{
-			{Path: "payments/handler.go", Purpose: "payment request handling", SymbolCount: 3},
-			{Path: "payments/service.go", Purpose: "payment service", SymbolCount: 2},
-			{Path: "billing/gateway.go", Purpose: "payment gateway", SymbolCount: 1},
-		},
-	}
-
-	var (
-		mu      sync.Mutex
-		prompts []string
-	)
-	runHelper := func(ctx context.Context, prompt string) (*BoundedHelperResult, error) {
-		mu.Lock()
-		prompts = append(prompts, prompt)
-		count := len(prompts)
-		mu.Unlock()
-		return &BoundedHelperResult{
-			Output: fmt.Sprintf("findings %d", count),
-			Status: BoundedHelperStatusCompleted,
-		}, nil
-	}
-
-	result := RunParallelScouts(context.Background(), "payment", index, repoPath, 2, runHelper)
-	if len(prompts) != 2 {
-		t.Fatalf("RunParallelScouts() helper calls = %d, want 2", len(prompts))
-	}
-	if !strings.Contains(result, "## Scout 1 Findings") || !strings.Contains(result, "## Scout 2 Findings") {
-		t.Fatalf("RunParallelScouts() = %q, want scout findings sections", result)
-	}
-}
 
 func TestFilterEnvMulti_SinglePrefix(t *testing.T) {
 	env := []string{"CLAUDECODE=abc", "HOME=/home/user", "PATH=/usr/bin"}

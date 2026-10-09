@@ -83,15 +83,9 @@ func TestOrchestrator_StartKB_NoRepos(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // When KB freshness returns true for all repos, startKB skips to Inquire.
-// This is exercised indirectly by setting ForceKBRebuild=false and providing
-// a CmdRunner that doesn't look at the filesystem (returns empty/no error).
-// Absent a command runner wired to fake filesystem state, we verify at least
-// that the mixed-case path transitions to BuildingKB.
-//
-// For the all-fresh skip, a fully fresh KB requires KBFresh to return true.
-// The cleanest way to verify the skip is by inspecting orchestrator behavior
-// with no repos, covered by TestOrchestrator_StartKB_NoRepos. The mixed-case
-// is covered by TestOrchestrator_StartKB_MixedFresh below.
+// That path needs a PhaseRunner wired to seeded KB state and is covered by
+// TestOrchestrator_StartKB_AllFresh_SkipsToInquire. The mixed-case is covered
+// by TestOrchestrator_StartKB_MixedFresh below.
 
 // ---------------------------------------------------------------------------
 // TestOrchestrator_StartKB_MixedFresh

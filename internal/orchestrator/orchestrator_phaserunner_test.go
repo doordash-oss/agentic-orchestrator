@@ -17,6 +17,7 @@ package orchestrator_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -348,7 +349,7 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 		CurrentPhase: feature.PhaseKnowledgeBase,
 		Pipeline:     feature.PipelineLarge,
 		Repos: []feature.FeatureRepo{
-			{Name: "repo-fresh", Path: "/tmp/repo-fresh"},
+			{Name: "repo-fresh", Path: t.TempDir()},
 			{Name: "repo-stale", Path: "/tmp/repo-stale"},
 			{Name: "repo-dirty", Path: "/tmp/repo-dirty"},
 		},
@@ -432,6 +433,79 @@ func TestOrchestrator_StartKB_MixedFresh_FansOutPerRepo(t *testing.T) {
 	// PhaseStarted hook fired exactly once for KB.
 	if len(startedPhases) != 1 || startedPhases[0] != feature.PhaseKnowledgeBase {
 		t.Errorf("startedPhases = %v, want [PhaseKnowledgeBase]", startedPhases)
+	}
+
+	refuteKBIndexDirCreated(t, cpr.stateDir, "repo-fresh")
+}
+
+// With every repo fresh, startKB skips straight to Inquire: no KB transition,
+// no per-repo completion bookkeeping, no KB sessions, and nothing written
+// under the knowledge-base state directories.
+func TestOrchestrator_StartKB_AllFresh_SkipsToInquire(t *testing.T) {
+	cpr := newCapturingPhaseRunner(t)
+
+	repoNames := []string{"repo-one", "repo-two"}
+	var repos []feature.FeatureRepo
+	for _, name := range repoNames {
+		seedFreshKB(t, cpr.stateDir, name, "deadbeef")
+		repos = append(repos, feature.FeatureRepo{Name: name, Path: t.TempDir()})
+	}
+
+	f := &feature.Feature{
+		ID:           "feat-all-fresh",
+		Status:       feature.StatusInterrupted,
+		CurrentPhase: feature.PhaseKnowledgeBase,
+		Pipeline:     feature.PipelineLarge,
+		Repos:        repos,
+	}
+	lc := lifecycleForFeature(f)
+	fs := newFeatureStore(f)
+	cpr.pr.FeatureStore = fs
+
+	var startedPhases []feature.Phase
+	o := orchestrator.New(orchestrator.Deps{
+		Lifecycle:   lc,
+		Store:       fs,
+		Sessions:    cpr.sm,
+		PhaseRunner: cpr.pr,
+		CmdRunner:   cpr.cmd,
+	}, orchestrator.Hooks{
+		OnPhaseStarted: func(id string, p feature.Phase) {
+			startedPhases = append(startedPhases, p)
+		},
+	})
+
+	if err := o.StartFeature(f.ID); err != nil {
+		t.Fatalf("StartFeature: %v", err)
+	}
+
+	for _, name := range []string{"StartKnowledgeBase", "InitKBStatus", "MarkRepoKBCompleted"} {
+		if n := countLifecycleCalls(lc, name); n != 0 {
+			t.Errorf("%s calls = %d, want 0", name, n)
+		}
+	}
+	if n := countLifecycleCalls(lc, "StartInquire"); n != 1 {
+		t.Errorf("StartInquire calls = %d, want 1; got %v", n, lifecycleCallNames(lc))
+	}
+	if kbSessions := cpr.startSessionsByPhase(feature.PhaseKnowledgeBase); len(kbSessions) != 0 {
+		t.Errorf("KB StartSession calls = %d, want 0", len(kbSessions))
+	}
+	if len(startedPhases) != 1 || startedPhases[0] != feature.PhaseInquire {
+		t.Errorf("startedPhases = %v, want [PhaseInquire]", startedPhases)
+	}
+
+	for _, name := range repoNames {
+		refuteKBIndexDirCreated(t, cpr.stateDir, name)
+	}
+}
+
+// refuteKBIndexDirCreated fails when startKB left an "index" directory in the
+// repo's knowledge-base state directory.
+func refuteKBIndexDirCreated(t *testing.T, stateDir, repoName string) {
+	t.Helper()
+	dir := filepath.Join(agent.KBStateDir(stateDir, repoName), "index")
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("knowledge-base index directory %s: stat err = %v, want not exist", dir, err)
 	}
 }
 

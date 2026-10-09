@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -671,71 +670,5 @@ func TestRunAllKnowledgeBuilds_PartialFresh(t *testing.T) {
 	case <-sess.Done():
 	case <-time.After(10 * time.Second):
 		t.Fatal("timed out waiting for stale-svc KB session")
-	}
-}
-
-func TestRunCodebaseIndexForRepo_FreshKBStaleIndex(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	// This regression test verifies that RunCodebaseIndexForRepo builds the
-	// codebase index independently of KB freshness. The desktop app calls it in every
-	// KB path (including "all KBs fresh" and "no KB changes") to ensure the
-	// structural index is always up-to-date.
-
-	repoPath := testutil.InitGitRepo(t)
-	// Add a Go file so the codebase indexer has something to index
-	testutil.CommitFile(t, repoPath, "main.go", "package main\nfunc main() {}\n", "add main.go")
-
-	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, "state")
-	os.MkdirAll(stateDir, 0o755)
-
-	// Set up KB directory as fresh (state.json + index.md with current commit)
-	kbDir := KBStateDir(stateDir, "index-test-repo")
-	os.MkdirAll(kbDir, 0o755)
-	os.WriteFile(KBPath(kbDir), []byte("# Knowledge Base\n"), 0o644)
-	currentCommit := testutil.CommitFile(t, repoPath, "data.txt", "data", "add data")
-	SaveKBState(kbDir, &KBState{HeadCommit: currentCommit})
-
-	// Verify KB is fresh but codebase index is NOT fresh
-	runner := &execCommandRunner{}
-	ctx := context.Background()
-	if !IsKBFresh(ctx, runner, kbDir, repoPath) {
-		t.Fatal("precondition: expected KB to be fresh")
-	}
-	if IsCodebaseIndexFresh(ctx, runner, kbDir, repoPath) {
-		t.Fatal("precondition: expected codebase index to NOT be fresh")
-	}
-
-	eventCh := make(chan interface{}, 100)
-	sm := session.NewManager(eventCh)
-	defer sm.Shutdown()
-
-	pr := &PhaseRunner{
-		SessionManager: sm,
-		CommandRunner:  runner,
-		StateDir:       stateDir,
-	}
-
-	repo := feature.FeatureRepo{Name: "index-test-repo", Path: repoPath}
-	err := pr.RunCodebaseIndexForRepo(repo)
-	if err != nil {
-		t.Fatalf("RunCodebaseIndexForRepo error: %v", err)
-	}
-
-	// Verify codebase index was built
-	if !IsCodebaseIndexFresh(ctx, runner, kbDir, repoPath) {
-		t.Error("expected codebase index to be fresh after RunCodebaseIndexForRepo")
-	}
-
-	// Verify the index file was actually written
-	idx, err := LoadCodebaseIndex(kbDir)
-	if err != nil {
-		t.Fatalf("LoadCodebaseIndex error: %v", err)
-	}
-	if idx == nil {
-		t.Fatal("expected non-nil codebase index")
 	}
 }

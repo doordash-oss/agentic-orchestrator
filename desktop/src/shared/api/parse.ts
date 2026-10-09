@@ -1661,7 +1661,9 @@ export const ServerSupervisorRecordSchema = z.object({
   created_at: z.string().max(100),
   client_message_id: z.string().max(128).optional(),
   stream_message_id: ServerSupervisorIdSchema.optional(),
-  messages: z.array(ServerTranscriptMessageSchema).max(500),
+  // Paging limits records, not the projected rows within a record. A single
+  // tool result can contain thousands of file changes; preserve every row.
+  messages: z.array(ServerTranscriptMessageSchema),
   request: ServerSupervisorRequestRecordSchema.optional(),
   marker: ServerSupervisorMarkerRecordSchema.optional(),
   checkpoint: ServerSupervisorCheckpointRecordSchema.optional(),

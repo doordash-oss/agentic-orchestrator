@@ -39,6 +39,7 @@ import {
   ServerRepoStatusSchema,
   ServerSetupSchema,
   ServerSetupTaskSchema,
+  SupervisorTranscriptResponseSchema,
   TestingContractResponseSchema,
 } from './parse';
 import { CanonicalErrorException, type CanonicalError } from '../errors';
@@ -684,6 +685,53 @@ describe('parseServerJson', () => {
     const schema = z.object({ n: z.number() });
     expect(parseServerJson('{"n": 4}', schema)).toEqual({ n: 4 });
     expect(failure(() => parseServerJson('{"n": "4"}', schema)).code).toBe('E_SCHEMA_MISMATCH');
+  });
+
+  it('preserves all file-change rows in a large supervisor transcript record', () => {
+    const messages = Array.from({ length: 1930 }, (_, blockIndex) => ({
+      index: 153,
+      block_index: blockIndex,
+      role: 'system',
+      type: 'tool_progress',
+      tool: 'Write',
+      redacted: true,
+      file_change: {
+        path: `src/file-${blockIndex}.ts`,
+        operation: 'update',
+        detail: 'Captured from provider file change.',
+      },
+    }));
+    const page = {
+      api_version: 'v1',
+      conversation_id: 'conversation-1',
+      items: [
+        {
+          seq: 153,
+          id: 'record-153',
+          conversation_id: 'conversation-1',
+          generation: 2,
+          turn_id: 'g2.t2',
+          kind: 'tool_result',
+          visibility: 'display_only',
+          created_at: '2026-10-09T17:41:14Z',
+          messages,
+        },
+      ],
+      first_seq: 153,
+      last_seq: 153,
+      has_more_before: true,
+      has_more_after: false,
+      head_seq: 153,
+    };
+
+    const parsed = parseServerJson(JSON.stringify(page), SupervisorTranscriptResponseSchema);
+    expect(parsed.items[0]?.messages).toEqual(messages);
+
+    // Rows beyond the page-size limit still receive full schema validation.
+    const invalid = JSON.stringify(page).replace('"block_index":1929', '"block_index":-1');
+    const error = failure(() => parseServerJson(invalid, SupervisorTranscriptResponseSchema));
+    expect(error.code).toBe('E_SCHEMA_MISMATCH');
+    expect(error.summary).toContain('items.0.messages.1929.block_index');
   });
 
   it('requires the one-based index on ask-user and gate questions', () => {

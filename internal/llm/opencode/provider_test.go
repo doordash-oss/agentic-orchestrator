@@ -426,9 +426,7 @@ func TestBuildCommand_NativeToollessReviewIsEphemeralAndDeniesEverySurface(t *te
 	args, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "opencode:anthropic/claude-haiku-4-5[200K]",
 		EffortLevel:          llm.EffortLow,
-		ZeroTools:            true,
-		NoSessionPersistence: true,
-		NoCustomization:      true,
+		NativeToollessReview: true,
 		StateDir:             stateDir,
 		WorkDir:              "/workspace/project",
 		WritableRoots:        []string{"/workspace/project"},
@@ -528,25 +526,16 @@ func TestProviderReviewPreferenceBand(t *testing.T) {
 	}
 }
 
-func TestBuildCommand_NativeToollessReviewRejectsPartialIsolation(t *testing.T) {
-	tests := []struct {
-		name string
-		opts llm.CommandBuildOpts
-	}{
-		{name: "zero tools only", opts: llm.CommandBuildOpts{ZeroTools: true}},
-		{name: "no persistence only", opts: llm.CommandBuildOpts{NoSessionPersistence: true}},
-		{name: "no customization only", opts: llm.CommandBuildOpts{NoCustomization: true}},
-		{name: "two of three", opts: llm.CommandBuildOpts{ZeroTools: true, NoCustomization: true}},
+func TestBuildCommand_NativeToollessReviewRequiresStateDir(t *testing.T) {
+	_, _, err := New().BuildCommand(llm.CommandBuildOpts{
+		Model:                "anthropic/claude-haiku-4-5",
+		NativeToollessReview: true,
+	})
+	if err == nil {
+		t.Fatal("BuildCommand(native tool-less review without a state dir) error = nil")
 	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.opts.Model = "anthropic/claude-haiku-4-5"
-			tc.opts.StateDir = t.TempDir()
-			if args, env, err := New().BuildCommand(tc.opts); err == nil {
-				t.Fatalf("BuildCommand(partial native review) = (%v, %v, nil), want fail-closed error", args, env)
-			}
-		})
+	if !strings.Contains(err.Error(), "OpenCode native tool-less review requires an ephemeral provider state directory") {
+		t.Fatalf("BuildCommand(native tool-less review without a state dir) error = %v, want state-directory requirement", err)
 	}
 }
 
@@ -657,6 +646,22 @@ func TestVersionInfo_ParsesSemverAndNeverEchoesRawOutput(t *testing.T) {
 				t.Fatalf("VersionInfo() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestVersionInfo_WrapsRunnerError proves the runner error path keeps the
+// provider's own wrap around the raw runner error, matching the Claude and
+// Codex version probes.
+func TestVersionInfo_WrapsRunnerError(t *testing.T) {
+	runner := func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
+		return nil, errors.New("not installed")
+	}
+	_, err := NewWithRunner(runner).VersionInfo()
+	if err == nil {
+		t.Fatal("VersionInfo() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to run 'opencode --version'") || !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("VersionInfo() error = %v, want provider wrap around raw runner error", err)
 	}
 }
 

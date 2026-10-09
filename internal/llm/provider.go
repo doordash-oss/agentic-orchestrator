@@ -298,24 +298,20 @@ type CommandBuildOpts struct {
 	// Code's "auto" mode because it injects a "work without stopping for
 	// clarifying questions" system-reminder that overrides [grill-me].
 	PermissionMode string
-	// ZeroTools, when true, asks the provider to expose zero tools (e.g.
-	// Claude's --tools ""). This is stronger than DisallowedTools because it
-	// removes the entire native and MCP tool surface rather than denylisting
-	// known tool names. Providers that do not support it leave their behavior
-	// unchanged.
-	ZeroTools bool
-	// NoSessionPersistence, when true, asks the provider to disable native
-	// session persistence (e.g. Claude's --no-session-persistence) so no
-	// provider transcript or session identity is created. Providers that do
+	// NativeToollessReview, when true, asks the provider to launch its
+	// audited one-turn reviewer boundary: zero tools (e.g. Claude's
+	// --tools "") — stronger than DisallowedTools because it removes the
+	// entire native and MCP tool surface rather than denylisting known tool
+	// names — no native session persistence (e.g. Claude's
+	// --no-session-persistence) so no provider transcript or session
+	// identity is created, and no project/user customization — CLAUDE.md
+	// auto-discovery, hooks, LSP, plugin sync, settings, rules, skills, and
+	// local configuration (e.g. Claude's --safe-mode) — so the hidden
+	// reviewer's context contains only the static review policy and the
+	// declared execution-context fields, with no project-injected
+	// instructions that could alter the classification. Providers that do
 	// not support it leave their behavior unchanged.
-	NoSessionPersistence bool
-	// NoCustomization, when true, asks the provider to skip all project/user
-	// customization — CLAUDE.md auto-discovery, hooks, LSP, plugin sync,
-	// settings, rules, skills, and local configuration (e.g. Claude's
-	// --safe-mode). This ensures the hidden reviewer's context contains only the
-	// static review policy and the declared execution-context fields, with
-	// no project-injected instructions that could alter the classification.
-	NoCustomization bool
+	NativeToollessReview bool
 	// Interactive marks human-driven chat, mirroring ProtocolOpts.Interactive,
 	// so a provider can choose its interactive launch profile. Non-interactive
 	// sessions build exactly the orchestrated-phase command.

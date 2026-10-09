@@ -19,7 +19,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -143,12 +142,8 @@ var nativeToollessConfigOverrides = []string{
 }
 
 func nativeToollessReviewRequested(opts llm.CommandBuildOpts) (bool, error) {
-	requested := opts.ZeroTools || opts.NoSessionPersistence || opts.NoCustomization
-	if !requested {
+	if !opts.NativeToollessReview {
 		return false, nil
-	}
-	if !opts.ZeroTools || !opts.NoSessionPersistence || !opts.NoCustomization {
-		return false, fmt.Errorf("Codex native tool-less review requires zero tools, no session persistence, and no customization")
 	}
 	if strings.TrimSpace(opts.StateDir) == "" {
 		return false, fmt.Errorf("Codex native tool-less review requires an ephemeral provider state directory")
@@ -231,11 +226,11 @@ func (p *Provider) InstallHint() string {
 
 func (p *Provider) VersionInfo() (string, error) {
 	bin := p.cliBinary()
-	out, err := exec.Command(bin, "--version").CombinedOutput()
+	out, err := clirun.VersionProbe(p.runner, bin)
 	if err != nil {
 		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
 
 // MinVersion is the app-server baseline verified by the structured contract
@@ -330,29 +325,6 @@ func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
 		}
 	}
 	return false
-}
-
-// CLIVersion returns the installed Codex CLI version.
-func (p *Provider) CLIVersion() (string, error) {
-	runner := p.runner
-	if runner == nil {
-		runner = clirun.DefaultRunner()
-	}
-	bin := p.cliBinary()
-	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
-	if err != nil {
-		return "", fmt.Errorf("running %s --version: %w", bin, err)
-	}
-	return clirun.ParseVersionOutput(out)
-}
-
-// OutputPricePerMToken returns the output price per million tokens for a model.
-func (p *Provider) OutputPricePerMToken(model string) float64 {
-	r, ok := lookupRate(model)
-	if !ok {
-		return 0
-	}
-	return r.outputPerMToken
 }
 
 // defaultModelInfos returns Agentic's curated Codex/OpenAI model catalog.

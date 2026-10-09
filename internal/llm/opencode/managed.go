@@ -240,17 +240,8 @@ func copyNativeReviewAuth(dir string) error {
 }
 
 func nativeToollessReviewRequested(opts llm.CommandBuildOpts) (bool, error) {
-	requested := 0
-	for _, enabled := range []bool{opts.ZeroTools, opts.NoSessionPersistence, opts.NoCustomization} {
-		if enabled {
-			requested++
-		}
-	}
-	if requested == 0 {
+	if !opts.NativeToollessReview {
 		return false, nil
-	}
-	if requested != 3 {
-		return false, fmt.Errorf("OpenCode native tool-less review requires zero tools, no session persistence, and no customization")
 	}
 	if strings.TrimSpace(opts.StateDir) == "" {
 		return false, fmt.Errorf("OpenCode native tool-less review requires an ephemeral provider state directory")

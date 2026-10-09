@@ -372,16 +372,12 @@ func (p *Provider) InstallHint() string {
 // error that does not echo the raw output, so no untrusted content reaches the
 // startup version diagnostic either. It shares the same runner seam as discovery.
 func (p *Provider) VersionInfo() (string, error) {
-	runner := p.runner
-	if runner == nil {
-		runner = clirun.DefaultRunner()
-	}
 	bin := p.cliBinary()
-	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
+	raw, err := clirun.VersionProbe(p.runner, bin)
 	if err != nil {
 		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
-	version, err := clirun.ParseVersionOutput(out)
+	version, err := clirun.ParseVersionOutput([]byte(raw))
 	if err != nil {
 		// Deliberately do not wrap the parser error: it echoes the raw output,
 		// which an attacker-influenced version line could use to inject

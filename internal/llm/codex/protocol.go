@@ -750,13 +750,7 @@ func (p *Protocol) writeJSON(v interface{}) error {
 		return fmt.Errorf("codex protocol: stdin not set")
 	}
 
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("marshaling JSON: %w", err)
-	}
-	data = append(data, '\n')
-	_, err = w.Write(data)
-	return err
+	return llm.WriteJSONLine(w, v)
 }
 
 // --- Read methods ---

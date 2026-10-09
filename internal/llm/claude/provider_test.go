@@ -288,10 +288,10 @@ func TestBuildInteractiveCommand_PermissionMode_CoexistsWithDSP(t *testing.T) {
 }
 
 // TestBuildInteractiveCommand_IsolationFlags is a table-driven test covering
-// the hidden reviewer's launch-option isolation contract: ZeroTools emits
-// --tools "" (and suppresses --disallowedTools), NoSessionPersistence emits
-// --no-session-persistence, NoCustomization emits --safe-mode, and all three can
-// coexist on the same invocation.
+// the hidden reviewer's launch-option isolation contract: the single
+// NativeToollessReview flag emits --tools "" (and suppresses
+// --disallowedTools), --no-session-persistence, and --safe-mode together on
+// the same invocation; none of them are emitted when it is off.
 func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 	cases := []struct {
 		name             string
@@ -301,32 +301,15 @@ func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 		wantNoDisallowed bool
 	}{
 		{
-			name:             "zero_tools",
-			opts:             llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, DisallowedTools: []string{"Bash", "Read"}},
+			name:             "native_toolless_review",
+			opts:             llm.CommandBuildOpts{Model: "haiku", NativeToollessReview: true, DisallowedTools: []string{"Bash", "Read"}},
+			wantFlags:        []string{"--no-session-persistence", "--safe-mode"},
 			wantEmptyTools:   true,
 			wantNoDisallowed: true,
 		},
 		{
-			name:      "no_session_persistence",
-			opts:      llm.CommandBuildOpts{Model: "haiku", NoSessionPersistence: true},
-			wantFlags: []string{"--no-session-persistence"},
-		},
-		{
-			name:      "no_customization",
-			opts:      llm.CommandBuildOpts{Model: "haiku", NoCustomization: true},
-			wantFlags: []string{"--safe-mode"},
-		},
-		{
-			name:           "zero_tools_and_no_session_persistence",
-			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true},
-			wantFlags:      []string{"--no-session-persistence"},
-			wantEmptyTools: true,
-		},
-		{
-			name:           "full_isolation",
-			opts:           llm.CommandBuildOpts{Model: "haiku", ZeroTools: true, NoSessionPersistence: true, NoCustomization: true},
-			wantFlags:      []string{"--no-session-persistence", "--safe-mode"},
-			wantEmptyTools: true,
+			name: "isolation off",
+			opts: llm.CommandBuildOpts{Model: "haiku", DisallowedTools: []string{"Bash"}},
 		},
 	}
 	for _, tc := range cases {
@@ -337,23 +320,28 @@ func TestBuildInteractiveCommand_IsolationFlags(t *testing.T) {
 					t.Errorf("missing %s: %v", flag, args)
 				}
 			}
-			if tc.opts.NoCustomization && slices.Contains(args, "--bare") {
-				t.Errorf("NoCustomization must retain normal authentication, got --bare: %v", args)
+			if tc.opts.NativeToollessReview && slices.Contains(args, "--bare") {
+				t.Errorf("NativeToollessReview must retain normal authentication, got --bare: %v", args)
 			}
-			if tc.wantEmptyTools {
-				hasEmptyTools := false
-				for i, a := range args {
-					if a == "--tools" && i+1 < len(args) && args[i+1] == "" {
-						hasEmptyTools = true
-					}
+			hasEmptyTools := false
+			for i, a := range args {
+				if a == "--tools" && i+1 < len(args) && args[i+1] == "" {
+					hasEmptyTools = true
 				}
-				if !hasEmptyTools {
-					t.Errorf("missing --tools \"\": %v", args)
-				}
+			}
+			if hasEmptyTools != tc.wantEmptyTools {
+				t.Errorf("--tools \"\" present = %v, want %v: %v", hasEmptyTools, tc.wantEmptyTools, args)
 			}
 			if tc.wantNoDisallowed {
 				if slices.Contains(args, "--disallowedTools") {
-					t.Errorf("must not emit --disallowedTools when ZeroTools=true: %v", args)
+					t.Errorf("must not emit --disallowedTools when NativeToollessReview=true: %v", args)
+				}
+			}
+			if !tc.opts.NativeToollessReview {
+				for _, flag := range []string{"--safe-mode", "--no-session-persistence"} {
+					if slices.Contains(args, flag) {
+						t.Errorf("isolation flag %s emitted without NativeToollessReview: %v", flag, args)
+					}
 				}
 			}
 		})
@@ -405,20 +393,44 @@ func TestClaudeProvider_CheckReadinessUsesCustomBinary(t *testing.T) {
 	}
 }
 
-func TestClaudeProvider_CLIVersionUsesCustomBinary(t *testing.T) {
+func TestClaudeProvider_VersionInfoUsesInjectedRunner(t *testing.T) {
 	var gotName string
+	var gotArgs []string
 	p := &Provider{
 		binary: "fcc-claude",
 		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
 			gotName = name
-			return []byte("2.1.81 (Claude Code)"), nil
+			gotArgs = args
+			return []byte("2.1.81 (Claude Code)\n"), nil
 		},
 	}
-	if _, err := p.CLIVersion(); err != nil {
-		t.Fatalf("CLIVersion() error: %v", err)
+	got, err := p.VersionInfo()
+	if err != nil {
+		t.Fatalf("VersionInfo() error: %v", err)
+	}
+	if got != "2.1.81 (Claude Code)" {
+		t.Fatalf("VersionInfo() = %q, want trimmed raw output", got)
 	}
 	if gotName != "fcc-claude" {
-		t.Errorf("CLIVersion probed %q, want fcc-claude", gotName)
+		t.Errorf("VersionInfo probed %q, want fcc-claude", gotName)
+	}
+	if !slices.Equal(gotArgs, []string{"--version"}) {
+		t.Errorf("VersionInfo args = %v, want [--version]", gotArgs)
+	}
+}
+
+func TestClaudeProvider_VersionInfoWrapsRunnerError(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return nil, errors.New("boom")
+		},
+	}
+	_, err := p.VersionInfo()
+	if err == nil {
+		t.Fatal("VersionInfo() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to run 'claude --version'") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("VersionInfo() error = %v, want provider wrap around raw runner error", err)
 	}
 }
 

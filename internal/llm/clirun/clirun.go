@@ -70,3 +70,17 @@ func ParseVersionOutput(output []byte) (string, error) {
 	}
 	return match, nil
 }
+
+// VersionProbe runs binary's --version flag through runner (nil means the
+// default stdout-only runner) and returns the trimmed raw output. The error
+// is the raw runner error, so each caller applies its own wrap.
+func VersionProbe(runner CommandRunner, binary string) (string, error) {
+	if runner == nil {
+		runner = DefaultRunner()
+	}
+	out, err := runner(context.Background(), binary, []string{"--version"}, nil)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}

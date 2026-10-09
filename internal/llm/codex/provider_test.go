@@ -317,9 +317,7 @@ func TestProviderBuildCommand_NativeToollessReviewIsIsolated(t *testing.T) {
 		Model:                "gpt-5.4-mini[400K]",
 		StateDir:             stateDir,
 		EffortLevel:          llm.EffortLow,
-		ZeroTools:            true,
-		NoSessionPersistence: true,
-		NoCustomization:      true,
+		NativeToollessReview: true,
 	})
 	if err != nil {
 		t.Fatalf("BuildCommand(native tool-less review) error: %v", err)
@@ -394,31 +392,16 @@ func TestProviderReviewPreferenceBand(t *testing.T) {
 	}
 }
 
-func TestProviderBuildCommand_RejectsPartialToollessReview(t *testing.T) {
-	tests := []struct {
-		name string
-		opts llm.CommandBuildOpts
-	}{
-		{
-			name: "missing zero tools",
-			opts: llm.CommandBuildOpts{NoSessionPersistence: true, NoCustomization: true},
-		},
-		{
-			name: "missing no persistence",
-			opts: llm.CommandBuildOpts{ZeroTools: true, NoCustomization: true},
-		},
-		{
-			name: "missing no customization",
-			opts: llm.CommandBuildOpts{ZeroTools: true, NoSessionPersistence: true},
-		},
+func TestProviderBuildCommand_NativeToollessReviewRequiresStateDir(t *testing.T) {
+	_, _, err := (&Provider{}).BuildCommand(llm.CommandBuildOpts{
+		Model:                "gpt-5.4",
+		NativeToollessReview: true,
+	})
+	if err == nil {
+		t.Fatal("BuildCommand(native tool-less review without a state dir) error = nil")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tt.opts.StateDir = t.TempDir()
-			if _, _, err := (&Provider{}).BuildCommand(tt.opts); err == nil {
-				t.Fatal("BuildCommand(partial tool-less review) error = nil")
-			}
-		})
+	if !strings.Contains(err.Error(), "Codex native tool-less review requires an ephemeral provider state directory") {
+		t.Fatalf("BuildCommand(native tool-less review without a state dir) error = %v, want state-directory requirement", err)
 	}
 }
 
@@ -846,6 +829,47 @@ func TestCodexProvider_CheckReadinessUsesCustomBinary(t *testing.T) {
 	}
 }
 
+func TestCodexProvider_VersionInfoUsesInjectedRunner(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	p := &Provider{
+		binary: "my-codex",
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			gotName = name
+			gotArgs = args
+			return []byte("OpenAI Codex v0.153.2\n"), nil
+		},
+	}
+	got, err := p.VersionInfo()
+	if err != nil {
+		t.Fatalf("VersionInfo() error: %v", err)
+	}
+	if got != "OpenAI Codex v0.153.2" {
+		t.Fatalf("VersionInfo() = %q, want trimmed raw output", got)
+	}
+	if gotName != "my-codex" {
+		t.Errorf("VersionInfo probed %q, want my-codex", gotName)
+	}
+	if !slices.Equal(gotArgs, []string{"--version"}) {
+		t.Errorf("VersionInfo args = %v, want [--version]", gotArgs)
+	}
+}
+
+func TestCodexProvider_VersionInfoWrapsRunnerError(t *testing.T) {
+	p := &Provider{
+		runner: func(ctx context.Context, name string, args []string, env []string) ([]byte, error) {
+			return nil, errors.New("boom")
+		},
+	}
+	_, err := p.VersionInfo()
+	if err == nil {
+		t.Fatal("VersionInfo() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "failed to run 'codex --version'") || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("VersionInfo() error = %v, want provider wrap around raw runner error", err)
+	}
+}
+
 func TestProviderSupportsSessionResume(t *testing.T) {
 	p := &Provider{}
 	if !p.SupportsSessionResume() {
@@ -858,9 +882,6 @@ func TestAstraCatalogRoutingWindowsAndEffort(t *testing.T) {
 	for _, selection := range []string{"gpt-6-astra", "gpt-6-astra[272K]", "gpt-6-astra[872K]"} {
 		if !p.MatchesModel(selection) {
 			t.Fatalf("Astra not routed to Codex: %s", selection)
-		}
-		if p.OutputPricePerMToken(selection) != 50 {
-			t.Fatalf("Astra priced as a different model: %s", selection)
 		}
 		wantWindow := 272_000
 		if strings.Contains(selection, "872K") {

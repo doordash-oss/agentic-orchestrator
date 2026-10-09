@@ -582,13 +582,7 @@ func (p *Protocol) writeJSON(v interface{}) error {
 	if w == nil {
 		return fmt.Errorf("opencode protocol: stdin not set")
 	}
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("marshaling JSON: %w", err)
-	}
-	data = append(data, '\n')
-	_, err = w.Write(data)
-	return err
+	return llm.WriteJSONLine(w, v)
 }
 
 // ParseLine translates one JSON-RPC line from OpenCode's stdout into SDKMessages.

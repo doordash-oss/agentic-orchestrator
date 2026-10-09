@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
@@ -114,11 +113,11 @@ func (p *Provider) InstallHint() string {
 
 func (p *Provider) VersionInfo() (string, error) {
 	bin := p.cliBinary()
-	out, err := exec.Command(bin, "--version").CombinedOutput()
+	out, err := clirun.VersionProbe(p.runner, bin)
 	if err != nil {
 		return "", fmt.Errorf("failed to run '%s --version': %w", bin, err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
 
 func (p *Provider) MinVersion() [3]int { return [3]int{2, 1, 81} }
@@ -221,20 +220,6 @@ func reviewModelMatchesHint(model llm.ModelInfo, hint string) bool {
 	return false
 }
 
-// CLIVersion returns the installed Claude CLI version.
-func (p *Provider) CLIVersion() (string, error) {
-	runner := p.runner
-	if runner == nil {
-		runner = clirun.DefaultRunner()
-	}
-	bin := p.cliBinary()
-	out, err := runner(context.Background(), bin, []string{"--version"}, nil)
-	if err != nil {
-		return "", fmt.Errorf("running %s --version: %w", bin, err)
-	}
-	return clirun.ParseVersionOutput(out)
-}
-
 // defaultModelInfos supplies offline routing defaults when initialization and
 // the persisted catalog are unavailable. Discovery never filters through this
 // list, and these hints never claim to be CLI-reported capabilities.
@@ -280,7 +265,7 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	// agents, and other customizations while retaining normal authentication.
 	// It ensures the hidden reviewer's context contains only the static review
 	// policy and declared execution-context fields.
-	if opts.NoCustomization {
+	if opts.NativeToollessReview {
 		args = InsertAfterBinary(args, "--safe-mode")
 	}
 
@@ -333,7 +318,7 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if opts.ZeroTools {
+	if opts.NativeToollessReview {
 		args = append(args, "--tools", "")
 	} else if len(opts.DisallowedTools) > 0 {
 		args = append(args, "--disallowedTools", strings.Join(opts.DisallowedTools, ","))
@@ -341,7 +326,7 @@ func applyStreamingOpts(args []string, opts llm.CommandBuildOpts) []string {
 	if len(opts.AllowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
 	}
-	if opts.NoSessionPersistence {
+	if opts.NativeToollessReview {
 		args = append(args, "--no-session-persistence")
 	}
 	if opts.ResumeSessionID != "" {

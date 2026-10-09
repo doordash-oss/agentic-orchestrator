@@ -1396,9 +1396,6 @@ fi`,
 	if result.FinalStatus != finalStatusReviewPassed {
 		t.Fatalf("FinalStatus = %q, want review_passed", result.FinalStatus)
 	}
-	if result.PlanRevisionFeedback != "" {
-		t.Fatalf("PlanRevisionFeedback = %q, want empty", result.PlanRevisionFeedback)
-	}
 	if result.Iterations != 2 {
 		t.Fatalf("Iterations = %d, want 2 after fix-agent iteration", result.Iterations)
 	}
@@ -1494,7 +1491,7 @@ fi`,
 		t.Fatalf("loop: %v", err)
 	}
 	if result.FinalStatus != finalStatusReviewPassed {
-		t.Fatalf("FinalStatus = %q, want review_passed; feedback:\n%s", result.FinalStatus, result.PlanRevisionFeedback)
+		t.Fatalf("FinalStatus = %q, want review_passed; last error: %s", result.FinalStatus, result.LastError)
 	}
 	if _, err := os.Stat(fixMarker); err != nil {
 		t.Fatalf("fix marker was not written: %v", err)

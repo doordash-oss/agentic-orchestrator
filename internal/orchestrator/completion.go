@@ -1334,10 +1334,6 @@ func (o *Orchestrator) finishDeferredFinalReviewResult(featureID string, res *ag
 		// failure_type=infrastructure.
 		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, nil)
 		return errFinalReviewInterrupted
-	case finalStatusPlanRevisionRequired:
-		errMsg := "final review requested unsupported phase-plan revision"
-		o.emitPhaseCompleted(featureID, feature.PhaseFinalReview, errors.New(errMsg))
-		return o.markFinalReviewFailedWithEvent(featureID, failureRecord(errcat.InfrastructureFailure, feature.PhaseFinalReview, errMsg))
 	case "failed":
 		errMsg := res.LastError
 		if errMsg == "" {

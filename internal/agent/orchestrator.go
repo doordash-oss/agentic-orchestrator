@@ -283,16 +283,6 @@ func RunMultiRepoFinalReview(cfg OrchestratorConfig, sm ports.SessionManager) (*
 		return &OrchestratorResult{FinalStatus: "all_passed"}, nil
 	case "interrupted":
 		return &OrchestratorResult{FinalStatus: "interrupted"}, nil
-	case "plan_revision_required":
-		// Final Review must keep fixes inside the final-review loop. Older
-		// injected/fake review runners may still return this status; surface
-		// it as a failure instead of reopening planning.
-		return &OrchestratorResult{
-			FinalStatus:  "failed",
-			RepoStatuses: finalReviewRepoStatuses(frResult),
-			FailedRepos:  append([]string(nil), frResultRepos(frResult)...),
-			LastError:    "final review requested unsupported phase-plan revision",
-		}, nil
 	default:
 		return &OrchestratorResult{
 			FinalStatus:  "failed",

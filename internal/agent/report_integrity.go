@@ -80,9 +80,10 @@ type ReportGateFinding struct {
 	Detail    string
 }
 
-// ReportGateResult is what ValidateVerificationReport returns. Rejected is
-// true iff any blocking findings exist. KnownCaveats is populated with the
-// report's known_caveats map for downstream surfacing to the LLM reviewer.
+// ReportGateResult is what ValidateVerificationReportWithContext returns.
+// Rejected is true iff any blocking findings exist. KnownCaveats is populated
+// with the report's known_caveats map for downstream surfacing to the LLM
+// reviewer.
 type ReportGateResult struct {
 	Rejected     bool
 	Findings     []ReportGateFinding
@@ -119,8 +120,8 @@ var hedgePhrases = []string{
 	"cannot be verified",
 }
 
-// ValidateVerificationReport runs the deterministic integrity gate over a
-// verification report. Returns a result describing any blocking findings.
+// ValidateVerificationReportWithContext runs the deterministic integrity gate
+// over a verification report. Returns a result describing any blocking findings.
 //
 // The gate is designed to catch two classes of over-claim cheaply:
 //
@@ -133,15 +134,9 @@ var hedgePhrases = []string{
 // rootSuccess reflects whether the root agent emitted a structured success
 // outcome. When true, any not_run required check is a contradiction and blocks
 // the gate.
-func ValidateVerificationReport(report *VerificationReport, required []RequiredVerificationItem, contract *TestingContract, rootSuccess bool) ReportGateResult {
-	return ValidateVerificationReportWithContext(report, required, rootSuccess, VerificationReportValidationContext{
-		Contract: contract,
-	})
-}
-
-// ValidateVerificationReportWithContext runs the deterministic integrity gate
-// and, when supplied with an iteration directory, validates file-backed visual
-// and behavioral evidence under that iteration root.
+//
+// When ctx carries an iteration directory, file-backed visual and behavioral
+// evidence is validated under that iteration root.
 func ValidateVerificationReportWithContext(report *VerificationReport, required []RequiredVerificationItem, rootSuccess bool, ctx VerificationReportValidationContext) ReportGateResult {
 	result := ReportGateResult{KnownCaveats: report.KnownCaveats}
 
@@ -688,8 +683,9 @@ func ValidateDeferralLedger(deferrals []feature.IncomingDeferral, closedDeferral
 }
 
 // MergeGateResults concatenates findings from multiple gate runs and
-// recomputes Rejected. Used by callers that run ValidateVerificationReport
-// and ValidateDeferralLedger in sequence and want a single combined view.
+// recomputes Rejected. Used by callers that run
+// ValidateVerificationReportWithContext and ValidateDeferralLedger in sequence
+// and want a single combined view.
 func MergeGateResults(results ...ReportGateResult) ReportGateResult {
 	var merged ReportGateResult
 	for _, r := range results {
@@ -710,20 +706,6 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n-1] + "…"
-}
-
-func quotedUnique(ss []string) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	for _, s := range ss {
-		k := strings.ToLower(s)
-		if _, ok := seen[k]; ok {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, fmt.Sprintf("%q", s))
-	}
-	return out
 }
 
 // FormatGateFeedback builds the markdown body written to review-feedback.md

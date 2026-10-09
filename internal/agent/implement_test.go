@@ -3439,6 +3439,8 @@ func TestWaitForPhaseOutcome_RejectsProviderExitWithLiveDelegatedTasks(t *testin
 	}
 }
 
+func (d *atomicDuration) set(x time.Duration) { d.v.Store(int64(x)) }
+
 func withPhaseOutcomeReclassifyInterval(t *testing.T, d time.Duration) {
 	t.Helper()
 	prev := phaseOutcomeReclassifyInterval.get()

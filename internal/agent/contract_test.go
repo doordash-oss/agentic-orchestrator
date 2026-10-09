@@ -755,6 +755,22 @@ func TestContractRegistryImplementerReportsMissingArtifacts(t *testing.T) {
 	}
 }
 
+// notRunVerificationReport builds a legacy v1 report listing each required
+// item as an unrun check.
+func notRunVerificationReport(required ...RequiredVerificationItem) VerificationReport {
+	report := VerificationReport{Version: 1}
+	for _, item := range required {
+		report.RequiredChecks = append(report.RequiredChecks, VerificationCheckResult{
+			Name:        item.Name,
+			Requirement: item.Requirement,
+			Command:     item.Requirement,
+			Mode:        VerificationModeUnknown,
+			Status:      VerificationStatusNotRun,
+		})
+	}
+	return report
+}
+
 func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
 	iterDir := t.TempDir()
 	artifactDir := filepath.Dir(iterDir)
@@ -764,7 +780,7 @@ func TestContractRegistryImplementerReportsMalformedProgress(t *testing.T) {
 	if err := os.WriteFile(progressPath, []byte("# Iteration Progress\n\n## Iteration Handoff\n- malformed\n"), 0o644); err != nil {
 		t.Fatalf("write malformed progress: %v", err)
 	}
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
+	if err := WriteVerificationReport(reportPath, notRunVerificationReport()); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
@@ -788,9 +804,7 @@ func TestContractRegistryImplementerAllowsRetryWithNotRunVerification(t *testing
 	reportPath := filepath.Join(iterDir, "verification-report.yaml")
 
 	writeValidProgress(t, progressPath, reportPath, StateRetry)
-	report := BuildVerificationReportStub([]RequiredVerificationItem{
-		{Name: "Relevant tests pass", Requirement: "go test ./..."},
-	})
+	report := notRunVerificationReport(RequiredVerificationItem{Name: "Relevant tests pass", Requirement: "go test ./..."})
 	if err := WriteVerificationReport(reportPath, report); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
@@ -814,7 +828,7 @@ func TestContractRegistryImplementerDoesNotRequireNeedUserInputForSuccess(t *tes
 	reportPath := filepath.Join(iterDir, "verification-report.yaml")
 
 	writeValidProgress(t, progressPath, reportPath, StateSuccess)
-	if err := WriteVerificationReport(reportPath, BuildVerificationReportStub(nil)); err != nil {
+	if err := WriteVerificationReport(reportPath, notRunVerificationReport()); err != nil {
 		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 

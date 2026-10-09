@@ -16,14 +16,12 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -51,46 +49,6 @@ type PRContext struct {
 	Roadmap            string // plan/roadmap text (was the prior "plan" arg)
 	CommitBodies       string // `git log --format=%B base..HEAD`
 	DiffStat           string // `git diff --stat base...HEAD`
-}
-
-// extractTextFromStreamJSON parses JSONL stream-json output from the claude CLI
-// and returns the concatenated assistant text content. Falls back to the raw
-// input if no assistant messages are found (e.g., if the output format changed).
-func extractTextFromStreamJSON(output string) string {
-	var b strings.Builder
-	var resultText string
-	foundAssistant := false
-
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var msg llm.SDKMessage
-		if err := json.Unmarshal([]byte(line), &msg); err != nil {
-			continue
-		}
-		if msg.Assistant != nil {
-			for _, block := range msg.Assistant.Message.Content {
-				if block.IsText() {
-					b.WriteString(block.Text)
-					foundAssistant = true
-				}
-			}
-		}
-		if msg.Result != nil && msg.Result.Result != "" {
-			resultText = msg.Result.Result
-		}
-	}
-
-	if foundAssistant {
-		return b.String()
-	}
-	if resultText != "" {
-		return resultText
-	}
-	// Fallback: return raw output (handles non-JSON output gracefully)
-	return output
 }
 
 // BuildPRDescriptionPrompt constructs the prompt for generating a PR description

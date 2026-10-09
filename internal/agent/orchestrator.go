@@ -325,13 +325,3 @@ func frResultRepos(r *FeatureFinalReviewResult) []string {
 	sort.Strings(out)
 	return out
 }
-
-// findRepo looks up a FeatureRepo by name.
-func findRepo(f *feature.Feature, name string) *feature.FeatureRepo {
-	for i := range f.Repos {
-		if f.Repos[i].Name == name {
-			return &f.Repos[i]
-		}
-	}
-	return nil
-}

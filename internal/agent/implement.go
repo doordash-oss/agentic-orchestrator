@@ -1802,8 +1802,6 @@ func newAtomicDuration(d time.Duration) *atomicDuration {
 
 func (d *atomicDuration) get() time.Duration { return time.Duration(d.v.Load()) }
 
-func (d *atomicDuration) set(x time.Duration) { d.v.Store(int64(x)) }
-
 // backgroundTaskStallGrace is how long live background tasks may stay silent
 // (no stdout, which carries all task activity) after the root outcome is
 // already present before the waiter stops the session — killing runaway

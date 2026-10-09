@@ -15,7 +15,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -131,18 +130,18 @@ func TestAcquireReleaseKBLock(t *testing.T) {
 	dir := t.TempDir()
 
 	// First acquire succeeds
-	locked, err := AcquireKBLock(dir, "feature-1")
+	locked, err := AcquireKBLockWithStatus(dir, "feature-1", nil)
 	if err != nil {
-		t.Fatalf("AcquireKBLock: %v", err)
+		t.Fatalf("AcquireKBLockWithStatus: %v", err)
 	}
 	if !locked {
 		t.Fatal("expected lock to be acquired")
 	}
 
 	// Second acquire fails (contention)
-	locked2, err := AcquireKBLock(dir, "feature-2")
+	locked2, err := AcquireKBLockWithStatus(dir, "feature-2", nil)
 	if err != nil {
-		t.Fatalf("AcquireKBLock (second): %v", err)
+		t.Fatalf("AcquireKBLockWithStatus (second): %v", err)
 	}
 	if locked2 {
 		t.Fatal("expected lock NOT to be acquired (contention)")
@@ -166,10 +165,10 @@ func TestAcquireReleaseKBLock(t *testing.T) {
 	}
 
 	// Reentrant: same feature can re-acquire its own lock
-	_, _ = AcquireKBLock(dir, "feature-reentrant")
-	locked3, err := AcquireKBLock(dir, "feature-reentrant")
+	_, _ = AcquireKBLockWithStatus(dir, "feature-reentrant", nil)
+	locked3, err := AcquireKBLockWithStatus(dir, "feature-reentrant", nil)
 	if err != nil {
-		t.Fatalf("AcquireKBLock (reentrant): %v", err)
+		t.Fatalf("AcquireKBLockWithStatus (reentrant): %v", err)
 	}
 	if !locked3 {
 		t.Fatal("expected reentrant lock acquisition to succeed")
@@ -179,84 +178,12 @@ func TestAcquireReleaseKBLock(t *testing.T) {
 	}
 
 	// Force release (empty feature ID)
-	_, _ = AcquireKBLock(dir, "feature-3")
+	_, _ = AcquireKBLockWithStatus(dir, "feature-3", nil)
 	if err := ReleaseKBLock(dir, ""); err != nil {
 		t.Fatalf("ReleaseKBLock (force): %v", err)
 	}
 	if _, err := os.Stat(KBLockPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("lock should be removed after force release")
-	}
-}
-
-func TestIsKBLockStale(t *testing.T) {
-	dir := t.TempDir()
-
-	// No lock = not stale
-	if IsKBLockStale(dir, nil) {
-		t.Error("expected no stale lock when no lock exists")
-	}
-
-	// Fresh lock = not stale (nil statusFn — time-only check)
-	_, _ = AcquireKBLock(dir, "feature-1")
-	if IsKBLockStale(dir, nil) {
-		t.Error("expected fresh lock not to be stale")
-	}
-}
-
-func TestIsKBLockStaleOwnerCheck(t *testing.T) {
-	tests := []struct {
-		name      string
-		statusFn  FeatureStatusFunc
-		wantStale bool
-	}{
-		{
-			name:      "owner still building KB",
-			statusFn:  func(id string) (int, bool) { return int(feature.StatusBuildingKB), true },
-			wantStale: false,
-		},
-		{
-			name:      "owner no longer building KB",
-			statusFn:  func(id string) (int, bool) { return 0, true }, // StatusCreated
-			wantStale: true,
-		},
-		{
-			name:      "owner feature not found",
-			statusFn:  func(id string) (int, bool) { return 0, false },
-			wantStale: true,
-		},
-		{
-			name:      "nil statusFn — time-only",
-			statusFn:  nil,
-			wantStale: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			_, _ = AcquireKBLock(dir, "feature-1")
-			got := IsKBLockStale(dir, tt.statusFn)
-			if got != tt.wantStale {
-				t.Errorf("IsKBLockStale = %v, want %v", got, tt.wantStale)
-			}
-		})
-	}
-}
-
-func TestIsKBLockStalePreservesOldActiveOwner(t *testing.T) {
-	dir := t.TempDir()
-	old := KBLockInfo{FeatureID: "feature-1", Timestamp: time.Now().Add(-2 * time.Hour)}
-	data, _ := json.Marshal(old)
-	if err := os.WriteFile(KBLockPath(dir), data, 0o644); err != nil {
-		t.Fatalf("write lock: %v", err)
-	}
-
-	if IsKBLockStale(dir, func(id string) (int, bool) {
-		return int(feature.StatusBuildingKB), true
-	}) {
-		t.Fatal("old lock with confirmed BuildingKB owner should not be stale")
-	}
-	if !IsKBLockStale(dir, nil) {
-		t.Fatal("old lock without owner status should use age fallback")
 	}
 }
 
@@ -277,8 +204,8 @@ func TestAcquireKBLockWithStatusReclaimsMissingOrStoppedOwner(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if locked, err := AcquireKBLock(dir, "owner"); err != nil || !locked {
-				t.Fatalf("AcquireKBLock owner = %v, %v; want acquired", locked, err)
+			if locked, err := AcquireKBLockWithStatus(dir, "owner", nil); err != nil || !locked {
+				t.Fatalf("AcquireKBLockWithStatus owner = %v, %v; want acquired", locked, err)
 			}
 
 			locked, err := AcquireKBLockWithStatus(dir, "waiter", tt.statusFn)
@@ -319,8 +246,8 @@ func TestAcquireKBLockWithStatusPreservesActiveOwner(t *testing.T) {
 
 func TestAcquireKBLockWithStatusConcurrentReclaimHasOneWinner(t *testing.T) {
 	dir := t.TempDir()
-	if locked, err := AcquireKBLock(dir, "owner"); err != nil || !locked {
-		t.Fatalf("AcquireKBLock owner = %v, %v; want acquired", locked, err)
+	if locked, err := AcquireKBLockWithStatus(dir, "owner", nil); err != nil || !locked {
+		t.Fatalf("AcquireKBLockWithStatus owner = %v, %v; want acquired", locked, err)
 	}
 
 	const contenders = 16
@@ -354,8 +281,8 @@ func TestAcquireKBLockWithStatusConcurrentReclaimHasOneWinner(t *testing.T) {
 
 func TestReleaseKBLockIfOwnedDoesNotRemoveReplacement(t *testing.T) {
 	dir := t.TempDir()
-	if locked, err := AcquireKBLock(dir, "replacement"); err != nil || !locked {
-		t.Fatalf("AcquireKBLock replacement = %v, %v; want acquired", locked, err)
+	if locked, err := AcquireKBLockWithStatus(dir, "replacement", nil); err != nil || !locked {
+		t.Fatalf("AcquireKBLockWithStatus replacement = %v, %v; want acquired", locked, err)
 	}
 
 	removed, err := ReleaseKBLockIfOwned(dir, "old-owner")
@@ -406,59 +333,6 @@ func TestIsKBFreshRequiresKBFile(t *testing.T) {
 	if _, err := os.Stat(KBPath(dir)); err != nil {
 		t.Error("expected index.md to exist after creation")
 	}
-}
-
-func TestHasKBChanges(t *testing.T) {
-	repoDir := t.TempDir()
-	runner := &fakeGitRunner{head: "commit-a"}
-	headCommit := runner.head
-	kbDir := t.TempDir()
-
-	t.Run("no state.json returns true", func(t *testing.T) {
-		emptyDir := t.TempDir()
-		has, err := HasKBChanges(context.Background(), runner, emptyDir, repoDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !has {
-			t.Error("expected true when no state.json exists")
-		}
-	})
-
-	t.Run("no index.md returns true", func(t *testing.T) {
-		dir := t.TempDir()
-		_ = SaveKBState(dir, &KBState{HeadCommit: headCommit, LastUpdated: time.Now(), Version: 1})
-		has, err := HasKBChanges(context.Background(), runner, dir, repoDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !has {
-			t.Error("expected true when index.md is missing")
-		}
-	})
-
-	t.Run("state + index.md + no changes returns false", func(t *testing.T) {
-		_ = SaveKBState(kbDir, &KBState{HeadCommit: headCommit, LastUpdated: time.Now(), Version: 1})
-		_ = os.WriteFile(KBPath(kbDir), []byte("# KB"), 0o644)
-		has, err := HasKBChanges(context.Background(), runner, kbDir, repoDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if has {
-			t.Error("expected false when no git changes exist")
-		}
-	})
-
-	t.Run("state + index.md + new commits returns true", func(t *testing.T) {
-		runner.log = "commit-b second\n"
-		has, err := HasKBChanges(context.Background(), runner, kbDir, repoDir)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !has {
-			t.Error("expected true when new commits exist")
-		}
-	})
 }
 
 func TestBuildKBPromptFullBuild(t *testing.T) {

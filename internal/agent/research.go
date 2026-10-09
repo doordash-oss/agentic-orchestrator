@@ -15,11 +15,8 @@
 package agent
 
 import (
-	"strings"
-
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
 // researchFeatureViews projects a feature's repos, images, and attachments
@@ -55,40 +52,4 @@ func BuildResearchFromQuestionsPrompt(f *feature.Feature, skillsDir, questionsPa
 		QuestionsPath: questionsPath,
 		Repos:         repos,
 	})
-}
-
-// collectEnvExcludes gathers env var prefixes to strip from all providers.
-func collectEnvExcludes(providers []llm.LLMProvider) []string {
-	seen := make(map[string]bool)
-	var result []string
-	for _, p := range providers {
-		for _, v := range p.EnvVarsToExclude() {
-			if !seen[v] {
-				seen[v] = true
-				result = append(result, v)
-			}
-		}
-	}
-	return result
-}
-
-// filterEnvMulti returns a copy of env without entries matching any of the given key prefixes.
-func filterEnvMulti(env []string, excludes []string) []string {
-	if len(excludes) == 0 {
-		return env
-	}
-	result := make([]string, 0, len(env))
-	for _, e := range env {
-		excluded := false
-		for _, ex := range excludes {
-			if strings.HasPrefix(e, ex+"=") {
-				excluded = true
-				break
-			}
-		}
-		if !excluded {
-			result = append(result, e)
-		}
-	}
-	return result
 }

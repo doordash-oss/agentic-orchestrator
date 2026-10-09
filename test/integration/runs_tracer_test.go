@@ -148,9 +148,6 @@ func TestRunsLayout_CreateInquireDesignRewindInquireAgain(t *testing.T) {
 	if got := agent.PhasePlanDir(stateDir, f, 1); !underRun1(got, run1Dir) {
 		t.Errorf("PhasePlanDir(..., 1) = %q, want under %q", got, run1Dir)
 	}
-	if got := agent.PhaseImplementDir(stateDir, f, 1); !underRun1(got, run1Dir) {
-		t.Errorf("PhaseImplementDir(..., 1) = %q, want under %q", got, run1Dir)
-	}
 	if got := agent.RoadmapDir(stateDir, f); !underRun1(got, run1Dir) {
 		t.Errorf("RoadmapDir = %q, want under %q", got, run1Dir)
 	}

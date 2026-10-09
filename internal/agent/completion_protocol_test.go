@@ -156,3 +156,34 @@ func TestCommitPhaseOutcome_InvalidIntentClearsPriorReceipt(t *testing.T) {
 		t.Fatalf("prior receipt survived rejected commit: %v", err)
 	}
 }
+
+func TestRemoveCompletionReceiptOnlyRemovesReceipt(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		PhaseCompleteFile:        "",
+		"artifact.md":            "# artifact\n",
+		ProtocolRetrySidecarFile: "role: researcher\n",
+		"qa-answers.md":          "Q: x\nA: y\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	if err := RemoveCompletionReceipt(dir); err != nil {
+		t.Fatalf("RemoveCompletionReceipt() error = %v", err)
+	}
+	if err := RemoveCompletionReceipt(dir); err != nil {
+		t.Fatalf("RemoveCompletionReceipt() second call error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, PhaseCompleteFile)); !os.IsNotExist(err) {
+		t.Fatalf("phase_complete stat err = %v, want not exist", err)
+	}
+	for _, name := range []string{"artifact.md", ProtocolRetrySidecarFile, "qa-answers.md"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s was removed, want preserved: %v", name, err)
+		}
+	}
+}

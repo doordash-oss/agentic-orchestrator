@@ -108,27 +108,6 @@ func MarkWorkspaceFresh(ctx context.Context, runner ports.CommandRunner, workspa
 	return feature.SaveWorkspaceState(workspaceDir, updated)
 }
 
-// HasWorkspaceChanges checks whether there are git changes since the last
-// workspace KB build. Returns true (assume changes) when state or index.md is
-// missing, or on any error.
-func HasWorkspaceChanges(ctx context.Context, runner ports.CommandRunner, workspaceDir, repoPath string) (bool, error) {
-	state, err := feature.LoadWorkspaceState(workspaceDir)
-	if err != nil || state == nil || state.AnalyzedCommit == "" {
-		return true, nil
-	}
-	if _, err := os.Stat(KBPath(workspaceDir)); err != nil {
-		return true, nil
-	}
-	out, err := runner.Run(ctx, "git", []string{"log", "--oneline", state.AnalyzedCommit + "..HEAD"}, ports.CommandOpts{Dir: repoPath})
-	if err != nil {
-		return true, nil
-	}
-	if len(string(out)) > 0 {
-		return true, nil
-	}
-	return false, nil
-}
-
 // IsAncestor checks whether ancestorCommit is an ancestor of descendantCommit
 // in the given repo path. Returns false on any error.
 //
@@ -413,20 +392,6 @@ func CommitStagedOverlay(tmpDir, overlayDir string) error {
 	return nil
 }
 
-// PromoteWorkspaceToOverlay atomically replaces the parent overlay with the
-// child's refreshed workspace, stamping the resulting parent merge HEAD and
-// canonical commit. This is a convenience wrapper that stages and commits in
-// one call. Multi-repository promotion should use StageWorkspaceToOverlay +
-// CommitStagedOverlay to keep all overlays locked until the entire vector
-// is committed.
-func PromoteWorkspaceToOverlay(workspaceDir, overlayDir, mergeHEAD, canonicalCommit string) error {
-	tmpDir, err := StageWorkspaceToOverlay(workspaceDir, overlayDir, mergeHEAD, canonicalCommit)
-	if err != nil {
-		return err
-	}
-	return CommitStagedOverlay(tmpDir, overlayDir)
-}
-
 // RemoveWorkspace removes a child KB workspace directory.
 func RemoveWorkspace(workspaceDir string) error {
 	return os.RemoveAll(workspaceDir)
@@ -437,17 +402,6 @@ func RemoveOverlay(overlayDir string) error {
 	_ = os.RemoveAll(overlayDir + ".old")
 	_ = os.RemoveAll(overlayDir + ".promoting")
 	return os.RemoveAll(overlayDir)
-}
-
-// WorkspaceKBInfo builds a KBInfo pointing at the child's disposable workspace
-// instead of the canonical KB. Used to pass the workspace as read-only context
-// to downstream roles.
-func WorkspaceKBInfo(repoName, workspaceDir string) KBInfo {
-	return KBInfo{
-		Name:      repoName,
-		IndexPath: KBPath(workspaceDir),
-		RootDir:   workspaceDir,
-	}
 }
 
 // CanonicalKBCommit returns the current canonical KB head commit, or "" if

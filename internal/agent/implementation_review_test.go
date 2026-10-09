@@ -256,41 +256,6 @@ func TestComposeImplementationReviewFeedbackPoolsDesignOriginalityBlock(t *testi
 	}
 }
 
-func TestBuildImplementationReviewAxisPromptIncludesSingleReviewerContextPlusAxis(t *testing.T) {
-	got := BuildImplementationReviewAxisPrompt(
-		"/plan.md",
-		"Feature fully implemented",
-		"/progress.md",
-		"/iter-01",
-		"/testing-contract.yaml",
-		"/iter-01/verification-report.yaml",
-		1,
-		[]RequiredVerificationItem{{Name: "Build passes", Requirement: "go build ./..."}},
-		"/roadmap.md",
-		"tdd-fill-in",
-		"/iter-01/review/craft/review-feedback.md",
-		"Craft",
-	)
-
-	for _, want := range []string{
-		"Axis under review: Craft",
-		"Iteration under review: 1",
-		"Iteration artifacts directory: /iter-01",
-		"Read the approved roadmap at: /roadmap.md",
-		"Read the implementation plan (source of truth) at: /plan.md",
-		"Feature fully implemented",
-		"Read the verification report at: /iter-01/verification-report.yaml",
-		"Read the binding testing contract at: /testing-contract.yaml",
-		"Read the current progress at: /progress.md",
-		"This is a **tdd-fill-in** phase",
-		"Review feedback output: /iter-01/review/craft/review-feedback.md",
-	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("BuildImplementationReviewAxisPrompt() missing %q in:\n%s", want, got)
-		}
-	}
-}
-
 func TestBuildImplementationReviewAxisPromptIncludesFinalGateContext(t *testing.T) {
 	got := BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
 		Gate:                                 implementationReviewGateFinal,

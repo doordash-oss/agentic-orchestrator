@@ -35,7 +35,7 @@ func TestGrillMeInquirenessPartial_AllLevels(t *testing.T) {
 	var first string
 	for _, level := range levels {
 		t.Run(string(level), func(t *testing.T) {
-			got := prompts.GrillMeInquireness(string(level))
+			got := prompts.MustRender("grillme_inquireness", prompts.GrillMeInquirenessInput{Level: string(level)})
 			if first == "" {
 				first = got
 			} else if got != first {
@@ -51,7 +51,7 @@ func TestGrillMeInquirenessPartial_AllLevels(t *testing.T) {
 // Phase-Plan-revision builders). Header is the bracketed-tag form (no stray
 // colon); body resolves all ambiguity autonomously without grilling the user.
 func TestAutonomousInquirenessPartial(t *testing.T) {
-	got := prompts.AutonomousInquireness()
+	got := prompts.MustRender("autonomous_inquireness", prompts.AutonomousInquirenessInput{})
 
 	wantSnippets := []string{
 		"## Ambiguity Resolution [none]",
@@ -70,9 +70,9 @@ func TestAutonomousInquirenessPartial(t *testing.T) {
 }
 
 func TestGrillMeInquirenessPartial_InvariantAndPolicyFree(t *testing.T) {
-	none := prompts.GrillMeInquireness(string(feature.InquirenessNone))
-	medium := prompts.GrillMeInquireness(string(feature.InquirenessMedium))
-	high := prompts.GrillMeInquireness(string(feature.InquirenessHigh))
+	none := prompts.MustRender("grillme_inquireness", prompts.GrillMeInquirenessInput{Level: string(feature.InquirenessNone)})
+	medium := prompts.MustRender("grillme_inquireness", prompts.GrillMeInquirenessInput{Level: string(feature.InquirenessMedium)})
+	high := prompts.MustRender("grillme_inquireness", prompts.GrillMeInquirenessInput{Level: string(feature.InquirenessHigh)})
 
 	if none != medium || medium != high {
 		t.Fatalf("grill-me directive differs by inquireness level:\n--- none ---\n%s\n--- medium ---\n%s\n--- high ---\n%s", none, medium, high)

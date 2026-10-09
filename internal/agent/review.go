@@ -93,41 +93,6 @@ type reviewUserInput struct {
 	FeedbackPath string
 }
 
-// BuildReviewPrompt constructs the prompt for the review gate.
-// Large artifacts (plan, roadmap, progress, verification report) are referenced
-// by path so the reviewer reads them via tool use, keeping the prompt compact.
-// Per-phase implementation review now uses axis prompts; this helper remains
-// for the generic review prompt contract and tests.
-//
-// feedbackPath is the absolute path to the structured `review-feedback.md` the
-// reviewer must write under the Handoff Contract. Pass "" when the caller is
-// only exercising the prompt body (e.g. unit tests for optional sections).
-//
-// The prose lives in internal/agent/prompts/templates/review.user.tmpl.
-func BuildReviewPrompt(planPath, exitCriteria, progressPath, iterDir, contractPath, verificationReportPath string, iteration int, requiredVerification []RequiredVerificationItem, roadmapPath, phaseType, feedbackPath string) string {
-	required := make([]verificationItemView, 0, len(requiredVerification))
-	for _, item := range requiredVerification {
-		required = append(required, verificationItemView{
-			Name:        item.Name,
-			Requirement: item.Requirement,
-		})
-	}
-
-	return prompts.ReviewUserPrompt(reviewUserInput{
-		Iteration:              iteration,
-		IterDir:                iterDir,
-		RoadmapPath:            roadmapPath,
-		PlanPath:               planPath,
-		ExitCriteria:           exitCriteria,
-		VerificationReportPath: verificationReportPath,
-		ContractPath:           contractPath,
-		RequiredVerification:   required,
-		ProgressPath:           progressPath,
-		PhaseType:              phaseType,
-		FeedbackPath:           feedbackPath,
-	})
-}
-
 // ImplementationReviewAxisPromptOpts carries the shared prompt context for an
 // implementation review axis. The per-phase gate populates the phase-scoped
 // fields; the Final Review gate also supplies cumulative-diff and prior
@@ -161,27 +126,6 @@ type ImplementationReviewAxisPromptOpts struct {
 	PriorImplementationReportPaths       []string
 	PriorImplementationEvidenceRootDirs  []string
 	PriorImplementationEvidenceArtifacts []string
-}
-
-// BuildImplementationReviewAxisPrompt constructs the prompt for one
-// implementation review axis. It carries the same review context as the legacy
-// single-reviewer prompt plus the selected axis label.
-func BuildImplementationReviewAxisPrompt(planPath, exitCriteria, progressPath, iterDir, contractPath, verificationReportPath string, iteration int, requiredVerification []RequiredVerificationItem, roadmapPath, phaseType, feedbackPath, axisLabel string) string {
-	return BuildImplementationReviewAxisPromptWithOpts(ImplementationReviewAxisPromptOpts{
-		Gate:                   implementationReviewGatePerPhase,
-		AxisLabel:              axisLabel,
-		PlanPath:               planPath,
-		ExitCriteria:           exitCriteria,
-		ProgressPath:           progressPath,
-		IterDir:                iterDir,
-		ContractPath:           contractPath,
-		VerificationReportPath: verificationReportPath,
-		Iteration:              iteration,
-		RequiredVerification:   requiredVerification,
-		RoadmapPath:            roadmapPath,
-		PhaseType:              phaseType,
-		FeedbackPath:           feedbackPath,
-	})
 }
 
 // BuildImplementationReviewAxisPromptWithOpts renders one gate-aware
@@ -371,33 +315,6 @@ func ParseReviewFeedback(path string) (*ParsedReviewFeedback, error) {
 	}
 
 	return parsed, nil
-}
-
-// FormatReviewProtocolViolationFeedback renders a deterministic
-// CHANGES_REQUESTED feedback document for a malformed review-feedback.md,
-// shaped to satisfy the handoff contract on its own (so a downstream caller
-// that re-parses the synthesized file gets a clean ParseReviewFeedback). The
-// output mirrors FormatProtocolViolationFeedback for progress.md.
-func FormatReviewProtocolViolationFeedback(parsed *ParsedReviewFeedback) string {
-	var b strings.Builder
-	b.WriteString("# Implementation Review — Handoff Protocol Violation\n\n")
-	b.WriteString("This iteration's `review-feedback.md` did not satisfy the handoff contract spelled out in the review skill. The deterministic handoff parser ran ahead of the LLM reviewer's downstream consumers; every defect listed below was decided mechanically (no model judgment), so the list is exhaustive and fixing every item will let the next review handoff parse cleanly.\n\n")
-	b.WriteString("## Findings\n")
-	if parsed == nil || len(parsed.ProtocolViolations) == 0 {
-		b.WriteString("- (none)\n\n")
-	} else {
-		for _, v := range parsed.ProtocolViolations {
-			fmt.Fprintf(&b, "- **Critical**: %s\n", v)
-		}
-		b.WriteString("\n")
-	}
-	b.WriteString("Re-emit `review-feedback.md` with all three sections in order:\n")
-	b.WriteString("1. `## Findings` (severity-prefixed bullets, or `- (none)`)\n")
-	b.WriteString("2. `## Suggestions` (non-blocking improvements, or `- (none)`)\n")
-	b.WriteString("3. `## Verdict` (one of `APPROVED`, `CHANGES_REQUESTED` on its own line)\n\n")
-	b.WriteString("## Suggestions\n- (none)\n\n")
-	b.WriteString("## Verdict\nCHANGES_REQUESTED\n")
-	return b.String()
 }
 
 // FormatStructuredReviewFeedback wraps a free-form feedback body in the

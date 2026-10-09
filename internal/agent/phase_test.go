@@ -2121,7 +2121,6 @@ func TestNoLegacyBuilderCallersInAgentLayer(t *testing.T) {
 	}
 	files := []string{
 		"describe.go",
-		"summarize.go",
 		"research.go",
 		"phase.go",
 	}

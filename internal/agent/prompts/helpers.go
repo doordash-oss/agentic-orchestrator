@@ -16,21 +16,6 @@ package prompts
 
 import "strings"
 
-// GrillMeInquireness renders the grillme_inquireness partial for a given
-// inquireness level. level is the raw "none" / "medium" / "high" string;
-// any other value falls through to the medium branch.
-func GrillMeInquireness(level string) string {
-	return MustRender("grillme_inquireness", GrillMeInquirenessInput{Level: level})
-}
-
-// AutonomousInquireness renders the autonomous_inquireness partial used by
-// revision phases. The partial takes no inputs; the helper exists so callers
-// can drop the rendered string into ad-hoc compositions without spelling
-// MustRender at every call site.
-func AutonomousInquireness() string {
-	return MustRender("autonomous_inquireness", AutonomousInquirenessInput{})
-}
-
 // InquireUserPrompt renders the full Inquire-phase user prompt body, minus
 // the leading skill instruction (which the shared runInteractivePhase
 // helper prepends).
@@ -64,23 +49,6 @@ func VisualReferences(in VisualReferencesInput) string {
 		in.Label = "working on this feature"
 	}
 	return MustRender("visual_references", in)
-}
-
-// QAFiles renders the qa_files partial. Returns "" when Paths is empty.
-func QAFiles(in QAFilesInput) string {
-	if len(in.Paths) == 0 {
-		return ""
-	}
-	return MustRender("qa_files", in)
-}
-
-// PriorAxisApprovals renders the prior_axis_approvals partial. Returns ""
-// when Approvals is empty.
-func PriorAxisApprovals(in PriorAxisApprovalsInput) string {
-	if len(in.Approvals) == 0 {
-		return ""
-	}
-	return MustRender("prior_axis_approvals", in)
 }
 
 // DeferralsDue renders the deferrals_due partial. Returns "" when Entries
@@ -140,21 +108,10 @@ func ImplementUserPrompt(in any) string {
 	return MustRender("implement.user", in)
 }
 
-// ReviewUserPrompt renders the Review-gate user prompt (review.user.tmpl).
-func ReviewUserPrompt(in any) string {
-	return MustRender("review.user", in)
-}
-
 // ImplementationReviewAxisUserPrompt renders the per-axis implementation
 // review prompt (implementation_review_axis.user.tmpl).
 func ImplementationReviewAxisUserPrompt(in any) string {
 	return strings.TrimSpace(MustRender("implementation_review_axis.user", in)) + "\n"
-}
-
-// SummaryUserPrompt renders the bounded-helper summary-generation prompt
-// (summary.user.tmpl).
-func SummaryUserPrompt(in SummaryUserInput) string {
-	return MustRender("summary.user", in)
 }
 
 // SupervisorSystemPrompt renders the supervisor conversation's launch-channel
@@ -173,11 +130,6 @@ func PRDescriptionUserPrompt(in PRDescriptionUserInput) string {
 // (final_fix.user.tmpl).
 func FinalFixUserPrompt(in any) string {
 	return MustRender("final_fix.user", in)
-}
-
-// ScoutUserPrompt renders the per-scout subprocess prompt (scout.user.tmpl).
-func ScoutUserPrompt(in ScoutUserInput) string {
-	return MustRender("scout.user", in)
 }
 
 // ValidateSpecializedUserPrompt renders the per-axis specialized-validator

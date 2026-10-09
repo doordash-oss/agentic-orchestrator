@@ -755,6 +755,18 @@ func JoinProtocolViolations(violations []ProtocolViolation) string {
 	return strings.Join(parts, "; ")
 }
 
+// FormatSingleShotProtocolViolationError renders the canonical protocol violation LastError.
+func FormatSingleShotProtocolViolationError(role Role, dir string, violations []ProtocolViolation) string {
+	if dir == "" {
+		dir = "<unresolved>"
+	}
+	reason := JoinProtocolViolations(violations)
+	if strings.TrimSpace(reason) == "" {
+		reason = "contract validation failed"
+	}
+	return fmt.Sprintf("protocol violation: %s @ %s: %s", role, dir, reason)
+}
+
 // externalHostRE matches a URL or bare domain in evidence prose. It is the
 // deterministic signal that a capture or observation targets a third-party
 // surface rather than the repository's own UI.

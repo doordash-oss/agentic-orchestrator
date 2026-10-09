@@ -78,7 +78,7 @@ func TestBuildRoadmapPrompt_UsesGrillMeDirective(t *testing.T) {
 				Description: "exercise grill-me directive in roadmap",
 				Inquireness: level,
 			}
-			prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+			prompt := BuildRoadmapPromptWithResearch(f, "", "", "/tmp/design.md", "", nil)
 
 			if first == "" {
 				first = prompt
@@ -122,7 +122,7 @@ func TestBuildPhasePlanPrompt_UsesInvariantGrillMe(t *testing.T) {
 				Description: "exercise phase-plan grill-me prompt",
 				Inquireness: level,
 			}
-			prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, nil)
+			prompt := BuildPhasePlanPromptWithResearch(f, "", "", "/roadmap.md", "", phase, nil)
 
 			if first == "" {
 				first = prompt

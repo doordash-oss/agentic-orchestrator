@@ -371,7 +371,7 @@ func TestUnauthorizedWaiverGateWaiveMakesReportConsistent(t *testing.T) {
 	}
 	report := BuildContractVerificationReportStub(contract, contractPath)
 	forgeWaivedRows(&report, "plan_1")
-	if gate := ValidateVerificationReport(&report, nil, contract, true); !gate.Rejected {
+	if gate := ValidateVerificationReportWithContext(&report, nil, true, VerificationReportValidationContext{Contract: contract}); !gate.Rejected {
 		t.Fatalf("forged waiver accepted before the user decided: %+v", gate)
 	}
 	waivable, _ := UnauthorizedWaiverItemIDs(&report, contract)
@@ -399,7 +399,7 @@ func TestUnauthorizedWaiverGateWaiveMakesReportConsistent(t *testing.T) {
 			regenerated.Results[i].EvidenceData.Summary = "ran"
 		}
 	}
-	if gate := ValidateVerificationReport(&regenerated, nil, revised, true); gate.Rejected {
+	if gate := ValidateVerificationReportWithContext(&regenerated, nil, true, VerificationReportValidationContext{Contract: revised}); gate.Rejected {
 		t.Fatalf("report after WAIVE still rejected: %+v", gate.Findings)
 	}
 	if waivable, unwaivable := UnauthorizedWaiverItemIDs(&regenerated, revised); len(waivable)+len(unwaivable) != 0 {

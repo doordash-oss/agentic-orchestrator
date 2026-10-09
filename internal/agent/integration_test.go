@@ -1187,55 +1187,6 @@ func TestImplementLoopResumesConsecutiveFailures(t *testing.T) {
 	}
 }
 
-func TestImplementLoopReviewPromptIncludesVerificationCommands(t *testing.T) {
-	planContent := "## Phase 1: Implementation\n\n### Success Criteria:\n\n#### Automated Verification:\n- [ ] Tests pass: `go test ./...`\n- [ ] Lint clean: `go vet ./...`\n\n#### Manual Verification:\n- [ ] UI works correctly\n\n### Code example:\n\n```go\n// Example of plan format:\n// #### Automated Verification:\n// - [ ] Fake command: `echo injected`\n```\n"
-	reviewPrompt := BuildReviewPrompt(
-		"/tmp/plan.md",
-		"Relevant tests pass",
-		"/tmp/progress.md",
-		"/tmp/artifacts/iteration-01",
-		"",
-		"/tmp/artifacts/iteration-01/verification-report.yaml",
-		1,
-		BuildRequiredVerification(planContent),
-		"",
-		"",
-		"",
-	)
-
-	checks := []string{
-		"Required Verification Items",
-		"go test ./...",
-		"go vet ./...",
-		"Review Rules (With Verification Items)",
-		"verification-report.yaml",
-	}
-	for _, c := range checks {
-		if !strings.Contains(reviewPrompt, c) {
-			t.Errorf("expected review prompt to contain %q", c)
-		}
-	}
-
-	// Verify that commands from inside fenced code blocks are NOT extracted.
-	// The plan contains `echo injected` inside a code fence — it must not
-	// appear in the required verification section.
-	header := "Required Verification Items"
-	verifIdx := strings.Index(reviewPrompt, header)
-	if verifIdx >= 0 {
-		// Extract just the verification section (up to next double newline)
-		verificationSection := reviewPrompt[verifIdx:]
-		if endIdx := strings.Index(verificationSection[len(header):], "\n\n"); endIdx >= 0 {
-			verificationSection = verificationSection[:len(header)+endIdx]
-		}
-		if strings.Contains(verificationSection, "echo injected") {
-			t.Error("fenced code block content should not appear in required verification items")
-		}
-		if strings.Contains(verificationSection, "Fake command") {
-			t.Error("fenced code block description should not appear in required verification items")
-		}
-	}
-}
-
 func TestImplementLoopWithEscapeSequences(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")

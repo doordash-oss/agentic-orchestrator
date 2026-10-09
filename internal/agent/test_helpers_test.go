@@ -15,8 +15,6 @@
 package agent
 
 import (
-	"context"
-	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -24,7 +22,6 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
@@ -174,22 +171,4 @@ func assertExplorationAgentNames(t *testing.T, got []string) {
 	if !reflect.DeepEqual(got, explorationAgentNames()) {
 		t.Fatalf("AgentNames = %#v, want exploration set %#v", got, explorationAgentNames())
 	}
-}
-
-type fakeGitRunner struct {
-	head string
-	log  string
-}
-
-func (r *fakeGitRunner) Run(ctx context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
-	if name != "git" {
-		return nil, fmt.Errorf("unexpected command %q", name)
-	}
-	if len(args) == 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
-		return []byte(r.head + "\n"), nil
-	}
-	if len(args) == 3 && args[0] == "log" && args[1] == "--oneline" {
-		return []byte(r.log), nil
-	}
-	return nil, fmt.Errorf("unexpected git args %v in %s", args, opts.Dir)
 }

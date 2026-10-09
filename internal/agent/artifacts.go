@@ -60,12 +60,6 @@ func PhasePlanDir(stateDir string, f *feature.Feature, phase int) string {
 	return filepath.Join(PhaseDir(stateDir, f, phase), "plan")
 }
 
-// PhaseImplementDir returns the implement subdirectory for a roadmap phase.
-// e.g., runs/run-001/phase-01/implement/.
-func PhaseImplementDir(stateDir string, f *feature.Feature, phase int) string {
-	return filepath.Join(PhaseDir(stateDir, f, phase), "implement")
-}
-
 // PhaseTestingContractDir returns the base directory for a roadmap phase's
 // testing contract artifact. The contract lives at the phase root so
 // implementation and review share one binding file.
@@ -124,10 +118,6 @@ func (am *ArtifactManager) CreateIterationDir(n int) (string, error) {
 		return "", fmt.Errorf("creating iteration directory: %w", err)
 	}
 	return dir, nil
-}
-
-func (am *ArtifactManager) WriteResponse(iterDir string, response string) error {
-	return os.WriteFile(filepath.Join(iterDir, "response.txt"), []byte(response), 0o644)
 }
 
 func (am *ArtifactManager) WriteMeta(iterDir string, meta IterationMeta) error {

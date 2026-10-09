@@ -74,43 +74,6 @@ func axisApprovalViews(approvals []AxisApproval) []prompts.AxisApprovalView {
 	return views
 }
 
-// deferralsDueViews returns the typed view of deferrals due this phase, or
-// nil when none. Mirrors deferralsDueThisPhaseSection's filter step.
-func deferralsDueViews(f *feature.Feature, phase int) []prompts.DeferralView {
-	run := f.Run()
-	if run == nil {
-		return nil
-	}
-	due := feature.DueForPhase(run.Deferrals, phase)
-	if len(due) == 0 {
-		return nil
-	}
-	views := make([]prompts.DeferralView, 0, len(due))
-	for _, d := range due {
-		views = append(views, prompts.DeferralView{
-			ID:              d.ID,
-			Description:     d.Description,
-			CreatedInPhase:  d.CreatedInPhase,
-			CreatedInKind:   d.CreatedInKind,
-			DueByPhase:      d.DueByPhase,
-			Reason:          d.Reason,
-			RedeferralCount: d.RedeferralCount(),
-		})
-	}
-	return views
-}
-
-// qaFilePaths are paths to Q&A files from earlier phases.
-//
-// The prose lives in internal/agent/prompts/templates/roadmap.user.tmpl.
-//
-// skillsDir and guidelinesDir are retained on the signature for caller
-// stability. RoleSpec-backed system prompts now own the primary skill
-// directive and useful-resource catalog.
-func BuildRoadmapPrompt(f *feature.Feature, skillsDir, guidelinesDir, designArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
-	return BuildRoadmapPromptWithResearch(f, skillsDir, guidelinesDir, designArtifactPath, "", qaFilePaths, kbInfos...)
-}
-
 // refactorPassForkPoint names a refactor child's fork-point commits, one
 // "repo @ sha" clause per repository. Empty for top-level features. Planning
 // and design receive it as spec-grounding context: intent language like
@@ -131,6 +94,8 @@ func refactorPassForkPoint(f *feature.Feature) string {
 
 // BuildRoadmapPromptWithResearch constructs the initial roadmap prompt with
 // the approved design artifact plus the research artifact as grounding context.
+//
+// The prose lives in internal/agent/prompts/templates/roadmap.user.tmpl.
 func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir, designArtifactPath, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) string {
 	_ = skillsDir
 	_ = guidelinesDir
@@ -190,7 +155,8 @@ func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, prev
 	})
 }
 
-// BuildPhasePlanPrompt constructs the prompt for per-phase plan creation.
+// BuildPhasePlanPromptWithResearch constructs the initial per-phase plan prompt
+// with the approved roadmap plus the research artifact as grounding context.
 //
 // The prose lives in internal/agent/prompts/templates/phase_plan.user.tmpl.
 //
@@ -202,16 +168,6 @@ func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, prev
 // omitted — the approved roadmap already incorporates them. Phase-Plan's
 // own qa-answers.md is NOT propagated to Implement (Implement reads
 // the phase-plan markdown artifact, which already encodes all decisions).
-//
-// skillsDir, guidelinesDir, and kbInfos are retained on the signature for
-// caller stability. RoleSpec-backed system prompts now own the primary skill
-// directive and useful-resource catalog.
-func BuildPhasePlanPrompt(f *feature.Feature, skillsDir, guidelinesDir, roadmapPath string, phase RoadmapPhase, qaFilePaths []string, kbInfos ...KBInfo) string {
-	return BuildPhasePlanPromptWithResearch(f, skillsDir, guidelinesDir, roadmapPath, "", phase, qaFilePaths, kbInfos...)
-}
-
-// BuildPhasePlanPromptWithResearch constructs the initial per-phase plan prompt
-// with the approved roadmap plus the research artifact as grounding context.
 func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir, roadmapPath, researchArtifactPath string, phase RoadmapPhase, qaFilePaths []string, kbInfos ...KBInfo) string {
 	_ = skillsDir
 	_ = guidelinesDir
@@ -266,21 +222,4 @@ func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, 
 		Inquireness:               prompts.AutonomousInquirenessInput{},
 		AutomatedVerificationOnly: !f.EffectivePipeline().ShouldContractAgentEvidence(),
 	})
-}
-
-// formatPriorAxisApprovals writes a "Prior Axis Approvals" section into b when
-// approvals is non-empty. artifactName distinguishes the wording ("roadmap" vs
-// "phase plan"); the skill callout is axis-name-agnostic because both revise
-// skills implement the same Sticky Approval Respect procedure.
-//
-// The literal prose lives in
-// internal/agent/prompts/partials/prior_axis_approvals.tmpl.
-func formatPriorAxisApprovals(b *strings.Builder, approvals []AxisApproval, artifactName string) {
-	if len(approvals) == 0 {
-		return
-	}
-	b.WriteString(prompts.PriorAxisApprovals(prompts.PriorAxisApprovalsInput{
-		ArtifactName: artifactName,
-		Approvals:    axisApprovalViews(approvals),
-	}))
 }

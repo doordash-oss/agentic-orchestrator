@@ -44,14 +44,6 @@ func TestArtifactManagerWriteFiles(t *testing.T) {
 
 	iterDir, _ := am.CreateIterationDir(1)
 
-	if err := am.WriteResponse(iterDir, "test response"); err != nil {
-		t.Fatalf("write response: %v", err)
-	}
-	content, _ := os.ReadFile(filepath.Join(iterDir, "response.txt"))
-	if string(content) != "test response" {
-		t.Errorf("response content = %q", content)
-	}
-
 	meta := IterationMeta{
 		Iteration:   1,
 		StartedAt:   time.Now(),
@@ -393,15 +385,6 @@ func TestPhasePlanDir(t *testing.T) {
 	want := "/tmp/state/feat1/runs/run-001/phase-02/plan"
 	if got != want {
 		t.Errorf("PhasePlanDir = %q, want %q", got, want)
-	}
-}
-
-func TestPhaseImplementDir(t *testing.T) {
-	f := &feature.Feature{ID: "feat1", ActiveRun: 1}
-	got := PhaseImplementDir("/tmp/state", f, 3)
-	want := "/tmp/state/feat1/runs/run-001/phase-03/implement"
-	if got != want {
-		t.Errorf("PhaseImplementDir = %q, want %q", got, want)
 	}
 }
 

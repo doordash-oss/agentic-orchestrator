@@ -1388,6 +1388,23 @@ func TestIsArtifactExcluded(t *testing.T) {
 	}
 }
 
+func TestProtocolRetrySidecarExcludedFromArtifactSelection(t *testing.T) {
+	if !IsArtifactExcluded(ProtocolRetrySidecarFile) {
+		t.Fatalf("IsArtifactExcluded(%q) = false, want true", ProtocolRetrySidecarFile)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ProtocolRetrySidecarFile), []byte("# not an artifact\n"), 0o644); err != nil {
+		t.Fatalf("write sidecar: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "research.md"), []byte("# research\n"), 0o644); err != nil {
+		t.Fatalf("write markdown: %v", err)
+	}
+	if got := newestPhaseMarkdownArtifact(dir); !strings.HasSuffix(got, "research.md") {
+		t.Fatalf("newestPhaseMarkdownArtifact() = %q, want research.md", got)
+	}
+}
+
 // --- Tests for plan attempt resume ---
 
 func TestLatestCompletedPlanAttempt(t *testing.T) {
@@ -2218,7 +2235,7 @@ func TestSpecializedValidation_UsesReviewModelInBoundedSessions(t *testing.T) {
 			}
 
 			domain := testPlanValidatorAxis(t, "validate-roadmap-architecture")
-			_, _, _, _ = runSpecializedPlanValidation(cfg, sm, 1, planDir, filepath.Join(planDir, "plan.md"), domain, observe.SpanContext{})
+			_, _, _, _ = runSpecializedPlanValidationForArtifact(cfg, sm, 1, planDir, filepath.Join(planDir, "plan.md"), domain, validationArtifactPhasePlan, planValidationExtras{}, observe.SpanContext{})
 
 			if capturedOpts.Model != tt.wantModel {
 				t.Errorf("expected BuildSession model=%q, got %q", tt.wantModel, capturedOpts.Model)
@@ -2463,7 +2480,7 @@ func TestSpecializedValidation_UsesConfiguredReviewModel(t *testing.T) {
 	}
 
 	domain := testPlanValidatorAxis(t, "validate-roadmap-architecture")
-	_, _, _, _ = runSpecializedPlanValidation(cfg, sm, 1, planDir, filepath.Join(planDir, "plan.md"), domain, observe.SpanContext{})
+	_, _, _, _ = runSpecializedPlanValidationForArtifact(cfg, sm, 1, planDir, filepath.Join(planDir, "plan.md"), domain, validationArtifactPhasePlan, planValidationExtras{}, observe.SpanContext{})
 
 	if capturedOpts.Model != "codex" {
 		t.Errorf("expected BuildSession model=%q (no override), got %q", "codex", capturedOpts.Model)

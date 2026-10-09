@@ -139,44 +139,6 @@ func TestParsePRDescription(t *testing.T) {
 	}
 }
 
-func TestExtractTextFromStreamJSON(t *testing.T) {
-	tests := []struct {
-		name   string
-		output string
-		want   string
-	}{
-		{
-			name:   "assistant text blocks",
-			output: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"TITLE: Fix bug"}]}}` + "\n" + `{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.01}`,
-			want:   "TITLE: Fix bug",
-		},
-		{
-			name:   "result text fallback",
-			output: `{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.01,"result":"Final answer"}`,
-			want:   "Final answer",
-		},
-		{
-			name:   "plain text fallback",
-			output: "Not JSON at all",
-			want:   "Not JSON at all",
-		},
-		{
-			name:   "empty",
-			output: "",
-			want:   "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := extractTextFromStreamJSON(tt.output)
-			if got != tt.want {
-				t.Errorf("extractTextFromStreamJSON() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestPhaseRunnerRunDescriptionGeneration_UsesUtilitySession(t *testing.T) {
 	sess := newUtilityTestSession()
 	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n## Summary\n- Test change"))

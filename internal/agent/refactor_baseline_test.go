@@ -53,7 +53,7 @@ func TestRefactorPassForkPoint_NamesForkPointPerRepo(t *testing.T) {
 // resolve relative language into absolute end-state statements.
 func TestSpecPhasePromptsCarryRefactorPassContext(t *testing.T) {
 	child := refactorChildFixture()
-	roadmap := BuildRoadmapPrompt(child, "", "", "/path/to/design.md", nil)
+	roadmap := BuildRoadmapPromptWithResearch(child, "", "", "/path/to/design.md", "", nil)
 	design := BuildDesignPrompt(child, "", "", "/path/to/research.md", nil)
 
 	for name, prompt := range map[string]string{"roadmap": roadmap, "design": design} {
@@ -83,7 +83,7 @@ func TestSpecPhasePromptsCarryRefactorPassContext(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 		Repos:       []feature.FeatureRepo{{Name: "repo-a", BaseBranch: "main"}},
 	}
-	if strings.Contains(BuildRoadmapPrompt(top, "", "", "", nil), "Refactor Pass Context") {
+	if strings.Contains(BuildRoadmapPromptWithResearch(top, "", "", "", "", nil), "Refactor Pass Context") {
 		t.Fatal("top-level roadmap prompt unexpectedly carries the refactor pass context")
 	}
 	if strings.Contains(BuildDesignPrompt(top, "", "", "", nil), "Refactor Pass Context") {

@@ -632,18 +632,6 @@ func roadmapValidatorsForRisk(risk feature.RiskLevel) []planValidatorAxis {
 	return selectPlanValidators(validationArtifactRoadmap, risk)
 }
 
-// runSpecializedPlanValidation runs a single specialized validator against the plan
-// using a domain-specific template.
-//
-// All validators run in interactive mode so the provider protocol handles the
-// full lifecycle (handshake → prompt → tool use → result). For providers that
-// support print mode (Claude), stdin is closed after the protocol sends the
-// prompt since it's a one-shot evaluation. For providers that don't (Codex),
-// stdin must stay open because it carries the JSON-RPC channel.
-func runSpecializedPlanValidation(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain planValidatorAxis, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
-	return runSpecializedPlanValidationForArtifact(cfg, sm, attempt, attemptDir, planArtifactPath, domain, validationArtifactPhasePlan, planValidationExtras{}, parentCtx)
-}
-
 // planValidationExtras carries optional prompt augmentations that only some
 // validators consume. Roadmap and single-phase flows pass the zero value;
 // per-phase plan validation populates PriorPhasePlanPaths.
@@ -651,6 +639,14 @@ type planValidationExtras struct {
 	PriorPhasePlanPaths []string
 }
 
+// runSpecializedPlanValidationForArtifact runs a single specialized validator
+// against the plan artifact using a domain-specific template.
+//
+// All validators run in interactive mode so the provider protocol handles the
+// full lifecycle (handshake → prompt → tool use → result). For providers that
+// support print mode (Claude), stdin is closed after the protocol sends the
+// prompt since it's a one-shot evaluation. For providers that don't (Codex),
+// stdin must stay open because it carries the JSON-RPC channel.
 func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.SessionManager, attempt int, attemptDir, planArtifactPath string, domain planValidatorAxis, kind validationArtifactKind, extras planValidationExtras, parentCtx observe.SpanContext) (ReviewStatus, string, ValidatorMarkers, error) {
 	helperIterDir := filepath.Join(attemptDir, domain.helperDirName())
 	if err := os.MkdirAll(helperIterDir, 0o755); err != nil {
@@ -2442,6 +2438,10 @@ func resolvePlanArtifactPath(store ports.FeatureStore, featureID, artifactDir st
 	}
 	return bestPath
 }
+
+// ProtocolRetrySidecarFile names the retry-state file earlier releases wrote
+// into phase directories; it is never an artifact.
+const ProtocolRetrySidecarFile = ".protocol-retry.yaml"
 
 // IsArtifactExcluded returns true if the filename should be excluded from
 // artifact resolution fallback. These are debug/infrastructure files.

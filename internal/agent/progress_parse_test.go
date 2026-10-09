@@ -430,21 +430,6 @@ SUCCESS
 	}
 }
 
-func TestFormatProtocolViolationFeedback_TerminatesWithStatusLine(t *testing.T) {
-	parsed := &ParsedProgress{
-		ProtocolViolations: []string{
-			"progress.md missing required section \"## Deferrals\"",
-		},
-	}
-	out := FormatProtocolViolationFeedback(parsed)
-	if !strings.HasSuffix(strings.TrimSpace(out), "## Verdict\nCHANGES_REQUESTED") {
-		t.Errorf("missing terminal ## Verdict block; got:\n%s", out)
-	}
-	if !strings.Contains(out, "missing required section") {
-		t.Errorf("violation should be enumerated; got:\n%s", out)
-	}
-}
-
 func TestParseProgressMd_RejectsAgentAuthoredQuestionGate(t *testing.T) {
 	dir := t.TempDir()
 	iterDir := filepath.Join(dir, "iteration-01")

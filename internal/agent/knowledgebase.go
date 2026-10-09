@@ -171,14 +171,6 @@ func kbLockMutex(kbDir string) *sync.Mutex {
 	return mu.(*sync.Mutex)
 }
 
-// AcquireKBLock attempts to create a lock file for the KB directory.
-// Returns true if the lock was acquired, false if another feature holds it.
-// The lock is reentrant: if the same featureID already holds it, the
-// timestamp is refreshed and the call succeeds.
-func AcquireKBLock(kbDir, featureID string) (bool, error) {
-	return AcquireKBLockWithStatus(kbDir, featureID, nil)
-}
-
 // AcquireKBLockWithStatus attempts to create a lock file, reclaiming an
 // existing lock only when the owner can be proven stale by statusFn, when the
 // lock is corrupt, or when no statusFn is available and the timestamp exceeds
@@ -311,23 +303,6 @@ func ReleaseKBLockIfOwned(kbDir, featureID string) (bool, error) {
 // Returns the status and true if found, or zero value and false if not found.
 type FeatureStatusFunc func(featureID string) (int, bool)
 
-// IsKBLockStale checks if the lock file is stale. A lock is stale if:
-// - The lock file is corrupt
-// - The lock owner feature no longer exists or is not in StatusBuildingKB
-// - The lock is older than 30 minutes and no statusFn is available
-// The statusFn parameter looks up a feature's status; if nil, only time-based
-// staleness is checked. A confirmed BuildingKB owner is authoritative even
-// when the timestamp is old because the timestamp is not a heartbeat.
-func IsKBLockStale(kbDir string, statusFn FeatureStatusFunc) bool {
-	mu := kbLockMutex(kbDir)
-	mu.Lock()
-	defer mu.Unlock()
-
-	lockPath := KBLockPath(kbDir)
-	data, err := os.ReadFile(lockPath)
-	return isKBLockStaleData(data, err, statusFn)
-}
-
 func isKBLockStaleData(data []byte, readErr error, statusFn FeatureStatusFunc) bool {
 	if readErr != nil {
 		return false
@@ -391,29 +366,6 @@ func GetCurrentCommit(ctx context.Context, runner ports.CommandRunner, repoPath 
 		return "", fmt.Errorf("git rev-parse HEAD: %w", err)
 	}
 	return strings.TrimSpace(string(out)), nil
-}
-
-// HasKBChanges checks whether there are actual git changes since the last KB build.
-// Returns true (assume changes) when state or index.md is missing, or on any error.
-// Returns false only when state.json and index.md exist and git log shows no commits
-// between the stored HEAD and the current HEAD.
-func HasKBChanges(ctx context.Context, runner ports.CommandRunner, kbDir, repoPath string) (bool, error) {
-	state, err := LoadKBState(kbDir)
-	if err != nil || state == nil || state.HeadCommit == "" {
-		return true, nil // can't determine, assume changes
-	}
-	if _, err := os.Stat(KBPath(kbDir)); err != nil {
-		return true, nil // no index.md, need full build
-	}
-	// Check for commits between stored HEAD and current HEAD
-	out, err := runner.Run(ctx, "git", []string{"log", "--oneline", state.HeadCommit + "..HEAD"}, ports.CommandOpts{Dir: repoPath})
-	if err != nil {
-		return true, nil // git error, assume changes
-	}
-	if len(strings.TrimSpace(string(out))) > 0 {
-		return true, nil
-	}
-	return false, nil
 }
 
 // BuildKBPrompt constructs the user prompt for the KB agent.

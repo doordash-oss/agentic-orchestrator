@@ -433,9 +433,9 @@ func TestRunKnowledgeBaseForRepo_RequiresLockOwnership(t *testing.T) {
 	}
 
 	kbDir := KBStateDir(stateDir, "locked-repo")
-	locked, err := AcquireKBLock(kbDir, "other-feature")
+	locked, err := AcquireKBLockWithStatus(kbDir, "other-feature", nil)
 	if err != nil {
-		t.Fatalf("AcquireKBLock: %v", err)
+		t.Fatalf("AcquireKBLockWithStatus: %v", err)
 	}
 	if !locked {
 		t.Fatal("expected other feature to acquire KB lock")

@@ -68,8 +68,6 @@ func ProgressFingerprint(path string) (string, error) {
 
 // ProgressTracker tracks consecutive no-progress iterations.
 type ProgressTracker struct {
-	lastFingerprint string
-	hasChecked      bool
 	noProgressCount int
 	hasOutcome      bool
 	bestBlockers    int
@@ -87,42 +85,9 @@ func NewProgressTracker() *ProgressTracker {
 	return &ProgressTracker{}
 }
 
-// Check compares the current progress file fingerprint with the last one.
-// Returns true if progress was made (fingerprint changed). Uses the
-// handoff-narrative-scoped fingerprint so iteration-specific paths in
-// progress.md don't mask a stalled agent.
-func (pt *ProgressTracker) Check(progressPath string) (bool, error) {
-	fp, err := ProgressFingerprint(progressPath)
-	if err != nil {
-		return false, err
-	}
-
-	if !pt.hasChecked {
-		pt.lastFingerprint = fp
-		pt.hasChecked = true
-		return true, nil
-	}
-
-	if fp == pt.lastFingerprint {
-		pt.noProgressCount++
-		return false, nil
-	}
-
-	pt.lastFingerprint = fp
-	pt.noProgressCount = 0
-	return true, nil
-}
-
 // NoProgressCount returns the number of consecutive no-progress iterations.
 func (pt *ProgressTracker) NoProgressCount() int {
 	return pt.noProgressCount
-}
-
-// ObserveVerifiedOutcome records a deterministic outcome when no repository
-// fingerprint is available. Progress is credited when the verified blocker
-// count reaches a new low.
-func (pt *ProgressTracker) ObserveVerifiedOutcome(blockers int) bool {
-	return pt.ObserveVerifiedOutcomeWithWorktree(blockers, "")
 }
 
 // ObserveVerifiedOutcomeWithWorktree records a deterministic verifier/reviewer
@@ -462,35 +427,6 @@ func ParseProgressMd(path string) (*ParsedProgress, error) {
 	}
 
 	return parsed, nil
-}
-
-// FormatProtocolViolationFeedback renders a deterministic CHANGES_REQUESTED
-// feedback document for a malformed progress.md, conforming to the file-based
-// review handoff schema (## Findings / ## Suggestions / ## Verdict) so
-// ParseReviewFeedback can re-parse it cleanly when the implement loop short-
-// circuits ahead of the LLM reviewer. Callers persist this to
-// review-feedback.md.
-func FormatProtocolViolationFeedback(parsed *ParsedProgress) string {
-	var b strings.Builder
-	b.WriteString("This iteration's `progress.md` did not satisfy the harness contract spelled out in `skills/implement/SKILL.md`. The deterministic handoff parser ran ahead of the LLM reviewer; every defect listed below was decided mechanically (no model judgment), so the list is exhaustive and fixing every item will let the next iteration's handoff parse cleanly.\n\n")
-	if parsed != nil {
-		for _, v := range parsed.ProtocolViolations {
-			fmt.Fprintf(&b, "- **Critical**: %s\n", v)
-		}
-	}
-	if parsed == nil || len(parsed.ProtocolViolations) == 0 {
-		b.WriteString("- (none)\n")
-	}
-	b.WriteString("\nRe-emit `progress.md` with these sections in order:\n")
-	b.WriteString("1. `## Iteration Handoff` (with the four `### ` sub-sections)\n")
-	b.WriteString("2. `## Deferrals` (fenced YAML block with `deferrals:` and `closed_deferrals:` keys)\n")
-	b.WriteString("3. `## Iteration State` (one of `SUCCESS`, `RETRY` on its own line)\n")
-	return FormatStructuredReviewFeedback(
-		"Implementation Review — Iteration Handoff Protocol Violation",
-		strings.TrimRight(b.String(), "\n"),
-		"",
-		ReviewChangesRequested,
-	)
 }
 
 // findSectionHeadings returns the byte offset of each heading in the

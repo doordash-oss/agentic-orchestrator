@@ -63,25 +63,25 @@ func TestFingerprint(t *testing.T) {
 func TestProgressTracker(t *testing.T) {
 	pt := NewProgressTracker()
 
-	made := pt.ObserveVerifiedOutcome(3)
+	made := pt.ObserveVerifiedOutcomeWithWorktree(3, "")
 	if !made {
 		t.Fatal("first verified outcome should establish progress baseline")
 	}
-	made = pt.ObserveVerifiedOutcome(3)
+	made = pt.ObserveVerifiedOutcomeWithWorktree(3, "")
 	if made {
 		t.Fatal("same blocker count should not count as progress")
 	}
 	if pt.NoProgressCount() != 1 {
 		t.Fatalf("NoProgressCount = %d, want 1", pt.NoProgressCount())
 	}
-	made = pt.ObserveVerifiedOutcome(2)
+	made = pt.ObserveVerifiedOutcomeWithWorktree(2, "")
 	if !made {
 		t.Fatal("lower blocker count should count as progress")
 	}
 	if pt.NoProgressCount() != 0 {
 		t.Fatalf("NoProgressCount = %d, want reset to 0", pt.NoProgressCount())
 	}
-	made = pt.ObserveVerifiedOutcome(3)
+	made = pt.ObserveVerifiedOutcomeWithWorktree(3, "")
 	if made {
 		t.Fatal("regressing blocker count should not count as progress")
 	}

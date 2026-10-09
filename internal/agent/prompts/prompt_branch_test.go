@@ -216,9 +216,9 @@ func TestMultiRepoPromptBranches(t *testing.T) {
 }
 
 func TestInquirenessBranches(t *testing.T) {
-	grillMeNone := GrillMeInquireness("none")
-	grillMeMedium := GrillMeInquireness("medium")
-	grillMeHigh := GrillMeInquireness("high")
+	grillMeNone := MustRender("grillme_inquireness", GrillMeInquirenessInput{Level: "none"})
+	grillMeMedium := MustRender("grillme_inquireness", GrillMeInquirenessInput{Level: "medium"})
+	grillMeHigh := MustRender("grillme_inquireness", GrillMeInquirenessInput{Level: "high"})
 	if grillMeNone != grillMeMedium || grillMeMedium != grillMeHigh {
 		t.Fatalf("grill-me directive should be invariant by inquireness level:\n--- none ---\n%s\n--- medium ---\n%s\n--- high ---\n%s", grillMeNone, grillMeMedium, grillMeHigh)
 	}
@@ -249,7 +249,7 @@ func TestInquirenessBranches(t *testing.T) {
 		},
 		{
 			name:         "autonomous_inquireness_forbids_questions",
-			got:          AutonomousInquireness(),
+			got:          MustRender("autonomous_inquireness", AutonomousInquirenessInput{}),
 			wantContains: []string{"Ambiguity Resolution [none]", "Do NOT ask the user any questions"},
 			wantOmit:     []string{"Ambiguity Resolution [grill-me]"},
 		},

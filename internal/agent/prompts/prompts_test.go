@@ -436,8 +436,8 @@ func TestGoldenSnapshots(t *testing.T) {
 		},
 		{
 			// Phase-Plan primary builder always emits the grillme_inquireness
-			// partial with Level="none" — see BuildPhasePlanPrompt for the
-			// hardcoded override.
+			// partial with Level="none" — see BuildPhasePlanPromptWithResearch
+			// for the hardcoded override.
 			name: "phase_plan_user_autonomous",
 			render: func() string {
 				in := PhasePlanUserInput{
@@ -575,7 +575,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "summary_user",
 			render: func() string {
-				return SummaryUserPrompt(SummaryUserInput{
+				return MustRender("summary.user", SummaryUserInput{
 					Name:        "Add OAuth login",
 					Description: "Sign in with Google.",
 				})
@@ -694,7 +694,7 @@ func TestGoldenSnapshots(t *testing.T) {
 		{
 			name: "scout_user",
 			render: func() string {
-				return ScoutUserPrompt(ScoutUserInput{
+				return MustRender("scout.user", ScoutUserInput{
 					Query: "How does the auth module wrap errors?",
 					Files: []ScoutFile{
 						{Path: "auth/login.go", Purpose: "login flow", Content: "package auth\n\nfunc Login() error { ... }"},

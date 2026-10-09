@@ -21,53 +21,12 @@ import (
 	"testing"
 )
 
-func TestBuildRequiredVerification(t *testing.T) {
-	plan := "#### Automated Verification:\n- [ ] Unit tests pass: `go test ./...`\n- [ ] Lint passes: `go vet ./...`\n"
-	got := BuildRequiredVerification(plan)
-
-	if len(got) != 2 {
-		t.Fatalf("BuildRequiredVerification() got %d required items, want 2", len(got))
-	}
-	if got[0].Name != "Unit tests pass" || got[0].Requirement != "go test ./..." {
-		t.Fatalf("BuildRequiredVerification() first item = %+v", got[0])
-	}
-	if got[1].Name != "Lint passes" || got[1].Requirement != "go vet ./..." {
-		t.Fatalf("BuildRequiredVerification() second item = %+v", got[1])
-	}
-}
-
-func TestWriteAndReadVerificationReportStub(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "verification-report.yaml")
-	required := []RequiredVerificationItem{
-		{Name: "Unit tests pass", Requirement: "go test ./..."},
-		{Name: "Configured verification", Requirement: "npm run lint"},
-	}
-
-	if err := WriteVerificationReportStub(path, required); err != nil {
-		t.Fatalf("WriteVerificationReportStub() error = %v", err)
-	}
-
-	report, err := ReadVerificationReport(path)
-	if err != nil {
-		t.Fatalf("ReadVerificationReport() error = %v", err)
-	}
-	if report.Version != 1 {
-		t.Fatalf("ReadVerificationReport() Version = %d, want 1", report.Version)
-	}
-	if len(report.RequiredChecks) != 2 {
-		t.Fatalf("ReadVerificationReport() got %d required checks, want 2", len(report.RequiredChecks))
-	}
-	if report.RequiredChecks[0].Status != VerificationStatusNotRun {
-		t.Fatalf("ReadVerificationReport() status = %q, want %q", report.RequiredChecks[0].Status, VerificationStatusNotRun)
-	}
-}
-
 func TestWriteAndReadContractVerificationReportStub(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "verification-report.yaml")
 	contract := CompileTestingContract("#### Automated Verification:\n- [ ] Agent tests: `go test ./internal/agent/... -count=1`\n", "/tmp/phase-01/plan.md", "tdd-fill-in")
 
-	if err := WriteVerificationReportStubFromContract(path, "/tmp/phase-01/testing-contract.yaml", &contract); err != nil {
-		t.Fatalf("WriteVerificationReportStubFromContract() error = %v", err)
+	if err := WriteVerificationReport(path, BuildContractVerificationReportStub(&contract, "/tmp/phase-01/testing-contract.yaml")); err != nil {
+		t.Fatalf("WriteVerificationReport() error = %v", err)
 	}
 
 	report, err := ReadVerificationReport(path)

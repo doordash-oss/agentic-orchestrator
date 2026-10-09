@@ -35,7 +35,7 @@ Some details.
 `
 	got := PhaseScopeFromText(feat, plan)
 	if !got.ScopeOK() {
-		t.Fatalf("expected ScopeOK, got issues: %s", got.IssueSummary())
+		t.Fatalf("expected ScopeOK, got issues: %+v", got.Issues)
 	}
 	if !reflect.DeepEqual(got.Repos, []string{"solo"}) {
 		t.Fatalf("repos = %v, want [solo]", got.Repos)
@@ -60,7 +60,7 @@ Body for web.
 `
 	got := PhaseScopeFromText(feat, plan)
 	if !got.ScopeOK() {
-		t.Fatalf("expected ScopeOK, got issues: %s", got.IssueSummary())
+		t.Fatalf("expected ScopeOK, got issues: %+v", got.Issues)
 	}
 	if !reflect.DeepEqual(got.Repos, []string{testRepoNameAPI, testRepoNameWeb}) {
 		t.Fatalf("repos = %v, want [api web]", got.Repos)
@@ -163,7 +163,7 @@ Body.
 `
 	got := PhaseScopeFromText(feat, plan)
 	if !got.ScopeOK() {
-		t.Fatalf("expected OK, got %s", got.IssueSummary())
+		t.Fatalf("expected OK, got %+v", got.Issues)
 	}
 	if !reflect.DeepEqual(got.Repos, []string{testRepoNameAPI}) {
 		t.Fatalf("expected [api] (partial subset), got %v", got.Repos)

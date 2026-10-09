@@ -153,23 +153,3 @@ func PhaseScopeFromText(feat *feature.Feature, planText string) PhaseScopeResult
 		Issues: issues,
 	}
 }
-
-// IssueSummary renders the Issues slice as a human-readable error string.
-// Returns "" when the result is OK.
-func (r PhaseScopeResult) IssueSummary() string {
-	if len(r.Issues) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	for i, issue := range r.Issues {
-		if i > 0 {
-			b.WriteString("; ")
-		}
-		if issue.Task != "" {
-			b.WriteString(issue.Task)
-			b.WriteString(": ")
-		}
-		b.WriteString(issue.Message)
-	}
-	return b.String()
-}

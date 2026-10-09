@@ -151,8 +151,9 @@ func TestOrchestrator_StartKB_LockHeldByOther_SetsWaitMessage(t *testing.T) {
 	cpr := newCapturingPhaseRunner(t)
 
 	// Pre-create kb.lock for "repo-locked" owned by another feature so that
-	// AcquireKBLock fails on the first attempt. Don't seed state.json so the
-	// freshness check returns false and the lock acquisition path runs.
+	// AcquireKBLockWithStatus fails on the first attempt. Don't seed
+	// state.json so the freshness check returns false and the lock
+	// acquisition path runs.
 	kbDir := agent.KBStateDir(cpr.stateDir, "repo-locked")
 	if err := os.MkdirAll(kbDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", kbDir, err)

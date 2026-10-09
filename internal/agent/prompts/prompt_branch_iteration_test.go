@@ -104,7 +104,7 @@ func TestReviewPromptBranchBehavior(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ReviewUserPrompt(tt.input)
+			got := MustRender("review.user", tt.input)
 			for _, want := range tt.wantContains {
 				requireContains(t, got, want)
 			}

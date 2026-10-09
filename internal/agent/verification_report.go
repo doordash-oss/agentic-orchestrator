@@ -311,46 +311,6 @@ func NormalizeStatus(s VerificationRunStatus) VerificationRunStatus {
 	}
 }
 
-// BuildRequiredVerification merges plan-extracted automated verification with
-// the feature's configured verification text.
-func BuildRequiredVerification(planText string) []RequiredVerificationItem {
-	seen := make(map[string]bool)
-	var required []RequiredVerificationItem
-
-	add := func(item RequiredVerificationItem) {
-		key := strings.TrimSpace(item.Requirement)
-		if key == "" || seen[key] {
-			return
-		}
-		item.Requirement = key
-		seen[key] = true
-		required = append(required, item)
-	}
-
-	for _, step := range ParsePlanVerification(planText) {
-		add(RequiredVerificationItem{
-			Name:        step.Description,
-			Requirement: step.Command,
-		})
-	}
-
-	return required
-}
-
-func BuildVerificationReportStub(required []RequiredVerificationItem) VerificationReport {
-	report := VerificationReport{Version: 1}
-	for _, item := range required {
-		report.RequiredChecks = append(report.RequiredChecks, VerificationCheckResult{
-			Name:        item.Name,
-			Requirement: item.Requirement,
-			Command:     item.Requirement,
-			Mode:        VerificationModeUnknown,
-			Status:      VerificationStatusNotRun,
-		})
-	}
-	return report
-}
-
 func BuildContractVerificationReportStub(contract *TestingContract, contractPath string) VerificationReport {
 	report := VerificationReport{
 		Version:          2,
@@ -404,14 +364,6 @@ func WriteVerificationReport(path string, report VerificationReport) error {
 		return fmt.Errorf("writing verification report: %w", err)
 	}
 	return nil
-}
-
-func WriteVerificationReportStub(path string, required []RequiredVerificationItem) error {
-	return WriteVerificationReport(path, BuildVerificationReportStub(required))
-}
-
-func WriteVerificationReportStubFromContract(path, contractPath string, contract *TestingContract) error {
-	return WriteVerificationReport(path, BuildContractVerificationReportStub(contract, contractPath))
 }
 
 func ReadVerificationReport(path string) (*VerificationReport, error) {

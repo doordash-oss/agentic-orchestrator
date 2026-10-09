@@ -32,7 +32,7 @@ func TestBuildRoadmapPrompt(t *testing.T) {
 		Inquireness: feature.InquirenessMedium,
 	}
 
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil, KBInfo{
+	prompt := BuildRoadmapPromptWithResearch(f, "", "", "/path/to/design.md", "", nil, KBInfo{
 		IndexPath: "/kb/index.md",
 		RootDir:   "/kb/",
 	})
@@ -95,7 +95,7 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 		Name:        "Dark Mode",
 		Description: "Add dark theme support",
 	}
-	prompt := BuildRoadmapPrompt(f, "/skills", "/guidelines", "/path/to/design.md", nil, KBInfo{
+	prompt := BuildRoadmapPromptWithResearch(f, "/skills", "/guidelines", "/path/to/design.md", "", nil, KBInfo{
 		Name:      "agentic",
 		IndexPath: "/kb/agentic/index.md",
 		RootDir:   "/kb/agentic",
@@ -109,11 +109,11 @@ func TestBuildRoadmapPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing.T
 		"/kb/agentic/index.md",
 	} {
 		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("BuildRoadmapPrompt() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
+			t.Fatalf("BuildRoadmapPromptWithResearch() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
 		}
 	}
 	if !strings.Contains(prompt, "Design Document: /path/to/design.md") {
-		t.Fatalf("BuildRoadmapPrompt() missing per-call design path:\n%s", prompt)
+		t.Fatalf("BuildRoadmapPromptWithResearch() missing per-call design path:\n%s", prompt)
 	}
 }
 
@@ -134,12 +134,12 @@ func TestBuildPhasePlanPromptLeavesRoleSpecOwnedContentToSystemPrompt(t *testing
 		"/kb/agentic/index.md",
 	} {
 		if strings.Contains(prompt, forbidden) {
-			t.Fatalf("BuildPhasePlanPrompt() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
+			t.Fatalf("BuildPhasePlanPromptWithResearch() contains RoleSpec-owned content %q:\n%s", forbidden, prompt)
 		}
 	}
 	for _, want := range []string{"/roadmap.md", "/research.md", "/answers.md", "Persist selected theme"} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("BuildPhasePlanPrompt() missing per-call content %q:\n%s", want, prompt)
+			t.Fatalf("BuildPhasePlanPromptWithResearch() missing per-call content %q:\n%s", want, prompt)
 		}
 	}
 }
@@ -197,7 +197,7 @@ func TestBuildRoadmapPrompt_Medium(t *testing.T) {
 	}
 
 	// Medium: no design artifact — feature description must be in prompt
-	prompt := BuildRoadmapPrompt(f, "", "", "", nil)
+	prompt := BuildRoadmapPromptWithResearch(f, "", "", "", "", nil)
 
 	if !strings.Contains(prompt, "Medium Feature") {
 		t.Error("prompt should contain feature name")
@@ -217,7 +217,7 @@ func TestBuildRoadmapPromptNoKB(t *testing.T) {
 		Inquireness: feature.InquirenessNone,
 	}
 
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil)
+	prompt := BuildRoadmapPromptWithResearch(f, "", "", "/path/to/design.md", "", nil)
 
 	if !strings.Contains(prompt, "/path/to/design.md") {
 		t.Error("prompt should contain design path")
@@ -242,7 +242,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+		prompt := BuildRoadmapPromptWithResearch(f, "", "", "/tmp/design.md", "", nil)
 		if !strings.Contains(prompt, "Target Repositories") {
 			t.Error("expected 'Target Repositories' section")
 		}
@@ -261,7 +261,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+		prompt := BuildRoadmapPromptWithResearch(f, "", "", "/tmp/design.md", "", nil)
 		if strings.Contains(prompt, "execution-order.yaml") {
 			t.Error("roadmap prompt should not mention execution-order.yaml")
 		}
@@ -274,7 +274,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 			Name:  "test-feature",
 			Repos: []feature.FeatureRepo{{Name: "repo-a", Path: "/path/a", WorktreePath: testWorktreePathA}},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+		prompt := BuildRoadmapPromptWithResearch(f, "", "", "/tmp/design.md", "", nil)
 		for _, want := range []string{"Target Repositories", "repo-a", testWorktreePathA} {
 			if !strings.Contains(prompt, want) {
 				t.Errorf("single-repo prompt missing %q:\n%s", want, prompt)
@@ -292,7 +292,7 @@ func TestBuildRoadmapPrompt_MultiRepo(t *testing.T) {
 				{Name: "repo-b", Path: "/path/b"},
 			},
 		}
-		prompt := BuildRoadmapPrompt(f, "", "", "/tmp/design.md", nil)
+		prompt := BuildRoadmapPromptWithResearch(f, "", "", "/tmp/design.md", "", nil)
 		if !strings.Contains(prompt, testWorktreePathA) {
 			t.Error("expected worktree path for repo-a")
 		}
@@ -319,7 +319,7 @@ func TestBuildPhasePlanPromptOmitsPhaseType(t *testing.T) {
 		Goal:   "Build the E2E skeleton",
 	}
 
-	prompt := BuildPhasePlanPrompt(f, "", "", "/path/to/roadmap.md", phase, nil, KBInfo{
+	prompt := BuildPhasePlanPromptWithResearch(f, "", "", "/path/to/roadmap.md", "", phase, nil, KBInfo{
 		IndexPath: "/kb/index.md",
 		RootDir:   "/kb/",
 	})
@@ -354,7 +354,7 @@ func TestBuildPhasePlanPromptLaterPhaseWithStubRetirements(t *testing.T) {
 		StubsToRetire: []string{"Parser stub", "Validator stub"},
 	}
 
-	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, nil)
+	prompt := BuildPhasePlanPromptWithResearch(f, "", "", "/roadmap.md", "", phase, nil)
 
 	if !strings.Contains(prompt, "Phase 2") {
 		t.Error("prompt should contain phase number")
@@ -376,7 +376,7 @@ func TestBuildRoadmapPrompt_WithQAFiles(t *testing.T) {
 	}
 
 	qaFiles := []string{"/state/feat/inquire/qa-answers.md", "/state/feat/research/qa-answers.md"}
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", qaFiles)
+	prompt := BuildRoadmapPromptWithResearch(f, "", "", "/path/to/design.md", "", qaFiles)
 
 	if !strings.Contains(prompt, "User Decisions") {
 		t.Error("prompt should contain User Decisions section when QA files present")
@@ -398,7 +398,7 @@ func TestBuildRoadmapPrompt_NoQAFiles(t *testing.T) {
 		Description: "A test feature",
 	}
 
-	prompt := BuildRoadmapPrompt(f, "", "", "/path/to/design.md", nil)
+	prompt := BuildRoadmapPromptWithResearch(f, "", "", "/path/to/design.md", "", nil)
 
 	if strings.Contains(prompt, "User Decisions") {
 		t.Error("prompt should not contain User Decisions section when no QA files")
@@ -422,16 +422,16 @@ func TestBuildPhasePlanPrompt_WithQAFiles(t *testing.T) {
 	}
 
 	qaFiles := []string{"/state/feat/design/qa-answers.md"}
-	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, qaFiles)
+	prompt := BuildPhasePlanPromptWithResearch(f, "", "", "/roadmap.md", "", phase, qaFiles)
 
 	if !strings.Contains(prompt, "User Decisions") {
-		t.Errorf("BuildPhasePlanPrompt(...) missing User Decisions section")
+		t.Errorf("BuildPhasePlanPromptWithResearch(...) missing User Decisions section")
 	}
 	if !strings.Contains(prompt, "/state/feat/design/qa-answers.md") {
-		t.Errorf("BuildPhasePlanPrompt(...) missing Q&A file path %q", qaFiles[0])
+		t.Errorf("BuildPhasePlanPromptWithResearch(...) missing Q&A file path %q", qaFiles[0])
 	}
 	if !strings.Contains(prompt, "do not re-ask") {
-		t.Errorf("BuildPhasePlanPrompt(...) missing do-not-re-ask guidance")
+		t.Errorf("BuildPhasePlanPromptWithResearch(...) missing do-not-re-ask guidance")
 	}
 }
 
@@ -449,7 +449,7 @@ func TestBuildPhasePlanPrompt_WithRoadmapAssignedCommitments(t *testing.T) {
 		StubsToRetire: []string{"Validator stub"},
 	}
 
-	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, nil)
+	prompt := BuildPhasePlanPromptWithResearch(f, "", "", "/roadmap.md", "", phase, nil)
 
 	if strings.Contains(prompt, "Prior Phase Context") {
 		t.Error("prompt should not contain Prior Phase Context")
@@ -474,7 +474,7 @@ func TestBuildPhasePlanPrompt_NoPriorPhases(t *testing.T) {
 		Type:   "tracer-bullet",
 	}
 
-	prompt := BuildPhasePlanPrompt(f, "", "", "/roadmap.md", phase, nil)
+	prompt := BuildPhasePlanPromptWithResearch(f, "", "", "/roadmap.md", "", phase, nil)
 
 	if strings.Contains(prompt, "Prior Phase Context") {
 		t.Error("prompt should not contain Prior Phase Context for phase 1")

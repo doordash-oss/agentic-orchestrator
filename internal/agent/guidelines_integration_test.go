@@ -225,6 +225,6 @@ func TestBuildSession_GuidelinesReviewAxis(t *testing.T) {
 	}
 }
 
-// Guidelines are no longer inlined in BuildReviewPrompt — they are discovered
-// via the system prompt preamble injected by BuildSession. See
+// Guidelines are not inlined in review prompts — they are discovered via the
+// system prompt preamble injected by BuildSession. See
 // TestBuildSession_GuidelinesReviewAxis for the preamble test.

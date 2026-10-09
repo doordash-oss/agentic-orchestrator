@@ -77,7 +77,7 @@ func TestImplementLoop_TerminalProviderErrorDoesNotCrashResume(t *testing.T) {
 	builds := 0
 	cfg.BuildSession = func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		builds++
-		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+		return []string{"mock-agent"}, nil, &session.SessionOpts{}, nil
 	}
 	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		sess := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-failed-turn"}

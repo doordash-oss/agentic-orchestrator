@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +39,19 @@ func newOpenCodeSupervisorHarness(t *testing.T, script testutil.FakeOpenCodeScri
 		if ok && strings.HasPrefix(key, "XDG_") {
 			t.Setenv(key, value)
 		}
+	}
+	// The sandbox's env already excludes ambient OPENCODE_* variables, and
+	// the child must inherit that clean environment too: the fake records
+	// every OPENCODE_* variable it sees, so a host running under an
+	// OpenCode-managed agent would otherwise leak its own isolation flags
+	// into launch-environment assertions. Scrub them for this test's child.
+	for _, kv := range os.Environ() {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(key, "OPENCODE_") {
+			continue
+		}
+		os.Unsetenv(key)
+		t.Cleanup(func() { os.Setenv(key, value) })
 	}
 	h := newHarnessBase(t, "opencode")
 	h.script = testutil.WriteFakeOpenCodeScript(t, script)

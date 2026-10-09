@@ -83,7 +83,7 @@ func (r *Registry) roleCandidates(role PhaseRole) []roleCandidate {
 		if recommender, ok := p.(RoleModelRecommender); ok {
 			nominated = recommender.RecommendedModels(role)
 		}
-		for _, model := range catalogForProvider(p) {
+		for _, model := range p.ModelCatalog() {
 			if model.ID == "" || !modelEligible(model, role) {
 				continue
 			}

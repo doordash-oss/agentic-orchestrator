@@ -25,7 +25,11 @@ import (
 
 // LLMProvider defines the interface that each coding tool (Claude Code, Codex,
 // etc.) must implement to integrate with the orchestrator. One instance exists
-// per provider type and is registered in the global Registry.
+// per provider type and is registered in the global Registry. Every provider
+// implements the full capability set below; capabilities with a real split
+// (role-model recommendations, minimum-version enforcement, catalog refresh
+// policy, the structured completion tool, and every Protocol-level option)
+// stay behind their own optional interfaces.
 type LLMProvider interface {
 	// Name returns the provider identifier (e.g. "claude", "codex").
 	Name() string
@@ -38,6 +42,50 @@ type LLMProvider interface {
 
 	// AvailableModels returns the model strings this provider supports.
 	AvailableModels() []string
+
+	// ModelCatalog returns the provider's effective model catalog: the
+	// entries stored by SetModelCatalog, or the provider's built-in defaults
+	// when nothing is stored. The returned slice is a deep copy callers can
+	// freely mutate.
+	ModelCatalog() []ModelInfo
+
+	// SetModelCatalog stores a discovered catalog, replacing the stored
+	// entries. An empty (or nil) catalog restores the built-in defaults.
+	SetModelCatalog(models []ModelInfo)
+
+	// DiscoverModelCatalog refreshes the provider's model catalog from the
+	// local provider CLI. Discovery is best-effort: callers keep the
+	// built-in default catalog when it fails or returns nothing.
+	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
+
+	// DiscoverModelCatalogWithProgress streams each discovered model to
+	// report as soon as the provider surfaces it, before returning the
+	// final catalog. report may be nil.
+	DiscoverModelCatalogWithProgress(ctx context.Context, report ModelDiscoveryReporter) ([]ModelInfo, error)
+
+	// ContextWindowForModel returns the context window of the first catalog
+	// entry matching model by ID or alias whose window is positive; entries
+	// without a usable window are skipped. Zero means unknown.
+	ContextWindowForModel(model string) int
+
+	// AskingQuestionsClause returns the provider-specific prompt content
+	// that teaches the agent how to ask the user questions.
+	AskingQuestionsClause() string
+
+	// SupportsNativeToollessReview reports whether the provider's automatic-
+	// review launch and protocol expose no native tool, question,
+	// child-session, customization, or persistence surface.
+	SupportsNativeToollessReview() bool
+
+	// CheckReadiness runs a provider-specific non-interactive readiness
+	// probe (typically an auth-status command) and reports whether the
+	// installed CLI is actually usable for Agentic startup.
+	CheckReadiness(ctx context.Context) ProviderReadiness
+
+	// ReviewPreferenceBand returns the provider-local preference band for an
+	// automatic-review model. Lower bands are preferred; false excludes the
+	// model from automatic selection.
+	ReviewPreferenceBand(model ModelInfo) (int, bool)
 
 	// BuildCommand returns the CLI command args and environment variables
 	// needed to start an interactive session with this provider.
@@ -74,34 +122,12 @@ type ProviderReadiness struct {
 	Remedy string
 }
 
-// ReadinessChecker is implemented by providers that can run a provider-specific
-// non-interactive readiness probe.
-type ReadinessChecker interface {
-	CheckReadiness(ctx context.Context) ProviderReadiness
-}
-
-// ReviewModelRanker is implemented by providers that define provider-local
-// preference bands for automatic-review models. Lower bands are preferred.
-// Returning false excludes the model from automatic selection.
-type ReviewModelRanker interface {
-	ReviewPreferenceBand(model ModelInfo) (int, bool)
-}
-
 // RoleModelRecommender is implemented by providers that know their own model
 // families well enough to nominate defaults per phase role. Entries are the
 // provider's own catalog IDs or aliases, most preferred first. Configured
 // model_recommendations always take precedence over these nominations.
 type RoleModelRecommender interface {
 	RecommendedModels(role PhaseRole) []string
-}
-
-// NativeToollessReviewer is implemented only by providers whose automatic-
-// review launch and protocol have been audited to expose no native tool,
-// question, child-session, customization, or persistence surface. General
-// provider support is deliberately insufficient: automatic review requires an
-// explicit positive attestation of the complete isolation contract.
-type NativeToollessReviewer interface {
-	SupportsNativeToollessReview() bool
 }
 
 // VersionEnforcer is implemented by providers whose installed CLI must meet
@@ -114,11 +140,6 @@ type NativeToollessReviewer interface {
 // provider stays selectable.
 type VersionEnforcer interface {
 	EnforcesMinVersion() bool
-}
-
-// PromptAdapter provides provider-specific prompt content.
-type PromptAdapter interface {
-	AskingQuestionsClause() string
 }
 
 // RecommendationConfidenceClause is the provider-agnostic prose that teaches
@@ -160,20 +181,6 @@ type SessionUsageReconciler interface {
 	ReconciledUsage(ctx context.Context) *Usage
 }
 
-// CatalogProvider exposes the model catalog populated by discovery.
-// Providers implementing this interface allow the Registry to perform
-// capability-based model selection from the live catalog.
-type CatalogProvider interface {
-	ModelCatalog() []ModelInfo
-}
-
-// CatalogDiscoverer is implemented by providers that can refresh their model
-// catalog from the local provider CLI. Discovery is best-effort: callers should
-// fall back to CatalogProvider/default catalogs when it fails.
-type CatalogDiscoverer interface {
-	DiscoverModelCatalog(ctx context.Context) ([]ModelInfo, error)
-}
-
 // CatalogRefreshPolicy is implemented by providers whose catalog depends on
 // local configuration independently of CLI version. Version-keyed caches are
 // fallback evidence for these providers, not a substitute for discovery.
@@ -185,12 +192,6 @@ type CatalogRefreshPolicy interface {
 // It is best-effort and should be safe to call from provider discovery
 // goroutines.
 type ModelDiscoveryReporter func(ModelInfo)
-
-// CatalogProgressDiscoverer is implemented by providers that can stream
-// model discovery progress before returning the final catalog.
-type CatalogProgressDiscoverer interface {
-	DiscoverModelCatalogWithProgress(ctx context.Context, report ModelDiscoveryReporter) ([]ModelInfo, error)
-}
 
 // Protocol handles the wire-level communication with a provider's CLI process.
 // One instance is created per session. Implementations hold provider-specific
@@ -334,9 +335,10 @@ type ProtocolOpts struct {
 	// sessions governed by a phase contract.
 	StructuredCompletion bool
 	// NativeToollessReview selects the provider's audited one-turn reviewer
-	// protocol boundary. Providers that attest NativeToollessReviewer use this
-	// to omit every tool, question, child-session, continuation, and persistent
-	// session surface while leaving ordinary sessions unchanged.
+	// protocol boundary. Providers whose SupportsNativeToollessReview attests
+	// the isolation contract use this to omit every tool, question,
+	// child-session, continuation, and persistent session surface while
+	// leaving ordinary sessions unchanged.
 	NativeToollessReview bool
 	// ResumeSessionID, when non-empty, asks the protocol to resume a prior
 	// provider session identity rather than start a fresh one. Empty means a
@@ -416,11 +418,7 @@ func EffortCapabilitiesForModel(provider LLMProvider, model string) []EffortLeve
 	if provider == nil {
 		return nil
 	}
-	cp, ok := provider.(CatalogProvider)
-	if !ok {
-		return nil
-	}
-	if entry, ok := LookupModel(cp.ModelCatalog(), model); ok {
+	if entry, ok := LookupModel(provider.ModelCatalog(), model); ok {
 		return entry.EffortCapabilities
 	}
 	return nil

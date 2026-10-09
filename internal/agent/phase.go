@@ -88,18 +88,18 @@ type PhaseRunner struct {
 	RunFinalReviewFn func(OrchestratorConfig, ports.SessionManager) (*FeatureFinalReviewResult, error)
 }
 
-// askingQuestionsClauseForModel returns the PromptAdapter.AskingQuestionsClause()
+// askingQuestionsClauseForModel returns the provider's AskingQuestionsClause
 // for the given model via the registry. Falls back to an empty string if the
-// registry is nil or the provider doesn't implement PromptAdapter.
+// registry is nil or the model cannot be resolved to a provider.
 func (pr *PhaseRunner) askingQuestionsClauseForModel(model string) string {
 	if pr.Registry == nil {
 		return ""
 	}
-	pa, err := pr.Registry.PromptAdapterForModel(model)
+	clause, err := pr.Registry.AskingQuestionsClauseForModel(model)
 	if err != nil {
 		return ""
 	}
-	return pa.AskingQuestionsClause()
+	return clause
 }
 
 // completionToolForModel selects the provider's structured completion transport.
@@ -1488,9 +1488,6 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	}
 	if c, ok := prov.(boundedHelperSandboxProvider); ok {
 		sessOpts.UsesBoundedHelperSandbox = c.UsesBoundedHelperSandbox()
-	}
-	if c, ok := prov.(sessionResumeProvider); ok {
-		sessOpts.SupportsSessionResume = c.SupportsSessionResume()
 	}
 	return cmd, env, sessOpts, nil
 }

@@ -1396,7 +1396,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 	var buildOpts []BuildSessionOpts
 	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		buildOpts = append(buildOpts, opts)
-		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+		return []string{"mock-agent"}, nil, &session.SessionOpts{}, nil
 	}
 
 	var startIDs []string
@@ -1456,37 +1456,6 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 	}
 }
 
-func TestImplementLoop_CrashResumeNotAttemptedWithoutCapability(t *testing.T) {
-	featureID := "crash-resume-002"
-	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
-	cfg := newCrashResumeLoopConfig(t, artifactDir, stateDir, workDir, observeDir, featureID)
-
-	buildCalls := 0
-	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
-		buildCalls++
-		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: false}, nil
-	}
-	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
-		dead.statusCh <- agentStatusFailed
-		return dead, nil
-	}
-
-	if _, err := runImplementationLoop(cfg, nil); err != nil {
-		t.Fatalf("RunImplementationLoop() error = %v", err)
-	}
-	if buildCalls != 1 {
-		t.Fatalf("BuildSession calls = %d, want 1 (no resume without capability)", buildCalls)
-	}
-	meta, err := newArtifactManager(artifactDir).readMeta(filepath.Join(artifactDir, "iteration-01"))
-	if err != nil {
-		t.Fatalf("read meta: %v", err)
-	}
-	if meta.AgentStatus != agentStatusFailed {
-		t.Fatalf("AgentStatus = %q, want FAILED", meta.AgentStatus)
-	}
-}
-
 func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
 	featureID := "crash-resume-003"
 	artifactDir, stateDir, workDir, observeDir := crashResumeTestDirs(t, featureID)
@@ -1495,7 +1464,7 @@ func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
 	buildCalls := 0
 	cfg.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 		buildCalls++
-		return []string{"mock-agent"}, nil, &session.SessionOpts{SupportsSessionResume: true}, nil
+		return []string{"mock-agent"}, nil, &session.SessionOpts{}, nil
 	}
 	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		// Every process dies; the loop must resume at most once.

@@ -15,6 +15,7 @@
 package llm_test
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
@@ -22,7 +23,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// stubProvider is a minimal LLMProvider for testing.
+// stubProvider is a minimal LLMProvider for testing. Its folded capability
+// methods return canned values: no catalog, no review support, ready, and no
+// review band; wrapping stubs override the surface they exercise.
 type stubProvider struct {
 	name           string
 	models         []string
@@ -52,7 +55,26 @@ func (s *stubProvider) VersionInfo() (string, error)                { return s.v
 func (s *stubProvider) MinVersion() [3]int                          { return [3]int{0, 0, 0} }
 func (s *stubProvider) EnvVarsToExclude() []string                  { return nil }
 
-// stubFullProvider implements LLMProvider + PromptAdapter + CostCalculator.
+func (s *stubProvider) ModelCatalog() []llm.ModelInfo { return nil }
+func (s *stubProvider) SetModelCatalog([]llm.ModelInfo) {}
+func (s *stubProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (s *stubProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (s *stubProvider) ContextWindowForModel(string) int { return 0 }
+func (s *stubProvider) AskingQuestionsClause() string    { return "" }
+func (s *stubProvider) SupportsNativeToollessReview() bool {
+	return false
+}
+func (s *stubProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (s *stubProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
+
+// stubFullProvider implements LLMProvider + CostCalculator with an asking
+// clause and context window.
 type stubFullProvider struct {
 	stubProvider
 	askingClause  string
@@ -60,7 +82,7 @@ type stubFullProvider struct {
 	contextWindow int
 }
 
-// stubCatalogProvider implements LLMProvider + CatalogProvider.
+// stubCatalogProvider is a stubProvider with a model catalog.
 type stubCatalogProvider struct {
 	stubProvider
 	catalog []llm.ModelInfo
@@ -168,47 +190,38 @@ func TestRegistry_ByName(t *testing.T) {
 	}
 }
 
-func TestRegistry_PromptAdapterForModel(t *testing.T) {
+func TestRegistry_AskingQuestionsClauseForModel(t *testing.T) {
 	r := llm.NewRegistry()
 
-	// stubProvider does NOT implement PromptAdapter
 	r.Register(&stubProvider{name: "bare", models: []string{"bare-model"}, hasCLI: true})
 
-	// stubFullProvider implements PromptAdapter
 	r.Register(&stubFullProvider{
 		stubProvider: stubProvider{name: "full", models: []string{"full-model"}, hasCLI: true},
 		askingClause: "ask questions this way",
 	})
 
-	t.Run("provider_implements_PromptAdapter", func(t *testing.T) {
-		pa, err := r.PromptAdapterForModel("full-model")
+	t.Run("resolves_provider_clause", func(t *testing.T) {
+		clause, err := r.AskingQuestionsClauseForModel("full-model")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if pa.AskingQuestionsClause() != "ask questions this way" {
-			t.Errorf("got %q, want %q", pa.AskingQuestionsClause(), "ask questions this way")
+		if clause != "ask questions this way" {
+			t.Errorf("got %q, want %q", clause, "ask questions this way")
 		}
 	})
 
-	t.Run("explicit_provider_prefix_uses_prompt_adapter", func(t *testing.T) {
-		pa, err := r.PromptAdapterForModel("full:unlisted-model")
+	t.Run("explicit_provider_prefix_uses_provider_clause", func(t *testing.T) {
+		clause, err := r.AskingQuestionsClauseForModel("full:unlisted-model")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if pa.AskingQuestionsClause() != "ask questions this way" {
-			t.Errorf("got %q, want %q", pa.AskingQuestionsClause(), "ask questions this way")
-		}
-	})
-
-	t.Run("provider_does_not_implement_PromptAdapter", func(t *testing.T) {
-		_, err := r.PromptAdapterForModel("bare-model")
-		if err == nil {
-			t.Fatal("expected error for provider not implementing PromptAdapter")
+		if clause != "ask questions this way" {
+			t.Errorf("got %q, want %q", clause, "ask questions this way")
 		}
 	})
 
 	t.Run("unknown_model", func(t *testing.T) {
-		_, err := r.PromptAdapterForModel("unknown")
+		_, err := r.AskingQuestionsClauseForModel("unknown")
 		if err == nil {
 			t.Fatal("expected error for unknown model")
 		}
@@ -544,19 +557,13 @@ func TestRegistry_CatalogModelsForProvider(t *testing.T) {
 		}
 	})
 
-	t.Run("returns_synthetic_entries_for_provider_without_catalog_interface", func(t *testing.T) {
+	t.Run("returns_no_entries_for_provider_with_empty_catalog", func(t *testing.T) {
 		r := llm.NewRegistry()
 		r.Register(&stubProvider{name: "bare", models: []string{"bare-model"}, hasCLI: true})
 
 		models := r.ModelsForProvider("bare")
-		if len(models) != 1 {
-			t.Fatalf("expected 1 synthetic model, got %d", len(models))
-		}
-		if models[0].ID != "bare-model" {
-			t.Errorf("expected synthetic model ID %q, got %q", "bare-model", models[0].ID)
-		}
-		if models[0].Category != "" {
-			t.Errorf("expected empty category for synthetic entry, got %q", models[0].Category)
+		if len(models) != 0 {
+			t.Fatalf("expected no models for a provider with no catalog, got %d: %v", len(models), models)
 		}
 	})
 

@@ -3524,6 +3524,40 @@ func (p fakeProvider) ModelCatalog() []llm.ModelInfo {
 	return out
 }
 
+// SetModelCatalog is a no-op: the fake's catalog is fixed at construction. No
+// caller enriches the fake; the method exists to satisfy the provider
+// interface.
+func (fakeProvider) SetModelCatalog([]llm.ModelInfo) {}
+
+func (p fakeProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return p.ModelCatalog(), nil
+}
+
+func (p fakeProvider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	models, err := p.DiscoverModelCatalog(ctx)
+	if err == nil && report != nil {
+		for _, model := range models {
+			report(model)
+		}
+	}
+	return models, err
+}
+
+func (p fakeProvider) ContextWindowForModel(model string) int {
+	if entry, ok := llm.LookupModel(p.ModelCatalog(), model); ok && entry.ContextWindow > 0 {
+		return entry.ContextWindow
+	}
+	return 0
+}
+
+func (p fakeProvider) AskingQuestionsClause() string { return "" }
+
+func (p fakeProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+
+func (p fakeProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
+
 type countingFeatureReader struct {
 	feature         *feature.Feature
 	loadRunNumbers  []int

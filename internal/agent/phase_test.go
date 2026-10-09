@@ -1263,7 +1263,6 @@ type captureProvider struct {
 	contextWindow  int
 	watchdog       bool
 	boundedSandbox bool
-	sessionResume  bool
 	buildOpts      llm.CommandBuildOpts
 	protocolOpts   llm.ProtocolOpts
 }
@@ -1292,7 +1291,22 @@ func (p *captureProvider) ComputeCost(string, int64, int64) float64 { return 0 }
 func (p *captureProvider) ContextWindowForModel(string) int         { return p.contextWindow }
 func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
 func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
-func (p *captureProvider) SupportsSessionResume() bool              { return p.sessionResume }
+func (p *captureProvider) ModelCatalog() []llm.ModelInfo {
+	return []llm.ModelInfo{{ID: p.model}}
+}
+func (p *captureProvider) SetModelCatalog([]llm.ModelInfo) {}
+func (p *captureProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (p *captureProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (p *captureProvider) AskingQuestionsClause() string           { return "" }
+func (p *captureProvider) SupportsNativeToollessReview() bool      { return false }
+func (p *captureProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (p *captureProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 type captureProtocol struct{}
 
@@ -1424,36 +1438,6 @@ func TestBuildSession_SurfacesBoundedHelperSandboxCapability(t *testing.T) {
 			}
 			if sessOpts.UsesBoundedHelperSandbox != tc.sandbox {
 				t.Errorf("UsesBoundedHelperSandbox = %v, want %v", sessOpts.UsesBoundedHelperSandbox, tc.sandbox)
-			}
-		})
-	}
-}
-
-func TestBuildSession_SurfacesSessionResumeCapability(t *testing.T) {
-	dir := t.TempDir()
-	for _, tc := range []struct {
-		name   string
-		resume bool
-	}{
-		{name: "capable provider", resume: true},
-		{name: "incapable provider", resume: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			provider := &captureProvider{name: "capture", model: "model-a[1M]", contextWindow: 1_000_000, sessionResume: tc.resume}
-			pr := NewPhaseRunner(session.NewManager(make(chan any, 8)), feature.NewStore(dir), dir)
-			pr.Registry = newRegistryWithCaptureProvider(provider)
-			_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-				Model:              "model-a[1M]",
-				Prompt:             "p",
-				SystemPrompt:       "s",
-				WorkDir:            dir,
-				CompletionProtocol: true,
-			})
-			if err != nil {
-				t.Fatalf("BuildSession() error: %v", err)
-			}
-			if sessOpts.SupportsSessionResume != tc.resume {
-				t.Errorf("SupportsSessionResume = %v, want %v", sessOpts.SupportsSessionResume, tc.resume)
 			}
 		})
 	}

@@ -60,10 +60,6 @@ func (p *Provider) Name() string { return "codex" }
 // contract. Ordinary Codex sessions do not activate this boundary.
 func (p *Provider) SupportsNativeToollessReview() bool { return true }
 
-// SupportsSessionResume reports that a persisted thread can be resumed via
-// ProtocolOpts.ResumeSessionID (the thread/resume handshake).
-func (p *Provider) SupportsSessionResume() bool { return true }
-
 // cliBinary returns the configured CLI executable name, falling back to the
 // provider default when no override is set.
 func (p *Provider) cliBinary() string {

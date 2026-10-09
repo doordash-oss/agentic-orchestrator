@@ -164,7 +164,7 @@ type ImplementConfig struct {
 	RoundCommitRepos map[string]string
 
 	// AskingClause is the pre-resolved "Asking Questions" prompt section
-	// from the PromptAdapter for the implementation model. Set by PhaseRunner
+	// from the implementation model's provider. Set by PhaseRunner
 	// before launching the loop.
 	AskingClause   string
 	CompletionTool string
@@ -702,7 +702,7 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			// finish or report state before charging the iteration as FAILED.
 			// An explicit terminal error is not a crash: replaying its input
 			// can only hide the diagnostic or repeat the same failed request.
-			if agentStatus == agentStatusFailed && waitResult.Err == nil && sessOpts != nil && sessOpts.SupportsSessionResume &&
+			if agentStatus == agentStatusFailed && waitResult.Err == nil &&
 				!hasCommittedPhaseOutcome(iterDir, feature.PhaseImplement, roleImplementer) {
 				if resumeID := providerSessionID(sess); resumeID != "" {
 					// Account the dead session before replacing it.

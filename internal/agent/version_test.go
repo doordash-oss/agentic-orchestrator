@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -43,6 +44,23 @@ func (m *mockVersionProvider) BuildCommand(_ llm.CommandBuildOpts) ([]string, []
 func (m *mockVersionProvider) NewProtocol(_ llm.ProtocolOpts) llm.Protocol { return nil }
 func (m *mockVersionProvider) MinVersion() [3]int                          { return m.minVer }
 func (m *mockVersionProvider) EnvVarsToExclude() []string                  { return nil }
+func (m *mockVersionProvider) ModelCatalog() []llm.ModelInfo                { return nil }
+func (m *mockVersionProvider) SetModelCatalog([]llm.ModelInfo)               {}
+func (m *mockVersionProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (m *mockVersionProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (m *mockVersionProvider) ContextWindowForModel(string) int { return 0 }
+func (m *mockVersionProvider) AskingQuestionsClause() string    { return "" }
+func (m *mockVersionProvider) SupportsNativeToollessReview() bool {
+	return false
+}
+func (m *mockVersionProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (m *mockVersionProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 // Ensure mockVersionProvider satisfies llm.LLMProvider at compile time.
 var _ llm.LLMProvider = (*mockVersionProvider)(nil)

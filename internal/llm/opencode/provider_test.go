@@ -30,11 +30,7 @@ import (
 )
 
 func TestProviderAttestsNativeToollessReview(t *testing.T) {
-	reviewer, ok := any(New()).(llm.NativeToollessReviewer)
-	if !ok {
-		t.Fatal("OpenCode Provider does not implement llm.NativeToollessReviewer")
-	}
-	if !reviewer.SupportsNativeToollessReview() {
+	if !New().SupportsNativeToollessReview() {
 		t.Fatal("SupportsNativeToollessReview() = false, want true after the audited boundary is implemented")
 	}
 }
@@ -717,33 +713,11 @@ func TestProviderImplementsExpectedInterfaces(t *testing.T) {
 	if _, ok := p.(llm.LLMProvider); !ok {
 		t.Error("Provider does not implement llm.LLMProvider")
 	}
-	if _, ok := p.(llm.ReadinessChecker); !ok {
-		t.Error("Provider does not implement llm.ReadinessChecker")
-	}
 	if _, ok := p.(llm.VersionEnforcer); !ok {
 		t.Error("Provider does not implement llm.VersionEnforcer")
 	}
-	if _, ok := p.(llm.PromptAdapter); !ok {
-		t.Error("Provider does not implement llm.PromptAdapter")
-	}
 	if _, ok := p.(llm.CostCalculator); !ok {
 		t.Error("Provider does not implement llm.CostCalculator")
-	}
-	// OpenCode now participates in the shared catalog surfaces: it advertises a
-	// discoverable, refreshable, progress-streaming, enrichable catalog so it
-	// flows through the same discovery, cache, registry, and model-list paths as
-	// the other providers.
-	if _, ok := p.(llm.CatalogProvider); !ok {
-		t.Error("Provider does not implement llm.CatalogProvider")
-	}
-	if _, ok := p.(llm.CatalogDiscoverer); !ok {
-		t.Error("Provider does not implement llm.CatalogDiscoverer")
-	}
-	if _, ok := p.(llm.CatalogProgressDiscoverer); !ok {
-		t.Error("Provider does not implement llm.CatalogProgressDiscoverer")
-	}
-	if _, ok := p.(llm.CatalogEnricher); !ok {
-		t.Error("Provider does not implement llm.CatalogEnricher")
 	}
 }
 
@@ -941,7 +915,9 @@ func TestCatalogBackedRouting_RegistryLevel(t *testing.T) {
 }
 
 // fakeBareProvider is a minimal provider that matches its bare model names. It
-// stands in for a normal catalog provider in routing tests.
+// stands in for a provider with no catalog in routing tests; its folded
+// capability methods return canned values (ready, no review support, no
+// review band, no discovery result).
 type fakeBareProvider struct {
 	name   string
 	models []string
@@ -961,6 +937,23 @@ func (f *fakeBareProvider) InstallHint() string                       { return "
 func (f *fakeBareProvider) VersionInfo() (string, error)              { return "1.0.0", nil }
 func (f *fakeBareProvider) MinVersion() [3]int                        { return [3]int{0, 0, 0} }
 func (f *fakeBareProvider) EnvVarsToExclude() []string                { return nil }
+func (f *fakeBareProvider) ModelCatalog() []llm.ModelInfo              { return nil }
+func (f *fakeBareProvider) SetModelCatalog([]llm.ModelInfo)           {}
+func (f *fakeBareProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (f *fakeBareProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (f *fakeBareProvider) ContextWindowForModel(string) int { return 0 }
+func (f *fakeBareProvider) AskingQuestionsClause() string    { return "" }
+func (f *fakeBareProvider) SupportsNativeToollessReview() bool {
+	return false
+}
+func (f *fakeBareProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (f *fakeBareProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 // TestLiveVersionMeetsMinimum verifies, against a real installed OpenCode CLI,
 // that VersionInfo parses to at least MinVersion. Skipped in -short runs and
@@ -1014,11 +1007,4 @@ func atLeast(got, min [3]int) bool {
 		}
 	}
 	return true
-}
-
-func TestProviderSupportsSessionResume(t *testing.T) {
-	p := New()
-	if !p.SupportsSessionResume() {
-		t.Error("SupportsSessionResume() = false, want true")
-	}
 }

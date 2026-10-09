@@ -339,14 +339,9 @@ func probeProviderReadiness(ctx context.Context, p llm.LLMProvider) ProviderRead
 			return out
 		}
 	}
-	checker, ok := p.(llm.ReadinessChecker)
-	if !ok {
-		out.Ready = true
-		return out
-	}
 	probeCtx, cancel := context.WithTimeout(ctx, providerReadinessProbeTimeout)
 	defer cancel()
-	status := checker.CheckReadiness(probeCtx)
+	status := p.CheckReadiness(probeCtx)
 	if status.Ready {
 		out.Ready = true
 		return out

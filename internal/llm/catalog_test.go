@@ -30,9 +30,6 @@ import (
 // shared-catalog behavior is pinned against, at the provider interface.
 type catalogSurface interface {
 	llm.LLMProvider
-	llm.CatalogProvider
-	llm.CatalogEnricher
-	ContextWindowForModel(model string) int
 }
 
 // defaultCatalogProviders returns the two hardcoded-defaults providers,

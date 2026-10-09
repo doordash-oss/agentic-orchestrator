@@ -103,7 +103,7 @@ func (p *stubRecommendingProvider) RecommendedModels(role llm.PhaseRole) []strin
 // builtinProvider wraps a real provider's built-in catalog and nominations in a
 // detectable stub so the test needs no CLI on PATH.
 func builtinProvider(name string, real interface {
-	llm.CatalogProvider
+	llm.LLMProvider
 	llm.RoleModelRecommender
 }) *stubRecommendingProvider {
 	return &stubRecommendingProvider{

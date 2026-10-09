@@ -81,7 +81,7 @@ type OrchestratorConfig struct {
 	BuildSession func(BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error)
 
 	// AskingClause is the pre-resolved "Asking Questions" prompt section
-	// from the PromptAdapter for the implementation model. Passed through
+	// from the implementation model's provider. Passed through
 	// to ImplementConfig.
 	AskingClause   string
 	CompletionTool string

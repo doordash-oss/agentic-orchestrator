@@ -297,11 +297,6 @@ type SessionOpts struct {
 	// UsesBoundedHelperSandbox carries the resolved provider's sandbox
 	// capability so helper runners need not resolve the provider again.
 	UsesBoundedHelperSandbox bool
-	// SupportsSessionResume reports that the resolved provider can resume a
-	// prior provider-native session via BuildSessionOpts.ResumeSessionID.
-	// Used by crash-resume: when a provider process dies mid-turn, the loop
-	// may start a fresh process that continues the same conversation.
-	SupportsSessionResume bool
 	// EffectiveEffort is the resolved provider-safe effort level for this
 	// session launch. Empty means no effort was resolved (utility sessions,
 	// legacy callers). Set by the implementation launch path from

@@ -1371,14 +1371,8 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 	}
 	if status.Ready {
 		provider := h.registry.ByName(req.Provider)
-		discoverer, canDiscover := provider.(llm.CatalogDiscoverer)
-		enricher, canEnrich := provider.(llm.CatalogEnricher)
-		if !canDiscover || !canEnrich {
-			writeAPIError(w, http.StatusConflict, errcat.ProviderModelRefreshUnsupported)
-			return
-		}
 		discoveryCtx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
-		models, err := discoverer.DiscoverModelCatalog(discoveryCtx)
+		models, err := provider.DiscoverModelCatalog(discoveryCtx)
 		cancel()
 		if err != nil {
 			writeAPIError(w, http.StatusBadGateway, errcat.ProviderModelRefreshFailed, errcat.WithDiagnostics("provider model refresh failed"))
@@ -1394,7 +1388,7 @@ func (h *apiHandler) handleProviderModelRefreshRoute(w http.ResponseWriter, r *h
 				return
 			}
 		}
-		enricher.SetModelCatalog(models)
+		provider.SetModelCatalog(models)
 	}
 
 	readiness, err := h.readinessSnapshot(r.Context(), false)

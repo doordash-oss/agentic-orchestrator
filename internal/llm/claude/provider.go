@@ -50,10 +50,6 @@ func NewProvider(binary string) *Provider {
 
 func (p *Provider) Name() string { return "claude" }
 
-// SupportsSessionResume reports that a prior CLI session can be resumed via
-// CommandBuildOpts.ResumeSessionID (the --resume flag).
-func (p *Provider) SupportsSessionResume() bool { return true }
-
 // cliBinary returns the configured CLI executable name, falling back to the
 // provider default when no override is set.
 func (p *Provider) cliBinary() string {

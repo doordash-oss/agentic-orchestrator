@@ -29,9 +29,7 @@ import (
 // Compile-time interface checks.
 var _ llm.Protocol = (*mocks.MockProtocol)(nil)
 var _ llm.LLMProvider = (*mocks.MockProvider)(nil)
-var _ llm.PromptAdapter = (*mocks.MockProvider)(nil)
 var _ llm.CostCalculator = (*mocks.MockProvider)(nil)
-var _ llm.CatalogProvider = (*mocks.MockProvider)(nil)
 var _ ports.SessionView = (*mocks.MockSessionView)(nil)
 
 // Feature ports

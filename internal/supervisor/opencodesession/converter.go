@@ -115,11 +115,11 @@ func RegistryContextWindow(reg *llm.Registry) func(model string) int {
 		if reg == nil {
 			return 0
 		}
-		cc, ok := reg.ByName(Harness).(llm.CostCalculator)
-		if !ok {
+		provider := reg.ByName(Harness)
+		if provider == nil {
 			return 0
 		}
-		return cc.ContextWindowForModel(model)
+		return provider.ContextWindowForModel(model)
 	}
 }
 

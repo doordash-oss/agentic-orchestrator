@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -55,6 +56,22 @@ func (p *effortCatalogProvider) VersionInfo() (string, error)                   
 func (p *effortCatalogProvider) MinVersion() [3]int                             { return [3]int{} }
 func (p *effortCatalogProvider) EnvVarsToExclude() []string                     { return nil }
 func (p *effortCatalogProvider) ModelCatalog() []llm.ModelInfo                  { return p.models }
+func (p *effortCatalogProvider) SetModelCatalog(models []llm.ModelInfo)          { p.models = models }
+func (p *effortCatalogProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (p *effortCatalogProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (p *effortCatalogProvider) ContextWindowForModel(string) int { return 0 }
+func (p *effortCatalogProvider) AskingQuestionsClause() string    { return "" }
+func (p *effortCatalogProvider) SupportsNativeToollessReview() bool {
+	return false
+}
+func (p *effortCatalogProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (p *effortCatalogProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 func TestResolveEffortForRole(t *testing.T) {
 	// When the PhaseRunner has no Registry (as in this unit test),

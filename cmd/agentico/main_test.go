@@ -121,6 +121,18 @@ func (s *stubProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
 	}
 	return llm.ProviderReadiness{Ready: true}
 }
+func (s *stubProvider) ModelCatalog() []llm.ModelInfo { return nil }
+func (s *stubProvider) SetModelCatalog([]llm.ModelInfo) {}
+func (s *stubProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (s *stubProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (s *stubProvider) ContextWindowForModel(string) int        { return 0 }
+func (s *stubProvider) AskingQuestionsClause() string           { return "" }
+func (s *stubProvider) SupportsNativeToollessReview() bool      { return false }
+func (s *stubProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 type stubCatalogDiscoveryProvider struct {
 	stubProvider
@@ -139,6 +151,16 @@ func (s *stubCatalogDiscoveryProvider) DiscoverModelCatalog(ctx context.Context)
 		return s.discoverFn(ctx)
 	}
 	return s.discovered, s.discoverErr
+}
+
+func (s *stubCatalogDiscoveryProvider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	models, err := s.DiscoverModelCatalog(ctx)
+	if err == nil && report != nil {
+		for _, model := range models {
+			report(model)
+		}
+	}
+	return models, err
 }
 
 func (s *stubCatalogDiscoveryProvider) SetModelCatalog(models []llm.ModelInfo) {
@@ -166,9 +188,8 @@ func TestDiscoverProviderCatalogsSetsCatalogAndWarnsOnFailure(t *testing.T) {
 		stubProvider: stubProvider{name: "failure", hasCLI: true},
 		discoverErr:  errors.New("catalog unavailable"),
 	}
-	plain := &stubProvider{name: "plain", hasCLI: true}
 
-	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{success, failure, plain}, t.TempDir(), nil, false)
+	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{success, failure}, t.TempDir(), nil, false)
 	if len(success.catalog) != 1 || success.catalog[0].ID != "live-model" {
 		t.Fatalf("success catalog = %+v, want live-model", success.catalog)
 	}
@@ -801,11 +822,10 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 // TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure proves the
 // plan's degrade-to-fallback contract end-to-end: when a ready, version-eligible
 // OpenCode's live discovery fails, the shared startup path emits an ordered
-// "retaining provider catalog" warning AND the provider still surfaces a non-empty
-// curated catalog through CatalogProvider/AvailableModels — so a discovery
-// failure never leaves setup/config consumers with an empty OpenCode model list.
-// The runner is faked so the test needs no real OpenCode binary, credentials, or
-// network.
+// "retaining provider catalog" warning AND the provider never fabricates a
+// catalog — discovery leaves its model lists empty rather than inventing
+// entries. The runner is faked so the test needs no real OpenCode binary,
+// credentials, or network.
 func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing.T) {
 	runner := func(_ context.Context, name string, args []string, _ []string) ([]byte, error) {
 		if name != providerNameOpencode {

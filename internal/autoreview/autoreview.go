@@ -227,8 +227,7 @@ func eligibleReviewerProviders(registry *llm.Registry) (map[string]llm.LLMProvid
 			continue
 		}
 		eligibility.detected++
-		capability, ok := provider.(llm.NativeToollessReviewer)
-		if !ok || !capability.SupportsNativeToollessReview() {
+		if !provider.SupportsNativeToollessReview() {
 			eligibility.rejections[provider.Name()] = "isolated tool-less review is not supported"
 			continue
 		}
@@ -251,11 +250,7 @@ func isBuiltinReviewerProvider(name string) bool {
 }
 
 func reviewerCatalog(provider llm.LLMProvider) []llm.ModelInfo {
-	catalogProvider, ok := provider.(llm.CatalogProvider)
-	if !ok {
-		return nil
-	}
-	return catalogProvider.ModelCatalog()
+	return provider.ModelCatalog()
 }
 
 // catalogModel resolves a selector to the single catalog entry it names by
@@ -277,13 +272,7 @@ func catalogModel(provider llm.LLMProvider, selector string) (string, bool) {
 }
 
 func reviewPreferenceBand(provider llm.LLMProvider, model llm.ModelInfo) (int, bool) {
-	if ranker, ok := provider.(llm.ReviewModelRanker); ok {
-		return ranker.ReviewPreferenceBand(model)
-	}
-	if model.Category == "cheap" {
-		return 0, true
-	}
-	return 0, false
+	return provider.ReviewPreferenceBand(model)
 }
 
 // RestoreReviewer reconstructs a Reviewer from a snapshotted provider name

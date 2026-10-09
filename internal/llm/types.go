@@ -139,9 +139,3 @@ func AppendUniqueAlias(aliases []string, id, alias string) []string {
 	}
 	return append(aliases, alias)
 }
-
-// CatalogEnricher is implemented by providers whose model catalog can be
-// overridden at runtime, either from provider CLI discovery or from tests.
-type CatalogEnricher interface {
-	SetModelCatalog(models []ModelInfo)
-}

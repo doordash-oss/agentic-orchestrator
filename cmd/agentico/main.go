@@ -827,13 +827,9 @@ func checkProviderReadiness(ctx context.Context, p llm.LLMProvider) llm.Provider
 	if status, ok := checkProviderVersionGate(p); !ok {
 		return status
 	}
-	checker, ok := p.(llm.ReadinessChecker)
-	if !ok {
-		return llm.ProviderReadiness{Ready: true}
-	}
 	checkCtx, cancel := context.WithTimeout(ctx, providerReadinessTimeout)
 	defer cancel()
-	status := checker.CheckReadiness(checkCtx)
+	status := p.CheckReadiness(checkCtx)
 	if status.Detail == "" && !status.Ready {
 		status.Detail = "not ready"
 	}
@@ -914,31 +910,12 @@ func formatProviderNameList(providers []llm.LLMProvider) string {
 type providerCatalogDiscoveryProgress func(provider string, model llm.ModelInfo)
 
 type providerCatalogDiscoveryJob struct {
-	index      int
-	provider   llm.LLMProvider
-	discoverer llm.CatalogDiscoverer
-	enricher   llm.CatalogEnricher
+	index    int
+	provider llm.LLMProvider
 }
 
 func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []startupWarning {
-	var jobs []providerCatalogDiscoveryJob
-	for i, p := range providers {
-		discoverer, ok := p.(llm.CatalogDiscoverer)
-		if !ok {
-			continue
-		}
-		enricher, ok := p.(llm.CatalogEnricher)
-		if !ok {
-			continue
-		}
-		jobs = append(jobs, providerCatalogDiscoveryJob{
-			index:      i,
-			provider:   p,
-			discoverer: discoverer,
-			enricher:   enricher,
-		})
-	}
-	if len(jobs) == 0 {
+	if len(providers) == 0 {
 		return nil
 	}
 
@@ -953,12 +930,12 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 		defer reportMu.Unlock()
 		report(provider, model)
 	}
-	wg.Add(len(jobs))
-	for _, job := range jobs {
+	wg.Add(len(providers))
+	for i, p := range providers {
 		go func(job providerCatalogDiscoveryJob) {
 			defer wg.Done()
-			warningsByProvider[job.index] = discoverOneProviderCatalog(ctx, job.provider, job.discoverer, job.enricher, cacheRoot, reportProgress, refreshModels)
-		}(job)
+			warningsByProvider[job.index] = discoverOneProviderCatalog(ctx, job.provider, cacheRoot, reportProgress, refreshModels)
+		}(providerCatalogDiscoveryJob{index: i, provider: p})
 	}
 	wg.Wait()
 
@@ -980,7 +957,7 @@ func catalogWarning(providerName, diagnostics string) startupWarning {
 	}
 }
 
-func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discoverer llm.CatalogDiscoverer, enricher llm.CatalogEnricher, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []startupWarning {
+func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []startupWarning {
 	var warnings []startupWarning
 	providerName := p.Name()
 	if policy, ok := p.(llm.CatalogRefreshPolicy); ok && policy.RefreshCatalogOnStartup() {
@@ -1018,7 +995,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 	if version != "" && !refreshModels {
 		models, err := loadProviderCatalogCache(cacheRoot, providerName, version)
 		if err == nil {
-			enricher.SetModelCatalog(models)
+			p.SetModelCatalog(models)
 			return nil
 		}
 		if !os.IsNotExist(err) {
@@ -1029,14 +1006,13 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 	}
 
 	// On a discovery error or an empty result we leave the catalog unset and warn:
-	// the provider's CatalogProvider supplies the built-in fallback catalog (see
-	// the CatalogDiscoverer contract), so downstream model lists and routing still
-	// see a populated catalog rather than nothing.
+	// the provider's built-in fallback catalog supplies model lists and routing,
+	// so downstream consumers still see a populated catalog rather than nothing.
 	discoveryCtx, cancel := context.WithTimeout(ctx, providerCatalogDiscoveryTimeout)
-	models, err := discoverModelCatalog(discoveryCtx, discoverer, reportModel)
+	models, err := p.DiscoverModelCatalogWithProgress(discoveryCtx, reportModel)
 	cancel()
 	if err != nil {
-		if fallback, ok := tryStaleCacheFallback(enricher, cacheRoot, providerName, version, refreshModels, err.Error()); ok {
+		if fallback, ok := tryStaleCacheFallback(p, cacheRoot, providerName, version, refreshModels, err.Error()); ok {
 			return append(warnings, fallback...)
 		}
 		warnings = append(warnings, catalogWarning(providerName,
@@ -1045,7 +1021,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		return warnings
 	}
 	if len(models) == 0 {
-		if fallback, ok := tryStaleCacheFallback(enricher, cacheRoot, providerName, version, refreshModels, "discovered empty catalog"); ok {
+		if fallback, ok := tryStaleCacheFallback(p, cacheRoot, providerName, version, refreshModels, "discovered empty catalog"); ok {
 			return append(warnings, fallback...)
 		}
 		warnings = append(warnings, catalogWarning(providerName,
@@ -1053,7 +1029,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 		))
 		return warnings
 	}
-	enricher.SetModelCatalog(models)
+	p.SetModelCatalog(models)
 	if version != "" {
 		if err := saveProviderCatalogCache(cacheRoot, providerName, version, models); err != nil {
 			warnings = append(warnings, catalogWarning(providerName,
@@ -1066,7 +1042,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, discover
 
 // tryStaleCacheFallback serves a previously cached catalog when a refresh
 // failed (reason); ok is false if no cache fallback applies.
-func tryStaleCacheFallback(enricher llm.CatalogEnricher, cacheRoot, providerName, version string, refreshModels bool, reason string) ([]startupWarning, bool) {
+func tryStaleCacheFallback(provider llm.LLMProvider, cacheRoot, providerName, version string, refreshModels bool, reason string) ([]startupWarning, bool) {
 	if !refreshModels || cacheRoot == "" || version == "" {
 		return nil, false
 	}
@@ -1074,29 +1050,13 @@ func tryStaleCacheFallback(enricher llm.CatalogEnricher, cacheRoot, providerName
 	if cerr != nil {
 		return nil, false
 	}
-	enricher.SetModelCatalog(cached.Models)
+	provider.SetModelCatalog(cached.Models)
 	warning := catalogWarning(providerName, fmt.Sprintf(
 		"could not refresh model catalog; %s; using stale cache from %s",
 		reason,
 		cached.DiscoveredAt.Format(time.RFC3339),
 	))
 	return []startupWarning{warning}, true
-}
-
-func discoverModelCatalog(ctx context.Context, discoverer llm.CatalogDiscoverer, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
-	if progressDiscoverer, ok := discoverer.(llm.CatalogProgressDiscoverer); ok {
-		return progressDiscoverer.DiscoverModelCatalogWithProgress(ctx, report)
-	}
-	models, err := discoverer.DiscoverModelCatalog(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if report != nil {
-		for _, model := range models {
-			report(model)
-		}
-	}
-	return models, nil
 }
 
 func persistRefreshedProviderModelCatalog(cacheRoot string, provider llm.LLMProvider, models []llm.ModelInfo) error {
@@ -2293,7 +2253,7 @@ func remapUnresolvableModels(cfg *config.Config, registry *llm.Registry) {
 	// Preserve compatibility with providers that only advertise model IDs.
 	hasCatalog := false
 	for _, provider := range registry.DetectedProviders() {
-		if cp, ok := provider.(llm.CatalogProvider); ok && len(cp.ModelCatalog()) > 0 {
+		if len(provider.ModelCatalog()) > 0 {
 			hasCatalog = true
 			break
 		}

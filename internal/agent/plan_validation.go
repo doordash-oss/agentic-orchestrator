@@ -488,7 +488,7 @@ type planLoopConfig struct {
 	SessionStartFunc func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error)
 
 	// AskingClause is the pre-resolved "Asking Questions" prompt section
-	// from the PromptAdapter for the planning model. Set by PhaseRunner
+	// from the planning model's provider. Set by PhaseRunner
 	// before launching the loop.
 	AskingClause   string
 	CompletionTool string

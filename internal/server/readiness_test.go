@@ -880,7 +880,7 @@ func TestProviderModelRefreshRejectsInvalidProviderName(t *testing.T) {
 	}
 }
 
-func TestProviderModelRefreshHandlesUnknownUnreadyAndUnsupportedProviders(t *testing.T) {
+func TestProviderModelRefreshHandlesUnknownUnreadyAndReadyProviders(t *testing.T) {
 	t.Parallel()
 
 	unready := &refreshableProvider{
@@ -894,16 +894,17 @@ func TestProviderModelRefreshHandlesUnknownUnreadyAndUnsupportedProviders(t *tes
 		},
 		discovered: []llm.ModelInfo{{ID: "must-not-discover"}},
 	}
-	unsupported := &readinessProbeProvider{
+	ready := &readinessProbeProvider{
 		MockProvider: &mocks.MockProvider{
-			ProviderName: "unsupported",
+			ProviderName: "ready",
 			CLIDetected:  true,
 			Models:       []string{"fallback"},
+			Catalog:      []llm.ModelInfo{{ID: "ready-refreshed"}},
 		},
 		status: staticReadiness(llm.ProviderReadiness{Ready: true}),
 	}
 	handler := NewHandler(HandlerOptions{
-		Registry:              newReadinessRegistry(unready, unsupported),
+		Registry:              newReadinessRegistry(unready, ready),
 		Mutations:             &createFeatureRecorder{},
 		DisableHostValidation: true,
 	})
@@ -926,11 +927,20 @@ func TestProviderModelRefreshHandlesUnknownUnreadyAndUnsupportedProviders(t *tes
 		t.Fatalf("unready provider discovery calls = %d; want 0", got)
 	}
 
-	cannotRefresh := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
-		"provider": "unsupported",
+	refreshed := postTrustedJSON(handler, "/api/v1/catalog/models/refresh", map[string]string{
+		"provider": "ready",
 	})
-	if cannotRefresh.Code != http.StatusConflict {
-		t.Fatalf("unsupported provider status = %d body=%s; want 409", cannotRefresh.Code, cannotRefresh.Body.String())
+	if refreshed.Code != http.StatusOK {
+		t.Fatalf("ready provider status = %d body=%s; want 200 refreshed catalog", refreshed.Code, refreshed.Body.String())
+	}
+	var refreshBody struct {
+		Catalog ModelCatalogResponse `json:"catalog"`
+	}
+	if err := json.NewDecoder(refreshed.Result().Body).Decode(&refreshBody); err != nil {
+		t.Fatalf("decode ready refresh response: %v", err)
+	}
+	if got := refreshBody.Catalog.ProviderModels["ready"]; len(got) != 1 || got[0].ID != "ready-refreshed" {
+		t.Fatalf("ready provider refreshed models = %+v; want ready-refreshed", got)
 	}
 }
 

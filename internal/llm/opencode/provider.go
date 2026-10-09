@@ -133,12 +133,6 @@ func (p *Provider) EnablesPendingToolWatchdog() bool { return true }
 // permission denials.
 func (p *Provider) UsesBoundedHelperSandbox() bool { return true }
 
-// SupportsSessionResume reports that a prior ACP session can be resumed via
-// ProtocolOpts.ResumeSessionID (session/load). Agents that do not advertise
-// the loadSession capability fail the resume handshake with a clear error,
-// which callers treat as "resume unavailable" and fall back.
-func (p *Provider) SupportsSessionResume() bool { return true }
-
 // SupportsNativeToollessReview attests that the provider's isolated managed
 // configuration and ACP protocol implement Agentico's complete hidden-review
 // contract. BuildCommand activates that boundary only when all three native

@@ -149,11 +149,10 @@ const (
 
 // Readiness and provider codes.
 const (
-	NotReady                        Code = "not_ready"
-	ProviderNotFound                Code = "provider_not_found"
-	ProviderModelRefreshUnsupported Code = "provider_model_refresh_unsupported"
-	ProviderModelRefreshFailed      Code = "provider_model_refresh_failed"
-	PromptSnapshotTooLarge          Code = "prompt_snapshot_too_large"
+	NotReady                   Code = "not_ready"
+	ProviderNotFound           Code = "provider_not_found"
+	ProviderModelRefreshFailed Code = "provider_model_refresh_failed"
+	PromptSnapshotTooLarge     Code = "prompt_snapshot_too_large"
 )
 
 // Read-failure codes.
@@ -1097,11 +1096,6 @@ var catalog = map[Code]Entry{
 		Title:       "Provider not found",
 		Summary:     "The requested provider is not registered.",
 		Remediation: "Choose a configured provider.",
-	},
-	ProviderModelRefreshUnsupported: {
-		Class:   ClassBlocking,
-		Title:   "Model refresh unsupported",
-		Summary: "The provider does not support refreshing its model list.",
 	},
 	ProviderModelRefreshFailed: {
 		Class:       ClassBlocking,

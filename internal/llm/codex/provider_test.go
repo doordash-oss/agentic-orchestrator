@@ -870,13 +870,6 @@ func TestCodexProvider_VersionInfoWrapsRunnerError(t *testing.T) {
 	}
 }
 
-func TestProviderSupportsSessionResume(t *testing.T) {
-	p := &Provider{}
-	if !p.SupportsSessionResume() {
-		t.Error("SupportsSessionResume() = false, want true")
-	}
-}
-
 func TestAstraCatalogRoutingWindowsAndEffort(t *testing.T) {
 	p := NewProvider("")
 	for _, selection := range []string{"gpt-6-astra", "gpt-6-astra[272K]", "gpt-6-astra[872K]"} {

@@ -15,6 +15,7 @@
 package agent
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"testing"
@@ -42,6 +43,23 @@ func (m *mockStartupProvider) BuildCommand(_ llm.CommandBuildOpts) ([]string, []
 func (m *mockStartupProvider) NewProtocol(_ llm.ProtocolOpts) llm.Protocol { return nil }
 func (m *mockStartupProvider) MinVersion() [3]int                          { return [3]int{0, 0, 0} }
 func (m *mockStartupProvider) EnvVarsToExclude() []string                  { return nil }
+func (m *mockStartupProvider) ModelCatalog() []llm.ModelInfo                { return nil }
+func (m *mockStartupProvider) SetModelCatalog([]llm.ModelInfo)               {}
+func (m *mockStartupProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (m *mockStartupProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	return nil, nil
+}
+func (m *mockStartupProvider) ContextWindowForModel(string) int { return 0 }
+func (m *mockStartupProvider) AskingQuestionsClause() string    { return "" }
+func (m *mockStartupProvider) SupportsNativeToollessReview() bool {
+	return false
+}
+func (m *mockStartupProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	return llm.ProviderReadiness{Ready: true}
+}
+func (m *mockStartupProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 // --- FormatNoCLIMessage tests ---
 

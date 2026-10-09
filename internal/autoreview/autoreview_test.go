@@ -570,20 +570,14 @@ func TestResolveReviewerStaleProviderQualifiedModelRejected(t *testing.T) {
 	}
 }
 
-// oauthFakeClaudeProvider wraps FakeClaudeProvider but reports bare auth as
-// unusable, simulating an OAuth-only Claude installation. Isolated review uses
-// safe mode rather than bare mode, so normal provider readiness is sufficient.
-type oauthFakeClaudeProvider struct {
-	testutil.FakeClaudeProvider
-}
-
-func (oauthFakeClaudeProvider) CheckBareAuth() bool { return false }
-
+// TestResolveReviewerAcceptsOAuthOnlyAuth proves an OAuth-only Claude
+// installation (no API key, no bare-auth mode) still resolves as the automatic
+// reviewer: isolated review launches in safe mode with normal authentication,
+// so ordinary provider readiness is sufficient.
 func TestResolveReviewerAcceptsOAuthOnlyAuth(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
 	reg := llm.NewRegistry()
-	provider := oauthFakeClaudeProvider{FakeClaudeProvider: testutil.FakeClaudeProvider{Script: script}}
-	reg.Register(provider)
+	reg.Register(testutil.FakeClaudeProvider{Script: script})
 	reviewer, ok, reason := ResolveReviewer(reg, "")
 	if !ok || reviewer.Provider == nil || reviewer.Provider.Name() != "claude" {
 		t.Fatalf("ResolveReviewer with OAuth-only auth = (%+v, %t, %q), want Claude reviewer", reviewer, ok, reason)

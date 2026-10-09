@@ -15,12 +15,14 @@
 package mocks
 
 import (
+	"context"
+
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// MockProvider implements llm.LLMProvider and all segregated interfaces
-// (PromptAdapter, CostCalculator, CatalogProvider). All return values
-// are configurable via exported fields. Method calls are recorded for assertion.
+// MockProvider implements llm.LLMProvider and the optional CostCalculator
+// interface. All return values are configurable via exported fields. Method
+// calls are recorded for assertion.
 type MockProvider struct {
 	// LLMProvider fields
 	ProviderName string
@@ -31,15 +33,27 @@ type MockProvider struct {
 	Protocol     *MockProtocol
 	Hint         string
 
-	// PromptAdapter
+	// AskingQuestionsClause
 	QuestionsClause string
 
 	// CostCalculator
 	CostPerCall   float64
 	ContextWindow int
 
-	// CatalogProvider
+	// ModelCatalog / discovery
 	Catalog []llm.ModelInfo
+
+	// SupportsNativeToollessReview
+	ToollessReview bool
+
+	// CheckReadiness: Readiness is returned when HasReadiness is set;
+	// otherwise the provider reports ready.
+	Readiness    llm.ProviderReadiness
+	HasReadiness bool
+
+	// ReviewPreferenceBand
+	ReviewBand   int
+	ReviewBandOK bool
 
 	// VersionInfo
 	VersionInfoResult string
@@ -100,7 +114,7 @@ func (p *MockProvider) MinVersion() [3]int { return p.MinVer }
 
 func (p *MockProvider) EnvVarsToExclude() []string { return p.EnvVarsExclude }
 
-// --- PromptAdapter ---
+// --- AskingQuestionsClause ---
 
 func (p *MockProvider) AskingQuestionsClause() string { return p.QuestionsClause }
 
@@ -112,6 +126,37 @@ func (p *MockProvider) ComputeCost(model string, inputTokens, outputTokens int64
 
 func (p *MockProvider) ContextWindowForModel(model string) int { return p.ContextWindow }
 
-// --- CatalogProvider ---
+// --- Catalog, discovery, readiness and review ranking ---
 
 func (p *MockProvider) ModelCatalog() []llm.ModelInfo { return p.Catalog }
+
+func (p *MockProvider) SetModelCatalog(models []llm.ModelInfo) {
+	p.Catalog = append([]llm.ModelInfo(nil), models...)
+}
+
+func (p *MockProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
+	return append([]llm.ModelInfo(nil), p.Catalog...), nil
+}
+
+func (p *MockProvider) DiscoverModelCatalogWithProgress(ctx context.Context, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
+	models, err := p.DiscoverModelCatalog(ctx)
+	if err == nil && report != nil {
+		for _, model := range models {
+			report(model)
+		}
+	}
+	return models, err
+}
+
+func (p *MockProvider) SupportsNativeToollessReview() bool { return p.ToollessReview }
+
+func (p *MockProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
+	if p.HasReadiness {
+		return p.Readiness
+	}
+	return llm.ProviderReadiness{Ready: true}
+}
+
+func (p *MockProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) {
+	return p.ReviewBand, p.ReviewBandOK
+}

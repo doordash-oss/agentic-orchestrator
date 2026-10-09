@@ -753,6 +753,32 @@ func knowledgeBaseAgentNames() []string {
 // This runs asynchronously and returns a channel that receives the result.
 // qaFilePaths are paths to Q&A files from earlier phases (inquire, research, design).
 func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArtifactPath string, qaFilePaths []string, kbInfos ...KBInfo) (chan *PlanLoopResult, error) {
+	cfg := pr.planLoopConfig(f, f.MaxPlanIterations, qaFilePaths, kbInfos)
+	cfg.ResearchArtifactPath = researchArtifactPath
+	return pr.startPlanningLoop(cfg, roadmapPlanKind()), nil
+}
+
+// RunPhasePlanning runs per-phase plan creation + critic loop.
+// qaFilePaths are paths to Q&A files from earlier phases (inquire, research, design).
+// priorPhasePlanPaths are approved plan paths from completed phases (phase-01, phase-02, etc.).
+func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, phase RoadmapPhase, qaFilePaths []string, priorPhasePlanPaths []string, kbInfos ...KBInfo) (chan *PlanLoopResult, error) {
+	maxAttempts := 10
+	if pr.Config != nil && pr.Config.Defaults.MaxPhasePlanIterations > 0 {
+		maxAttempts = pr.Config.Defaults.MaxPhasePlanIterations
+	}
+	// Honor per-feature budget override (set by "iterate more" in the desktop app).
+	if f.MaxPlanIterations > maxAttempts {
+		maxAttempts = f.MaxPlanIterations
+	}
+	cfg := pr.planLoopConfig(f, maxAttempts, qaFilePaths, kbInfos)
+	return pr.startPlanningLoop(cfg, phasePlanKind(roadmapPath, phase, priorPhasePlanPaths)), nil
+}
+
+// planLoopConfig builds the planning-loop configuration shared by roadmap and
+// phase planning.
+func (pr *PhaseRunner) planLoopConfig(f *feature.Feature, maxAttempts int, qaFilePaths []string, kbInfos []KBInfo) PlanLoopConfig {
+	// Planning runs in the feature worktree (same as implementation), so plan
+	// validators see prior-phase symbols rather than the base repo clone.
 	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
 
 	// Derive repo name for permission scoping so planning sessions persist
@@ -762,23 +788,24 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		repoName = f.Repos[0].Name
 	}
 
+	// The role model selects the asking clause, completion tool and effort;
+	// the loop hands the session the feature's raw planning model.
 	planningModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
 	planEffort, planEffortSource := pr.resolveEffortForRole(f, llm.PhasePlanning, planningModel)
 	reviewModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
 	validatorEffort, validatorEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, reviewModel)
-	cfg := PlanLoopConfig{
+	return PlanLoopConfig{
 		Registry:                     pr.Registry,
 		Feature:                      f,
 		FeatureStore:                 pr.FeatureStore,
 		StateDir:                     pr.StateDir,
-		ResearchArtifactPath:         researchArtifactPath,
 		PlanningResearchArtifactPath: f.ResearchArtifactPath(),
 		DesignArtifactPath:           f.DesignArtifactPath(),
 		QAFilePaths:                  qaFilePaths,
 		KBInfos:                      kbInfos,
 		WorkDir:                      workDir,
 		AdditionalDirs:               additionalDirs,
-		MaxAttempts:                  f.MaxPlanIterations,
+		MaxAttempts:                  maxAttempts,
 		DangerouslySkipPermissions:   pr.DangerouslySkipPermissions,
 		PermissionCache:              pr.PermissionCache,
 		RepoName:                     repoName,
@@ -794,94 +821,22 @@ func (pr *PhaseRunner) RunPlanningWithValidation(f *feature.Feature, researchArt
 		GuidelinesDir:                pr.GuidelinesDir,
 		Observer:                     pr.Observer,
 	}
-
-	resultCh := make(chan *PlanLoopResult, 1)
-	go func() {
-		result, err := RunRoadmapPlanningLoop(cfg, pr.SessionManager)
-		if err != nil {
-			resultCh <- &PlanLoopResult{FinalStatus: "failed", LastError: err.Error()}
-		} else {
-			resultCh <- result
-		}
-	}()
-
-	return resultCh, nil
 }
 
-// RunPhasePlanning runs per-phase plan creation + critic loop.
-// qaFilePaths are paths to Q&A files from earlier phases (inquire, research, design).
-// priorPhasePlanPaths are approved plan paths from completed phases (phase-01, phase-02, etc.).
-func (pr *PhaseRunner) RunPhasePlanning(f *feature.Feature, roadmapPath string, phase RoadmapPhase, qaFilePaths []string, priorPhasePlanPaths []string, kbInfos ...KBInfo) (chan *PlanLoopResult, error) {
-	// Use the shared resolver so per-phase planning runs in the feature worktree
-	// (same as roadmap planning and implementation). Previously this function
-	// used f.Repos[0].Path unconditionally, which pointed the plan validators
-	// at the base repo clone on master and made every prior-phase symbol look
-	// missing.
-	workDir, additionalDirs := resolveUnifiedWorkDir(f, pr.StateDir)
-
-	maxAttempts := 10
-	if pr.Config != nil && pr.Config.Defaults.MaxPhasePlanIterations > 0 {
-		maxAttempts = pr.Config.Defaults.MaxPhasePlanIterations
-	}
-	// Honor per-feature budget override (set by "iterate more" in the desktop app).
-	if f.MaxPlanIterations > maxAttempts {
-		maxAttempts = f.MaxPlanIterations
-	}
-
-	// Derive repo name for permission scoping (same fallback as roadmap planning).
-	var planRepoName string
-	if len(f.Repos) > 0 {
-		planRepoName = f.Repos[0].Name
-	}
-
-	phasePlanModel := pr.modelForRole(f.Models.Planning, llm.PhasePlanning)
-	phasePlanEffort, phasePlanEffortSource := pr.resolveEffortForRole(f, llm.PhasePlanning, phasePlanModel)
-	phaseValidatorModel := pr.modelForRole(f.Models.Review, llm.PhaseReview)
-	phaseValidatorEffort, phaseValidatorEffortSource := pr.resolveEffortForRole(f, llm.PhaseReview, phaseValidatorModel)
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Registry:                     pr.Registry,
-			Feature:                      f,
-			FeatureStore:                 pr.FeatureStore,
-			StateDir:                     pr.StateDir,
-			PlanningResearchArtifactPath: f.ResearchArtifactPath(),
-			DesignArtifactPath:           f.DesignArtifactPath(),
-			QAFilePaths:                  qaFilePaths,
-			KBInfos:                      kbInfos,
-			WorkDir:                      workDir,
-			AdditionalDirs:               additionalDirs,
-			MaxAttempts:                  maxAttempts,
-			DangerouslySkipPermissions:   pr.DangerouslySkipPermissions,
-			PermissionCache:              pr.PermissionCache,
-			RepoName:                     planRepoName,
-			BuildSession:                 pr.buildSessionForFeature(f),
-			AskingClause:                 pr.askingQuestionsClauseForModel(phasePlanModel),
-			CompletionTool:               pr.completionToolForModel(phasePlanModel),
-			EffortLevel:                  f.EffectivePipeline().EffortLevel(),
-			EffectiveEffort:              phasePlanEffort,
-			EffortSource:                 phasePlanEffortSource,
-			ValidatorEffectiveEffort:     phaseValidatorEffort,
-			ValidatorEffortSource:        phaseValidatorEffortSource,
-			SkillsDir:                    pr.SkillsDir,
-			GuidelinesDir:                pr.GuidelinesDir,
-			Observer:                     pr.Observer,
-		},
-		RoadmapPath:         roadmapPath,
-		Phase:               phase,
-		PriorPhasePlanPaths: priorPhasePlanPaths,
-	}
-
+// startPlanningLoop runs the planning loop for kind in the background and
+// delivers its result, or a failed result carrying its error, on the
+// returned channel.
+func (pr *PhaseRunner) startPlanningLoop(cfg PlanLoopConfig, kind planArtifactKind) chan *PlanLoopResult {
 	resultCh := make(chan *PlanLoopResult, 1)
 	go func() {
-		result, err := RunPhasePlanningLoop(cfg, pr.SessionManager)
+		result, err := runPlanningLoop(cfg, kind, pr.SessionManager)
 		if err != nil {
 			resultCh <- &PlanLoopResult{FinalStatus: "failed", LastError: err.Error()}
 		} else {
 			resultCh <- result
 		}
 	}()
-
-	return resultCh, nil
+	return resultCh
 }
 
 // RunImplementation starts the implementation loop for a feature.

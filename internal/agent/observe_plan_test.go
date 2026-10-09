@@ -26,7 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
-// TestRoadmapPlanningLoopEmitsEvents verifies that RunRoadmapPlanningLoop emits
+// TestRoadmapPlanningLoopEmitsEvents verifies that roadmap planning emits
 // the full event sequence: phase.started -> sessions -> phase.completed.
 func TestRoadmapPlanningLoopEmitsEvents(t *testing.T) {
 	if testing.Short() {
@@ -75,20 +75,9 @@ func TestRoadmapPlanningLoopEmitsEvents(t *testing.T) {
 	}
 	_ = store.Save(f)
 
-	cfg := PlanLoopConfig{
-		Feature:                    f,
-		FeatureStore:               store,
-		StateDir:                   stateDir,
-		WorkDir:                    workDir,
-		DangerouslySkipPermissions: true,
-		BuildSession:               mockBuildSession(planScript, criticScript),
-		Observer:                   obs,
-	}
-
-	result, err := RunRoadmapPlanningLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop error: %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	pr.Observer = obs
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("expected FinalStatus=approved, got %s", result.FinalStatus)
 	}
@@ -138,7 +127,7 @@ func TestRoadmapPlanningLoopEmitsEvents(t *testing.T) {
 	}
 }
 
-// TestPhasePlanningLoopEmitsEvents verifies that RunPhasePlanningLoop emits
+// TestPhasePlanningLoopEmitsEvents verifies that phase planning emits
 // the full event sequence: phase.started -> sessions -> phase.completed.
 func TestPhasePlanningLoopEmitsEvents(t *testing.T) {
 	if testing.Short() {
@@ -191,23 +180,9 @@ func TestPhasePlanningLoopEmitsEvents(t *testing.T) {
 	}
 	_ = store.Save(f)
 
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-			Observer:                   obs,
-		},
-		Phase: RoadmapPhase{Number: 1, Name: "Test Phase", Type: "collapsed"},
-	}
-
-	result, err := RunPhasePlanningLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop error: %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	pr.Observer = obs
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{Number: 1, Name: "Test Phase", Type: "collapsed"}, nil)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("expected FinalStatus=approved, got %s", result.FinalStatus)
 	}

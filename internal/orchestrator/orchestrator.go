@@ -1841,14 +1841,14 @@ func (o *Orchestrator) persistRoadmapPhaseCount(featureID string, f *feature.Fea
 // overwrite its meta.yaml with a CHANGES_REQUESTED entry.
 //
 // The planner's resume logic short-circuits when the latest attempt has
-// ReviewStatus == "APPROVED" (in RunRoadmapPlanningLoop and
-// RunPhasePlanningLoop). Writing a new meta with empty AgentStatus causes
+// ReviewStatus == "APPROVED" (in the agent's planning loop, for roadmaps
+// and phase plans alike). Writing a new meta with empty AgentStatus causes
 // LatestCompletedPlanAttempt to skip that attempt entirely, forcing a fresh
 // attempt. Without this, "iterate" on an approved plan would return approved
 // immediately and never re-plan.
 //
 // For the non-phase-plan case the helper invalidates both the roadmap/
-// directory (where RunRoadmapPlanningLoop writes) and the legacy plan/
+// directory (where roadmap planning writes) and the legacy plan/
 // directory left over from the removed RunPlanningLoop (features carried
 // forward from older builds may still have APPROVED metadata there). Either
 // directory may be empty or absent on any given feature, in which case
@@ -1865,13 +1865,13 @@ func (o *Orchestrator) writePlanAttemptChangesRequested(f *feature.Feature, phas
 	}
 	var candidates []string
 	if phasePlan && f.CurrentRoadmapPhase > 0 {
-		// RunPhasePlanningLoop writes attempt-NN/meta.yaml under the
+		// Phase planning writes attempt-NN/meta.yaml under the
 		// phase-plan dir (plan_validation.go). Targeting any other dir here
 		// would leave the APPROVED attempt untouched in the real attempt tree,
 		// and the next plan run would short-circuit via the attempt cache.
 		candidates = append(candidates, o.phasePlanDirForFeature(f, f.CurrentRoadmapPhase))
 	} else {
-		// Roadmap dir: matches the path RunRoadmapPlanningLoop reads from.
+		// Roadmap dir: matches the path roadmap planning reads from.
 		roadmapDir := agent.RoadmapDir(baseDir, f)
 		// Legacy plan dir: features carried forward from a build that ran the
 		// (now-removed) RunPlanningLoop may have APPROVED metadata at

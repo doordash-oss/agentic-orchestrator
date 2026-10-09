@@ -493,7 +493,7 @@ func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t 
 // roadmap feature whose CurrentRoadmapPhase > 0 must resolve the per-phase
 // plan (<state>/<featureID>/phase-NN/plan/*.md), not the generic "plan"
 // artifact. Roadmap phase plans are written under phase-NN/plan by
-// RunPhasePlanningLoop (see internal/agent/plan_validation.go); the production
+// phase planning (see internal/agent/plan_validation.go); the production
 // resolver uses the same phase-%d-plan key.
 // ---------------------------------------------------------------------------
 

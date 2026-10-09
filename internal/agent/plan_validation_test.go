@@ -99,48 +99,7 @@ func TestResolvePlanArtifactPath(t *testing.T) {
 	})
 }
 
-func TestRecordApprovedPhasePlanArtifactRecordsFrontendFlag(t *testing.T) {
-	dir := t.TempDir()
-	planPath := filepath.Join(dir, "phase-plan.md")
-	planText := "# Phase 1 Plan\n\n" +
-		"## Metadata\n\n" +
-		"**Frontend:** true\n\n" +
-		"## Overview\nShip UI.\n\n" +
-		"## Success Criteria\n\n" +
-		"### Visual Evidence\n- [ ] Capture the UI.\n"
-	if err := os.WriteFile(planPath, []byte(planText), 0o644); err != nil {
-		t.Fatalf("WriteFile(plan) error = %v", err)
-	}
-
-	store := feature.NewStore(dir)
-	f := newTestPlanFeature(t, dir)
-	if err := store.Save(f); err != nil {
-		t.Fatalf("Save(feature) error = %v", err)
-	}
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:      f,
-			FeatureStore: store,
-		},
-		Phase: RoadmapPhase{Number: 2},
-	}
-
-	if err := recordApprovedPhasePlanArtifact(cfg, planPath); err != nil {
-		t.Fatalf("recordApprovedPhasePlanArtifact() error = %v", err)
-	}
-	loaded, err := store.Load(f.ID)
-	if err != nil {
-		t.Fatalf("Load(feature) error = %v", err)
-	}
-	if got := loaded.Artifacts["phase-2-plan"]; got != planPath {
-		t.Fatalf("Artifacts[phase-2-plan] = %q, want %q", got, planPath)
-	}
-	if !loaded.RoadmapPhaseFrontend(2) || !loaded.AnyRoadmapPhaseFrontend() {
-		t.Fatalf("frontend flag not recorded: %#v", loaded.Run().RoadmapPhaseFrontendByPhase)
-	}
-}
-
-// --- Integration tests for RunRoadmapPlanningLoop ---
+// --- Integration tests for the planning loop entry points ---
 // These tests follow the same pattern as TestImplementLoop* in integration_test.go:
 // they use mock bash scripts that emit the expected signals.
 
@@ -225,26 +184,14 @@ func runPhasePlanningLoopWithPlannerArtifacts(t *testing.T, artifacts plannerScr
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "tdd-fill-in",
-			Goal:   "Test phase planner contract",
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	setPhasePlanDefaultAttempts(pr, 2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "tdd-fill-in",
+		Goal:   "Test phase planner contract",
+	}, nil)
 	return phasePlanningLoopRun{Result: result, PhasePlanDir: phasePlanDir}
 }
 
@@ -293,26 +240,14 @@ fi
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "tdd-fill-in",
-			Goal:   "Test phase planner contract repair",
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	setPhasePlanDefaultAttempts(pr, 2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "tdd-fill-in",
+		Goal:   "Test phase planner contract repair",
+	}, nil)
 	return result
 }
 
@@ -345,18 +280,9 @@ func TestRoadmapPlanningLoopMissingRoadmapTripsProtocolViolation(t *testing.T) {
 	f := newTestPlanFeature(t, workDir)
 	_ = store.Save(f)
 
-	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
-		Feature:                    f,
-		FeatureStore:               store,
-		StateDir:                   stateDir,
-		WorkDir:                    workDir,
-		MaxAttempts:                2,
-		DangerouslySkipPermissions: true,
-		BuildSession:               mockBuildSession(planScript, criticScript),
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	f.MaxPlanIterations = 2
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -404,18 +330,9 @@ func TestRoadmapPlanningLoopWritesFirstAttemptQALog(t *testing.T) {
 		t.Fatalf("Save(feature): %v", err)
 	}
 
-	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
-		Feature:                    f,
-		FeatureStore:               store,
-		StateDir:                   stateDir,
-		WorkDir:                    workDir,
-		MaxAttempts:                1,
-		DangerouslySkipPermissions: true,
-		BuildSession:               mockBuildSession(planScript, ""),
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop(): %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, ""))
+	f.MaxPlanIterations = 1
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -467,18 +384,9 @@ func TestRoadmapPlanningLoopMissingRootOutcomeTripsProtocolViolation(t *testing.
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
-		Feature:                    f,
-		FeatureStore:               store,
-		StateDir:                   stateDir,
-		WorkDir:                    workDir,
-		MaxAttempts:                2,
-		DangerouslySkipPermissions: true,
-		BuildSession:               mockBuildSession(planScript, criticScript),
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	f.MaxPlanIterations = 2
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -526,18 +434,9 @@ fi
 	f := newTestPlanFeature(t, workDir)
 	_ = store.Save(f)
 
-	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
-		Feature:                    f,
-		FeatureStore:               store,
-		StateDir:                   stateDir,
-		WorkDir:                    workDir,
-		MaxAttempts:                2,
-		DangerouslySkipPermissions: true,
-		BuildSession:               mockBuildSession(planScript, criticScript),
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	f.MaxPlanIterations = 2
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -589,18 +488,9 @@ done
 	f := newTestPlanFeature(t, workDir)
 	_ = store.Save(f)
 
-	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
-		Feature:                    f,
-		FeatureStore:               store,
-		StateDir:                   stateDir,
-		WorkDir:                    workDir,
-		MaxAttempts:                1,
-		DangerouslySkipPermissions: true,
-		BuildSession:               mockBuildSession(planScript, criticScript),
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	f.MaxPlanIterations = 1
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -641,18 +531,9 @@ func TestRoadmapPlanningLoopUsesAttemptDirCompletionReceipt(t *testing.T) {
 	f := newTestPlanFeature(t, workDir)
 	_ = store.Save(f)
 
-	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
-		Feature:                    f,
-		FeatureStore:               store,
-		StateDir:                   stateDir,
-		WorkDir:                    workDir,
-		MaxAttempts:                1,
-		DangerouslySkipPermissions: true,
-		BuildSession:               buildSession,
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, buildSession)
+	f.MaxPlanIterations = 1
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -746,21 +627,9 @@ func TestPhasePlanningLoopWritesFirstAttemptQALog(t *testing.T) {
 		t.Fatalf("Save(feature): %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                1,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, ""),
-		},
-		Phase: RoadmapPhase{Number: 1, Name: "Test Phase", Type: "tdd-fill-in", Goal: "Write plan"},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop(): %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, ""))
+	setPhasePlanDefaultAttempts(pr, 1)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{Number: 1, Name: "Test Phase", Type: "tdd-fill-in", Goal: "Write plan"}, nil)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -814,26 +683,14 @@ func TestPhasePlanningLoopMissingRootOutcomeTripsProtocolViolation(t *testing.T)
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "tdd-fill-in",
-			Goal:   "Test phase planner outcome",
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	setPhasePlanDefaultAttempts(pr, 2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "tdd-fill-in",
+		Goal:   "Test phase planner outcome",
+	}, nil)
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -903,26 +760,14 @@ func TestPhasePlanningLoopRejectsAgentEvidenceForAutomatedOnlyProfile(t *testing
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "tdd-fill-in",
-			Goal:   "Test automated-only evidence rejection",
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	setPhasePlanDefaultAttempts(pr, 2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "tdd-fill-in",
+		Goal:   "Test automated-only evidence rejection",
+	}, nil)
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -985,26 +830,14 @@ func TestPhasePlanningLoopApprovesFrontendAutomatedOnlyPlanWithNoneRequiredVisua
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "tdd-fill-in",
-			Goal:   "Test frontend automated-only plan is not deadlocked",
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	setPhasePlanDefaultAttempts(pr, 2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "tdd-fill-in",
+		Goal:   "Test frontend automated-only plan is not deadlocked",
+	}, nil)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -1047,26 +880,14 @@ func TestPhasePlanningLoopRejectsMoonshotFrontendPlanWithNoneRequiredVisualEvide
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "tdd-fill-in",
-			Goal:   "Test frontend visual rule still enforced for evidence-contracting profiles",
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	setPhasePlanDefaultAttempts(pr, 2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "tdd-fill-in",
+		Goal:   "Test frontend visual rule still enforced for evidence-contracting profiles",
+	}, nil)
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -1127,26 +948,14 @@ func TestPhasePlanningLoopAllowsAgentEvidenceForMoonshotProfile(t *testing.T) {
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "tdd-fill-in",
-			Goal:   "Test agent evidence allowed for moonshot",
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	setPhasePlanDefaultAttempts(pr, 2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "tdd-fill-in",
+		Goal:   "Test agent evidence allowed for moonshot",
+	}, nil)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %q, want approved (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -1302,26 +1111,14 @@ func TestPlanValidatorMissingRootOutcomeReturnsProtocolViolation(t *testing.T) {
 		t.Fatalf("Save(feature) error = %v", err)
 	}
 
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               mockBuildSession(planScript, criticScript),
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "tdd-fill-in",
-			Goal:   "Test phase validator outcome",
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, mockBuildSession(planScript, criticScript))
+	setPhasePlanDefaultAttempts(pr, 2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "tdd-fill-in",
+		Goal:   "Test phase validator outcome",
+	}, nil)
 	if result.FinalStatus != BoundedHelperStatusProtocolViolation {
 		t.Fatalf("FinalStatus = %q, want protocol_violation (LastError=%q)", result.FinalStatus, result.LastError)
 	}
@@ -1456,7 +1253,7 @@ func TestLatestCompletedPlanAttempt(t *testing.T) {
 	})
 }
 
-func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T) {
+func TestPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
@@ -1489,30 +1286,27 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 	}
 
 	var gotSessionID string
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:      f,
-			FeatureStore: store,
-			StateDir:     tmpDir,
-			WorkDir:      workDir,
-			MaxAttempts:  3,
-			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
-			},
-			SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
-				gotSessionID = id
-				return nil, session.ErrShuttingDown
-			},
+	result, err := runPlanningLoop(PlanLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     tmpDir,
+		WorkDir:      workDir,
+		MaxAttempts:  3,
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
 		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Restarted plan",
-			Type:   "tdd-fill-in",
-			Goal:   "Retry failed provider sessions without changing the plan attempt",
+		SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+			gotSessionID = id
+			return nil, session.ErrShuttingDown
 		},
-	}, nil)
+	}, phasePlanKind("", RoadmapPhase{
+		Number: 1,
+		Name:   "Restarted plan",
+		Type:   "tdd-fill-in",
+		Goal:   "Retry failed provider sessions without changing the plan attempt",
+	}, nil), nil)
 	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+		t.Fatalf("runPlanningLoop() error = %v", err)
 	}
 	if result.FinalStatus != "interrupted" {
 		t.Fatalf("FinalStatus = %q, want interrupted", result.FinalStatus)
@@ -1529,7 +1323,7 @@ func TestRunPhasePlanningLoopRetriesFailedAttemptWithFreshSessionID(t *testing.T
 	}
 }
 
-func TestRunPhasePlanningLoopRetriesEarlyInfrastructureFailureInProcess(t *testing.T) {
+func TestPhasePlanningLoopRetriesEarlyInfrastructureFailureInProcess(t *testing.T) {
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	phasePlanDir := filepath.Join(tmpDir, "test-plan-001", "runs", "run-001", "phase-01", "plan")
@@ -1547,40 +1341,37 @@ func TestRunPhasePlanningLoopRetriesEarlyInfrastructureFailureInProcess(t *testi
 	}
 
 	var sessionIDs []string
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:      f,
-			FeatureStore: store,
-			StateDir:     tmpDir,
-			WorkDir:      workDir,
-			MaxAttempts:  1,
-			BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-				return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
-			},
-			SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
-				sessionIDs = append(sessionIDs, id)
-				if len(sessionIDs) == 1 {
-					return newTerminalStatusTestSession(ports.SessionFailed), nil
-				}
-				if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
-					t.Fatalf("write plan.md: %v", err)
-				}
-				sess := newUtilityTestSession()
-				sess.setRootIntent(validSuccessCompletionIntent())
-				sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
-				sess.statusCh <- agentStatusSuccess
-				return sess, nil
-			},
+	result, err := runPlanningLoop(PlanLoopConfig{
+		Feature:      f,
+		FeatureStore: store,
+		StateDir:     tmpDir,
+		WorkDir:      workDir,
+		MaxAttempts:  1,
+		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+			return []string{"echo", "unused"}, nil, &ports.SessionOpts{PIDDir: opts.PIDDir}, nil
 		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Retry plan",
-			Type:   "tdd-fill-in",
-			Goal:   "Retry a provider child process that died before doing work",
+		SessionStartFunc: func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*ports.SessionOpts) (ports.SessionHandle, error) {
+			sessionIDs = append(sessionIDs, id)
+			if len(sessionIDs) == 1 {
+				return newTerminalStatusTestSession(ports.SessionFailed), nil
+			}
+			if err := os.WriteFile(filepath.Join(phasePlanDir, "plan.md"), []byte(validPhasePlanText()), 0o644); err != nil {
+				t.Fatalf("write plan.md: %v", err)
+			}
+			sess := newUtilityTestSession()
+			sess.setRootIntent(validSuccessCompletionIntent())
+			sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+			sess.statusCh <- agentStatusSuccess
+			return sess, nil
 		},
-	}, nil)
+	}, phasePlanKind("", RoadmapPhase{
+		Number: 1,
+		Name:   "Retry plan",
+		Type:   "tdd-fill-in",
+		Goal:   "Retry a provider child process that died before doing work",
+	}, nil), nil)
 	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
+		t.Fatalf("runPlanningLoop() error = %v", err)
 	}
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %q, want approved", result.FinalStatus)
@@ -1835,26 +1626,19 @@ func TestRoadmapLoopValidatorInfrastructureFailureDoesNotRevisePlan(t *testing.T
 	defer restoreBackoff()
 	sm := session.NewManager(make(chan interface{}, 100))
 	defer sm.Shutdown()
-	result, err := RunRoadmapPlanningLoop(PlanLoopConfig{
-		Feature:      f,
-		FeatureStore: store,
-		StateDir:     tmpDir,
-		WorkDir:      workDir,
-		MaxAttempts:  3,
-		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
-			callsMu.Lock()
-			if !isReviewHelper(opts.PermHandler) {
-				plannerCalls++
-			} else {
-				criticCalls++
-			}
-			callsMu.Unlock()
-			return buildSession(opts)
-		},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, tmpDir, func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		callsMu.Lock()
+		if !isReviewHelper(opts.PermHandler) {
+			plannerCalls++
+		} else {
+			criticCalls++
+		}
+		callsMu.Unlock()
+		return buildSession(opts)
+	})
+	pr.DangerouslySkipPermissions = false
+	f.MaxPlanIterations = 3
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != "failed" || result.Iterations != 1 {
 		t.Fatalf("result = %+v, want infrastructure failure in attempt 1", result)
 	}
@@ -1867,6 +1651,14 @@ func TestRoadmapLoopValidatorInfrastructureFailureDoesNotRevisePlan(t *testing.T
 	}
 	if _, err := os.Stat(filepath.Join(roadmapDir, "attempt-02")); !os.IsNotExist(err) {
 		t.Fatalf("attempt-02 stat error = %v, want no second plan attempt", err)
+	}
+	feedback, err := os.ReadFile(filepath.Join(roadmapDir, "attempt-01", "validation-feedback.md"))
+	if err != nil || string(feedback) != "Roadmap validation failed: "+result.LastError {
+		t.Fatalf("validation-feedback.md = %q (%v), want the roadmap validation failure for %q", feedback, err, result.LastError)
+	}
+	meta, err := os.ReadFile(filepath.Join(roadmapDir, "attempt-01", "meta.yaml"))
+	if err != nil || string(meta) != "attempt: 1\nagent_status: SUCCESS\nreview_status: FAILED\n" {
+		t.Fatalf("attempt-01/meta.yaml = %q (%v), want FAILED review status", meta, err)
 	}
 }
 
@@ -2054,7 +1846,7 @@ func TestPlanValidationSurfaces_PassExplicitEmptyAgentNames(t *testing.T) {
 // TestPlanningLoopCodexSkipsResumeUnit verifies that --resume is NOT
 // inserted for Codex models without spawning processes.
 
-// --- Integration test for RunPhasePlanningLoop with codex review model ---
+// --- Integration test for phase planning with a codex review model ---
 
 func TestPhasePlanLoopCodexReviewPath(t *testing.T) {
 	if testing.Short() {
@@ -2107,27 +1899,13 @@ func TestPhasePlanLoopCodexReviewPath(t *testing.T) {
 		return cmd, nil, sessOpts, nil
 	}
 
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			DangerouslySkipPermissions: true,
-			BuildSession:               customBuildSession,
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "collapsed",
-			Goal:   "Test the codex review path",
-		},
-	}
-
-	result, err := RunPhasePlanningLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop error: %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, customBuildSession)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "collapsed",
+		Goal:   "Test the codex review path",
+	}, nil)
 
 	if result.FinalStatus != "approved" {
 		t.Errorf("expected FinalStatus=approved, got %s", result.FinalStatus)
@@ -2403,7 +2181,7 @@ func TestRoadmapSpecializedValidation_UsesRoadmapValidatorSubset(t *testing.T) {
 		},
 	}
 
-	_, _, _ = runRoadmapMultiValidatorPlanValidation(cfg, sm, 1, roadmapDir, roadmapPath)
+	_, _, _, _ = runRoadmapMultiValidatorPlanValidation(cfg, sm, 1, roadmapDir, roadmapPath)
 
 	expectedValidators := roadmapValidatorsForRisk(feature.RiskMedium)
 	if len(validationOpts) != len(expectedValidators) {
@@ -2524,28 +2302,14 @@ func TestPhasePlanLoop_SkillReadInstruction(t *testing.T) {
 	f := newTestPlanFeature(t, workDir)
 	_ = store.Save(f)
 
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			DangerouslySkipPermissions: true,
-			BuildSession:               buildSession,
-			SkillsDir:                  skillsDir,
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Test Phase",
-			Type:   "collapsed",
-			Goal:   "Test skill-read instruction",
-		},
-	}
-
-	result, err := RunPhasePlanningLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop error: %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, buildSession)
+	pr.SkillsDir = skillsDir
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Test Phase",
+		Type:   "collapsed",
+		Goal:   "Test skill-read instruction",
+	}, nil)
 	if result.FinalStatus != "approved" {
 		t.Errorf("expected approved, got %s", result.FinalStatus)
 	}
@@ -2689,19 +2453,8 @@ fi
 	f := newTestPlanFeature(t, workDir)
 	_ = store.Save(f)
 
-	cfg := PlanLoopConfig{
-		Feature:                    f,
-		FeatureStore:               store,
-		StateDir:                   stateDir,
-		WorkDir:                    workDir,
-		DangerouslySkipPermissions: true,
-		BuildSession:               buildSession,
-	}
-
-	result, err := RunRoadmapPlanningLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("RunRoadmapPlanningLoop error: %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, buildSession)
+	result := runRoadmapEntry(t, pr, f)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %s, want approved", result.FinalStatus)
 	}
@@ -2798,27 +2551,13 @@ fi
 	f := newTestPlanFeature(t, workDir)
 	_ = store.Save(f)
 
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			DangerouslySkipPermissions: true,
-			BuildSession:               buildSession,
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Tracer",
-			Type:   "tracer-bullet",
-			Goal:   "Sticky test",
-		},
-	}
-
-	result, err := RunPhasePlanningLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop error: %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, buildSession)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Tracer",
+		Type:   "tracer-bullet",
+		Goal:   "Sticky test",
+	}, nil)
 	if result.FinalStatus != "approved" {
 		t.Fatalf("FinalStatus = %s, want approved", result.FinalStatus)
 	}
@@ -2892,28 +2631,14 @@ func TestPhasePlanLoopStallEscalationPersistsReviewArtifact(t *testing.T) {
 		t.Fatalf("save feature: %v", err)
 	}
 
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature:                    f,
-			FeatureStore:               store,
-			StateDir:                   stateDir,
-			WorkDir:                    workDir,
-			MaxAttempts:                axisStallLimit + 2,
-			DangerouslySkipPermissions: true,
-			BuildSession:               buildSession,
-		},
-		Phase: RoadmapPhase{
-			Number: 1,
-			Name:   "Tracer",
-			Type:   "tracer-bullet",
-			Goal:   "Exercise stalled human-review escalation",
-		},
-	}
-
-	result, err := RunPhasePlanningLoop(cfg, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop error: %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, stateDir, buildSession)
+	setPhasePlanDefaultAttempts(pr, axisStallLimit+2)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{
+		Number: 1,
+		Name:   "Tracer",
+		Type:   "tracer-bullet",
+		Goal:   "Exercise stalled human-review escalation",
+	}, nil)
 	if result.FinalStatus != "needs_human_review" {
 		t.Fatalf("FinalStatus = %s, want needs_human_review", result.FinalStatus)
 	}
@@ -3348,13 +3073,8 @@ func TestPhasePlanningLoopValidatorInfrastructureFailureRetriesThenResumes(t *te
 	}
 	sm := session.NewManager(make(chan interface{}, 100))
 	defer sm.Shutdown()
-	cfg := PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir,
-			MaxAttempts: 3, DangerouslySkipPermissions: true, BuildSession: counting,
-		},
-		Phase: RoadmapPhase{Number: 1, Name: "Test Phase", Type: "tdd-fill-in", Goal: "Survive a busy model"},
-	}
+	pr := newPlanEntryRunner(sm, store, tmpDir, counting)
+	setPhasePlanDefaultAttempts(pr, 3)
 
 	t.Run("capacity clears during backoff", func(t *testing.T) {
 		previous := validationInfrastructureBackoff
@@ -3364,10 +3084,7 @@ func TestPhasePlanningLoopValidatorInfrastructureFailureRetriesThenResumes(t *te
 			_ = os.Remove(capacityMarker)
 			return 0
 		}
-		result, err := RunPhasePlanningLoop(cfg, sm)
-		if err != nil {
-			t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-		}
+		result := runPhasePlanEntry(t, pr, f, RoadmapPhase{Number: 1, Name: "Test Phase", Type: "tdd-fill-in", Goal: "Survive a busy model"}, nil)
 		if result.FinalStatus != "approved" || result.Iterations != 1 {
 			t.Fatalf("result = %+v, want attempt-1 approval after a validation retry round", result)
 		}
@@ -3393,9 +3110,8 @@ func TestPhasePlanningLoopValidatorInfrastructureFailureRetriesThenResumes(t *te
 				testutil.JSONLSuccess+"\n")
 		build2 := mockBuildSession(plan2Script, criticScript)
 		planner2, critic2 := 0, 0
-		cfg2 := cfg
-		cfg2.Phase = RoadmapPhase{Number: 2, Name: "Phase Two", Type: "tdd-fill-in", Goal: "Resume validation"}
-		cfg2.BuildSession = func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
+		phase2 := RoadmapPhase{Number: 2, Name: "Phase Two", Type: "tdd-fill-in", Goal: "Resume validation"}
+		pr2 := newPlanEntryRunner(sm, store, tmpDir, func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 			callsMu.Lock()
 			if isReviewHelper(opts.PermHandler) {
 				critic2++
@@ -3404,26 +3120,25 @@ func TestPhasePlanningLoopValidatorInfrastructureFailureRetriesThenResumes(t *te
 			}
 			callsMu.Unlock()
 			return build2(opts)
-		}
+		})
+		setPhasePlanDefaultAttempts(pr2, 3)
 		if err := os.WriteFile(capacityMarker, []byte("busy"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		result, err := RunPhasePlanningLoop(cfg2, sm)
-		if err != nil {
-			t.Fatalf("first RunPhasePlanningLoop() error = %v", err)
-		}
+		result := runPhasePlanEntry(t, pr2, f, phase2, nil)
 		if result.FinalStatus != "failed" || result.Iterations != 1 || planner2 != 1 {
 			t.Fatalf("result = %+v (planner calls %d), want infrastructure failure on attempt 1 without revision", result, planner2)
+		}
+		feedback, err := os.ReadFile(filepath.Join(phase2Dir, "attempt-01", "validation-feedback.md"))
+		if err != nil || string(feedback) != "Phase plan validation failed: "+result.LastError {
+			t.Fatalf("validation-feedback.md = %q (%v), want the phase-plan validation failure for %q", feedback, err, result.LastError)
 		}
 		if _, err := os.Stat(filepath.Join(phase2Dir, "attempt-02")); !os.IsNotExist(err) {
 			t.Fatalf("attempt-02 exists after infrastructure failure: %v", err)
 		}
 		// The model recovers; the user restarts the phase.
 		_ = os.Remove(capacityMarker)
-		resumed, err := RunPhasePlanningLoop(cfg2, sm)
-		if err != nil {
-			t.Fatalf("resumed RunPhasePlanningLoop() error = %v", err)
-		}
+		resumed := runPhasePlanEntry(t, pr2, f, phase2, nil)
 		if resumed.FinalStatus != "approved" || resumed.Iterations != 1 {
 			t.Fatalf("resumed result = %+v, want the committed attempt-1 plan approved", resumed)
 		}
@@ -3500,16 +3215,9 @@ func TestValidatorInfrastructureRetryPreservesRejection(t *testing.T) {
 	}
 	sm := session.NewManager(make(chan interface{}, 100))
 	defer sm.Shutdown()
-	result, err := RunPhasePlanningLoop(PhasePlanLoopConfig{
-		PlanLoopConfig: PlanLoopConfig{
-			Feature: f, FeatureStore: store, StateDir: tmpDir, WorkDir: workDir,
-			MaxAttempts: 1, DangerouslySkipPermissions: true, BuildSession: counting,
-		},
-		Phase: RoadmapPhase{Number: 1, Name: "Test Phase", Type: "tdd-fill-in", Goal: "Keep the rejection"},
-	}, sm)
-	if err != nil {
-		t.Fatalf("RunPhasePlanningLoop() error = %v", err)
-	}
+	pr := newPlanEntryRunner(sm, store, tmpDir, counting)
+	setPhasePlanDefaultAttempts(pr, 1)
+	result := runPhasePlanEntry(t, pr, f, RoadmapPhase{Number: 1, Name: "Test Phase", Type: "tdd-fill-in", Goal: "Keep the rejection"}, nil)
 	if result.FinalStatus == "approved" {
 		t.Fatalf("result = %+v; a retried sibling must not erase Structural's rejection", result)
 	}

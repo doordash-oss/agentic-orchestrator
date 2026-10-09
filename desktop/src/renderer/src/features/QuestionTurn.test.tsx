@@ -129,13 +129,38 @@ describe('QuestionConversationTurn', () => {
       requestId: 'questions-1',
       sessionId: 'session-1',
       answers: {
-        '1': 'Build user-facing features',
+        '1': [2],
       },
     });
   });
 });
 
 describe('Question answers', () => {
+  it('submits option indexes independently of duplicate, truncated, and comma-bearing labels', async () => {
+    const user = userEvent.setup();
+    const questionItem: QuestionsAttentionItem = {
+      ...item,
+      questions: [
+        {
+          index: 1,
+          question: 'Choose',
+          header: 'Choices',
+          multiSelect: true,
+          options: [{ label: 'truncated...' }, { label: 'truncated...' }, { label: 'red, green' }],
+        },
+      ],
+    };
+    render(<Harness questionItem={questionItem} />);
+    const choices = screen.getAllByRole('checkbox');
+    await user.click(choices[1]!);
+    await user.click(choices[2]!);
+    expect(choices[0]).not.toBeChecked();
+    expect(questionAnswersRequest(questionItem, latestDrafts).answers).toEqual({ '1': [2, 3] });
+    expect(screen.getByLabelText('Your reply, not sent yet')).toHaveTextContent(
+      '2 · truncated..., 3 · red, green',
+    );
+  });
+
   it('free text answers the question, replacing any selection', async () => {
     const onSubmit = vi.fn();
     const user = userEvent.setup();

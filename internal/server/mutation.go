@@ -32,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
@@ -231,9 +232,9 @@ const (
 )
 
 type AskUserAnswerRequest struct {
-	RequestID string            `json:"request_id"`
-	SessionID string            `json:"session_id,omitempty"`
-	Answers   map[string]string `json:"answers"`
+	RequestID string                   `json:"request_id"`
+	SessionID string                   `json:"session_id,omitempty"`
+	Answers   map[string]askuser.Reply `json:"answers"`
 }
 
 type HelpAnswerRequest struct {

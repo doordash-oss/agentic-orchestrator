@@ -93,13 +93,13 @@ export function QuestionConversationTurn({
               }
             });
           }
-          const chooseOption = (label: string, checked: boolean) =>
+          const chooseOption = (index: number, checked: boolean) =>
             setQuestionDraft(setDrafts, detailKey, question.index, {
               selected: question.multiSelect
                 ? checked
-                  ? [...new Set([...draft.selected, label])]
-                  : draft.selected.filter((value) => value !== label)
-                : [label],
+                  ? [...new Set([...draft.selected, index])]
+                  : draft.selected.filter((value) => value !== index)
+                : [index],
               freeText: '',
             });
           const handleKeys = (event: ReactKeyboardEvent<HTMLFieldSetElement>) => {
@@ -123,8 +123,7 @@ export function QuestionConversationTurn({
             }
             if (!Number.isInteger(digit) || digit < 1 || digit > question.options.length) return;
             event.preventDefault();
-            const option = question.options[digit - 1]!;
-            chooseOption(option.label, !draft.selected.includes(option.label));
+            chooseOption(digit, !draft.selected.includes(digit));
           };
           return (
             <fieldset key={question.index} className="attention-question" onKeyDown={handleKeys}>
@@ -154,10 +153,10 @@ export function QuestionConversationTurn({
               ) : null}
               {question.options.map((option, optionIndex) => {
                 const selected =
-                  draft.freeText.trim() === '' && draft.selected.includes(option.label);
+                  draft.freeText.trim() === '' && draft.selected.includes(optionIndex + 1);
                 return (
                   <label
-                    key={option.label}
+                    key={optionIndex}
                     className="attention-option"
                     data-recommended={optionIndex === recommendedIndex ? true : undefined}
                     data-selected={selected ? true : undefined}
@@ -166,9 +165,11 @@ export function QuestionConversationTurn({
                       className="sr-only"
                       type={question.multiSelect ? 'checkbox' : 'radio'}
                       name={`${detailKey}:${question.index}`}
-                      value={option.label}
+                      value={optionIndex + 1}
                       checked={selected}
-                      onChange={(event) => chooseOption(option.label, event.currentTarget.checked)}
+                      onChange={(event) =>
+                        chooseOption(optionIndex + 1, event.currentTarget.checked)
+                      }
                     />
                     <span className="attention-option__number" aria-hidden="true">
                       {optionIndex + 1}
@@ -228,11 +229,10 @@ export function QuestionConversationTurn({
               draft.freeText.trim() !== ''
                 ? draft.freeText.trim()
                 : draft.selected
-                    .map((label) => {
-                      const index = question.options.findIndex((option) => option.label === label);
-                      const display = displayQuestionOptionLabel(label);
-                      return index >= 0 ? `${index + 1} · ${display}` : display;
-                    })
+                    .map(
+                      (index) =>
+                        `${index} · ${displayQuestionOptionLabel(question.options[index - 1]!.label)}`,
+                    )
                     .join(', ');
             return <strong key={question.index}>{text}</strong>;
           })}

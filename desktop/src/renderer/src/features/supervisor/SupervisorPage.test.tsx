@@ -726,7 +726,7 @@ describe('SupervisorPage pending requests', () => {
     expect(mock.api.answerQuestions).toHaveBeenCalledWith({
       requestId: questionRequest.id,
       sessionId: SESSION_ID,
-      answers: { '1': 'Postgres' },
+      answers: { '1': [1] },
     });
     await waitFor(() =>
       expect(within(transcript()).queryByRole('group', { name: 'Agent question' })).toBeNull(),

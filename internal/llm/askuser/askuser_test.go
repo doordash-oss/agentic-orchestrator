@@ -305,6 +305,57 @@ func TestDisplay(t *testing.T) {
 	}
 }
 
+func TestResolveRepliesPreservesOptionIdentity(t *testing.T) {
+	bundle := Bundle{Questions: []Question{{
+		Question: "Choose", MultiSelect: true,
+		Options: []Option{{Label: strings.Repeat("x", 1001)}, {Label: " Yes "}, {Label: "red, green"}, {Label: "same"}, {Label: "same"}},
+	}, {Question: "Notes?"}}}
+	// The UI can only see bounded labels. It sends positions, including a
+	// comma-bearing label alongside another choice and the second duplicate.
+	display := bundle.Display(Limits{Label: 1000})
+	if display.Questions[0].Options[0].Label == bundle.Questions[0].Options[0].Label {
+		t.Fatal("fixture must truncate the displayed label")
+	}
+	var replies map[string]Reply
+	if err := json.Unmarshal([]byte(`{"1":[5,3,2,1],"2":"custom note"}`), &replies); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := bundle.ResolveReplies(replies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLabels := []string{bundle.Questions[0].Options[0].Label, " Yes ", "red, green", "same"}
+	answer := resolved.Answers[0]
+	if !answer.Selected || !reflect.DeepEqual(answer.Positions, []int{0, 1, 2, 4}) || !reflect.DeepEqual(answer.Labels, wantLabels) {
+		t.Fatalf("selection lost its original identity: %+v", answer)
+	}
+	if answer.Raw != strings.Join(wantLabels, ", ") || resolved.ByText()["Choose"] != answer.Raw {
+		t.Fatal("provider and transcript must receive original labels")
+	}
+	if resolved.Answers[1].Selected || resolved.Answers[1].Raw != "custom note" {
+		t.Fatalf("text answer = %+v", resolved.Answers[1])
+	}
+}
+
+func TestResolveRepliesRejectsInvalidSelections(t *testing.T) {
+	bundle := Bundle{Questions: []Question{{Question: "Choose", Options: []Option{{Label: "a"}, {Label: "b"}}}}}
+	for _, raw := range []string{`{"1":[]}`, `{"1":[0]}`, `{"1":[-1]}`, `{"1":[3]}`, `{"1":[1,2]}`, `{"1":[1,1]}`, `{"1":null}`, `{"1":1}`, `{"1":[1.5]}`, `{"1":{}}`} {
+		t.Run(raw, func(t *testing.T) {
+			var replies map[string]Reply
+			if err := json.Unmarshal([]byte(raw), &replies); err != nil {
+				return
+			}
+			if _, err := bundle.ResolveReplies(replies); err == nil {
+				t.Fatal("invalid selection accepted")
+			}
+		})
+	}
+	bundle.Questions[0].MultiSelect = true
+	if _, err := bundle.ResolveReplies(map[string]Reply{"1": {Options: []int{1, 1}}}); err == nil {
+		t.Fatal("duplicate multi-select option accepted")
+	}
+}
+
 func TestResolve(t *testing.T) {
 	bundle := Bundle{Questions: []Question{
 		{Question: "Which branch?", Header: "Branch", Options: []Option{{Label: "main"}, {Label: "dev (Recommended)"}, {Label: "release"}}},

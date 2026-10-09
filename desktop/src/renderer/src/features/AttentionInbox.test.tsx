@@ -830,7 +830,7 @@ describe('AttentionInbox question detail', () => {
       requestId: questionsItem.id,
       sessionId: questionsItem.sessionId,
       answers: {
-        '1': 'Harden the review pipeline (Recommended)',
+        '1': [1],
       },
     });
 
@@ -852,7 +852,7 @@ describe('AttentionInbox question detail', () => {
       requestId: questionsItem.id,
       sessionId: questionsItem.sessionId,
       answers: {
-        '1': 'Build user-facing features',
+        '1': [2],
       },
     });
   });
@@ -871,7 +871,7 @@ describe('AttentionInbox question detail', () => {
       requestId: questionsItem.id,
       sessionId: questionsItem.sessionId,
       answers: {
-        '1': 'Build user-facing features',
+        '1': [2],
       },
     });
 

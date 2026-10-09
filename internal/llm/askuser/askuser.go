@@ -263,7 +263,8 @@ type Answer struct {
 	Labels []string
 	// Positions are the zero-based option-list positions of Labels.
 	Positions []int
-	// Raw is the answer string as submitted.
+	// Raw is the submitted text, or the original selected labels joined with
+	// ", " for provider responses and transcript recording.
 	Raw string
 }
 
@@ -274,6 +275,37 @@ type Resolved struct {
 	Answers []Answer
 }
 
+// Reply is either a text answer or explicit one-based option indexes. Keeping
+// selections separate from labels makes display truncation and punctuation
+// irrelevant to the provider's option identity. A nil Options slice means text.
+type Reply struct {
+	Text    string
+	Options []int
+}
+
+// MarshalJSON encodes the API's string-or-index-array answer shape.
+func (r Reply) MarshalJSON() ([]byte, error) {
+	if r.Options != nil {
+		return json.Marshal(r.Options)
+	}
+	return json.Marshal(r.Text)
+}
+
+// UnmarshalJSON rejects every answer shape other than text or option indexes.
+func (r *Reply) UnmarshalJSON(data []byte) error {
+	*r = Reply{}
+	data = bytes.TrimSpace(data)
+	if len(data) > 0 {
+		switch data[0] {
+		case '"':
+			return json.Unmarshal(data, &r.Text)
+		case '[':
+			return json.Unmarshal(data, &r.Options)
+		}
+	}
+	return errors.New("askuser: answer must be text or an array of option indexes")
+}
+
 // Resolve resolves answers keyed by one-based question index, as a decimal
 // string, against the bundle. Every key must name a question, no question may
 // be answered twice and every question must receive a non-blank answer. A
@@ -281,12 +313,24 @@ type Resolved struct {
 // surrounding whitespace; a multi-select answer is split on ", " and selects
 // options only when every part equals a label. Any other answer is free text.
 func (b Bundle) Resolve(answers map[string]string) (Resolved, error) {
+	replies := make(map[string]Reply, len(answers))
+	for key, answer := range answers {
+		replies[key] = Reply{Text: answer}
+	}
+	return b.ResolveReplies(replies)
+}
+
+// ResolveReplies resolves text answers and explicit option selections in
+// question order. Selections must be non-empty, unique, in range, and respect
+// the question's multi-select flag. Their labels are recovered verbatim from
+// the original bundle, never from a display copy.
+func (b Bundle) ResolveReplies(answers map[string]Reply) (Resolved, error) {
 	keys := make([]string, 0, len(answers))
 	for key := range answers {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	byIndex := make(map[int]string, len(answers))
+	byIndex := make(map[int]Reply, len(answers))
 	for _, key := range keys {
 		index, err := strconv.Atoi(key)
 		if err != nil || index < 1 || index > len(b.Questions) {
@@ -295,7 +339,7 @@ func (b Bundle) Resolve(answers map[string]string) (Resolved, error) {
 		if _, dup := byIndex[index]; dup {
 			return Resolved{}, fmt.Errorf("askuser: answer key %q answers question %d twice", key, index)
 		}
-		if strings.TrimSpace(answers[key]) == "" {
+		if answers[key].Options == nil && strings.TrimSpace(answers[key].Text) == "" {
 			return Resolved{}, fmt.Errorf("askuser: answer key %q has a blank answer", key)
 		}
 		byIndex[index] = answers[key]
@@ -306,7 +350,29 @@ func (b Bundle) Resolve(answers map[string]string) (Resolved, error) {
 		if !ok {
 			return Resolved{}, fmt.Errorf("askuser: answer key %q is missing", strconv.Itoa(i+1))
 		}
-		resolved.Answers[i] = q.resolve(i+1, raw)
+		if raw.Options == nil {
+			resolved.Answers[i] = q.resolve(i+1, raw.Text)
+			continue
+		}
+		if len(raw.Options) == 0 || (!q.MultiSelect && len(raw.Options) != 1) {
+			return Resolved{}, fmt.Errorf("askuser: answer key %q has an invalid number of selections", strconv.Itoa(i+1))
+		}
+		chosen := make(map[int]bool, len(raw.Options))
+		for _, option := range raw.Options {
+			if option < 1 || option > len(q.Options) || chosen[option] {
+				return Resolved{}, fmt.Errorf("askuser: answer key %q has an invalid or repeated option index %d", strconv.Itoa(i+1), option)
+			}
+			chosen[option] = true
+		}
+		answer := Answer{Index: i + 1, Question: q.Question, Selected: true}
+		for j, option := range q.Options {
+			if chosen[j+1] {
+				answer.Labels = append(answer.Labels, option.Label)
+				answer.Positions = append(answer.Positions, j)
+			}
+		}
+		answer.Raw = strings.Join(answer.Labels, ", ")
+		resolved.Answers[i] = answer
 	}
 	return resolved, nil
 }

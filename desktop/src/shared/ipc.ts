@@ -2540,9 +2540,19 @@ export type PermissionDecisionRequest = z.output<typeof PermissionDecisionReques
 export const AskUserAnswerRequestSchema = z.strictObject({
   requestId: AttentionIDSchema,
   sessionId: AttentionIDSchema.optional(),
-  /** Keyed by each question's one-based index as a decimal string, e.g. {"1": "main"}. */
+  /** Question index -> text answer or one-based option indexes, e.g. {"1": [2]}. */
   answers: z
-    .record(QuestionIndexKeySchema, AttentionTextSchema)
+    .record(
+      QuestionIndexKeySchema,
+      z.union([
+        AttentionTextSchema,
+        z
+          .array(z.number().int().min(1))
+          .min(1)
+          .max(100)
+          .refine((indexes) => new Set(indexes).size === indexes.length),
+      ]),
+    )
     .refine((answers) => Object.keys(answers).length > 0),
 });
 export type AskUserAnswerRequest = z.output<typeof AskUserAnswerRequestSchema>;

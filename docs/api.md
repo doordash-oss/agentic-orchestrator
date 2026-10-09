@@ -31,8 +31,11 @@ and minimum client series 4 under the `loopback-bearer-v1` runtime policy
 (`network-bearer-v1` for non-loopback listeners). In schema series 4,
 ask-user questions carry a required one-based `index`; answers on both
 surfaces (the ask-user answer's `answers` and the need-user-input draft) are
-keyed by that index as a string (`"1"`, `"2"`, ...) and valued with the
-option label verbatim or free text; and the need-user-input gate question's
+keyed by that index as a string (`"1"`, `"2"`, ...). Ask-user selections use
+arrays of one-based option indexes (`{"1":[2]}`), preserving option identity
+independently of trimmed or truncated display labels. Text answers remain
+supported, including verbatim labels for compatibility. Gate drafts use text
+answers. The need-user-input gate question's
 `index` is required (minimum 1). Series 3 removed `PUT` on
 `/api/v1/config/runtime` (now `405`; `PATCH` is the only runtime-config
 mutation and keeps its partial-update semantics). Series 2 removed the chat

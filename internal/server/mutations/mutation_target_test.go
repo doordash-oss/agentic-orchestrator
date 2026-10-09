@@ -367,9 +367,9 @@ func TestServerMutationTargetAnswerAskUserResolvesIndexKeyedAnswersInQuestionOrd
 	result, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
 		RequestID: testAskRequestID,
 		SessionID: testSessionAskID,
-		Answers: map[string]string{
-			"2": "Dark launch first",
-			"1": labelUseFullInput,
+		Answers: map[string]askuser.Reply{
+			"2": {Text: "Dark launch first"},
+			"1": {Text: labelUseFullInput},
 		},
 	})
 	if err != nil {
@@ -399,6 +399,32 @@ func TestServerMutationTargetAnswerAskUserResolvesIndexKeyedAnswersInQuestionOrd
 	assertJSONDoesNotContain(t, result, labelUseFullInput, "Dark launch first")
 }
 
+func TestServerMutationTargetAnswerAskUserPreservesSelectedOptionIndexes(t *testing.T) {
+	longLabel := strings.Repeat("x", 1001)
+	bundle := askuser.Bundle{Questions: []askuser.Question{{
+		Question: "Which checks?", MultiSelect: true,
+		Options: []askuser.Option{{Label: longLabel}, {Label: longLabel + "y"}, {Label: " red, green "}},
+	}, {Question: "Notes?"}}}
+	target, sess := newAskUserMutationTarget(bundle.Encode())
+	handler := serverruntime.NewHandler(serverruntime.HandlerOptions{DisableHostValidation: true, Mutations: target})
+	body := `{"request_id":"` + testAskRequestID + `","session_id":"` + testSessionAskID + `","answers":{"1":[2,3],"2":"custom note"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/prompts/ask-user/answer", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Agentico-Client", "local")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || len(sess.askCalls) != 1 {
+		t.Fatalf("status = %d, calls = %d, body = %s", rec.Code, len(sess.askCalls), rec.Body.String())
+	}
+	answer := sess.askCalls[0].resolved.Answers[0]
+	if !answer.Selected || !reflect.DeepEqual(answer.Positions, []int{1, 2}) || !reflect.DeepEqual(answer.Labels, []string{longLabel + "y", " red, green "}) {
+		t.Fatalf("selection lost its identity: %+v", answer)
+	}
+	if sess.askCalls[0].resolved.Answers[1].Raw != "custom note" {
+		t.Fatal("text answer was lost")
+	}
+}
+
 func TestServerMutationTargetAnswerAskUserRejectsUnresolvableAnswersAsBadRequest(t *testing.T) {
 	input := json.RawMessage(`{"questions":[{"question":"Which DB?"},{"question":"Rollout plan?"}]}`)
 	tests := []struct {
@@ -420,7 +446,7 @@ func TestServerMutationTargetAnswerAskUserRejectsUnresolvableAnswersAsBadRequest
 			body, err := json.Marshal(serverruntime.AskUserAnswerRequest{
 				RequestID: testAskRequestID,
 				SessionID: testSessionAskID,
-				Answers:   tt.answers,
+				Answers:   textReplies(tt.answers),
 			})
 			if err != nil {
 				t.Fatalf("Marshal request: %v", err)
@@ -3038,4 +3064,12 @@ func TestServerMutationTargetCompletionPreflightCarriesRepoError(t *testing.T) {
 	if strings.Contains(string(raw), "last_error") {
 		t.Fatalf("preflight response carries a last_error key: %s", raw)
 	}
+}
+
+func textReplies(answers map[string]string) map[string]askuser.Reply {
+	replies := make(map[string]askuser.Reply, len(answers))
+	for key, text := range answers {
+		replies[key] = askuser.Reply{Text: text}
+	}
+	return replies
 }

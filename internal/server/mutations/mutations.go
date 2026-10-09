@@ -450,7 +450,7 @@ func (t *mutationTarget) AnswerAskUser(req serverruntime.AskUserAnswerRequest) (
 	if err != nil {
 		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("ask-user request %s has invalid questions: %w", pending.RequestID, err)
 	}
-	resolved, err := bundle.Resolve(req.Answers)
+	resolved, err := bundle.ResolveReplies(req.Answers)
 	if err != nil {
 		return serverruntime.AskUserAnswerResponse{}, fmt.Errorf("invalid ask-user answers: %w", err)
 	}

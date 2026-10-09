@@ -60,7 +60,7 @@ import { formatWaitingDuration } from './phaseRail';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 
 export interface QuestionAnswerDraft {
-  selected: string[];
+  selected: number[];
   freeText: string;
 }
 
@@ -690,13 +690,13 @@ export function AttentionDetail({
             });
           }
           const freeTextHintId = `${detailKey}:${questionIndex}:free-text-hint`;
-          const chooseOption = (label: string, checked: boolean) =>
+          const chooseOption = (index: number, checked: boolean) =>
             setQuestionDraft(setDrafts, detailKey, question.index, {
               selected: question.multiSelect
                 ? checked
-                  ? [...new Set([...draft.selected, label])]
-                  : draft.selected.filter((value) => value !== label)
-                : [label],
+                  ? [...new Set([...draft.selected, index])]
+                  : draft.selected.filter((value) => value !== index)
+                : [index],
               freeText: '',
             });
           const handleKeys = (event: ReactKeyboardEvent<HTMLFieldSetElement>) => {
@@ -714,8 +714,7 @@ export function AttentionDetail({
             if (!Number.isInteger(digit) || digit < 1) return;
             if (digit <= question.options.length) {
               event.preventDefault();
-              const option = question.options[digit - 1]!;
-              chooseOption(option.label, !draft.selected.includes(option.label));
+              chooseOption(digit, !draft.selected.includes(digit));
             } else if (digit === question.options.length + 1) {
               event.preventDefault();
               event.currentTarget
@@ -742,10 +741,10 @@ export function AttentionDetail({
               {question.options.map((option, optionIndex) => {
                 const recommended = optionIndex === recommendedIndex;
                 const selected =
-                  draft.freeText.trim() === '' && draft.selected.includes(option.label);
+                  draft.freeText.trim() === '' && draft.selected.includes(optionIndex + 1);
                 return (
                   <label
-                    key={option.label}
+                    key={optionIndex}
                     className="attention-option"
                     data-recommended={recommended ? true : undefined}
                     data-selected={selected ? true : undefined}
@@ -754,9 +753,11 @@ export function AttentionDetail({
                       className="sr-only"
                       type={question.multiSelect ? 'checkbox' : 'radio'}
                       name={`${detailKey}:${question.index}`}
-                      value={option.label}
-                      checked={draft.selected.includes(option.label)}
-                      onChange={(event) => chooseOption(option.label, event.currentTarget.checked)}
+                      value={optionIndex + 1}
+                      checked={draft.selected.includes(optionIndex + 1)}
+                      onChange={(event) =>
+                        chooseOption(optionIndex + 1, event.currentTarget.checked)
+                      }
                     />
                     <span className="attention-option__number" aria-hidden="true">
                       {optionIndex + 1}
@@ -1214,9 +1215,13 @@ export function setQuestionDraft(
   });
 }
 
-export function questionAnswer(draft: QuestionAnswerDraft | undefined): string {
+export function questionAnswer(draft: QuestionAnswerDraft | undefined): string | number[] {
   if (draft === undefined) return '';
-  return draft.freeText.trim() === '' ? draft.selected.join(', ') : draft.freeText;
+  return draft.freeText.trim() === ''
+    ? draft.selected.length > 0
+      ? draft.selected
+      : ''
+    : draft.freeText;
 }
 
 function gateDraftFor(

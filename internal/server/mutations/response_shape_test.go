@@ -266,7 +266,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 			target := mutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
 			resp, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
-				RequestID: testAskRequestID, SessionID: testSessionAskID, Answers: map[string]string{"1": "Postgres"},
+				RequestID: testAskRequestID, SessionID: testSessionAskID, Answers: textReplies(map[string]string{"1": "Postgres"}),
 			})
 			if err != nil {
 				t.Fatalf("AnswerAskUser() error = %v", err)

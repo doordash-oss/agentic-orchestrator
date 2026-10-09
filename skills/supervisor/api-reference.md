@@ -107,8 +107,8 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
 
 - `GET /api/v1/prompts` — list pending ask-user and help prompts with `request_id`, `session_id`, `feature_id` and the questions.
   Example: `"$AGENTICO_BIN" api GET /api/v1/prompts`
-- `POST /api/v1/prompts/ask-user/answer` — answer an ask-user prompt. Required: `request_id`, `answers` (an object keyed by each question's `index` as a string, from the prompt's `questions`, valued with the chosen option label verbatim or free text; every question must be answered). Optional: `session_id`.
-  Example: `"$AGENTICO_BIN" api POST /api/v1/prompts/ask-user/answer '{"request_id":"{request_id}","session_id":"{session_id}","answers":{"1":"main"}}'`
+- `POST /api/v1/prompts/ask-user/answer` — answer an ask-user prompt. Required: `request_id`, `answers` (an object keyed by each question's `index` as a string, from the prompt's `questions`, valued with an array of one-based option indexes or a text answer; every question must be answered; prefer indexes for selections because display labels may be truncated). Optional: `session_id`.
+  Example: `"$AGENTICO_BIN" api POST /api/v1/prompts/ask-user/answer '{"request_id":"{request_id}","session_id":"{session_id}","answers":{"1":[1]}}'`
 
 ## Help and permission answers
 

@@ -2281,4 +2281,16 @@ describe('ask-user and gate answer keys', () => {
       expect(check({})).toBe(false);
     }
   });
+
+  it('validates explicit ask-user option indexes alongside text answers', () => {
+    const ask = (answer: unknown) =>
+      ipcModule.AskUserAnswerRequestSchema.safeParse({
+        requestId: 'ask-1',
+        answers: { '1': answer, '2': 'custom note' },
+      }).success;
+    expect(ask([1, 3])).toBe(true);
+    for (const invalid of [[], [0], [-1], [1.5], [1, 1], ['1'], null, {}]) {
+      expect(ask(invalid)).toBe(false);
+    }
+  });
 });

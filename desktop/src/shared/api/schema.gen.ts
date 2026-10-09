@@ -695,7 +695,7 @@ export interface paths {
         put?: never;
         /**
          * Answer an ask-user prompt.
-         * @description The generic JSON mutation body carries `answers`, an object keyed by each question's `index` rendered as a string (one-based, e.g. `"1"`), valued with the chosen option label verbatim or with free text.
+         * @description The generic JSON mutation body carries `answers`, an object keyed by each question's `index` rendered as a string (one-based, e.g. `"1"`), valued with an array of one-based option indexes (e.g. `[1, 3]`) or a text answer. Option indexes refer to the original option order; display labels may be trimmed or truncated. Text answers still accept verbatim option labels for compatibility. Every question must be answered.
          */
         post: operations["answerAskUserPrompt"];
         delete?: never;

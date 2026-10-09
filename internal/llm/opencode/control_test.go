@@ -386,6 +386,33 @@ func TestParseLine_StructuredQuestionBecomesAskUserQuestion(t *testing.T) {
 // TestRespondToAskUser_StructuredAnswerSelectsNativeOption proves answering a
 // structured question selects the matching option's id through the native ACP
 // outcome — resuming via the provider protocol's pending request (Task 3).
+func TestRespondToAskUser_IndexedAnswerSelectsNativeOption(t *testing.T) {
+	for _, label := range []string{strings.Repeat("x", 1001), " Yes ", "red, green"} {
+		t.Run(label[:min(len(label), 20)], func(t *testing.T) {
+			p, buf, _ := newPostHandshakeProtocol(t)
+			msgs := mustParse(t, p, structuredQuestionLine(t, 91, "Pick one", []map[string]any{
+				{"optionId": "opt-first", "name": label},
+				{"optionId": "opt-second", "name": label + "other"},
+			}))
+			bundle, err := askuser.Parse(msgs[0].ControlRequest.Request.Input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := bundle.ResolveReplies(map[string]askuser.Reply{"1": {Options: []int{2}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.RespondToAskUser("91", resolved); err != nil {
+				t.Fatal(err)
+			}
+			out := decodePermissionResponse(t, buf.lastLine(t))
+			if out.Result.Outcome.Outcome != OutcomeSelected || out.Result.Outcome.OptionID != "opt-second" {
+				t.Fatalf("indexed answer must select the native option, got %+v", out.Result.Outcome)
+			}
+		})
+	}
+}
+
 func TestRespondToAskUser_StructuredAnswerSelectsNativeOption(t *testing.T) {
 	p, buf, _ := newPostHandshakeProtocol(t)
 	const reqID = 91

@@ -88,12 +88,12 @@ import { RunHistoryService } from './runHistory';
 import { SetupService } from './setup';
 import { CreationFilesService } from './creationFiles';
 import { ThemeController } from './theme';
+import { IPC_EVENTS } from '../shared/ipcChannels';
 import {
   actionableAttentionCount,
   DEFAULT_RUNTIME_ID,
   disabledMainWindowUiState,
   CREATION_IMAGE_FORMATS,
-  IPC_EVENTS,
   SETTINGS_WINDOW_DEFAULT_HEIGHT,
   SETTINGS_WINDOW_DEFAULT_WIDTH,
   SETTINGS_WINDOW_MIN_HEIGHT,
@@ -1500,8 +1500,8 @@ if (!hasSingleInstanceLock) {
       openSettingsWindow: (request) => ({
         opened: openSettingsWindow(request.section ?? null, request.focus ?? null),
       }),
-      getTheme: () => theme.getInfo(),
-      setTheme: (preference) => {
+      getThemePreference: () => theme.getInfo(),
+      setThemePreference: (preference) => {
         const info = theme.setPreference(preference);
         // The renderer's own sync event cannot cross a window boundary, so
         // the resolved theme is fanned out here: a theme picked in Settings

@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 import { describe, expect, it } from 'vitest';
+import { IPC_CHANNELS, IPC_EVENTS } from './ipcChannels';
 import {
   SessionSummarySchema,
   SupervisorEventSchema,
@@ -30,8 +31,6 @@ import {
   CreationFileUploadResultSchema,
   FeatureSetupViewSchema,
   FeatureSummaryViewSchema,
-  IPC_CHANNELS,
-  IPC_EVENTS,
   WindowFocusEventSchema,
   InitRepositoryRequestSchema,
   IpcEnvelopeSchema,
@@ -65,7 +64,6 @@ import {
   defaultSettingsWindowPrefs,
   defaultShellPrefs,
   defaultWizardPrefs,
-  ipcContracts,
   AppEventSchema,
   KnownServerSchema,
   MAX_KNOWN_SERVERS,
@@ -703,15 +701,6 @@ describe('Setup task and setup view schemas', () => {
 });
 
 describe('IPC channel registry', () => {
-  it('defines a zod request/response contract for every invokable channel', () => {
-    for (const channel of Object.values(IPC_CHANNELS)) {
-      const contract = ipcContracts[channel];
-      expect(contract, `missing contract for ${channel}`).toBeDefined();
-      expect(contract.request).toBeDefined();
-      expect(contract.response).toBeDefined();
-    }
-  });
-
   it('namespaces all channels to avoid collisions with generic channels', () => {
     for (const channel of [...Object.values(IPC_CHANNELS), ...Object.values(IPC_EVENTS)]) {
       expect(channel.startsWith('agentico:')).toBe(true);

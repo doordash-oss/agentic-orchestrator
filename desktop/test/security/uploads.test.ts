@@ -23,7 +23,7 @@ limitations under the License.
 import { describe, expect, it, vi } from 'vitest';
 import { registerIpcHandlers, type IpcServices } from '../../src/main/ipcHandlers';
 import type { TrustedSender } from '../../src/main/security';
-import { IPC_CHANNELS } from '../../src/shared/ipc';
+import { IPC_CHANNELS } from '../../src/shared/ipcChannels';
 
 const trusted: TrustedSender = {
   webContentsIds: new Set([1]),
@@ -73,7 +73,7 @@ describe('creationUploadFiles channel', () => {
     );
     const handlers = register({ uploadCreationFiles });
 
-    const result = (await handlers.get(IPC_CHANNELS.creationUploadFiles)!(goodEvent, 'image', [
+    const result = (await handlers.get(IPC_CHANNELS.uploadCreationFiles)!(goodEvent, 'image', [
       '/shots/a.png',
     ])) as { ok: boolean; value?: unknown };
 
@@ -84,7 +84,7 @@ describe('creationUploadFiles channel', () => {
   it('fails closed on out-of-contract arguments before touching the service', async () => {
     const uploadCreationFiles = vi.fn(() => Promise.resolve({ results: [] }));
     const handlers = register({ uploadCreationFiles });
-    const channel = handlers.get(IPC_CHANNELS.creationUploadFiles)!;
+    const channel = handlers.get(IPC_CHANNELS.uploadCreationFiles)!;
 
     const cases: unknown[][] = [
       ['document', ['/shots/a.png']], // unknown kind
@@ -111,7 +111,7 @@ describe('creationUploadFiles channel', () => {
     );
     const handlers = register({ uploadCreationFiles });
 
-    const result = (await handlers.get(IPC_CHANNELS.creationUploadFiles)!(goodEvent, 'image', [
+    const result = (await handlers.get(IPC_CHANNELS.uploadCreationFiles)!(goodEvent, 'image', [
       '/shots/a.png',
     ])) as { ok: boolean; error?: { code: string } };
 
@@ -123,7 +123,7 @@ describe('creationUploadFiles channel', () => {
     const uploadCreationFiles = vi.fn(() => Promise.resolve({ results: [] }));
     const handlers = register({ uploadCreationFiles });
 
-    const result = (await handlers.get(IPC_CHANNELS.creationUploadFiles)!(foreignEvent, 'image', [
+    const result = (await handlers.get(IPC_CHANNELS.uploadCreationFiles)!(foreignEvent, 'image', [
       '/shots/a.png',
     ])) as { ok: boolean; error?: { code: string } };
 

@@ -43,7 +43,6 @@ const syntheticAskUserPrefix = "opencode-synthetic-"
 func (p *Protocol) handleRequestPermission(rawID json.RawMessage, params json.RawMessage) (llm.SDKMessage, bool) {
 	id, err := parseID(rawID)
 	if err != nil {
-		p.logDebug("[opencode] session/request_permission with unparseable id %q", string(rawID))
 		return llm.SDKMessage{}, false
 	}
 
@@ -56,7 +55,6 @@ func (p *Protocol) handleRequestPermission(rawID json.RawMessage, params json.Ra
 
 	var pp RequestPermissionParams
 	if jerr := json.Unmarshal(params, &pp); jerr != nil {
-		p.logDebug("[opencode] failed to parse session/request_permission params: %v", jerr)
 		_ = p.writePermissionOutcome(id, OutcomeCancelled, "")
 		return llm.SDKMessage{}, false
 	}
@@ -306,8 +304,6 @@ func (p *Protocol) respondToControl(requestID string, allow, remember bool) erro
 		} else if perm.allowID != "" {
 			outcome = OutcomeSelected
 			optionID = perm.allowID
-		} else {
-			p.logDebug("[opencode] approve for request %s had no allow option; cancelling", requestID)
 		}
 	} else if perm.rejectID != "" {
 		outcome = OutcomeSelected
@@ -533,7 +529,6 @@ func (p *Protocol) sendQuestionFormatReminder(lastText string) bool {
 		return false
 	}
 	if err := p.sendPrompt(questionFormatReminder(lastText)); err != nil {
-		p.logDebug("[opencode] failed to send reformat reminder: %v", err)
 		return false
 	}
 	p.mu.Lock()

@@ -1416,10 +1416,7 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 	}
 	env = appendAgenticoBinEnv(env)
 
-	contextWindow := 0
-	if cc, ok := prov.(llm.CostCalculator); ok {
-		contextWindow = cc.ContextWindowForModel(bareModel)
-	}
+	contextWindow := prov.ContextWindowForModel(bareModel)
 
 	protocol := prov.NewProtocol(llm.ProtocolOpts{
 		Model:                bareModel,

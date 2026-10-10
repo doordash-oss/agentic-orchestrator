@@ -74,7 +74,6 @@ func (p *Protocol) requestUsageRead() {
 			p.finishUsageReadLocked()
 		}
 		p.mu.Unlock()
-		p.logDebug("[codex] optional usage lookup unavailable: %v", err)
 	}
 }
 

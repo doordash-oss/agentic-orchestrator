@@ -193,8 +193,7 @@ func (p *FakeCodexProvider) MatchesModel(model string) bool {
 	return strings.EqualFold(model, FakeCodexModel) || strings.EqualFold(model, "gpt-fake") ||
 		strings.EqualFold(model, FakeCodexSecondModel) || strings.EqualFold(model, "gpt-fake-next")
 }
-func (p *FakeCodexProvider) ComputeCost(string, int64, int64) float64 { return 0 }
-func (p *FakeCodexProvider) ContextWindowForModel(string) int         { return 200000 }
+func (p *FakeCodexProvider) ContextWindowForModel(string) int { return 200000 }
 
 // SupportsNativeToollessReview attests the same audited boundary as the real
 // Codex provider the fake wraps.

@@ -109,15 +109,6 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 		t.Fatalf("durable order = status %d, Bash %d; want adjacent status before activity", rawStatusIndex, rawBashIndex)
 	}
 
-	attached, err := manager.Attach(automaticReviewJourneySessionID)
-	if err != nil {
-		t.Fatalf("Attach() error: %v", err)
-	}
-	attachStatusIndex, attachBashIndex := automaticReviewRawOrder(t, attached.MessageLog().Messages(), wantStatus)
-	if attachStatusIndex != rawStatusIndex || attachBashIndex != rawBashIndex {
-		t.Fatalf("attach order = (%d,%d), want durable (%d,%d)", attachStatusIndex, attachBashIndex, rawStatusIndex, rawBashIndex)
-	}
-
 	httpServer := httptest.NewServer(server.NewHandler(server.HandlerOptions{
 		FeatureStore:          store,
 		Sessions:              manager,

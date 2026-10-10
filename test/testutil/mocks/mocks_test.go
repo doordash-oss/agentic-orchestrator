@@ -29,7 +29,6 @@ import (
 // Compile-time interface checks.
 var _ llm.Protocol = (*mocks.MockProtocol)(nil)
 var _ llm.LLMProvider = (*mocks.MockProvider)(nil)
-var _ llm.CostCalculator = (*mocks.MockProvider)(nil)
 var _ ports.SessionView = (*mocks.MockSessionView)(nil)
 
 // Feature ports
@@ -189,11 +188,8 @@ func TestMockProviderRegistration(t *testing.T) {
 	}
 }
 
-func TestMockProviderCostCalculator(t *testing.T) {
-	p := &mocks.MockProvider{CostPerCall: 0.05, ContextWindow: 128000}
-	if p.ComputeCost("model", 100, 200) != 0.05 {
-		t.Error("ComputeCost did not return configured CostPerCall")
-	}
+func TestMockProviderContextWindow(t *testing.T) {
+	p := &mocks.MockProvider{ContextWindow: 128000}
 	if p.ContextWindowForModel("model") != 128000 {
 		t.Error("ContextWindowForModel did not return configured ContextWindow")
 	}

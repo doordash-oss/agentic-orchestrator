@@ -94,11 +94,6 @@ Preferred free-text shape when the value is inherently unconstrained:
 {"questions":[{"header":"Version","question":"What exact version should Agentic be bumped to?","multiSelect":false,"options":[]}]} `
 }
 
-func (p *Provider) ComputeCost(_ string, _, _ int64) float64 {
-	// Claude CLI reports cost in the result message TotalCostUSD field.
-	return 0
-}
-
 func (p *Provider) NewProtocol(opts llm.ProtocolOpts) llm.Protocol {
 	return NewProtocol(opts)
 }

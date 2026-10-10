@@ -241,17 +241,14 @@ func TestProviderCatalogDetectCLIUsesConstructorBinary(t *testing.T) {
 	if !codex.NewProvider("").DetectCLI() {
 		t.Error(`codex.NewProvider("").DetectCLI() = false, want the resolved default binary`)
 	}
-	if !opencode.New().DetectCLI() {
-		t.Error("opencode.New().DetectCLI() = false, want the resolved default binary")
-	}
-	if !opencode.NewWithRunner(nil).DetectCLI() {
-		t.Error("opencode.NewWithRunner(nil).DetectCLI() = false, want the resolved default binary")
+	if !opencode.New("", nil).DetectCLI() {
+		t.Error(`opencode.New("", nil).DetectCLI() = false, want the resolved default binary`)
 	}
 	const fake = "agentico-fake-provider-cli"
-	if !claude.NewProvider(fake).DetectCLI() || !codex.NewProvider(fake).DetectCLI() || !opencode.NewWithBinary(fake).DetectCLI() {
+	if !claude.NewProvider(fake).DetectCLI() || !codex.NewProvider(fake).DetectCLI() || !opencode.New(fake, nil).DetectCLI() {
 		t.Error("DetectCLI() = false for a binary present in PATH, want the constructor override honored")
 	}
-	if claude.NewProvider("agentico-no-such-cli").DetectCLI() || opencode.NewWithBinary("agentico-no-such-cli").DetectCLI() {
+	if claude.NewProvider("agentico-no-such-cli").DetectCLI() || opencode.New("agentico-no-such-cli", nil).DetectCLI() {
 		t.Error("DetectCLI() = true for a binary absent from PATH, want false")
 	}
 }
@@ -259,7 +256,7 @@ func TestProviderCatalogDetectCLIUsesConstructorBinary(t *testing.T) {
 // --- OpenCode: the same catalog surface pinned where its rules differ ---
 
 func TestOpenCodeCatalogMatchesModelAtInterface(t *testing.T) {
-	p := opencode.New()
+	p := opencode.New("", nil)
 	for _, m := range []string{
 		// An explicit "opencode:" prefix always matches, in or out of the catalog.
 		"opencode:anthropic/claude-sonnet-4-5",
@@ -323,21 +320,21 @@ func TestOpenCodeCatalogMatchesModelAtInterface(t *testing.T) {
 }
 
 func TestOpenCodeCatalogContextWindowsAtInterface(t *testing.T) {
-	p := opencode.New()
+	p := opencode.New("", nil)
 	p.SetModelCatalog([]llm.ModelInfo{
 		{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000},
 		{ID: "portkey/@fireworks/accounts/fireworks/models/glm-5p2"},
 		{ID: "vendor/no-window"},
 	})
 	for model, want := range map[string]int{
-		"anthropic/claude-sonnet-4-5[200K]":                              200_000,   // suffixed id
-		"anthropic/claude-sonnet-4-5":                                    200_000,   // unsuffixed alias
-		"opencode:anthropic/claude-sonnet-4-5[200K]":                     200_000,   // explicit prefix
-		"portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]":   1_040_000, // suffix-window fallback
+		"anthropic/claude-sonnet-4-5[200K]":                                    200_000,   // suffixed id
+		"anthropic/claude-sonnet-4-5":                                          200_000,   // unsuffixed alias
+		"opencode:anthropic/claude-sonnet-4-5[200K]":                           200_000,   // explicit prefix
+		"portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]":          1_040_000, // suffix-window fallback
 		"opencode:portkey/@fireworks/accounts/fireworks/models/glm-5p2[1.04M]": 1_040_000,
-		"vendor/no-window[200K]": 200_000, // zero-window entry skipped, suffix wins
-		"vendor/unknown-model":   0,       // unknown metadata stays unknown
-		"vendor/no-window":       0,
+		"vendor/no-window[200K]":                                               200_000, // zero-window entry skipped, suffix wins
+		"vendor/unknown-model":                                                 0,       // unknown metadata stays unknown
+		"vendor/no-window":                                                     0,
 	} {
 		if got := p.ContextWindowForModel(model); got != want {
 			t.Errorf("ContextWindowForModel(%q) = %d, want %d", model, got, want)

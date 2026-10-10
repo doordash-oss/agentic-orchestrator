@@ -57,14 +57,10 @@ const configContentEnvVar = "OPENCODE_CONFIG_CONTENT"
 // runner is injectable so version/readiness/discovery probes can be exercised in
 // tests without a real OpenCode binary; production code falls back to clirun
 // helpers. The embedded llm.Catalog holds the model catalog discovered at
-// startup (empty until discovery runs; no default entries are fabricated);
-// rates holds the per-model pricing parsed alongside it, guarded by mu because
-// discovery, startup enrichment, and routing lookups touch it from different
-// goroutines.
+// startup (empty until discovery runs; no default entries are fabricated).
 type Provider struct {
 	llm.Catalog
 	mu     sync.RWMutex
-	rates  map[string]modelRate
 	runner clirun.CommandRunner
 	// binary overrides the CLI executable name; empty means defaultBinary.
 	binary string
@@ -83,15 +79,6 @@ func (p *Provider) cliBinary() string {
 	return defaultBinary
 }
 
-// modelRate holds the per-million-token pricing discovered for one backend
-// model. Pricing is not part of llm.ModelInfo (and so is not persisted in the
-// version-keyed catalog cache); it lives here only for the lifetime of a
-// discovered catalog and drives ComputeCost when present.
-type modelRate struct {
-	inputPerMToken  float64
-	outputPerMToken float64
-}
-
 // newProvider builds a Provider around the injectable command runner and the
 // CLI binary override, binding the embedded catalog (no default entries) to
 // the resolved CLI name.
@@ -101,22 +88,14 @@ func newProvider(binary string, runner clirun.CommandRunner) *Provider {
 	return p
 }
 
-// New returns a Provider with the default (production) command runner and the
-// default CLI binary name.
-func New() *Provider { return newProvider("", nil) }
-
-// NewWithBinary returns a Provider that invokes the supplied CLI binary name
-// (or the default when empty). It is the constructor used by the FX module to
-// honor the providers.opencode.cli config override.
-func NewWithBinary(binary string) *Provider { return newProvider(binary, nil) }
-
-// NewWithRunner returns a Provider that uses the supplied command runner for its
-// version, readiness, and model-discovery probes instead of shelling out to the
-// real OpenCode binary. It is a dependency-injection seam for tests that drive
-// the provider through the shared startup discovery and cache path; production
-// code uses New.
-func NewWithRunner(runner clirun.CommandRunner) *Provider {
-	return newProvider("", runner)
+// New returns a Provider that invokes the supplied CLI binary name (or the
+// default when empty) through the supplied command runner for its version,
+// readiness, and model-discovery probes. A nil runner means the default
+// (production) runner. It is the constructor used by the FX module to honor
+// the providers.opencode.cli config override and by tests that inject a fake
+// runner.
+func New(binary string, runner clirun.CommandRunner) *Provider {
+	return newProvider(binary, runner)
 }
 
 func (p *Provider) Name() string { return providerName }
@@ -397,42 +376,6 @@ func (p *Provider) EnforcesMinVersion() bool { return true }
 // EnvVarsToExclude returns nil — OpenCode needs no env stripping.
 func (p *Provider) EnvVarsToExclude() []string { return nil }
 
-// ComputeCost computes token cost from the pricing parsed during catalog
-// discovery. When pricing was exposed for the model in a stable numeric shape it
-// is applied (per million tokens); otherwise — unknown model, no pricing, or a
-// a catalog without advertised pricing — it returns 0 so the
-// session falls back to the cost OpenCode reports over ACP without corrupting
-// usage summaries.
-func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
-	rate, ok := p.lookupRate(model)
-	if !ok {
-		return 0
-	}
-	return (float64(inputTokens)/1_000_000)*rate.inputPerMToken +
-		(float64(outputTokens)/1_000_000)*rate.outputPerMToken
-}
-
-// lookupRate returns the discovered pricing for a model, trying the selection as
-// given and then with the Agentico context-window suffix removed (rates are
-// keyed under both forms during discovery).
-func (p *Provider) lookupRate(model string) (modelRate, bool) {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return modelRate{}, false
-	}
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if r, ok := p.rates[strings.ToLower(model)]; ok {
-		return r, true
-	}
-	if stripped := llm.StripModelContextWindow(model); stripped != model {
-		if r, ok := p.rates[strings.ToLower(stripped)]; ok {
-			return r, true
-		}
-	}
-	return modelRate{}, false
-}
-
 // ContextWindowForModel returns the context window for a model from the
 // discovered or cached catalog, matching by canonical id or alias (so suffixed IDs, unsuffixed
 // aliases, and the canonicalized form of an explicit "opencode:" selection all
@@ -480,29 +423,9 @@ func (p *Provider) ReviewPreferenceBand(model llm.ModelInfo) (int, bool) {
 func (p *Provider) RefreshCatalogOnStartup() bool { return true }
 
 // SetModelCatalog installs an isolated metadata snapshot (the shared catalog
-// semantics) and restores its advertised pricing, including when the catalog
-// was loaded from cache. The rates rebuild is interim: Task 7 deletes it
-// together with the rest of the rate plumbing, leaving only the promoted
-// shared set.
+// semantics), including when the catalog was loaded from cache.
 func (p *Provider) SetModelCatalog(models []llm.ModelInfo) {
-	p.mu.Lock()
-	p.rates = make(map[string]modelRate)
-	for _, m := range models {
-		if m.Cost != nil {
-			p.rates[strings.ToLower(m.ID)] = modelRate{inputPerMToken: m.Cost.Input, outputPerMToken: m.Cost.Output}
-			p.rates[strings.ToLower(BackendModel(m.ID))] = modelRate{inputPerMToken: m.Cost.Input, outputPerMToken: m.Cost.Output}
-		}
-	}
-	p.mu.Unlock()
 	p.Catalog.SetModelCatalog(models)
-}
-
-// setRates replaces the discovered pricing table. Called by discovery before the
-// catalog is installed via SetModelCatalog.
-func (p *Provider) setRates(rates map[string]modelRate) {
-	p.mu.Lock()
-	p.rates = rates
-	p.mu.Unlock()
 }
 
 // CheckReadiness probes whether OpenCode is configured with usable provider

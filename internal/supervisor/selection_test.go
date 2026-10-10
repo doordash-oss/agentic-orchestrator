@@ -42,8 +42,8 @@ type selPayload struct {
 }
 
 const (
-	selKindUse     = "tool_use"
-	selKindResult  = "tool_result"
+	selKindUse    = "tool_use"
+	selKindResult = "tool_result"
 )
 
 // selRules builds rules over the synthetic types. promptCounts emulates the

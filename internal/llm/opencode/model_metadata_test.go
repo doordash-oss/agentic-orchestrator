@@ -29,7 +29,7 @@ func TestDiscoveredVariantsSurviveCacheAndDriveManagedConfig(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			fixture := provider + `/glm-flash-new
 {"name":"anything","capabilities":{"toolcall":true,"output":{"text":true}},"cost":{"input":1.4,"output":4.4},"limit":{"context":1040000},"variants":{"high":{"reasoningEffort":"high"},"max":{"reasoningEffort":"max","thinking":{"budgetTokens":32000}},"low":{"disabled":true}}}`
-			models, _, err := parseOpenCodeModels([]byte(fixture))
+			models, err := parseOpenCodeModels([]byte(fixture))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -44,7 +44,7 @@ func TestDiscoveredVariantsSurviveCacheAndDriveManagedConfig(t *testing.T) {
 			if err := json.Unmarshal(data, &cached); err != nil {
 				t.Fatal(err)
 			}
-			p := New()
+			p := New("", nil)
 			p.SetModelCatalog(cached)
 			// Caller mutation must not change cached variants or a concurrent session.
 			cached[0].EffortVariants[llm.EffortMax]["reasoningEffort"] = "low"
@@ -68,8 +68,8 @@ func TestDiscoveredVariantsSurviveCacheAndDriveManagedConfig(t *testing.T) {
 					t.Fatalf("%s options = %#v", level, got)
 				}
 			}
-			if cost := p.ComputeCost(provider+"/glm-flash-new", 1000000, 1000000); cost < 5.79 || cost > 5.81 {
-				t.Fatalf("cached pricing lost: %v", cost)
+			if got := p.ModelCatalog()[0].Cost; got == nil || got.Input != 1.4 || got.Output != 4.4 {
+				t.Fatalf("cached pricing lost: %+v", got)
 			}
 		})
 	}
@@ -88,7 +88,7 @@ func TestVariantDiscoveryDoesNotInventControls(t *testing.T) {
 }
 
 func TestMissingMetadataDoesNotImplyEffortOrCategory(t *testing.T) {
-	models, _, err := parseOpenCodeModels([]byte("openai/gpt-99\nportkey/kimi-next\n"))
+	models, err := parseOpenCodeModels([]byte("openai/gpt-99\nportkey/kimi-next\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestMissingMetadataDoesNotImplyEffortOrCategory(t *testing.T) {
 			t.Fatalf("invented metadata: %+v", model)
 		}
 	}
-	p := New()
+	p := New("", nil)
 	p.SetModelCatalog(models)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "openai/gpt-99", EffortLevel: llm.EffortMax})
 	if err != nil {

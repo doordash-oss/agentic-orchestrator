@@ -55,7 +55,7 @@ func (s *stubProvider) VersionInfo() (string, error)                { return s.v
 func (s *stubProvider) MinVersion() [3]int                          { return [3]int{0, 0, 0} }
 func (s *stubProvider) EnvVarsToExclude() []string                  { return nil }
 
-func (s *stubProvider) ModelCatalog() []llm.ModelInfo { return nil }
+func (s *stubProvider) ModelCatalog() []llm.ModelInfo   { return nil }
 func (s *stubProvider) SetModelCatalog([]llm.ModelInfo) {}
 func (s *stubProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
 	return nil, nil
@@ -73,12 +73,11 @@ func (s *stubProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
 }
 func (s *stubProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
-// stubFullProvider implements LLMProvider + CostCalculator with an asking
+// stubFullProvider implements LLMProvider with an asking
 // clause and context window.
 type stubFullProvider struct {
 	stubProvider
 	askingClause  string
-	cost          float64
 	contextWindow int
 }
 
@@ -99,9 +98,8 @@ func (p *stubToollessCatalogProvider) SupportsNativeToollessReview() bool {
 	return p.toolLess
 }
 
-func (s *stubFullProvider) AskingQuestionsClause() string            { return s.askingClause }
-func (s *stubFullProvider) ComputeCost(string, int64, int64) float64 { return s.cost }
-func (s *stubFullProvider) ContextWindowForModel(string) int         { return s.contextWindow }
+func (s *stubFullProvider) AskingQuestionsClause() string    { return s.askingClause }
+func (s *stubFullProvider) ContextWindowForModel(string) int { return s.contextWindow }
 
 func TestRegistry_ForModel(t *testing.T) {
 	r := llm.NewRegistry()
@@ -222,44 +220,6 @@ func TestRegistry_AskingQuestionsClauseForModel(t *testing.T) {
 
 	t.Run("unknown_model", func(t *testing.T) {
 		_, err := r.AskingQuestionsClauseForModel("unknown")
-		if err == nil {
-			t.Fatal("expected error for unknown model")
-		}
-	})
-}
-
-func TestRegistry_CostCalculatorForModel(t *testing.T) {
-	r := llm.NewRegistry()
-
-	r.Register(&stubProvider{name: "bare", models: []string{"bare-model"}, hasCLI: true})
-	r.Register(&stubFullProvider{
-		stubProvider:  stubProvider{name: "full", models: []string{"full-model"}, hasCLI: true},
-		cost:          1.23,
-		contextWindow: 100000,
-	})
-
-	t.Run("provider_implements_CostCalculator", func(t *testing.T) {
-		cc, err := r.CostCalculatorForModel("full-model")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if cc.ComputeCost("full-model", 1000, 2000) != 1.23 {
-			t.Errorf("got %f, want 1.23", cc.ComputeCost("full-model", 1000, 2000))
-		}
-		if cc.ContextWindowForModel("full-model") != 100000 {
-			t.Errorf("got %d, want 100000", cc.ContextWindowForModel("full-model"))
-		}
-	})
-
-	t.Run("provider_does_not_implement_CostCalculator", func(t *testing.T) {
-		_, err := r.CostCalculatorForModel("bare-model")
-		if err == nil {
-			t.Fatal("expected error for provider not implementing CostCalculator")
-		}
-	})
-
-	t.Run("unknown_model", func(t *testing.T) {
-		_, err := r.CostCalculatorForModel("unknown")
 		if err == nil {
 			t.Fatal("expected error for unknown model")
 		}

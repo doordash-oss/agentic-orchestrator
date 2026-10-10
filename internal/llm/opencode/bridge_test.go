@@ -27,12 +27,12 @@ import (
 
 func TestBuildCommand_InteractiveAddsServerBridge(t *testing.T) {
 	opts := llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5", WorkDir: t.TempDir(), StateDir: t.TempDir()}
-	baseArgs, baseEnv, err := New().BuildCommand(opts)
+	baseArgs, baseEnv, err := New("", nil).BuildCommand(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	opts.Interactive = true
-	args, env, err := New().BuildCommand(opts)
+	args, env, err := New("", nil).BuildCommand(opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestBridgedAnswers(t *testing.T) {
 func bridgeTestProtocol(t *testing.T, root string) *Protocol {
 	t.Helper()
 	p := NewProtocol(llm.ProtocolOpts{Model: "fake/model", Interactive: true})
-	p.bridge = newServerBridge(serverClient{addr: "127.0.0.1:1", password: "unused-password"}, nil)
+	p.bridge = newServerBridge(serverClient{addr: "127.0.0.1:1", password: "unused-password"})
 	p.acpSessionID = root
 	return p
 }

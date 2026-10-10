@@ -127,7 +127,7 @@ func TestSeedHistoryPostsNoReplyToLiveSession(t *testing.T) {
 	}
 	p := NewProtocol(llm.ProtocolOpts{SeedHistoryPath: path})
 	p.acpSessionID = "ses_fresh"
-	p.bridge = newServerBridge(serverClient{addr: server.Listener.Addr().String(), password: "secret", directory: "/tmp/work dir", http: &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{}).DialContext}}}, nil)
+	p.bridge = newServerBridge(serverClient{addr: server.Listener.Addr().String(), password: "secret", directory: "/tmp/work dir", http: &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: (&net.Dialer{}).DialContext}}})
 	if err := p.seedHistory(context.Background()); err != nil {
 		t.Fatal(err)
 	}

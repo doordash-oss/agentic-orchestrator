@@ -537,5 +537,3 @@ func TestSDKMessage_UnmarshalJSON_UnknownType(t *testing.T) {
 		t.Error("unknown type should have nil concrete pointers")
 	}
 }
-
-

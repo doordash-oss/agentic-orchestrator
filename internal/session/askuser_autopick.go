@@ -15,7 +15,6 @@
 package session
 
 import (
-	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -71,12 +70,6 @@ func askUserAutoPickPurposeCanPick(purpose ports.AskUserAutoPickPurpose) bool {
 	default:
 		return false
 	}
-}
-
-func decideAskUserAutoPick(input json.RawMessage, ctx askUserAutoPickDecisionContext) askUserAutoPickDecision {
-	// Parse returns an empty bundle for a rejected input, which declines.
-	bundle, _ := askuser.Parse(input)
-	return decideAskUserAutoPickBundle(bundle, ctx)
 }
 
 // decideAskUserAutoPickBundle runs the auto-pick heuristics over a parsed

@@ -543,15 +543,6 @@ func (s *transcriptStore) readLocked(seq int64) (Record, error) {
 // a CursorOutOfRangeError: an after past the head or a before past the head
 // plus one. before=1, after=head and before=head+1 stay valid.
 func (s *transcriptStore) rangedPage(q PageQuery) (Page, error) {
-	return s.readPage(q, true)
-}
-
-// page reads one page. Out-of-range cursors return an empty page.
-func (s *transcriptStore) page(q PageQuery) (Page, error) {
-	return s.readPage(q, false)
-}
-
-func (s *transcriptStore) readPage(q PageQuery, strict bool) (Page, error) {
 	if q.HasBefore && q.HasAfter {
 		return Page{}, ErrInvalidPageQuery
 	}
@@ -565,7 +556,7 @@ func (s *transcriptStore) readPage(q PageQuery, strict bool) (Page, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	head := int64(len(s.offsets))
-	if strict && ((q.HasAfter && q.After > head) || (q.HasBefore && q.Before > head+1)) {
+	if (q.HasAfter && q.After > head) || (q.HasBefore && q.Before > head+1) {
 		return Page{}, &CursorOutOfRangeError{HeadSeq: head}
 	}
 	var from, to int64 // inclusive seq bounds

@@ -53,17 +53,14 @@ func (p *Protocol) handleWriteTextFile(rawID json.RawMessage, params json.RawMes
 		return
 	}
 	if !p.fsWriteAllowed(path) {
-		p.logDebug("[opencode] denying out-of-bounds fs/write_text_file: %s", path)
 		p.writeFSError(rawID, jsonRPCInternalError, "write path is outside the session's writable roots")
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		p.logDebug("[opencode] fs/write_text_file mkdir failed for %s: %v", path, err)
 		p.writeFSError(rawID, jsonRPCInternalError, "creating parent directory failed")
 		return
 	}
 	if err := os.WriteFile(path, []byte(wp.Content), 0o644); err != nil {
-		p.logDebug("[opencode] fs/write_text_file write failed for %s: %v", path, err)
 		p.writeFSError(rawID, jsonRPCInternalError, "writing file failed")
 		return
 	}
@@ -88,7 +85,6 @@ func (p *Protocol) handleReadTextFile(rawID json.RawMessage, params json.RawMess
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		p.logDebug("[opencode] fs/read_text_file failed for %s: %v", path, err)
 		p.writeFSError(rawID, jsonRPCInternalError, "reading file failed")
 		return
 	}

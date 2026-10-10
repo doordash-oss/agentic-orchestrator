@@ -77,10 +77,6 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 	return models, nil
 }
 
-func parseCodexModelCatalog(out []byte) ([]llm.ModelInfo, error) {
-	return parseCodexModelCatalogWithProgress(out, nil)
-}
-
 func parseCodexModelCatalogWithProgress(out []byte, report llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
 	var payload codexModelCatalogPayload
 	if err := json.Unmarshal(out, &payload); err != nil {

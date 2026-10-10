@@ -157,7 +157,7 @@ func TestClassifyTurn_SeparatesRootIntentQuestionsTasksAndViolations(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ClassifyTurn(tt.in); got != tt.want {
-				t.Fatalf("ClassifyTurn() = %s, want %s", got, tt.want)
+				t.Fatalf("ClassifyTurn() = %d, want %d", got, tt.want)
 			}
 		})
 	}

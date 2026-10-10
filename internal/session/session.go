@@ -683,10 +683,6 @@ func NewSession(id, featureID string, phase feature.Phase) *Session {
 	}
 }
 
-func (s *Session) setCriticalAttachSendTimeoutForTest(timeout time.Duration) {
-	s.criticalAttachSendTimeout = timeout
-}
-
 // RegisterAttachConsumer marks a goroutine as actively draining AttachCh. The
 // returned cleanup is idempotent and must be called when the read loop exits.
 func (s *Session) RegisterAttachConsumer() func() {
@@ -704,10 +700,6 @@ func (s *Session) RegisterAttachConsumer() func() {
 
 func (s *Session) hasAttachConsumer() bool {
 	return s != nil && s.attachConsumers.Load() > 0
-}
-
-func (s *Session) setResultShutdownGraceForTest(grace time.Duration) {
-	s.resultShutdownGrace = grace
 }
 
 func (s *Session) criticalAttachTimeout() time.Duration {
@@ -1597,17 +1589,6 @@ func (s *Session) respondToControlViaProtocol(requestID string, allow bool, orig
 	_ = s.protocol.RespondToControl(requestID, allow, originalInput, reason)
 }
 
-// CloseStdin closes the session's stdin pipe, signalling EOF to the subprocess.
-func (s *Session) CloseStdin() {
-	s.mu.Lock()
-	w := s.stdin
-	s.stdin = nil
-	s.mu.Unlock()
-	if w != nil {
-		_ = w.Close()
-	}
-}
-
 // SendUserMessage sends a user message to the session via JSON stdin.
 func (s *Session) SendUserMessage(text string) error {
 	return s.SendUserMessageWithHiddenContext(text, "")
@@ -2186,20 +2167,6 @@ func (s *Session) hasPendingAskUserQuestionLocked() bool {
 	return false
 }
 
-// SendInput writes raw bytes to stdin. For backward compatibility.
-// New code should use SendUserMessage or RespondToControl.
-func (s *Session) SendInput(data []byte) error {
-	s.mu.Lock()
-	w := s.stdin
-	s.mu.Unlock()
-
-	if w == nil {
-		return fmt.Errorf("session stdin is closed")
-	}
-	_, err := w.Write(data)
-	return err
-}
-
 // Interrupt cancels the agent's current turn while keeping the session
 // alive for follow-up messages. Prefers the provider's protocol-level
 // interrupt (Claude: control_request/interrupt); falls back to SIGINT on
@@ -2566,18 +2533,6 @@ func (s *Session) SetLogFile(f *os.File) {
 	}
 }
 
-// logDebug writes a formatted debug message to the session's log file.
-// If no log file is set, the message is silently discarded. This avoids
-// writing to stderr which would corrupt structured session output.
-func (s *Session) logDebug(format string, args ...interface{}) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.logFile != nil {
-		msg := fmt.Sprintf(format, args...)
-		_, _ = s.logFile.Write([]byte(msg + "\n"))
-	}
-}
-
 // IdleDuration returns how long since the session last produced output.
 func (s *Session) IdleDuration() time.Duration {
 	// JSON protocol sessions do not track idle output duration; report zero.
@@ -2855,10 +2810,4 @@ func (s *Session) persistTranscriptRow(index int, msg llm.SDKMessage) error {
 // AttachCh returns the channel for receiving messages in attach mode.
 func (s *Session) AttachCh() <-chan llm.SDKMessage {
 	return s.attachCh
-}
-
-// SetAttached is kept for backward compatibility during migration.
-// In the new architecture, attach mode uses AttachCh() instead.
-func (s *Session) SetAttached(attached bool, out *os.File) {
-	// No-op in JSON mode — attach mode is handled via AttachCh()
 }

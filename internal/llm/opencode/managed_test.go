@@ -87,7 +87,7 @@ func parseFullInline(t *testing.T, env []string) fullManagedConfig {
 
 func TestManagedConfig_WrittenUnderStateDirAndPointedAt(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:    "anthropic/claude-sonnet-4-5",
 		StateDir: state,
@@ -120,7 +120,7 @@ func TestManagedConfig_WrittenUnderStateDirAndPointedAt(t *testing.T) {
 
 func TestManagedConfig_DeterministicAndSafeOverwrite(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	opts := llm.CommandBuildOpts{Model: "openai/gpt-5", StateDir: state, SystemPrompt: "role instructions body"}
 
 	_, env1, err := p.BuildCommand(opts)
@@ -155,7 +155,7 @@ func TestManagedConfig_DeterministicAndSafeOverwrite(t *testing.T) {
 
 func TestManagedConfig_DistinctInputsDistinctPaths(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, envA, err := p.BuildCommand(llm.CommandBuildOpts{Model: "openai/gpt-5", StateDir: state})
 	if err != nil {
 		t.Fatalf("BuildCommand A: %v", err)
@@ -179,7 +179,7 @@ func TestManagedConfig_NoGlobalDirsWritten(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 	state := t.TempDir()
 
-	p := New()
+	p := New("", nil)
 	if _, _, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:        "openai/gpt-5",
 		StateDir:     state,
@@ -201,7 +201,7 @@ func TestManagedConfig_NoGlobalDirsWritten(t *testing.T) {
 
 func TestManagedConfig_IsolationEnvScrubsInheritedSurfaces(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "openai/gpt-5", StateDir: state})
 	if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
@@ -240,7 +240,7 @@ func TestManagedConfig_IsolationEnvScrubsInheritedSurfaces(t *testing.T) {
 func TestManagedConfig_RoleInstructionsDeliveredAsFile(t *testing.T) {
 	state := t.TempDir()
 	role := "# Agentico Role\nWrite only inside output roots.\nStructured root-outcome contract.\n"
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:        "anthropic/claude-sonnet-4-5",
 		StateDir:     state,
@@ -269,7 +269,7 @@ func TestManagedConfig_RoleInstructionsDeliveredAsFile(t *testing.T) {
 
 func TestManagedConfig_NoSystemPromptOmitsInstructions(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "openai/gpt-5", StateDir: state})
 	if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
@@ -282,7 +282,7 @@ func TestManagedConfig_NoSystemPromptOmitsInstructions(t *testing.T) {
 func TestManagedConfig_RoleInstructionsRequireStateDir(t *testing.T) {
 	// A role prompt with no provider-managed state dir cannot be delivered; the
 	// provider must fail closed rather than silently drop the role instructions.
-	p := New()
+	p := New("", nil)
 	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:        "openai/gpt-5",
 		SystemPrompt: "role that cannot be delivered",
@@ -300,7 +300,7 @@ func TestManagedConfig_RoleInstructionsRequireStateDir(t *testing.T) {
 func TestManagedConfig_WritableRootsBoundEdits(t *testing.T) {
 	state := t.TempDir()
 	worktree := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:         "openai/gpt-5",
 		StateDir:      state,
@@ -333,7 +333,7 @@ func TestManagedConfig_WritableRootsBoundEdits(t *testing.T) {
 
 func TestManagedConfig_DangerousSkipBoundsWritesToRoots(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "openai/gpt-5",
 		StateDir:             state,
@@ -364,7 +364,7 @@ func TestManagedConfig_DangerousSkipBoundsWritesToRoots(t *testing.T) {
 func TestManagedConfig_ReadsBoundedToMountedRootsInNormalMode(t *testing.T) {
 	state := t.TempDir()
 	readRoots := []string{state, "/skills", "/guidelines", "/repo-b"}
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:         "openai/gpt-5",
 		StateDir:      state,
@@ -398,7 +398,7 @@ func TestManagedConfig_ReadsBoundedToMountedRootsInNormalMode(t *testing.T) {
 // rather than carrying a path-pattern gate (Task 3).
 func TestManagedConfig_DangerousSkipAllowsReads(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "openai/gpt-5",
 		StateDir:             state,
@@ -424,7 +424,7 @@ func TestManagedConfig_DangerousSkipAllowsReads(t *testing.T) {
 func TestManagedConfig_ExternalDirectoryAllowsMountedRoots(t *testing.T) {
 	state := t.TempDir()
 	readRoots := []string{state, "/skills", "/guidelines", "/repo-b"}
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:         "openai/gpt-5",
 		StateDir:      state,
@@ -457,7 +457,7 @@ func TestManagedConfig_ExternalDirectoryAllowsMountedRoots(t *testing.T) {
 // access is noninteractive in dangerous-skip mode, mirroring reads.
 func TestManagedConfig_DangerousSkipAllowsExternalDirectory(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "openai/gpt-5",
 		StateDir:             state,
@@ -482,7 +482,7 @@ func TestManagedConfig_DangerousSkipAllowsExternalDirectory(t *testing.T) {
 func TestManagedConfig_SubagentsRunNonInteractive(t *testing.T) {
 	state := t.TempDir()
 	agentsJSON := `{"api-surface-researcher":{"description":"Researches API surface","prompt":"You research."}}`
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:         "openai/gpt-5",
 		StateDir:      state,
@@ -523,7 +523,7 @@ func TestManagedConfig_SubagentsRunNonInteractive(t *testing.T) {
 func TestManagedConfig_SubagentBashAllowedUnderDangerousSkip(t *testing.T) {
 	state := t.TempDir()
 	agentsJSON := `{"api-surface-researcher":{"description":"d","prompt":"p"}}`
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "openai/gpt-5",
 		StateDir:             state,
@@ -548,7 +548,7 @@ func TestManagedConfig_AgentsConverted(t *testing.T) {
 	state := t.TempDir()
 	agentsJSON := `{"reviewer":{"description":"Reviews code","prompt":"You review.","model":"openai/gpt-5"},` +
 		`"explorer":{"description":"Explores","prompt":"You explore.","model":"sonnet"}}`
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:      "anthropic/claude-sonnet-4-5",
 		StateDir:   state,
@@ -584,7 +584,7 @@ func TestManagedConfig_AgentsConverted(t *testing.T) {
 // Agentico-defined agents are added.
 func TestManagedConfig_BuiltinOverridesWhenEmpty(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "openai/gpt-5", StateDir: state})
 	if err != nil {
 		t.Fatalf("BuildCommand: %v", err)
@@ -613,7 +613,7 @@ func TestManagedConfig_BuiltinOverridesWhenEmpty(t *testing.T) {
 
 func TestEffortMapping_StableForDiscoveredVariant(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	p.SetModelCatalog([]llm.ModelInfo{{ID: "openai/gpt-5", EffortVariants: map[llm.EffortLevel]map[string]any{llm.EffortHigh: {"reasoningEffort": "high"}}}})
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:       "openai/gpt-5",
@@ -635,7 +635,7 @@ func TestEffortMapping_StableForDiscoveredVariant(t *testing.T) {
 
 func TestEffortMapping_OmittedForUnsupportedBackend(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	for _, model := range []string{"anthropic/claude-sonnet-4-5", "ollama/llama3.1:8b"} {
 		_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 			Model:       model,
@@ -654,7 +654,7 @@ func TestEffortMapping_OmittedForUnsupportedBackend(t *testing.T) {
 
 func TestBuildCommand_InvalidModelRejectedBeforeManagedConfig(t *testing.T) {
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/$(whoami)", StateDir: state, EffortLevel: llm.EffortHigh})
 	if err == nil {
 		t.Fatalf("BuildCommand(invalid) = (%v,%v,nil), want rejection", cmd, env)
@@ -693,10 +693,6 @@ func TestIsolationEnv_VersionGatesFutureFeatureAndReportsFallback(t *testing.T) 
 	if !slices.Contains(unavailable, "future isolation") {
 		t.Fatalf("unavailable did not report the future feature: %v", unavailable)
 	}
-	diag := isolationFallbackDiagnostic(unavailable)
-	if !strings.Contains(diag, "permission mediation") || !strings.Contains(diag, "future isolation") {
-		t.Errorf("fallback diagnostic = %q, want it to name the feature and the mediation fallback", diag)
-	}
 }
 
 // --- Task 7: managed-config diagnostic redaction ---
@@ -706,7 +702,7 @@ func TestManagedConfig_BuildErrorOmitsConfigAndSecrets(t *testing.T) {
 	// that names the operation but echoes neither the raw input nor the secret.
 	withEnv(t, []string{"PATH=/usr/bin"})
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	secret := "sk-ant-MANAGEDLEAK1234567890"
 	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:      "openai/gpt-5",
@@ -732,7 +728,7 @@ func TestManagedConfig_InlineAndFileNeverInDebugAsRawSecrets(t *testing.T) {
 	// content and file are pure config (model/permission/instructions paths), and
 	// effort options carry only a documented reasoning level, never credentials.
 	state := t.TempDir()
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:        "openai/gpt-5",
 		StateDir:     state,

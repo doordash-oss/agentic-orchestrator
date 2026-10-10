@@ -286,14 +286,26 @@ func TestUsagePreservedOnErrorResult(t *testing.T) {
 // produces a SystemInit SDK message carrying the captured ACP session id. The
 // session layer's PID-file session-id update is gated on a provider init
 // message, so without this the OpenCode session id never reaches the PID file.
+// The session/new request id is read from the frame the fake harness received.
 func TestSessionNewEmitsInitMessageWithSessionID(t *testing.T) {
-	buf := &syncBuffer{}
-	p := NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5"})
-	p.SetStdin(buf)
-	const sessionNewID = 201
-	p.SetRequestIDsForTest(0, sessionNewID, 0, 0)
+	h := newHandshakeHarness(t, llm.ProtocolOpts{
+		Model:         "opencode:anthropic/claude-sonnet-4-5",
+		InitialPrompt: "phase prompt",
+	})
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.p.Handshake(context.Background()) }()
 
-	msgs := mustParse(t, p, responseLine(t, sessionNewID, map[string]any{"sessionId": "ses_new"}))
+	initReq := h.nextRequest(t)
+	if initReq.Method != "initialize" {
+		t.Fatalf("first request = %q, want initialize", initReq.Method)
+	}
+	h.feed(t, responseLine(t, mustID(t, initReq.ID), initResultWithLoadSession(false)))
+
+	newReq := h.nextRequest(t)
+	if newReq.Method != "session/new" {
+		t.Fatalf("second request = %q, want session/new", newReq.Method)
+	}
+	msgs := h.feed(t, responseLine(t, mustID(t, newReq.ID), map[string]any{"sessionId": "ses_new"}))
 	if len(msgs) != 1 || msgs[0].Init == nil {
 		t.Fatalf("session/new produced %+v, want one system-init message", msgs)
 	}
@@ -304,27 +316,43 @@ func TestSessionNewEmitsInitMessageWithSessionID(t *testing.T) {
 	if msgs[0].Init.Model != "anthropic/claude-sonnet-4-5" {
 		t.Fatalf("init model = %q, want anthropic/claude-sonnet-4-5", msgs[0].Init.Model)
 	}
-	if got := p.SessionID(); got != "ses_new" {
+	if err := <-errCh; err != nil {
+		t.Fatalf("Handshake() error: %v", err)
+	}
+	if got := h.p.SessionID(); got != "ses_new" {
 		t.Fatalf("SessionID() = %q, want ses_new", got)
 	}
 }
 
 // TestSessionLoadEmitsInitMessageWithResumedID proves a resumed session also
 // emits an init message carrying the resumed session id, so a resumed run's PID
-// file records the identity the next prompt is delivered to.
+// file records the identity the next prompt is delivered to. The session/load
+// request id is read from the frame the fake harness received.
 func TestSessionLoadEmitsInitMessageWithResumedID(t *testing.T) {
-	buf := &syncBuffer{}
-	p := NewProtocol(llm.ProtocolOpts{Model: "opencode:anthropic/claude-sonnet-4-5", ResumeSessionID: "ses_prior"})
-	p.SetStdin(buf)
-	const sessionLoadID = 202
-	p.SetRequestIDsForTest(0, 0, sessionLoadID, 0)
+	h := newHandshakeHarness(t, llm.ProtocolOpts{
+		Model:           "opencode:anthropic/claude-sonnet-4-5",
+		InitialPrompt:   "phase prompt",
+		ResumeSessionID: "ses_prior",
+	})
+	errCh := make(chan error, 1)
+	go func() { errCh <- h.p.Handshake(context.Background()) }()
 
-	msgs := mustParse(t, p, responseLine(t, sessionLoadID, map[string]any{}))
+	initReq := h.nextRequest(t)
+	h.feed(t, responseLine(t, mustID(t, initReq.ID), initResultWithLoadSession(true)))
+
+	loadReq := h.nextRequest(t)
+	if loadReq.Method != sessionLoadMethod {
+		t.Fatalf("second request = %q, want session/load", loadReq.Method)
+	}
+	msgs := h.feed(t, responseLine(t, mustID(t, loadReq.ID), map[string]any{}))
 	if len(msgs) != 1 || msgs[0].Init == nil {
 		t.Fatalf("session/load produced %+v, want one system-init message", msgs)
 	}
 	if msgs[0].Init.SessionID != "ses_prior" {
 		t.Fatalf("init session id = %q, want ses_prior (resumed identity)", msgs[0].Init.SessionID)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("Handshake() error: %v", err)
 	}
 }
 

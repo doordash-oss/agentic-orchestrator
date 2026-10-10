@@ -104,7 +104,6 @@ var codexHandshakeTimeout = 30 * time.Second
 
 type Manager struct {
 	sessions           map[string]*Session
-	attached           *Session
 	mu                 sync.RWMutex
 	eventCh            chan interface{}
 	stoppingCh         chan struct{} // closed when Shutdown begins
@@ -604,42 +603,12 @@ func (m *Manager) FeatureSessions(featureID string) []ports.SessionView {
 	return result
 }
 
-func (m *Manager) SendInput(sessionID string, data []byte) error {
-	m.mu.RLock()
-	s, ok := m.sessions[sessionID]
-	m.mu.RUnlock()
-	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
-	}
-	return s.SendInput(data)
-}
-
-func (m *Manager) Attach(sessionID string) (ports.SessionView, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	s, ok := m.sessions[sessionID]
-	if !ok {
-		return nil, fmt.Errorf("session %s not found", sessionID)
-	}
-	m.attached = s
-	return s, nil
-}
-
 // RegisterTestSession inserts a pre-built session into the manager for testing.
 // It must only be used in tests.
 func (m *Manager) RegisterTestSession(s *Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[s.id] = s
-}
-
-func (m *Manager) Detach() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.attached != nil {
-		m.attached.SetAttached(false, nil)
-		m.attached = nil
-	}
 }
 
 func (m *Manager) Shutdown() {

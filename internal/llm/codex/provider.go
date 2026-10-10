@@ -192,10 +192,6 @@ Use kind free_form with an empty options array only for an inherently unconstrai
 Apply this contract on every turn of an interview, including after repository exploration and previous answers. A request to confirm scope or proceed is also a question and must use ask_user. A tool answer clarifies that decision within the phase's existing scope; it does not grant unrelated implementation permission.`
 }
 
-func (p *Provider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
-	return computeCost(model, int(inputTokens), 0, 0, int(outputTokens))
-}
-
 // contextWindowOverrideForModel resolves a window-suffixed selection to its
 // catalog entry's window by canonical ID only (aliases are not accepted) and
 // returns the window even when it is zero: a zero window here means "matched

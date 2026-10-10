@@ -536,7 +536,6 @@ func (s *responseShapeDescriptionSession) SetStatus(ports.SessionStatus)        
 func (s *responseShapeDescriptionSession) SetLogFile(*os.File)                            {}
 func (s *responseShapeDescriptionSession) AddCleanupFunc(func())                          {}
 func (s *responseShapeDescriptionSession) SetHasUnansweredQuestion(bool)                  {}
-func (s *responseShapeDescriptionSession) CloseStdin()                                    {}
 func (s *responseShapeDescriptionSession) SetOnToolAllowed(func(string, json.RawMessage)) {}
 func (s *responseShapeDescriptionSession) SetOnFileRead(func(llm.FileReadEvent))          {}
 func (s *responseShapeDescriptionSession) SetOnSubagentEvent(func(llm.SDKMessage))        {}

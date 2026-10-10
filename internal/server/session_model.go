@@ -190,7 +190,7 @@ func (h *apiHandler) handleSessionOutputStream(w http.ResponseWriter, r *http.Re
 		messages := sess.MessageLog().Messages()
 		total := len(messages)
 		// Re-include the previously-sent tail index on every tick (not just
-		// strictly-new ones): UpdateLast/UpdateLastAssistantPartial can mutate
+		// strictly-new ones): UpdateLastAssistantPartial can mutate
 		// the last message in place without growing Len(), so the tail may
 		// still be changing. Resending an unchanged row is harmless — the
 		// client's row-level dedup (shared with snapshot-refresh

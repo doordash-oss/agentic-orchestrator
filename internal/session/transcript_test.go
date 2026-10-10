@@ -155,28 +155,6 @@ func TestReadLastLines(t *testing.T) {
 	}
 }
 
-func TestExtractSessionIDFromOutput(t *testing.T) {
-	dir := t.TempDir()
-	outputPath := filepath.Join(dir, "output.txt")
-
-	os.WriteFile(outputPath, []byte("[init] session=abc-123-def model=opus\n[thinking] hello\n"), 0o644)
-	got := extractSessionIDFromOutput(outputPath)
-	if got != "abc-123-def" {
-		t.Errorf("extractSessionIDFromOutput() = %q, want %q", got, "abc-123-def")
-	}
-}
-
-func TestErrorDetailFromOutput(t *testing.T) {
-	dir := t.TempDir()
-	outputPath := filepath.Join(dir, "output.txt")
-	os.WriteFile(outputPath, []byte("[init] session=nonexistent model=opus\n"), 0o644)
-
-	got := ErrorDetailFromOutput(outputPath, "/some/path")
-	if got != "" {
-		t.Errorf("ErrorDetailFromOutput with missing transcript = %q, want empty", got)
-	}
-}
-
 func TestLooksLikeNormalChat(t *testing.T) {
 	tests := []struct {
 		text string

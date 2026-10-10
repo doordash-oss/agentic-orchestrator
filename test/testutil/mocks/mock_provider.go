@@ -20,9 +20,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
 
-// MockProvider implements llm.LLMProvider and the optional CostCalculator
-// interface. All return values are configurable via exported fields. Method
-// calls are recorded for assertion.
+// MockProvider implements llm.LLMProvider. All return values are configurable
+// via exported fields. Method calls are recorded for assertion.
 type MockProvider struct {
 	// LLMProvider fields
 	ProviderName string
@@ -36,8 +35,7 @@ type MockProvider struct {
 	// AskingQuestionsClause
 	QuestionsClause string
 
-	// CostCalculator
-	CostPerCall   float64
+	// ContextWindowForModel
 	ContextWindow int
 
 	// ModelCatalog / discovery
@@ -118,11 +116,7 @@ func (p *MockProvider) EnvVarsToExclude() []string { return p.EnvVarsExclude }
 
 func (p *MockProvider) AskingQuestionsClause() string { return p.QuestionsClause }
 
-// --- CostCalculator ---
-
-func (p *MockProvider) ComputeCost(model string, inputTokens, outputTokens int64) float64 {
-	return p.CostPerCall
-}
+// --- ContextWindowForModel ---
 
 func (p *MockProvider) ContextWindowForModel(model string) int { return p.ContextWindow }
 

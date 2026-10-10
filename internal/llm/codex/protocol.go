@@ -119,8 +119,6 @@ type Protocol struct {
 	nativeDecisionSeen bool
 	nativeReviewFailed bool
 	tasksByThread      map[string]codexTaskRef
-
-	logFunc func(string, ...interface{})
 }
 
 type codexTaskRef struct {
@@ -164,17 +162,6 @@ func (p *Protocol) SetStdin(w io.Writer) {
 	p.mu.Lock()
 	p.stdin = w
 	p.mu.Unlock()
-}
-
-// SetLogFunc sets a logging function for debug output.
-func (p *Protocol) SetLogFunc(f func(string, ...interface{})) {
-	p.logFunc = f
-}
-
-func (p *Protocol) logDebug(format string, args ...interface{}) {
-	if p.logFunc != nil {
-		p.logFunc(format, args...)
-	}
 }
 
 // Handshake performs the 3-step Codex initialization:
@@ -229,7 +216,6 @@ func (p *Protocol) Handshake(ctx context.Context) error {
 func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 	var env envelope
 	if err := json.Unmarshal(line, &env); err != nil {
-		p.logDebug("[codex] failed to parse JSON-RPC envelope: %v", err)
 		if p.opts.NativeToollessReview {
 			p.markNativeToollessFailed()
 			return nil, fmt.Errorf("parsing Codex native tool-less review response: %w", err)
@@ -300,7 +286,6 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 		return out, nil
 	}
 
-	p.logDebug("[codex] unrecognized JSON-RPC message (no method or id)")
 	if p.opts.NativeToollessReview {
 		return []llm.SDKMessage{p.nativeToollessViolation("malformed JSON-RPC envelope")}, nil
 	}
@@ -781,13 +766,9 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 	}
 	if isInterrupt {
 		// The turn's own turn/completed reports the outcome.
-		if len(errData) > 0 && string(errData) != "null" {
-			p.logDebug("[codex] turn/interrupt %d rejected: %s", id, string(errData))
-		}
 		return llm.SDKMessage{}, false, true
 	}
 	if len(errData) > 0 && string(errData) != "null" {
-		p.logDebug("[codex] error response for request %d: %s", id, string(errData))
 		if isThread {
 			return p.handleThreadError(errData)
 		}
@@ -796,7 +777,6 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 
 	var initResult InitializeResult
 	if err := json.Unmarshal(result, &initResult); err == nil && initResult.UserAgent != "" {
-		p.logDebug("[codex] initialized: userAgent=%s codexHome=%s", initResult.UserAgent, initResult.CodexHome)
 		p.mu.Lock()
 		if p.handshakeDone != nil {
 			select {
@@ -834,7 +814,6 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 		if resumed {
 			p.requestUsageRead()
 		}
-		p.logDebug("[codex] thread started: %s", threadResult.Thread.ID)
 		if !p.opts.Interactive {
 			return llm.SDKMessage{}, false, true
 		}
@@ -847,11 +826,9 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 		p.turnID = turnResult.Turn.ID
 		p.turnActive = true
 		p.mu.Unlock()
-		p.logDebug("[codex] turn started: %s (status=%s)", turnResult.Turn.ID, turnResult.Turn.Status)
 		return llm.SDKMessage{}, false, true
 	}
 
-	p.logDebug("[codex] unhandled response for request %d", id)
 	return llm.SDKMessage{}, false, false
 }
 
@@ -899,7 +876,6 @@ func (p *Protocol) handleThreadError(errData json.RawMessage) (llm.SDKMessage, b
 		p.resumeFallback = true
 		p.usageState.resumeBaselinePending = false
 		p.mu.Unlock()
-		p.logDebug("[codex] resume of %s failed (%s); starting a fresh thread", p.opts.ResumeSessionID, rpcErr.Message)
 		if err := p.startThread(); err != nil {
 			p.mu.Lock()
 			p.threadErr = fmt.Errorf("codex fresh thread after failed resume: %w", err)
@@ -965,7 +941,6 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 	case "item/commandExecution/requestApproval":
 		var approval CommandApprovalParams
 		if err := json.Unmarshal(params, &approval); err != nil {
-			p.logDebug("[codex] failed to parse command approval: %v", err)
 			return llm.SDKMessage{}, false
 		}
 		inputJSON, _ := json.Marshal(map[string]string{"command": approval.Command})
@@ -986,7 +961,6 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 	case "item/fileChange/requestApproval":
 		var approval FileChangeApprovalParams
 		if err := json.Unmarshal(params, &approval); err != nil {
-			p.logDebug("[codex] failed to parse file change approval: %v", err)
 			return llm.SDKMessage{}, false
 		}
 		inputFields := map[string]string{}
@@ -1017,7 +991,6 @@ func (p *Protocol) parseServerRequest(method string, id int, params json.RawMess
 		return p.handleNativeUserInput(id, params)
 
 	default:
-		p.logDebug("[codex] unhandled server request: %s", method)
 		return llm.SDKMessage{}, false
 	}
 }
@@ -1177,7 +1150,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 	case "item/agentMessage/delta":
 		var delta AgentMessageDelta
 		if err := json.Unmarshal(params, &delta); err != nil {
-			p.logDebug("[codex] failed to parse agent message delta: %v", err)
 			if p.opts.NativeToollessReview {
 				return p.nativeToollessViolation("malformed item/agentMessage/delta notification"), true
 			}
@@ -1241,7 +1213,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 	case "turn/completed":
 		var completed TurnCompletedParams
 		if err := json.Unmarshal(params, &completed); err != nil {
-			p.logDebug("[codex] failed to parse turn/completed: %v", err)
 			if p.opts.NativeToollessReview {
 				return p.nativeToollessViolation("malformed turn/completed notification"), true
 			}
@@ -1377,7 +1348,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 			return p.withUsage(msg), true
 
 		default:
-			p.logDebug("[codex] turn/completed with unknown status: %s", completed.Turn.Status)
 			if p.opts.NativeToollessReview {
 				return p.nativeToollessViolation("unknown review turn status: " + completed.Turn.Status), true
 			}
@@ -1879,7 +1849,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}, true
 
 	default:
-		p.logDebug("[codex] unhandled notification: %s", method)
 		if p.opts.NativeToollessReview {
 			return p.nativeToollessViolation("unexpected notification: " + method), true
 		}
@@ -2139,10 +2108,6 @@ func (p *Protocol) WritableRootsForTest() []string {
 // SystemPromptForTest returns the SystemPrompt from the protocol options.
 func (p *Protocol) SystemPromptForTest() string {
 	return p.opts.SystemPrompt
-}
-
-func computeCost(model string, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens int) float64 {
-	return computeCostForContext(model, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, inputTokens)
 }
 
 func computeCostForContext(model string, inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens, contextInputTokens int) float64 {

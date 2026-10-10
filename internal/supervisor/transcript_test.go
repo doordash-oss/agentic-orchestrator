@@ -77,7 +77,7 @@ func TestTranscriptStore_ConcurrentAppendsAllocateStrictlyIncreasingSeqAndSurviv
 		}()
 	}
 	wg.Wait()
-	page, err := store.page(PageQuery{HasAfter: true, Limit: maxPageLimit})
+	page, err := store.rangedPage(PageQuery{HasAfter: true, Limit: maxPageLimit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestTranscriptStore_ConcurrentAppendsAllocateStrictlyIncreasingSeqAndSurviv
 	_ = store.close()
 
 	reopened := openTestStore(t, dir)
-	again, err := reopened.page(PageQuery{HasAfter: true, Limit: maxPageLimit})
+	again, err := reopened.rangedPage(PageQuery{HasAfter: true, Limit: maxPageLimit})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestTranscriptStore_RebuildsMissingOrTruncatedIndex(t *testing.T) {
 			if _, err := os.Stat(indexPath); err != nil {
 				t.Fatalf("index not rebuilt: %v", err)
 			}
-			page, err := reopened.page(PageQuery{Before: 6, HasBefore: true, Limit: 2})
+			page, err := reopened.rangedPage(PageQuery{Before: 6, HasBefore: true, Limit: 2})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -171,7 +171,7 @@ func TestTranscriptStore_DropsTornTrailingLine(t *testing.T) {
 	if rec.Seq != 2 {
 		t.Fatalf("seq after torn tail = %d, want 2", rec.Seq)
 	}
-	page, _ := reopened.page(PageQuery{})
+	page, _ := reopened.rangedPage(PageQuery{})
 	if got := recordTexts(t, page.Items); fmt.Sprint(got) != "[kept next]" {
 		t.Fatalf("records = %v", got)
 	}
@@ -242,13 +242,11 @@ func TestTranscriptStore_PagingHonoursCursorsLimitsAndFlags(t *testing.T) {
 		{"after zero", PageQuery{After: 0, HasAfter: true, Limit: 10}, 10, 1, 10, false, true},
 		{"after cursor", PageQuery{After: 600, HasAfter: true}, 20, 601, 620, true, false},
 		{"after head", PageQuery{After: 620, HasAfter: true}, 0, 0, 0, false, false},
-		{"after beyond head", PageQuery{After: 900, HasAfter: true}, 0, 0, 0, false, false},
 		{"before first", PageQuery{Before: 1, HasBefore: true}, 0, 0, 0, false, false},
-		{"before beyond head", PageQuery{Before: 5000, HasBefore: true}, 0, 0, 0, false, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			page, err := store.page(tc.query)
+			page, err := store.rangedPage(tc.query)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -265,7 +263,7 @@ func TestTranscriptStore_PagingHonoursCursorsLimitsAndFlags(t *testing.T) {
 		{Limit: 501},
 		{Limit: -1},
 	} {
-		if _, err := store.page(bad); !errors.Is(err, ErrInvalidPageQuery) {
+		if _, err := store.rangedPage(bad); !errors.Is(err, ErrInvalidPageQuery) {
 			t.Fatalf("page(%+v) err = %v, want ErrInvalidPageQuery", bad, err)
 		}
 	}

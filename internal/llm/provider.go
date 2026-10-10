@@ -152,12 +152,6 @@ type VersionEnforcer interface {
 // question payload itself is wire-formatted.
 const RecommendationConfidenceClause = `For every multiple-choice question you construct, assign every answer option a confidence score as a decimal between 0.00 and 1.00. This score is a property of the answer itself: how sure you are that the option is the right answer given the context you have. Surface these confidence scores to the user in the question payload you emit. Mark exactly one recommended option, and that recommended option MUST be the single highest-confidence option. If your intended recommendation is not the highest-confidence option, revise either the recommendation label or the confidence scores before sending. When no option is recommended (e.g. free-text questions or genuinely undecidable choices), you do not need to produce confidence values.`
 
-// CostCalculator computes cost and context window for a provider's models.
-type CostCalculator interface {
-	ComputeCost(model string, inputTokens, outputTokens int64) float64
-	ContextWindowForModel(model string) int
-}
-
 // SessionCostAdjustment is provider-specific cost and usage that is not carried
 // by the primary session result. For example, OpenCode stores Task subagents as
 // child sessions outside the parent ACP usage_update total.

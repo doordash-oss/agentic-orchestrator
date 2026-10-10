@@ -3709,14 +3709,6 @@ func (m fakeSessionManager) FeatureSessions(featureID string) []ports.SessionVie
 	return out
 }
 
-func (m fakeSessionManager) SendInput(string, []byte) error { return nil }
-
-func (m fakeSessionManager) Attach(id string) (ports.SessionView, error) {
-	return m.GetSession(id), nil
-}
-
-func (m fakeSessionManager) Detach() {}
-
 func (m fakeSessionManager) Shutdown() {}
 
 func (m fakeSessionManager) IsShuttingDown() bool { return false }
@@ -3821,7 +3813,6 @@ type fakeMessageLog struct {
 }
 
 func (l fakeMessageLog) Append(llm.SDKMessage) int                     { return len(l.messages) - 1 }
-func (l fakeMessageLog) UpdateLast(llm.SDKMessage)                     {}
 func (l fakeMessageLog) UpdateLastAssistantPartial(llm.SDKMessage) int { return 0 }
 func (l fakeMessageLog) Messages() []llm.SDKMessage {
 	return append([]llm.SDKMessage(nil), l.messages...)

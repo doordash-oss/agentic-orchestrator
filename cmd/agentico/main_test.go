@@ -795,7 +795,7 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 	const wantID = testAnthropicSonnet45ModelID
 
 	// First startup: cache miss → discovery runs, catalog populated and cached.
-	p1 := opencode.NewWithRunner(runner)
+	p1 := opencode.New("", runner)
 	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p1}, cacheRoot, nil, false); len(warnings) != 0 {
 		t.Fatalf("first-startup warnings = %v, want none", warnings)
 	}
@@ -807,7 +807,7 @@ func TestDiscoverProviderCatalogs_OpenCodeDiscoversAndCaches(t *testing.T) {
 	}
 
 	// OpenCode configuration can change independently of its CLI version.
-	p2 := opencode.NewWithRunner(runner)
+	p2 := opencode.New("", runner)
 	if warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p2}, cacheRoot, nil, false); len(warnings) != 0 {
 		t.Fatalf("second-startup warnings = %v, want none", warnings)
 	}
@@ -841,7 +841,7 @@ func TestDiscoverProviderCatalogs_OpenCodeFallsBackOnDiscoveryFailure(t *testing
 		}
 	}
 
-	p := opencode.NewWithRunner(runner)
+	p := opencode.New("", runner)
 	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, t.TempDir(), nil, false)
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one opencode built-in-fallback warning", warnings)

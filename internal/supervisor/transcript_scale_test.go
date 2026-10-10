@@ -267,7 +267,7 @@ func TestTranscriptStore_RewritesDisagreeingIndexOnOpen(t *testing.T) {
 			}
 			reopened := openTestStore(t, dir)
 			assertIndexMatchesStore(t, dir, reopened)
-			page, err := reopened.page(PageQuery{Before: 6, HasBefore: true, Limit: 2})
+			page, err := reopened.rangedPage(PageQuery{Before: 6, HasBefore: true, Limit: 2})
 			if err != nil {
 				t.Fatal(err)
 			}

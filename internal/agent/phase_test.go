@@ -1291,10 +1291,9 @@ func (p *captureProvider) MinVersion() [3]int { return [3]int{} }
 func (p *captureProvider) EnvVarsToExclude() []string {
 	return nil
 }
-func (p *captureProvider) ComputeCost(string, int64, int64) float64 { return 0 }
-func (p *captureProvider) ContextWindowForModel(string) int         { return p.contextWindow }
-func (p *captureProvider) EnablesPendingToolWatchdog() bool         { return p.watchdog }
-func (p *captureProvider) UsesBoundedHelperSandbox() bool           { return p.boundedSandbox }
+func (p *captureProvider) ContextWindowForModel(string) int { return p.contextWindow }
+func (p *captureProvider) EnablesPendingToolWatchdog() bool { return p.watchdog }
+func (p *captureProvider) UsesBoundedHelperSandbox() bool   { return p.boundedSandbox }
 func (p *captureProvider) ModelCatalog() []llm.ModelInfo {
 	return []llm.ModelInfo{{ID: p.model}}
 }

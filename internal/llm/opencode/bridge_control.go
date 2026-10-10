@@ -276,7 +276,6 @@ func (p *Protocol) resolveElsewhere(prefix string, props json.RawMessage) {
 	defer p.mu.Unlock()
 	if _, held := p.bridged[prefix+ev.RequestID]; held {
 		delete(p.bridged, prefix+ev.RequestID)
-		p.logDebug("[opencode] bridged request %s was answered elsewhere", ev.RequestID)
 	}
 	p.markBridgedDoneLocked(ev.RequestID)
 }
@@ -298,7 +297,6 @@ func (p *Protocol) resolveVanished(line bridgeLine) {
 		if req.askedSeq < line.Seq && !pending[reqID] {
 			delete(p.bridged, reqID)
 			p.markBridgedDoneLocked(req.openCodeID)
-			p.logDebug("[opencode] bridged request %s was answered while the event stream was down", req.openCodeID)
 		}
 	}
 }
@@ -329,7 +327,6 @@ func (p *Protocol) respondBridged(requestID, reply string, answers [][]string) e
 	}
 	p.mu.Unlock()
 	if !held {
-		p.logDebug("[opencode] no held bridged request %s; nothing to answer", requestID)
 		return nil
 	}
 	id := url.PathEscape(req.openCodeID)

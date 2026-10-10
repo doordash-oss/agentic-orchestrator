@@ -30,13 +30,13 @@ import (
 )
 
 func TestProviderAttestsNativeToollessReview(t *testing.T) {
-	if !New().SupportsNativeToollessReview() {
+	if !New("", nil).SupportsNativeToollessReview() {
 		t.Fatal("SupportsNativeToollessReview() = false, want true after the audited boundary is implemented")
 	}
 }
 
 func TestProviderName(t *testing.T) {
-	if got := New().Name(); got != "opencode" {
+	if got := New("", nil).Name(); got != "opencode" {
 		t.Fatalf("Name() = %q, want opencode", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestBackendModel_StripsRoutingPrefixOnce(t *testing.T) {
 }
 
 func TestBuildCommand_ACPStdioWithModelEnv(t *testing.T) {
-	p := New()
+	p := New("", nil)
 	cmd, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5"})
 	if err != nil {
 		t.Fatalf("BuildCommand() error: %v", err)
@@ -83,7 +83,7 @@ func TestBuildCommand_ACPStdioWithModelEnv(t *testing.T) {
 
 func TestBuildCommand_InteractiveUsesMinimalOverlay(t *testing.T) {
 	state := t.TempDir()
-	cmd, env, err := New().BuildCommand(llm.CommandBuildOpts{
+	cmd, env, err := New("", nil).BuildCommand(llm.CommandBuildOpts{
 		Model: "opencode:openai/gpt-5", Interactive: true,
 		StateDir: state, SystemPrompt: "Supervisor instructions",
 	})
@@ -163,7 +163,7 @@ func TestBuildCommand_InteractiveUsesMinimalOverlay(t *testing.T) {
 }
 
 func TestBuildCommand_InteractiveEffortCoversEligibleModels(t *testing.T) {
-	p := New()
+	p := New("", nil)
 	noText := false
 	p.SetModelCatalog([]llm.ModelInfo{
 		{ID: "vendor/first", EffortVariants: map[llm.EffortLevel]map[string]any{llm.EffortHigh: {"reasoningEffort": "high"}}},
@@ -202,16 +202,13 @@ func TestBuildCommand_InteractiveEffortCoversEligibleModels(t *testing.T) {
 }
 
 func TestOpenCodeProvider_CLIBinaryDefault(t *testing.T) {
-	if got := New().cliBinary(); got != "opencode" {
+	if got := New("", nil).cliBinary(); got != "opencode" {
 		t.Errorf("cliBinary() = %q, want opencode", got)
-	}
-	if got := NewWithBinary("").cliBinary(); got != "opencode" {
-		t.Errorf("NewWithBinary(\"\").cliBinary() = %q, want opencode", got)
 	}
 }
 
 func TestOpenCodeProvider_BuildCommandUsesCustomBinary(t *testing.T) {
-	p := NewWithBinary("my-opencode")
+	p := New("my-opencode", nil)
 	cmd, _, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5"})
 	if err != nil {
 		t.Fatalf("BuildCommand() error: %v", err)
@@ -224,7 +221,7 @@ func TestOpenCodeProvider_BuildCommandUsesCustomBinary(t *testing.T) {
 func TestBuildCommand_StripsRoutingPrefixBeforeModelEnv(t *testing.T) {
 	// Defensive: even if the routing-prefixed form reaches BuildCommand, the
 	// prefix is stripped exactly once before being handed to OpenCode.
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "opencode:openai/gpt-5"})
 	if err != nil {
 		t.Fatalf("BuildCommand() error: %v", err)
@@ -240,7 +237,7 @@ func TestBuildCommand_StripsRoutingPrefixBeforeModelEnv(t *testing.T) {
 // may yield a launchable `opencode acp` command, and an empty backend must not
 // silently fall back to OpenCode's default model.
 func TestBuildCommand_RejectsInvalidBackendModels(t *testing.T) {
-	p := New()
+	p := New("", nil)
 	const secret = "sk-ant-deadbeefdeadbeefdeadbeef0123"
 	cases := []struct {
 		name        string
@@ -291,7 +288,7 @@ func TestBuildCommand_RejectsInvalidBackendModels(t *testing.T) {
 // whitespace, and OpenCode-meaningful suffixes — survive validation and reach
 // OPENCODE_CONFIG_CONTENT unchanged after the prefix is stripped exactly once.
 func TestBuildCommand_PreservesValidSlashFormModels(t *testing.T) {
-	p := New()
+	p := New("", nil)
 	cases := map[string]string{
 		"anthropic/claude-sonnet-4-5":                                   "anthropic/claude-sonnet-4-5",
 		"openai/gpt-5-codex":                                            "openai/gpt-5-codex",
@@ -383,7 +380,7 @@ func configModel(t *testing.T, content string) string {
 // supplied, reads also ask rather than being silently allowed, so an
 // external-directory read still pauses through Agentico.
 func TestBuildCommand_NormalModeAsksForMediatedSurfaces(t *testing.T) {
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5", DangerouslySkipPerms: false})
 	if err != nil {
 		t.Fatalf("BuildCommand() error: %v", err)
@@ -418,7 +415,7 @@ func TestBuildCommand_NativeToollessReviewIsEphemeralAndDeniesEverySurface(t *te
 		t.Fatal(err)
 	}
 	t.Setenv("XDG_DATA_HOME", realDataHome)
-	p := New()
+	p := New("", nil)
 	args, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:                "opencode:anthropic/claude-haiku-4-5[200K]",
 		EffortLevel:          llm.EffortLow,
@@ -503,7 +500,7 @@ func TestBuildCommand_NativeToollessReviewIsEphemeralAndDeniesEverySurface(t *te
 }
 
 func TestProviderReviewPreferenceBand(t *testing.T) {
-	p := New()
+	p := New("", nil)
 	tests := []struct {
 		model llm.ModelInfo
 		band  int
@@ -523,7 +520,7 @@ func TestProviderReviewPreferenceBand(t *testing.T) {
 }
 
 func TestBuildCommand_NativeToollessReviewRequiresStateDir(t *testing.T) {
-	_, _, err := New().BuildCommand(llm.CommandBuildOpts{
+	_, _, err := New("", nil).BuildCommand(llm.CommandBuildOpts{
 		Model:                "anthropic/claude-haiku-4-5",
 		NativeToollessReview: true,
 	})
@@ -536,7 +533,7 @@ func TestBuildCommand_NativeToollessReviewRequiresStateDir(t *testing.T) {
 }
 
 func TestBuildCommand_DisallowedTaskDeniesOpenCodeTaskSurface(t *testing.T) {
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{
 		Model:           "anthropic/claude-sonnet-4-5",
 		DisallowedTools: []string{"Task"},
@@ -559,7 +556,7 @@ func TestBuildCommand_DisallowedTaskDeniesOpenCodeTaskSurface(t *testing.T) {
 // prompts still route as user-input decisions rather than being silently
 // auto-approved (Task 3).
 func TestBuildCommand_DangerousSkipAllowsToolsButAsksQuestions(t *testing.T) {
-	p := New()
+	p := New("", nil)
 	_, env, err := p.BuildCommand(llm.CommandBuildOpts{Model: "anthropic/claude-sonnet-4-5", DangerouslySkipPerms: true})
 	if err != nil {
 		t.Fatalf("BuildCommand() error: %v", err)
@@ -576,13 +573,13 @@ func TestBuildCommand_DangerousSkipAllowsToolsButAsksQuestions(t *testing.T) {
 }
 
 func TestInstallHint_SupportedDistribution(t *testing.T) {
-	if got := New().InstallHint(); !strings.Contains(got, "opencode.ai/install") {
+	if got := New("", nil).InstallHint(); !strings.Contains(got, "opencode.ai/install") {
 		t.Fatalf("InstallHint() = %q, want the supported opencode.ai installer", got)
 	}
 }
 
 func TestMinVersion_Is1_17_9(t *testing.T) {
-	if got := New().MinVersion(); got != [3]int{1, 17, 9} {
+	if got := New("", nil).MinVersion(); got != [3]int{1, 17, 9} {
 		t.Fatalf("MinVersion() = %v, want [1 17 9]", got)
 	}
 }
@@ -591,7 +588,7 @@ func TestMinVersion_Is1_17_9(t *testing.T) {
 // so a too-old CLI is filtered out of the ready provider set rather than left
 // routable with only a warning.
 func TestEnforcesMinVersion_True(t *testing.T) {
-	if !New().EnforcesMinVersion() {
+	if !New("", nil).EnforcesMinVersion() {
 		t.Fatal("EnforcesMinVersion() = false, want true (too-old OpenCode must be filtered out)")
 	}
 }
@@ -625,7 +622,7 @@ func TestVersionInfo_ParsesSemverAndNeverEchoesRawOutput(t *testing.T) {
 				}
 				return []byte(tc.raw), nil
 			}
-			got, err := NewWithRunner(runner).VersionInfo()
+			got, err := New("", runner).VersionInfo()
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("VersionInfo() = %q, want error", got)
@@ -652,7 +649,7 @@ func TestVersionInfo_WrapsRunnerError(t *testing.T) {
 	runner := func(_ context.Context, _ string, _ []string, _ []string) ([]byte, error) {
 		return nil, errors.New("not installed")
 	}
-	_, err := NewWithRunner(runner).VersionInfo()
+	_, err := New("", runner).VersionInfo()
 	if err == nil {
 		t.Fatal("VersionInfo() error = nil, want error")
 	}
@@ -661,30 +658,19 @@ func TestVersionInfo_WrapsRunnerError(t *testing.T) {
 	}
 }
 
-// TestCostAndContext_ZeroWithoutMetadata proves that for a model absent from any
-// catalog, cost and context window both report the "unknown" zero rather
-// than a guessed value. Familiar model names do not imply known metadata.
-func TestCostAndContext_ZeroWithoutMetadata(t *testing.T) {
-	p := New()
-	// A familiar model without discovered pricing still has unknown cost.
-	if got := p.ComputeCost("anthropic/claude-sonnet-4-5", 1000, 2000); got != 0 {
-		t.Fatalf("ComputeCost(undiscovered) = %v, want 0 (no pricing metadata)", got)
-	}
-	// A model in no catalog at all → unknown (zero) window and zero cost.
-	if got := p.ComputeCost("vendor/unknown-model", 1000, 2000); got != 0 {
-		t.Fatalf("ComputeCost(unknown) = %v, want 0 (no pricing metadata)", got)
-	}
+// TestContextWindow_ZeroWithoutMetadata proves that for a model absent from any
+// catalog the context window reports the "unknown" zero rather than a guessed
+// value. Familiar model names do not imply known metadata.
+func TestContextWindow_ZeroWithoutMetadata(t *testing.T) {
+	p := New("", nil)
 	if got := p.ContextWindowForModel("vendor/unknown-model"); got != 0 {
 		t.Fatalf("ContextWindowForModel(unknown) = %d, want 0 (no catalog metadata)", got)
 	}
-	// A catalog with no pricing (e.g. loaded from the version-keyed cache) still
-	// yields zero cost, but its discovered context window is returned.
+	// A catalog loaded without pricing metadata still returns its discovered
+	// context window.
 	p.SetModelCatalog([]llm.ModelInfo{
 		{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000},
 	})
-	if got := p.ComputeCost("anthropic/claude-sonnet-4-5[200K]", 1_000_000, 1_000_000); got != 0 {
-		t.Fatalf("ComputeCost() = %v, want 0 when catalog carries no pricing", got)
-	}
 	if got := p.ContextWindowForModel("anthropic/claude-sonnet-4-5[200K]"); got != 200_000 {
 		t.Fatalf("ContextWindowForModel(suffixed) = %d, want 200000", got)
 	}
@@ -703,26 +689,23 @@ func TestCostAndContext_ZeroWithoutMetadata(t *testing.T) {
 }
 
 func TestEnvVarsToExclude_Nil(t *testing.T) {
-	if got := New().EnvVarsToExclude(); got != nil {
+	if got := New("", nil).EnvVarsToExclude(); got != nil {
 		t.Fatalf("EnvVarsToExclude() = %v, want nil", got)
 	}
 }
 
 func TestProviderImplementsExpectedInterfaces(t *testing.T) {
-	var p any = New()
+	var p any = New("", nil)
 	if _, ok := p.(llm.LLMProvider); !ok {
 		t.Error("Provider does not implement llm.LLMProvider")
 	}
 	if _, ok := p.(llm.VersionEnforcer); !ok {
 		t.Error("Provider does not implement llm.VersionEnforcer")
 	}
-	if _, ok := p.(llm.CostCalculator); !ok {
-		t.Error("Provider does not implement llm.CostCalculator")
-	}
 }
 
 func TestAskingQuestionsClause_EmbedsConfidenceContract(t *testing.T) {
-	clause := New().AskingQuestionsClause()
+	clause := New("", nil).AskingQuestionsClause()
 	if clause == "" {
 		t.Fatal("AskingQuestionsClause() is empty")
 	}
@@ -870,7 +853,7 @@ func TestCheckReadiness_TimeoutDistinguished(t *testing.T) {
 func TestCatalogBackedRouting_RegistryLevel(t *testing.T) {
 	reg := llm.NewRegistry()
 	reg.Register(&fakeBareProvider{name: "claude", models: []string{"sonnet", "opus"}})
-	oc := New()
+	oc := New("", nil)
 	oc.SetModelCatalog([]llm.ModelInfo{
 		{ID: "anthropic/claude-sonnet-4-5[200K]", Aliases: []string{"anthropic/claude-sonnet-4-5"}, ContextWindow: 200_000, Category: "balanced"},
 		{ID: "openai/gpt-5", Category: "capable"},
@@ -937,7 +920,7 @@ func (f *fakeBareProvider) InstallHint() string                       { return "
 func (f *fakeBareProvider) VersionInfo() (string, error)              { return "1.0.0", nil }
 func (f *fakeBareProvider) MinVersion() [3]int                        { return [3]int{0, 0, 0} }
 func (f *fakeBareProvider) EnvVarsToExclude() []string                { return nil }
-func (f *fakeBareProvider) ModelCatalog() []llm.ModelInfo              { return nil }
+func (f *fakeBareProvider) ModelCatalog() []llm.ModelInfo             { return nil }
 func (f *fakeBareProvider) SetModelCatalog([]llm.ModelInfo)           {}
 func (f *fakeBareProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
 	return nil, nil
@@ -962,7 +945,7 @@ func TestLiveVersionMeetsMinimum(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping live OpenCode version probe in short mode")
 	}
-	p := New()
+	p := New("", nil)
 	if !p.DetectCLI() {
 		t.Skip("opencode CLI not installed")
 	}

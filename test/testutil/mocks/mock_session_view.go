@@ -261,7 +261,6 @@ func (m *MockSessionView) SetStatus(status ports.SessionStatus) { m.StatusVal = 
 func (m *MockSessionView) SetLogFile(*os.File)                  {}
 func (m *MockSessionView) AddCleanupFunc(func())                {}
 func (m *MockSessionView) SetHasUnansweredQuestion(v bool)      { m.HasUnansweredQuestionVal = v }
-func (m *MockSessionView) CloseStdin()                          {}
 func (m *MockSessionView) SetOnToolAllowed(func(toolName string, input json.RawMessage)) {
 }
 func (m *MockSessionView) SetOnFileRead(func(read llm.FileReadEvent))  {}

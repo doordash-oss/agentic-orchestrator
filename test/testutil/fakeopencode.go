@@ -221,7 +221,7 @@ func NewFakeOpenCodeProvider(t testing.TB, script string) *FakeOpenCodeProvider 
 	if err != nil {
 		t.Fatalf("resolve test executable: %v", err)
 	}
-	inner := opencode.NewWithBinary(exe)
+	inner := opencode.New(exe, nil)
 	inner.SetModelCatalog(fakeOpenCodeCatalog())
 	return &FakeOpenCodeProvider{Script: script, inner: inner}
 }
@@ -264,8 +264,7 @@ func (p *FakeOpenCodeProvider) MatchesModel(model string) bool {
 	backend := opencode.BackendModel(model)
 	return backend == FakeOpenCodeModel || backend == FakeOpenCodeSecondModel
 }
-func (p *FakeOpenCodeProvider) ComputeCost(string, int64, int64) float64 { return 0 }
-func (p *FakeOpenCodeProvider) ContextWindowForModel(string) int         { return 200000 }
+func (p *FakeOpenCodeProvider) ContextWindowForModel(string) int { return 200000 }
 
 // SupportsNativeToollessReview attests the same audited boundary as the real
 // OpenCode provider the fake wraps.

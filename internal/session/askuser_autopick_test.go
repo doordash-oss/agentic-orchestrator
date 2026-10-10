@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
@@ -245,30 +246,32 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := decideAskUserAutoPick(json.RawMessage(tt.input), askUserAutoPickDecisionContext{
+			// Parse returns an empty bundle for a rejected input, which declines.
+			bundle, _ := askuser.Parse(json.RawMessage(tt.input))
+			got := decideAskUserAutoPickBundle(bundle, askUserAutoPickDecisionContext{
 				Purpose:     tt.purpose,
 				Inquireness: tt.inquireness,
 			})
 			if got.Pickable != tt.wantPick {
-				t.Fatalf("decideAskUserAutoPick(%s).Pickable = %v, want %v (reason=%s)", tt.name, got.Pickable, tt.wantPick, got.Reason)
+				t.Fatalf("decideAskUserAutoPickBundle(%s).Pickable = %v, want %v (reason=%s)", tt.name, got.Pickable, tt.wantPick, got.Reason)
 			}
 			if !tt.wantPick {
 				if len(got.Answers) != 0 {
-					t.Errorf("decideAskUserAutoPick(%s).Answers = %v, want empty", tt.name, got.Answers)
+					t.Errorf("decideAskUserAutoPickBundle(%s).Answers = %v, want empty", tt.name, got.Answers)
 				}
 				return
 			}
 			if len(got.Answers) != 1 || got.Answers["1"] != tt.wantAnswer {
-				t.Errorf("decideAskUserAutoPick(%s).Answers = %v, want {\"1\": %q}", tt.name, got.Answers, tt.wantAnswer)
+				t.Errorf("decideAskUserAutoPickBundle(%s).Answers = %v, want {\"1\": %q}", tt.name, got.Answers, tt.wantAnswer)
 			}
 			if len(got.Selections) != 1 {
-				t.Fatalf("decideAskUserAutoPick(%s) len(Selections) = %d, want 1", tt.name, len(got.Selections))
+				t.Fatalf("decideAskUserAutoPickBundle(%s) len(Selections) = %d, want 1", tt.name, len(got.Selections))
 			}
 			if got.Selections[0].Answer != tt.wantAnswer {
-				t.Errorf("decideAskUserAutoPick(%s) Answer = %q, want %q", tt.name, got.Selections[0].Answer, tt.wantAnswer)
+				t.Errorf("decideAskUserAutoPickBundle(%s) Answer = %q, want %q", tt.name, got.Selections[0].Answer, tt.wantAnswer)
 			}
 			if got.Selections[0].Confidence != tt.wantConf {
-				t.Errorf("decideAskUserAutoPick(%s) Confidence = %v, want %v", tt.name, got.Selections[0].Confidence, tt.wantConf)
+				t.Errorf("decideAskUserAutoPickBundle(%s) Confidence = %v, want %v", tt.name, got.Selections[0].Confidence, tt.wantConf)
 			}
 		})
 	}

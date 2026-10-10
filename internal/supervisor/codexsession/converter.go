@@ -67,8 +67,8 @@ type Options struct {
 	// Home resolves the Codex home directory. Nil means codex.ResolveHome
 	// (CODEX_HOME, else $HOME/.codex).
 	Home func() (string, error)
-	// CLIVersion is recorded in session_meta. Empty means "agentico".
-	CLIVersion string
+	// cliVersion is recorded in session_meta. Empty means "agentico".
+	cliVersion string
 	// ModelProvider is recorded in session_meta. Empty means "openai".
 	ModelProvider string
 }
@@ -77,8 +77,8 @@ func (o Options) withDefaults() Options {
 	if o.Home == nil {
 		o.Home = codex.ResolveHome
 	}
-	if o.CLIVersion == "" {
-		o.CLIVersion = defaultCLIVersion
+	if o.cliVersion == "" {
+		o.cliVersion = defaultCLIVersion
 	}
 	if o.ModelProvider == "" {
 		o.ModelProvider = defaultModelProvider
@@ -164,7 +164,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if err := ctx.Err(); err != nil {
 		return supervisor.RebuildResult{}, err
 	}
-	data, started, err := render(in, c.opts)
+	data, started, err := renderRollout(in, c.opts)
 	if err != nil {
 		return supervisor.RebuildResult{}, err
 	}
@@ -257,16 +257,7 @@ func compactedPayloads(content []byte) []json.RawMessage {
 
 func countCompacted(content []byte) int { return len(compactedPayloads(content)) }
 
-// Render converts in.Records to the bytes of a Codex rollout file without
-// touching the file system. It returns nil when the selection is empty.
-// Argument errors are plain errors; unrepresentable records are
-// *supervisor.ConversionError.
-func Render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
-	data, _, err := render(in, opts.withDefaults())
-	return data, err
-}
-
-func render(in supervisor.RebuildInput, opts Options) ([]byte, time.Time, error) {
+func renderRollout(in supervisor.RebuildInput, opts Options) ([]byte, time.Time, error) {
 	if err := supervisor.ValidateNativeRebuildInput(in, "codex rollout rebuild"); err != nil {
 		return nil, time.Time{}, err
 	}
@@ -601,7 +592,7 @@ type sessionMeta struct {
 	Timestamp     string `json:"timestamp"`
 	CWD           string `json:"cwd"`
 	Originator    string `json:"originator"`
-	CLIVersion    string `json:"cli_version"`
+	CLIVer        string `json:"cli_version"`
 	Source        string `json:"source"`
 	ModelProvider string `json:"model_provider"`
 }
@@ -652,7 +643,7 @@ func encodeLines(in supervisor.RebuildInput, opts Options, entries []entry, sele
 		Timestamp:     startTS,
 		CWD:           in.WorkDir,
 		Originator:    originator,
-		CLIVersion:    opts.CLIVersion,
+		CLIVer:        opts.cliVersion,
 		Source:        "vscode",
 		ModelProvider: opts.ModelProvider,
 	}

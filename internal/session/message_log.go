@@ -43,31 +43,6 @@ func (l *MessageLog) Append(msg llm.SDKMessage) int {
 	return len(l.messages) - 1
 }
 
-// Prepend adds messages before the existing log entries.
-func (l *MessageLog) Prepend(msgs []llm.SDKMessage) {
-	if len(msgs) == 0 {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	prepended := make([]llm.SDKMessage, 0, len(msgs)+len(l.messages))
-	prepended = append(prepended, msgs...)
-	prepended = append(prepended, l.messages...)
-	l.messages = prepended
-}
-
-// UpdateLast replaces the last message in the log. Used for partial message streaming.
-// If the log is empty, the message is appended instead.
-func (l *MessageLog) UpdateLast(msg llm.SDKMessage) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.messages) == 0 {
-		l.messages = append(l.messages, msg)
-		return
-	}
-	l.messages[len(l.messages)-1] = msg
-}
-
 // UpdateLastAssistantPartial coalesces an incoming assistant message into the
 // most recent in-flight streaming partial.
 // UpdateLastAssistantPartial coalesces an incoming assistant message into
@@ -274,12 +249,6 @@ func (l *MessageLog) ToolUseBlocks() []llm.ContentBlock {
 		}
 	}
 	return blocks
-}
-
-// RenderMessagesPublic produces a human-readable text view of messages.
-// Exported for use by attach view and tests.
-func RenderMessagesPublic(msgs []llm.SDKMessage) string {
-	return renderMessages(msgs)
 }
 
 // renderMessages produces a human-readable text view of messages.

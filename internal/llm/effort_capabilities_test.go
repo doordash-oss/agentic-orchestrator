@@ -54,7 +54,7 @@ func TestCodexCatalogHasEffortCapabilities(t *testing.T) {
 }
 
 func TestOpenCodeUndiscoveredModelsAreAutoOnly(t *testing.T) {
-	p := opencode.New()
+	p := opencode.New("", nil)
 	for _, id := range []string{"openai/gpt-5", "portkey/custom"} {
 		if len(llm.EffortCapabilitiesForModel(p, id)) != 0 {
 			t.Fatal("effort support requires discovery")
@@ -66,7 +66,7 @@ func TestEffortCapabilitiesForModelViaRegistry(t *testing.T) {
 	reg := llm.NewRegistry()
 	claudeProv := claude.NewProvider("")
 	codexProv := codex.NewProvider("")
-	opencodeProv := opencode.New()
+	opencodeProv := opencode.New("", nil)
 	reg.Register(claudeProv)
 	reg.Register(codexProv)
 	reg.Register(opencodeProv)

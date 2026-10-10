@@ -89,7 +89,7 @@ func findModel(models []llm.ModelInfo, id string) (llm.ModelInfo, bool) {
 
 // TestDiscover_VerboseSuccess covers a successful verbose discovery: slash-form
 // ids, display names, context-window suffixes, unsuffixed aliases, deterministic
-// categories, and parsed pricing that drives ComputeCost.
+// categories, and parsed per-model pricing.
 func TestDiscover_VerboseSuccess(t *testing.T) {
 	p := &Provider{runner: fakeModelsRunner(t, map[string]runnerResponse{
 		verboseRefreshKey: {out: []byte(verboseTwoModels)},
@@ -119,6 +119,11 @@ func TestDiscover_VerboseSuccess(t *testing.T) {
 	if !slices.Contains(sonnet.Aliases, "anthropic/claude-sonnet-4-5") {
 		t.Errorf("sonnet aliases = %v, want unsuffixed backend id preserved", sonnet.Aliases)
 	}
+	// Pricing parsed from cost.{input,output} (USD per 1M tokens) lands on the
+	// per-model cost field the role ranking reads.
+	if sonnet.Cost == nil || sonnet.Cost.Input != 3 || sonnet.Cost.Output != 15 {
+		t.Errorf("sonnet Cost = %+v, want 3 in / 15 out per 1M tokens", sonnet.Cost)
+	}
 
 	nano, ok := findModel(models, "openai/gpt-5-nano[400K]")
 	if !ok {
@@ -127,15 +132,8 @@ func TestDiscover_VerboseSuccess(t *testing.T) {
 	if nano.Category != "" {
 		t.Errorf("nano Category = %q, want no name-derived category", nano.Category)
 	}
-
-	// Pricing parsed from cost.{input,output} (USD per 1M tokens) drives
-	// ComputeCost via both the suffixed id and the unsuffixed alias.
-	p.SetModelCatalog(models)
-	if got := p.ComputeCost("anthropic/claude-sonnet-4-5[200K]", 1_000_000, 1_000_000); got != 18 {
-		t.Errorf("ComputeCost(suffixed) = %v, want 18 (3 in + 15 out)", got)
-	}
-	if got := p.ComputeCost("anthropic/claude-sonnet-4-5", 1_000_000, 1_000_000); got != 18 {
-		t.Errorf("ComputeCost(alias) = %v, want 18", got)
+	if nano.Cost == nil || nano.Cost.Input != 0.05 || nano.Cost.Output != 0.4 {
+		t.Errorf("nano Cost = %+v, want 0.05 in / 0.4 out per 1M tokens", nano.Cost)
 	}
 }
 
@@ -167,11 +165,10 @@ func TestDiscover_LineOnlyFallback(t *testing.T) {
 		if strings.Contains(m.ID, "[") {
 			t.Errorf("line-only model %q has an invented context suffix", m.ID)
 		}
-	}
-	// No pricing was available, so cost is zero.
-	p.SetModelCatalog(models)
-	if got := p.ComputeCost("anthropic/claude-sonnet-4-5", 1_000_000, 1_000_000); got != 0 {
-		t.Errorf("ComputeCost line-only = %v, want 0", got)
+		// No pricing was available.
+		if m.Cost != nil {
+			t.Errorf("line-only model %q has pricing %+v, want none", m.ID, m.Cost)
+		}
 	}
 }
 
@@ -216,7 +213,7 @@ func TestDiscover_RefreshTimeoutFallsBackBeforeOverallDeadline(t *testing.T) {
 // kept only once.
 func TestDiscover_DuplicateBackendIDs(t *testing.T) {
 	out := "anthropic/claude-sonnet-4-5\nanthropic/claude-sonnet-4-5\nopenai/gpt-5\n"
-	models, _, err := parseOpenCodeModels([]byte(out))
+	models, err := parseOpenCodeModels([]byte(out))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -231,7 +228,7 @@ func TestDiscover_AcceptsPortkeyFireworksBackendID(t *testing.T) {
 	out := backend + "\n" +
 		`{ "id": "@fireworks/accounts/fireworks/models/glm-5p2", "providerID": "portkey", "name": "glm-5p2", "status": "active", "limit": { "context": 0 } }` + "\n"
 
-	models, _, err := parseOpenCodeModels([]byte(out))
+	models, err := parseOpenCodeModels([]byte(out))
 	if err != nil {
 		t.Fatalf("parseOpenCodeModels() error: %v", err)
 	}
@@ -260,7 +257,7 @@ func TestDiscover_MissingDisplayName(t *testing.T) {
   "limit": { "context": 200000 }
 }
 `
-	models, _, err := parseOpenCodeModels([]byte(out))
+	models, err := parseOpenCodeModels([]byte(out))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -282,7 +279,7 @@ anthropic/claude-secret
 openai/gpt-old
 { "id": "gpt-old", "providerID": "openai", "name": "Old", "status": "deprecated" }
 `
-	models, _, err := parseOpenCodeModels([]byte(out))
+	models, err := parseOpenCodeModels([]byte(out))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -303,7 +300,7 @@ func TestDiscover_MalformedOutput(t *testing.T) {
 anthropic/claude-sonnet-4-5
 { "id": "claude-sonnet-4-5", "providerID": "anthropic", "name": "Sonnet", "status": "active", "limit": { "context": 200000 } }
 `
-	models, _, err := parseOpenCodeModels([]byte(out))
+	models, err := parseOpenCodeModels([]byte(out))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -344,7 +341,7 @@ func assertNoModelMentions(t *testing.T, models []llm.ModelInfo, forbidden strin
 // but bare tokens yields an error so discovery fails over to the fallback.
 func TestDiscover_RejectsBareTokenModelID(t *testing.T) {
 	out := "bareword\nanthropic/claude-sonnet-4-5\nopusish\n"
-	models, _, err := parseOpenCodeModels([]byte(out))
+	models, err := parseOpenCodeModels([]byte(out))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -357,7 +354,7 @@ func TestDiscover_RejectsBareTokenModelID(t *testing.T) {
 	assertNoModelMentions(t, models, "bareword")
 	assertNoModelMentions(t, models, "opusish")
 
-	if _, _, err := parseOpenCodeModels([]byte("bareword\nanother\n")); err == nil {
+	if _, err := parseOpenCodeModels([]byte("bareword\nanother\n")); err == nil {
 		t.Error("parseOpenCodeModels(bare tokens) = nil error, want error so discovery fails over to fallback")
 	}
 }
@@ -372,7 +369,7 @@ func TestDiscover_RejectsCredentialLikeModelID(t *testing.T) {
 	out := cred + "\n" +
 		"anthropic/" + cred + "\n" +
 		"anthropic/claude-sonnet-4-5\n"
-	models, _, err := parseOpenCodeModels([]byte(out))
+	models, err := parseOpenCodeModels([]byte(out))
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
@@ -385,7 +382,7 @@ func TestDiscover_RejectsCredentialLikeModelID(t *testing.T) {
 	assertNoModelMentions(t, models, cred)
 	assertNoModelMentions(t, models, "sk-ant-")
 
-	if _, _, err := parseOpenCodeModels([]byte(cred + "\n")); err == nil {
+	if _, err := parseOpenCodeModels([]byte(cred + "\n")); err == nil {
 		t.Errorf("parseOpenCodeModels(%q) = nil error, want error so discovery fails over to fallback", cred)
 	}
 }
@@ -394,7 +391,7 @@ func TestDiscover_RejectsCredentialLikeModelID(t *testing.T) {
 // (so discovery degrades to the next attempt or the provider fallback).
 func TestDiscover_EmptyOutput(t *testing.T) {
 	for _, out := range []string{"", "   \n  \n"} {
-		if _, _, err := parseOpenCodeModels([]byte(out)); err == nil {
+		if _, err := parseOpenCodeModels([]byte(out)); err == nil {
 			t.Errorf("parseOpenCodeModels(%q) = nil error, want error for empty output", out)
 		}
 	}
@@ -488,7 +485,7 @@ func TestDiscover_SanitizesMaliciousCatalogText(t *testing.T) {
 		`{ "id": "claude-sonnet-4-5", "providerID": "anthropic", "name": ` + string(nameJSON) +
 		`, "status": "active", "limit": { "context": 200000 } }` + "\n"
 
-	models, _, perr := parseOpenCodeModels([]byte(out))
+	models, perr := parseOpenCodeModels([]byte(out))
 	if perr != nil {
 		t.Fatalf("parse error: %v", perr)
 	}

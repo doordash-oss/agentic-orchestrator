@@ -40,7 +40,7 @@ const (
 	testConvID     = "conv-golden"
 	testModel      = "gpt-5.2-codex"
 	testEffort     = "high"
-	testCLIVersion = "0.156.0"
+	testcliVersion = "0.156.0"
 )
 
 func loadRecords(t *testing.T, name string) []supervisor.Record {
@@ -81,7 +81,16 @@ func input(recs []supervisor.Record) supervisor.RebuildInput {
 }
 
 func testOptions(home func() (string, error)) Options {
-	return Options{Home: home, CLIVersion: testCLIVersion}
+	return Options{Home: home, cliVersion: testcliVersion}
+}
+
+// render converts in.Records to the bytes of a Codex rollout file without
+// touching the file system. It returns nil when the selection is empty.
+// Argument errors are plain errors; unrepresentable records are
+// *supervisor.ConversionError.
+func render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
+	data, _, err := renderRollout(in, opts.withDefaults())
+	return data, err
 }
 
 func converterAt(home string) *Converter {
@@ -93,7 +102,7 @@ func TestCheckpointRendersNativeCompactedLine(t *testing.T) {
 	checkpoint := supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[1].CreatedAt,
 		Data: json.RawMessage(`{"covers_through_seq":2,"summary":"","native_baseline":{"harness":"codex","payload":{"message":"","window_id":"w1","replacement_history":[{"type":"compaction","encrypted_content":"opaque"}]}},"reason":"native_auto","model":"gpt-5.2-codex"}`)}
 	recs = append(recs, checkpoint)
-	got, err := Render(input(recs), testOptions(nil))
+	got, err := render(input(recs), testOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +119,7 @@ func TestReadableForeignCheckpointRendersNote(t *testing.T) {
 	recs := loadRecords(t, "transcript.jsonl")
 	recs = append(recs, supervisor.Record{Seq: 100, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[1].CreatedAt,
 		Data: json.RawMessage(`{"covers_through_seq":2,"summary":"Earlier summary","native_baseline":{"harness":"claude","payload":{}},"reason":"native_auto","model":"claude"}`)})
-	got, err := Render(input(recs), testOptions(nil))
+	got, err := render(input(recs), testOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +134,7 @@ func TestLatestAndLastCodexCheckpoint(t *testing.T) {
 		Data: json.RawMessage(`{"covers_through_seq":1,"native_baseline":{"harness":"codex","payload":{"window_id":"first"}},"reason":"native_auto"}`)}
 	last := supervisor.Record{Seq: 101, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[2].CreatedAt,
 		Data: json.RawMessage(`{"covers_through_seq":100,"native_baseline":{"harness":"codex","payload":{"window_id":"latest"}},"reason":"native_auto"}`)}
-	got, err := Render(input([]supervisor.Record{recs[0], first, recs[2], last}), testOptions(nil))
+	got, err := render(input([]supervisor.Record{recs[0], first, recs[2], last}), testOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +151,7 @@ func TestCheckpointDropsStraddlingCodexToolResult(t *testing.T) {
 	recs := loadRecords(t, "transcript.jsonl")
 	cut := supervisor.Record{Seq: 6, Kind: supervisor.KindCheckpoint, Visibility: supervisor.VisibilityModelOnly, CreatedAt: recs[5].CreatedAt,
 		Data: json.RawMessage(`{"covers_through_seq":5,"native_baseline":{"harness":"codex","payload":{"window_id":"cut"}},"reason":"native_auto"}`)}
-	got, err := Render(input([]supervisor.Record{recs[4], cut, recs[7]}), testOptions(nil))
+	got, err := render(input([]supervisor.Record{recs[4], cut, recs[7]}), testOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -329,7 +338,7 @@ func TestRebuildGolden(t *testing.T) {
 func TestModelOnlyNoteBecomesUserHistory(t *testing.T) {
 	recs := loadRecords(t, "transcript.jsonl")
 	recs = append(recs, supervisor.Record{Seq: 40, ID: "note-40", Generation: 2, CreatedAt: recs[len(recs)-1].CreatedAt, Kind: supervisor.KindNote, Visibility: supervisor.VisibilityModelOnly, Data: json.RawMessage(`{"text":"Agentico note: The model changed to sonnet."}`)})
-	data, err := Render(input(recs), testOptions(nil))
+	data, err := render(input(recs), testOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +358,7 @@ func TestModelOnlyNoteBecomesUserHistory(t *testing.T) {
 }
 
 func TestCrossHarnessGolden(t *testing.T) {
-	data, err := Render(input(loadRecords(t, "cross_harness.jsonl")), testOptions(nil))
+	data, err := render(input(loadRecords(t, "cross_harness.jsonl")), testOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,20 +486,20 @@ func assertLineShape(t *testing.T, data []byte) {
 func TestRenderDeterministicAndMatchesRebuild(t *testing.T) {
 	t.Parallel()
 	opts := testOptions(nil)
-	a, err := Render(input(loadRecords(t, "transcript.jsonl")), opts)
+	a, err := render(input(loadRecords(t, "transcript.jsonl")), opts)
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("render: %v", err)
 	}
-	b, err := Render(input(loadRecords(t, "transcript.jsonl")), opts)
+	b, err := render(input(loadRecords(t, "transcript.jsonl")), opts)
 	if err != nil || !bytes.Equal(a, b) {
-		t.Fatalf("Render is not deterministic (err %v)", err)
+		t.Fatalf("render is not deterministic (err %v)", err)
 	}
 	want, err := os.ReadFile(filepath.Join("testdata", "transcript.golden.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(a, want) {
-		t.Fatal("Render output differs from the golden")
+		t.Fatal("render output differs from the golden")
 	}
 }
 
@@ -498,9 +507,9 @@ func TestRenderDefaults(t *testing.T) {
 	t.Parallel()
 	in := input(loadRecords(t, "transcript.jsonl"))
 	in.Effort = ""
-	data, err := Render(in, Options{})
+	data, err := render(in, Options{})
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("render: %v", err)
 	}
 	text := string(data)
 	if !strings.Contains(text, `"cli_version":"agentico","source":"vscode","model_provider":"openai"`) {
@@ -513,7 +522,7 @@ func TestRenderDefaults(t *testing.T) {
 
 func TestTurnContextPerTurn(t *testing.T) {
 	t.Parallel()
-	data, err := Render(input(loadRecords(t, "transcript.jsonl")), testOptions(nil))
+	data, err := render(input(loadRecords(t, "transcript.jsonl")), testOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +562,7 @@ func TestRebuildEmptyHistoryWritesNothing(t *testing.T) {
 			if got := keys(snapshot(t, home)); len(got) != 1 {
 				t.Fatalf("empty history touched the codex home: %v", got)
 			}
-			data, err := Render(input(recs), Options{})
+			data, err := render(input(recs), Options{})
 			if err != nil || data != nil {
 				t.Fatalf("Render = %q, %v; want nil", data, err)
 			}
@@ -758,9 +767,9 @@ func TestRebuildReplacesExistingRolloutInPlace(t *testing.T) {
 	if err := os.WriteFile(other, []byte("other\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want, err := Render(input(loadRecords(t, "transcript.jsonl")), testOptions(nil))
+	want, err := render(input(loadRecords(t, "transcript.jsonl")), testOptions(nil))
 	if err != nil {
-		t.Fatalf("Render: %v", err)
+		t.Fatalf("render: %v", err)
 	}
 	if len(want) >= len(stale) {
 		t.Fatalf("fixture must be shorter than the stale file to prove replacement")
@@ -882,7 +891,7 @@ var attachmentBlocks = []string{
 }
 
 func TestAttachmentsGolden(t *testing.T) {
-	data, err := Render(input(loadRecords(t, "attachments.jsonl")), testOptions(nil))
+	data, err := render(input(loadRecords(t, "attachments.jsonl")), testOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}

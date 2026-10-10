@@ -607,7 +607,7 @@ func TestParseCodexModelCatalog_FiltersAndMapsVisibleAPIModels(t *testing.T) {
 		{"slug":"private-model","display_name":"Private","visibility":"list","supported_in_api":false,"context_window":123000}
 	]}`)
 
-	models, err := parseCodexModelCatalog(catalogJSON)
+	models, err := parseCodexModelCatalogWithProgress(catalogJSON, nil)
 	if err != nil {
 		t.Fatalf("parseCodexModelCatalog() error: %v", err)
 	}
@@ -885,7 +885,7 @@ func TestAstraCatalogRoutingWindowsAndEffort(t *testing.T) {
 		}
 	}
 	raw := []byte(`{"models":[{"slug":"gpt-6-astra","visibility":"list","supported_in_api":true,"context_window":272000,"max_context_window":872000,"supported_reasoning_levels":[{"effort":"low"},{"effort":"max"},{"effort":"ultra"}]}]}`)
-	catalog, err := parseCodexModelCatalog(raw)
+	catalog, err := parseCodexModelCatalogWithProgress(raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -141,20 +141,6 @@ func (r *Registry) AskingQuestionsClauseForModel(model string) (string, error) {
 	return p.AskingQuestionsClause(), nil
 }
 
-// CostCalculatorForModel returns the CostCalculator for the given model.
-// Returns an error if no provider matches or the provider doesn't implement CostCalculator.
-func (r *Registry) CostCalculatorForModel(model string) (CostCalculator, error) {
-	p, err := r.ForModel(model)
-	if err != nil {
-		return nil, err
-	}
-	cc, ok := p.(CostCalculator)
-	if !ok {
-		return nil, fmt.Errorf("provider %q does not implement CostCalculator", p.Name())
-	}
-	return cc, nil
-}
-
 // ResolveModel resolves a model string to a provider and the bare model name.
 // Accepts both "provider:model" (explicit prefix) and "model" (implicit lookup).
 // Returns (provider, strippedModel, error).

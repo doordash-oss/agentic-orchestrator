@@ -140,8 +140,6 @@ type Protocol struct {
 	bridged     map[string]*bridgedRequest
 	bridgedDone map[string]bool
 	bridgeSeq   int
-
-	logFunc func(string, ...interface{})
 }
 
 // permissionOptions records the option ids a permission request offers, so an
@@ -179,19 +177,10 @@ func NewProtocol(opts llm.ProtocolOpts) *Protocol {
 	if opts.Interactive && !opts.NativeToollessReview {
 		if client, ok := serverEndpointFromLaunch(opts.LaunchArgs, opts.LaunchEnv); ok {
 			client.directory = opts.WorkDir
-			p.bridge = newServerBridge(client, p.logDebug)
+			p.bridge = newServerBridge(client)
 		}
 	}
 	return p
-}
-
-// SetLogFunc sets a logging function for debug output.
-func (p *Protocol) SetLogFunc(f func(string, ...interface{})) { p.logFunc = f }
-
-func (p *Protocol) logDebug(format string, args ...interface{}) {
-	if p.logFunc != nil {
-		p.logFunc(format, args...)
-	}
 }
 
 func (p *Protocol) SetStdin(w io.Writer) {
@@ -673,7 +662,6 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 func (p *Protocol) malformedStdout(detail string) ([]llm.SDKMessage, error) {
 	msg, ok := p.terminalError(malformedStdoutDiagnostic(detail))
 	if !ok {
-		p.logDebug("[opencode] ignoring malformed stdout after terminal result: %s", detail)
 		return nil, nil
 	}
 	return []llm.SDKMessage{msg}, nil
@@ -697,7 +685,6 @@ func malformedStdoutDiagnostic(detail string) string {
 func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 	id, err := parseID(env.ID)
 	if err != nil {
-		p.logDebug("[opencode] response with unparseable id %q", string(env.ID))
 		return nil
 	}
 
@@ -821,7 +808,6 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 		if p.opts.NativeToollessReview {
 			return seal(p.terminalError(fmt.Sprintf("OpenCode native tool-less review received unexpected response id %d", id)))
 		}
-		p.logDebug("[opencode] unhandled response for id %d", id)
 		return nil
 	}
 }
@@ -961,7 +947,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		if p.opts.NativeToollessReview {
 			return seal(p.terminalError(fmt.Sprintf("OpenCode native tool-less review received unexpected ACP notification %s", method)))
 		}
-		p.logDebug("[opencode] ignoring notification %s", method)
 		return nil
 	}
 	var su SessionUpdateParams
@@ -969,7 +954,6 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		if p.opts.NativeToollessReview {
 			return seal(p.terminalError("OpenCode native tool-less review received malformed session/update"))
 		}
-		p.logDebug("[opencode] failed to parse session/update: %v", err)
 		return nil
 	}
 	if p.opts.NativeToollessReview {
@@ -1872,7 +1856,6 @@ func (p *Protocol) Interrupt() error {
 	}); err != nil {
 		// Falling back to the session-level interrupt is safer than reporting a
 		// hard error when the cancel notification cannot be written.
-		p.logDebug("[opencode] session/cancel write failed: %v", err)
 		return llm.ErrNotSupported
 	}
 	return nil
@@ -1921,40 +1904,4 @@ func (p *Protocol) NegotiatedVersion() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.negotiatedVersion
-}
-
-// InitialPromptForTest returns the rendered phase prompt the protocol will send
-// as the first user turn.
-func (p *Protocol) InitialPromptForTest() string { return p.opts.InitialPrompt }
-
-// WorkDirForTest returns the resolved work directory used for session/new.
-func (p *Protocol) WorkDirForTest() string { return p.opts.WorkDir }
-
-// BackendModelForTest returns the backend "provider/model" the protocol selected.
-func (p *Protocol) BackendModelForTest() string { return p.model }
-
-// setRequestIDsForTest pins the handshake request ids so response-handling can
-// be exercised without running the full Handshake.
-func (p *Protocol) setRequestIDsForTest(initID, sessionNewID, promptID int) {
-	p.mu.Lock()
-	p.initID, p.sessionNewID, p.promptID = initID, sessionNewID, promptID
-	p.mu.Unlock()
-}
-
-// SetRequestIDsForTest pins the handshake request ids (including session/load) so
-// other packages can drive a real protocol through session establishment and
-// prompt responses without running the full ACP handshake. Test-only.
-func (p *Protocol) SetRequestIDsForTest(initID, sessionNewID, sessionLoadID, promptID int) {
-	p.mu.Lock()
-	p.initID, p.sessionNewID, p.sessionLoadID, p.promptID = initID, sessionNewID, sessionLoadID, promptID
-	p.mu.Unlock()
-}
-
-// promptIDForTest returns the id of the most recent session/prompt request,
-// which advances each time a follow-up turn (e.g. a reformat reminder or an
-// answer envelope) is sent.
-func (p *Protocol) promptIDForTest() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.promptID
 }

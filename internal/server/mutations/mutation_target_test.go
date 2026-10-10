@@ -2625,11 +2625,6 @@ func (m *mutationTargetSessionManager) FeatureSessions(featureID string) []ports
 	}
 	return out
 }
-func (m *mutationTargetSessionManager) SendInput(string, []byte) error { return nil }
-func (m *mutationTargetSessionManager) Attach(id string) (ports.SessionView, error) {
-	return m.GetSession(id), nil
-}
-func (m *mutationTargetSessionManager) Detach()              {}
 func (m *mutationTargetSessionManager) Shutdown()            {}
 func (m *mutationTargetSessionManager) IsShuttingDown() bool { return false }
 

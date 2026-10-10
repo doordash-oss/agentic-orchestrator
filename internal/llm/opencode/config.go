@@ -559,21 +559,6 @@ func isolationEnvFrom(features []isolationFeature, installed [3]int) (env, unava
 	return env, unavailable
 }
 
-// isolationFallbackDiagnostic renders a redacted, actionable message naming the
-// isolation features unavailable on the installed OpenCode and stating that the
-// session falls back to permission mediation. It carries no config or secret
-// content.
-func isolationFallbackDiagnostic(unavailable []string) string {
-	if len(unavailable) == 0 {
-		return ""
-	}
-	return sanitizeDiagnostic(fmt.Sprintf(
-		"OpenCode isolation features unavailable on the installed CLI: %s; "+
-			"falling back to permission mediation for these surfaces",
-		strings.Join(unavailable, ", "),
-	))
-}
-
 // minSupportedVersion is the enforced MinVersion floor every launched OpenCode
 // session is guaranteed to meet (the provider is filtered out of routing below
 // it), used as the version basis for isolation-feature gating.

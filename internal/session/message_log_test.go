@@ -63,25 +63,6 @@ func TestMessageLog_Messages_ReturnsCopy(t *testing.T) {
 	}
 }
 
-func TestMessageLog_UpdateLast(t *testing.T) {
-	log := NewMessageLog()
-
-	// UpdateLast on empty log appends.
-	log.UpdateLast(llm.SDKMessage{Type: "assistant"})
-	if log.Len() != 1 {
-		t.Fatalf("Len() = %d after UpdateLast on empty, want 1", log.Len())
-	}
-
-	// UpdateLast replaces.
-	log.UpdateLast(llm.SDKMessage{Type: "assistant", Subtype: "updated"})
-	if log.Len() != 1 {
-		t.Fatalf("Len() = %d after UpdateLast, want 1", log.Len())
-	}
-	if log.Messages()[0].Subtype != "updated" {
-		t.Errorf("Subtype = %q, want updated", log.Messages()[0].Subtype)
-	}
-}
-
 func TestMessageLog_LastN(t *testing.T) {
 	log := NewMessageLog()
 	for i := 0; i < 5; i++ {

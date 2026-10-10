@@ -45,7 +45,7 @@ func TestOpenCodeRefreshesVariantsWithoutCLIVersionChange(t *testing.T) {
 {"variants":{` + variants + `}}`), nil
 	}
 	for i := 1; i <= 2; i++ {
-		p := opencode.NewWithRunner(runner)
+		p := opencode.New("", runner)
 		warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, root, nil, false)
 		if len(warnings) != 0 {
 			t.Fatal(warnings)
@@ -55,7 +55,7 @@ func TestOpenCodeRefreshesVariantsWithoutCLIVersionChange(t *testing.T) {
 		}
 	}
 	fail = true
-	p := opencode.NewWithRunner(runner)
+	p := opencode.New("", runner)
 	warnings := discoverProviderCatalogs(context.Background(), []llm.LLMProvider{p}, root, nil, false)
 	if len(warnings) != 1 || !strings.Contains(warningText(warnings[0]), "stale cache") {
 		t.Fatal(warnings)

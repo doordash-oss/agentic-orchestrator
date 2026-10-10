@@ -1029,7 +1029,7 @@ func TestSession_CodexProviderStaysAliveAfterResult(t *testing.T) {
 	s := NewSession("codex-alive", "feat-1", feature.PhaseResearch)
 	s.protocol = claude.NewProtocol(llm.ProtocolOpts{WorkDir: dir})
 	s.providerName = "codex"
-	s.setResultShutdownGraceForTest(100 * time.Millisecond)
+	s.resultShutdownGrace = 100 * time.Millisecond
 	if err := s.Start([]string{"bash", script}, dir, nil, func(llm.SDKMessage) {}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -1080,7 +1080,7 @@ func TestSession_ResultUnsticksHungWrapper(t *testing.T) {
 
 	s := NewSession("hung-wrapper", "feat-1", feature.PhaseResearch)
 	s.protocol = claude.NewProtocol(llm.ProtocolOpts{WorkDir: dir})
-	s.setResultShutdownGraceForTest(200 * time.Millisecond)
+	s.resultShutdownGrace = 200 * time.Millisecond
 	if err := s.Start([]string{"bash", script}, dir, nil, func(llm.SDKMessage) {}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -1308,38 +1308,6 @@ func TestWaitingSinceStampedOnWaitingHelpTransition(t *testing.T) {
 	s.SetStatus(SessionWaitingHelp)
 	if got := s.WaitingSince(); got.Before(stamp) {
 		t.Fatalf("WaitingSince() on re-entry = %v, want at or after previous stamp %v", got, stamp)
-	}
-}
-
-func TestSessionSendInput(t *testing.T) {
-	t.Parallel()
-	// parallel-candidate: in-process stdin pipe with per-test session state.
-	stdinR, stdinW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("Pipe: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = stdinR.Close()
-		_ = stdinW.Close()
-	})
-	s := NewSession("input-test", "feat-1", feature.PhaseResearch)
-	s.SetStdinForTest(stdinW)
-
-	// Send raw input
-	err = s.SendInput([]byte("test-input\n"))
-	if err != nil {
-		t.Errorf("send input: %v", err)
-	}
-	if err := stdinW.Close(); err != nil {
-		t.Fatalf("close stdin writer: %v", err)
-	}
-
-	data, err := io.ReadAll(stdinR)
-	if err != nil {
-		t.Fatalf("ReadAll(stdin): %v", err)
-	}
-	if got := string(data); got != "test-input\n" {
-		t.Errorf("stdin = %q, want %q", got, "test-input\n")
 	}
 }
 
@@ -1705,7 +1673,7 @@ func TestSessionResultDeliveredUnderBackpressure(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol replay with per-test attach buffer.
 	s := NewSession("bp-test", "feat-1", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(time.Second)
+	s.criticalAttachSendTimeout = time.Second
 	unregister := registerAttachConsumerForTest(t, s)
 	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
@@ -2792,7 +2760,7 @@ func TestSession_NoAttachConsumerSuppressesCriticalDropReport(t *testing.T) {
 	wantTimeout := 200 * time.Millisecond
 
 	s := NewSession("headless-drop-test", "feat-headless", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(wantTimeout)
+	s.criticalAttachSendTimeout = wantTimeout
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}
@@ -2826,7 +2794,7 @@ func TestSession_AttachDropReporterFiresOnCriticalDrop(t *testing.T) {
 	wantTimeout := 50 * time.Millisecond
 
 	s := NewSession("drop-test", "feat-9", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(wantTimeout)
+	s.criticalAttachSendTimeout = wantTimeout
 	unregister := registerAttachConsumerForTest(t, s)
 	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
@@ -2878,7 +2846,7 @@ func TestSession_AttachDropReporterSilentWithoutReporter(t *testing.T) {
 	const timeout = 50 * time.Millisecond
 
 	s := NewSession("quiet-test", "feat-9", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(timeout)
+	s.criticalAttachSendTimeout = timeout
 	unregister := registerAttachConsumerForTest(t, s)
 	defer unregister()
 	for i := 0; i < cap(s.attachCh); i++ {
@@ -3083,7 +3051,7 @@ func TestSession_StatusChSignalAfterResultCallback(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: in-process protocol replay with per-test attach buffer.
 	s := NewSession("callback-order-test", "feat-1", feature.PhaseImplement)
-	s.setCriticalAttachSendTimeoutForTest(100 * time.Millisecond)
+	s.criticalAttachSendTimeout = 100 * time.Millisecond
 	for i := 0; i < cap(s.attachCh); i++ {
 		s.attachCh <- llm.SDKMessage{Type: "assistant"}
 	}

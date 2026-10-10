@@ -363,7 +363,6 @@ type AutoReviewSnapshot struct {
 // so *session.MessageLog satisfies it structurally.
 type MessageLog interface {
 	Append(msg llm.SDKMessage) int
-	UpdateLast(msg llm.SDKMessage)
 	UpdateLastAssistantPartial(msg llm.SDKMessage) int
 	Messages() []llm.SDKMessage
 	Len() int
@@ -501,7 +500,6 @@ type SessionHandle interface {
 	SetLogFile(f *os.File)
 	AddCleanupFunc(fn func())
 	SetHasUnansweredQuestion(v bool)
-	CloseStdin()
 	SetOnToolAllowed(fn func(toolName string, input json.RawMessage))
 	SetOnFileRead(fn func(read llm.FileReadEvent))
 	SetOnSubagentEvent(fn func(msg llm.SDKMessage))
@@ -517,9 +515,6 @@ type SessionManager interface {
 	ActiveSessions() []SessionView
 	RecentSessions(limit int) []SessionView
 	FeatureSessions(featureID string) []SessionView
-	SendInput(sessionID string, data []byte) error
-	Attach(sessionID string) (SessionView, error)
-	Detach()
 	Shutdown()
 	IsShuttingDown() bool
 }

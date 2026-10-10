@@ -253,16 +253,15 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			return "", "", resp.Result
 		}},
 		{"AnswerAskUser", resultAnswered, func(t *testing.T) (string, string, string) {
-			sess := &mutationTargetSessionView{
-				id: testSessionAskID, featureID: "feat-ask", phase: feature.PhaseInquire, status: ports.SessionWaitingHelp, active: true,
-				pending: []*llm.ControlRequestMessage{{
-					Type: wireTypeControlRequest, RequestID: testAskRequestID,
-					Request: llm.ControlRequest{
-						Subtype: wireSubtypeCanUseTool, ToolName: toolNameAskUserQuestion,
-						Input: json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`),
-					},
-				}},
-			}
+			sess := newMutationTargetSessionView(testSessionAskID, "feat-ask", feature.PhaseInquire)
+			sess.StatusVal = ports.SessionWaitingHelp
+			sess.pending = []*llm.ControlRequestMessage{{
+				Type: wireTypeControlRequest, RequestID: testAskRequestID,
+				Request: llm.ControlRequest{
+					Subtype: wireSubtypeCanUseTool, ToolName: toolNameAskUserQuestion,
+					Input: json.RawMessage(`{"questions":[{"question":"Which DB?"}]}`),
+				},
+			}}
 			sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 			target := mutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
 			resp, err := target.AnswerAskUser(serverruntime.AskUserAnswerRequest{
@@ -274,9 +273,8 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			return "", "", resp.Result
 		}},
 		{"SendHelp", resultSent, func(t *testing.T) (string, string, string) {
-			sess := &mutationTargetSessionView{
-				id: testSessionHelpID, featureID: testFeatureHelpID, phase: feature.PhaseImplement, status: ports.SessionWaitingHelp, active: true,
-			}
+			sess := newMutationTargetSessionView(testSessionHelpID, testFeatureHelpID, feature.PhaseImplement)
+			sess.StatusVal = ports.SessionWaitingHelp
 			sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 			target := mutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
 			resp, err := target.SendHelp(serverruntime.HelpAnswerRequest{
@@ -481,17 +479,16 @@ func newResponseShapeImplementTarget(t *testing.T, name string, mutate func(*fea
 }
 
 func newResponseShapePermissionSession() *mutationTargetSessionView {
-	return &mutationTargetSessionView{
-		id: testSessionPermissionID, featureID: testFeaturePermissionID, phase: feature.PhaseImplement,
-		status: ports.SessionWaitingPermission, active: true,
-		pending: []*llm.ControlRequestMessage{{
-			Type: wireTypeControlRequest, RequestID: testPermRequestID,
-			Request: llm.ControlRequest{
-				Subtype: wireSubtypeCanUseTool, ToolName: toolNameBash,
-				Input: json.RawMessage(`{"command":"go test ./cmd/agentico"}`),
-			},
-		}},
-	}
+	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
+	sess.StatusVal = ports.SessionWaitingPermission
+	sess.pending = []*llm.ControlRequestMessage{{
+		Type: wireTypeControlRequest, RequestID: testPermRequestID,
+		Request: llm.ControlRequest{
+			Subtype: wireSubtypeCanUseTool, ToolName: toolNameBash,
+			Input: json.RawMessage(`{"command":"go test ./cmd/agentico"}`),
+		},
+	}}
+	return sess
 }
 
 // responseShapeRetryReviewSession adds the automatic-review retry capability

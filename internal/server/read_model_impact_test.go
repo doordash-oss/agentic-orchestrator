@@ -21,6 +21,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // actionJSONByID returns the raw JSON projection of one action from a detail
@@ -137,11 +138,13 @@ func TestDiscardActionCarriesStructuredImpactPreview(t *testing.T) {
 	}
 	opts := baseReadHandlerOptions(store)
 	opts.Sessions = fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-		id:        "sess-implement-1",
-		featureID: child.ID,
-		label:     "Implement phase-1",
-		status:    ports.SessionRunning,
-		startedAt: time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC),
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        "sess-implement-1",
+			FeatureIDVal: child.ID,
+			LabelVal:     "Implement phase-1",
+			StatusVal:    ports.SessionRunning,
+			StartedAtVal: time.Date(2026, 7, 28, 11, 0, 0, 0, time.UTC),
+		},
 	}}}
 	handler := NewHandler(opts)
 

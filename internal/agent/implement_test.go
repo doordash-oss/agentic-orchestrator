@@ -1199,9 +1199,9 @@ func TestWaitForPhaseOutcome_ContextHandoffDisabledForSmallWindow(t *testing.T) 
 
 func TestWaitForPhaseOutcome_FormalRootQuestionPausesWithoutCommitting(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.result = newEndedAfterTextResult()
+	sess.CostVal = newEndedAfterTextResult()
 	sess.setRootAsk(true)
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	var commits atomic.Int32
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
@@ -1225,7 +1225,7 @@ func TestWaitForPhaseOutcome_FormalRootQuestionPausesWithoutCommitting(t *testin
 
 	sess.setRootAsk(false)
 	sess.setRootIntent(validSuccessCompletionIntent())
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 	select {
 	case result := <-resultCh:
 		if result.Status != agentStatusSuccess || result.Err != nil {
@@ -1297,8 +1297,8 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 			iterDir := filepath.Join(artifactDir, "iteration-01")
 			testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
 			sess.setRootIntent(validSuccessCompletionIntent())
-			sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
-			sess.statusCh <- agentStatusSuccess
+			sess.CostVal = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+			sess.StatusChVal <- agentStatusSuccess
 			return sess, nil
 		},
 	}
@@ -1410,7 +1410,7 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 		if len(startIDs) == 1 {
 			// First process dies mid-turn without writing the marker.
 			dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
-			dead.statusCh <- agentStatusFailed
+			dead.StatusChVal <- agentStatusFailed
 			return dead, nil
 		}
 		// The resumed process finishes the iteration.
@@ -1418,8 +1418,8 @@ func TestImplementLoop_CrashResumeRecoversDeadSession(t *testing.T) {
 		testutil.WriteImplementHandoffFiles(t, artifactDir, iterDir, agentStatusSuccess)
 		resumed := newUtilityTestSession()
 		resumed.setRootIntent(validSuccessCompletionIntent())
-		resumed.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
-		resumed.statusCh <- agentStatusSuccess
+		resumed.CostVal = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+		resumed.StatusChVal <- agentStatusSuccess
 		return resumed, nil
 	}
 
@@ -1474,7 +1474,7 @@ func TestImplementLoop_CrashResumeAttemptedOncePerIteration(t *testing.T) {
 	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		// Every process dies; the loop must resume at most once.
 		dead := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-123"}
-		dead.statusCh <- agentStatusFailed
+		dead.StatusChVal <- agentStatusFailed
 		return dead, nil
 	}
 
@@ -3322,9 +3322,9 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 	sess := newBgTaskSession()
 	sess.taskCountObserved = make(chan int, 1)
 	sess.liveTasks.Store(1)
-	sess.result = newEndedAfterTextResult()
+	sess.CostVal = newEndedAfterTextResult()
 	sess.setRootIntent(validSuccessCompletionIntent())
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	var commits atomic.Int32
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
@@ -3373,7 +3373,7 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 		t.Fatal("root session was not resumed after delegated tasks finished")
 	}
 	sess.setRootIntent(validSuccessCompletionIntent())
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	select {
 	case result := <-resultCh:
@@ -3391,9 +3391,9 @@ func TestWaitForPhaseOutcome_DefersCommitUntilDelegatedTasksFinish(t *testing.T)
 func TestWaitForPhaseOutcome_RejectsProviderExitWithLiveDelegatedTasks(t *testing.T) {
 	sess := newBgTaskSession()
 	sess.liveTasks.Store(1)
-	sess.result = newEndedAfterTextResult()
+	sess.CostVal = newEndedAfterTextResult()
 	sess.setRootIntent(validSuccessCompletionIntent())
-	close(sess.done)
+	close(sess.DoneChVal)
 
 	var commits atomic.Int32
 	result := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
@@ -3437,7 +3437,7 @@ func TestWaitForPhaseOutcome_ReclassifyTickRecoversDroppedSuccessStatus(t *testi
 	withPhaseOutcomeReclassifyInterval(t, 5*time.Millisecond)
 
 	sess := newBgTaskSession()
-	sess.result = newEndedAfterTextResult()
+	sess.CostVal = newEndedAfterTextResult()
 	sess.setRootIntent(validSuccessCompletionIntent())
 	// No StatusCh send and no Done close: the completion signal was lost.
 
@@ -3475,10 +3475,10 @@ func TestWaitForPhaseOutcome_StopsRunawayTasksAndCommitsPresentOutcome(t *testin
 
 	sess := newBgTaskSession()
 	sess.liveTasks.Store(1)
-	sess.result = newEndedAfterTextResult()
+	sess.CostVal = newEndedAfterTextResult()
 	sess.setRootIntent(validSuccessCompletionIntent())
 	sess.lastStdoutNs.Store(time.Now().Add(-time.Hour).UnixNano())
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	var commits atomic.Int32
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
@@ -3634,7 +3634,7 @@ func chatterUntil(sess *outcomeSignalSession, novel bool) func() {
 			if novel {
 				text = fmt.Sprintf("checked attempt %d", i)
 			}
-			sess.msgLog.Append(llm.SDKMessage{
+			sess.MessageLogVal.Append(llm.SDKMessage{
 				Type: "assistant",
 				Assistant: &llm.AssistantMessage{
 					Message: llm.ConversationMsg{
@@ -3715,7 +3715,7 @@ func TestWaitForPhaseOutcome_LaterResultDoesNotReadjudicateOutcome(t *testing.T)
 
 	// The turn's terminal Result lands after the harness already ruled on it.
 	sess.emitResult(newEndedAfterTextResult())
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	select {
 	case result := <-resultCh:
@@ -3756,7 +3756,7 @@ func TestWaitForPhaseOutcome_RepeatedTaskOutputCountsAsSilent(t *testing.T) {
 	sess.setRootIntent(validSuccessCompletionIntent())
 	stopChatter := chatterUntil(sess, false)
 	defer stopChatter()
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	var commits atomic.Int32
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
@@ -3799,7 +3799,7 @@ func TestWaitForPhaseOutcome_DeferralCeilingCommitsChattyPollLoop(t *testing.T) 
 	sess.setRootIntent(validSuccessCompletionIntent())
 	stopChatter := chatterUntil(sess, true)
 	defer stopChatter()
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	var commits atomic.Int32
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
@@ -3840,7 +3840,7 @@ func TestWaitForPhaseOutcome_DeferralCeilingViolatesWithoutOutcome(t *testing.T)
 	sess.emitResult(newEndedAfterTextResult())
 	stopChatter := chatterUntil(sess, true)
 	defer stopChatter()
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	resultCh := make(chan PhaseOutcomeWaitResult, 1)
 	go func() {

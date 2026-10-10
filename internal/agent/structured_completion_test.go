@@ -136,8 +136,8 @@ func TestStructuredCompletionRejectedThenPlainTurnReportsCommitViolations(t *tes
 			t.Fatal("defective artifact accepted")
 		}
 		// The model gives up and ends the turn in prose.
-		sess.result = newEndedAfterTextResult()
-		sess.statusCh <- agentStatusSuccess
+		sess.CostVal = newEndedAfterTextResult()
+		sess.StatusChVal <- agentStatusSuccess
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -187,8 +187,8 @@ func TestStructuredCompletionDeferredRejectionsDoNotConsumeBudget(t *testing.T) 
 
 func TestStructuredCompletionPlainTurnFailsWithoutSuccessNudge(t *testing.T) {
 	sess := newCompletionToolSession()
-	sess.result = newEndedAfterTextResult()
-	sess.statusCh <- agentStatusSuccess
+	sess.CostVal = newEndedAfterTextResult()
+	sess.StatusChVal <- agentStatusSuccess
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	result := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{Ctx: ctx, CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
@@ -249,7 +249,7 @@ func TestStructuredBoundedHelperValidatesOutputBeforeCommitWithoutTerminalResult
 	}
 	outputPath := filepath.Join(t.TempDir(), "response.txt")
 	sess := newCompletionToolSession()
-	sess.id = "helper"
+	sess.IDVal = "helper"
 	request := llm.PhaseCompletionRequest{RequestID: "empty-output", Intent: llm.CompletionIntent{Found: true, Status: llm.CompletionIntentSuccess}}
 	sess.requests <- request
 	responses := 0

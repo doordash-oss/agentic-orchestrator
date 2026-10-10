@@ -118,7 +118,7 @@ func TestRunReviewHelper_LiveRunConfiguresScratchRootsEnvAndPermissions(t *testi
 	tempRoot := filepath.Join(helperDir, "tmp")
 
 	sess := newUtilityTestSession()
-	sess.result = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
+	sess.CostVal = &llm.ResultMessage{Type: "result", Subtype: "success", StopReason: "end_turn"}
 	sm := mocks.NewMockSessionManager()
 	var startEnv []string
 	var startOpts *ports.SessionOpts
@@ -150,7 +150,7 @@ func TestRunReviewHelper_LiveRunConfiguresScratchRootsEnvAndPermissions(t *testi
 			t.Errorf("write evidence: %v", err)
 		}
 		sess.setRootIntent(validSuccessCompletionIntent())
-		sess.statusCh <- "SUCCESS"
+		sess.StatusChVal <- "SUCCESS"
 		return sess, nil
 	}
 

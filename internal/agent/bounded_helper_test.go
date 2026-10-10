@@ -16,7 +16,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -29,7 +28,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -326,7 +324,6 @@ type boundedNudgeSession struct {
 	*utilityTestSession
 	statusC   chan string
 	doneC     chan struct{}
-	result    *llm.ResultMessage
 	nudges    chan string
 	stopCalls int
 	intentMu  sync.RWMutex
@@ -334,18 +331,18 @@ type boundedNudgeSession struct {
 }
 
 func newBoundedNudgeSession(result *llm.ResultMessage) *boundedNudgeSession {
-	return &boundedNudgeSession{
+	sess := &boundedNudgeSession{
 		utilityTestSession: newUtilityTestSession(),
 		statusC:            make(chan string, 4),
 		doneC:              make(chan struct{}),
-		result:             result,
 		nudges:             make(chan string, 4),
 	}
+	sess.CostVal = result
+	return sess
 }
 
-func (s *boundedNudgeSession) StatusCh() <-chan string  { return s.statusC }
-func (s *boundedNudgeSession) Done() <-chan struct{}    { return s.doneC }
-func (s *boundedNudgeSession) Cost() *llm.ResultMessage { return s.result }
+func (s *boundedNudgeSession) StatusCh() <-chan string { return s.statusC }
+func (s *boundedNudgeSession) Done() <-chan struct{}   { return s.doneC }
 func (s *boundedNudgeSession) SendUserMessage(text string) error {
 	s.setRootIntent(llm.CompletionIntent{})
 	s.nudges <- text
@@ -542,9 +539,9 @@ func TestRunBoundedHelper_RetriesEarlyInfrastructureFailure(t *testing.T) {
 		}
 		writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 		sess := newUtilityTestSession()
-		sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn}
+		sess.CostVal = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, StopReason: testStopReasonEndTurn}
 		sess.setRootIntent(validSuccessCompletionIntent())
-		sess.statusCh <- agentStatusSuccess
+		sess.StatusChVal <- agentStatusSuccess
 		return sess, nil
 	}
 	pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
@@ -752,7 +749,7 @@ func TestRunBoundedHelper_BackgroundTasksFinishQuietlyAutoResumes(t *testing.T) 
 	// The resumed turn writes the contract artifacts and ends cleanly.
 	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 	sess.setRootIntent(validSuccessCompletionIntent())
-	sess.result.StopReason = testStopReasonEndTurn
+	sess.CostVal.StopReason = testStopReasonEndTurn
 	sess.statusC <- agentStatusSuccess
 
 	select {
@@ -946,7 +943,7 @@ func TestRunBoundedHelper_TruncatedTurnAutoResumes(t *testing.T) {
 	// The resumed turn writes the contract artifacts and ends cleanly.
 	writeReviewFeedbackFile(t, filepath.Join(phaseDir, "review-feedback.md"), testutil.StructuredReviewFeedback("", "", agentStatusApproved))
 	sess.setRootIntent(validSuccessCompletionIntent())
-	sess.result.StopReason = testStopReasonEndTurn
+	sess.CostVal.StopReason = testStopReasonEndTurn
 	sess.statusC <- agentStatusSuccess
 
 	select {
@@ -1151,14 +1148,14 @@ func TestRunBoundedHelper_ArmsKeepAliveForCompletionHelpers(t *testing.T) {
 					gotOpts = opts[0]
 				}
 				sess := newUtilityTestSession()
-				sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, Result: "done", StopReason: testStopReasonEndTurn}
+				sess.CostVal = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, Result: "done", StopReason: testStopReasonEndTurn}
 				if tc.phaseDir != "" {
 					if err := os.WriteFile(filepath.Join(tc.phaseDir, "index.md"), []byte("# Knowledge Base\n"), 0o644); err != nil {
 						t.Fatalf("write contract artifact: %v", err)
 					}
 					sess.setRootIntent(validSuccessCompletionIntent())
 				}
-				sess.statusCh <- agentStatusSuccess
+				sess.StatusChVal <- agentStatusSuccess
 				return sess, nil
 			}
 			pr := &PhaseRunner{SessionManager: sm, StateDir: t.TempDir()}
@@ -1318,109 +1315,48 @@ func TestRunBoundedHelper_StalledBackgroundTasks(t *testing.T) {
 	}
 }
 
+// utilityTestSession embeds the shared mock session view; utility-helper
+// flows read the transcript, terminal result, status channel, pending
+// question state, root ask gate and task activities off the handle. The
+// root-ask, root-intent and task-activity accessors keep the fake's own
+// mutex so tests can flip them from other goroutines.
 type utilityTestSession struct {
-	id          string
-	featureID   string
-	phase       feature.Phase
-	repoName    string
-	done        chan struct{}
-	statusCh    chan string
-	attachCh    chan llm.SDKMessage
-	msgLog      *session.MessageLog
-	result      *llm.ResultMessage
-	usage       llm.Usage
-	lastControl *llm.ControlRequestMessage
-	pendingAsk  bool
-	stateMu     sync.RWMutex
-	rootAsk     bool
-	rootIntent  llm.CompletionIntent
-	activities  []llm.TaskActivity
+	*mocks.MockSessionView
+	stateMu    sync.RWMutex
+	rootAsk    bool
+	rootIntent llm.CompletionIntent
+	activities []llm.TaskActivity
+}
+
+func newUtilityTestSession() *utilityTestSession {
+	m := mocks.NewMockSessionView("", "")
+	m.StartedAtVal = time.Time{}
+	return &utilityTestSession{MockSessionView: m}
 }
 
 type terminalStatusTestSession struct {
 	*utilityTestSession
-	status ports.SessionStatus
 }
 
 func newTerminalStatusTestSession(status ports.SessionStatus) *terminalStatusTestSession {
-	sess := &terminalStatusTestSession{
-		utilityTestSession: newUtilityTestSession(),
-		status:             status,
-	}
-	close(sess.done)
+	sess := &terminalStatusTestSession{utilityTestSession: newUtilityTestSession()}
+	sess.StatusVal = status
+	close(sess.DoneChVal)
 	return sess
 }
 
-func (s *terminalStatusTestSession) Status() ports.SessionStatus {
-	return s.status
-}
-
-func newUtilityTestSession() *utilityTestSession {
-	return &utilityTestSession{
-		done:     make(chan struct{}),
-		statusCh: make(chan string, 1),
-		attachCh: make(chan llm.SDKMessage, 1),
-		msgLog:   session.NewMessageLog(),
-	}
-}
-
-func (s *utilityTestSession) ID() string              { return s.id }
-func (s *utilityTestSession) FeatureID() string       { return s.featureID }
-func (s *utilityTestSession) Phase() feature.Phase    { return s.phase }
-func (s *utilityTestSession) RepoName() string        { return s.repoName }
-func (s *utilityTestSession) PermCacheScope() string  { return "" }
-func (s *utilityTestSession) Kind() ports.SessionKind { return ports.KindPhase }
-func (s *utilityTestSession) Label() string           { return "" }
-func (s *utilityTestSession) Status() session.SessionStatus {
-	return session.SessionRunning
-}
-func (s *utilityTestSession) IsActive() bool                   { return true }
-func (s *utilityTestSession) Iteration() int                   { return 0 }
-func (s *utilityTestSession) StartedAt() time.Time             { return time.Time{} }
-func (s *utilityTestSession) WaitingSince() time.Time          { return time.Time{} }
-func (s *utilityTestSession) InitialPrompt() string            { return "" }
-func (s *utilityTestSession) ProviderName() string             { return "" }
-func (s *utilityTestSession) Model() string                    { return "" }
-func (s *utilityTestSession) WorkDir() string                  { return "" }
-func (s *utilityTestSession) EffectiveEffort() llm.EffortLevel { return "" }
-func (s *utilityTestSession) EffortSource() llm.EffortSource   { return "" }
-func (s *utilityTestSession) MessageLog() ports.MessageLog {
-	return s.msgLog
-}
-func (s *utilityTestSession) Cost() *llm.ResultMessage    { return s.result }
-func (s *utilityTestSession) LatestUsage() *llm.Usage     { return nil }
-func (s *utilityTestSession) AccumulatedUsage() llm.Usage { return s.usage }
-func (s *utilityTestSession) LastControlRequest() *llm.ControlRequestMessage {
-	return s.lastControl
-}
-func (s *utilityTestSession) PendingControlRequests() []*llm.ControlRequestMessage {
-	if s.lastControl == nil {
-		return nil
-	}
-	return []*llm.ControlRequestMessage{s.lastControl}
-}
-func (s *utilityTestSession) QALog() []session.QAPair         { return nil }
-func (s *utilityTestSession) LogFilePath() string             { return "" }
-func (s *utilityTestSession) ContextPercentage() int          { return 0 }
-func (s *utilityTestSession) ErrorDetail() string             { return "" }
-func (s *utilityTestSession) ExitCodeDetail() string          { return "" }
-func (s *utilityTestSession) LastStdoutAt() time.Time         { return time.Time{} }
-func (s *utilityTestSession) StatusCh() <-chan string         { return s.statusCh }
-func (s *utilityTestSession) AttachCh() <-chan llm.SDKMessage { return s.attachCh }
-func (s *utilityTestSession) Done() <-chan struct{}           { return s.done }
-func (s *utilityTestSession) HasPendingAskUserQuestion() bool {
-	return s.pendingAsk
-}
 func (s *utilityTestSession) HasPendingRootAskUserQuestion() bool {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	return s.rootAsk
 }
+
 func (s *utilityTestSession) RootCompletionIntent() llm.CompletionIntent {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	return s.rootIntent
 }
+
 func (s *utilityTestSession) LiveBackgroundTaskCount() int {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
@@ -1432,40 +1368,24 @@ func (s *utilityTestSession) LiveBackgroundTaskCount() int {
 	}
 	return count
 }
+
 func (s *utilityTestSession) TaskActivities() []llm.TaskActivity {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	return append([]llm.TaskActivity(nil), s.activities...)
 }
+
 func (s *utilityTestSession) setRootAsk(pending bool) {
 	s.stateMu.Lock()
 	s.rootAsk = pending
 	s.stateMu.Unlock()
 }
+
 func (s *utilityTestSession) setRootIntent(intent llm.CompletionIntent) {
 	s.stateMu.Lock()
 	s.rootIntent = intent
 	s.stateMu.Unlock()
 }
-func (s *utilityTestSession) SendUserMessage(text string) error { return nil }
-func (s *utilityTestSession) RespondToControl(requestID string, allow bool, reason string) error {
-	return nil
-}
-func (s *utilityTestSession) RespondToAskUser(string, askuser.Resolved) error {
-	return nil
-}
-func (s *utilityTestSession) Stop() error                            { return nil }
-func (s *utilityTestSession) Interrupt() error                       { return nil }
-func (s *utilityTestSession) Wait()                                  {}
-func (s *utilityTestSession) SetStatus(status session.SessionStatus) {}
-func (s *utilityTestSession) SetLogFile(f *os.File)                  {}
-func (s *utilityTestSession) AddCleanupFunc(fn func())               {}
-func (s *utilityTestSession) SetHasUnansweredQuestion(v bool)        {}
-func (s *utilityTestSession) CloseStdin()                            {}
-func (s *utilityTestSession) SetOnToolAllowed(fn func(toolName string, input json.RawMessage)) {
-}
-func (s *utilityTestSession) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
-func (s *utilityTestSession) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
 
 var _ ports.SessionHandle = (*utilityTestSession)(nil)
 
@@ -1479,11 +1399,11 @@ func newUtilityTestPhaseRunner(t *testing.T, sess *utilityTestSession) *utilityT
 
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
-		sess.id = id
-		sess.featureID = featureID
-		sess.phase = phase
+		sess.IDVal = id
+		sess.FeatureIDVal = featureID
+		sess.PhaseVal = phase
 		if len(opts) > 0 && opts[0] != nil {
-			sess.repoName = opts[0].RepoName
+			sess.RepoNameVal = opts[0].RepoName
 		}
 		return sess, nil
 	}
@@ -1507,15 +1427,15 @@ func newUtilityTestPhaseRunner(t *testing.T, sess *utilityTestSession) *utilityT
 
 func TestRunBoundedHelper_SessionSuccess(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.msgLog.Append(mocks.AssistantTextMessage("Utility output"))
-	sess.result = &llm.ResultMessage{
+	sess.MessageLogVal.Append(mocks.AssistantTextMessage("Utility output"))
+	sess.CostVal = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
 		Result:     "done",
 		StopReason: testStopReasonEndTurn,
 	}
-	sess.usage = llm.Usage{InputTokens: 9, OutputTokens: 4}
-	sess.statusCh <- agentStatusSuccess
+	sess.AccumulatedUsageVal = llm.Usage{InputTokens: 9, OutputTokens: 4}
+	sess.StatusChVal <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	result, err := runner.pr.runBoundedHelper(context.Background(), boundedHelperConfig{
@@ -1586,13 +1506,13 @@ func TestRunBoundedHelper_TimesOut(t *testing.T) {
 
 func TestRunBoundedHelper_SessionRequiresOutput(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.result = &llm.ResultMessage{
+	sess.CostVal = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
 		Result:     "done",
 		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	result, err := runner.pr.runBoundedHelper(context.Background(), boundedHelperConfig{
@@ -1618,7 +1538,7 @@ func TestRunBoundedHelper_SessionRequiresOutput(t *testing.T) {
 
 func TestRunBoundedHelper_SessionFailsOnPermissionRequest(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.attachCh <- mocks.ControlRequestMsg("perm-1", "Bash")
+	sess.AttachChVal <- mocks.ControlRequestMsg("perm-1", "Bash")
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	result, err := runner.pr.runBoundedHelper(context.Background(), boundedHelperConfig{

@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 const (
@@ -308,7 +309,11 @@ func TestClientTranscriptContinuationUsesHandlerOffset(t *testing.T) {
 	}
 	handler := NewHandler(HandlerOptions{
 		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-			id: fixtureSessionID, featureID: fixtureFeatureID, messages: messages,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:        fixtureSessionID,
+				FeatureIDVal: fixtureFeatureID,
+			},
+			messages: messages,
 		}}},
 		DisableHostValidation: true,
 	})

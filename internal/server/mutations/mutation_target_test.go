@@ -87,22 +87,17 @@ func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
-			sess := &mutationTargetSessionView{
-				id:        testSessionPermissionID,
-				featureID: testFeaturePermissionID,
-				phase:     feature.PhaseImplement,
-				status:    ports.SessionWaitingPermission,
-				active:    true,
-				pending: []*llm.ControlRequestMessage{{
-					Type:      wireTypeControlRequest,
-					RequestID: testPermRequestID,
-					Request: llm.ControlRequest{
-						Subtype:  wireSubtypeCanUseTool,
-						ToolName: toolNameBash,
-						Input:    input,
-					},
-				}},
-			}
+			sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
+			sess.StatusVal = ports.SessionWaitingPermission
+			sess.pending = []*llm.ControlRequestMessage{{
+				Type:      wireTypeControlRequest,
+				RequestID: testPermRequestID,
+				Request: llm.ControlRequest{
+					Subtype:  wireSubtypeCanUseTool,
+					ToolName: toolNameBash,
+					Input:    input,
+				},
+			}}
 			sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 			target := mutationTarget{
 				orch:     mutationTargetOrchestrator(sessions),
@@ -138,22 +133,17 @@ func TestServerMutationTargetAnswerPermissionRespondsToPendingControlRequest(t *
 
 func TestServerMutationTargetAnswerPermissionRejectsLegacyAllow(t *testing.T) {
 	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
-	sess := &mutationTargetSessionView{
-		id:        testSessionPermissionID,
-		featureID: testFeaturePermissionID,
-		phase:     feature.PhaseImplement,
-		status:    ports.SessionWaitingPermission,
-		active:    true,
-		pending: []*llm.ControlRequestMessage{{
-			Type:      wireTypeControlRequest,
-			RequestID: testPermRequestID,
-			Request: llm.ControlRequest{
-				Subtype:  wireSubtypeCanUseTool,
-				ToolName: toolNameBash,
-				Input:    input,
-			},
-		}},
-	}
+	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
+	sess.StatusVal = ports.SessionWaitingPermission
+	sess.pending = []*llm.ControlRequestMessage{{
+		Type:      wireTypeControlRequest,
+		RequestID: testPermRequestID,
+		Request: llm.ControlRequest{
+			Subtype:  wireSubtypeCanUseTool,
+			ToolName: toolNameBash,
+			Input:    input,
+		},
+	}}
 	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 	target := mutationTarget{
 		orch:     mutationTargetOrchestrator(sessions),
@@ -177,28 +167,23 @@ func TestServerMutationTargetAnswerPermissionAllowRememberPersistsBeforeAnswer(t
 	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
 	permDir := t.TempDir()
 	cache := permission.NewCache(permission.NewStore(permDir))
-	sess := &mutationTargetSessionView{
-		id:             testSessionPermissionID,
-		featureID:      testFeaturePermissionID,
-		phase:          feature.PhaseImplement,
-		status:         ports.SessionWaitingPermission,
-		active:         true,
-		permCacheScope: testRepoAName,
-		pending: []*llm.ControlRequestMessage{{
-			Type:      wireTypeControlRequest,
-			RequestID: testPermRequestID,
-			Request: llm.ControlRequest{
-				Subtype:  wireSubtypeCanUseTool,
-				ToolName: toolNameBash,
-				Input:    input,
-			},
-		}},
-		onRespondControl: func() error {
-			if _, ok := cache.Check(toolNameBash, string(input), testRepoAName); !ok {
-				t.Fatal("rule was not persisted before answering")
-			}
-			return nil
+	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
+	sess.StatusVal = ports.SessionWaitingPermission
+	sess.PermCacheScopeVal = testRepoAName
+	sess.pending = []*llm.ControlRequestMessage{{
+		Type:      wireTypeControlRequest,
+		RequestID: testPermRequestID,
+		Request: llm.ControlRequest{
+			Subtype:  wireSubtypeCanUseTool,
+			ToolName: toolNameBash,
+			Input:    input,
 		},
+	}}
+	sess.onRespondControl = func() error {
+		if _, ok := cache.Check(toolNameBash, string(input), testRepoAName); !ok {
+			t.Fatal("rule was not persisted before answering")
+		}
+		return nil
 	}
 	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 	target := mutationTarget{
@@ -246,22 +231,17 @@ func TestServerMutationTargetAnswerPermissionAllowRememberPersistenceFailureDoes
 		t.Fatalf("write blocking permission path: %v", err)
 	}
 	cache := permission.NewCache(permission.NewStore(permDir))
-	sess := &mutationTargetSessionView{
-		id:        testSessionPermissionID,
-		featureID: testFeaturePermissionID,
-		phase:     feature.PhaseImplement,
-		status:    ports.SessionWaitingPermission,
-		active:    true,
-		pending: []*llm.ControlRequestMessage{{
-			Type:      wireTypeControlRequest,
-			RequestID: testPermRequestID,
-			Request: llm.ControlRequest{
-				Subtype:  wireSubtypeCanUseTool,
-				ToolName: toolNameBash,
-				Input:    input,
-			},
-		}},
-	}
+	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
+	sess.StatusVal = ports.SessionWaitingPermission
+	sess.pending = []*llm.ControlRequestMessage{{
+		Type:      wireTypeControlRequest,
+		RequestID: testPermRequestID,
+		Request: llm.ControlRequest{
+			Subtype:  wireSubtypeCanUseTool,
+			ToolName: toolNameBash,
+			Input:    input,
+		},
+	}}
 	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 	target := mutationTarget{
 		orch:            mutationTargetOrchestrator(sessions),
@@ -292,22 +272,17 @@ func TestServerMutationTargetAnswerPermissionAllowRememberDuplicateReturnsAlread
 	if _, err := cache.RememberAllowPattern(rememberPatternBashGoTest, testRepoAName); err != nil {
 		t.Fatalf("seed remembered rule: %v", err)
 	}
-	sess := &mutationTargetSessionView{
-		id:        testSessionPermissionID,
-		featureID: testFeaturePermissionID,
-		phase:     feature.PhaseImplement,
-		status:    ports.SessionWaitingPermission,
-		active:    true,
-		pending: []*llm.ControlRequestMessage{{
-			Type:      wireTypeControlRequest,
-			RequestID: testPermRequestID,
-			Request: llm.ControlRequest{
-				Subtype:  wireSubtypeCanUseTool,
-				ToolName: toolNameBash,
-				Input:    input,
-			},
-		}},
-	}
+	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
+	sess.StatusVal = ports.SessionWaitingPermission
+	sess.pending = []*llm.ControlRequestMessage{{
+		Type:      wireTypeControlRequest,
+		RequestID: testPermRequestID,
+		Request: llm.ControlRequest{
+			Subtype:  wireSubtypeCanUseTool,
+			ToolName: toolNameBash,
+			Input:    input,
+		},
+	}}
 	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 	target := mutationTarget{
 		orch:            mutationTargetOrchestrator(sessions),
@@ -337,22 +312,17 @@ func TestServerMutationTargetAnswerPermissionAllowRememberDuplicateReturnsAlread
 // newAskUserMutationTarget returns a target whose one session holds a
 // pending AskUserQuestion request with input.
 func newAskUserMutationTarget(input json.RawMessage) (*mutationTarget, *mutationTargetSessionView) {
-	sess := &mutationTargetSessionView{
-		id:        testSessionAskID,
-		featureID: "feat-ask",
-		phase:     feature.PhaseInquire,
-		status:    ports.SessionWaitingHelp,
-		active:    true,
-		pending: []*llm.ControlRequestMessage{{
-			Type:      wireTypeControlRequest,
-			RequestID: testAskRequestID,
-			Request: llm.ControlRequest{
-				Subtype:  wireSubtypeCanUseTool,
-				ToolName: toolNameAskUserQuestion,
-				Input:    input,
-			},
-		}},
-	}
+	sess := newMutationTargetSessionView(testSessionAskID, "feat-ask", feature.PhaseInquire)
+	sess.StatusVal = ports.SessionWaitingHelp
+	sess.pending = []*llm.ControlRequestMessage{{
+		Type:      wireTypeControlRequest,
+		RequestID: testAskRequestID,
+		Request: llm.ControlRequest{
+			Subtype:  wireSubtypeCanUseTool,
+			ToolName: toolNameAskUserQuestion,
+			Input:    input,
+		},
+	}}
 	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 	return &mutationTarget{
 		orch:     mutationTargetOrchestrator(sessions),
@@ -376,22 +346,22 @@ func TestServerMutationTargetAnswerAskUserResolvesIndexKeyedAnswersInQuestionOrd
 		t.Fatalf("AnswerAskUser() error = %v", err)
 	}
 
-	if len(sess.askCalls) != 1 {
-		t.Fatalf("RespondToAskUser calls = %d, want 1", len(sess.askCalls))
+	if len(sess.AskUserResponses) != 1 {
+		t.Fatalf("RespondToAskUser calls = %d, want 1", len(sess.AskUserResponses))
 	}
-	call := sess.askCalls[0]
-	if call.requestID != testAskRequestID {
-		t.Fatalf("RespondToAskUser requestID = %q, want ask-1", call.requestID)
+	call := sess.AskUserResponses[0]
+	if call.RequestID != testAskRequestID {
+		t.Fatalf("RespondToAskUser requestID = %q, want ask-1", call.RequestID)
 	}
-	if !jsonEqual(call.resolved.Bundle.Encode(), input) {
-		t.Fatalf("RespondToAskUser bundle = %s, want original %s", call.resolved.Bundle.Encode(), input)
+	if !jsonEqual(call.Resolved.Bundle.Encode(), input) {
+		t.Fatalf("RespondToAskUser bundle = %s, want original %s", call.Resolved.Bundle.Encode(), input)
 	}
 	want := []askuser.Answer{
 		{Index: 1, Question: "Which DB?", Selected: true, Labels: []string{labelUseFullInput}, Positions: []int{0}, Raw: labelUseFullInput},
 		{Index: 2, Question: "Rollout plan?", Raw: "Dark launch first"},
 	}
-	if !reflect.DeepEqual(call.resolved.Answers, want) {
-		t.Fatalf("RespondToAskUser answers = %+v, want %+v", call.resolved.Answers, want)
+	if !reflect.DeepEqual(call.Resolved.Answers, want) {
+		t.Fatalf("RespondToAskUser answers = %+v, want %+v", call.Resolved.Answers, want)
 	}
 	if result.RequestID != testAskRequestID || result.SessionID != testSessionAskID || result.Result != resultAnswered {
 		t.Fatalf("AnswerAskUser() result = %+v; want request/session answer", result)
@@ -413,14 +383,14 @@ func TestServerMutationTargetAnswerAskUserPreservesSelectedOptionIndexes(t *test
 	req.Header.Set("X-Agentico-Client", "local")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || len(sess.askCalls) != 1 {
-		t.Fatalf("status = %d, calls = %d, body = %s", rec.Code, len(sess.askCalls), rec.Body.String())
+	if rec.Code != http.StatusOK || len(sess.AskUserResponses) != 1 {
+		t.Fatalf("status = %d, calls = %d, body = %s", rec.Code, len(sess.AskUserResponses), rec.Body.String())
 	}
-	answer := sess.askCalls[0].resolved.Answers[0]
+	answer := sess.AskUserResponses[0].Resolved.Answers[0]
 	if !answer.Selected || !reflect.DeepEqual(answer.Positions, []int{1, 2}) || !reflect.DeepEqual(answer.Labels, []string{longLabel + "y", " red, green "}) {
 		t.Fatalf("selection lost its identity: %+v", answer)
 	}
-	if sess.askCalls[0].resolved.Answers[1].Raw != "custom note" {
+	if sess.AskUserResponses[0].Resolved.Answers[1].Raw != "custom note" {
 		t.Fatal("text answer was lost")
 	}
 }
@@ -471,8 +441,8 @@ func TestServerMutationTargetAnswerAskUserRejectsUnresolvableAnswersAsBadRequest
 			if !strings.Contains(response.Error.Diagnostics, tt.wantKey) {
 				t.Fatalf("diagnostics = %q, want the offending key %s named", response.Error.Diagnostics, tt.wantKey)
 			}
-			if len(sess.askCalls) != 0 {
-				t.Fatalf("RespondToAskUser calls = %d, want none for unresolvable answers", len(sess.askCalls))
+			if len(sess.AskUserResponses) != 0 {
+				t.Fatalf("RespondToAskUser calls = %d, want none for unresolvable answers", len(sess.AskUserResponses))
 			}
 		})
 	}
@@ -817,13 +787,8 @@ func TestServerMutationTargetReviewFeedbackFeatureReplaySkipsChildDispatch(t *te
 }
 
 func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t *testing.T) {
-	sess := &mutationTargetSessionView{
-		id:        testSessionHelpID,
-		featureID: testFeatureHelpID,
-		phase:     feature.PhaseImplement,
-		status:    ports.SessionWaitingHelp,
-		active:    true,
-	}
+	sess := newMutationTargetSessionView(testSessionHelpID, testFeatureHelpID, feature.PhaseImplement)
+	sess.StatusVal = ports.SessionWaitingHelp
 	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 	target := mutationTarget{
 		orch:     mutationTargetOrchestrator(sessions),
@@ -839,8 +804,8 @@ func TestServerMutationTargetSendHelpSendsUserMessageToAddressedActiveSession(t 
 		t.Fatalf("SendHelp() error = %v", err)
 	}
 
-	if !reflect.DeepEqual(sess.sentMessages, []string{"Please use the existing migration path."}) {
-		t.Fatalf("SendUserMessage calls = %v, want addressed help text", sess.sentMessages)
+	if !reflect.DeepEqual(sess.SentMessages, []string{"Please use the existing migration path."}) {
+		t.Fatalf("SendUserMessage calls = %v, want addressed help text", sess.SentMessages)
 	}
 	if result.FeatureID != testFeatureHelpID || result.SessionID != testSessionHelpID || result.Result != resultSent {
 		t.Fatalf("SendHelp() result = %+v; want feature/session sent", result)
@@ -2265,13 +2230,7 @@ func TestServerMutationTargetRewindActionStopsSessionsBeforeRewind(t *testing.T)
 		Pipeline: feature.PipelineMedium,
 	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
-		sessions: []ports.SessionView{&mutationTargetSessionView{
-			id:        "session-rewind",
-			featureID: f.ID,
-			phase:     feature.PhaseImplement,
-			status:    ports.SessionRunning,
-			active:    true,
-		}},
+		sessions: []ports.SessionView{newMutationTargetSessionView("session-rewind", f.ID, feature.PhaseImplement)},
 	}
 	var statusAtStop feature.Status
 	sessions.onStop = func(string) {
@@ -2302,13 +2261,7 @@ func TestServerMutationTargetRewindActionUpgradePipelineBranch(t *testing.T) {
 		Pipeline: feature.PipelineMedium,
 	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
-		sessions: []ports.SessionView{&mutationTargetSessionView{
-			id:        "session-upgrade-rewind",
-			featureID: f.ID,
-			phase:     feature.PhaseImplement,
-			status:    ports.SessionRunning,
-			active:    true,
-		}},
+		sessions: []ports.SessionView{newMutationTargetSessionView("session-upgrade-rewind", f.ID, feature.PhaseImplement)},
 	}
 	target := mutationTarget{
 		orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{}),
@@ -2342,13 +2295,7 @@ func TestServerMutationTargetRewindActionUpgradePipelineFailureMetadata(t *testi
 		Pipeline: feature.PipelineMoonshot,
 	}, feature.StatusImplementing, feature.PhaseImplement)
 	sessions := &mutationTargetSessionManager{
-		sessions: []ports.SessionView{&mutationTargetSessionView{
-			id:        "session-failed-upgrade",
-			featureID: f.ID,
-			phase:     feature.PhaseImplement,
-			status:    ports.SessionRunning,
-			active:    true,
-		}},
+		sessions: []ports.SessionView{newMutationTargetSessionView("session-failed-upgrade", f.ID, feature.PhaseImplement)},
 	}
 	target := mutationTarget{
 		orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{}),
@@ -2640,7 +2587,7 @@ type mutationTargetSessionManager struct {
 }
 
 func (m *mutationTargetSessionManager) StartSession(id, featureID string, phase feature.Phase, _ []string, _ string, _ []string, _ ...*ports.SessionOpts) (ports.SessionHandle, error) {
-	sess := &mutationTargetSessionView{id: id, featureID: featureID, phase: phase, status: ports.SessionRunning, active: true}
+	sess := newMutationTargetSessionView(id, featureID, phase)
 	m.sessions = append(m.sessions, sess)
 	return sess, nil
 }
@@ -2686,19 +2633,21 @@ func (m *mutationTargetSessionManager) Detach()              {}
 func (m *mutationTargetSessionManager) Shutdown()            {}
 func (m *mutationTargetSessionManager) IsShuttingDown() bool { return false }
 
+// mutationTargetSessionView embeds the shared mock session view; the
+// mutation-target flows only need the pending-request queries plus richer
+// control-response recording than the shared mock captures.
 type mutationTargetSessionView struct {
-	id               string
-	featureID        string
-	phase            feature.Phase
-	status           ports.SessionStatus
-	active           bool
-	permCacheScope   string
+	*mocks.MockSessionView
 	pending          []*llm.ControlRequestMessage
-	sentMessages     []string
 	controlCalls     []mutationTargetControlCall
 	rememberedCalls  []string
-	askCalls         []mutationTargetAskUserCall
 	onRespondControl func() error
+}
+
+func newMutationTargetSessionView(id, featureID string, phase feature.Phase) *mutationTargetSessionView {
+	m := mocks.NewMockSessionView(id, featureID)
+	m.PhaseVal = phase
+	return &mutationTargetSessionView{MockSessionView: m}
 }
 
 type mutationTargetControlCall struct {
@@ -2708,33 +2657,6 @@ type mutationTargetControlCall struct {
 	originalInput json.RawMessage
 }
 
-type mutationTargetAskUserCall struct {
-	requestID string
-	resolved  askuser.Resolved
-}
-
-func (s *mutationTargetSessionView) ID() string                       { return s.id }
-func (s *mutationTargetSessionView) FeatureID() string                { return s.featureID }
-func (s *mutationTargetSessionView) Phase() feature.Phase             { return s.phase }
-func (s *mutationTargetSessionView) RepoName() string                 { return "" }
-func (s *mutationTargetSessionView) PermCacheScope() string           { return s.permCacheScope }
-func (s *mutationTargetSessionView) Kind() ports.SessionKind          { return ports.KindPhase }
-func (s *mutationTargetSessionView) Label() string                    { return "" }
-func (s *mutationTargetSessionView) Status() ports.SessionStatus      { return s.status }
-func (s *mutationTargetSessionView) IsActive() bool                   { return s.active }
-func (s *mutationTargetSessionView) Iteration() int                   { return 0 }
-func (s *mutationTargetSessionView) StartedAt() time.Time             { return time.Time{} }
-func (s *mutationTargetSessionView) WaitingSince() time.Time          { return time.Time{} }
-func (s *mutationTargetSessionView) InitialPrompt() string            { return "" }
-func (s *mutationTargetSessionView) ProviderName() string             { return "" }
-func (s *mutationTargetSessionView) Model() string                    { return "" }
-func (s *mutationTargetSessionView) WorkDir() string                  { return "" }
-func (s *mutationTargetSessionView) EffectiveEffort() llm.EffortLevel { return "" }
-func (s *mutationTargetSessionView) EffortSource() llm.EffortSource   { return "" }
-func (s *mutationTargetSessionView) MessageLog() ports.MessageLog     { return nil }
-func (s *mutationTargetSessionView) Cost() *llm.ResultMessage         { return nil }
-func (s *mutationTargetSessionView) LatestUsage() *llm.Usage          { return nil }
-func (s *mutationTargetSessionView) AccumulatedUsage() llm.Usage      { return llm.Usage{} }
 func (s *mutationTargetSessionView) LastControlRequest() *llm.ControlRequestMessage {
 	if len(s.pending) == 0 {
 		return nil
@@ -2746,15 +2668,6 @@ func (s *mutationTargetSessionView) PendingControlRequests() []*llm.ControlReque
 	copy(out, s.pending)
 	return out
 }
-func (s *mutationTargetSessionView) QALog() []ports.QAPair           { return nil }
-func (s *mutationTargetSessionView) LogFilePath() string             { return "" }
-func (s *mutationTargetSessionView) ContextPercentage() int          { return 0 }
-func (s *mutationTargetSessionView) ErrorDetail() string             { return "" }
-func (s *mutationTargetSessionView) ExitCodeDetail() string          { return "" }
-func (s *mutationTargetSessionView) LastStdoutAt() time.Time         { return time.Time{} }
-func (s *mutationTargetSessionView) StatusCh() <-chan string         { return nil }
-func (s *mutationTargetSessionView) AttachCh() <-chan llm.SDKMessage { return nil }
-func (s *mutationTargetSessionView) Done() <-chan struct{}           { return nil }
 func (s *mutationTargetSessionView) HasPendingAskUserQuestion() bool {
 	for _, pending := range s.pending {
 		if pending != nil && pending.Request.ToolName == toolNameAskUserQuestion {
@@ -2765,15 +2678,6 @@ func (s *mutationTargetSessionView) HasPendingAskUserQuestion() bool {
 }
 func (s *mutationTargetSessionView) HasPendingRootAskUserQuestion() bool {
 	return s.HasPendingAskUserQuestion()
-}
-func (s *mutationTargetSessionView) RootCompletionIntent() llm.CompletionIntent {
-	return llm.CompletionIntent{}
-}
-func (s *mutationTargetSessionView) LiveBackgroundTaskCount() int       { return 0 }
-func (s *mutationTargetSessionView) TaskActivities() []llm.TaskActivity { return nil }
-func (s *mutationTargetSessionView) SendUserMessage(text string) error {
-	s.sentMessages = append(s.sentMessages, text)
-	return nil
 }
 func (s *mutationTargetSessionView) RespondToControl(requestID string, allow bool, reason string) error {
 	if s.onRespondControl != nil {
@@ -2796,7 +2700,6 @@ func (s *mutationTargetSessionView) RespondToControl(requestID string, allow boo
 	})
 	return nil
 }
-
 func (s *mutationTargetSessionView) RespondToControlRemember(requestID string) error {
 	if err := s.RespondToControl(requestID, true, ""); err != nil {
 		return err
@@ -2804,26 +2707,6 @@ func (s *mutationTargetSessionView) RespondToControlRemember(requestID string) e
 	s.rememberedCalls = append(s.rememberedCalls, requestID)
 	return nil
 }
-func (s *mutationTargetSessionView) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
-	s.askCalls = append(s.askCalls, mutationTargetAskUserCall{
-		requestID: requestID,
-		resolved:  resolved,
-	})
-	return nil
-}
-func (s *mutationTargetSessionView) Stop() error      { return nil }
-func (s *mutationTargetSessionView) Interrupt() error { return nil }
-func (s *mutationTargetSessionView) Wait()            {}
-func (s *mutationTargetSessionView) SetStatus(status ports.SessionStatus) {
-	s.status = status
-}
-func (s *mutationTargetSessionView) SetLogFile(*os.File)                            {}
-func (s *mutationTargetSessionView) AddCleanupFunc(func())                          {}
-func (s *mutationTargetSessionView) SetHasUnansweredQuestion(bool)                  {}
-func (s *mutationTargetSessionView) CloseStdin()                                    {}
-func (s *mutationTargetSessionView) SetOnToolAllowed(func(string, json.RawMessage)) {}
-func (s *mutationTargetSessionView) SetOnFileRead(func(llm.FileReadEvent))          {}
-func (s *mutationTargetSessionView) SetOnSubagentEvent(func(llm.SDKMessage))        {}
 
 func assertJSONDoesNotContain(t *testing.T, value any, banned ...string) {
 	t.Helper()
@@ -2852,22 +2735,18 @@ func jsonEqual(a, b json.RawMessage) bool {
 
 func TestServerMutationTargetAnswerPermissionAutoApproveScopeEnablesBeforeAnswering(t *testing.T) {
 	newPending := func() *mutationTargetSessionView {
-		return &mutationTargetSessionView{
-			id:        testSessionPermissionID,
-			featureID: testFeaturePermissionID,
-			phase:     feature.PhaseImplement,
-			status:    ports.SessionWaitingPermission,
-			active:    true,
-			pending: []*llm.ControlRequestMessage{{
-				Type:      wireTypeControlRequest,
-				RequestID: testPermRequestID,
-				Request: llm.ControlRequest{
-					Subtype:  wireSubtypeCanUseTool,
-					ToolName: toolNameBash,
-					Input:    json.RawMessage(`{"command":"go test ./cmd/agentico"}`),
-				},
-			}},
-		}
+		sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
+		sess.StatusVal = ports.SessionWaitingPermission
+		sess.pending = []*llm.ControlRequestMessage{{
+			Type:      wireTypeControlRequest,
+			RequestID: testPermRequestID,
+			Request: llm.ControlRequest{
+				Subtype:  wireSubtypeCanUseTool,
+				ToolName: toolNameBash,
+				Input:    json.RawMessage(`{"command":"go test ./cmd/agentico"}`),
+			},
+		}}
+		return sess
 	}
 
 	t.Run("workspace", func(t *testing.T) {
@@ -2933,7 +2812,7 @@ func TestServerMutationTargetAnswerPermissionAutoApproveScopeEnablesBeforeAnswer
 			t.Fatalf("set inquireness: %v", err)
 		}
 		sess := newPending()
-		sess.featureID = f.ID
+		sess.FeatureIDVal = f.ID
 		sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 		target := mutationTarget{
 			orch:       orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{}),
@@ -2977,7 +2856,7 @@ func TestServerMutationTargetAnswerPermissionAutoApproveScopeEnablesBeforeAnswer
 
 	t.Run("feature scope without feature fails before answering", func(t *testing.T) {
 		sess := newPending()
-		sess.featureID = ""
+		sess.FeatureIDVal = ""
 		sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
 		target := mutationTarget{orch: mutationTargetOrchestrator(sessions), sessions: sessions}
 		if _, err := target.AnswerPermission(serverruntime.PermissionAnswerRequest{

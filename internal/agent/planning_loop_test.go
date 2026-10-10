@@ -510,7 +510,7 @@ func TestPlanningEntryPointsFailureTexts(t *testing.T) {
 		sess := newTerminalStatusTestSession(ports.SessionFailed)
 		// Spent tokens mark the failure as real work, not a retryable
 		// infrastructure blip.
-		sess.usage = llm.Usage{InputTokens: 10}
+		sess.AccumulatedUsageVal = llm.Usage{InputTokens: 10}
 		return sess, nil
 	}
 	cases := []struct {
@@ -602,9 +602,9 @@ func TestPlanningEntryPointsRecordPlannerCostByInlineRule(t *testing.T) {
 					}
 					sess := newUtilityTestSession()
 					sess.setRootIntent(validSuccessCompletionIntent())
-					sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
-					sess.usage = tc.usage
-					sess.statusCh <- agentStatusSuccess
+					sess.CostVal = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+					sess.AccumulatedUsageVal = tc.usage
+					sess.StatusChVal <- agentStatusSuccess
 					return sess, nil
 				}}
 				pr := newPlanEntryRunner(sm, fx.store, fx.stateDir, stubPlannerBuildSession(nil))

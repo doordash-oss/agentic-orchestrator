@@ -33,6 +33,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // recordingSupervisor is a SupervisorService double that records calls and
@@ -836,7 +837,13 @@ func TestSupervisorCheckpointProjectionHidesBaselineAndBoundsSummary(t *testing.
 }
 
 func TestSupervisorRequestOriginProjectsOnStateAndRecords(t *testing.T) {
-	sess := &fakeSessionView{id: supervisor.SessionID("c1", 1), featureID: supervisor.FeatureID, status: ports.SessionWaitingPermission}
+	sess := &fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:        supervisor.SessionID("c1", 1),
+			FeatureIDVal: supervisor.FeatureID,
+			StatusVal:    ports.SessionWaitingPermission,
+		},
+	}
 	child := &llm.ControlRequestMessage{
 		RequestID: "req-child",
 		Request:   llm.ControlRequest{Subtype: controlSubtypeCanUseTool, ToolName: "Bash", Input: json.RawMessage(`{"command":"ls"}`)},

@@ -141,14 +141,14 @@ func TestParsePRDescription(t *testing.T) {
 
 func TestPhaseRunnerRunDescriptionGeneration_UsesBoundedHelper(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n## Summary\n- Test change"))
-	sess.result = &llm.ResultMessage{
+	sess.MessageLogVal.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n## Summary\n- Test change"))
+	sess.CostVal = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
 		Result:     "done",
 		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	prCtx := PRContext{FeatureName: "test", Roadmap: "plan content"}
@@ -199,17 +199,17 @@ func TestPhaseRunnerRunDescriptionGeneration_UsesBoundedHelper(t *testing.T) {
 			t.Errorf("CanUseTool(%q) reason = %q, want supplied-context direction", toolName, decision.Reason)
 		}
 	}
-	if sess.featureID != "feat-publish" {
-		t.Errorf("session featureID = %q, want %q", sess.featureID, "feat-publish")
+	if sess.FeatureIDVal != "feat-publish" {
+		t.Errorf("session featureID = %q, want %q", sess.FeatureIDVal, "feat-publish")
 	}
-	if sess.phase != feature.PhasePublish {
-		t.Errorf("session phase = %v, want %v", sess.phase, feature.PhasePublish)
+	if sess.PhaseVal != feature.PhasePublish {
+		t.Errorf("session phase = %v, want %v", sess.PhaseVal, feature.PhasePublish)
 	}
 }
 
 func TestPhaseRunnerRunDescriptionGeneration_ReturnsHelperErrorWithoutFallback(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.attachCh <- mocks.ControlRequestMsg("perm-1", "Bash")
+	sess.AttachChVal <- mocks.ControlRequestMsg("perm-1", "Bash")
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	prCtx := PRContext{
@@ -228,13 +228,13 @@ func TestPhaseRunnerRunDescriptionGeneration_ReturnsHelperErrorWithoutFallback(t
 
 func TestPhaseRunnerRunDescriptionGeneration_RequiresText(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.result = &llm.ResultMessage{
+	sess.CostVal = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
 		Result:     "done",
 		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	_, _, err := runner.pr.RunDescriptionGeneration(context.Background(), "feat-publish", "sonnet", PRContext{FeatureName: "test"})
@@ -251,14 +251,14 @@ func TestPhaseRunnerRunDescriptionGeneration_RequiresText(t *testing.T) {
 
 func TestPhaseRunnerRunDescriptionGeneration_RejectsIncompleteOutput(t *testing.T) {
 	sess := newUtilityTestSession()
-	sess.msgLog.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n"))
-	sess.result = &llm.ResultMessage{
+	sess.MessageLogVal.Append(mocks.AssistantTextMessage("TITLE: Test PR\nBODY:\n"))
+	sess.CostVal = &llm.ResultMessage{
 		Type:       testResultMessageType,
 		Subtype:    testResultSuccessValue,
 		Result:     "done",
 		StopReason: testStopReasonEndTurn,
 	}
-	sess.statusCh <- agentStatusSuccess
+	sess.StatusChVal <- agentStatusSuccess
 
 	runner := newUtilityTestPhaseRunner(t, sess)
 	title, body, err := runner.pr.RunDescriptionGeneration(

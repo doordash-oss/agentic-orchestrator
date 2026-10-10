@@ -215,13 +215,13 @@ func TestRunFeatureFinalReviewLoop_SessionsCarryFinalReviewPhase(t *testing.T) {
 		}
 
 		sess := newUtilityTestSession()
-		sess.id = id
-		sess.featureID = featureID
-		sess.phase = phase
+		sess.IDVal = id
+		sess.FeatureIDVal = featureID
+		sess.PhaseVal = phase
 		sess.setRootIntent(validSuccessCompletionIntent())
-		sess.result = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, SessionID: testMockIdentifier, StopReason: "end_turn"}
-		sess.statusCh <- agentStatusSuccess
-		close(sess.done)
+		sess.CostVal = &llm.ResultMessage{Type: testResultMessageType, Subtype: testResultSuccessValue, SessionID: testMockIdentifier, StopReason: "end_turn"}
+		sess.StatusChVal <- agentStatusSuccess
+		close(sess.DoneChVal)
 		return sess, nil
 	}
 

@@ -26,6 +26,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // raceSafeActiveSessionView overrides fakeSessionView.IsActive with an
@@ -42,7 +43,12 @@ func (s *raceSafeActiveSessionView) IsActive() bool { return s.active.Load() }
 func TestSessionOutputStreamEmitsIndexedTranscriptRecordsAndTerminates(t *testing.T) {
 	t.Parallel()
 
-	sess := &fakeSessionView{id: fixtureSessionID, status: ports.SessionDone}
+	sess := &fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal:     fixtureSessionID,
+			StatusVal: ports.SessionDone,
+		},
+	}
 	sess.log = session.NewMessageLog()
 	sess.log.Append(llm.SDKMessage{Type: roleAssistant, Assistant: &llm.AssistantMessage{
 		Type:    roleAssistant,
@@ -88,7 +94,11 @@ func TestSessionOutputStreamReincludesMutatingTailRow(t *testing.T) {
 		Type:    roleAssistant,
 		Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "partial"}}},
 	}})
-	sess := &raceSafeActiveSessionView{fakeSessionView: &fakeSessionView{id: fixtureSessionID}}
+	sess := &raceSafeActiveSessionView{fakeSessionView: &fakeSessionView{
+		MockSessionView: &mocks.MockSessionView{
+			IDVal: fixtureSessionID,
+		},
+	}}
 	sess.log = log
 	sess.active.Store(true)
 	handler := NewHandler(HandlerOptions{
@@ -137,8 +147,10 @@ func TestSessionOutputStreamErrorIsRetriableForActiveSession(t *testing.T) {
 
 	handler := NewHandler(HandlerOptions{
 		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-			id:     fixtureSessionID,
-			status: ports.SessionRunning,
+			MockSessionView: &mocks.MockSessionView{
+				IDVal:     fixtureSessionID,
+				StatusVal: ports.SessionRunning,
+			},
 		}}},
 		DisableHostValidation: true,
 	})

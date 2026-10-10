@@ -167,7 +167,7 @@ func (m *mockCatalogProvider) VersionInfo() (string, error)                   { 
 func (m *mockCatalogProvider) MinVersion() [3]int                             { return [3]int{} }
 func (m *mockCatalogProvider) EnvVarsToExclude() []string                     { return nil }
 func (m *mockCatalogProvider) ModelCatalog() []llm.ModelInfo                  { return m.models }
-func (m *mockCatalogProvider) SetModelCatalog(models []llm.ModelInfo)           { m.models = models }
+func (m *mockCatalogProvider) SetModelCatalog(models []llm.ModelInfo)         { m.models = models }
 func (m *mockCatalogProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
 	return nil, nil
 }

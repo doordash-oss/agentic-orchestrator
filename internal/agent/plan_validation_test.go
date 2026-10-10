@@ -1361,8 +1361,8 @@ func TestPhasePlanningLoopRetriesEarlyInfrastructureFailureInProcess(t *testing.
 			}
 			sess := newUtilityTestSession()
 			sess.setRootIntent(validSuccessCompletionIntent())
-			sess.result = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
-			sess.statusCh <- agentStatusSuccess
+			sess.CostVal = &llm.ResultMessage{Subtype: testResultSuccessValue, StopReason: "end_turn"}
+			sess.StatusChVal <- agentStatusSuccess
 			return sess, nil
 		},
 	}, phasePlanKind("", RoadmapPhase{

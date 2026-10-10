@@ -36,17 +36,17 @@ func TestWaitForPhaseOutcome_TerminalProviderError(t *testing.T) {
 	for _, delivery := range []string{"status", "reclassify", "exited"} {
 		t.Run(delivery, func(t *testing.T) {
 			sess := newBgTaskSession()
-			sess.result = &llm.ResultMessage{Subtype: "error", IsError: true, Result: terminalImageError}
+			sess.CostVal = &llm.ResultMessage{Subtype: "error", IsError: true, Result: terminalImageError}
 			// Even a success intent and outstanding work cannot override a
 			// terminal provider failure or defer it into an input/task wait.
 			sess.setRootIntent(validSuccessCompletionIntent())
 			sess.setRootAsk(true)
 			sess.liveTasks.Store(1)
 			if delivery == "status" {
-				sess.statusCh <- agentStatusAPIError
+				sess.StatusChVal <- agentStatusAPIError
 			}
 			if delivery == "exited" {
-				close(sess.done)
+				close(sess.DoneChVal)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -81,9 +81,9 @@ func TestImplementLoop_TerminalProviderErrorDoesNotCrashResume(t *testing.T) {
 	}
 	cfg.SessionStartFunc = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		sess := &crashResumeTestSession{utilityTestSession: newUtilityTestSession(), providerSessionID: "native-failed-turn"}
-		sess.result = &llm.ResultMessage{Subtype: "error", IsError: true, Result: terminalImageError}
+		sess.CostVal = &llm.ResultMessage{Subtype: "error", IsError: true, Result: terminalImageError}
 		// A closed process also exposes the retry bug without hanging the test.
-		close(sess.done)
+		close(sess.DoneChVal)
 		return sess, nil
 	}
 	_, err := runImplementationLoop(cfg, nil)
@@ -115,8 +115,8 @@ func TestWaitForPhaseOutcome_TerminalErrorShapes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := newBgTaskSession()
-			sess.result = tc.result
-			sess.statusCh <- statusFromResult(tc.result)
+			sess.CostVal = tc.result
+			sess.StatusChVal <- statusFromResult(tc.result)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			got := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{Ctx: ctx})

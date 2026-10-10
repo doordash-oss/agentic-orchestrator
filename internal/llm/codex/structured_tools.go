@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -58,6 +59,10 @@ type pendingQuestionRequest struct {
 	Dynamic     bool
 	CallID      string
 	QuestionIDs map[string]string
+	// TurnEnded is set when the root turn completed while this question was
+	// still unanswered. Codex drops the tool call with the turn, so the answer
+	// must open a follow-up turn instead of replying to the dead call.
+	TurnEnded bool
 }
 
 func (p *Protocol) developerInstructions() *string {
@@ -205,7 +210,7 @@ func (p *Protocol) handleDynamicToolCall(id int, raw json.RawMessage) (llm.SDKMe
 	p.mu.Lock()
 	isRoot := p.isMainThread(call.ThreadID)
 	stale := isRoot && p.turnID != "" && call.TurnID != p.turnID
-	pendingQuestion := len(p.pendingQuestions) > 0
+	pendingQuestion := p.hasLiveQuestionLocked()
 	pendingCompletion := p.pendingCompletion != ""
 	p.mu.Unlock()
 	if stale {
@@ -310,6 +315,46 @@ func (p *Protocol) rememberQuestions(id int, request pendingQuestionRequest) {
 	p.pendingQuestions[strconv.Itoa(id)] = request
 }
 
+// hasLiveQuestionLocked reports whether a question is pending whose tool call
+// Codex still holds open. A question orphaned by turn completion no longer
+// blocks a new one. Caller must hold p.mu.
+func (p *Protocol) hasLiveQuestionLocked() bool {
+	for _, pending := range p.pendingQuestions {
+		if !pending.TurnEnded {
+			return true
+		}
+	}
+	return false
+}
+
+// orphanPendingQuestionsLocked marks every unanswered question as outliving
+// its turn. Codex keeps sampling while an ask_user call is outstanding and
+// may end the turn with a final message; it then discards the call, so a
+// later answer cannot be delivered as its result. Caller must hold p.mu.
+func (p *Protocol) orphanPendingQuestionsLocked() {
+	for id, pending := range p.pendingQuestions {
+		pending.TurnEnded = true
+		p.pendingQuestions[id] = pending
+	}
+}
+
+// orphanedAnswerTurn is the user text that carries an answer into a new turn
+// once the asking turn has ended.
+func orphanedAnswerTurn(pending pendingQuestionRequest, answers map[string]string) string {
+	questions := make([]string, 0, len(pending.QuestionIDs))
+	for question := range pending.QuestionIDs {
+		questions = append(questions, question)
+	}
+	sort.Strings(questions)
+	var b strings.Builder
+	b.WriteString("The user answered your ask_user question after your previous turn ended.\n")
+	for _, question := range questions {
+		fmt.Fprintf(&b, "\nQuestion: %s\nAnswer: %s\n", question, answers[question])
+	}
+	b.WriteString("\nContinue from this answer.")
+	return b.String()
+}
+
 func (p *Protocol) askUserControl(id int, threadID string, input json.RawMessage) llm.SDKMessage {
 	return p.controlMessageOrigin(llm.SDKMessage{Type: "control_request", Subtype: "can_use_tool", ControlRequest: &llm.ControlRequestMessage{
 		Type: "control_request", RequestID: strconv.Itoa(id), Request: llm.ControlRequest{Subtype: "can_use_tool", ToolName: "AskUserQuestion", Input: input},
@@ -346,10 +391,13 @@ func (p *Protocol) respondToAskUser(requestID string, answers map[string]string)
 	// must observe that this answer has already released the previous one.
 	delete(p.pendingQuestions, requestID)
 	p.mu.Unlock()
-	if pending.Dynamic {
+	switch {
+	case pending.TurnEnded:
+		err = p.sendFollowUpTurn(orphanedAnswerTurn(pending, answers))
+	case pending.Dynamic:
 		data, _ := json.Marshal(map[string]any{"callId": pending.CallID, "answers": mapped})
 		err = p.respondDynamicTool(id, true, string(data))
-	} else {
+	default:
 		err = p.writeJSON(Response{JSONRPC: "2.0", ID: id, Result: map[string]any{"answers": mapped}})
 	}
 	if err != nil {

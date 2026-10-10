@@ -1297,6 +1297,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		p.mu.Lock()
 		p.turnActive = false
 		p.interruptPending = false
+		p.orphanPendingQuestionsLocked()
 		p.mu.Unlock()
 		p.requestUsageRead()
 

@@ -33,7 +33,7 @@ func (p *Protocol) interactiveToolBlock(method string, params json.RawMessage) (
 	if method != "item/started" && method != "item/completed" {
 		return llm.SDKMessage{}, false
 	}
-	var ev ItemStartedParams
+	var ev itemStartedParams
 	if err := json.Unmarshal(params, &ev); err != nil || ev.Item.ID == "" {
 		return llm.SDKMessage{}, false
 	}
@@ -68,7 +68,7 @@ func (p *Protocol) interactiveToolBlock(method string, params json.RawMessage) (
 	return toolResultMessage(ev.Item, paths), true
 }
 
-func changedPaths(item ItemUnion) []string {
+func changedPaths(item itemUnion) []string {
 	var paths []string
 	for _, change := range item.Changes {
 		if path := strings.TrimSpace(change.Path); path != "" {
@@ -78,7 +78,7 @@ func changedPaths(item ItemUnion) []string {
 	return paths
 }
 
-func toolUseMessage(item ItemUnion, paths []string) llm.SDKMessage {
+func toolUseMessage(item itemUnion, paths []string) llm.SDKMessage {
 	name := "Bash"
 	input := map[string]any{"command": item.Command}
 	if item.Cwd != "" {
@@ -105,7 +105,7 @@ func toolUseMessage(item ItemUnion, paths []string) llm.SDKMessage {
 	}
 }
 
-func toolResultMessage(item ItemUnion, paths []string) llm.SDKMessage {
+func toolResultMessage(item itemUnion, paths []string) llm.SDKMessage {
 	status := strings.ToLower(strings.TrimSpace(item.Status))
 	failed := status == "declined" || status == "failed"
 	var text string

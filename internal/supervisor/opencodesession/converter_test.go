@@ -221,7 +221,7 @@ func TestRebuildGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
-	if !res.Resume || res.SessionID != "" || res.Path != filepath.Join(dir, SeedFileName) {
+	if !res.Resume || res.SessionID != "" || res.Path != filepath.Join(dir, seedFileName) {
 		t.Fatalf("Rebuild result = %+v, want Resume with the seed under %s and no session id", res, dir)
 	}
 	got, err := os.ReadFile(res.Path)
@@ -492,7 +492,7 @@ func TestRebuildConversionErrorWritesNothing(t *testing.T) {
 				dir := t.TempDir()
 				const previous = "previous seed\n"
 				if existing {
-					if err := os.WriteFile(SeedPath(dir), []byte(previous), 0o600); err != nil {
+					if err := os.WriteFile(seedPath(dir), []byte(previous), 0o600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -503,7 +503,7 @@ func TestRebuildConversionErrorWritesNothing(t *testing.T) {
 					t.Fatalf("Rebuild error = %v, want *supervisor.ConversionError for seq 42", err)
 				}
 				after := snapshot(t, dir)
-				if strings.Join(keys(before), ",") != strings.Join(keys(after), ",") || before[SeedFileName] != after[SeedFileName] {
+				if strings.Join(keys(before), ",") != strings.Join(keys(after), ",") || before[seedFileName] != after[seedFileName] {
 					t.Fatalf("conversion error changed the conversation dir: %v -> %v", before, after)
 				}
 			}
@@ -553,7 +553,7 @@ func TestRebuildReplacesSeedAtomically(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	stale := strings.Repeat("stale history line\n", 5000)
-	if err := os.WriteFile(SeedPath(dir), []byte(stale), 0o644); err != nil {
+	if err := os.WriteFile(seedPath(dir), []byte(stale), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	want, err := Render(input(dir, loadRecords(t, "transcript.jsonl")), Options{})
@@ -570,14 +570,14 @@ func TestRebuildReplacesSeedAtomically(t *testing.T) {
 			t.Fatalf("rebuild %d did not fully replace the previous seed", i)
 		}
 	}
-	info, err := os.Stat(SeedPath(dir))
+	info, err := os.Stat(seedPath(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("seed mode = %v, want 0600", perm)
 	}
-	if got := keys(snapshot(t, dir)); strings.Join(got, ",") != "./,"+SeedFileName {
+	if got := keys(snapshot(t, dir)); strings.Join(got, ",") != "./,"+seedFileName {
 		t.Fatalf("conversation dir = %v, want only the seed (no temp files)", got)
 	}
 }
@@ -598,7 +598,7 @@ func TestRegistryContextWindow(t *testing.T) {
 func assertShape(t *testing.T, data []byte) {
 	t.Helper()
 	text := string(data)
-	if !strings.HasPrefix(text, Preamble+"\nEarlier messages omitted: ") {
+	if !strings.HasPrefix(text, preamble+"\nEarlier messages omitted: ") {
 		t.Fatalf("seed does not open with the preamble:\n%.300s", text)
 	}
 	if !strings.HasSuffix(text, "\n\n"+Closing+"\n") {

@@ -178,7 +178,7 @@ func TestCodexInteractiveSettingsUpdateControlsLaterTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, turn := w.await(t, "turn/start")
-	var got TurnStartParams
+	var got turnStartParams
 	if err := json.Unmarshal(turn, &got); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestCodexSettingsUpdateRejectionKeepsCachedValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, raw := w.await(t, "turn/start")
-	var turn TurnStartParams
+	var turn turnStartParams
 	if err := json.Unmarshal(raw, &turn); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestCodexSettingsUpdateTimeoutAndNonInteractiveRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, raw := w.await(t, "turn/start")
-	var turn TurnStartParams
+	var turn turnStartParams
 	if err := json.Unmarshal(raw, &turn); err != nil {
 		t.Fatal(err)
 	}

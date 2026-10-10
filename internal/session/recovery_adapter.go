@@ -38,7 +38,7 @@ func NewRecoveryAdapter(stateDir string, fm *feature.Manager) *RecoveryAdapter {
 
 // ScanForRecovery checks all features for orphaned sessions.
 func (a *RecoveryAdapter) ScanForRecovery(_ context.Context) ([]ports.RecoveryItem, error) {
-	pidFiles, err := FindPIDFiles(a.StateDir)
+	pidFiles, err := findPIDFiles(a.StateDir)
 	if err != nil {
 		return nil, err
 	}
@@ -67,13 +67,13 @@ func (a *RecoveryAdapter) ScanForRecovery(_ context.Context) ([]ports.RecoveryIt
 //
 //	(a) Idempotent on retry. Each per-item branch is a no-op when re-applied:
 //	    terminateProcessGroup is gated on item.ProcessAlive (rechecked via
-//	    isProcessGroupAlive); RemovePIDFile tolerates a missing file;
+//	    isProcessGroupAlive); removePIDFile tolerates a missing file;
 //	    fm.Transition short-circuits when the target state
 //	    is already set; and the resume-metadata Store.Modify writes
 //	    overwrite-with-the-same-value (SessionID + RepoName) so a re-run
 //	    against the same RecoveryItem set converges.
 //	(b) On crash mid-loop: each per-item action commits independently —
-//	    terminateProcessGroup is synchronous, RemovePIDFile is filesystem-
+//	    terminateProcessGroup is synchronous, removePIDFile is filesystem-
 //	    atomic, and fm.* mutations route through Store.Modify (atomic
 //	    feature.yaml rewrite). A crash leaves the feature directory in a
 //	    consistent partial state where the items already processed have
@@ -93,7 +93,7 @@ func (a *RecoveryAdapter) ExecuteRecovery(_ context.Context, items []ports.Recov
 			}
 			// Clean up PID file after the process is confirmed dead
 			if item.PIDFile.Dir != "" {
-				_ = RemovePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
+				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
 			}
 			if item.Feature != nil && a.FeatureManager != nil {
 				_ = a.FeatureManager.Transition(item.Feature.ID, feature.StatusInterrupted)
@@ -106,7 +106,7 @@ func (a *RecoveryAdapter) ExecuteRecovery(_ context.Context, items []ports.Recov
 			}
 			// Clean up stale PID file after process is confirmed dead
 			if item.PIDFile.Dir != "" {
-				_ = RemovePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
+				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
 			}
 			// Store the SessionID on the feature so the phase runner
 			// can use --resume to continue the session from where it left off.
@@ -133,7 +133,7 @@ func (a *RecoveryAdapter) ExecuteRecovery(_ context.Context, items []ports.Recov
 		case ports.RecoverySkip:
 			// Clean up PID file if process is dead
 			if !item.ProcessAlive && item.PIDFile.Dir != "" {
-				_ = RemovePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
+				_ = removePIDFile(item.PIDFile.Dir, item.PIDFile.RepoName)
 			}
 		}
 	}

@@ -31,7 +31,7 @@ import (
 // the write to its own feedback artifact, aborting the helper.
 func TestNormalizePermissionInput_EditFilepathLowercase(t *testing.T) {
 	want := "/x/validate-architecture/validation-architecture-feedback.md"
-	tc := PermissionToolCall{
+	tc := permissionToolCall{
 		Kind:     ToolKindEdit,
 		Title:    "edit",
 		RawInput: json.RawMessage(`{"filepath":"` + want + `","diff":"--- a\n+++ b\n"}`),
@@ -59,7 +59,7 @@ func TestNormalizePermissionInput_EditFilepathLowercase(t *testing.T) {
 // "other" prompts.
 func TestNormalizePermissionInput_OtherExternalDirectory(t *testing.T) {
 	parent := "/Users/x/.agentic-workflow/knowledge-base/repo"
-	tc := PermissionToolCall{
+	tc := permissionToolCall{
 		Kind:     ToolKindOther,
 		Title:    parent,
 		RawInput: json.RawMessage(`{"filepath":"` + parent + `/index.md","parentDir":"` + parent + `"}`),
@@ -86,7 +86,7 @@ func TestNormalizePermissionInput_OtherExternalDirectory(t *testing.T) {
 // so prompts are recognizable and remembered Bash rules can match them.
 func TestNormalizePermissionInput_OtherCommand(t *testing.T) {
 	command := "cd /repo && cat > /tmp/debug-test.ts << 'EOF'\nEOF\nnpx vitest run"
-	tc := PermissionToolCall{
+	tc := permissionToolCall{
 		Kind:     ToolKindOther,
 		Title:    command,
 		RawInput: json.RawMessage(`{"command":"` + strings.ReplaceAll(command, "\n", `\n`) + `","directories":["/repo","/tmp"],"patterns":["/repo/*","/tmp/*"]}`),
@@ -306,11 +306,11 @@ func TestRespondToControl_DenyWithoutRejectOptionCancels(t *testing.T) {
 	}
 }
 
-func decodePermissionResponse(t *testing.T, line []byte) PermissionResponse {
+func decodePermissionResponse(t *testing.T, line []byte) permissionResponse {
 	t.Helper()
-	var out PermissionResponse
+	var out permissionResponse
 	if err := json.Unmarshal(line, &out); err != nil {
-		t.Fatalf("response is not a PermissionResponse: %v (raw %q)", err, line)
+		t.Fatalf("response is not a permissionResponse: %v (raw %q)", err, line)
 	}
 	return out
 }
@@ -465,7 +465,7 @@ func TestRespondToAskUser_StructuredFreeFormFallsBackToFollowUpTurn(t *testing.T
 	if followUp.Method != "session/prompt" {
 		t.Fatalf("follow-up method = %q, want session/prompt", followUp.Method)
 	}
-	var params PromptParams
+	var params promptParams
 	if err := json.Unmarshal(mustMarshal(t, followUp.Params), &params); err != nil {
 		t.Fatalf("decode follow-up params: %v", err)
 	}
@@ -617,7 +617,7 @@ func TestPromptEndTurn_NumberedOptionsWithoutStemRemindsBeforeSurfacing(t *testi
 	if err := json.Unmarshal(buf.lastLine(t), &reminder); err != nil || reminder.Method != "session/prompt" {
 		t.Fatalf("expected question-format reminder session/prompt; got %q (err %v)", buf.String(), err)
 	}
-	var pp PromptParams
+	var pp promptParams
 	if err := json.Unmarshal(mustMarshal(t, reminder.Params), &pp); err != nil {
 		t.Fatalf("decode reminder params: %v", err)
 	}
@@ -658,7 +658,7 @@ func TestPromptEndTurn_NumberedOptionsMissingConfidenceRemindsBeforeSurfacing(t 
 	if err := json.Unmarshal(buf.lastLine(t), &reminder); err != nil || reminder.Method != "session/prompt" {
 		t.Fatalf("expected a confidence-format reminder session/prompt; got %q (err %v)", buf.String(), err)
 	}
-	var pp PromptParams
+	var pp promptParams
 	if err := json.Unmarshal(mustMarshal(t, reminder.Params), &pp); err != nil {
 		t.Fatalf("decode reminder params: %v", err)
 	}
@@ -867,7 +867,7 @@ func TestRespondToAskUser_SyntheticAnswerDeliversFollowUpTurn(t *testing.T) {
 	if err := json.Unmarshal(buf.lastLine(t), &followUp); err != nil || followUp.Method != "session/prompt" {
 		t.Fatalf("expected a follow-up session/prompt; got %q (err %v)", buf.String(), err)
 	}
-	var pp PromptParams
+	var pp promptParams
 	if err := json.Unmarshal(mustMarshal(t, followUp.Params), &pp); err != nil {
 		t.Fatalf("decode follow-up params: %v", err)
 	}

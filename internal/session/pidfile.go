@@ -32,9 +32,9 @@ type PIDFile = ports.PIDFile
 
 var _ = time.Second // keep time import used elsewhere
 
-// PIDFileName returns the PID file name for a given repo name.
+// pidfileName returns the PID file name for a given repo name.
 // Always returns "session-<repoName>.pid".
-func PIDFileName(repoName string) string {
+func pidfileName(repoName string) string {
 	return "session-" + repoName + ".pid"
 }
 
@@ -47,7 +47,7 @@ func WritePIDFile(dir string, pf PIDFile) error {
 	if err != nil {
 		return fmt.Errorf("marshaling PID file: %w", err)
 	}
-	path := filepath.Join(dir, PIDFileName(pf.RepoName))
+	path := filepath.Join(dir, pidfileName(pf.RepoName))
 	return os.WriteFile(path, data, 0o644)
 }
 
@@ -64,18 +64,18 @@ func ReadPIDFile(path string) (*PIDFile, error) {
 	return &pf, nil
 }
 
-// RemovePIDFile removes a PID file.
-func RemovePIDFile(dir string, repoName string) error {
-	return os.Remove(filepath.Join(dir, PIDFileName(repoName)))
+// removePIDFile removes a PID file.
+func removePIDFile(dir string, repoName string) error {
+	return os.Remove(filepath.Join(dir, pidfileName(repoName)))
 }
 
-// FindPIDFiles scans the bounded set of directories where sessions persist PID
+// findPIDFiles scans the bounded set of directories where sessions persist PID
 // files: the state directory itself and each immediate feature directory.
 //
 // Feature trees also contain arbitrary run artifacts, work products, and copied
 // fixtures. Recursing into those trees is both unbounded and incorrect: a copied
 // session PID fixture is not a live session owned by this runtime.
-func FindPIDFiles(featuresDir string) ([]PIDFile, error) {
+func findPIDFiles(featuresDir string) ([]PIDFile, error) {
 	var results []PIDFile
 	entries, err := os.ReadDir(featuresDir)
 	if err != nil {

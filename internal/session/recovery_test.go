@@ -124,7 +124,7 @@ func TestExecuteRecoveryKill(t *testing.T) {
 	}
 
 	// PID file should be removed
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 0 {
 		t.Errorf("expected 0 PID files after kill, got %d", len(pids))
 	}
@@ -174,7 +174,7 @@ func TestExecuteRecoveryResume(t *testing.T) {
 	}
 
 	// PID file should be removed
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 0 {
 		t.Errorf("expected 0 PID files after resume, got %d", len(pids))
 	}
@@ -203,7 +203,7 @@ func TestExecuteRecoverySkipDeadProcess(t *testing.T) {
 	}
 
 	// PID file should be removed since process is dead
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 0 {
 		t.Errorf("expected 0 PID files after skip (dead process), got %d", len(pids))
 	}
@@ -300,7 +300,7 @@ func TestExecuteRecoveryKillMultiRepo(t *testing.T) {
 	}
 
 	// service-a PID file should be removed, service-b should still exist
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 1 {
 		t.Fatalf("expected 1 PID file remaining, got %d", len(pids))
 	}
@@ -365,7 +365,7 @@ func TestExecuteRecoveryKillLiveProcess(t *testing.T) {
 	}
 
 	// PID file should be removed.
-	pids, _ := FindPIDFiles(dir)
+	pids, _ := findPIDFiles(dir)
 	if len(pids) != 0 {
 		t.Errorf("expected 0 PID files after kill, got %d", len(pids))
 	}

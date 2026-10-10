@@ -71,9 +71,9 @@ type Protocol struct {
 	promptActive      bool
 	promptQueue       []string
 
-	negotiatedVersion int
-	acpSessionID      string
-	handshakeErr      error
+	negotiatedACPVersion int
+	acpSessionID         string
+	handshakeErr         error
 
 	// resumeSessionID, when non-empty, asks the handshake to resume that ACP
 	// session via session/load instead of creating a fresh one. loadSession
@@ -354,7 +354,7 @@ func (p *Protocol) handshakeError() error {
 // or zero, means the tracer cannot safely proceed.
 func (p *Protocol) checkProtocolVersion() error {
 	p.mu.Lock()
-	v := p.negotiatedVersion
+	v := p.negotiatedACPVersion
 	p.mu.Unlock()
 	if v == 0 {
 		return fmt.Errorf("opencode did not negotiate an ACP protocol version")
@@ -375,9 +375,9 @@ func (p *Protocol) sendInitialize() error {
 	p.initID = id
 	p.mu.Unlock()
 
-	fsCapability := FSCapability{ReadTextFile: true, WriteTextFile: true}
+	caps := fsCapability{ReadTextFile: true, WriteTextFile: true}
 	if p.opts.NativeToollessReview {
-		fsCapability = FSCapability{}
+		caps = fsCapability{}
 	}
 	req := Request{
 		JSONRPC: "2.0",
@@ -389,8 +389,8 @@ func (p *Protocol) sendInitialize() error {
 				Name:    "agentic",
 				Version: "0.1.0",
 			},
-			ClientCapabilities: ClientCapabilities{
-				FS:       fsCapability,
+			ClientCapabilities: clientCapabilities{
+				FS:       caps,
 				Terminal: false,
 			},
 		},
@@ -411,7 +411,7 @@ func (p *Protocol) sendSessionNew() error {
 		JSONRPC: "2.0",
 		ID:      id,
 		Method:  "session/new",
-		Params: SessionNewParams{
+		Params: sessionNewParams{
 			Cwd:        p.opts.WorkDir,
 			MCPServers: []interface{}{},
 		},
@@ -436,7 +436,7 @@ func (p *Protocol) sendSessionLoad() error {
 		JSONRPC: "2.0",
 		ID:      id,
 		Method:  sessionLoadMethod,
-		Params: SessionLoadParams{
+		Params: sessionLoadParams{
 			SessionID:  resumeID,
 			Cwd:        p.opts.WorkDir,
 			MCPServers: []interface{}{},
@@ -486,7 +486,7 @@ func (p *Protocol) sendPrompt(text string) error {
 		JSONRPC: "2.0",
 		ID:      id,
 		Method:  "session/prompt",
-		Params: PromptParams{
+		Params: promptParams{
 			SessionID: sessionID,
 			Prompt:    []ContentBlock{{Type: "text", Text: text}},
 		},
@@ -498,9 +498,9 @@ func (p *Protocol) sendPrompt(text string) error {
 	return nil
 }
 
-// SetPromptModel selects the model for subsequent turns on the same ACP
+// setPromptModel selects the model for subsequent turns on the same ACP
 // session. OpenCode accepts session/set_model without a process relaunch.
-func (p *Protocol) SetPromptModel(model string) {
+func (p *Protocol) setPromptModel(model string) {
 	p.mu.Lock()
 	p.promptModel = BackendModel(model)
 	p.mu.Unlock()
@@ -513,7 +513,7 @@ func (p *Protocol) ApplySettings(ctx context.Context, model, _ string) error {
 	if !p.opts.Interactive {
 		return fmt.Errorf("OpenCode settings update requires an interactive session")
 	}
-	p.SetPromptModel(model)
+	p.setPromptModel(model)
 	done, err := p.sendModelChangeIfNeeded()
 	if err != nil {
 		return err
@@ -706,7 +706,7 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 			return nil
 		}
 		p.mu.Lock()
-		p.negotiatedVersion = res.ProtocolVersion
+		p.negotiatedACPVersion = res.ProtocolVersion
 		p.loadSession = res.AgentCapabilities.LoadSession
 		p.mu.Unlock()
 		p.closeOnce(p.initDone)
@@ -717,7 +717,7 @@ func (p *Protocol) handleResponse(env inboundEnvelope) []llm.SDKMessage {
 			p.failHandshake(fmt.Errorf("opencode session/new failed: %s", rpcErrorDetail(env.Error)), p.sessionReady)
 			return nil
 		}
-		var res SessionNewResult
+		var res sessionNewResult
 		if jerr := json.Unmarshal(env.Result, &res); jerr != nil {
 			p.failHandshake(fmt.Errorf("parsing session/new result: %s", sanitizeDiagnostic(jerr.Error())), p.sessionReady)
 			return nil
@@ -846,7 +846,7 @@ func (p *Protocol) handlePromptResponse(env inboundEnvelope, hasErr bool) []llm.
 	if hasErr {
 		return seal(p.terminalError(fmt.Sprintf("OpenCode prompt failed: %s", rpcErrorDetail(env.Error))))
 	}
-	var res PromptResult
+	var res promptResult
 	if jerr := json.Unmarshal(env.Result, &res); jerr != nil {
 		return seal(p.terminalError(fmt.Sprintf("malformed OpenCode prompt result: %v", jerr)))
 	}
@@ -930,7 +930,7 @@ func appendIfEmit(usageMsgs []llm.SDKMessage, term llm.SDKMessage, emit bool) []
 // cumulative totals and returns the resulting cumulative usage update (empty when
 // the result carried no usage). The streamed usage_update carries no token split,
 // so this is what delivers input/output/cache to the session's accumulation.
-func (p *Protocol) foldResultUsage(u *PromptUsage) []llm.SDKMessage {
+func (p *Protocol) foldResultUsage(u *promptUsage) []llm.SDKMessage {
 	if msg, ok := p.accumulateResultUsage(u); ok {
 		return []llm.SDKMessage{msg}
 	}
@@ -949,7 +949,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 		}
 		return nil
 	}
-	var su SessionUpdateParams
+	var su sessionUpdateParams
 	if err := json.Unmarshal(params, &su); err != nil {
 		if p.opts.NativeToollessReview {
 			return seal(p.terminalError("OpenCode native tool-less review received malformed session/update"))
@@ -1074,7 +1074,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 	return out
 }
 
-func (p *Protocol) childSessionUpdate(su SessionUpdateParams) []llm.SDKMessage {
+func (p *Protocol) childSessionUpdate(su sessionUpdateParams) []llm.SDKMessage {
 	if su.SessionID == "" {
 		return nil
 	}
@@ -1153,7 +1153,7 @@ func updateText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var c UpdateContent
+	var c updateContent
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return ""
 	}
@@ -1169,7 +1169,7 @@ func toolContentText(raw json.RawMessage) string {
 	}
 	var blocks []struct {
 		Text    string        `json:"text,omitempty"`
-		Content UpdateContent `json:"content,omitempty"`
+		Content updateContent `json:"content,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &blocks); err != nil {
 		return ""
@@ -1439,7 +1439,7 @@ func (p *Protocol) failClosed(rawID json.RawMessage, method string) (llm.SDKMess
 	_ = p.writeJSON(ErrorResponse{
 		JSONRPC: "2.0",
 		ID:      rawID,
-		Error: RPCError{
+		Error: rpcError{
 			Code:    jsonRPCMethodNotSupported,
 			Message: fmt.Sprintf("%s is not supported by the OpenCode tracer", method),
 		},
@@ -1451,7 +1451,7 @@ func (p *Protocol) failNativeToollessReviewInteraction(rawID json.RawMessage, me
 	_ = p.writeJSON(ErrorResponse{
 		JSONRPC: "2.0",
 		ID:      rawID,
-		Error: RPCError{
+		Error: rpcError{
 			Code:    jsonRPCMethodNotSupported,
 			Message: fmt.Sprintf("%s is unavailable during native tool-less review", method),
 		},
@@ -1502,7 +1502,7 @@ func (p *Protocol) applyUsageUpdate(u SessionUpdate) (llm.SDKMessage, bool) {
 // streamed usage_update has none), so each result's tokens are summed once into
 // the lifetime totals — a multi-turn session accumulates without double-counting.
 // ok is false when the result carried no usage, so callers emit nothing.
-func (p *Protocol) accumulateResultUsage(u *PromptUsage) (llm.SDKMessage, bool) {
+func (p *Protocol) accumulateResultUsage(u *promptUsage) (llm.SDKMessage, bool) {
 	if u == nil {
 		return llm.SDKMessage{}, false
 	}
@@ -1852,7 +1852,7 @@ func (p *Protocol) Interrupt() error {
 	if err := p.writeJSON(Notification{
 		JSONRPC: "2.0",
 		Method:  sessionCancelMethod,
-		Params:  SessionCancelParams{SessionID: sessionID},
+		Params:  sessionCancelParams{SessionID: sessionID},
 	}); err != nil {
 		// Falling back to the session-level interrupt is safer than reporting a
 		// hard error when the cancel notification cannot be written.
@@ -1891,17 +1891,3 @@ func (p *Protocol) Close() error {
 }
 
 // --- test accessors ---
-
-// ACPSessionID returns the internal ACP session id created during the handshake.
-func (p *Protocol) ACPSessionID() string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.acpSessionID
-}
-
-// NegotiatedVersion returns the ACP protocol version OpenCode negotiated.
-func (p *Protocol) NegotiatedVersion() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.negotiatedVersion
-}

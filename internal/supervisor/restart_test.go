@@ -212,8 +212,8 @@ func TestCoordinator_RestartKeepsTheGenerationFence(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, err = second.store.appendRecord(Record{Generation: 0, Kind: KindAssistant, Visibility: VisibilityContent})
-	if !errors.Is(err, ErrRetiredGeneration) {
-		t.Fatalf("append from generation 0 = %v, want ErrRetiredGeneration", err)
+	if !errors.Is(err, errRetiredGeneration) {
+		t.Fatalf("append from generation 0 = %v, want errRetiredGeneration", err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {

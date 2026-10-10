@@ -41,11 +41,11 @@ import (
 // providerName is the Agentico routing identifier for OpenCode.
 const providerName = "opencode"
 
-// RoutingPrefix is the Agentico-only model prefix that explicitly selects the
+// routingPrefix is the Agentico-only model prefix that explicitly selects the
 // OpenCode provider, e.g. "opencode:anthropic/claude-sonnet-4-5". It is purely
 // a routing artifact: the prefix is stripped before the backend model string
 // is handed to OpenCode.
-const RoutingPrefix = providerName + ":"
+const routingPrefix = providerName + ":"
 
 // configContentEnvVar is OpenCode's inline-config environment variable. Setting
 // it lets the provider pin the backend model for one launch without writing to
@@ -127,7 +127,7 @@ func (p *Provider) SupportsNativeToollessReview() bool { return true }
 // are slash-form "provider/model" values, so a ready OpenCode never captures a
 // bare name (e.g. "sonnet", "gpt-5.4") meant for another provider.
 func (p *Provider) MatchesModel(model string) bool {
-	if strings.HasPrefix(model, RoutingPrefix) {
+	if strings.HasPrefix(model, routingPrefix) {
 		return BackendModel(model) != ""
 	}
 	return p.catalogContains(model)
@@ -319,7 +319,7 @@ func isSafeModelRune(r rune) bool {
 // tag such as an ollama "model:tag" — is preserved verbatim.
 func BackendModel(model string) string {
 	model = strings.TrimSpace(model)
-	model = strings.TrimPrefix(model, RoutingPrefix)
+	model = strings.TrimPrefix(model, routingPrefix)
 	model = strings.TrimSpace(model)
 	model = llm.StripModelContextWindow(model)
 	return strings.TrimSpace(model)
@@ -383,7 +383,7 @@ func (p *Provider) EnvVarsToExclude() []string { return nil }
 // which callers treat as "unknown" without corrupting behavior.
 func (p *Provider) ContextWindowForModel(model string) int {
 	model = strings.TrimSpace(model)
-	model = strings.TrimPrefix(model, RoutingPrefix)
+	model = strings.TrimPrefix(model, routingPrefix)
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return 0

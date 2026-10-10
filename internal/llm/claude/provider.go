@@ -227,8 +227,8 @@ func defaultModelInfos() []llm.ModelInfo {
 
 // --- Command building helpers ---
 
-// InsertAfterBinary inserts flags right after the binary name (args[0]).
-func InsertAfterBinary(cmd []string, flags ...string) []string {
+// insertAfterBinary inserts flags right after the binary name (args[0]).
+func insertAfterBinary(cmd []string, flags ...string) []string {
 	if len(cmd) == 0 {
 		return cmd
 	}
@@ -257,11 +257,11 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	// It ensures the hidden reviewer's context contains only the static review
 	// policy and declared execution-context fields.
 	if opts.NativeToollessReview {
-		args = InsertAfterBinary(args, "--safe-mode")
+		args = insertAfterBinary(args, "--safe-mode")
 	}
 
 	if opts.DangerouslySkipPerms {
-		args = InsertAfterBinary(args, "--dangerously-skip-permissions")
+		args = insertAfterBinary(args, "--dangerously-skip-permissions")
 	}
 
 	// Pin the session permission mode when the caller asks for a specific one.
@@ -270,7 +270,7 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	// clarifying questions" system-reminder that silently overrides
 	// grilling-phase prompts ([grill-me]).
 	if opts.PermissionMode != "" {
-		args = InsertAfterBinary(args, "--permission-mode", opts.PermissionMode)
+		args = insertAfterBinary(args, "--permission-mode", opts.PermissionMode)
 	}
 
 	// Activate the control_request protocol for AskUserQuestion and tool permissions
@@ -278,11 +278,11 @@ func buildInteractiveCommand(binary string, opts llm.CommandBuildOpts) []string 
 	if tool == "" {
 		tool = "stdio"
 	}
-	args = InsertAfterBinary(args, "--permission-prompt-tool", tool)
+	args = insertAfterBinary(args, "--permission-prompt-tool", tool)
 
 	for _, dir := range opts.AdditionalDirs {
 		if dir != "" {
-			args = InsertAfterBinary(args, "--add-dir", dir)
+			args = insertAfterBinary(args, "--add-dir", dir)
 		}
 	}
 	return args

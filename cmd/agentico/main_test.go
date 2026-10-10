@@ -121,7 +121,7 @@ func (s *stubProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
 	}
 	return llm.ProviderReadiness{Ready: true}
 }
-func (s *stubProvider) ModelCatalog() []llm.ModelInfo { return nil }
+func (s *stubProvider) ModelCatalog() []llm.ModelInfo   { return nil }
 func (s *stubProvider) SetModelCatalog([]llm.ModelInfo) {}
 func (s *stubProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
 	return nil, nil
@@ -129,9 +129,9 @@ func (s *stubProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, e
 func (s *stubProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
 	return nil, nil
 }
-func (s *stubProvider) ContextWindowForModel(string) int        { return 0 }
-func (s *stubProvider) AskingQuestionsClause() string           { return "" }
-func (s *stubProvider) SupportsNativeToollessReview() bool      { return false }
+func (s *stubProvider) ContextWindowForModel(string) int               { return 0 }
+func (s *stubProvider) AskingQuestionsClause() string                  { return "" }
+func (s *stubProvider) SupportsNativeToollessReview() bool             { return false }
 func (s *stubProvider) ReviewPreferenceBand(llm.ModelInfo) (int, bool) { return 0, false }
 
 type stubCatalogDiscoveryProvider struct {

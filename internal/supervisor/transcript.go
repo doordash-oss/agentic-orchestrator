@@ -108,9 +108,9 @@ type PageQuery struct {
 	Limit     int
 }
 
-// ErrRetiredGeneration rejects an append tagged with a generation other than
+// errRetiredGeneration rejects an append tagged with a generation other than
 // the store's current one.
-var ErrRetiredGeneration = errors.New("supervisor transcript: append from a retired generation")
+var errRetiredGeneration = errors.New("supervisor transcript: append from a retired generation")
 
 // ErrInvalidPageQuery rejects a page request that sets both cursors or an
 // out-of-range limit.
@@ -126,10 +126,10 @@ func (e *CursorOutOfRangeError) Error() string {
 	return fmt.Sprintf("supervisor transcript: cursor out of range (head %d)", e.HeadSeq)
 }
 
-// RecoveryNote describes records an open could not read: a complete line
+// recoveryNote describes records an open could not read: a complete line
 // that failed to parse or broke the seq sequence ended the valid prefix, and
 // the untouched original was preserved at PreservedPath.
-type RecoveryNote struct {
+type recoveryNote struct {
 	AfterSeq      int64
 	Unread        int
 	PreservedPath string
@@ -166,7 +166,7 @@ type transcriptStore struct {
 	background      backgroundIndex
 	// recovery is set when open preserved a corrupt transcript; the
 	// coordinator turns it into a marker once.
-	recovery *RecoveryNote
+	recovery *recoveryNote
 	// content reports whether any record carries history a harness would
 	// see on rebuild.
 	content bool
@@ -220,7 +220,7 @@ func (s *transcriptStore) load() error {
 		if err != nil {
 			return err
 		}
-		s.recovery = &RecoveryNote{AfterSeq: int64(len(scan.offsets)), Unread: scan.unread, PreservedPath: path}
+		s.recovery = &recoveryNote{AfterSeq: int64(len(scan.offsets)), Unread: scan.unread, PreservedPath: path}
 	}
 	if scan.size != info.Size() {
 		// Drop a torn trailing line (or the unreadable suffix) so the next
@@ -332,7 +332,7 @@ func (s *transcriptStore) preserveCorrupt() (string, error) {
 }
 
 // takeRecovery returns the pending recovery note once.
-func (s *transcriptStore) takeRecovery() *RecoveryNote {
+func (s *transcriptStore) takeRecovery() *recoveryNote {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	note := s.recovery
@@ -464,7 +464,7 @@ func (s *transcriptStore) appendRecord(rec Record) (Record, bool, error) {
 		}
 	}
 	if rec.Generation != s.generation {
-		return Record{}, false, ErrRetiredGeneration
+		return Record{}, false, errRetiredGeneration
 	}
 	rec.Seq = int64(len(s.offsets)) + 1
 	rec.ConversationID = s.conversationID

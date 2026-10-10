@@ -352,7 +352,7 @@ func TestRespondToAskUser_ClearsLastControlRequest(t *testing.T) {
 			status:                SessionWaitingHelp,
 			done:                  make(chan struct{}),
 		}
-		s.SetLastControlRequest(&llm.ControlRequestMessage{
+		setLastControlRequest(s, &llm.ControlRequestMessage{
 			RequestID: "req-123",
 		})
 
@@ -382,7 +382,7 @@ func TestRespondToAskUser_ClearsLastControlRequest(t *testing.T) {
 			status:                SessionWaitingHelp,
 			done:                  make(chan struct{}),
 		}
-		s.SetLastControlRequest(&llm.ControlRequestMessage{
+		setLastControlRequest(s, &llm.ControlRequestMessage{
 			RequestID: "req-other",
 		})
 
@@ -600,7 +600,7 @@ func TestSendUserMessage_ClearsLastControlRequest(t *testing.T) {
 		status:                SessionWaitingHelp,
 		done:                  make(chan struct{}),
 	}
-	s.SetLastControlRequest(&llm.ControlRequestMessage{
+	setLastControlRequest(s, &llm.ControlRequestMessage{
 		RequestID: "req-456",
 	})
 

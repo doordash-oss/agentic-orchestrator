@@ -189,8 +189,8 @@ func TestTranscriptStore_RetiredGenerationAppendIsRejectedAndLeavesFileUnchanged
 	}
 	data, _ := json.Marshal(UserData{Text: "late"})
 	_, _, err = store.appendRecord(Record{Generation: 1, Kind: KindAssistant, Visibility: VisibilityContent, Data: data})
-	if !errors.Is(err, ErrRetiredGeneration) {
-		t.Fatalf("retired append err = %v, want ErrRetiredGeneration", err)
+	if !errors.Is(err, errRetiredGeneration) {
+		t.Fatalf("retired append err = %v, want errRetiredGeneration", err)
 	}
 	after, _ := os.ReadFile(filepath.Join(dir, transcriptFileName))
 	if !bytes.Equal(before, after) {

@@ -163,7 +163,7 @@ func (f *fakeSession) answer(answer ports.ControlAnswer) {
 // their handshake synchronously unless configured otherwise.
 type fakeLauncher struct {
 	mu       sync.Mutex
-	requests []LaunchRequest
+	requests []launchRequest
 	sessions []*fakeSession
 	// gate, when set, blocks Launch until closed.
 	gate chan struct{}
@@ -176,13 +176,13 @@ type fakeLauncher struct {
 	// plain sessions cannot carry hidden context.
 	plain bool
 	// init, when set, scripts the init message each launch reports.
-	init func(LaunchRequest) *llm.SystemInitMessage
+	init func(launchRequest) *llm.SystemInitMessage
 }
 
 // plainSession hides the fake's hidden-context capability.
 type plainSession struct{ ports.SessionView }
 
-func (l *fakeLauncher) Launch(_ context.Context, req LaunchRequest) (ports.SessionView, error) {
+func (l *fakeLauncher) Launch(_ context.Context, req launchRequest) (ports.SessionView, error) {
 	l.mu.Lock()
 	l.requests = append(l.requests, req)
 	gate := l.gate
@@ -234,7 +234,7 @@ func (l *fakeLauncher) session(i int) *fakeSession {
 	return l.sessions[i]
 }
 
-func (l *fakeLauncher) request(i int) LaunchRequest {
+func (l *fakeLauncher) request(i int) launchRequest {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.requests[i]

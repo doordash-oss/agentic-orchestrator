@@ -691,15 +691,15 @@ func TestCoordinator_HiddenContextOnIncapableSessionIsRefusedBeforeCommit(t *tes
 	c := newTestCoordinator(t, t.TempDir(), launcher)
 	chooseSettings(t, c)
 
-	if _, err := c.Send(context.Background(), "explain", "BUNDLE", "cm-1"); !errors.Is(err, ErrHiddenContextUnsupported) {
-		t.Fatalf("launch send err = %v, want ErrHiddenContextUnsupported", err)
+	if _, err := c.Send(context.Background(), "explain", "BUNDLE", "cm-1"); !errors.Is(err, errHiddenContextUnsupported) {
+		t.Fatalf("launch send err = %v, want errHiddenContextUnsupported", err)
 	}
 	waitLifecycle(t, c, LifecycleIdle)
 	if head := c.State().HeadSeq; head != 0 {
 		t.Fatalf("refused launch send appended: head=%d", head)
 	}
-	if _, err := c.Send(context.Background(), "explain", "BUNDLE", "cm-2"); !errors.Is(err, ErrHiddenContextUnsupported) {
-		t.Fatalf("live send err = %v, want ErrHiddenContextUnsupported", err)
+	if _, err := c.Send(context.Background(), "explain", "BUNDLE", "cm-2"); !errors.Is(err, errHiddenContextUnsupported) {
+		t.Fatalf("live send err = %v, want errHiddenContextUnsupported", err)
 	}
 	st := c.State()
 	if st.HeadSeq != 0 || st.Lifecycle != LifecycleIdle || len(launcher.session(0).Sent()) != 0 {

@@ -33,8 +33,8 @@ type Response struct {
 	Result  interface{} `json:"result"`
 }
 
-// OutboundNotification is an outbound JSON-RPC 2.0 notification (no id).
-type OutboundNotification struct {
+// outboundNotification is an outbound JSON-RPC 2.0 notification (no id).
+type outboundNotification struct {
 	JSONRPC string      `json:"jsonrpc"`
 	Method  string      `json:"method"`
 	Params  interface{} `json:"params,omitempty"`
@@ -70,12 +70,12 @@ type InitializeResult struct {
 
 // --- Thread ---
 
-// ThreadStartParams holds parameters for thread/start.
-type ThreadStartParams struct {
+// threadStartParams holds parameters for thread/start.
+type threadStartParams struct {
 	Model                   string                    `json:"model"`
 	Cwd                     string                    `json:"cwd"`
 	ApprovalPolicy          string                    `json:"approvalPolicy,omitempty"`
-	Sandbox                 *SandboxMode              `json:"sandbox,omitempty"`
+	Sandbox                 *sandboxMode              `json:"sandbox,omitempty"`
 	Ephemeral               bool                      `json:"ephemeral,omitempty"`
 	Config                  map[string]interface{}    `json:"config,omitempty"`
 	BaseInstructions        *string                   `json:"baseInstructions,omitempty"`
@@ -85,13 +85,13 @@ type ThreadStartParams struct {
 	SelectedCapabilityRoots *[]map[string]interface{} `json:"selectedCapabilityRoots,omitempty"`
 }
 
-// SandboxMode selects the coarse sandbox mode used during thread/start.
-type SandboxMode string
+// sandboxMode selects the coarse sandbox mode used during thread/start.
+type sandboxMode string
 
 const (
-	SandboxModeReadOnly         SandboxMode = "read-only"
-	SandboxModeWorkspaceWrite   SandboxMode = "workspace-write"
-	SandboxModeDangerFullAccess SandboxMode = "danger-full-access"
+	SandboxModeReadOnly         sandboxMode = "read-only"
+	SandboxModeWorkspaceWrite   sandboxMode = "workspace-write"
+	SandboxModeDangerFullAccess sandboxMode = "danger-full-access"
 )
 
 // SandboxPolicy configures the sandbox policy for turn/start.
@@ -101,22 +101,22 @@ type SandboxPolicy struct {
 	NetworkAccess bool     `json:"networkAccess,omitempty"`
 }
 
-// ThreadResumeParams holds parameters for thread/resume.
-type ThreadResumeParams struct {
+// threadResumeParams holds parameters for thread/resume.
+type threadResumeParams struct {
 	ThreadID              string                 `json:"threadId"`
 	DeveloperInstructions *string                `json:"developerInstructions,omitempty"`
 	Config                map[string]interface{} `json:"config,omitempty"`
 }
 
-// ThreadSettingsUpdateParams changes the model and effort on an existing thread.
-type ThreadSettingsUpdateParams struct {
+// threadSettingsUpdateParams changes the model and effort on an existing thread.
+type threadSettingsUpdateParams struct {
 	ThreadID string  `json:"threadId"`
 	Model    string  `json:"model"`
 	Effort   *string `json:"effort"`
 }
 
-// ThreadStartResult is the response to thread/start and thread/resume.
-type ThreadStartResult struct {
+// threadStartResult is the response to thread/start and thread/resume.
+type threadStartResult struct {
 	Thread         Thread `json:"thread"`
 	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
 	Model          string `json:"model,omitempty"`
@@ -130,24 +130,24 @@ type Thread struct {
 
 // --- Turn ---
 
-// TurnStartParams holds parameters for turn/start.
-type TurnStartParams struct {
+// turnStartParams holds parameters for turn/start.
+type turnStartParams struct {
 	ThreadID       string         `json:"threadId"`
-	Input          []InputItem    `json:"input"`
+	Input          []inputItem    `json:"input"`
 	Model          string         `json:"model,omitempty"`
 	Effort         string         `json:"effort,omitempty"`
 	ApprovalPolicy string         `json:"approvalPolicy,omitempty"`
 	SandboxPolicy  *SandboxPolicy `json:"sandboxPolicy,omitempty"`
 }
 
-// InputItem is a single input in a turn/start request.
-type InputItem struct {
+// inputItem is a single input in a turn/start request.
+type inputItem struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 }
 
-// TurnStartResult is the response to turn/start.
-type TurnStartResult struct {
+// turnStartResult is the response to turn/start.
+type turnStartResult struct {
 	Turn Turn `json:"turn"`
 }
 
@@ -157,16 +157,16 @@ type Turn struct {
 	Status string `json:"status"`
 }
 
-// TurnInterruptParams holds parameters for turn/interrupt.
-type TurnInterruptParams struct {
+// turnInterruptParams holds parameters for turn/interrupt.
+type turnInterruptParams struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
 }
 
 // --- Notifications (inbound) ---
 
-// AgentMessageDelta is an incremental text chunk from the agent.
-type AgentMessageDelta struct {
+// agentMessageDelta is an incremental text chunk from the agent.
+type agentMessageDelta struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
 	ItemID   string `json:"itemId"`
@@ -174,8 +174,8 @@ type AgentMessageDelta struct {
 	Phase    string `json:"phase,omitempty"`
 }
 
-// CommandApprovalParams is a server request for command execution approval.
-type CommandApprovalParams struct {
+// commandApprovalParams is a server request for command execution approval.
+type commandApprovalParams struct {
 	ItemID   string `json:"itemId"`
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
@@ -184,8 +184,8 @@ type CommandApprovalParams struct {
 	Reason   string `json:"reason,omitempty"`
 }
 
-// FileChangeApprovalParams is a server request for file change approval.
-type FileChangeApprovalParams struct {
+// fileChangeApprovalParams is a server request for file change approval.
+type fileChangeApprovalParams struct {
 	ItemID    string `json:"itemId"`
 	ThreadID  string `json:"threadId"`
 	TurnID    string `json:"turnId"`
@@ -193,38 +193,38 @@ type FileChangeApprovalParams struct {
 	GrantRoot string `json:"grantRoot,omitempty"`
 }
 
-// TurnCompletedParams is a notification that a turn has completed.
-type TurnCompletedParams struct {
+// turnCompletedParams is a notification that a turn has completed.
+type turnCompletedParams struct {
 	ThreadID string        `json:"threadId"`
-	Turn     CompletedTurn `json:"turn"`
+	Turn     completedTurn `json:"turn"`
 }
 
-// CompletedTurn contains the final state of a completed turn.
-type CompletedTurn struct {
+// completedTurn contains the final state of a completed turn.
+type completedTurn struct {
 	ID     string     `json:"id"`
 	Status string     `json:"status"` // "completed", "failed", "interrupted"
-	Error  *TurnError `json:"error,omitempty"`
+	Error  *turnError `json:"error,omitempty"`
 }
 
-// TokenUsageUpdatedParams is a notification with token usage.
+// tokenUsageUpdatedParams is a notification with token usage.
 // The wire format uses "tokenUsage" containing "total" (lifetime cumulative,
 // for cost/billing) and "last" (current context fill after compaction, for
 // computing context window usage %).
-type TokenUsageUpdatedParams struct {
+type tokenUsageUpdatedParams struct {
 	ThreadID   string           `json:"threadId"`
 	TurnID     string           `json:"turnId"`
-	TokenUsage ThreadTokenUsage `json:"tokenUsage"`
+	TokenUsage threadTokenUsage `json:"tokenUsage"`
 }
 
-// ThreadTokenUsage wraps cumulative and per-turn token breakdowns.
-type ThreadTokenUsage struct {
-	Total              TokenUsageBreakdown `json:"total"`
-	Last               TokenUsageBreakdown `json:"last"`
+// threadTokenUsage wraps cumulative and per-turn token breakdowns.
+type threadTokenUsage struct {
+	Total              tokenUsageBreakdown `json:"total"`
+	Last               tokenUsageBreakdown `json:"last"`
 	ModelContextWindow *int                `json:"modelContextWindow,omitempty"`
 }
 
-// TokenUsageBreakdown contains token counts for a usage snapshot.
-type TokenUsageBreakdown struct {
+// tokenUsageBreakdown contains token counts for a usage snapshot.
+type tokenUsageBreakdown struct {
 	InputTokens           int `json:"inputTokens"`
 	CachedInputTokens     int `json:"cachedInputTokens"`
 	CacheWriteInputTokens int `json:"cacheWriteInputTokens"`
@@ -233,58 +233,58 @@ type TokenUsageBreakdown struct {
 	TotalTokens           int `json:"totalTokens"`
 }
 
-// TurnError contains error details for a failed turn.
-type TurnError struct {
+// turnError contains error details for a failed turn.
+type turnError struct {
 	Message   string         `json:"message"`
-	ErrorInfo *ErrorInfoType `json:"codexErrorInfo,omitempty"`
+	ErrorInfo *errorInfoType `json:"codexErrorInfo,omitempty"`
 }
 
-// ErrorInfoType contains the structured error classification.
-type ErrorInfoType struct {
+// errorInfoType contains the structured error classification.
+type errorInfoType struct {
 	Type           string `json:"type"`
 	HttpStatusCode *int   `json:"httpStatusCode,omitempty"`
 	RawKind        string `json:"-"`
 }
 
 // UnmarshalJSON handles the polymorphic codexErrorInfo field.
-func (e *ErrorInfoType) UnmarshalJSON(data []byte) error {
+func (e *errorInfoType) UnmarshalJSON(data []byte) error {
 	var s string
 	if json.Unmarshal(data, &s) == nil {
 		e.RawKind = s
 		e.Type = s
 		return nil
 	}
-	type plain ErrorInfoType
+	type plain errorInfoType
 	return json.Unmarshal(data, (*plain)(e))
 }
 
-// ErrorNotification is an inbound error notification with retry info.
-type ErrorNotification struct {
-	Error             TurnError `json:"error"`
+// errorNotification is an inbound error notification with retry info.
+type errorNotification struct {
+	Error             turnError `json:"error"`
 	WillRetry         bool      `json:"willRetry"`
 	ThreadID          string    `json:"threadId,omitempty"`
 	TurnID            string    `json:"turnId,omitempty"`
 	AdditionalDetails string    `json:"additionalDetails,omitempty"`
 }
 
-// CommandOutputDelta is an incremental output chunk from a command execution.
-type CommandOutputDelta struct {
+// commandOutputDelta is an incremental output chunk from a command execution.
+type commandOutputDelta struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
 	ItemID   string `json:"itemId"`
 	Delta    string `json:"delta"`
 }
 
-// FileChangeOutputDelta is an incremental output chunk from a file change.
-type FileChangeOutputDelta struct {
+// fileChangeOutputDelta is an incremental output chunk from a file change.
+type fileChangeOutputDelta struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
 	ItemID   string `json:"itemId"`
 	Delta    string `json:"delta"`
 }
 
-// ReasoningSummaryDelta is an incremental reasoning summary text chunk.
-type ReasoningSummaryDelta struct {
+// reasoningSummaryDelta is an incremental reasoning summary text chunk.
+type reasoningSummaryDelta struct {
 	ThreadID     string `json:"threadId"`
 	TurnID       string `json:"turnId"`
 	ItemID       string `json:"itemId"`
@@ -292,41 +292,41 @@ type ReasoningSummaryDelta struct {
 	SummaryIndex int    `json:"summaryIndex"`
 }
 
-// RateLimitsUpdated carries rate limit information.
-type RateLimitsUpdated struct {
-	RateLimits RateLimitBucket `json:"rateLimits"`
+// rateLimitsUpdated carries rate limit information.
+type rateLimitsUpdated struct {
+	RateLimits rateLimitBucket `json:"rateLimits"`
 }
 
-// RateLimitBucket contains rate limit bucket info.
-type RateLimitBucket struct {
+// rateLimitBucket contains rate limit bucket info.
+type rateLimitBucket struct {
 	LimitID   string           `json:"limitId"`
 	LimitName *string          `json:"limitName"`
-	Primary   *RateLimitWindow `json:"primary"`
+	Primary   *rateLimitWindow `json:"primary"`
 }
 
-// RateLimitWindow contains timing info for a rate limit window.
-type RateLimitWindow struct {
+// rateLimitWindow contains timing info for a rate limit window.
+type rateLimitWindow struct {
 	UsedPercent       float64 `json:"usedPercent"`
 	WindowDurationMin int     `json:"windowDurationMins"`
 	ResetsAt          int64   `json:"resetsAt"`
 }
 
-// ItemCompletedParams wraps a completed ThreadItem.
-type ItemCompletedParams struct {
+// itemCompletedParams wraps a completed ThreadItem.
+type itemCompletedParams struct {
 	ThreadID string    `json:"threadId"`
 	TurnID   string    `json:"turnId"`
-	Item     ItemUnion `json:"item"`
+	Item     itemUnion `json:"item"`
 }
 
-// ItemStartedParams wraps a started ThreadItem.
-type ItemStartedParams struct {
+// itemStartedParams wraps a started ThreadItem.
+type itemStartedParams struct {
 	ThreadID string    `json:"threadId"`
 	TurnID   string    `json:"turnId"`
-	Item     ItemUnion `json:"item"`
+	Item     itemUnion `json:"item"`
 }
 
-// ItemUnion is a polymorphic item; Type discriminates the variant.
-type ItemUnion struct {
+// itemUnion is a polymorphic item; Type discriminates the variant.
+type itemUnion struct {
 	Cwd               string          `json:"cwd,omitempty"`
 	ID                string          `json:"id"`
 	Type              string          `json:"type"`
@@ -340,14 +340,14 @@ type ItemUnion struct {
 	AggregatedOutput  string          `json:"aggregatedOutput,omitempty"`
 	ExitCode          *int            `json:"exitCode,omitempty"`
 	Summary           []string        `json:"summary,omitempty"`
-	CommandActions    []CommandAction `json:"commandActions,omitempty"`
+	CommandActions    []commandAction `json:"commandActions,omitempty"`
 	Changes           []FileChange    `json:"changes,omitempty"`
 }
 
-// CommandAction is Codex's structured description of a command's filesystem
+// commandAction is Codex's structured description of a command's filesystem
 // action. Read actions are provider-reported evidence that file contents were
 // loaded.
-type CommandAction struct {
+type commandAction struct {
 	Type    string `json:"type,omitempty"`
 	Command string `json:"command,omitempty"`
 	Name    string `json:"name,omitempty"`
@@ -357,38 +357,38 @@ type CommandAction struct {
 // FileChange is Codex's structured description of a file mutation.
 type FileChange struct {
 	Path string         `json:"path,omitempty"`
-	Kind FileChangeKind `json:"kind,omitempty"`
+	Kind fileChangeKind `json:"kind,omitempty"`
 	Diff string         `json:"diff,omitempty"`
 }
 
-// FileChangeKind describes the kind of a Codex file mutation.
-type FileChangeKind struct {
+// fileChangeKind describes the kind of a Codex file mutation.
+type fileChangeKind struct {
 	Type     string `json:"type,omitempty"`
 	MovePath string `json:"move_path,omitempty"`
 }
 
-// ApprovalDecision is the result sent in response to an approval request.
-type ApprovalDecision struct {
+// approvalDecision is the result sent in response to an approval request.
+type approvalDecision struct {
 	Decision string `json:"decision"` // "accept", "decline", "cancel"
 }
 
 // --- Model discovery (app-server) ---
 
-// ModelListParams holds the parameters for a model/list JSON-RPC request.
-type ModelListParams struct {
+// modelListParams holds the parameters for a model/list JSON-RPC request.
+type modelListParams struct {
 	Limit         int    `json:"limit"`
 	Cursor        string `json:"cursor,omitempty"`
 	IncludeHidden bool   `json:"includeHidden"`
 }
 
-// ModelListResult is the response to a model/list request.
-type ModelListResult struct {
-	Data       []ModelListEntry `json:"data"`
+// modelListResult is the response to a model/list request.
+type modelListResult struct {
+	Data       []modelListEntry `json:"data"`
 	NextCursor string           `json:"nextCursor,omitempty"`
 }
 
-// ModelListEntry is a single model returned by model/list.
-type ModelListEntry struct {
+// modelListEntry is a single model returned by model/list.
+type modelListEntry struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
 	Hidden      bool   `json:"hidden"`

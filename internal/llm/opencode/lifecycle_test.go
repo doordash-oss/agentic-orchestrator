@@ -389,7 +389,7 @@ func TestHandshake_ResumeUsesSessionLoad(t *testing.T) {
 	if loadReq.Method != sessionLoadMethod {
 		t.Fatalf("second request = %q, want session/load", loadReq.Method)
 	}
-	var lp SessionLoadParams
+	var lp sessionLoadParams
 	if err := json.Unmarshal(loadReq.Params, &lp); err != nil {
 		t.Fatalf("unmarshal session/load params: %v", err)
 	}
@@ -402,7 +402,7 @@ func TestHandshake_ResumeUsesSessionLoad(t *testing.T) {
 	if promptReq.Method != "session/prompt" {
 		t.Fatalf("third request = %q, want session/prompt", promptReq.Method)
 	}
-	var pp PromptParams
+	var pp promptParams
 	if err := json.Unmarshal(promptReq.Params, &pp); err != nil {
 		t.Fatalf("unmarshal session/prompt params: %v", err)
 	}

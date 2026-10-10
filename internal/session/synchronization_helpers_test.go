@@ -160,3 +160,29 @@ func resolveAskUser(t testing.TB, input json.RawMessage, answers map[string]stri
 	}
 	return resolved
 }
+
+// setLastControlRequest stages a pending control_request without going
+// through the full readMessages pipeline. Used by tests. Passing nil
+// clears the entire pending list (preserving the historical "single
+// slot" semantics). Passing a non-nil request appends it (or replaces
+// the existing entry for the same requestID), so multiple successive
+// calls accumulate — letting parallel-AUQ test scenarios stage two
+// concurrent requests the same way production does. Production code
+// uses recordPendingControlRequestLocked from inside readMessages.
+func setLastControlRequest(s *Session, cr *llm.ControlRequestMessage) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cr == nil {
+		s.pendingControlRequests = nil
+		return
+	}
+	s.recordPendingControlRequestLocked(cr)
+}
+
+// registerTestSession inserts a pre-built session into the manager for
+// testing.
+func registerTestSession(m *Manager, s *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions[s.id] = s
+}

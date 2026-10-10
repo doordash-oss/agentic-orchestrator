@@ -23,19 +23,19 @@ import (
 	"time"
 )
 
-// OrphanOutcome reports what TerminateOrphan did with one PID file.
-type OrphanOutcome string
+// orphanOutcome reports what TerminateOrphan did with one PID file.
+type orphanOutcome string
 
 const (
 	// OrphanNone means no PID file was found or its process is gone.
-	OrphanNone OrphanOutcome = "none"
+	OrphanNone orphanOutcome = "none"
 	// OrphanMismatch means a live process holds the PID but its identity
 	// does not match the PID file, so it was left alone.
-	OrphanMismatch OrphanOutcome = "mismatch"
+	OrphanMismatch orphanOutcome = "mismatch"
 	// OrphanTerminated means the recorded process group was terminated.
-	OrphanTerminated OrphanOutcome = "terminated"
+	OrphanTerminated orphanOutcome = "terminated"
 	// OrphanSurvived means the process group outlived the bounded wait.
-	OrphanSurvived OrphanOutcome = "survived"
+	OrphanSurvived orphanOutcome = "survived"
 )
 
 // identityStartSlack bounds how far a live process's start time may sit
@@ -48,7 +48,7 @@ const identityStartSlack = 5 * time.Second
 // time matching the recorded one, terminates its process group and waits up
 // to wait for it to exit. A process is never reattached. A PID file whose
 // identity does not match the live process is left alone.
-func TerminateOrphan(dir, managerID string, wait time.Duration) OrphanOutcome {
+func TerminateOrphan(dir, managerID string, wait time.Duration) orphanOutcome {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return OrphanNone

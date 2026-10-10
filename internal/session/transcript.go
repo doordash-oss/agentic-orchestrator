@@ -21,12 +21,12 @@ import (
 	"strings"
 )
 
-// TranscriptErrorDetail reads the provider's transcript file to extract
+// transcriptErrorDetail reads the provider's transcript file to extract
 // the last error message. This catches errors like "Request too large" that
 // the CLI writes to its transcript but not to the stream-json stdout protocol.
 //
 // Best-effort: returns "" if the transcript can't be found.
-func (s *Session) TranscriptErrorDetail() string {
+func (s *Session) transcriptErrorDetail() string {
 	path := s.protocol.TranscriptPath()
 	if path == "" {
 		return ""
@@ -160,7 +160,7 @@ func (s *Session) ErrorDetail() string {
 			return detail
 		}
 	}
-	return s.TranscriptErrorDetail()
+	return s.transcriptErrorDetail()
 }
 
 // looksLikeNormalChat returns true if the text appears to be normal assistant

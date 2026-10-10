@@ -186,7 +186,7 @@ type Coordinator struct {
 	store            *transcriptStore
 	lifecycle        Lifecycle
 	step             StartingStep
-	outcome          TurnOutcome
+	outcome          turnOutcome
 	interruptedBy    InterruptedBy
 	failure          *LaunchFailedError
 	permMode         PermissionMode
@@ -1115,7 +1115,7 @@ func (c *Coordinator) refuseSendLocked(msg Message) (res SendResult, err error, 
 	case c.lifecycle == LifecycleStarting && c.launch != nil:
 	case c.lifecycle == LifecycleIdle && c.session != nil:
 		if !canDeliver(c.session, msg.HiddenContext) {
-			return SendResult{}, ErrHiddenContextUnsupported, true
+			return SendResult{}, errHiddenContextUnsupported, true
 		}
 	case c.lifecycle.inTurn():
 		return SendResult{}, ErrTurnActive, true
@@ -1268,7 +1268,7 @@ func (c *Coordinator) rebuildsLocked() bool {
 }
 
 // setOutcomeLocked records how the latest turn ended and who cut it.
-func (c *Coordinator) setOutcomeLocked(outcome TurnOutcome, by InterruptedBy) {
+func (c *Coordinator) setOutcomeLocked(outcome turnOutcome, by InterruptedBy) {
 	c.outcome = outcome
 	c.interruptedBy = by
 }
@@ -1336,7 +1336,7 @@ func (c *Coordinator) runLaunch(attempt *launchAttempt) {
 		return
 	}
 	obs := &generationObserver{c: c, generation: attempt.generation, handshake: make(chan struct{})}
-	sess, err := c.opts.Launcher.Launch(context.Background(), LaunchRequest{
+	sess, err := c.opts.Launcher.Launch(context.Background(), launchRequest{
 		SessionID:       attempt.sessionID,
 		ConversationID:  conversationID,
 		Generation:      attempt.generation,
@@ -1494,7 +1494,7 @@ func (c *Coordinator) completeLaunch(attempt *launchAttempt, sess ports.SessionV
 	var deliveries []*joiner
 	for i, j := range attempt.joiners {
 		if _, ok := c.store.lookupClientMessage(j.cmid); !ok && !canDeliver(sess, j.hidden) {
-			results[i] = joinResult{err: ErrHiddenContextUnsupported}
+			results[i] = joinResult{err: errHiddenContextUnsupported}
 			continue
 		}
 		rec, existing, err := c.appendUserLocked(j.text, j.hidden, j.cmid, j.attachments)
@@ -1752,7 +1752,7 @@ func (c *Coordinator) interruptGrace(attempt *interruptAttempt, sess ports.Sessi
 
 // cancelLaunchLocked abandons the in-flight launch; its goroutine stops the
 // process once the launcher returns and fails the joiners.
-func (c *Coordinator) cancelLaunchLocked(outcome TurnOutcome, by InterruptedBy) {
+func (c *Coordinator) cancelLaunchLocked(outcome turnOutcome, by InterruptedBy) {
 	attempt := c.launch
 	attempt.cancelled = true
 	close(attempt.cancel)
@@ -2220,7 +2220,7 @@ func (c *Coordinator) appendProviderLocked(gen int64, kind RecordKind, payload a
 		StreamMessageID: streamID,
 		Data:            data,
 	})
-	if errors.Is(err, ErrRetiredGeneration) || existing {
+	if errors.Is(err, errRetiredGeneration) || existing {
 		return nil
 	}
 	if err != nil {
@@ -2324,7 +2324,7 @@ func (c *Coordinator) appendResolutionLocked(gen int64, turnID string, kind Reco
 		Visibility: VisibilityDisplayOnly,
 		Data:       payload,
 	})
-	if errors.Is(err, ErrRetiredGeneration) || existing {
+	if errors.Is(err, errRetiredGeneration) || existing {
 		return
 	}
 	if err != nil {

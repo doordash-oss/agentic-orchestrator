@@ -53,7 +53,7 @@ func (p *Protocol) handleRequestPermission(rawID json.RawMessage, params json.Ra
 		return llm.SDKMessage{}, false
 	}
 
-	var pp RequestPermissionParams
+	var pp requestPermissionParams
 	if jerr := json.Unmarshal(params, &pp); jerr != nil {
 		_ = p.writePermissionOutcome(id, OutcomeCancelled, "")
 		return llm.SDKMessage{}, false
@@ -92,7 +92,7 @@ func (p *Protocol) originForSession(sessionID string) llm.EventOrigin {
 // buildPermissionControl normalizes a tool-permission request into a
 // can_use_tool control request and records the allow/reject option ids so an
 // approve/deny decision resolves to the right ACP outcome.
-func (p *Protocol) buildPermissionControl(reqID string, pp RequestPermissionParams) llm.SDKMessage {
+func (p *Protocol) buildPermissionControl(reqID string, pp requestPermissionParams) llm.SDKMessage {
 	toolName, input := normalizePermissionInput(pp.ToolCall)
 
 	allowID, rejectID := classifyOptionIDs(pp.Options)
@@ -123,7 +123,7 @@ func (p *Protocol) buildPermissionControl(reqID string, pp RequestPermissionPara
 // detail field clients render (command for Bash, file_path for Write); unknown
 // kinds still surface as a permission prompt with a best-effort detail so the
 // user can decide rather than the tracer failing closed.
-func normalizePermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
+func normalizePermissionInput(tc permissionToolCall) (string, json.RawMessage) {
 	switch tc.Kind {
 	case ToolKindExecute:
 		return "Bash", inputObject("command", firstStringField(tc.RawInput, tc.Title, "command", "cmd", "script"))
@@ -168,7 +168,7 @@ func normalizePermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
 	}
 }
 
-func unknownPermissionInput(tc PermissionToolCall) (string, json.RawMessage) {
+func unknownPermissionInput(tc permissionToolCall) (string, json.RawMessage) {
 	name := tc.Kind
 	if name == "" {
 		name = "Tool"
@@ -221,7 +221,7 @@ func firstStringField(raw json.RawMessage, fallback string, keys ...string) stri
 // It prefers the once-scoped variants and matches on the ACP option kind prefix
 // (allow_*/reject_*); a missing kind leaves that direction empty so the response
 // path falls back to a cancelled outcome.
-func classifyOptionIDs(options []PermissionOption) (allowID, rejectID string) {
+func classifyOptionIDs(options []permissionOption) (allowID, rejectID string) {
 	for _, o := range options {
 		switch {
 		case strings.HasPrefix(o.Kind, "allow"):
@@ -239,7 +239,7 @@ func classifyOptionIDs(options []PermissionOption) (allowID, rejectID string) {
 
 // alwaysOptionID returns the allow_always option id, or "" when none is
 // offered.
-func alwaysOptionID(options []PermissionOption) string {
+func alwaysOptionID(options []permissionOption) string {
 	for _, o := range options {
 		if o.Kind == OptionKindAllowAlways {
 			return o.OptionID
@@ -328,10 +328,10 @@ func (p *Protocol) respondToControl(requestID string, allow, remember bool) erro
 // writePermissionOutcome sends the JSON-RPC result for a
 // session/request_permission request.
 func (p *Protocol) writePermissionOutcome(id int, outcome, optionID string) error {
-	return p.writeJSON(PermissionResponse{
+	return p.writeJSON(permissionResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Result:  PermissionOutcomeResult{Outcome: PermissionOutcome{Outcome: outcome, OptionID: optionID}},
+		Result:  permissionOutcomeResult{Outcome: permissionOutcome{Outcome: outcome, OptionID: optionID}},
 	})
 }
 
@@ -342,7 +342,7 @@ func (p *Protocol) writePermissionOutcome(id int, outcome, optionID string) erro
 // recommended markers, and confidence scores. It records the native option
 // ids in presented order so the user's selection resolves to the native ACP
 // outcome.
-func (p *Protocol) buildQuestionControl(reqID string, pp RequestPermissionParams) llm.SDKMessage {
+func (p *Protocol) buildQuestionControl(reqID string, pp requestPermissionParams) llm.SDKMessage {
 	optionIDs := make([]string, 0, len(pp.Options))
 	seen := make(map[string]int)
 	opts := make([]askuser.Option, 0, len(pp.Options))

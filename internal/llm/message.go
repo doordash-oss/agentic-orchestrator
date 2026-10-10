@@ -214,7 +214,7 @@ type SystemInitMessage struct {
 	SessionID      string          `json:"session_id"`
 	Model          string          `json:"model"`
 	Tools          []string        `json:"tools,omitempty"`
-	MCPServers     []MCPServerInfo `json:"mcp_servers,omitempty"`
+	MCPServers     []mcpServerInfo `json:"mcp_servers,omitempty"`
 	PermissionMode string          `json:"permissionMode,omitempty"`
 	// ResumeOutcome reports how a resumed launch started: ResumeOutcomeResumed,
 	// ResumeOutcomeFallback, or empty for a fresh session. Providers that
@@ -231,8 +231,8 @@ const (
 	ResumeOutcomeFallback = "fallback"
 )
 
-// MCPServerInfo describes an MCP server connected to the session.
-type MCPServerInfo struct {
+// mcpServerInfo describes an MCP server connected to the session.
+type mcpServerInfo struct {
 	Name   string `json:"name"`
 	Status string `json:"status,omitempty"`
 }
@@ -397,22 +397,6 @@ type ResultMessage struct {
 
 // IsSuccess returns true if the result indicates successful completion.
 func (r *ResultMessage) IsSuccess() bool { return r.Subtype == "success" && !r.IsError }
-
-// IsClientSideResult returns true if the result was resolved by the CLI
-// without model interaction (e.g. "Unknown skill: X"). These have
-// IsSuccess() true but zero output tokens and non-empty result text.
-func (r *ResultMessage) IsClientSideResult() bool {
-	if !r.IsSuccess() || r.Result == "" {
-		return false
-	}
-	if r.Usage != nil && r.Usage.OutputTokens == 0 {
-		return true
-	}
-	return false
-}
-
-// IsMaxTurns returns true if the session hit the max turns limit.
-func (r *ResultMessage) IsMaxTurns() bool { return r.Subtype == "max_turns" }
 
 // IsTurnTruncated reports whether the provider ended this turn before a
 // deliberate root outcome could be produced.

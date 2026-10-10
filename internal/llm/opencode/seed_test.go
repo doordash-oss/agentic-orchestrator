@@ -41,7 +41,7 @@ func TestPromptChangesModelBeforeTurnOnlyWhenNeeded(t *testing.T) {
 		t.Fatal("unchanged model sent set_model")
 	}
 	out.Reset()
-	p.SetPromptModel("opencode:vendor/second")
+	p.setPromptModel("opencode:vendor/second")
 	if err := p.sendPrompt("second"); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestPromptModelRefusalUsesPreviousModel(t *testing.T) {
 	p.acpSessionID = "ses_fresh"
 	var out bytes.Buffer
 	p.SetStdin(&out)
-	p.SetPromptModel("opencode:vendor/second")
+	p.setPromptModel("opencode:vendor/second")
 	if err := p.sendPrompt("hello"); err != nil {
 		t.Fatal(err)
 	}

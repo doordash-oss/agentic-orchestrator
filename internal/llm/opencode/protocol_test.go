@@ -263,7 +263,7 @@ func TestHandshake_HappyPath(t *testing.T) {
 	if snReq.Method != "session/new" {
 		t.Fatalf("second request method = %q, want session/new", snReq.Method)
 	}
-	var snParams SessionNewParams
+	var snParams sessionNewParams
 	if err := json.Unmarshal(snReq.Params, &snParams); err != nil {
 		t.Fatalf("unmarshal session/new params: %v", err)
 	}
@@ -277,25 +277,25 @@ func TestHandshake_HappyPath(t *testing.T) {
 	if promptReq.Method != "session/prompt" {
 		t.Fatalf("third request method = %q, want session/prompt", promptReq.Method)
 	}
-	var promptParams PromptParams
-	if err := json.Unmarshal(promptReq.Params, &promptParams); err != nil {
+	var decoded promptParams
+	if err := json.Unmarshal(promptReq.Params, &decoded); err != nil {
 		t.Fatalf("unmarshal session/prompt params: %v", err)
 	}
-	if promptParams.SessionID != "ses_abc123" {
-		t.Fatalf("session/prompt sessionId = %q, want ses_abc123", promptParams.SessionID)
+	if decoded.SessionID != "ses_abc123" {
+		t.Fatalf("session/prompt sessionId = %q, want ses_abc123", decoded.SessionID)
 	}
-	if len(promptParams.Prompt) != 1 || promptParams.Prompt[0].Text != "RENDERED PHASE PROMPT with marker path" {
-		t.Fatalf("session/prompt prompt = %+v, want the rendered phase prompt", promptParams.Prompt)
+	if len(decoded.Prompt) != 1 || decoded.Prompt[0].Text != "RENDERED PHASE PROMPT with marker path" {
+		t.Fatalf("session/prompt prompt = %+v, want the rendered phase prompt", decoded.Prompt)
 	}
 
 	if err := <-errCh; err != nil {
 		t.Fatalf("Handshake() error: %v", err)
 	}
-	if got := h.p.ACPSessionID(); got != "ses_abc123" {
-		t.Fatalf("ACPSessionID() = %q, want ses_abc123", got)
-	}
-	if got := h.p.NegotiatedVersion(); got != 1 {
-		t.Fatalf("NegotiatedVersion() = %d, want 1", got)
+	h.p.mu.Lock()
+	negotiated := h.p.negotiatedACPVersion
+	h.p.mu.Unlock()
+	if negotiated != 1 {
+		t.Fatalf("negotiated ACP version = %d, want 1", negotiated)
 	}
 	// Session-identity parity: the captured ACP session id is surfaced through
 	// the Agentico-facing SessionID so session views, PID-file identity, and the
@@ -330,7 +330,7 @@ func TestHandshake_NativeToollessReviewDeclaresNoClientToolSurface(t *testing.T)
 	h.feed(t, responseLine(t, mustID(t, initReq.ID), map[string]any{"protocolVersion": 1}))
 
 	sessionReq := h.nextRequest(t)
-	var sessionParams SessionNewParams
+	var sessionParams sessionNewParams
 	if err := json.Unmarshal(sessionReq.Params, &sessionParams); err != nil {
 		t.Fatalf("unmarshal session/new params: %v", err)
 	}
@@ -340,12 +340,12 @@ func TestHandshake_NativeToollessReviewDeclaresNoClientToolSurface(t *testing.T)
 	h.feed(t, responseLine(t, mustID(t, sessionReq.ID), map[string]any{"sessionId": "hidden-review"}))
 
 	promptReq := h.nextRequest(t)
-	var promptParams PromptParams
-	if err := json.Unmarshal(promptReq.Params, &promptParams); err != nil {
+	var decoded promptParams
+	if err := json.Unmarshal(promptReq.Params, &decoded); err != nil {
 		t.Fatalf("unmarshal session/prompt params: %v", err)
 	}
-	if len(promptParams.Prompt) != 1 || promptParams.Prompt[0].Text != "Classify one command." {
-		t.Fatalf("review prompt = %+v, want exact minimal prompt", promptParams.Prompt)
+	if len(decoded.Prompt) != 1 || decoded.Prompt[0].Text != "Classify one command." {
+		t.Fatalf("review prompt = %+v, want exact minimal prompt", decoded.Prompt)
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("Handshake() error: %v", err)

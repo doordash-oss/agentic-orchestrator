@@ -60,7 +60,7 @@ func TestPIDFileRemove(t *testing.T) {
 	pf := PIDFile{PID: 1, RepoName: "repo-a"}
 	WritePIDFile(dir, pf)
 
-	if err := RemovePIDFile(dir, "repo-a"); err != nil {
+	if err := removePIDFile(dir, "repo-a"); err != nil {
 		t.Fatalf("remove PID file: %v", err)
 	}
 
@@ -80,7 +80,7 @@ func TestFindPIDFiles(t *testing.T) {
 	WritePIDFile(feat1Dir, PIDFile{PID: 100, FeatureID: "feat-1", Phase: "implement"})
 	WritePIDFile(feat2Dir, PIDFile{PID: 200, FeatureID: "feat-2", Phase: "research"})
 
-	pids, err := FindPIDFiles(dir)
+	pids, err := findPIDFiles(dir)
 	if err != nil {
 		t.Fatalf("find PID files: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestFindPIDFilesDoesNotDescendIntoFeatureArtifacts(t *testing.T) {
 		t.Fatalf("write legacy phase PID file: %v", err)
 	}
 
-	pids, err := FindPIDFiles(dir)
+	pids, err := findPIDFiles(dir)
 	if err != nil {
 		t.Fatalf("find PID files: %v", err)
 	}
@@ -146,20 +146,20 @@ func TestPIDFileName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := PIDFileName(tt.repoName)
+			got := pidfileName(tt.repoName)
 			if got != tt.want {
-				t.Errorf("PIDFileName(%q) = %q, want %q", tt.repoName, got, tt.want)
+				t.Errorf("pidfileName(%q) = %q, want %q", tt.repoName, got, tt.want)
 			}
 		})
 	}
 }
 
-// TestPIDFileName_AlwaysPerRepo asserts the contract: PIDFileName always
+// TestPIDFileName_AlwaysPerRepo asserts the contract: pidfileName always
 // produces the per-repo "session-<repo>.pid" form. There is no longer a
 // legacy "session.pid" path.
 func TestPIDFileName_AlwaysPerRepo(t *testing.T) {
-	if got := PIDFileName("foo"); got != "session-foo.pid" {
-		t.Errorf("PIDFileName(\"foo\") = %q, want \"session-foo.pid\"", got)
+	if got := pidfileName("foo"); got != "session-foo.pid" {
+		t.Errorf("pidfileName(\"foo\") = %q, want \"session-foo.pid\"", got)
 	}
 }
 
@@ -213,7 +213,7 @@ func TestFindPIDFilesMultipleRepos(t *testing.T) {
 	_ = WritePIDFile(featDir, PIDFile{PID: 100, FeatureID: "feat-multi", Phase: "implement", RepoName: "service-a"})
 	_ = WritePIDFile(featDir, PIDFile{PID: 200, FeatureID: "feat-multi", Phase: "implement", RepoName: "service-b"})
 
-	pids, err := FindPIDFiles(dir)
+	pids, err := findPIDFiles(dir)
 	if err != nil {
 		t.Fatalf("find PID files: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestRemovePIDFileWithRepoName(t *testing.T) {
 	}
 
 	// Remove it
-	if err := RemovePIDFile(dir, "service-a"); err != nil {
+	if err := removePIDFile(dir, "service-a"); err != nil {
 		t.Fatalf("remove PID file: %v", err)
 	}
 

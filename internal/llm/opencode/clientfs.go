@@ -42,7 +42,7 @@ const (
 // permission gate; a write outside them, or an I/O failure, is answered with a
 // JSON-RPC error rather than performed or crashed.
 func (p *Protocol) handleWriteTextFile(rawID json.RawMessage, params json.RawMessage) {
-	var wp WriteTextFileParams
+	var wp writeTextFileParams
 	if err := json.Unmarshal(params, &wp); err != nil {
 		p.writeFSError(rawID, jsonRPCInvalidParams, "invalid fs/write_text_file params")
 		return
@@ -65,7 +65,7 @@ func (p *Protocol) handleWriteTextFile(rawID json.RawMessage, params json.RawMes
 		return
 	}
 	// ACP write result is null.
-	_ = p.writeJSON(FSResultResponse{JSONRPC: "2.0", ID: rawID, Result: nil})
+	_ = p.writeJSON(fsResultResponse{JSONRPC: "2.0", ID: rawID, Result: nil})
 }
 
 // handleReadTextFile hosts an fs/read_text_file request, honoring the optional
@@ -73,7 +73,7 @@ func (p *Protocol) handleWriteTextFile(rawID json.RawMessage, params json.RawMes
 // non-destructive and OpenCode has already cleared the read against its own
 // permission map before delegating, so the handler only reports I/O failures.
 func (p *Protocol) handleReadTextFile(rawID json.RawMessage, params json.RawMessage) {
-	var rp ReadTextFileParams
+	var rp readTextFileParams
 	if err := json.Unmarshal(params, &rp); err != nil {
 		p.writeFSError(rawID, jsonRPCInvalidParams, "invalid fs/read_text_file params")
 		return
@@ -89,7 +89,7 @@ func (p *Protocol) handleReadTextFile(rawID json.RawMessage, params json.RawMess
 		return
 	}
 	content := sliceTextLines(string(data), rp.Line, rp.Limit)
-	_ = p.writeJSON(FSResultResponse{JSONRPC: "2.0", ID: rawID, Result: ReadTextFileResult{Content: content}})
+	_ = p.writeJSON(fsResultResponse{JSONRPC: "2.0", ID: rawID, Result: readTextFileResult{Content: content}})
 }
 
 // resolveFSPath trims and cleans an ACP fs path, resolving a relative path
@@ -174,6 +174,6 @@ func (p *Protocol) writeFSError(rawID json.RawMessage, code int, msg string) {
 	_ = p.writeJSON(ErrorResponse{
 		JSONRPC: "2.0",
 		ID:      rawID,
-		Error:   RPCError{Code: code, Message: msg},
+		Error:   rpcError{Code: code, Message: msg},
 	})
 }

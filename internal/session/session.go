@@ -158,7 +158,7 @@ type Session struct {
 	// AskUserQuestion tracking — set when an AskUserQuestion tool_use is
 	// detected in an assistant message, cleared when the user sends a message.
 	// Used by phase runners to keep sessions alive until the user answers.
-	// Access via SetHasUnansweredQuestion / HasUnansweredQuestion; the
+	// Access via SetHasUnansweredQuestion; the
 	// field is protected by mu.
 	hasUnansweredQuestion bool
 
@@ -600,25 +600,6 @@ func (s *Session) SetCost(c *llm.ResultMessage) { s.cost = c }
 func (s *Session) SetIteration(i int)           { s.iteration = i }
 func (s *Session) SendStatus(status string)     { s.statusCh <- status }
 
-// SetLastControlRequest stages a pending control_request without going
-// through the full readMessages pipeline. Used by tests. Passing nil
-// clears the entire pending list (preserving the historical "single
-// slot" semantics). Passing a non-nil request appends it (or replaces
-// the existing entry for the same requestID), so multiple successive
-// calls accumulate — letting parallel-AUQ test scenarios stage two
-// concurrent requests the same way production does. Production code
-// should use recordPendingControlRequestLocked from inside
-// readMessages.
-func (s *Session) SetLastControlRequest(cr *llm.ControlRequestMessage) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if cr == nil {
-		s.pendingControlRequests = nil
-		return
-	}
-	s.recordPendingControlRequestLocked(cr)
-}
-
 func (s *Session) SetRepoName(name string)        { s.repoName = name }
 func (s *Session) SetPermCacheScope(scope string) { s.permCacheScope = scope }
 func (s *Session) SetProcess(cmd *exec.Cmd)       { s.process = cmd }
@@ -965,7 +946,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		copy(cleanups, s.cleanupFuncs)
 		s.mu.Unlock()
 		if pidDir != "" {
-			_ = RemovePIDFile(pidDir, repoName)
+			_ = removePIDFile(pidDir, repoName)
 		}
 		for _, fn := range cleanups {
 			fn()
@@ -2122,13 +2103,6 @@ func (s *Session) SetHasUnansweredQuestion(v bool) {
 	s.mu.Unlock()
 }
 
-// HasUnansweredQuestion returns hasUnansweredQuestion under the session mutex.
-func (s *Session) HasUnansweredQuestion() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.hasUnansweredQuestion
-}
-
 // HasPendingAskUserQuestion returns true when the session is currently waiting
 // on at least one AskUserQuestion control request.
 func (s *Session) HasPendingAskUserQuestion() bool {
@@ -2222,7 +2196,7 @@ func (s *Session) Stop() error {
 			s.mu.Unlock()
 			s.CloseDone()
 			if pidDir != "" {
-				_ = RemovePIDFile(pidDir, repoName)
+				_ = removePIDFile(pidDir, repoName)
 			}
 		}
 		return nil
@@ -2533,12 +2507,7 @@ func (s *Session) SetLogFile(f *os.File) {
 	}
 }
 
-// IdleDuration returns how long since the session last produced output.
-func (s *Session) IdleDuration() time.Duration {
-	// JSON protocol sessions do not track idle output duration; report zero.
-	return 0
-}
-
+// idleDuration returns how long since the session last produced output.
 // IsActive returns true if the session is still running or waiting for input.
 func (s *Session) IsActive() bool {
 	s.mu.Lock()

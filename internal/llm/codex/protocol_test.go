@@ -104,7 +104,7 @@ func TestCodexProtocol_NativeToollessReviewConfiguresOneEphemeralTurn(t *testing
 
 	var threadReq struct {
 		Method string            `json:"method"`
-		Params ThreadStartParams `json:"params"`
+		Params threadStartParams `json:"params"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &threadReq); err != nil {
 		t.Fatalf("unmarshal thread/start: %v", err)
@@ -141,7 +141,7 @@ func TestCodexProtocol_NativeToollessReviewConfiguresOneEphemeralTurn(t *testing
 	}
 	var turnReq struct {
 		Method string          `json:"method"`
-		Params TurnStartParams `json:"params"`
+		Params turnStartParams `json:"params"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &turnReq); err != nil {
 		t.Fatalf("unmarshal turn/start: %v", err)
@@ -715,15 +715,15 @@ func TestCodexProtocol_TokenUsageUpdated(t *testing.T) {
 func TestCodexCommandExecutionCompletedIncludesStructuredFileReads(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
 	exitCode := 0
-	params, err := json.Marshal(ItemCompletedParams{
+	params, err := json.Marshal(itemCompletedParams{
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
-		Item: ItemUnion{
+		Item: itemUnion{
 			ID:               "call_read",
 			Type:             "commandExecution",
 			AggregatedOutput: "file contents",
 			ExitCode:         &exitCode,
-			CommandActions: []CommandAction{
+			CommandActions: []commandAction{
 				{Type: "read", Path: "/tmp/state/guidelines/go/index.md"},
 				{Type: codexFileChangeOperationWrite, Path: "/tmp/state/output.txt"},
 				{Type: "read", Path: ""},
@@ -822,10 +822,10 @@ func TestCodexFileChangeCompletedIncludesStructuredDiff(t *testing.T) {
 func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test", Model: "codex"})
 
-	startedParams, err := json.Marshal(ItemStartedParams{
+	startedParams, err := json.Marshal(itemStartedParams{
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
-		Item: ItemUnion{
+		Item: itemUnion{
 			ID:   "call_1",
 			Type: "commandExecution",
 		},
@@ -844,7 +844,7 @@ func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 		t.Fatalf("started ToolProgress = %+v, want ToolUseID call_1 and Bash", started.ToolProgress)
 	}
 
-	deltaParams, err := json.Marshal(CommandOutputDelta{
+	deltaParams, err := json.Marshal(commandOutputDelta{
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
 		ItemID:   "call_1",
@@ -891,12 +891,12 @@ func TestTokenUsageUpdatedSurfacesAsSDKMessage(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 	p.SetThreadIDForTest("thread-abc")
 
-	// Build the JSON-RPC notification params matching TokenUsageUpdatedParams.
-	payload := TokenUsageUpdatedParams{
+	// Build the JSON-RPC notification params matching tokenUsageUpdatedParams.
+	payload := tokenUsageUpdatedParams{
 		ThreadID: "thread-abc",
 		TurnID:   "turn-1",
-		TokenUsage: ThreadTokenUsage{
-			Total: TokenUsageBreakdown{
+		TokenUsage: threadTokenUsage{
+			Total: tokenUsageBreakdown{
 				InputTokens:  1500,
 				OutputTokens: 750,
 			},
@@ -940,7 +940,7 @@ func TestTokenUsageUpdatedSurfacesAsSDKMessage(t *testing.T) {
 func TestCodexCommandApproval_NormalizesToBash(t *testing.T) {
 	p := NewProtocol(llm.ProtocolOpts{WorkDir: "/tmp/test"})
 
-	params, err := json.Marshal(CommandApprovalParams{Command: "ls -la"})
+	params, err := json.Marshal(commandApprovalParams{Command: "ls -la"})
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
@@ -1088,9 +1088,9 @@ func TestCodexProtocol_ErrorResponseSurfacesAsResultError(t *testing.T) {
 
 func completedTurnParams(t *testing.T, threadID string) json.RawMessage {
 	t.Helper()
-	payload := TurnCompletedParams{
+	payload := turnCompletedParams{
 		ThreadID: threadID,
-		Turn:     CompletedTurn{ID: "turn-1", Status: "completed"},
+		Turn:     completedTurn{ID: "turn-1", Status: "completed"},
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -1254,7 +1254,7 @@ func TestNativeReviewFailureDiagnosticsAreSanitizedAndTerminal(t *testing.T) {
 func TestInteractiveFileResultCarriesOnlySuccessfulDiffs(t *testing.T) {
 	for _, status := range []string{"completed", "failed", "declined"} {
 		t.Run(status, func(t *testing.T) {
-			var item ItemUnion
+			var item itemUnion
 			if err := json.Unmarshal([]byte(`{"id":"edit-1","type":"fileChange","changes":[{"path":"src/a.go","kind":{"type":"update"},"diff":"-old\n+new"}]}`), &item); err != nil {
 				t.Fatal(err)
 			}
@@ -1272,7 +1272,7 @@ func TestInteractiveFileResultCarriesOnlySuccessfulDiffs(t *testing.T) {
 }
 
 func TestCodexShellToolHistoryPreservesCwd(t *testing.T) {
-	msg := toolUseMessage(ItemUnion{ID: "shell", Type: "commandExecution", Command: "python3 edit.py", Cwd: "/repo"}, nil)
+	msg := toolUseMessage(itemUnion{ID: "shell", Type: "commandExecution", Command: "python3 edit.py", Cwd: "/repo"}, nil)
 	var input map[string]any
 	json.Unmarshal(msg.Assistant.Message.Content[0].Input, &input)
 	if input["cwd"] != "/repo" {

@@ -60,7 +60,7 @@ const skillRelPath = "supervisor/SKILL.md"
 // the launch channel, no disallowed tools, no completion protocol, no
 // ask-user auto-pick and no tool watchdog. The first user message is sent by
 // the coordinator after the handshake and stays the user's own text.
-func (l *SessionLauncher) Launch(_ context.Context, req LaunchRequest) (ports.SessionView, error) {
+func (l *SessionLauncher) Launch(_ context.Context, req launchRequest) (ports.SessionView, error) {
 	if l.Runner == nil || l.Sessions == nil {
 		return nil, errors.New("supervisor launcher is not configured")
 	}

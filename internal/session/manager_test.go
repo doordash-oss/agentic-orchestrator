@@ -161,7 +161,7 @@ sleep 30
 		t.Fatalf("starting live session: %v", err)
 	}
 	waitForMessageCount(t, sess, 2)
-	pidFile, err := ReadPIDFile(filepath.Join(stateDir, PIDFileName("")))
+	pidFile, err := ReadPIDFile(filepath.Join(stateDir, pidfileName("")))
 	if err != nil {
 		t.Fatalf("reading live session metadata: %v", err)
 	}
@@ -177,7 +177,7 @@ sleep 30
 		t.Fatalf("closing persisted transcript: %v", err)
 	}
 
-	restarted := NewRecoveringManager(nil, stateDir)
+	restarted := newRecoveringManager(nil, stateDir)
 	restored := restarted.FeatureSessions("feature-1")
 	if len(restored) != 1 {
 		t.Fatalf("restored session count = %d, want 1", len(restored))

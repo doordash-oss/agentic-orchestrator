@@ -36,8 +36,8 @@ func parseUsageLine(t *testing.T, p *Protocol, line string) []llm.SDKMessage {
 
 func sendUsage(t *testing.T, p *Protocol, thread string, input, cached, writes, output int) llm.SDKMessage {
 	t.Helper()
-	breakdown := TokenUsageBreakdown{InputTokens: input, CachedInputTokens: cached, CacheWriteInputTokens: writes, OutputTokens: output, TotalTokens: input + output}
-	raw, err := json.Marshal(TokenUsageUpdatedParams{ThreadID: thread, TurnID: "turn-1", TokenUsage: ThreadTokenUsage{Total: breakdown, Last: breakdown}})
+	breakdown := tokenUsageBreakdown{InputTokens: input, CachedInputTokens: cached, CacheWriteInputTokens: writes, OutputTokens: output, TotalTokens: input + output}
+	raw, err := json.Marshal(tokenUsageUpdatedParams{ThreadID: thread, TurnID: "turn-1", TokenUsage: threadTokenUsage{Total: breakdown, Last: breakdown}})
 	if err != nil {
 		t.Fatal(err)
 	}

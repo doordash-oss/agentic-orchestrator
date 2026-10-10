@@ -118,9 +118,9 @@ func NewManager(eventCh chan interface{}) *Manager {
 	}
 }
 
-// NewRecoveringManager constructs a manager and restores live sessions whose
+// newRecoveringManager constructs a manager and restores live sessions whose
 // durable process and transcript metadata survived an abrupt server exit.
-func NewRecoveringManager(eventCh chan interface{}, stateDir string) *Manager {
+func newRecoveringManager(eventCh chan interface{}, stateDir string) *Manager {
 	m := NewManager(eventCh)
 	if stateDir != "" {
 		if err := m.restoreLiveSessions(stateDir); err != nil {
@@ -330,7 +330,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 }
 
 func (m *Manager) restoreLiveSessions(stateDir string) error {
-	pidFiles, err := FindPIDFiles(stateDir)
+	pidFiles, err := findPIDFiles(stateDir)
 	if err != nil {
 		return err
 	}
@@ -603,14 +603,8 @@ func (m *Manager) FeatureSessions(featureID string) []ports.SessionView {
 	return result
 }
 
-// RegisterTestSession inserts a pre-built session into the manager for testing.
+// registerTestSession inserts a pre-built session into the manager for testing.
 // It must only be used in tests.
-func (m *Manager) RegisterTestSession(s *Session) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sessions[s.id] = s
-}
-
 func (m *Manager) Shutdown() {
 	// Signal that no new sessions should be created.
 	select {

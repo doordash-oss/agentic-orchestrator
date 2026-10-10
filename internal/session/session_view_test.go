@@ -197,7 +197,7 @@ func TestSetterMethods(t *testing.T) {
 	}
 
 	cr := &llm.ControlRequestMessage{RequestID: "req-1"}
-	s.SetLastControlRequest(cr)
+	setLastControlRequest(s, cr)
 	if s.LastControlRequest() == nil || s.LastControlRequest().RequestID != "req-1" {
 		t.Errorf("LastControlRequest() = %v, want RequestID=req-1", s.LastControlRequest())
 	}
@@ -206,7 +206,7 @@ func TestSetterMethods(t *testing.T) {
 func TestManagerGetSessionReturnsSessionView(t *testing.T) {
 	mgr := NewManager(nil)
 	s := NewSession("s1", "f1", feature.PhaseResearch)
-	mgr.RegisterTestSession(s)
+	registerTestSession(mgr, s)
 
 	var sv ports.SessionView = mgr.GetSession("s1")
 	if sv == nil {
@@ -224,7 +224,7 @@ func TestManagerActiveSessionsReturnsSessionView(t *testing.T) {
 	mgr := NewManager(nil)
 	s := NewSession("s1", "f1", feature.PhaseResearch)
 	s.status = SessionRunning
-	mgr.RegisterTestSession(s)
+	registerTestSession(mgr, s)
 
 	sessions := mgr.ActiveSessions()
 	if len(sessions) != 1 {
@@ -240,8 +240,8 @@ func TestManagerFeatureSessionsReturnsSessionView(t *testing.T) {
 	mgr := NewManager(nil)
 	s1 := NewSession("s1", "f1", feature.PhaseResearch)
 	s2 := NewSession("s2", "f2", feature.PhasePlan)
-	mgr.RegisterTestSession(s1)
-	mgr.RegisterTestSession(s2)
+	registerTestSession(mgr, s1)
+	registerTestSession(mgr, s2)
 
 	sessions := mgr.FeatureSessions("f1")
 	if len(sessions) != 1 {

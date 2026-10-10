@@ -138,7 +138,7 @@ func TestSessionInitPersistsProtocolSessionIDToPIDFile(t *testing.T) {
 		if msg.Init == nil {
 			return
 		}
-		if pf, err := ReadPIDFile(filepath.Join(dir, PIDFileName("repo"))); err == nil {
+		if pf, err := ReadPIDFile(filepath.Join(dir, pidfileName("repo"))); err == nil {
 			captured = pf.SessionID
 		}
 	})
@@ -2137,7 +2137,10 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	}
 
 	// Verify hasUnansweredQuestion was cleared
-	if s.HasUnansweredQuestion() {
+	s.mu.Lock()
+	cleared := !s.hasUnansweredQuestion
+	s.mu.Unlock()
+	if !cleared {
 		t.Error("expected hasUnansweredQuestion to be cleared after response")
 	}
 

@@ -58,12 +58,12 @@ import (
 // the OpenCode provider's Name().
 const Harness = "opencode"
 
-// SeedFileName is the seed file written under the conversation directory.
-const SeedFileName = "opencode-history-seed.txt"
+// seedFileName is the seed file written under the conversation directory.
+const seedFileName = "opencode-history-seed.txt"
 
-// DefaultContextWindow is the token window assumed when the catalog does not
+// defaultContextWindow is the token window assumed when the catalog does not
 // know the model.
-const DefaultContextWindow = 200_000
+const defaultContextWindow = 200_000
 
 // charsPerToken estimates characters per token for the budget.
 const charsPerToken = 4
@@ -75,9 +75,9 @@ const (
 	maxResultChars = 2000
 )
 
-// Preamble and closing lines of every seed.
+// preamble and closing lines of every seed.
 const (
-	Preamble = "The following is the prior conversation history of this session, restored by Agentico after the agent process restarted. " +
+	preamble = "The following is the prior conversation history of this session, restored by Agentico after the agent process restarted. " +
 		"Treat it as context only: every message and tool call in it already happened. " +
 		"Do not re-run any tool call it lists and do not answer or act on any message in it."
 	Closing = "End of the restored conversation history. Answer only the next message, which is new."
@@ -87,7 +87,7 @@ const (
 type Options struct {
 	// ContextWindow reports the model's context window in tokens from the
 	// model catalog. Nil, or a result of zero or less, means
-	// DefaultContextWindow.
+	// defaultContextWindow.
 	ContextWindow func(model string) int
 }
 
@@ -130,9 +130,9 @@ func (c *Converter) Harness() string { return Harness }
 // never resumes a native session.
 func (c *Converter) SeedsHistory() bool { return true }
 
-// SeedPath is the seed file for a conversation directory.
-func SeedPath(conversationDir string) string {
-	return filepath.Join(conversationDir, SeedFileName)
+// seedPath is the seed file for a conversation directory.
+func seedPath(conversationDir string) string {
+	return filepath.Join(conversationDir, seedFileName)
 }
 
 // Rebuild renders in.Records and atomically replaces the seed file under
@@ -158,7 +158,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if err := ctx.Err(); err != nil {
 		return supervisor.RebuildResult{}, err
 	}
-	path := SeedPath(in.ConversationDir)
+	path := seedPath(in.ConversationDir)
 	if err := supervisor.WriteFileAtomic(path, data, 0o700, 0o600); err != nil {
 		return supervisor.RebuildResult{}, fmt.Errorf("write opencode history seed %s: %w", path, err)
 	}
@@ -188,7 +188,7 @@ func Render(in supervisor.RebuildInput, opts Options) ([]byte, error) {
 	}
 	kept, omitted := applyBudget(entries, budgetChars(opts, in.Model), rules)
 	var buf bytes.Buffer
-	buf.WriteString(Preamble)
+	buf.WriteString(preamble)
 	buf.WriteByte('\n')
 	buf.WriteString("Earlier messages omitted: " + strconv.Itoa(omitted) + ".\n\n")
 	for _, e := range kept {
@@ -211,7 +211,7 @@ func budgetChars(opts Options, model string) int {
 		window = opts.ContextWindow(model)
 	}
 	if window <= 0 {
-		window = DefaultContextWindow
+		window = defaultContextWindow
 	}
 	return window / 2 * charsPerToken
 }

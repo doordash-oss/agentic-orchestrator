@@ -37,11 +37,11 @@ func fsProtocol(t *testing.T, dir string) (*Protocol, *syncBuffer) {
 }
 
 // fsResponse parses the last written JSON-RPC line as an fs/* response.
-func fsResponse(t *testing.T, buf *syncBuffer) (result json.RawMessage, errObj *RPCError) {
+func fsResponse(t *testing.T, buf *syncBuffer) (result json.RawMessage, errObj *rpcError) {
 	t.Helper()
 	var resp struct {
 		Result json.RawMessage `json:"result"`
-		Error  *RPCError       `json:"error"`
+		Error  *rpcError       `json:"error"`
 	}
 	if err := json.Unmarshal(buf.lastLine(t), &resp); err != nil {
 		t.Fatalf("fs response not JSON-RPC: %v (raw %q)", err, buf.String())
@@ -173,9 +173,9 @@ func TestReadTextFile_ReturnsContentWithLineAndLimit(t *testing.T) {
 	if errObj != nil {
 		t.Fatalf("read replied with error %+v, want success", errObj)
 	}
-	var rr ReadTextFileResult
+	var rr readTextFileResult
 	if err := json.Unmarshal(result, &rr); err != nil {
-		t.Fatalf("read result not a ReadTextFileResult: %v (raw %s)", err, result)
+		t.Fatalf("read result not a readTextFileResult: %v (raw %s)", err, result)
 	}
 	if rr.Content != "b\nc" {
 		t.Fatalf("read content = %q, want %q (lines 2-3)", rr.Content, "b\nc")

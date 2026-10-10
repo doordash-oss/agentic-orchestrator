@@ -23,22 +23,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// ResetOutcome names the outcome of a new-conversation request.
-type ResetOutcome string
+// resetOutcome names the outcome of a new-conversation request.
+type resetOutcome string
 
 const (
 	// ResetDone retired the current conversation and opened an empty one.
-	ResetDone ResetOutcome = "reset"
+	ResetDone resetOutcome = "reset"
 	// ResetNoop found nothing to retire: no process, no launch and an empty
 	// transcript.
-	ResetNoop ResetOutcome = "noop"
+	ResetNoop resetOutcome = "noop"
 )
 
 // ResetResult reports a new-conversation request. PreviousConversationID is
 // the conversation current when the request arrived; for a noop it equals
 // State.ConversationID.
 type ResetResult struct {
-	Result                 ResetOutcome
+	Result                 resetOutcome
 	PreviousConversationID string
 	State                  State
 }

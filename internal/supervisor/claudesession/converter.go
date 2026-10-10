@@ -85,9 +85,9 @@ func New(opts Options) *Converter {
 // Harness reports "claude".
 func (c *Converter) Harness() string { return Harness }
 
-// SessionPath is the session file the CLI resumes for sessionID in workDir:
+// sessionPath is the session file the CLI resumes for sessionID in workDir:
 // <configDir>/projects/<encoded workDir>/<sessionID>.jsonl.
-func SessionPath(configDir, workDir, sessionID string) string {
+func sessionPath(configDir, workDir, sessionID string) string {
 	return filepath.Join(claudeconfig.ProjectsDir(configDir, workDir), sessionID+".jsonl")
 }
 
@@ -121,7 +121,7 @@ func (c *Converter) Rebuild(ctx context.Context, in supervisor.RebuildInput) (su
 	if configDir == "" {
 		return supervisor.RebuildResult{}, errors.New("resolve claude config dir: empty path")
 	}
-	path := SessionPath(configDir, in.WorkDir, in.NativeSessionID)
+	path := sessionPath(configDir, in.WorkDir, in.NativeSessionID)
 	if err := ctx.Err(); err != nil {
 		return supervisor.RebuildResult{}, err
 	}

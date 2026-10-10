@@ -197,6 +197,7 @@ func protocolViolationBuildSession(agentScript, reviewScript string) func(agent.
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testutil.SessionProtocol(opts.Prompt),
 		}, nil
 	}
 }

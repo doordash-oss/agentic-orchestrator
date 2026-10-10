@@ -72,6 +72,19 @@ func runMockSession(t testing.TB, s *Session, messages []llm.SDKMessage, onMessa
 	runSessionWithStdoutLines(t, s, lines, onMessage)
 }
 
+// wireProtocolStdinForTest wires the session's post-Start stdin pipe into its
+// protocol, mirroring the wiring the manager performs in StartSession, for
+// tests that launch the session through Session.Start directly and then write
+// control responses or user messages.
+func wireProtocolStdinForTest(s *Session) {
+	s.mu.Lock()
+	w := s.stdin
+	s.mu.Unlock()
+	if w != nil {
+		s.protocol.SetStdin(w)
+	}
+}
+
 func runSessionWithStdoutLines(t testing.TB, s *Session, lines []string, onMessage func(llm.SDKMessage)) {
 	t.Helper()
 

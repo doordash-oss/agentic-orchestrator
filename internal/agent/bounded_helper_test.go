@@ -1499,6 +1499,7 @@ func newUtilityTestPhaseRunner(t *testing.T, sess *utilityTestSession) *utilityT
 			PIDDir:      opts.PIDDir,
 			RepoName:    opts.RepoName,
 			PermHandler: opts.PermHandler,
+			Protocol:    testSessionProtocol(opts.Prompt),
 		}, nil
 	}
 	return runner

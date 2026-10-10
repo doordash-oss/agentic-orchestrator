@@ -26,6 +26,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -325,6 +326,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	var observed []string
 	sess, err := mgr.StartSession("autopick-test", "feat-1", feature.PhaseInquire,
 		[]string{"bash", script}, dir, nil, &SessionOpts{
+			Protocol: claude.NewProtocol(llm.ProtocolOpts{}),
 			AskUserAutoPick: &ports.AskUserAutoPickConfig{
 				Purpose: ports.AskUserAutoPickPurposeInquire,
 				LoadInquireness: func() (feature.Inquireness, error) {
@@ -415,6 +417,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	mgr := NewManager(eventCh)
 	sess, err := mgr.StartSession("autopick-stripped-confidence-test", "feat-1", feature.PhaseInquire,
 		[]string{"bash", script}, dir, nil, &SessionOpts{
+			Protocol: claude.NewProtocol(llm.ProtocolOpts{}),
 			AskUserAutoPick: &ports.AskUserAutoPickConfig{
 				Purpose: ports.AskUserAutoPickPurposeInquire,
 				LoadInquireness: func() (feature.Inquireness, error) {
@@ -471,6 +474,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	mgr := NewManager(eventCh)
 	sess, err := mgr.StartSession("autopick-multiselect-stripped-confidence-test", "feat-1", feature.PhaseInquire,
 		[]string{"bash", script}, dir, nil, &SessionOpts{
+			Protocol: claude.NewProtocol(llm.ProtocolOpts{}),
 			AskUserAutoPick: &ports.AskUserAutoPickConfig{
 				Purpose: ports.AskUserAutoPickPurposeInquire,
 				LoadInquireness: func() (feature.Inquireness, error) {
@@ -556,6 +560,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0}
 	loads := 0
 	sess, err := mgr.StartSession("autopick-dynamic-test", "feat-1", feature.PhaseInquire,
 		[]string{"bash", script}, dir, nil, &SessionOpts{
+			Protocol: claude.NewProtocol(llm.ProtocolOpts{}),
 			AskUserAutoPick: &ports.AskUserAutoPickConfig{
 				Purpose: ports.AskUserAutoPickPurposeInquire,
 				LoadInquireness: func() (feature.Inquireness, error) {

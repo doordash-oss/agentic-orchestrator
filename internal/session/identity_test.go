@@ -26,6 +26,8 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 )
 
 // TestAssertEmissionIdentity_WarnsOnEmptyFeatureID exercises the
@@ -116,6 +118,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 			sess, err := sm.StartSession(
 				tc.sessionID, featureID, tc.phase,
 				[]string{"bash", scriptPath}, tmpDir, nil,
+				&SessionOpts{Protocol: claude.NewProtocol(llm.ProtocolOpts{})},
 			)
 			if err != nil {
 				t.Fatalf("starting session: %v", err)

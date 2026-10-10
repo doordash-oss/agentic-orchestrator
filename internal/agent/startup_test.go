@@ -43,8 +43,8 @@ func (m *mockStartupProvider) BuildCommand(_ llm.CommandBuildOpts) ([]string, []
 func (m *mockStartupProvider) NewProtocol(_ llm.ProtocolOpts) llm.Protocol { return nil }
 func (m *mockStartupProvider) MinVersion() [3]int                          { return [3]int{0, 0, 0} }
 func (m *mockStartupProvider) EnvVarsToExclude() []string                  { return nil }
-func (m *mockStartupProvider) ModelCatalog() []llm.ModelInfo                { return nil }
-func (m *mockStartupProvider) SetModelCatalog([]llm.ModelInfo)               {}
+func (m *mockStartupProvider) ModelCatalog() []llm.ModelInfo               { return nil }
+func (m *mockStartupProvider) SetModelCatalog([]llm.ModelInfo)             {}
 func (m *mockStartupProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
 	return nil, nil
 }

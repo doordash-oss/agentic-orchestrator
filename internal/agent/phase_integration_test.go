@@ -205,6 +205,7 @@ func TestPhaseRunnerResearchSuccess(t *testing.T) {
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", researchScript}, nil, sessOpts, nil
 		},
@@ -398,6 +399,7 @@ exit 1
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", failScript}, nil, sessOpts, nil
 		},
@@ -461,6 +463,7 @@ sleep 0.2
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", script}, nil, sessOpts, nil
 		},
@@ -666,9 +669,9 @@ func TestRunResearch_GlobalBashRulesAutoApproveAcrossProviders(t *testing.T) {
 				t.Fatalf("EnsureGlobalDefaults: %v", err)
 			}
 
-		reg := llm.NewRegistry()
-		reg.Register(claude.NewProvider(""))
-		reg.Register(codex.NewProvider(""))
+			reg := llm.NewRegistry()
+			reg.Register(claude.NewProvider(""))
+			reg.Register(codex.NewProvider(""))
 
 			eventCh := make(chan interface{}, 100)
 			sm := session.NewManager(eventCh)

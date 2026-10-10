@@ -413,6 +413,7 @@ func TestRunInquireEmitsPhaseAndSessionEvents(t *testing.T) {
 		Observer:       obs,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			return []string{"bash", agentScript}, nil, &session.SessionOpts{
+				Protocol: testSessionProtocol(opts.Prompt),
 				PIDDir:   opts.PIDDir,
 				RepoName: opts.RepoName,
 			}, nil
@@ -527,6 +528,7 @@ func TestRunResearchEmitsPhaseAndSessionEvents(t *testing.T) {
 		Observer:       obs,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			return []string{"bash", agentScript}, nil, &session.SessionOpts{
+				Protocol: testSessionProtocol(opts.Prompt),
 				PIDDir:   opts.PIDDir,
 				RepoName: opts.RepoName,
 			}, nil
@@ -652,6 +654,7 @@ func TestRunKBForRepoEmitsEventsWithRepoName(t *testing.T) {
 		Observer:       obs,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			return []string{"bash", agentScript}, nil, &session.SessionOpts{
+				Protocol: testSessionProtocol(opts.Prompt),
 				PIDDir:   opts.PIDDir,
 				RepoName: opts.RepoName,
 			}, nil
@@ -812,7 +815,7 @@ fi
 		MaxConsecNoProgress: 5,
 		Model:               "test-model",
 		ReviewModel:         "test-review-model",
-		BuildSession:        mockBuildSession(agentScript, reviewScript),
+		BuildSession:        mockBuildSessionStillCrashingOnResume(agentScript, reviewScript),
 		ExitCriteria:        "test criteria",
 		Observer:            obs,
 	}
@@ -865,12 +868,14 @@ fi
 	// Each iteration should have its own session.started/ended pair
 	sessionStarted := filterEventsByType(events, "session.started")
 	sessionEnded := filterEventsByType(events, "session.ended")
-	// Iteration 1: 1 impl session; Iteration 2: 1 impl session + 3 review axes = 5 total
-	if len(sessionStarted) != 5 {
-		t.Errorf("expected 5 session.started events (2 impl + 3 review axes), got %d", len(sessionStarted))
+	// Iteration 1: impl session + one crash-resume session (the mock agent's
+	// silent exit is a process crash, so the loop restarts the provider once);
+	// Iteration 2: 1 impl session + 3 review axes = 6 total
+	if len(sessionStarted) != 6 {
+		t.Errorf("expected 6 session.started events (3 impl incl. one crash resume + 3 review axes), got %d", len(sessionStarted))
 	}
-	if len(sessionEnded) != 5 {
-		t.Errorf("expected 5 session.ended events, got %d", len(sessionEnded))
+	if len(sessionEnded) != 6 {
+		t.Errorf("expected 6 session.ended events, got %d", len(sessionEnded))
 	}
 
 	// Review events should only appear once (iteration 2)
@@ -965,7 +970,7 @@ func TestImplementLoopFailurePathEmitsPhaseCompleted(t *testing.T) {
 		MaxConsecNoProgress: 10,
 		Model:               "test-model",
 		ReviewModel:         "test-review-model",
-		BuildSession:        mockBuildSession(agentScript, reviewScript),
+		BuildSession:        mockBuildSessionStillCrashingOnResume(agentScript, reviewScript),
 		ExitCriteria:        "test criteria",
 		Observer:            obs,
 	}
@@ -1022,10 +1027,12 @@ func TestImplementLoopFailurePathEmitsPhaseCompleted(t *testing.T) {
 		t.Errorf("phase.failed Status = %q, want %q", phaseFailed[0].Status, "failed")
 	}
 
-	// Verify session.ended events exist for each iteration's impl session
+	// Verify session.ended events exist for each iteration's impl session.
+	// Each failed iteration crashes once and is crash-resumed once, so every
+	// iteration accounts two impl sessions (original + resume).
 	sessionEnded := filterEventsByType(events, "session.ended")
-	if len(sessionEnded) != 2 {
-		t.Errorf("expected 2 session.ended events (1 per failed iteration), got %d", len(sessionEnded))
+	if len(sessionEnded) != 4 {
+		t.Errorf("expected 4 session.ended events (2 per failed iteration: original + crash resume), got %d", len(sessionEnded))
 	}
 
 	// TraceID consistency

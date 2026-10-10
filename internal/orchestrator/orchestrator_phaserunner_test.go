@@ -27,8 +27,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -45,109 +43,21 @@ import (
 // tracker. The stub satisfies those calls without spinning up a real PTY.
 // ---------------------------------------------------------------------------
 
+// stubSessionHandle embeds the shared mock session view; the PhaseRunner
+// code that runs after MockSessionManager.StartSession returns the handle
+// uses only a narrow slice of SessionHandle — it registers cleanup
+// callbacks, sets a log file, and registers a tool-read tracker. The mock
+// satisfies those calls without spinning up a real PTY.
 type stubSessionHandle struct {
-	id        string
-	featureID string
-	phase     feature.Phase
-	repoName  string
-	done      chan struct{}
-	statusCh  chan string
-	attachCh  chan llm.SDKMessage
-	msgLog    *session.MessageLog
+	*mocks.MockSessionView
 }
 
 func newStubSessionHandle(id, featureID string, phase feature.Phase, repoName string) *stubSessionHandle {
-	return &stubSessionHandle{
-		id:        id,
-		featureID: featureID,
-		phase:     phase,
-		repoName:  repoName,
-		done:      make(chan struct{}),
-		statusCh:  make(chan string, 1),
-		attachCh:  make(chan llm.SDKMessage, 1),
-		msgLog:    session.NewMessageLog(),
-	}
+	m := mocks.NewMockSessionView(id, featureID)
+	m.PhaseVal = phase
+	m.RepoNameVal = repoName
+	return &stubSessionHandle{MockSessionView: m}
 }
-
-// SessionView identity/metadata.
-func (s *stubSessionHandle) ID() string              { return s.id }
-func (s *stubSessionHandle) FeatureID() string       { return s.featureID }
-func (s *stubSessionHandle) Phase() feature.Phase    { return s.phase }
-func (s *stubSessionHandle) RepoName() string        { return s.repoName }
-func (s *stubSessionHandle) PermCacheScope() string  { return "" }
-func (s *stubSessionHandle) Kind() ports.SessionKind { return ports.KindPhase }
-func (s *stubSessionHandle) Label() string           { return "" }
-
-// SessionView state.
-func (s *stubSessionHandle) Status() session.SessionStatus    { return session.SessionRunning }
-func (s *stubSessionHandle) IsActive() bool                   { return true }
-func (s *stubSessionHandle) Iteration() int                   { return 0 }
-func (s *stubSessionHandle) StartedAt() time.Time             { return time.Time{} }
-func (s *stubSessionHandle) WaitingSince() time.Time          { return time.Time{} }
-func (s *stubSessionHandle) InitialPrompt() string            { return "" }
-func (s *stubSessionHandle) ProviderName() string             { return "" }
-func (s *stubSessionHandle) Model() string                    { return "" }
-func (s *stubSessionHandle) WorkDir() string                  { return "" }
-func (s *stubSessionHandle) EffectiveEffort() llm.EffortLevel { return "" }
-func (s *stubSessionHandle) EffortSource() llm.EffortSource   { return "" }
-
-// SessionView data access.
-func (s *stubSessionHandle) MessageLog() ports.MessageLog                         { return s.msgLog }
-func (s *stubSessionHandle) Cost() *llm.ResultMessage                             { return nil }
-func (s *stubSessionHandle) LatestUsage() *llm.Usage                              { return nil }
-func (s *stubSessionHandle) AccumulatedUsage() llm.Usage                          { return llm.Usage{} }
-func (s *stubSessionHandle) LastControlRequest() *llm.ControlRequestMessage       { return nil }
-func (s *stubSessionHandle) PendingControlRequests() []*llm.ControlRequestMessage { return nil }
-func (s *stubSessionHandle) QALog() []session.QAPair                              { return nil }
-func (s *stubSessionHandle) LogFilePath() string                                  { return "" }
-func (s *stubSessionHandle) ContextPercentage() int                               { return 0 }
-func (s *stubSessionHandle) ErrorDetail() string                                  { return "" }
-func (s *stubSessionHandle) ExitCodeDetail() string                               { return "" }
-func (s *stubSessionHandle) LastStdoutAt() time.Time                              { return time.Time{} }
-
-// SessionView channels.
-func (s *stubSessionHandle) StatusCh() <-chan string         { return s.statusCh }
-func (s *stubSessionHandle) AttachCh() <-chan llm.SDKMessage { return s.attachCh }
-func (s *stubSessionHandle) Done() <-chan struct{}           { return s.done }
-
-// SessionView query.
-func (s *stubSessionHandle) HasPendingAskUserQuestion() bool { return false }
-func (s *stubSessionHandle) HasPendingRootAskUserQuestion() bool {
-	return false
-}
-func (s *stubSessionHandle) RootCompletionIntent() llm.CompletionIntent {
-	return llm.CompletionIntent{}
-}
-func (s *stubSessionHandle) LiveBackgroundTaskCount() int { return 0 }
-func (s *stubSessionHandle) TaskActivities() []llm.TaskActivity {
-	return nil
-}
-
-// SessionView interaction (no-ops).
-func (s *stubSessionHandle) SendUserMessage(text string) error { return nil }
-func (s *stubSessionHandle) RespondToControl(requestID string, allow bool, reason string) error {
-	return nil
-}
-func (s *stubSessionHandle) RespondToAskUser(string, askuser.Resolved) error {
-	return nil
-}
-func (s *stubSessionHandle) Stop() error      { return nil }
-func (s *stubSessionHandle) Interrupt() error { return nil }
-func (s *stubSessionHandle) Wait()            {}
-
-// SessionHandle mutation (no-ops).
-func (s *stubSessionHandle) SetStatus(status session.SessionStatus) {}
-func (s *stubSessionHandle) SetLogFile(f *os.File)                  {}
-func (s *stubSessionHandle) AddCleanupFunc(fn func())               {}
-func (s *stubSessionHandle) SetHasUnansweredQuestion(v bool)        {}
-func (s *stubSessionHandle) CloseStdin()                            {}
-func (s *stubSessionHandle) SetOnToolAllowed(fn func(toolName string, input json.RawMessage)) {
-}
-func (s *stubSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
-func (s *stubSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
-
-// Compile-time check that stubSessionHandle satisfies SessionHandle.
-var _ ports.SessionHandle = (*stubSessionHandle)(nil)
 
 // ---------------------------------------------------------------------------
 // capturingPhaseRunner — helper that constructs a real *agent.PhaseRunner

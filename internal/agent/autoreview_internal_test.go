@@ -1200,7 +1200,7 @@ func TestDecoratorSessionDisposalClearsCachedDecision(t *testing.T) {
 		[]string{"sh", "-c", "while IFS= read -r line; do :; done"},
 		t.TempDir(),
 		nil,
-		&session.SessionOpts{PermHandler: endedSession},
+		&session.SessionOpts{PermHandler: endedSession, Protocol: testSessionProtocol("")},
 	)
 	if err != nil {
 		t.Fatalf("StartSession() error = %v", err)

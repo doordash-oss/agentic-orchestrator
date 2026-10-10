@@ -172,6 +172,9 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	// out. The session is registered (made visible to readers) only once it is
 	// fully started below.
 	s := NewSession(id, featureID, phase)
+	if len(opts) == 0 || opts[0] == nil || opts[0].Protocol == nil {
+		return nil, errors.New("starting session: session options must carry a provider protocol")
+	}
 	if len(opts) > 0 && opts[0] != nil {
 		s.pidDir = opts[0].PIDDir
 		s.runNumber = opts[0].RunNumber
@@ -185,9 +188,7 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 		s.permCacheScope = opts[0].PermCacheScope
 		s.providerName = opts[0].ProviderName
 		s.model = opts[0].Model
-		if opts[0].Protocol != nil {
-			s.protocol = opts[0].Protocol
-		}
+		s.protocol = opts[0].Protocol
 		if opts[0].CriticalAttachSendTimeout > 0 {
 			s.criticalAttachSendTimeout = opts[0].CriticalAttachSendTimeout
 		}
@@ -250,41 +251,25 @@ func (m *Manager) StartSession(id, featureID string, phase feature.Phase, comman
 	}
 
 	// Give the protocol access to stdin for writing.
-	if s.protocol != nil {
-		s.protocol.SetStdin(s.stdin)
-	}
+	s.protocol.SetStdin(s.stdin)
 
-	// Protocol handshake.
-	if s.protocol != nil {
-		// Delegate handshake to the protocol (Claude: initialize + send prompt,
-		// Codex: initialize → thread/start → turn/start).
-		handshakeTimeout := codexHandshakeTimeout
-		if len(opts) > 0 && opts[0] != nil && opts[0].CodexHandshakeTimeout > 0 {
-			handshakeTimeout = opts[0].CodexHandshakeTimeout
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
-		defer cancel()
-		if err := s.protocol.Handshake(ctx); err != nil {
-			s.Stop()
-			return nil, fmt.Errorf("protocol handshake: %w", err)
-		}
-	} else {
-		// Legacy path (no protocol set): Claude interactive.
-		//
-		// A fast session can exit right after emitting its result without ever
-		// reading stdin (common with mock scripts in tests), closing the pipe
-		// before these writes land. That EPIPE/closed-pipe error is benign: the
-		// child already finished, so there is nothing left to hand off to.
-		if err := s.SendInitialize(); err != nil && !isChildExitedWriteError(err) {
-			_ = s.Stop()
-			return nil, fmt.Errorf("sending initialize handshake: %w", err)
-		}
-		if len(opts) > 0 && opts[0] != nil && opts[0].InitialPrompt != "" {
-			if err := s.SendUserMessage(opts[0].InitialPrompt); err != nil && !isChildExitedWriteError(err) {
-				_ = s.Stop()
-				return nil, fmt.Errorf("sending initial prompt: %w", err)
-			}
-		}
+	// Protocol handshake (Claude: initialize + send prompt, Codex: initialize →
+	// thread/start → turn/start).
+	//
+	// A fast session can exit right after emitting its result without ever
+	// reading stdin (common with mock scripts in tests), closing the pipe
+	// before the handshake writes land. That EPIPE/closed-pipe error is
+	// benign: the child already finished, so there is nothing left to
+	// hand off to.
+	handshakeTimeout := codexHandshakeTimeout
+	if len(opts) > 0 && opts[0] != nil && opts[0].CodexHandshakeTimeout > 0 {
+		handshakeTimeout = opts[0].CodexHandshakeTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+	defer cancel()
+	if err := s.protocol.Handshake(ctx); err != nil && !isChildExitedWriteError(err) {
+		s.Stop()
+		return nil, fmt.Errorf("protocol handshake: %w", err)
 	}
 
 	// Register the fully-started session under the lock, re-checking shutdown
@@ -370,6 +355,7 @@ func (m *Manager) restoreLiveSessions(stateDir string) error {
 			continue
 		}
 		s := NewSession(pf.ManagerID, pf.FeatureID, phase)
+		s.protocol = restoredProtocol{}
 		s.runNumber = pf.RunNumber
 		s.iteration = pf.Iteration
 		s.repoName = pf.RepoName

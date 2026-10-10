@@ -59,7 +59,7 @@ func (p *Protocol) SetStdin(w io.Writer) {
 
 // Handshake sends the SDK initialize request and the initial user message.
 func (p *Protocol) Handshake(ctx context.Context) error {
-	if err := p.writeJSON(llm.NewInitializeRequest()); err != nil {
+	if err := p.writeJSON(newInitializeRequest()); err != nil {
 		return fmt.Errorf("sending initialize: %w", err)
 	}
 	if p.opts.InitialPrompt != "" {
@@ -156,20 +156,20 @@ func (p *Protocol) ParseLine(line []byte) ([]llm.SDKMessage, error) {
 
 // SendUserMessage sends a user message via JSON stdin.
 func (p *Protocol) SendUserMessage(text string) error {
-	return p.writeJSON(llm.NewUserInput(text))
+	return p.writeJSON(newUserInput(text))
 }
 
 // RespondToControl sends a control response (allow/deny) for a tool permission request.
 func (p *Protocol) RespondToControl(requestID string, allow bool, originalInput json.RawMessage, reason string) error {
 	if allow {
-		return p.writeJSON(llm.NewAllowResponse(requestID, originalInput))
+		return p.writeJSON(newAllowResponse(requestID, originalInput))
 	}
-	return p.writeJSON(llm.NewDenyResponse(requestID, reason))
+	return p.writeJSON(newDenyResponse(requestID, reason))
 }
 
 // RespondToHook sends a hook continue response for PreToolUse callbacks.
 func (p *Protocol) RespondToHook(requestID string) error {
-	return p.writeJSON(llm.NewHookContinueResponse(requestID))
+	return p.writeJSON(newHookContinueResponse(requestID))
 }
 
 // RespondToAskUser sends a control response for an AskUserQuestion tool use.
@@ -179,7 +179,7 @@ func (p *Protocol) RespondToHook(requestID string) error {
 // free-text answer is injected as an extra option before being selected.
 func (p *Protocol) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
 	bundle, answers := presentAskUserAnswers(resolved)
-	return p.writeJSON(llm.NewAskUserResponse(requestID, bundle, answers))
+	return p.writeJSON(newAskUserResponse(requestID, bundle, answers))
 }
 
 // presentAskUserAnswers returns the bundle to echo and the answers keyed by

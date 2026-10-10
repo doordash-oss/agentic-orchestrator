@@ -22,6 +22,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 )
 
@@ -44,6 +45,9 @@ func TestDeferredReasonReachesModelOnUserDeny(t *testing.T) {
 	t.Parallel()
 	s := NewSession("supervisor-defer", "supervisor", feature.PhaseResearch)
 	var stdin bytes.Buffer
+	proto := claude.NewProtocol(llm.ProtocolOpts{})
+	proto.SetStdin(nopWriteCloser{Writer: &stdin})
+	s.protocol = proto
 	s.SetStdinForTest(nopWriteCloser{Writer: &stdin})
 	s.permHandler = &permission.SupervisorHandler{}
 
@@ -73,6 +77,9 @@ func TestDeferredReasonDoesNotChangeAllowOrPlainDeny(t *testing.T) {
 	t.Parallel()
 	s := NewSession("supervisor-defer-plain", "supervisor", feature.PhaseResearch)
 	var stdin bytes.Buffer
+	proto := claude.NewProtocol(llm.ProtocolOpts{})
+	proto.SetStdin(nopWriteCloser{Writer: &stdin})
+	s.protocol = proto
 	s.SetStdinForTest(nopWriteCloser{Writer: &stdin})
 	s.permHandler = &permission.SupervisorHandler{}
 

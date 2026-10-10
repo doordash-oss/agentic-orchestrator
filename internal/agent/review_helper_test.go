@@ -58,6 +58,7 @@ func TestRunReviewHelper_ReadOnlyUsesBoundedHelperArtifactHandler(t *testing.T) 
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 			got = opts
 			return []string{"bash", script}, nil, &ports.SessionOpts{
+				Protocol:          testSessionProtocol(opts.Prompt),
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
 				ProviderName:      testMockIdentifier,
@@ -260,6 +261,7 @@ func TestRunReviewHelper_ReadOnlyNarrowsWritableRootsToDeclaredArtifacts(t *test
 			got.AdditionalDirs = append([]string(nil), opts.AdditionalDirs...)
 			got.WritableRoots = append([]string(nil), opts.WritableRoots...)
 			return []string{"bash", script}, nil, &ports.SessionOpts{
+				Protocol:          testSessionProtocol(opts.Prompt),
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
 				ProviderName:      testMockIdentifier,
@@ -321,6 +323,7 @@ echo '{"type":"result","subtype":"success","session_id":"mock","total_cost_usd":
 		SessionManager: session.NewManager(make(chan interface{}, 10)),
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *ports.SessionOpts, error) {
 			return []string{"bash", script}, nil, &ports.SessionOpts{
+				Protocol:          testSessionProtocol(opts.Prompt),
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
 				ProviderName:      testMockIdentifier,
@@ -505,10 +508,10 @@ func TestPlanValidatorUsesReviewProviderProtocol(t *testing.T) {
 		t.Run(tt.planner+" to "+tt.reviewer, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
-				registry := llm.NewRegistry()
-				registry.Register(claude.NewProvider(""))
-				registry.Register(codex.NewProvider(""))
-				parent := &PhaseRunner{Registry: registry}
+			registry := llm.NewRegistry()
+			registry.Register(claude.NewProvider(""))
+			registry.Register(codex.NewProvider(""))
+			parent := &PhaseRunner{Registry: registry}
 			f := &feature.Feature{ID: "mixed-provider-plan"}
 			f.Models.Planning, f.Models.Review = tt.planner, tt.reviewer
 			var captured BuildSessionOpts

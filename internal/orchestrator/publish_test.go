@@ -15,14 +15,12 @@
 package orchestrator_test
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
@@ -30,7 +28,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -878,16 +875,15 @@ func TestOrchestrator_PublishRepo_DraftPublish_False(t *testing.T) {
 	}
 }
 
+// publishDescriptionSessionHandle embeds the shared mock session view; the
+// publish-description flow only reads the transcript, the terminal result,
+// the status channel and pending permission requests off the handle.
 type publishDescriptionSessionHandle struct {
-	id          string
-	featureID   string
-	phase       feature.Phase
-	done        chan struct{}
-	statusCh    chan string
-	attachCh    chan llm.SDKMessage
-	msgLog      *session.MessageLog
-	result      *llm.ResultMessage
-	lastControl *llm.ControlRequestMessage
+	*mocks.MockSessionView
+}
+
+func newPublishDescriptionSessionHandle() *publishDescriptionSessionHandle {
+	return &publishDescriptionSessionHandle{MockSessionView: mocks.NewMockSessionView("", "")}
 }
 
 func newPublishReadyBranch(t *testing.T, branch string) string {
@@ -907,114 +903,24 @@ func runPublishGit(t *testing.T, repo string, args ...string) {
 	}
 }
 
-func newPublishDescriptionSessionHandle() *publishDescriptionSessionHandle {
-	return &publishDescriptionSessionHandle{
-		done:     make(chan struct{}),
-		statusCh: make(chan string, 1),
-		attachCh: make(chan llm.SDKMessage, 1),
-		msgLog:   session.NewMessageLog(),
-	}
-}
-
-func (s *publishDescriptionSessionHandle) ID() string              { return s.id }
-func (s *publishDescriptionSessionHandle) FeatureID() string       { return s.featureID }
-func (s *publishDescriptionSessionHandle) Phase() feature.Phase    { return s.phase }
-func (s *publishDescriptionSessionHandle) RepoName() string        { return "" }
-func (s *publishDescriptionSessionHandle) PermCacheScope() string  { return "" }
-func (s *publishDescriptionSessionHandle) Kind() ports.SessionKind { return ports.KindPhase }
-func (s *publishDescriptionSessionHandle) Label() string           { return "" }
-func (s *publishDescriptionSessionHandle) Status() session.SessionStatus {
-	return session.SessionRunning
-}
-func (s *publishDescriptionSessionHandle) IsActive() bool                   { return true }
-func (s *publishDescriptionSessionHandle) Iteration() int                   { return 0 }
-func (s *publishDescriptionSessionHandle) StartedAt() time.Time             { return time.Time{} }
-func (s *publishDescriptionSessionHandle) WaitingSince() time.Time          { return time.Time{} }
-func (s *publishDescriptionSessionHandle) InitialPrompt() string            { return "" }
-func (s *publishDescriptionSessionHandle) ProviderName() string             { return "" }
-func (s *publishDescriptionSessionHandle) Model() string                    { return "" }
-func (s *publishDescriptionSessionHandle) WorkDir() string                  { return "" }
-func (s *publishDescriptionSessionHandle) EffectiveEffort() llm.EffortLevel { return "" }
-func (s *publishDescriptionSessionHandle) EffortSource() llm.EffortSource   { return "" }
-func (s *publishDescriptionSessionHandle) MessageLog() ports.MessageLog {
-	return s.msgLog
-}
-func (s *publishDescriptionSessionHandle) Cost() *llm.ResultMessage { return s.result }
-func (s *publishDescriptionSessionHandle) LatestUsage() *llm.Usage  { return nil }
-func (s *publishDescriptionSessionHandle) AccumulatedUsage() llm.Usage {
-	return llm.Usage{}
-}
-func (s *publishDescriptionSessionHandle) LastControlRequest() *llm.ControlRequestMessage {
-	return s.lastControl
-}
-func (s *publishDescriptionSessionHandle) PendingControlRequests() []*llm.ControlRequestMessage {
-	if s.lastControl == nil {
-		return nil
-	}
-	return []*llm.ControlRequestMessage{s.lastControl}
-}
-func (s *publishDescriptionSessionHandle) QALog() []session.QAPair         { return nil }
-func (s *publishDescriptionSessionHandle) LogFilePath() string             { return "" }
-func (s *publishDescriptionSessionHandle) ContextPercentage() int          { return 0 }
-func (s *publishDescriptionSessionHandle) ErrorDetail() string             { return "" }
-func (s *publishDescriptionSessionHandle) ExitCodeDetail() string          { return "" }
-func (s *publishDescriptionSessionHandle) LastStdoutAt() time.Time         { return time.Time{} }
-func (s *publishDescriptionSessionHandle) StatusCh() <-chan string         { return s.statusCh }
-func (s *publishDescriptionSessionHandle) AttachCh() <-chan llm.SDKMessage { return s.attachCh }
-func (s *publishDescriptionSessionHandle) Done() <-chan struct{}           { return s.done }
-func (s *publishDescriptionSessionHandle) HasPendingAskUserQuestion() bool {
-	return false
-}
-func (s *publishDescriptionSessionHandle) HasPendingRootAskUserQuestion() bool {
-	return false
-}
-func (s *publishDescriptionSessionHandle) RootCompletionIntent() llm.CompletionIntent {
-	return llm.CompletionIntent{}
-}
-func (s *publishDescriptionSessionHandle) LiveBackgroundTaskCount() int { return 0 }
-func (s *publishDescriptionSessionHandle) TaskActivities() []llm.TaskActivity {
-	return nil
-}
-func (s *publishDescriptionSessionHandle) SendUserMessage(text string) error { return nil }
-func (s *publishDescriptionSessionHandle) RespondToControl(requestID string, allow bool, reason string) error {
-	return nil
-}
-func (s *publishDescriptionSessionHandle) RespondToAskUser(string, askuser.Resolved) error {
-	return nil
-}
-func (s *publishDescriptionSessionHandle) Stop() error                            { return nil }
-func (s *publishDescriptionSessionHandle) Interrupt() error                       { return nil }
-func (s *publishDescriptionSessionHandle) Wait()                                  {}
-func (s *publishDescriptionSessionHandle) SetStatus(status session.SessionStatus) {}
-func (s *publishDescriptionSessionHandle) SetLogFile(f *os.File)                  {}
-func (s *publishDescriptionSessionHandle) AddCleanupFunc(fn func())               {}
-func (s *publishDescriptionSessionHandle) SetHasUnansweredQuestion(v bool)        {}
-func (s *publishDescriptionSessionHandle) CloseStdin()                            {}
-func (s *publishDescriptionSessionHandle) SetOnToolAllowed(fn func(toolName string, input json.RawMessage)) {
-}
-func (s *publishDescriptionSessionHandle) SetOnFileRead(fn func(read llm.FileReadEvent))  {}
-func (s *publishDescriptionSessionHandle) SetOnSubagentEvent(fn func(msg llm.SDKMessage)) {}
-
-var _ ports.SessionHandle = (*publishDescriptionSessionHandle)(nil)
-
 func newPublishDescriptionPhaseRunner(t *testing.T, output string, permissionFailure bool) *agent.PhaseRunner {
 	t.Helper()
 
 	newSession := func() *publishDescriptionSessionHandle {
 		sess := newPublishDescriptionSessionHandle()
 		if output != "" {
-			sess.msgLog.Append(mocks.AssistantTextMessage(output))
-			sess.result = &llm.ResultMessage{
+			sess.MessageLogVal.Append(mocks.AssistantTextMessage(output))
+			sess.CostVal = &llm.ResultMessage{
 				Type:       "result",
 				Subtype:    "success",
 				Result:     "done",
 				StopReason: "end_turn",
 			}
-			sess.statusCh <- "SUCCESS"
+			sess.StatusChVal <- "SUCCESS"
 		} else if permissionFailure {
 			req := mocks.ControlRequestMsg("perm-1", "Bash").ControlRequest
-			sess.lastControl = req
-			sess.attachCh <- llm.SDKMessage{Type: "control_request", ControlRequest: req}
+			sess.LastControlRequestVal = req
+			sess.AttachChVal <- llm.SDKMessage{Type: "control_request", ControlRequest: req}
 		}
 		return sess
 	}
@@ -1022,9 +928,9 @@ func newPublishDescriptionPhaseRunner(t *testing.T, output string, permissionFai
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		sess := newSession()
-		sess.id = id
-		sess.featureID = featureID
-		sess.phase = phase
+		sess.IDVal = id
+		sess.FeatureIDVal = featureID
+		sess.PhaseVal = phase
 		return sess, nil
 	}
 

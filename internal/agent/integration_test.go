@@ -203,7 +203,7 @@ fi
 		ReviewModel:         "reviewer",
 		ArtifactDir:         artifactDir,
 		StateDir:            stateDir,
-		BuildSession:        mockBuildSession(agentScript, reviewScript),
+		BuildSession:        mockBuildSessionStillCrashingOnResume(agentScript, reviewScript),
 	}
 
 	result, err := runImplementationLoop(cfg, sm)

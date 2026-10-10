@@ -28,11 +28,8 @@ import (
 // the last error message. This catches errors like "Request too large" that
 // the CLI writes to its transcript but not to the stream-json stdout protocol.
 //
-// Best-effort: returns "" if no protocol is set or the transcript can't be found.
+// Best-effort: returns "" if the transcript can't be found.
 func (s *Session) TranscriptErrorDetail() string {
-	if s.protocol == nil {
-		return ""
-	}
 	path := s.protocol.TranscriptPath()
 	if path == "" {
 		return ""

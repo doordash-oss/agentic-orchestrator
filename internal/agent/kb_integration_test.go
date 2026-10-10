@@ -81,6 +81,7 @@ func TestRunKnowledgeBase_IncrementalBuild(t *testing.T) {
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", kbScript}, nil, sessOpts, nil
 		},
@@ -154,6 +155,7 @@ func TestRunKnowledgeBase_FullBuild(t *testing.T) {
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", kbScript}, nil, sessOpts, nil
 		},
@@ -227,6 +229,7 @@ func TestRunKnowledgeBaseForRepo_SessionID(t *testing.T) {
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", kbScript}, nil, sessOpts, nil
 		},
@@ -307,6 +310,7 @@ func TestRunKnowledgeBaseForRepo_MountsKBDirWritable(t *testing.T) {
 				InitialPrompt: opts.Prompt,
 				RepoName:      opts.RepoName,
 				LogPath:       opts.LogPath,
+				Protocol:      testSessionProtocol(opts.Prompt),
 			}
 			return []string{"bash", kbScript}, nil, sessOpts, nil
 		},
@@ -424,4 +428,3 @@ func TestRunKnowledgeBaseForRepo_FreshSkips(t *testing.T) {
 		t.Errorf("expected empty session ID for fresh KB, got %q", sessionID)
 	}
 }
-

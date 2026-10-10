@@ -345,9 +345,6 @@ func (s *Session) Iteration() int        { return s.iteration }
 func (s *Session) InitialPrompt() string { return s.initialPrompt }
 func (s *Session) ProviderName() string  { return s.providerName }
 func (s *Session) SessionID() string {
-	if s.protocol == nil {
-		return ""
-	}
 	return s.protocol.SessionID()
 }
 func (s *Session) PermCacheScope() string { return s.permCacheScope }
@@ -430,7 +427,7 @@ func (s *Session) RootOutcomeCh() <-chan struct{} { return s.rootOutcomeCh }
 // not included in the primary result cost. Providers without this optional
 // capability return a zero adjustment.
 func (s *Session) AdditionalSessionCost(ctx context.Context) (llm.SessionCostAdjustment, error) {
-	if s == nil || s.protocol == nil {
+	if s == nil {
 		return llm.SessionCostAdjustment{}, nil
 	}
 	augmenter, ok := s.protocol.(llm.SessionCostAugmenter)
@@ -637,6 +634,16 @@ func (s *Session) SetStdinForTest(w io.WriteCloser) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stdin = w
+}
+
+// SetProtocolForTest installs a protocol on a directly-constructed session so
+// test code outside the session package can exercise the session's outgoing
+// paths. Production code should not call this — the protocol is normally
+// provided through SessionOpts before Start.
+func (s *Session) SetProtocolForTest(p llm.Protocol) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.protocol = p
 }
 
 // SetAttachDropReporter installs an AttachDropReporter that receives a
@@ -1018,29 +1025,9 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 		// Parse the line via the provider protocol. A single line can yield
 		// more than one SDK message, so every parsed message is dispatched, not
 		// just the first. Dropping the rest silently loses usage/context.
-		var parsed []llm.SDKMessage
-		if s.protocol != nil {
-			msgs, _ := s.protocol.ParseLine(line)
-			if len(msgs) == 0 {
-				continue // Unrecognized/internal message — skip
-			}
-			parsed = msgs
-		} else {
-			// Fallback: direct JSON unmarshal (no protocol set)
-			var msg llm.SDKMessage
-			if err := json.Unmarshal(line, &msg); err != nil {
-				text := string(line)
-				msg = llm.SDKMessage{
-					Type: "assistant",
-					Assistant: &llm.AssistantMessage{
-						Message: llm.ConversationMsg{
-							Role:    "assistant",
-							Content: []llm.ContentBlock{{Type: "text", Text: text}},
-						},
-					},
-				}
-			}
-			parsed = []llm.SDKMessage{msg}
+		parsed, _ := s.protocol.ParseLine(line)
+		if len(parsed) == 0 {
+			continue // Unrecognized/internal message — skip
 		}
 
 		for _, msg := range parsed {
@@ -1074,7 +1061,7 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 				s.mu.Unlock()
 
 				// Update PID file with session ID for --resume support
-				if pidDir != "" && s.protocol != nil {
+				if pidDir != "" {
 					if err := s.updatePIDFileSessionID(pidDir, s.protocol.SessionID()); err != nil {
 						log.Printf("session %s: update PID file with session ID: %v", s.id, err)
 					}
@@ -1422,11 +1409,7 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 
 	// Hook callbacks from the initialize handshake: always auto-continue.
 	if req.Request.Subtype == "hook_callback" {
-		if s.protocol != nil {
-			_ = s.protocol.RespondToHook(req.RequestID)
-		} else {
-			_ = s.writeJSON(llm.NewHookContinueResponse(req.RequestID))
-		}
+		_ = s.protocol.RespondToHook(req.RequestID)
 		return true
 	}
 
@@ -1460,15 +1443,11 @@ func (s *Session) tryHandleControlRequest(msg llm.SDKMessage) bool {
 		return false
 	}
 
-	var sessionID string
-	if s.protocol != nil {
-		sessionID = s.protocol.SessionID()
-	}
 	permReq := ports.ToolPermissionRequest{
 		RequestID:        req.RequestID,
 		ToolName:         req.Request.ToolName,
 		Input:            string(req.Request.Input),
-		SessionID:        sessionID,
+		SessionID:        s.protocol.SessionID(),
 		LogicalSessionID: s.id,
 		FeatureID:        s.featureID,
 		Phase:            s.phase,
@@ -1513,15 +1492,11 @@ func (s *Session) appendLocalStatus(text string) error {
 	if s == nil || s.messageLog == nil {
 		return errors.New("session message log unavailable")
 	}
-	sessionID := ""
-	if s.protocol != nil {
-		sessionID = s.protocol.SessionID()
-	}
 	msg := llm.SDKMessage{
 		Type: "status",
 		Status: &llm.StatusMessage{
 			Type:      "status",
-			SessionID: sessionID,
+			SessionID: s.protocol.SessionID(),
 			Message:   text,
 		},
 	}
@@ -1613,18 +1588,12 @@ func (s *Session) mergeAskUserToolUseConfidence(controlInput json.RawMessage) (a
 	return askuser.Bundle{}, false
 }
 
-// respondToControlViaProtocol sends a control response through the protocol or direct writeJSON.
+// respondToControlViaProtocol sends a control response through the session's protocol.
 func (s *Session) respondToControlViaProtocol(requestID string, allow bool, originalInput json.RawMessage, reason string) {
 	if s.watchdog != nil {
 		s.watchdog.ResolveControlRequest(requestID, "")
 	}
-	if s.protocol != nil {
-		_ = s.protocol.RespondToControl(requestID, allow, originalInput, reason)
-	} else if allow {
-		_ = s.writeJSON(llm.NewAllowResponse(requestID, originalInput))
-	} else {
-		_ = s.writeJSON(llm.NewDenyResponse(requestID, reason))
-	}
+	_ = s.protocol.RespondToControl(requestID, allow, originalInput, reason)
 }
 
 // CloseStdin closes the session's stdin pipe, signalling EOF to the subprocess.
@@ -1636,25 +1605,6 @@ func (s *Session) CloseStdin() {
 	if w != nil {
 		_ = w.Close()
 	}
-}
-
-// writeJSON marshals v to JSON and writes it to stdin followed by a newline.
-func (s *Session) writeJSON(v interface{}) error {
-	s.mu.Lock()
-	w := s.stdin
-	s.mu.Unlock()
-
-	if w == nil {
-		return fmt.Errorf("session stdin is closed")
-	}
-
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("marshaling JSON: %w", err)
-	}
-	data = append(data, '\n')
-	_, err = w.Write(data)
-	return err
 }
 
 // SendUserMessage sends a user message to the session via JSON stdin.
@@ -1714,13 +1664,7 @@ func (s *Session) SendUserMessageWithHiddenContext(visible, hiddenContext string
 	if hiddenContext = strings.TrimSpace(hiddenContext); hiddenContext != "" {
 		wireText = hiddenContext + "\n\n" + visible
 	}
-	var err error
-	if s.protocol != nil {
-		err = s.protocol.SendUserMessage(wireText)
-	} else {
-		err = s.writeJSON(llm.NewUserInput(wireText))
-	}
-	if err != nil {
+	if err := s.protocol.SendUserMessage(wireText); err != nil {
 		return err
 	}
 
@@ -1978,15 +1922,7 @@ func (s *Session) respondToPendingControl(requestID string, allow bool, reason s
 	}
 	s.mu.Unlock()
 
-	var err error
-	if s.protocol != nil {
-		err = s.protocol.RespondToControl(requestID, allow, originalInput, wireReason)
-	} else if allow {
-		err = s.writeJSON(llm.NewAllowResponse(requestID, originalInput))
-	} else {
-		err = s.writeJSON(llm.NewDenyResponse(requestID, wireReason))
-	}
-	if err != nil {
+	if err := s.protocol.RespondToControl(requestID, allow, originalInput, wireReason); err != nil {
 		return err
 	}
 
@@ -2038,13 +1974,7 @@ func (s *Session) RespondToAskUser(requestID string, resolved askuser.Resolved) 
 	s.mu.Unlock()
 	s.captureAskUserResponse(requestID, resolved, nil)
 
-	var err error
-	if s.protocol != nil {
-		err = s.protocol.RespondToAskUser(requestID, resolved)
-	} else {
-		err = s.writeJSON(llm.NewAskUserResponse(requestID, resolved.Bundle, resolved.ByText()))
-	}
-	if err != nil {
+	if err := s.protocol.RespondToAskUser(requestID, resolved); err != nil {
 		s.restoreAskUserRequest(answered, priorStatus, resolved)
 		return err
 	}
@@ -2090,11 +2020,7 @@ func (s *Session) restoreAskUserRequest(answered *llm.ControlRequestMessage, pri
 // holds each question's selection confidence keyed by one-based question
 // index.
 func (s *Session) respondToAskUserAutoPicked(requestID string, resolved askuser.Resolved, confidenceByIndex map[int]float64) error {
-	if s.protocol != nil {
-		if err := s.protocol.RespondToAskUser(requestID, resolved); err != nil {
-			return err
-		}
-	} else if err := s.writeJSON(llm.NewAskUserResponse(requestID, resolved.Bundle, resolved.ByText())); err != nil {
+	if err := s.protocol.RespondToAskUser(requestID, resolved); err != nil {
 		return err
 	}
 	s.captureAskUserResponse(requestID, resolved, confidenceByIndex)
@@ -2258,17 +2184,6 @@ func (s *Session) hasPendingAskUserQuestionLocked() bool {
 	return false
 }
 
-// SendInitialize sends the SDK initialize handshake to activate the
-// control_request protocol. Deprecated: use protocol.Handshake() instead.
-func (s *Session) SendInitialize() error {
-	return s.writeJSON(llm.NewInitializeRequest())
-}
-
-// Protocol returns the session's protocol handler.
-func (s *Session) Protocol() llm.Protocol {
-	return s.protocol
-}
-
 // SendInput writes raw bytes to stdin. For backward compatibility.
 // New code should use SendUserMessage or RespondToControl.
 func (s *Session) SendInput(data []byte) error {
@@ -2295,14 +2210,12 @@ func (s *Session) Interrupt() error {
 	proc := s.process
 	s.mu.Unlock()
 
-	if p != nil {
-		err := p.Interrupt()
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, llm.ErrNotSupported) {
-			return err
-		}
+	err := p.Interrupt()
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, llm.ErrNotSupported) {
+		return err
 	}
 
 	if proc == nil || proc.Process == nil {

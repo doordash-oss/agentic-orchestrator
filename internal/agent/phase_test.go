@@ -222,6 +222,7 @@ func TestBuildResearchPhaseSession_ClaudeProvider(t *testing.T) {
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return []string{"claude", "--model", opts.Model}, nil, sessOpts, nil
 	}
@@ -282,6 +283,7 @@ func TestBuildResearchPhaseSession_MultiRepoAdditionalDirs(t *testing.T) {
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return []string{"claude", "--model", opts.Model}, nil, sessOpts, nil
 	}
@@ -668,7 +670,7 @@ func TestRunInteractivePhase_CommandStructure(t *testing.T) {
 				copy(dirs, opts.AdditionalDirs)
 				captured = append(captured, capturedArgs{model: opts.Model, systemPrompt: opts.SystemPrompt, prompt: opts.Prompt, additionalDirs: dirs})
 				mu.Unlock()
-				return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+				return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
 			}
 
 			eventCh := make(chan any, 100)
@@ -877,7 +879,7 @@ func TestRunInteractivePhase_EmptyConfiguredModel_UsesDefaultAskingClause(t *tes
 				mu.Lock()
 				captured = append(captured, capturedArgs{model: opts.Model, systemPrompt: opts.SystemPrompt})
 				mu.Unlock()
-				return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+				return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
 			}
 
 			// Set up a registry with a mock provider that has a catalog default
@@ -979,7 +981,7 @@ func TestRunResearch_SkillReadInstruction(t *testing.T) {
 		mu.Lock()
 		capturedOpts = append(capturedOpts, opts)
 		mu.Unlock()
-		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
 	}
 
 	eventCh := make(chan any, 100)
@@ -1067,7 +1069,7 @@ func TestRunKnowledgeBaseForRepo_SkillReadInstruction(t *testing.T) {
 		mu.Lock()
 		capturedOpts = append(capturedOpts, opts)
 		mu.Unlock()
-		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir}, nil
+		return []string{"bash", script}, nil, &session.SessionOpts{PIDDir: opts.PIDDir, Protocol: testSessionProtocol(opts.Prompt)}, nil
 	}
 
 	eventCh := make(chan any, 100)
@@ -1204,7 +1206,9 @@ func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
 		if len(opts) > 0 && opts[0] != nil {
 			startSessionLogPath = opts[0].LogPath
 		}
-		return session.NewSession(id, featureID, phase), nil
+		started := session.NewSession(id, featureID, phase)
+		started.SetProtocolForTest(testSessionProtocol(""))
+		return started, nil
 	}
 	pr := &PhaseRunner{
 		SessionManager: sm,
@@ -1212,7 +1216,7 @@ func TestRunKnowledgeBaseForRepo_PassesLogPathBeforeSessionStart(t *testing.T) {
 		CommandRunner:  cmd,
 		BuildSessionFn: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			capturedLogPath = opts.LogPath
-			return []string{"true"}, nil, &session.SessionOpts{}, nil
+			return []string{"true"}, nil, &session.SessionOpts{Protocol: testSessionProtocol(opts.Prompt)}, nil
 		},
 	}
 
@@ -1301,8 +1305,8 @@ func (p *captureProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo
 func (p *captureProvider) DiscoverModelCatalogWithProgress(context.Context, llm.ModelDiscoveryReporter) ([]llm.ModelInfo, error) {
 	return nil, nil
 }
-func (p *captureProvider) AskingQuestionsClause() string           { return "" }
-func (p *captureProvider) SupportsNativeToollessReview() bool      { return false }
+func (p *captureProvider) AskingQuestionsClause() string      { return "" }
+func (p *captureProvider) SupportsNativeToollessReview() bool { return false }
 func (p *captureProvider) CheckReadiness(context.Context) llm.ProviderReadiness {
 	return llm.ProviderReadiness{Ready: true}
 }
@@ -2024,6 +2028,7 @@ func TestBuildSession_TestOverride(t *testing.T) {
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return []string{testMockIdentifier, "--model", opts.Model}, nil, sessOpts, nil
 	}
@@ -2051,9 +2056,9 @@ func TestBuildSession_TestOverride(t *testing.T) {
 	if env != nil {
 		t.Errorf("expected nil env for test override, got %v", env)
 	}
-	// Test override path should NOT set protocol
-	if sessOpts.Protocol != nil {
-		t.Error("expected nil Protocol for test override")
+	// The test override carries a protocol so the session manager accepts it.
+	if sessOpts.Protocol == nil {
+		t.Error("expected non-nil Protocol for test override")
 	}
 	if sessOpts.RepoName != "test-repo" {
 		t.Errorf("expected RepoName 'test-repo', got %q", sessOpts.RepoName)

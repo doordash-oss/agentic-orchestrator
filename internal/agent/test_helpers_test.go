@@ -21,9 +21,20 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
+
+// testSessionProtocol returns the Claude protocol mock sessions run under, so
+// test-built session options satisfy the manager's mandatory-protocol
+// requirement while keeping the wire behavior the protocol-less mock sessions
+// had: the initialize handshake plus the initial prompt as a user-input
+// message on stdin, and stdout JSONL parsed with the raw-text fallback.
+func testSessionProtocol(initialPrompt string) llm.Protocol {
+	return claude.NewProtocol(llm.ProtocolOpts{InitialPrompt: initialPrompt})
+}
 
 // isReviewHelper reports whether opts.PermHandler indicates a bounded review
 // or validator helper run. New bounded helpers use BoundedHelperArtifactHandler;
@@ -73,8 +84,29 @@ func mockBuildSession(agentScript, reviewScript string) func(BuildSessionOpts) (
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return cmd, nil, sessOpts, nil
+	}
+}
+
+// mockBuildSessionStillCrashingOnResume wraps mockBuildSession so a
+// crash-resume invocation (ResumeSessionID set) launches a process that
+// exits immediately without a result. The mock agent's silent exit is a
+// process crash in production terms, and the loop's crash resume restarts
+// the provider once; a provider that crashes again leaves the iteration
+// FAILED, exactly like the pre-protocol mock sessions did.
+func mockBuildSessionStillCrashingOnResume(agentScript, reviewScript string) func(BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+	base := mockBuildSession(agentScript, reviewScript)
+	return func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
+		if opts.ResumeSessionID == "" {
+			return base(opts)
+		}
+		_, env, sessOpts, err := base(opts)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return []string{"true"}, env, sessOpts, nil
 	}
 }
 
@@ -121,6 +153,7 @@ func mockBuildSessionByModel(scripts map[string]string) func(BuildSessionOpts) (
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return cmd, nil, sessOpts, nil
 	}

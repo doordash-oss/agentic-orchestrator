@@ -56,7 +56,7 @@ func (p *effortCatalogProvider) VersionInfo() (string, error)                   
 func (p *effortCatalogProvider) MinVersion() [3]int                             { return [3]int{} }
 func (p *effortCatalogProvider) EnvVarsToExclude() []string                     { return nil }
 func (p *effortCatalogProvider) ModelCatalog() []llm.ModelInfo                  { return p.models }
-func (p *effortCatalogProvider) SetModelCatalog(models []llm.ModelInfo)          { p.models = models }
+func (p *effortCatalogProvider) SetModelCatalog(models []llm.ModelInfo)         { p.models = models }
 func (p *effortCatalogProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
 	return nil, nil
 }

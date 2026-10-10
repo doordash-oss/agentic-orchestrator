@@ -44,8 +44,8 @@ func (m *mockVersionProvider) BuildCommand(_ llm.CommandBuildOpts) ([]string, []
 func (m *mockVersionProvider) NewProtocol(_ llm.ProtocolOpts) llm.Protocol { return nil }
 func (m *mockVersionProvider) MinVersion() [3]int                          { return m.minVer }
 func (m *mockVersionProvider) EnvVarsToExclude() []string                  { return nil }
-func (m *mockVersionProvider) ModelCatalog() []llm.ModelInfo                { return nil }
-func (m *mockVersionProvider) SetModelCatalog([]llm.ModelInfo)               {}
+func (m *mockVersionProvider) ModelCatalog() []llm.ModelInfo               { return nil }
+func (m *mockVersionProvider) SetModelCatalog([]llm.ModelInfo)             {}
 func (m *mockVersionProvider) DiscoverModelCatalog(context.Context) ([]llm.ModelInfo, error) {
 	return nil, nil
 }

@@ -32,6 +32,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -735,6 +736,7 @@ func TestImplementLoopCodexRoutingUnit(t *testing.T) {
 						InitialPrompt: opts.Prompt,
 						RepoName:      opts.RepoName,
 						LogPath:       opts.LogPath,
+						Protocol:      testSessionProtocol(opts.Prompt),
 					}
 					if tt.wantCodex {
 						return []string{"codex", "app-server"}, nil, sessOpts, nil
@@ -929,6 +931,9 @@ func TestCaptureSinkWaitForWriteObservesAlreadyCompletedWrite(t *testing.T) {
 // the sink plus the pipe reader so tests can optionally drain it.
 func attachCaptureSink(sess *session.Session) *captureSink {
 	sink := newCaptureSink()
+	proto := claude.NewProtocol(llm.ProtocolOpts{})
+	proto.SetStdin(sink)
+	sess.SetProtocolForTest(proto)
 	sess.SetStdinForTest(sink)
 	return sink
 }
@@ -1928,7 +1933,7 @@ func runImplementLoopWithMixedFailureScript(t *testing.T, sequence []string, max
 		ReviewModel:         "reviewer",
 		ArtifactDir:         artifactDir,
 		StateDir:            stateDir,
-		BuildSession:        mockBuildSession(agentScript, reviewScript),
+		BuildSession:        mockBuildSessionStillCrashingOnResume(agentScript, reviewScript),
 	}, sm)
 	if err != nil {
 		t.Fatalf("RunImplementationLoop() error = %v", err)

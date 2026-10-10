@@ -251,6 +251,7 @@ echo '`+resultJSON+`'
 		[]string{"bash", script},
 		tmpDir,
 		nil,
+		&session.SessionOpts{Protocol: testutil.SessionProtocol("")},
 	)
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -353,11 +354,11 @@ func TestSessionManagerMultipleSessions(t *testing.T) {
 	sm := session.NewManager(eventCh)
 	defer sm.Shutdown()
 
-	sess1, err := sm.StartSession("sess-1", "feat-1", feature.PhaseResearch, []string{"bash", script1}, tmpDir, nil)
+	sess1, err := sm.StartSession("sess-1", "feat-1", feature.PhaseResearch, []string{"bash", script1}, tmpDir, nil, &session.SessionOpts{Protocol: testutil.SessionProtocol("")})
 	if err != nil {
 		t.Fatalf("StartSession 1: %v", err)
 	}
-	sess2, err := sm.StartSession("sess-2", "feat-2", feature.PhaseResearch, []string{"bash", script2}, tmpDir, nil)
+	sess2, err := sm.StartSession("sess-2", "feat-2", feature.PhaseResearch, []string{"bash", script2}, tmpDir, nil, &session.SessionOpts{Protocol: testutil.SessionProtocol("")})
 	if err != nil {
 		t.Fatalf("StartSession 2: %v", err)
 	}
@@ -489,7 +490,7 @@ func TestSessionWithLogFile(t *testing.T) {
 		[]string{"bash", script},
 		tmpDir,
 		nil,
-		&session.SessionOpts{LogPath: logPath},
+		&session.SessionOpts{LogPath: logPath, Protocol: testutil.SessionProtocol("")},
 	)
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)
@@ -552,7 +553,7 @@ func TestPIDFileLifecycle(t *testing.T) {
 		[]string{"bash", script},
 		tmpDir,
 		nil,
-		&session.SessionOpts{PIDDir: pidDir, Iteration: 1, RepoName: "pid-repo"},
+		&session.SessionOpts{PIDDir: pidDir, Iteration: 1, RepoName: "pid-repo", Protocol: testutil.SessionProtocol("")},
 	)
 	if err != nil {
 		t.Fatalf("StartSession: %v", err)

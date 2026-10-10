@@ -1010,6 +1010,7 @@ func TestPlanValidatorHelperUsesIsolatedDirAndHarnessReceipt(t *testing.T) {
 		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			got = opts
 			return []string{"bash", criticScript}, nil, &session.SessionOpts{
+				Protocol:          testSessionProtocol(opts.Prompt),
 				PermHandler:       opts.PermHandler,
 				DebugSystemPrompt: opts.SystemPrompt,
 				ProviderName:      testMockIdentifier,
@@ -1895,6 +1896,7 @@ func TestPhasePlanLoopCodexReviewPath(t *testing.T) {
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return cmd, nil, sessOpts, nil
 	}
@@ -2004,6 +2006,7 @@ func TestSpecializedValidation_UsesReviewModelInBoundedSessions(t *testing.T) {
 				BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 					capturedOpts = opts
 					return []string{"bash", validatorScript}, nil, &session.SessionOpts{
+						Protocol:      testSessionProtocol(opts.Prompt),
 						PIDDir:        opts.PIDDir,
 						PermHandler:   opts.PermHandler,
 						InitialPrompt: opts.Prompt,
@@ -2173,6 +2176,7 @@ func TestRoadmapSpecializedValidation_UsesRoadmapValidatorSubset(t *testing.T) {
 			validationOpts = append(validationOpts, opts)
 			validationOptsMu.Unlock()
 			return []string{"bash", validatorScript}, nil, &session.SessionOpts{
+				Protocol:      testSessionProtocol(opts.Prompt),
 				PIDDir:        opts.PIDDir,
 				PermHandler:   opts.PermHandler,
 				InitialPrompt: opts.Prompt,
@@ -2249,6 +2253,7 @@ func TestSpecializedValidation_UsesConfiguredReviewModel(t *testing.T) {
 		BuildSession: func(opts BuildSessionOpts) ([]string, []string, *session.SessionOpts, error) {
 			capturedOpts = opts
 			return []string{"bash", validatorScript}, nil, &session.SessionOpts{
+				Protocol:      testSessionProtocol(opts.Prompt),
 				PIDDir:        opts.PIDDir,
 				PermHandler:   opts.PermHandler,
 				InitialPrompt: opts.Prompt,
@@ -2388,6 +2393,7 @@ func mockBuildSessionPerDomain(planScript string, domainScripts map[string]strin
 			InitialPrompt: opts.Prompt,
 			RepoName:      opts.RepoName,
 			LogPath:       opts.LogPath,
+			Protocol:      testSessionProtocol(opts.Prompt),
 		}
 		return cmd, nil, sessOpts, nil
 	}

@@ -68,7 +68,7 @@ func (p *Provider) DiscoverModelCatalogWithProgress(ctx context.Context, report 
 	// The CLI waits for more input after initialization. Stop and reap it on
 	// success as well as on malformed output, EOF, and cancellation.
 	defer func() { cancel(); _ = cmd.Wait() }()
-	request := llm.NewInitializeRequest()
+	request := newInitializeRequest()
 	request.RequestID = catalogRequestID
 	request.Request.Hooks = nil
 	if err := json.NewEncoder(stdin).Encode(request); err != nil {

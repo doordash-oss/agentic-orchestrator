@@ -234,6 +234,8 @@ function makeEnv(options: EnvOptions = {}): Env {
       euid: 501,
       isProcessAlive: () => true,
     },
+    openSse: () =>
+      Promise.resolve({ status: 200, lines: (async function* () {})(), close: () => undefined }),
     fetchJson: async (url, opts) => {
       env.fetchCalls.push(
         opts.token === undefined

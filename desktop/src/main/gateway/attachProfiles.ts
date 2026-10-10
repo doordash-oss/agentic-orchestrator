@@ -32,9 +32,8 @@ limitations under the License.
  *  - Every failure lands in a renderer-visible state with redacted
  *    diagnostics and a manual retry path.
  */
-import { z } from 'zod';
 import { buildCanonicalError } from '../../shared/errors';
-import type { CanonicalError } from '../../shared/api/parse';
+import { ProbeHealthSchema, type ProbeHealth, type CanonicalError } from '../../shared/api/parse';
 import type { ConnectionState, KnownServer, ServersPrefs, SwitchContext } from '../../shared/ipc';
 import {
   evaluateCompatibility,
@@ -45,24 +44,7 @@ import type { DiscoveryRecord } from './discovery';
 import { registryEntryKey } from './registry';
 import type { LoadResult as RemoteTokenLoadResult } from './remoteTokenStore';
 import type { HttpResult, SelectedRuntime } from './runtimeGateway';
-
-/**
- * Lenient view of /api/v1/health used while probing possibly-foreign
- * servers: only what the attach decision needs, tolerant of unknown fields
- * and future shapes. The compatibility declaration itself is validated
- * separately (fail-closed) by evaluateCompatibility.
- */
-export const ProbeHealthSchema = z.object({
-  status: z.string(),
-  compatibility: z.unknown().optional(),
-  runtime: z.object({ state_dir: z.string() }).optional(),
-  // Operator-assigned display name (server cap: MaxServerNameLength = 64).
-  // Informational only — an oversized or malformed name is dropped, never
-  // treated as an attach blocker.
-  name: z.string().max(64).optional().catch(undefined),
-});
-
-export type ProbeHealth = z.infer<typeof ProbeHealthSchema>;
+import { defined } from '../../shared/defined';
 
 export function trimBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '');
@@ -93,7 +75,10 @@ export interface AttachedConnection {
  * directly; state emission and generation fencing stay in the gateway.
  */
 export interface AttachHost {
-  fetchJson(url: string, options: { token?: string; timeoutMs: number }): Promise<HttpResult>;
+  fetchJson(
+    url: string,
+    options: { token?: string; timeoutMs: number; maxResponseBytes?: number },
+  ): Promise<HttpResult>;
   log(line: string): void;
   registerSecret(secret: string): void;
   knownServers(): ServersPrefs;
@@ -119,21 +104,26 @@ export interface AttachHost {
   markReady(): void;
 }
 
-type HealthProbeResult =
+export type HealthProbeResult =
   | { kind: 'healthy'; probe: ProbeHealth }
   | { kind: 'unreachable' }
   | { kind: 'bad-status' }
   | { kind: 'bad-payload' };
 
 /** The shared pipeline's first step: one bounded auth-exempt health probe. */
-async function probeAuthExemptHealth(
-  host: AttachHost,
+export async function probeAuthExemptHealth(
+  fetchJson: (
+    url: string,
+    options: { timeoutMs: number; maxResponseBytes: number },
+  ) => Promise<HttpResult>,
   baseUrl: string,
+  timeoutMs: number,
 ): Promise<HealthProbeResult> {
   let health: HttpResult;
   try {
-    health = await host.fetchJson(`${trimBase(baseUrl)}/api/v1/health`, {
-      timeoutMs: host.healthProbeMs,
+    health = await fetchJson(`${trimBase(baseUrl)}/api/v1/health`, {
+      timeoutMs,
+      maxResponseBytes: 1024 * 1024,
     });
   } catch {
     return { kind: 'unreachable' };
@@ -222,7 +212,7 @@ async function authenticateWithReadiness(
     serverBuild: connecting.serverBuild,
     serverName: connecting.serverName,
     error: failure.error,
-    ...(switchContext !== undefined ? { switchContext } : {}),
+    ...defined('switchContext', switchContext),
   });
   return 'rejected';
 }
@@ -251,7 +241,7 @@ export async function runLocalAttach(
         detail: 'The selected server stopped responding.',
         ownership: 'none',
         error: buildCanonicalError('E_ATTACH_UNREACHABLE'),
-        ...(switchContext !== undefined ? { switchContext } : {}),
+        ...defined('switchContext', switchContext),
       });
       return 'blocked';
     }
@@ -265,7 +255,7 @@ export async function runLocalAttach(
     ownership: 'none',
   });
 
-  const probed = await probeAuthExemptHealth(host, record.base_url);
+  const probed = await probeAuthExemptHealth(host.fetchJson, record.base_url, host.healthProbeMs);
   if (probed.kind === 'unreachable') {
     return staleResult('discovery candidate did not answer its health probe; treating as stale');
   }
@@ -417,12 +407,12 @@ export async function runRemoteAttach(
           ? 'E_REMOTE_TOKEN_UNREADABLE'
           : 'E_REMOTE_TOKEN_MISSING',
       ),
-      ...(switchContext !== undefined ? { switchContext } : {}),
+      ...defined('switchContext', switchContext),
     });
     return 'blocked';
   }
 
-  const probed = await probeAuthExemptHealth(host, baseUrl);
+  const probed = await probeAuthExemptHealth(host.fetchJson, baseUrl, host.healthProbeMs);
   if (probed.kind !== 'healthy') {
     if (probed.kind !== 'unreachable' && host.cancelled(generation)) {
       return 'blocked';
@@ -440,7 +430,7 @@ export async function runRemoteAttach(
             detail: 'The remote Agentico server is not reachable.',
             ownership: 'none',
             error: buildCanonicalError('E_REMOTE_HEALTH_UNANSWERED'),
-            ...(switchContext !== undefined ? { switchContext } : {}),
+            ...defined('switchContext', switchContext),
           }
         : {
             status: 'error',
@@ -448,7 +438,7 @@ export async function runRemoteAttach(
             detail: 'The remote Agentico server is not healthy.',
             ownership: 'none',
             error: buildCanonicalError('E_REMOTE_HEALTH_UNHEALTHY'),
-            ...(switchContext !== undefined ? { switchContext } : {}),
+            ...defined('switchContext', switchContext),
           },
     );
     return 'blocked';
@@ -524,7 +514,7 @@ export async function runRemoteAttach(
       entry.nickname === undefined && probeName !== null && probeName !== ''
         ? probeName
         : entry.name,
-    ...(entry.nickname === undefined ? {} : { nickname: entry.nickname }),
+    ...defined('nickname', entry.nickname),
     baseUrl,
     lastSeenAt: new Date(host.now()).toISOString(),
   };

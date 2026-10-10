@@ -27,6 +27,7 @@ import {
   SubagentTag,
   type AttentionDrafts,
 } from './AttentionInbox';
+import { defined } from '../../../shared/defined';
 
 export type QuestionsAttentionItem = Extract<AttentionItem, { kind: 'questions' }>;
 
@@ -42,7 +43,7 @@ export function questionAnswersRequest(
   const questionDraft = drafts.questions[`${item.kind}:${item.id}`] ?? {};
   return {
     requestId: item.id,
-    ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
+    ...defined('sessionId', item.sessionId),
     answers: Object.fromEntries(
       item.questions.map((question) => [
         String(question.index),

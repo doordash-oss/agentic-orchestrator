@@ -41,6 +41,7 @@ import {
 import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
+import { defined } from '../shared/defined';
 
 const CLONE_BASE = '/api/v1/workspace/repositories/clone';
 const CLONE_LIST_LIMIT = 200;
@@ -178,17 +179,18 @@ export function toCloneOperation(dto: CloneOperationDTO): CloneOperation {
       path: dto.published.path,
       hasHead: dto.published.has_head,
       publishedAt: dto.published.published_at,
-      ...(dto.published.identity === undefined
-        ? {}
-        : {
-            identity: {
+      ...defined(
+        'identity',
+        dto.published.identity === undefined
+          ? undefined
+          : {
               path: dto.published.identity.path,
               commonDir: dto.published.identity.common_dir,
               device: dto.published.identity.device,
               inode: dto.published.identity.inode,
               birthTime: dto.published.identity.birth_time,
             },
-          }),
+      ),
     };
   }
   return operation;

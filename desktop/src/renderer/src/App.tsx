@@ -41,6 +41,7 @@ import {
   SupervisorStatusProvider,
   type SupervisorStatusStore,
 } from './features/supervisor/supervisorStatus';
+import { defined } from '../../shared/defined';
 
 export default function App() {
   // Called purely for its side effect (mirroring the resolved theme onto
@@ -132,9 +133,7 @@ export default function App() {
   const requestRoute = useCallback((event: AppRouteEvent) => {
     if (event.target === 'settings') {
       void window.agentico
-        .openSettingsWindow(
-          event.settingsSection === undefined ? {} : { section: event.settingsSection },
-        )
+        .openSettingsWindow(defined('section', event.settingsSection))
         .catch(() => {
           // The window is a destination, not a mutation: a failed open never
           // needs to disturb the surface the user is looking at.
@@ -265,7 +264,7 @@ export default function App() {
                     setAttentionJump({
                       requestId: routeSequence.current,
                       featureId,
-                      ...(attentionId === undefined ? {} : { attentionId }),
+                      ...defined('attentionId', attentionId),
                     });
                   }}
                   updateState={updateState}

@@ -16,7 +16,7 @@ limitations under the License.
 
 import { describe, expect, it, vi } from 'vitest';
 import type { SseStream } from '../gateway/events';
-import { SessionService, parseSessionOutputBlock, type ServerTransport } from '../serverClient';
+import { SessionService, parseSessionOutputBlock, type SessionTransport } from '../serverClient';
 import { CanonicalErrorException } from '../../shared/errors';
 
 function stream(lines: readonly string[]): SseStream {
@@ -29,7 +29,7 @@ function stream(lines: readonly string[]): SseStream {
   };
 }
 
-function transport(overrides: Partial<ServerTransport> = {}): ServerTransport {
+function transport(overrides: Partial<SessionTransport> = {}): SessionTransport {
   return {
     apiRequest: vi.fn(() => Promise.resolve({ status: 200, body: {} })),
     openSessionOutputStream: vi.fn(() => Promise.resolve(stream([]))),

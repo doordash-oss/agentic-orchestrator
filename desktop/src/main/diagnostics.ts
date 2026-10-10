@@ -30,6 +30,7 @@ import type {
   DiagnosticsRetention,
   DiagnosticsSnapshot,
 } from '../shared/ipc';
+import { defined } from '../shared/defined';
 
 export const DIAGNOSTICS_RETENTION = Object.freeze({
   maxBytes: 25 * 1024 * 1024,
@@ -109,7 +110,7 @@ export class DiagnosticsService {
       id: this.nextId('crash'),
       time: this.now().toISOString(),
       version: this.version,
-      ...(this.revision === undefined ? {} : { revision: this.revision }),
+      ...defined('revision', this.revision),
       platform: this.platform,
       architecture: this.arch,
       processRole: input.processRole,

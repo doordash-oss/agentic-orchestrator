@@ -180,6 +180,8 @@ function makeEnv(options: EnvOptions = {}): Env {
       euid: 501,
       isProcessAlive: (pid) => alive.has(pid),
     },
+    openSse: () =>
+      Promise.resolve({ status: 200, lines: (async function* () {})(), close: () => undefined }),
     fetchJson: async (url, opts) => {
       const base = url.replace(/\/api\/v1\/.*$/, '');
       if (url.endsWith('/api/v1/health')) {

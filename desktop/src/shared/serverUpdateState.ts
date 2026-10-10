@@ -66,8 +66,6 @@ export function serverUpdateSummary(state: ServerUpdateState | null): string {
   switch (state.status) {
     case 'disabled':
       return 'Updates are turned off by this server’s startup policy.';
-    case 'unsupported':
-      return state.remediation ?? 'This server cannot update itself in place.';
     case 'idle':
       return 'No release check has run yet.';
     case 'checking':
@@ -126,7 +124,7 @@ export function serverUpdateVerbs(state: ServerUpdateState | null): ServerUpdate
     installNowStopsWork: false,
     cancel: false,
   };
-  if (state === null || state.status === 'disabled' || state.status === 'unsupported') return none;
+  if (state === null || state.status === 'disabled') return none;
   const busy =
     state.status === 'checking' || state.status === 'draining' || state.status === 'restarting';
   const available = state.status === 'available' || state.status === 'failed';

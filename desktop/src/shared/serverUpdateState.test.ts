@@ -64,8 +64,8 @@ describe('serverUpdateVerbs', () => {
     ).toMatchObject({ check: false, installWhenIdle: false, installNow: true, cancel: true });
   });
 
-  it('offers nothing once the server is draining, unsupported, or disabled', () => {
-    for (const status of ['draining', 'restarting', 'unsupported', 'disabled'] as const) {
+  it('offers nothing once the server is draining or disabled', () => {
+    for (const status of ['draining', 'restarting', 'disabled'] as const) {
       const verbs = serverUpdateVerbs(state({ status }));
       expect(verbs.installNow).toBe(false);
       expect(verbs.cancel).toBe(false);
@@ -96,9 +96,6 @@ describe('server update copy', () => {
     ).toBe('Waiting for window');
     expect(serverUpdateSummary(state({ policy: 'auto' }))).toBe(
       'Version 2.0.0 will install automatically when the server is idle.',
-    );
-    expect(serverUpdateSummary(state({ status: 'unsupported', remediation: 'Use brew.' }))).toBe(
-      'Use brew.',
     );
   });
 });

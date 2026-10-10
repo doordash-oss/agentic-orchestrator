@@ -27,6 +27,7 @@ import {
 } from './NeedUserInputVerificationDecision';
 import { parseIpcError } from '../wizard/ipcError';
 import { bucketElapsedSince } from './phaseRail';
+import { defined } from '../../../shared/defined';
 
 export type AttentionGate = Extract<AttentionItem, { kind: 'gate' }>;
 
@@ -160,8 +161,8 @@ export function NeedUserInputModal({
   // missing fact, not a phase called "".
   const gatePhase = phase === undefined || phase.trim() === '' ? undefined : phase;
   const stopped = gateStoppedSentence({
-    ...(gatePhase === undefined ? {} : { phase: gatePhase }),
-    ...(item.iteration === undefined ? {} : { iteration: item.iteration }),
+    ...defined('phase', gatePhase),
+    ...defined('iteration', item.iteration),
     waitingSince: item.waitingSince,
   });
 
@@ -173,7 +174,7 @@ export function NeedUserInputModal({
           if (currentItem.questions.length === 0) return;
           await window.agentico.saveGateDraft({
             featureId: currentItem.featureId,
-            ...(currentItem.repoName === undefined ? {} : { repoName: currentItem.repoName }),
+            ...defined('repoName', currentItem.repoName),
             answers: Object.fromEntries(
               currentItem.questions.map((question) => [
                 String(question.index),
@@ -203,7 +204,7 @@ export function NeedUserInputModal({
       await saveDraft();
       await window.agentico.resolveGate({
         featureId: item.featureId,
-        ...(item.repoName === undefined ? {} : { repoName: item.repoName }),
+        ...defined('repoName', item.repoName),
       });
       await onResolved();
     } catch (cause) {

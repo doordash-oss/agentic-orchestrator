@@ -22,8 +22,9 @@ limitations under the License.
 import { z } from 'zod';
 import { CanonicalErrorSchema, type CanonicalError } from './api/parse';
 import type { IpcMethod } from './ipcChannels';
+import { defined } from './defined';
 
-export type { CanonicalError, CanonicalErrorResponse } from './api/parse';
+export type { CanonicalError } from './api/parse';
 
 export const ATTENTION_ALREADY_RESOLVED_NOTICE =
   'This item was already resolved. The inbox has been refreshed.';
@@ -964,7 +965,6 @@ const ServerUpdateStatusSchema = z.enum([
   'restarting',
   'confirmed',
   'failed',
-  'unsupported',
   'disabled',
 ]);
 
@@ -3859,9 +3859,12 @@ export function applyShellPatch(current: ShellPrefs, patch: ShellPatch): ShellPr
   return {
     featureByServer,
     sidebarCollapsed: patch.sidebarCollapsed ?? current.sidebarCollapsed,
-    ...((patch.sidebarWidth ?? current.sidebarWidth) !== undefined
-      ? { sidebarWidth: patch.sidebarWidth ?? current.sidebarWidth }
-      : {}),
+    ...defined(
+      'sidebarWidth',
+      (patch.sidebarWidth ?? current.sidebarWidth) === undefined
+        ? undefined
+        : (patch.sidebarWidth ?? current.sidebarWidth),
+    ),
   };
 }
 

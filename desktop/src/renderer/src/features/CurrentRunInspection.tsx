@@ -60,6 +60,7 @@ import {
 import { renderSanitizedMarkdown } from './sanitizedMarkdown';
 import { CloseIcon, MaximizeIcon, MinimizeIcon } from '../components/icons';
 import { useModalDismiss } from '../components/useModalDismiss';
+import { defined } from '../../../shared/defined';
 
 const IDLE_ACTIVITY_LABEL = 'Thinking through the next step';
 const LIVE_METRICS_REFRESH_MS = 1000;
@@ -732,7 +733,7 @@ export function CurrentRunInspection({
       } catch (cause) {
         setContentError({
           error: parseIpcError(cause),
-          request: { kind, id, ...(size === undefined ? {} : { size }), label },
+          request: { kind, id, ...defined('size', size), label },
         });
       } finally {
         setLoadingContent(false);

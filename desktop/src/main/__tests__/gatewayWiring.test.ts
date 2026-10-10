@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fetchJson, MAX_PROBE_RESPONSE_BYTES, selectRuntime } from '../gateway/wiring';
+import { probeAuthExemptHealth } from '../gateway/attachProfiles';
 import { MAX_PAYLOAD_BYTES } from '../../shared/sanitize';
 
 /** Installs a fetch that never answers until the caller's signal aborts. */
@@ -38,6 +39,50 @@ function withStalledFetch(run: () => Promise<void>): Promise<void> {
 }
 
 describe('fetchJson', () => {
+  it('encodes JSON and octets through the same bounded request', async () => {
+    const original = globalThis.fetch;
+    const calls: RequestInit[] = [];
+    globalThis.fetch = ((_url: string, init: RequestInit) => {
+      calls.push(init);
+      return Promise.resolve({ status: 200, text: () => Promise.resolve('{}') });
+    }) as unknown as typeof fetch;
+    try {
+      await fetchJson('http://127.0.0.1:9/api/v1/features', {
+        method: 'POST',
+        token: 'secret',
+        timeoutMs: 1000,
+        body: { name: 'x' },
+      });
+      await fetchJson('http://127.0.0.1:9/api/v1/uploads', {
+        method: 'POST',
+        token: 'secret',
+        timeoutMs: 1000,
+        body: new Uint8Array([1, 2]),
+      });
+      expect(calls.map((call) => [call.headers, call.body])).toEqual([
+        [
+          {
+            Accept: 'application/json',
+            Authorization: 'Bearer secret',
+            'Content-Type': 'application/json',
+            'X-Agentico-Client': 'local',
+          },
+          '{"name":"x"}',
+        ],
+        [
+          {
+            Accept: 'application/json',
+            Authorization: 'Bearer secret',
+            'Content-Type': 'application/octet-stream',
+            'X-Agentico-Client': 'local',
+          },
+          new Uint8Array([1, 2]),
+        ],
+      ]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
   it('aborts an outstanding fetch when its connection is abandoned', async () => {
     await withStalledFetch(async () => {
       const controller = new AbortController();
@@ -116,6 +161,51 @@ describe('fetchJson', () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe('probeAuthExemptHealth', () => {
+  it('uses the probe response bound and preserves four outcomes', async () => {
+    const calls: Array<{ url: string; timeoutMs: number; maxResponseBytes: number }> = [];
+    const fetchProbe = async (
+      url: string,
+      options: { timeoutMs: number; maxResponseBytes: number },
+    ): Promise<{ status: number; body: unknown }> => {
+      calls.push({ url, ...options });
+      return { status: 200, body: { status: 'ok', name: 'runtime' } };
+    };
+    await expect(
+      probeAuthExemptHealth(fetchProbe, 'http://localhost:9/', 123),
+    ).resolves.toMatchObject({
+      kind: 'healthy',
+      probe: { name: 'runtime' },
+    });
+    expect(calls).toEqual([
+      {
+        url: 'http://localhost:9/api/v1/health',
+        timeoutMs: 123,
+        maxResponseBytes: MAX_PROBE_RESPONSE_BYTES,
+      },
+    ]);
+    await expect(
+      probeAuthExemptHealth(async () => ({ status: 503, body: {} }), 'http://localhost:9', 123),
+    ).resolves.toEqual({ kind: 'bad-status' });
+    await expect(
+      probeAuthExemptHealth(
+        async () => ({ status: 200, body: { status: 'down' } }),
+        'http://localhost:9',
+        123,
+      ),
+    ).resolves.toEqual({ kind: 'bad-payload' });
+    await expect(
+      probeAuthExemptHealth(
+        async () => {
+          throw new Error('offline');
+        },
+        'http://localhost:9',
+        123,
+      ),
+    ).resolves.toEqual({ kind: 'unreachable' });
   });
 });
 

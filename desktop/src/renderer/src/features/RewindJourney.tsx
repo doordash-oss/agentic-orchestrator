@@ -31,6 +31,7 @@ import type { CanonicalError } from '../../../shared/ipc';
 import { ErrorSurface } from '../components/ErrorSurface';
 import { FieldError } from '../components/FieldError';
 import { displayPhaseLabel } from './featureView';
+import { defined } from '../../../shared/defined';
 
 export interface RewindJourneyProps {
   featureId: string;
@@ -174,9 +175,7 @@ export function RewindJourney(props: RewindJourneyProps) {
         targetPhase,
         ...(roadmapPhase !== null ? { roadmapPhase } : {}),
         ...(upgradePipeline !== '' ? { upgradePipeline } : {}),
-        ...(preview.sourceRunNumber !== undefined
-          ? { sourceRunNumber: preview.sourceRunNumber }
-          : {}),
+        ...defined('sourceRunNumber', preview.sourceRunNumber),
         ...(preview.sourceRevision !== '' ? { sourceRevision: preview.sourceRevision } : {}),
       });
       setResult(res);

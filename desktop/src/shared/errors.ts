@@ -42,6 +42,7 @@ limitations under the License.
  * summary, remediation hint, and diagnostics string.
  */
 import type { CanonicalError } from './api/parse';
+import { defined } from './defined';
 
 // Type-only re-export (cycle-safe: erased at compile time — parse.ts imports
 // values from this module): the canonical error type is part of this module's
@@ -452,11 +453,6 @@ export const ERROR_CATALOG = {
   }),
 
   // --- Sessions / streams ------------------------------------------------------
-  E_SSE_UNAVAILABLE: entry({
-    class: 'blocking',
-    title: 'Event stream unavailable',
-    summary: () => 'This build has no event-stream transport wired.',
-  }),
   E_BAD_SESSION_ID: entry({
     class: 'blocking',
     title: 'Invalid session ID',
@@ -506,11 +502,6 @@ export const ERROR_CATALOG = {
     class: 'blocking',
     title: 'Upload failed',
     summary: () => 'The file could not be uploaded.',
-  }),
-  E_UPLOAD_UNAVAILABLE: entry({
-    class: 'blocking',
-    title: 'Uploads unavailable',
-    summary: () => 'This build has no upload transport wired.',
   }),
   E_UPLOAD_NAME: entry({
     class: 'needs_action',
@@ -759,9 +750,12 @@ export function buildCanonicalError<C extends CatalogCode>(
     class: spec.class,
     title: spec.title,
     summary,
-    ...(hint === undefined ? {} : { remediation: { hint } }),
-    ...(options.context === undefined ? {} : { context: options.context }),
-    ...(options.diagnostics === undefined ? {} : { diagnostics: redactText(options.diagnostics) }),
+    ...defined('remediation', hint === undefined ? undefined : { hint }),
+    ...defined('context', options.context),
+    ...defined(
+      'diagnostics',
+      options.diagnostics === undefined ? undefined : redactText(options.diagnostics),
+    ),
   };
 }
 

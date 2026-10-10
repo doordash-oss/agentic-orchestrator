@@ -29,6 +29,7 @@ import {
 } from '../../../../shared/ipc';
 import type { CanonicalError } from '../../../../shared/api/parse';
 import { actionById, displayStatusLabel, isReadyToStart } from '../featureView';
+import { defined } from '../../../../shared/defined';
 
 export type PassStateId =
   | 'setup'
@@ -381,7 +382,7 @@ export function relationshipWarningExplain(
       scope: 'transaction',
       code: warning.code,
       featureId: child.id,
-      ...(repository !== undefined ? { repository } : {}),
+      ...defined('repository', repository),
     },
     featureName: child.name,
   };

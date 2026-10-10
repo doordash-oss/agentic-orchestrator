@@ -57,6 +57,7 @@ import type {
   UpdateState,
 } from '../../../shared/ipc';
 import { canInstallInApp, hasActiveWork, installWhenIdleLabel } from '../../../shared/updateState';
+import { definedNonEmpty } from '../../../shared/defined';
 
 const TERMINAL_SESSION_STATUSES = new Set(['Done', 'Failed']);
 
@@ -1220,7 +1221,7 @@ function ServersPane({
         // An empty draft clears the nickname: the field is dropped entirely
         // rather than persisted as an empty string.
         const { nickname: _dropped, ...base } = entry;
-        const next: KnownServer = { ...base, ...(trimmed === '' ? {} : { nickname: trimmed }) };
+        const next: KnownServer = { ...base, ...definedNonEmpty('nickname', trimmed) };
         const updated = await window.agentico.updateSettings({ servers: { upsertKnown: next } });
         onSettingsChange(updated);
         setEditingKey(null);

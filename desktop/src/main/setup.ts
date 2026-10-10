@@ -24,7 +24,7 @@ import {
   ReadinessResponseSchema,
   RuntimeReadinessResponseSchema,
   type RuntimeReadinessResponse,
-  RuntimeConfigWorkspaceSchema,
+  RuntimeConfigResponseSchema,
   validateWithSchema,
   type ReadinessResponse,
 } from '../shared/api/parse';
@@ -45,6 +45,7 @@ import {
   type ServerIdentity,
   type ServerIdentitySource,
 } from './serverFence';
+import { defined } from '../shared/defined';
 
 /** The authenticated transport surface the gateway provides. */
 export type SetupTransport = ServerTransport;
@@ -119,7 +120,7 @@ export class SetupService {
     const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
     this.assertSameServer(before);
-    const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
+    const config = validateWithSchema(configBody, RuntimeConfigResponseSchema);
     const roots = config.workspace_roots ?? [];
     if (!roots.includes(validated)) {
       await this.api('/api/v1/config/runtime', {
@@ -141,7 +142,7 @@ export class SetupService {
     const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
     this.assertSameServer(before);
-    const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
+    const config = validateWithSchema(configBody, RuntimeConfigResponseSchema);
     const roots = config.workspace_roots ?? [];
     const next = roots.filter((r) => r !== validated);
     if (next.length !== roots.length) {
@@ -165,7 +166,7 @@ export class SetupService {
     const before = this.captureIdentity();
     const configBody = await this.api('/api/v1/config/runtime');
     this.assertSameServer(before);
-    const config = validateWithSchema(configBody, RuntimeConfigWorkspaceSchema);
+    const config = validateWithSchema(configBody, RuntimeConfigResponseSchema);
     const current = (config.workspace_roots ?? []).slice().sort();
     const sorted = validated.slice().sort();
     if (current.length !== sorted.length || current.some((r, i) => r !== sorted[i])) {
@@ -255,27 +256,28 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
     workspaceRoots: server.workspace.roots.map((root) => ({
       path: root.path,
       valid: root.valid,
-      ...(root.issue === undefined ? {} : { issue: root.issue }),
+      ...defined('issue', root.issue),
       cloneEligible: root.clone_eligible,
-      ...(root.clone_issue === undefined ? {} : { cloneIssue: root.clone_issue }),
+      ...defined('cloneIssue', root.clone_issue),
     })),
     repositories: server.workspace.repositories.map((repository) => ({
       name: repository.name,
       path: repository.path,
       valid: repository.valid,
       featureReady: repository.feature_ready,
-      ...(repository.issue === undefined ? {} : { issue: repository.issue }),
-      ...(repository.identity === undefined
-        ? {}
-        : {
-            identity: {
+      ...defined('issue', repository.issue),
+      ...defined(
+        'identity',
+        repository.identity === undefined
+          ? undefined
+          : {
               path: repository.identity.path,
               commonDir: repository.identity.common_dir,
               device: repository.identity.device,
               inode: repository.identity.inode,
               birthTime: repository.identity.birth_time,
             },
-          }),
+      ),
     })),
     issues: server.issues ?? [],
   };
@@ -287,22 +289,22 @@ export function toRuntimeReadinessSnapshot(
 ): RuntimeReadinessSnapshot {
   return {
     ready: server.ready,
-    ...(server.probed_at === undefined ? {} : { probedAt: server.probed_at }),
+    ...defined('probedAt', server.probed_at),
     providers: server.providers.map((provider) => ({
       name: provider.name,
       installed: provider.installed,
-      ...(provider.version === undefined ? {} : { version: provider.version }),
+      ...defined('version', provider.version),
       ready: provider.ready,
-      ...(provider.issue === undefined ? {} : { issue: provider.issue }),
+      ...defined('issue', provider.issue),
     })),
     models: {
       available: server.models.available,
-      ...(server.models.models === undefined ? {} : { models: server.models.models }),
-      ...(server.models.issue === undefined ? {} : { issue: server.models.issue }),
+      ...defined('models', server.models.models),
+      ...defined('issue', server.models.issue),
     },
     configuration: {
       valid: server.configuration.valid,
-      ...(server.configuration.issue === undefined ? {} : { issue: server.configuration.issue }),
+      ...defined('issue', server.configuration.issue),
     },
     issues: [
       ...server.providers.flatMap((provider) =>

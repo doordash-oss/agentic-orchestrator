@@ -26,6 +26,7 @@ limitations under the License.
  * one-popover-at-a-time rule across the attention bell and the update button.
  */
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
+import { defined } from '../../../shared/defined';
 
 export interface ToolbarPopoverProps {
   open: boolean;
@@ -87,7 +88,7 @@ export function ToolbarPopover({
   if (!open) return null;
   const surfaceProps = {
     ref: surface,
-    ...(id === undefined ? {} : { id }),
+    ...defined('id', id),
     className: className === undefined ? 'toolbar-popover' : `toolbar-popover ${className}`,
     'aria-label': label,
     tabIndex: -1,

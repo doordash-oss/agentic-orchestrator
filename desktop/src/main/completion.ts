@@ -48,6 +48,7 @@ import {
   type RevealPathRequest,
 } from '../shared/ipc';
 import { alwaysLocal, type LocalitySource } from './locality';
+import { defined } from '../shared/defined';
 
 export interface RevealPathOutcome {
   ok: boolean;
@@ -111,17 +112,13 @@ export class CompletionService {
             }),
         ...(repo.base_branch ? { baseBranch: repo.base_branch } : {}),
         ...(repo.branch ? { branch: repo.branch } : {}),
-        ...(repo.pending_commits === undefined ? {} : { pendingCommits: repo.pending_commits }),
-        ...(repo.pending_dirty === undefined ? {} : { pendingDirty: repo.pending_dirty }),
+        ...defined('pendingCommits', repo.pending_commits),
+        ...defined('pendingDirty', repo.pending_dirty),
         ...(repo.push_mode === 'fast_forward' || repo.push_mode === 'rewrite'
           ? { pushMode: repo.push_mode }
           : {}),
-        ...(repo.pending_dirty_files === undefined
-          ? {}
-          : { pendingDirtyFiles: repo.pending_dirty_files }),
-        ...(repo.pending_dirty_file_total === undefined
-          ? {}
-          : { pendingDirtyFileTotal: repo.pending_dirty_file_total }),
+        ...defined('pendingDirtyFiles', repo.pending_dirty_files),
+        ...defined('pendingDirtyFileTotal', repo.pending_dirty_file_total),
       })),
     };
   }
@@ -144,8 +141,8 @@ export class CompletionService {
         path: file.path,
         operation: file.operation,
         ...(file.old_path ? { oldPath: file.old_path } : {}),
-        ...(file.added_lines !== undefined ? { addedLines: file.added_lines } : {}),
-        ...(file.removed_lines !== undefined ? { removedLines: file.removed_lines } : {}),
+        ...defined('addedLines', file.added_lines),
+        ...defined('removedLines', file.removed_lines),
         ...(file.binary ? { binary: file.binary } : {}),
         ...(file.fingerprint ? { fingerprint: file.fingerprint } : {}),
       })),
@@ -155,7 +152,10 @@ export class CompletionService {
       ...(response.file_unavailable ? { fileUnavailable: response.file_unavailable } : {}),
       // Canonical warning objects cross IPC intact except diagnostics,
       // which pass through the same redaction as every other raw text.
-      ...(response.error === undefined ? {} : { error: redactedCanonicalError(response.error) }),
+      ...defined(
+        'error',
+        response.error === undefined ? undefined : redactedCanonicalError(response.error),
+      ),
     };
   }
 

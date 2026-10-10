@@ -60,7 +60,7 @@ import {
 } from '../../shared/ipc';
 import { isAllowedApiPath, SESSION_ID_PATTERN } from './apiPaths';
 import {
-  ProbeHealthSchema,
+  probeAuthExemptHealth,
   runLocalAttach,
   runRemoteAttach,
   trimBase,
@@ -76,6 +76,7 @@ import { registryEntryKey, type RegistryCandidate, type RegistryScan } from './r
 import type { LoadResult as RemoteTokenLoadResult } from './remoteTokenStore';
 import type { ResolveResult } from './resources';
 import { DEFAULT_STOP_TIMEOUT_MS, type ChildExit } from './serverProcess';
+import { defined, definedNonEmpty } from '../../shared/defined';
 
 export interface SelectedRuntime {
   runtimeDir: string;
@@ -153,22 +154,14 @@ export interface GatewayDeps {
       method?: ApiMethod;
       body?: unknown;
       signal?: AbortSignal;
+      maxResponseBytes?: number;
     },
-  ): Promise<HttpResult>;
-  /**
-   * Bounded binary POST (raw octet-stream body, JSON response) for the
-   * upload-staging endpoint. Same bearer discipline as fetchJson: the token
-   * is attached here in the main process only.
-   */
-  fetchOctetPost?(
-    url: string,
-    options: { token: string; timeoutMs: number; body: Uint8Array },
   ): Promise<HttpResult>;
   /**
    * Opens a long-lived SSE response. The bearer travels only as an
    * Authorization header supplied here — never as a URL parameter.
    */
-  openSse?(url: string, options: { token: string }): Promise<SseStream>;
+  openSse(url: string, options: { token: string }): Promise<SseStream>;
   resolveServerBinary(): ResolveResult;
   /** Spawns the bundled server (argv array, never a shell string). */
   spawnServer(binaryPath: string, args: readonly string[]): ServerChildLike;
@@ -245,7 +238,6 @@ export class RuntimeGateway {
   private generation = 0;
   private connectionReads = new AbortController();
   private initialReadiness: { generation: number; result: HttpResult } | null = null;
-  private legacyReadiness = false;
   private launchCommandContext: string | null = null;
   /**
    * The runtime directory the gateway actually resolved and connected with.
@@ -461,13 +453,10 @@ export class RuntimeGateway {
     if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
       throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
     }
-    const fetchOctetPost = this.deps.fetchOctetPost;
-    if (fetchOctetPost === undefined) {
-      throw new CanonicalErrorException(buildCanonicalError('E_UPLOAD_UNAVAILABLE'));
-    }
-    return fetchOctetPost(`${this.baseUrl}${path}`, {
+    return this.deps.fetchJson(`${this.baseUrl}${path}`, {
       token: this.token,
       timeoutMs: this.timeouts.apiRequestMs,
+      method: 'POST',
       body,
     });
   }
@@ -478,13 +467,6 @@ export class RuntimeGateway {
    * method — callers receive status plus a line iterator only.
    */
   async openEventStream(options: { afterSeq?: number; epoch?: string } = {}): Promise<SseStream> {
-    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
-      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
-    }
-    const openSse = this.deps.openSse;
-    if (openSse === undefined) {
-      throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
-    }
     const query = new URLSearchParams();
     if (options.afterSeq !== undefined && options.afterSeq > 0) {
       query.set('after', String(Math.floor(options.afterSeq)));
@@ -493,7 +475,7 @@ export class RuntimeGateway {
       }
     }
     const suffix = query.size > 0 ? `?${query.toString()}` : '';
-    return openSse(`${this.baseUrl}/api/v1/events${suffix}`, { token: this.token });
+    return this.openAuthenticatedSse(`/api/v1/events${suffix}`);
   }
 
   /**
@@ -505,13 +487,6 @@ export class RuntimeGateway {
   async openSupervisorEventStream(
     options: { afterSeq?: number; epoch?: string; heartbeatMs?: number } = {},
   ): Promise<SseStream> {
-    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
-      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
-    }
-    const openSse = this.deps.openSse;
-    if (openSse === undefined) {
-      throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
-    }
     const query = new URLSearchParams();
     if (options.afterSeq !== undefined && options.afterSeq > 0) {
       query.set('after', String(Math.floor(options.afterSeq)));
@@ -523,10 +498,7 @@ export class RuntimeGateway {
       query.set('heartbeat_ms', String(Math.floor(options.heartbeatMs)));
     }
     const path = `/api/v1/supervisor/events${query.size > 0 ? `?${query.toString()}` : ''}`;
-    if (!isAllowedApiPath(path, 'GET')) {
-      throw new CanonicalErrorException(buildCanonicalError('E_BAD_API_PATH'));
-    }
-    return openSse(`${this.baseUrl}${path}`, { token: this.token });
+    return this.openAuthenticatedSse(path);
   }
 
   /** Opens one authenticated session stream using only its transcript-row cursor. */
@@ -534,15 +506,8 @@ export class RuntimeGateway {
     sessionId: string,
     options: { from?: number } = {},
   ): Promise<SseStream> {
-    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
-      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
-    }
     if (!SESSION_ID_PATTERN.test(sessionId)) {
       throw new CanonicalErrorException(buildCanonicalError('E_BAD_SESSION_ID'));
-    }
-    const openSse = this.deps.openSse;
-    if (openSse === undefined) {
-      throw new CanonicalErrorException(buildCanonicalError('E_SSE_UNAVAILABLE'));
     }
     const query = new URLSearchParams();
     if (options.from !== undefined) {
@@ -552,9 +517,17 @@ export class RuntimeGateway {
       query.set('from', String(options.from));
     }
     const suffix = query.size === 0 ? '' : `?${query.toString()}`;
-    return openSse(`${this.baseUrl}/api/v1/sessions/${sessionId}/output/stream${suffix}`, {
-      token: this.token,
-    });
+    return this.openAuthenticatedSse(`/api/v1/sessions/${sessionId}/output/stream${suffix}`);
+  }
+
+  private openAuthenticatedSse(path: string): Promise<SseStream> {
+    if (this.state.status !== 'ready' || this.token === null || this.baseUrl === null) {
+      throw new CanonicalErrorException(buildCanonicalError('E_NOT_CONNECTED'));
+    }
+    if (!isAllowedApiPath(path, 'GET')) {
+      throw new CanonicalErrorException(buildCanonicalError('E_BAD_API_PATH'));
+    }
+    return this.deps.openSse(`${this.baseUrl}${path}`, { token: this.token });
   }
 
   /** Runs one full connect cycle. Safe to call repeatedly. */
@@ -941,8 +914,8 @@ export class RuntimeGateway {
       detail: state.detail,
       ownership: state.ownership,
       error: state.error,
-      ...(state.serverBuild === undefined ? {} : { serverBuild: state.serverBuild }),
-      ...(state.serverName === undefined ? {} : { serverName: state.serverName }),
+      ...defined('serverBuild', state.serverBuild),
+      ...defined('serverName', state.serverName),
       switchContext,
     });
   }
@@ -1041,16 +1014,12 @@ export class RuntimeGateway {
       return;
     }
     const baseUrl = this.baseUrl;
-    let healthy = false;
-    try {
-      const result = await this.deps.fetchJson(`${baseUrl}/api/v1/health`, {
-        timeoutMs: this.timeouts.healthProbeMs,
-      });
-      const probe = ProbeHealthSchema.safeParse(result.body);
-      healthy = result.status === 200 && probe.success && probe.data.status === 'ok';
-    } catch {
-      healthy = false;
-    }
+    const health = await probeAuthExemptHealth(
+      this.deps.fetchJson,
+      baseUrl,
+      this.timeouts.healthProbeMs,
+    );
+    const healthy = health.kind === 'healthy';
     if (
       healthy ||
       this.state.status !== 'ready' ||
@@ -1285,15 +1254,12 @@ export class RuntimeGateway {
 
   /** One bounded auth-exempt liveness probe; a throw is simply unreachable. */
   private async probeRemoteLiveness(baseUrl: string): Promise<boolean> {
-    try {
-      const result = await this.deps.fetchJson(`${trimBase(baseUrl)}/api/v1/health`, {
-        timeoutMs: this.timeouts.healthProbeMs,
-      });
-      const probe = result.status === 200 ? ProbeHealthSchema.safeParse(result.body) : null;
-      return probe !== null && probe.success && probe.data.status === 'ok';
-    } catch {
-      return false;
-    }
+    const result = await probeAuthExemptHealth(
+      this.deps.fetchJson,
+      baseUrl,
+      this.timeouts.healthProbeMs,
+    );
+    return result.kind === 'healthy';
   }
 
   /**
@@ -1427,16 +1393,12 @@ export class RuntimeGateway {
         this.remoteReprobeGeneration = null;
         return;
       }
-      let healthy = false;
-      try {
-        const health = await this.deps.fetchJson(`${trimBase(entry.baseUrl)}/api/v1/health`, {
-          timeoutMs: this.timeouts.healthProbeMs,
-        });
-        const probe = ProbeHealthSchema.safeParse(health.body);
-        healthy = health.status === 200 && probe.success && probe.data.status === 'ok';
-      } catch {
-        healthy = false;
-      }
+      const health = await probeAuthExemptHealth(
+        this.deps.fetchJson,
+        entry.baseUrl,
+        this.timeouts.healthProbeMs,
+      );
+      const healthy = health.kind === 'healthy';
       if (this.remoteReprobeGeneration !== generation || this.cancelled(generation)) {
         return;
       }
@@ -1636,23 +1598,17 @@ export class RuntimeGateway {
         this.deps.discovery,
       );
       if (outcome.kind === 'candidate' && outcome.record.pid === child.pid) {
-        try {
-          const health = await this.deps.fetchJson(
-            `${trimBase(outcome.record.base_url)}/api/v1/health`,
-            { timeoutMs: this.timeouts.healthProbeMs },
-          );
-          if (health.status === 200) {
-            const probe = ProbeHealthSchema.safeParse(health.body);
-            if (probe.success && probe.data.status === 'ok') {
-              return {
-                record: outcome.record,
-                compatibility: probe.data.compatibility,
-                serverName: probe.data.name ?? null,
-              };
-            }
-          }
-        } catch {
-          // Not listening yet — keep polling within the bound.
+        const health = await probeAuthExemptHealth(
+          this.deps.fetchJson,
+          outcome.record.base_url,
+          this.timeouts.healthProbeMs,
+        );
+        if (health.kind === 'healthy') {
+          return {
+            record: outcome.record,
+            compatibility: health.probe.compatibility,
+            serverName: health.probe.name ?? null,
+          };
         }
       }
       await this.deps.sleep(this.timeouts.pollIntervalMs);
@@ -1748,8 +1704,6 @@ export class RuntimeGateway {
     }
   }
 
-  /** A 404 is the only compatibility fallback; auth, network and schema
-   * failures never trigger a second request to a different endpoint. */
   private async requestRuntimeReadiness(
     baseUrl: string,
     token: string,
@@ -1758,10 +1712,9 @@ export class RuntimeGateway {
   ): Promise<HttpResult> {
     const generation = this.generation;
     const signal = this.connectionReads.signal;
-    const legacy = this.legacyReadiness;
-    const request = (legacy: boolean): Promise<HttpResult> =>
-      this.deps.fetchJson(
-        `${trimBase(baseUrl)}/api/v1/readiness${legacy ? '' : '/runtime'}${refresh ? '/refresh' : ''}`,
+    try {
+      const result = await this.deps.fetchJson(
+        `${trimBase(baseUrl)}/api/v1/readiness/runtime${refresh ? '/refresh' : ''}`,
         {
           token,
           timeoutMs,
@@ -1769,14 +1722,7 @@ export class RuntimeGateway {
           ...(refresh ? { method: 'POST' as const, body: {} } : {}),
         },
       );
-    try {
-      let result = await request(legacy);
       this.assertCurrentGeneration(generation);
-      if (!legacy && result.status === 404) {
-        this.legacyReadiness = true;
-        result = await request(true);
-        this.assertCurrentGeneration(generation);
-      }
       return result;
     } catch (error) {
       this.assertCurrentGeneration(generation);
@@ -1794,7 +1740,6 @@ export class RuntimeGateway {
     this.connectionReads.abort();
     this.connectionReads = new AbortController();
     this.initialReadiness = null;
-    this.legacyReadiness = false;
     return ++this.generation;
   }
 
@@ -1848,9 +1793,12 @@ export class RuntimeGateway {
                 hint: scrub(state.error.remediation.hint),
               },
             }),
-        ...(state.error.diagnostics === undefined
-          ? {}
-          : { diagnostics: this.scrubOwnedDiagnostics(scrub(state.error.diagnostics)) }),
+        ...defined(
+          'diagnostics',
+          state.error.diagnostics === undefined
+            ? undefined
+            : this.scrubOwnedDiagnostics(scrub(state.error.diagnostics)),
+        ),
       },
     };
   }
@@ -1911,7 +1859,7 @@ export class RuntimeGateway {
       .join('\n');
     return buildCanonicalError(code, {
       ...options,
-      ...(diagnostics === '' ? {} : { diagnostics }),
+      ...definedNonEmpty('diagnostics', diagnostics),
     });
   }
 

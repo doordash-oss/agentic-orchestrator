@@ -160,7 +160,7 @@ export function parseConnectionString(raw: string): ParsedConnectionString {
   const parsed: ParsedConnectionString = {
     baseUrl: `http://${joinHostPort(host, port)}`,
     token,
-    ...(nameValue === null || nameValue === '' ? {} : { name: nameValue }),
+    ...(nameValue !== null && nameValue !== '' ? { name: nameValue } : {}),
   };
   return parsed;
 }

@@ -156,6 +156,8 @@ function makeRemoteEnv(options: {
       euid: 501,
       isProcessAlive: () => false,
     },
+    openSse: () =>
+      Promise.resolve({ status: 200, lines: (async function* () {})(), close: () => undefined }),
     fetchJson: async (url) => {
       env.urls.push(url);
       const remoteHealth = options.remoteHealth ?? healthBody();

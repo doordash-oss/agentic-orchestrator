@@ -79,6 +79,7 @@ import {
   launchReviewFeedbackDraft,
   type ReviewFeedbackDraftCommentView,
 } from './reviewFeedbackDraftApi';
+import { defined } from '../../../../shared/defined';
 
 /**
  * The launch was structurally sound but every selected comment disappeared
@@ -305,7 +306,7 @@ export function ReviewFeedbackWorkspace({
         // shape — the original child ID and original counts — and transitions
         // identically.
         const receipt = launchReceiptText(result);
-        onDispatched({ childId: result.childId, ...(receipt === undefined ? {} : { receipt }) });
+        onDispatched({ childId: result.childId, ...defined('receipt', receipt) });
         onBack();
       })
       .catch((err: unknown) => {

@@ -104,14 +104,6 @@ describe('projectServerUpdate', () => {
     ).toBe('The supervisor is waiting for your answer.');
   });
 
-  it('reads a server that predates supervisor_waiting as working', () => {
-    const { supervisor_waiting: _omitted, ...legacy } = IDLE_SUMMARY;
-    expect(
-      projectServerUpdate(snapshot({ active_work_summary: { ...legacy, supervisor_active: true } }))
-        .activeWorkSummary,
-    ).toBe('The supervisor is working.');
-  });
-
   it('keeps a canonical server error and ignores anything else', () => {
     const error = {
       code: 'update_install_failed',
@@ -194,11 +186,7 @@ describe('ServerUpdateService', () => {
     ]);
   });
 
-  it('reads a server without the endpoints as unsupported and exposes the switcher badge', async () => {
-    const older = new ServerUpdateService(transport(() => ({ status: 404, body: undefined })));
-    await expect(older.get()).resolves.toMatchObject({ status: 'unsupported' });
-    expect(older.switcherBadge()).toBeUndefined();
-
+  it('exposes the switcher badge after reading update state', async () => {
     const current = new ServerUpdateService(transport(() => ({ status: 200, body: snapshot() })));
     expect(current.switcherBadge()).toBeUndefined();
     await current.get();

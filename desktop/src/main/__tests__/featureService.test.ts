@@ -65,6 +65,7 @@ function runtimeConfigBody(): Record<string, unknown> {
       pipeline: 'medium',
       checkpoints: {},
     },
+    notifications: { mute_feature_input: false },
   };
 }
 

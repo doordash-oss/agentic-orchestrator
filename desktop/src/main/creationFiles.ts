@@ -36,6 +36,7 @@ import {
 } from '../shared/ipc';
 import { validateWithSchema } from '../shared/api/parse';
 import { alwaysLocal, assertLocalConnection, type LocalitySource } from './locality';
+import { defined } from '../shared/defined';
 
 export interface CreationFilesServiceDeps {
   pickFiles(kind: CreationFileKind): Promise<string[]>;
@@ -100,7 +101,7 @@ export class CreationFilesService {
             files.push({
               repoKey: repo.name,
               path: relative,
-              ...(repo.identity === undefined ? {} : { identity: repo.identity }),
+              ...defined('identity', repo.identity),
               score,
             });
         }
@@ -114,7 +115,7 @@ export class CreationFilesService {
           .map(({ repoKey, path, identity }) => ({
             repoKey,
             path,
-            ...(identity === undefined ? {} : { identity }),
+            ...defined('identity', identity),
           })),
         truncated: truncated || files.length > CREATION_FILE_SEARCH_RESULT_LIMIT,
         cancelled: controller.signal.aborted,

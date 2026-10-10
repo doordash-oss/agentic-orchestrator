@@ -20,6 +20,7 @@ import {
   type SessionSummary,
 } from '../../../shared/ipc';
 import { orderRunSessions, sessionDisplayLabel, sessionGroup } from './reviewModel';
+import { defined } from '../../../shared/defined';
 
 export type CohortTabStatus = 'running' | 'completed' | 'failed';
 
@@ -121,7 +122,7 @@ export function computeCohort(
   return {
     sessionIds: ordered,
     phase: currentPhase,
-    ...(currentIteration === undefined ? {} : { iteration: currentIteration }),
+    ...defined('iteration', currentIteration),
   };
 }
 

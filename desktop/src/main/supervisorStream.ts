@@ -35,7 +35,6 @@ limitations under the License.
  *
  * No bearer, URL, or other connection material ever leaves this module.
  */
-import { redactText, toCanonicalError } from '../shared/errors';
 import {
   ServerSupervisorStreamEventSchema,
   type ServerSupervisorStreamEvent,
@@ -45,15 +44,11 @@ import {
   SupervisorStreamEpochSchema,
   type SupervisorEvent,
 } from '../shared/ipc';
-import {
-  DEFAULT_EVENT_STREAM_BACKOFF,
-  SseBlockAssembler,
-  decodeSsePayload,
-  type SseBlock,
-  type SseStream,
-} from './gateway/events';
+import { decodeSsePayload, type SseBlock, type SseStream } from './gateway/events';
 import { supervisorPendingRequest } from './attention';
+import { SseRunner, type SseCursor } from './gateway/sseRunner';
 import { toSupervisorRecord, toSupervisorState } from './supervisor';
+import { defined, definedNonEmpty } from '../shared/defined';
 
 /**
  * Upper bound for one supervisor event payload. Records carry transcript
@@ -77,10 +72,7 @@ export interface SupervisorStreamDeps {
   backoff?: { initialMs: number; maxMs: number };
 }
 
-export interface SupervisorCursor {
-  seq: number;
-  epoch: string;
-}
+export type SupervisorCursor = SseCursor;
 
 /**
  * Parses one SSE block into the wire event, or null (dropped) when the
@@ -149,138 +141,76 @@ function toRendererEvent(event: ServerSupervisorStreamEvent): SupervisorEvent | 
   return null;
 }
 
-/**
- * Owns the supervisor stream's reconnect loop while the gateway is ready.
- * Stopped whenever the connection leaves the ready state; the cursor
- * survives stop/start so a resumed subscription replays only what was
- * missed, and is dropped on a server identity change or a stream reset.
- */
+/** Supervisor-specific cursor and renderer mapping over the shared runner. */
 export class SupervisorStreamRunner {
-  private cursor: SupervisorCursor = { seq: 0, epoch: '' };
-  private readonly backoff: { initialMs: number; maxMs: number };
-  private running = false;
-  private generation = 0;
-  private current: SseStream | null = null;
+  private readonly runner: SseRunner<ServerSupervisorStreamEvent, SupervisorEvent>;
 
   constructor(private readonly deps: SupervisorStreamDeps) {
-    this.backoff = deps.backoff ?? DEFAULT_EVENT_STREAM_BACKOFF;
+    this.runner = new SseRunner({
+      open: (cursor) =>
+        deps.source.openSupervisorEventStream(
+          cursor.seq > 0 ? { afterSeq: cursor.seq, ...definedNonEmpty('epoch', cursor.epoch) } : {},
+        ),
+      parse: parseSupervisorStreamEvent,
+      ingest: (event, cursor) => this.ingest(event, cursor),
+      status: (state) => (state === 'connecting' ? null : { type: 'stream-status', status: state }),
+      emit: (push) => this.emit(push),
+      sleep: deps.sleep,
+      log: deps.log,
+      label: 'supervisor stream',
+      dropped: 'dropped an unusable supervisor stream payload',
+      ...defined('backoff', deps.backoff),
+    });
   }
 
   getCursor(): SupervisorCursor {
-    return { ...this.cursor };
+    return this.runner.getCursor();
   }
-
-  /** Idempotent; resumes from the tracked cursor. */
   start(): void {
-    if (this.running) return;
-    this.running = true;
-    const generation = ++this.generation;
-    void this.loop(generation);
+    this.runner.start();
   }
-
   stop(): void {
-    if (!this.running) return;
-    this.running = false;
-    this.generation += 1;
-    this.current?.close();
-    this.current = null;
+    this.runner.stop();
   }
 
-  /**
-   * Drops the resume cursor for a new server identity — replaying another
-   * server's (seq, epoch) space would skip or duplicate records — and tells
-   * the renderer to re-snapshot. Safe while running: the next attempt opens
-   * from the cleared cursor.
-   */
   resetCursor(): void {
-    this.dropCursor();
-  }
-
-  private dropCursor(): void {
-    this.cursor = { seq: 0, epoch: '' };
+    this.runner.resetCursor();
     this.emit({ type: 'reset' });
   }
 
-  private async loop(generation: number): Promise<void> {
-    let delay = this.backoff.initialMs;
-    while (this.active(generation)) {
-      // The attempt's own stream: a late finally from a stopped loop must
-      // never close the stream a newer start() has since opened.
-      let stream: SseStream | null = null;
-      try {
-        const cursor = this.getCursor();
-        stream = await this.deps.source.openSupervisorEventStream(
-          cursor.seq > 0
-            ? { afterSeq: cursor.seq, ...(cursor.epoch === '' ? {} : { epoch: cursor.epoch }) }
-            : {},
-        );
-        if (!this.active(generation)) {
-          stream.close();
-          return;
-        }
-        this.current = stream;
-        if (stream.status !== 200) {
-          throw new Error(`supervisor stream answered status ${String(stream.status)}`);
-        }
-        this.emit({ type: 'stream-status', status: 'live' });
-        delay = this.backoff.initialMs;
-        const assembler = new SseBlockAssembler();
-        for await (const line of stream.lines) {
-          if (!this.active(generation)) return;
-          const block = assembler.push(line);
-          if (block !== null) this.handleBlock(block);
-        }
-      } catch (err) {
-        const safe = toCanonicalError(err, 'E_EVENT_STREAM');
-        this.deps.log(
-          `supervisor stream attempt failed: ${safe.code}: ${redactText(safe.summary)}`,
-        );
-      } finally {
-        stream?.close();
-        if (this.current === stream) this.current = null;
-      }
-      if (!this.active(generation)) return;
-      this.emit({ type: 'stream-status', status: 'stale' });
-      await this.deps.sleep(delay);
-      delay = Math.min(delay * 2, this.backoff.maxMs);
-    }
-  }
-
-  private handleBlock(block: SseBlock): void {
-    const event = parseSupervisorStreamEvent(block);
-    if (event === null) {
-      this.deps.log('dropped an unusable supervisor stream payload');
-      return;
-    }
+  private ingest(
+    event: ServerSupervisorStreamEvent,
+    cursor: SseCursor,
+  ): { cursor: SseCursor; pushes: SupervisorEvent[] } {
     if (event.kind === 'stream.reset') {
-      this.dropCursor();
-      return;
+      return { cursor: { seq: 0, epoch: '' }, pushes: [{ type: 'reset' }] };
     }
     let push: SupervisorEvent | null;
     try {
       const mapped = toRendererEvent(event);
       push = mapped === null ? null : SupervisorEventSchema.parse(mapped);
     } catch {
-      // Validated before the cursor moves: a rejected event never resets or advances it.
       this.deps.log('dropped a supervisor stream payload that failed renderer validation');
-      return;
+      return { cursor, pushes: [] };
     }
-    // A new epoch (server restart) invalidates everything known.
+    let next = { ...cursor };
+    const pushes: SupervisorEvent[] = [];
     if (event.stream_epoch !== '') {
-      if (this.cursor.epoch !== '' && this.cursor.epoch !== event.stream_epoch) {
-        this.dropCursor();
+      if (next.epoch !== '' && next.epoch !== event.stream_epoch) {
+        next = { seq: 0, epoch: '' };
+        pushes.push({ type: 'reset' });
       }
-      if (this.cursor.epoch === '') this.cursor.epoch = event.stream_epoch;
+      if (next.epoch === '') next.epoch = event.stream_epoch;
     }
-    if (push === null) return; // heartbeat
+    if (push === null) return { cursor: next, pushes };
     if (push.type === 'record') {
-      if (push.record.seq <= this.cursor.seq) return; // replayed duplicate
-      this.cursor.seq = push.record.seq;
+      if (push.record.seq <= next.seq) return { cursor: next, pushes };
+      next.seq = push.record.seq;
     }
-    this.emit(push);
+    pushes.push(push);
+    return { cursor: next, pushes };
   }
 
-  /** Defense in depth: only schema-valid pushes ever reach the renderer. */
   private emit(event: SupervisorEvent): void {
     const parsed = SupervisorEventSchema.safeParse(event);
     if (!parsed.success) {
@@ -288,9 +218,5 @@ export class SupervisorStreamRunner {
       return;
     }
     this.deps.onPush(parsed.data);
-  }
-
-  private active(generation: number): boolean {
-    return this.running && generation === this.generation;
   }
 }

@@ -62,6 +62,7 @@ import { supervisorPendingRequest } from './attention';
 import { alwaysLocal, assertNoLocalPathsRemotely, type LocalitySource } from './locality';
 import { toTranscriptMessage, type ServerTransport } from './serverClient';
 import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
+import { defined } from '../shared/defined';
 
 /** The server's `client_message_id` syntax; a minted key that fails it is never sent. */
 const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
@@ -89,11 +90,11 @@ export function toWireErrorReference(reference: ErrorReference): Record<string, 
   return {
     scope: reference.scope,
     code: reference.code,
-    ...(reference.featureId === undefined ? {} : { feature_id: reference.featureId }),
-    ...(reference.repository === undefined ? {} : { repository: reference.repository }),
-    ...(reference.taskKey === undefined ? {} : { task_key: reference.taskKey }),
-    ...(reference.snapshotId === undefined ? {} : { snapshot_id: reference.snapshotId }),
-    ...(reference.key === undefined ? {} : { key: reference.key }),
+    ...defined('feature_id', reference.featureId),
+    ...defined('repository', reference.repository),
+    ...defined('task_key', reference.taskKey),
+    ...defined('snapshot_id', reference.snapshotId),
+    ...defined('key', reference.key),
   };
 }
 
@@ -106,9 +107,9 @@ function toStateError(error: ServerStateError) {
     class: error.class,
     title: error.title,
     summary: error.summary,
-    ...(error.remediation === undefined ? {} : { remediation: error.remediation }),
-    ...(error.context === undefined ? {} : { context: error.context }),
-    ...(error.diagnostics === undefined ? {} : { diagnostics: error.diagnostics }),
+    ...defined('remediation', error.remediation),
+    ...defined('context', error.context),
+    ...defined('diagnostics', error.diagnostics),
   };
 }
 
@@ -116,10 +117,11 @@ function toStateError(error: ServerStateError) {
 export function toSupervisorState(state: ServerSupervisorState): SupervisorState {
   return validateWithSchema(
     {
-      ...(state.background_tasks === undefined
-        ? {}
-        : {
-            backgroundTasks: state.background_tasks.map((task) => ({
+      ...defined(
+        'backgroundTasks',
+        state.background_tasks === undefined
+          ? undefined
+          : state.background_tasks.map((task) => ({
               id: task.id,
               providerId: task.provider_id,
               activity: task.activity,
@@ -133,12 +135,12 @@ export function toSupervisorState(state: ServerSupervisorState): SupervisorState
               updatedAt: task.updated_at,
               expiresAt: task.expires_at,
             })),
-          }),
+      ),
       conversationId: state.conversation_id,
       generation: state.generation,
       sessionId: state.session_id,
       lifecycle: state.lifecycle,
-      ...(state.starting_step === undefined ? {} : { startingStep: state.starting_step }),
+      ...defined('startingStep', state.starting_step),
       lastTurnOutcome: state.last_turn_outcome,
       interruptedBy: state.interrupted_by,
       settings: {
@@ -146,16 +148,17 @@ export function toSupervisorState(state: ServerSupervisorState): SupervisorState
         model: state.settings.model,
         effort: state.settings.effort,
       },
-      ...(state.pending_change === undefined
-        ? {}
-        : {
-            pendingChange: {
+      ...defined(
+        'pendingChange',
+        state.pending_change === undefined
+          ? undefined
+          : {
               requestId: state.pending_change.request_id,
               kind: state.pending_change.kind,
               target: state.pending_change.target,
               requestedAt: state.pending_change.requested_at,
             },
-          }),
+      ),
       effectiveModel: state.effective_model,
       permissionMode: {
         requested: state.permission_mode.requested,
@@ -167,14 +170,13 @@ export function toSupervisorState(state: ServerSupervisorState): SupervisorState
         : {
             failure: {
               ...toStateError(state.failure),
-              ...(state.failure.attempted_settings === undefined
-                ? {}
-                : { attemptedSettings: state.failure.attempted_settings }),
+              ...defined('attemptedSettings', state.failure.attempted_settings),
             },
           }),
-      ...(state.persist_failure === undefined
-        ? {}
-        : { persistFailure: toStateError(state.persist_failure) }),
+      ...defined(
+        'persistFailure',
+        state.persist_failure === undefined ? undefined : toStateError(state.persist_failure),
+      ),
       pendingRequests: state.pending_requests.map(supervisorPendingRequest),
       contextUsage:
         state.context_usage === null
@@ -203,12 +205,8 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
       kind: record.kind,
       visibility: record.visibility,
       createdAt: record.created_at,
-      ...(record.client_message_id === undefined
-        ? {}
-        : { clientMessageId: record.client_message_id }),
-      ...(record.stream_message_id === undefined
-        ? {}
-        : { streamMessageId: record.stream_message_id }),
+      ...defined('clientMessageId', record.client_message_id),
+      ...defined('streamMessageId', record.stream_message_id),
       messages: record.messages.map(toTranscriptMessage),
       ...(record.request === undefined
         ? {}
@@ -218,8 +216,8 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
               toolName: record.request.tool_name,
               stage: record.request.stage,
               outcome: record.request.outcome,
-              ...(record.request.summary === undefined ? {} : { summary: record.request.summary }),
-              ...(record.request.origin === undefined ? {} : { origin: record.request.origin }),
+              ...defined('summary', record.request.summary),
+              ...defined('origin', record.request.origin),
               ...(record.request.origin === 'child' && record.request.child_session_id !== undefined
                 ? { childSessionId: record.request.child_session_id }
                 : {}),
@@ -231,11 +229,9 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
             marker: {
               marker: record.marker.marker,
               text: record.marker.text,
-              ...(record.marker.code === undefined ? {} : { code: record.marker.code }),
-              ...(record.marker.summary === undefined ? {} : { summary: record.marker.summary }),
-              ...(record.marker.truncated === undefined
-                ? {}
-                : { truncated: record.marker.truncated }),
+              ...defined('code', record.marker.code),
+              ...defined('summary', record.marker.summary),
+              ...defined('truncated', record.marker.truncated),
             },
           }),
       ...(record.attachments === undefined || record.attachments.length === 0
@@ -248,10 +244,11 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
               size: attachment.size,
             })),
           }),
-      ...(record.checkpoint === undefined
-        ? {}
-        : {
-            checkpoint: {
+      ...defined(
+        'checkpoint',
+        record.checkpoint === undefined
+          ? undefined
+          : {
               coversThroughSeq: record.checkpoint.covers_through_seq,
               reason: record.checkpoint.reason,
               model: record.checkpoint.model,
@@ -259,7 +256,7 @@ export function toSupervisorRecord(record: ServerSupervisorRecord): SupervisorRe
               truncated: record.checkpoint.truncated,
               hasNativeBaseline: record.checkpoint.has_native_baseline,
             },
-          }),
+      ),
     },
     SupervisorRecordSchema,
   );
@@ -298,8 +295,8 @@ export class SupervisorService {
       method: 'PATCH',
       body: {
         harness: input.harness,
-        ...(input.model === undefined ? {} : { model: input.model }),
-        ...(input.effort === undefined ? {} : { effort: input.effort }),
+        ...defined('model', input.model),
+        ...defined('effort', input.effort),
         request_id: input.requestId,
         expected_generation: input.expectedGeneration,
       },
@@ -364,9 +361,12 @@ export class SupervisorService {
               ...(attachments.length === 0 ? {} : { attachments }),
             }),
         client_message_id: clientMessageId,
-        ...(input.errorReference === undefined
-          ? {}
-          : { error_reference: toWireErrorReference(input.errorReference) }),
+        ...defined(
+          'error_reference',
+          input.errorReference === undefined
+            ? undefined
+            : toWireErrorReference(input.errorReference),
+        ),
       },
     });
     const response = validateWithSchema(body, SupervisorMessageResponseSchema);

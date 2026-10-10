@@ -58,6 +58,7 @@ import {
   type SettingsPatch,
   type ThemePreference,
 } from '../shared/ipc';
+import { defined } from '../shared/defined';
 
 const FILE_NAME = 'settings.json';
 const MAX_SETTINGS_BYTES = 256 * 1024;
@@ -391,22 +392,24 @@ export class SettingsStore {
     }
     const next: Settings = {
       ...this.settings,
-      ...(parsed.data.runtime !== undefined ? { runtime: parsed.data.runtime } : {}),
-      ...(parsed.data.window !== undefined ? { window: parsed.data.window } : {}),
-      ...(parsed.data.theme !== undefined ? { theme: parsed.data.theme } : {}),
-      ...(parsed.data.wizard !== undefined ? { wizard: parsed.data.wizard } : {}),
-      ...(parsed.data.notifications !== undefined
-        ? { notifications: parsed.data.notifications }
-        : {}),
-      ...(parsed.data.shell !== undefined
-        ? { shell: applyShellPatch(this.settings.shell, parsed.data.shell) }
-        : {}),
-      ...(parsed.data.settingsWindow !== undefined
-        ? { settingsWindow: parsed.data.settingsWindow }
-        : {}),
-      ...(parsed.data.servers !== undefined
-        ? { servers: applyServersPatch(this.settings.servers, parsed.data.servers) }
-        : {}),
+      ...defined('runtime', parsed.data.runtime),
+      ...defined('window', parsed.data.window),
+      ...defined('theme', parsed.data.theme),
+      ...defined('wizard', parsed.data.wizard),
+      ...defined('notifications', parsed.data.notifications),
+      ...defined(
+        'shell',
+        parsed.data.shell === undefined
+          ? undefined
+          : applyShellPatch(this.settings.shell, parsed.data.shell),
+      ),
+      ...defined('settingsWindow', parsed.data.settingsWindow),
+      ...defined(
+        'servers',
+        parsed.data.servers === undefined
+          ? undefined
+          : applyServersPatch(this.settings.servers, parsed.data.servers),
+      ),
       schemaVersion: this.settings.schemaVersion,
     };
     this.persist(next);

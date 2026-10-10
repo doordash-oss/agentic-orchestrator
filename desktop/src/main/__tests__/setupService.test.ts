@@ -196,7 +196,15 @@ describe('SetupService.addWorkspaceRoot', () => {
   it('merges the new root into the server config and returns fresh readiness', async () => {
     const { service, calls } = makeService((path) => {
       if (path === '/api/v1/config/runtime') {
-        return { status: 200, body: { api_version: 'v1', workspace_roots: ['/existing'] } };
+        return {
+          status: 200,
+          body: {
+            api_version: 'v1',
+            feature_defaults: { models: {} },
+            notifications: { mute_feature_input: false },
+            workspace_roots: ['/existing'],
+          },
+        };
       }
       return { status: 200, body: serverReadiness() };
     });
@@ -210,7 +218,15 @@ describe('SetupService.addWorkspaceRoot', () => {
   it('skips the mutation when the root is already configured', async () => {
     const { service, calls } = makeService((path) => {
       if (path === '/api/v1/config/runtime') {
-        return { status: 200, body: { api_version: 'v1', workspace_roots: ['/work/space'] } };
+        return {
+          status: 200,
+          body: {
+            api_version: 'v1',
+            feature_defaults: { models: {} },
+            notifications: { mute_feature_input: false },
+            workspace_roots: ['/work/space'],
+          },
+        };
       }
       return { status: 200, body: serverReadiness() };
     });
@@ -433,7 +449,15 @@ describe('SetupService root-mutation fencing', () => {
     return { service, calls, identity };
   }
 
-  const configResponse = { status: 200, body: { api_version: 'v1', workspace_roots: ['/old'] } };
+  const configResponse = {
+    status: 200,
+    body: {
+      api_version: 'v1',
+      feature_defaults: { models: {} },
+      notifications: { mute_feature_input: false },
+      workspace_roots: ['/old'],
+    },
+  };
 
   it('aborts before the write when the server switches between the read and the patch', async () => {
     const { service, calls, identity } = makeFencedService((path) => {
@@ -515,7 +539,15 @@ describe('SetupService locality enforcement', () => {
       path === '/api/v1/readiness'
         ? { status: 200, body: serverReadiness() }
         : path === '/api/v1/config/runtime'
-          ? { status: 200, body: { api_version: 'v1', workspace_roots: [] } }
+          ? {
+              status: 200,
+              body: {
+                api_version: 'v1',
+                feature_defaults: { models: {} },
+                notifications: { mute_feature_input: false },
+                workspace_roots: [],
+              },
+            }
           : { status: 200, body: {} },
     );
     await expect(service.addWorkspaceRoot('/work/new')).rejects.toMatchObject({

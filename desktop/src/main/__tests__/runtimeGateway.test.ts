@@ -201,6 +201,8 @@ function makeEnv(options: EnvOptions = {}): Env {
       euid: 501,
       isProcessAlive: (pid) => alive.has(pid),
     },
+    openSse: () =>
+      Promise.resolve({ status: 200, lines: (async function* () {})(), close: () => undefined }),
     fetchJson: async (url, opts) => {
       env.fetchCalls.push(
         opts.token === undefined
@@ -1043,8 +1045,9 @@ describe('RuntimeGateway apiRequest', () => {
     const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
     await env.gateway.start();
     const uploadCalls: Array<{ url: string; token: string; body: Uint8Array }> = [];
-    env.deps.fetchOctetPost = (url, options) => {
-      uploadCalls.push({ url, token: options.token, body: options.body });
+    const originalFetchJson = env.deps.fetchJson;
+    env.deps.fetchJson = (url, options) => {
+      uploadCalls.push({ url, token: options.token ?? '', body: options.body as Uint8Array });
       return Promise.resolve({
         status: 200,
         body: { api_version: 'v1', reference: 'ref-1', kind: 'image', name: 'a.png', size: 3 },
@@ -1065,12 +1068,12 @@ describe('RuntimeGateway apiRequest', () => {
       },
     ]);
     expectNoTokenLeak(env);
+    env.deps.fetchJson = originalFetchJson;
   });
 
   it('apiUpload fails closed on malformed or missing upload query parameters', async () => {
     const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
     await env.gateway.start();
-    env.deps.fetchOctetPost = () => Promise.resolve({ status: 200, body: {} });
 
     for (const path of [
       '/api/v1/uploads',
@@ -1085,15 +1088,6 @@ describe('RuntimeGateway apiRequest', () => {
         canonical: { code: 'E_BAD_API_PATH' },
       });
     }
-  });
-
-  it('apiUpload fails closed when the build wires no upload transport', async () => {
-    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
-    await env.gateway.start();
-
-    await expect(
-      env.gateway.apiUpload('/api/v1/uploads?kind=image&name=a.png', new Uint8Array([1])),
-    ).rejects.toMatchObject({ canonical: { code: 'E_UPLOAD_UNAVAILABLE' } });
   });
 
   it('sends authenticated requests to the attached runtime once ready', async () => {
@@ -1260,14 +1254,6 @@ describe('RuntimeGateway openEventStream', () => {
     await env.gateway.openEventStream({ afterSeq: 42, epoch: 'epoch-a' });
     expect(calls[0]!.url).toBe(`${EXTERNAL_BASE}/api/v1/events?after=42&epoch=epoch-a`);
     expect(calls[0]!.url).not.toContain(EXTERNAL_TOKEN);
-  });
-
-  it('fails closed when no SSE transport is wired', async () => {
-    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
-    await env.gateway.start();
-    await expect(env.gateway.openEventStream()).rejects.toMatchObject({
-      canonical: { code: 'E_SSE_UNAVAILABLE' },
-    });
   });
 
   it('rejects after shutdown so a stream can never carry a stale credential', async () => {
@@ -2437,25 +2423,6 @@ describe('runtime-only readiness handoff', () => {
     expect(env.fetchCalls.some((call) => call.url === `${EXTERNAL_BASE}/api/v1/readiness`)).toBe(
       false,
     );
-  });
-
-  it('falls back only for an older server and reuses its combined attach snapshot', async () => {
-    const env = makeEnv({ discovery: JSON.stringify(discoveryRecord()) });
-    const fetch = env.deps.fetchJson;
-    const paths: string[] = [];
-    env.deps.fetchJson = async (url, options) => {
-      paths.push(url);
-      if (url.endsWith('/runtime')) return { status: 404, body: {} };
-      return fetch(url, options);
-    };
-    await env.gateway.start();
-    expect(env.gateway.getState().status).toBe('ready');
-    const before = paths.length;
-    await env.gateway.apiRequest('/api/v1/readiness/runtime');
-    expect(paths).toHaveLength(before);
-    await env.gateway.apiRequest('/api/v1/readiness/runtime');
-    expect(paths.at(-1)).toBe(`${EXTERNAL_BASE}/api/v1/readiness`);
-    expect(paths.filter((p) => p.endsWith('/runtime'))).toHaveLength(1);
   });
 
   it.each([401, 403, 500])('does not fall back on runtime readiness status %i', async (status) => {

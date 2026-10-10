@@ -31,6 +31,7 @@ import { useId, useRef } from 'react';
 import { useModalDismiss } from '../components/useModalDismiss';
 import { BulkPreviewPanel } from './BulkPreviewPanel';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
+import { defined } from '../../../shared/defined';
 
 export interface RecoverySheetProps {
   /** Non-null when the opening route asked for a bulk preview (⌘⇧B, the bulk command). */
@@ -74,9 +75,7 @@ export function RecoverySheet({
           </button>
         </header>
         <div className="sheet__body recovery-sheet__body">
-          <RecoveryWorkspace
-            {...(onNavigateToFeature === undefined ? {} : { onNavigateToFeature })}
-          />
+          <RecoveryWorkspace {...defined('onNavigateToFeature', onNavigateToFeature)} />
           <BulkPreviewPanel autoPreviewKey={bulkPreviewKey} />
         </div>
       </div>

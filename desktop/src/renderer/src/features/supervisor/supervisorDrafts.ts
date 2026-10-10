@@ -31,6 +31,7 @@ limitations under the License.
 import { createContext, useContext, useRef, useSyncExternalStore } from 'react';
 import type { ErrorReference } from '../../../../shared/ipc';
 import type { ComposerUploadItem } from '../stagedItems';
+import { defined } from '../../../../shared/defined';
 
 /** The composer's attachment items: local paths and staged uploads. */
 export interface SupervisorDraftItems {
@@ -186,8 +187,8 @@ export class SupervisorDraftsStore {
   appendDraft(serverKey: string, draft?: string, errorReference?: ErrorReference): void {
     this.update(serverKey, (entry) => ({
       ...entry,
-      ...(draft === undefined ? {} : { text: appendDraftText(entry.text, draft) }),
-      ...(errorReference === undefined ? {} : { errorReference }),
+      ...defined('text', draft === undefined ? undefined : appendDraftText(entry.text, draft)),
+      ...defined('errorReference', errorReference),
     }));
   }
 

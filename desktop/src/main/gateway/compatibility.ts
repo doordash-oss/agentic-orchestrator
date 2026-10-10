@@ -25,6 +25,7 @@ limitations under the License.
  */
 import { CompatibilityDeclarationSchema, type BuildIdentity } from '../../shared/api/parse';
 import type { CompatibilityFailure } from '../../shared/errors';
+import { SUPPORTED_API_VERSION } from '../../shared/apiVersion';
 
 export type { BuildIdentity };
 
@@ -32,7 +33,7 @@ export type { BuildIdentity };
 export const DESKTOP_SCHEMA_VERSION = 5;
 
 /** Server REST API majors this desktop build speaks. */
-export const SUPPORTED_SERVER_API_VERSIONS: readonly string[] = ['v1'];
+export const SUPPORTED_SERVER_API_VERSIONS: readonly string[] = [SUPPORTED_API_VERSION];
 
 /** Server schema contract series this desktop build supports. */
 export const SUPPORTED_SERVER_SCHEMA_VERSIONS: readonly number[] = [5];

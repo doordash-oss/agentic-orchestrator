@@ -38,6 +38,7 @@ import { scanRegistry, type RegistryDeps, type RegistryScan } from './registry';
 import { fileIsExecutable, resolveServerBinary } from './resources';
 import { RuntimeGateway, type GatewayDeps, type SelectedRuntime } from './runtimeGateway';
 import { ManagedServerProcess } from './serverProcess';
+import { defined } from '../../shared/defined';
 
 /** Mirrors the Go launcher's default runtime parent (cmd/agentico/main.go). */
 const DEFAULT_RUNTIME_PARENT = '~/.agentic-orchestrator';
@@ -143,7 +144,6 @@ export function createRuntimeGateway(options: RuntimeGatewayWiringOptions): Wire
     selectRuntime: () => selectRuntime(options.getRuntimeSelection()),
     discovery,
     fetchJson,
-    fetchOctetPost,
     openSse,
     resolveServerBinary: () =>
       resolveServerBinary(
@@ -252,11 +252,14 @@ export async function fetchJson(
     if (requestOptions.token !== undefined) {
       headers['Authorization'] = `Bearer ${requestOptions.token}`;
     }
-    let payload: string | undefined;
+    let payload: string | Uint8Array | undefined;
     if (method !== 'GET') {
-      headers['Content-Type'] = 'application/json';
+      const octets = requestOptions.body instanceof Uint8Array;
+      headers['Content-Type'] = octets ? 'application/octet-stream' : 'application/json';
       headers['X-Agentico-Client'] = 'local';
-      payload = JSON.stringify(requestOptions.body ?? {});
+      payload = octets
+        ? (requestOptions.body as Uint8Array)
+        : JSON.stringify(requestOptions.body ?? {});
     }
     const response = await fetch(url, {
       method,
@@ -266,61 +269,7 @@ export async function fetchJson(
           : AbortSignal.any([controller.signal, requestOptions.signal]),
       headers,
       redirect: 'error',
-      ...(payload === undefined ? {} : { body: payload }),
-    });
-    const text = await response.text();
-    assertWithinByteSize(text, requestOptions.maxResponseBytes ?? MAX_PAYLOAD_BYTES);
-    let body: unknown;
-    if (text !== '') {
-      body = JSON.parse(text);
-      assertNoPrototypePollution(body);
-    }
-    return { status: response.status, body };
-  } catch (err) {
-    if (timedOut) {
-      throw new CanonicalErrorException(requestTimeoutError());
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
- * Bounded binary POST for upload staging: raw octet-stream bytes in, the
- * same bounded/pollution-scanned JSON surface out as fetchJson. Shares
- * fetchJson's invariants — bearer header attached here in the main process
- * only, the CSRF mutation header, the typed timeout error — so a staged
- * upload can never outrun the mutation bound silently.
- */
-export async function fetchOctetPost(
-  url: string,
-  requestOptions: {
-    token: string;
-    timeoutMs: number;
-    body: Uint8Array;
-    /** Tighter response bound for probe endpoints; defaults to the boundary cap. */
-    maxResponseBytes?: number;
-  },
-): Promise<{ status: number; body: unknown }> {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, requestOptions.timeoutMs);
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/octet-stream',
-        Authorization: `Bearer ${requestOptions.token}`,
-        'X-Agentico-Client': 'local',
-      },
-      redirect: 'error',
-      body: requestOptions.body,
+      ...defined('body', payload as string),
     });
     const text = await response.text();
     assertWithinByteSize(text, requestOptions.maxResponseBytes ?? MAX_PAYLOAD_BYTES);

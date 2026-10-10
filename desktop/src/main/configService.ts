@@ -21,8 +21,18 @@ limitations under the License.
  * server through the gateway transport; the renderer never composes REST
  * paths or sees snake_case server shapes.
  */
-import { z } from 'zod';
-import { ReadinessResponseSchema } from '../shared/api/parse';
+import type { z } from 'zod';
+import {
+  ActionResponseSchema,
+  FeatureConfigResponseSchema,
+  ModelCatalogResponseSchema,
+  ProviderModelRefreshResponseSchema,
+  RuntimeConfigResponseSchema,
+  type ServerEffortDefaultsSchema,
+  type ServerModelDefaultsSchema,
+  type ServerCheckpointsSchema,
+  type ServerFeatureConfigSchema,
+} from '../shared/api/parse';
 import { assertCompatibleApiVersion } from '../shared/apiVersion';
 import {
   FeatureConfigUpdateRequestSchema,
@@ -40,114 +50,26 @@ import {
 } from '../shared/ipc';
 import { serverRequest, type ServerTransport } from './serverClient';
 import { toReadinessSnapshot } from './setup';
+import { defined, definedNonEmpty } from '../shared/defined';
 
-const ServerModelsSchema = z.object({
-  inquiry: z.string().optional(),
-  research: z.string().optional(),
-  planning: z.string().optional(),
-  implementation: z.string().optional(),
-  review: z.string().optional(),
-  utilities: z.string().optional(),
-  kb_build: z.string().optional(),
-  automatic_review: z.string().optional(),
-});
-
-const ServerEffortSchema = z.object({
-  inquiry: z.string().optional(),
-  research: z.string().optional(),
-  planning: z.string().optional(),
-  implementation: z.string().optional(),
-  review: z.string().optional(),
-  utilities: z.string().optional(),
-  kb_build: z.string().optional(),
-});
-
-const ServerCheckpointsSchema = z.object({
-  inquiry_review: z.boolean().optional(),
-  research_review: z.boolean().optional(),
-  design_review: z.boolean().optional(),
-  roadmap_review: z.boolean().optional(),
-  phase_plan_review: z.boolean().optional(),
-  manual_publish: z.boolean().optional(),
-  draft_publish: z.boolean().optional(),
-});
-
-const ServerFeatureConfigSchema = z.object({
-  models: ServerModelsSchema,
-  effort: ServerEffortSchema.optional(),
-  inquireness: z.string().optional(),
-  checkpoints: ServerCheckpointsSchema,
-  pipeline: z.string().optional(),
-  input_notifications: z.string().optional(),
-  automatic_review_mode: z.string().optional(),
-});
-
-const FeatureConfigResponseSchema = z.object({
-  api_version: z.string(),
-  feature_id: z.string(),
-  current: ServerFeatureConfigSchema,
-  defaults: ServerFeatureConfigSchema,
-  publishability: z.object({ manual_publish: z.boolean() }).partial().optional(),
-});
-
-const RuntimeConfigResponseSchema = z.object({
-  api_version: z.string(),
-  feature_defaults: z.object({
-    models: ServerModelsSchema,
-    effort: ServerEffortSchema.optional(),
-    inquireness: z.string().optional(),
-    checkpoints: ServerCheckpointsSchema.optional(),
-    pipeline: z.string().optional(),
-    automatic_review_enabled: z.boolean().optional(),
-    dangerously_skip_permissions: z.boolean().optional(),
-  }),
-  notifications: z.object({ mute_feature_input: z.boolean() }).optional(),
-});
-
-const ServerModelInfoSchema = z.object({
-  id: z.string(),
-  display_name: z.string().optional(),
-  aliases: z.array(z.string()).optional(),
-  category: z.string().optional(),
-  context_window: z.number().int().optional(),
-  effort_capabilities: z.array(z.string()).optional(),
-});
-
-const ModelCatalogResponseSchema = z.object({
-  api_version: z.string(),
-  provider_order: z.array(z.string()).optional(),
-  provider_models: z.record(z.string(), z.array(ServerModelInfoSchema)).optional(),
-  phase_defaults: ServerModelsSchema.optional(),
-  phase_provider_models: z.record(z.string(), z.record(z.string(), z.array(z.string()))).optional(),
-  chat_default_effort: z
-    .record(z.string(), z.enum(['low', 'medium', 'high', 'xhigh', 'max']))
-    .optional(),
-});
-
-const ProviderModelRefreshResponseSchema = z.object({
-  api_version: z.string(),
-  readiness: ReadinessResponseSchema,
-  catalog: ModelCatalogResponseSchema,
-});
-
-const ActionResponseSchema = z.object({ api_version: z.string() });
-
-function toPhaseModels(models: z.output<typeof ServerModelsSchema>): PhaseModels {
+function toPhaseModels(models: z.output<typeof ServerModelDefaultsSchema>): PhaseModels {
   const entry = (value: string | undefined): string | undefined =>
     value === undefined || value === '' ? undefined : value;
   return {
-    ...(entry(models.inquiry) === undefined ? {} : { inquiry: models.inquiry }),
-    ...(entry(models.research) === undefined ? {} : { research: models.research }),
-    ...(entry(models.planning) === undefined ? {} : { planning: models.planning }),
-    ...(entry(models.implementation) === undefined
-      ? {}
-      : { implementation: models.implementation }),
-    ...(entry(models.review) === undefined ? {} : { review: models.review }),
-    ...(entry(models.utilities) === undefined ? {} : { utilities: models.utilities }),
-    ...(entry(models.kb_build) === undefined ? {} : { kbBuild: models.kb_build }),
-    ...(entry(models.automatic_review) === undefined
-      ? {}
-      : { automaticReview: models.automatic_review }),
+    ...defined('inquiry', entry(models.inquiry) === undefined ? undefined : models.inquiry),
+    ...defined('research', entry(models.research) === undefined ? undefined : models.research),
+    ...defined('planning', entry(models.planning) === undefined ? undefined : models.planning),
+    ...defined(
+      'implementation',
+      entry(models.implementation) === undefined ? undefined : models.implementation,
+    ),
+    ...defined('review', entry(models.review) === undefined ? undefined : models.review),
+    ...defined('utilities', entry(models.utilities) === undefined ? undefined : models.utilities),
+    ...defined('kbBuild', entry(models.kb_build) === undefined ? undefined : models.kb_build),
+    ...defined(
+      'automaticReview',
+      entry(models.automatic_review) === undefined ? undefined : models.automatic_review,
+    ),
   };
 }
 
@@ -180,7 +102,9 @@ function effortEntry(value: string | undefined): EffortLevel | undefined {
     : undefined;
 }
 
-function toPhaseEffort(effort: z.output<typeof ServerEffortSchema> | undefined): PhaseEffort {
+function toPhaseEffort(
+  effort: z.output<typeof ServerEffortDefaultsSchema> | undefined,
+): PhaseEffort {
   if (effort === undefined) return {};
   const inquiry = effortEntry(effort.inquiry);
   const research = effortEntry(effort.research);
@@ -190,13 +114,13 @@ function toPhaseEffort(effort: z.output<typeof ServerEffortSchema> | undefined):
   const utilities = effortEntry(effort.utilities);
   const kbBuild = effortEntry(effort.kb_build);
   return {
-    ...(inquiry === undefined ? {} : { inquiry }),
-    ...(research === undefined ? {} : { research }),
-    ...(planning === undefined ? {} : { planning }),
-    ...(implementation === undefined ? {} : { implementation }),
-    ...(review === undefined ? {} : { review }),
-    ...(utilities === undefined ? {} : { utilities }),
-    ...(kbBuild === undefined ? {} : { kbBuild }),
+    ...defined('inquiry', inquiry),
+    ...defined('research', research),
+    ...defined('planning', planning),
+    ...defined('implementation', implementation),
+    ...defined('review', review),
+    ...defined('utilities', utilities),
+    ...defined('kbBuild', kbBuild),
   };
 }
 
@@ -297,7 +221,7 @@ export class ConfigService {
           effort: toServerEffort(req.config.effort),
           inquireness: req.config.inquireness,
           checkpoints: toServerCheckpoints(req.config.checkpoints),
-          ...(req.config.pipeline === '' ? {} : { pipeline: req.config.pipeline }),
+          ...definedNonEmpty('pipeline', req.config.pipeline),
           input_notifications: req.config.inputNotifications,
           automatic_review_mode: req.config.automaticReviewMode,
         },
@@ -336,7 +260,7 @@ export class ConfigService {
           effort: toServerEffort(defaults.effort),
           inquireness: defaults.inquireness,
           checkpoints: toServerCheckpoints(defaults.checkpoints),
-          ...(defaults.pipeline === '' ? {} : { pipeline: defaults.pipeline }),
+          ...definedNonEmpty('pipeline', defaults.pipeline),
           automatic_review_enabled: defaults.automaticReviewEnabled,
           dangerously_skip_permissions: defaults.dangerouslySkipPermissions ?? false,
         },
@@ -380,20 +304,22 @@ function toModelCatalogue(data: z.output<typeof ModelCatalogResponseSchema>): Mo
       ...(m.display_name === undefined || m.display_name === ''
         ? {}
         : { displayName: m.display_name }),
-      ...(m.aliases === undefined
-        ? {}
-        : { aliases: m.aliases.filter((alias) => alias.trim() !== '') }),
-      ...(m.category === undefined || m.category === '' ? {} : { category: m.category }),
+      ...defined(
+        'aliases',
+        m.aliases === undefined ? undefined : m.aliases.filter((alias) => alias.trim() !== ''),
+      ),
+      ...definedNonEmpty('category', m.category),
       ...(m.context_window === undefined || m.context_window <= 0
         ? {}
         : { contextWindow: m.context_window }),
-      ...(m.effort_capabilities === undefined
-        ? {}
-        : {
-            effortCapabilities: m.effort_capabilities.filter((value): value is EffortLevel =>
+      ...defined(
+        'effortCapabilities',
+        m.effort_capabilities === undefined
+          ? undefined
+          : m.effort_capabilities.filter((value): value is EffortLevel =>
               EFFORT_LEVELS.has(value as EffortLevel),
             ),
-          }),
+      ),
     }));
   }
   return {

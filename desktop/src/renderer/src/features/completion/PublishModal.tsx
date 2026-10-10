@@ -30,6 +30,7 @@ import { parseIpcError } from '../../wizard/ipcError';
 import type { CanonicalError } from '../../../../shared/ipc';
 import { PrLinkButton, isEligibleForPublish } from './completionShared';
 import { UNPUBLISHED_CHANGES, pendingDeliveryDetail } from './pendingDelivery';
+import { defined, definedNonEmpty } from '../../../../shared/defined';
 
 const PUBLISH_TIMEOUT_LOCKED_MESSAGE =
   'Publish may still be running. Quit and reopen Agentico before publishing again.';
@@ -244,8 +245,8 @@ export function PublishModal({
         body: {
           source_revision: preflight.sourceRevision,
           repos,
-          ...(title === '' ? {} : { title }),
-          ...(publishBody.trim() === '' ? {} : { body: publishBody }),
+          ...definedNonEmpty('title', title),
+          ...definedNonEmpty('body', publishBody.trim() === '' ? undefined : publishBody),
         },
       };
       setPublishBusy(true);
@@ -336,7 +337,7 @@ export function PublishModal({
         return {
           ...base,
           enabled: base.enabled && modalReason === undefined,
-          ...(reason === undefined ? {} : { disabledReason: reason }),
+          ...defined('disabledReason', reason),
         };
       };
     },

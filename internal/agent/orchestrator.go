@@ -43,7 +43,7 @@ import (
 // crashes by re-running the interrupted unit from scratch.
 type OrchestratorConfig struct {
 	Feature      *feature.Feature
-	FeatureStore ports.FeatureStore
+	FeatureStore FeatureStore
 	PlanPath     string
 	StateDir     string
 	Config       *config.Config

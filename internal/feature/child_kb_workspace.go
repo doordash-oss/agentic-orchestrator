@@ -32,13 +32,13 @@ func ChildKBWorkspaceDir(stateDir, childID, repoName string) string {
 	return filepath.Join(filepath.Dir(stateDir), "child-kb", childID, repoName)
 }
 
-// WorkspaceSource identifies where a child KB workspace was seeded from.
-type WorkspaceSource string
+// workspaceSource identifies where a child KB workspace was seeded from.
+type workspaceSource string
 
 const (
-	WorkspaceSourceOverlay   WorkspaceSource = "overlay"   // seeded from a valid parent overlay
-	WorkspaceSourceCanonical WorkspaceSource = "canonical" // seeded from the latest canonical KB
-	WorkspaceSourceFull      WorkspaceSource = "full"      // full build (no valid overlay or canonical baseline)
+	WorkspaceSourceOverlay   workspaceSource = "overlay"   // seeded from a valid parent overlay
+	WorkspaceSourceCanonical workspaceSource = "canonical" // seeded from the latest canonical KB
+	WorkspaceSourceFull      workspaceSource = "full"      // full build (no valid overlay or canonical baseline)
 )
 
 // ChildKBWorkspaceState is persisted as state.json in the workspace directory.
@@ -47,7 +47,7 @@ const (
 // commit the workspace was seeded against, and the commit the KB builder has
 // actually analyzed through.
 type ChildKBWorkspaceState struct {
-	Source          WorkspaceSource `json:"source"`
+	Source          workspaceSource `json:"source"`
 	CanonicalCommit string          `json:"canonical_commit"`
 	ParentHEAD      string          `json:"parent_head"`
 	SeedBaseCommit  string          `json:"seed_base_commit"`
@@ -66,8 +66,8 @@ type OverlayProvenance struct {
 	CreatedAt       time.Time `json:"created_at"`
 }
 
-// OverlayLockInfo holds information about who holds the overlay lock.
-type OverlayLockInfo struct {
+// overlayLockInfo holds information about who holds the overlay lock.
+type overlayLockInfo struct {
 	ChildID   string    `json:"child_id"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -75,34 +75,29 @@ type OverlayLockInfo struct {
 // ErrOverlayLocked is returned when a parent overlay is locked by another child.
 var ErrOverlayLocked = fmt.Errorf("parent overlay is locked by another child")
 
-// OverlayLockPath returns the path to the overlay lock file. The lock lives
+// overlayLockPath returns the path to the overlay lock file. The lock lives
 // as a sibling of the overlay directory (inside the stable overlay parent
 // namespace) rather than inside the overlay itself, so that atomic overlay
 // replacement does not destroy the lock and the exclusive-promotion
 // guarantee holds across overlay generations.
-func OverlayLockPath(overlayDir string) string {
+func overlayLockPath(overlayDir string) string {
 	return overlayDir + ".lock"
 }
 
-// OverlayStatePath returns the path to the overlay provenance state file.
-func OverlayStatePath(overlayDir string) string {
+// overlayStatePath returns the path to the overlay provenance state file.
+func overlayStatePath(overlayDir string) string {
 	return filepath.Join(overlayDir, "state.json")
 }
 
-// WorkspaceStatePath returns the path to the workspace state file.
-func WorkspaceStatePath(workspaceDir string) string {
+// workspaceStatePath returns the path to the workspace state file.
+func workspaceStatePath(workspaceDir string) string {
 	return filepath.Join(workspaceDir, "state.json")
-}
-
-// WorkspaceLockPath returns the path to the workspace lock file.
-func WorkspaceLockPath(workspaceDir string) string {
-	return filepath.Join(workspaceDir, "workspace.lock")
 }
 
 // LoadOverlayProvenance reads the overlay provenance from disk.
 // Returns nil if not found.
 func LoadOverlayProvenance(overlayDir string) (*OverlayProvenance, error) {
-	data, err := os.ReadFile(OverlayStatePath(overlayDir))
+	data, err := os.ReadFile(overlayStatePath(overlayDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -134,7 +129,7 @@ func SaveOverlayProvenance(overlayDir string, prov *OverlayProvenance) error {
 	if err != nil {
 		return fmt.Errorf("marshaling overlay provenance: %w", err)
 	}
-	path := OverlayStatePath(overlayDir)
+	path := overlayStatePath(overlayDir)
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
 		return fmt.Errorf("writing temp overlay provenance: %w", err)
@@ -148,7 +143,7 @@ func SaveOverlayProvenance(overlayDir string, prov *OverlayProvenance) error {
 // LoadWorkspaceState reads the child KB workspace state from disk.
 // Returns nil if not found.
 func LoadWorkspaceState(workspaceDir string) (*ChildKBWorkspaceState, error) {
-	data, err := os.ReadFile(WorkspaceStatePath(workspaceDir))
+	data, err := os.ReadFile(workspaceStatePath(workspaceDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -171,7 +166,7 @@ func SaveWorkspaceState(workspaceDir string, state *ChildKBWorkspaceState) error
 	if err != nil {
 		return fmt.Errorf("marshaling workspace state: %w", err)
 	}
-	path := WorkspaceStatePath(workspaceDir)
+	path := workspaceStatePath(workspaceDir)
 	tmpPath := path + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
 		return fmt.Errorf("writing temp workspace state: %w", err)
@@ -192,7 +187,7 @@ func SaveWorkspaceState(workspaceDir string, state *ChildKBWorkspaceState) error
 // unlocked overlay, so a corrupt or unwritable lock can never admit a second
 // child while a promotion is in flight.
 func AcquireOverlayLock(overlayDir, childID string) (bool, error) {
-	lockPath := OverlayLockPath(overlayDir)
+	lockPath := overlayLockPath(overlayDir)
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return false, fmt.Errorf("creating overlay lock dir: %w", err)
 	}
@@ -203,7 +198,7 @@ func AcquireOverlayLock(overlayDir, childID string) (bool, error) {
 			if readErr != nil {
 				return false, fmt.Errorf("reading existing overlay lock %s: %w", lockPath, readErr)
 			}
-			var existing OverlayLockInfo
+			var existing overlayLockInfo
 			if err := json.Unmarshal(data, &existing); err != nil {
 				return false, fmt.Errorf("parsing existing overlay lock %s: %w", lockPath, err)
 			}
@@ -222,7 +217,7 @@ func AcquireOverlayLock(overlayDir, childID string) (bool, error) {
 		}
 		return false, fmt.Errorf("creating overlay lock %s: %w", lockPath, err)
 	}
-	info := OverlayLockInfo{ChildID: childID, Timestamp: time.Now()}
+	info := overlayLockInfo{ChildID: childID, Timestamp: time.Now()}
 	data, err := json.Marshal(info)
 	if err != nil {
 		_ = f.Close()
@@ -246,14 +241,14 @@ func AcquireOverlayLock(overlayDir, childID string) (bool, error) {
 // corrupt lock payload is returned as an error so callers fail closed
 // instead of treating the overlay as unlocked.
 func ReadOverlayLockOwner(overlayDir string) (string, error) {
-	data, err := os.ReadFile(OverlayLockPath(overlayDir))
+	data, err := os.ReadFile(overlayLockPath(overlayDir))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
 		}
 		return "", fmt.Errorf("reading overlay lock: %w", err)
 	}
-	var info OverlayLockInfo
+	var info overlayLockInfo
 	if err := json.Unmarshal(data, &info); err != nil {
 		return "", fmt.Errorf("parsing overlay lock: %w", err)
 	}
@@ -266,7 +261,7 @@ func ReadOverlayLockOwner(overlayDir string) (string, error) {
 // returns a contextual error rather than silently deleting another child's
 // potentially valid lock.
 func ReleaseOverlayLock(overlayDir, childID string) error {
-	lockPath := OverlayLockPath(overlayDir)
+	lockPath := overlayLockPath(overlayDir)
 	if childID == "" {
 		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("removing overlay lock %s: %w", lockPath, err)
@@ -280,7 +275,7 @@ func ReleaseOverlayLock(overlayDir, childID string) error {
 		}
 		return fmt.Errorf("reading overlay lock %s: %w", lockPath, err)
 	}
-	var info OverlayLockInfo
+	var info overlayLockInfo
 	if err := json.Unmarshal(data, &info); err != nil {
 		return fmt.Errorf("parsing overlay lock %s: %w", lockPath, err)
 	}
@@ -293,27 +288,13 @@ func ReleaseOverlayLock(overlayDir, childID string) error {
 	return nil
 }
 
-// IsOverlayLockStale checks if the overlay lock file is stale.
-// A lock is stale if it is corrupt or older than the given timeout.
-func IsOverlayLockStale(overlayDir string, timeout time.Duration) bool {
-	data, err := os.ReadFile(OverlayLockPath(overlayDir))
-	if err != nil {
-		return false
-	}
-	var info OverlayLockInfo
-	if err := json.Unmarshal(data, &info); err != nil {
-		return true
-	}
-	return time.Since(info.Timestamp) > timeout
-}
-
-// PromotionPhase is the aggregate phase of the promotion journal.
-type PromotionPhase string
+// promotionPhase is the aggregate phase of the promotion journal.
+type promotionPhase string
 
 const (
-	PromotionPhasePending   PromotionPhase = "pending"
-	PromotionPhasePromoting PromotionPhase = "promoting"
-	PromotionPhasePromoted  PromotionPhase = "promoted"
+	PromotionPhasePending   promotionPhase = "pending"
+	PromotionPhasePromoting promotionPhase = "promoting"
+	PromotionPhasePromoted  promotionPhase = "promoted"
 )
 
 // PromotionEntry is the per-repository entry in the promotion journal.
@@ -333,7 +314,7 @@ type PromotionEntry struct {
 type PromotionJournal struct {
 	ChildID  string           `yaml:"child_id"`
 	ParentID string           `yaml:"parent_id"`
-	Phase    PromotionPhase   `yaml:"phase"`
+	Phase    promotionPhase   `yaml:"phase"`
 	Entries  []PromotionEntry `yaml:"entries"`
 	// LocksReleased flips true only after every overlay lock recorded in
 	// Entries has verifiably been released. A promoted journal without this
@@ -371,7 +352,7 @@ func (p *PromotionJournal) EntryByRepo(repoName string) *PromotionEntry {
 }
 
 // PromotionPath returns the path to the promotion journal file.
-func (s *Store) PromotionPath(childID string) string {
+func (s *Store) promotionPath(childID string) string {
 	return filepath.Join(s.BaseDir, childID, "promotion.yaml")
 }
 
@@ -383,7 +364,7 @@ func (s *Store) LoadPromotion(childID string) (*PromotionJournal, error) {
 }
 
 func (s *Store) loadPromotionUnlocked(childID string) (*PromotionJournal, error) {
-	data, err := os.ReadFile(s.PromotionPath(childID))
+	data, err := os.ReadFile(s.promotionPath(childID))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -408,7 +389,7 @@ func (s *Store) SavePromotion(childID string, journal *PromotionJournal) error {
 }
 
 func (s *Store) savePromotionUnlocked(journal *PromotionJournal) error {
-	path := s.PromotionPath(journal.ChildID)
+	path := s.promotionPath(journal.ChildID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating promotion directory: %w", err)
 	}
@@ -439,5 +420,5 @@ func (s *Store) savePromotionUnlocked(journal *PromotionJournal) error {
 func (s *Store) DeletePromotion(childID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return os.Remove(s.PromotionPath(childID))
+	return os.Remove(s.promotionPath(childID))
 }

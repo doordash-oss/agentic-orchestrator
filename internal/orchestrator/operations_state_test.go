@@ -37,7 +37,7 @@ func newConfigOpFixture(t *testing.T, hooks Hooks, features ...*feature.Feature)
 			t.Fatalf("save %s: %v", f.ID, err)
 		}
 	}
-	o := New(Deps{Lifecycle: feature.NewManager(store, config.NewDefault()), Store: store}, hooks)
+	o := New(Deps{Manager: feature.NewManager(store, config.NewDefault()), Store: store}, hooks)
 	t.Cleanup(func() { _ = o.Shutdown() })
 	return o, store
 }
@@ -188,7 +188,7 @@ func TestRewindOperationGuards(t *testing.T) {
 	guarded := func(f *feature.Feature) RewindInput {
 		return RewindInput{SourceRunNumber: f.ActiveRun, SourceRevision: feature.RewindRevision(f)}
 	}
-	rewound := []string{traceLockAcquired, traceGuard, traceGuard, stepRewound, traceLockReleased}
+	rewound := []string{traceLockAcquired, traceGuard, traceGuard, traceLockReleased}
 	tests := []struct {
 		name       string
 		features   func() []*feature.Feature
@@ -268,8 +268,8 @@ func TestRewindOperationGuards(t *testing.T) {
 			result, err := fx.o.Rewind(tt.target, tt.input(current))
 			switch {
 			case tt.wantStale:
-				var stale *StaleRewindPreviewError
-				if !errors.Is(err, ErrStaleRewindPreview) || !errors.As(err, &stale) {
+				var stale *staleRewindPreviewError
+				if !errors.Is(err, errStaleRewindPreview) || !errors.As(err, &stale) {
 					t.Fatalf("Rewind() error = %v, want a stale-preview rejection", err)
 				}
 			case tt.wantErr != nil:
@@ -280,8 +280,12 @@ func TestRewindOperationGuards(t *testing.T) {
 				if err != nil {
 					t.Fatalf("Rewind() error = %v", err)
 				}
-				if result.EffectivePhase != feature.PhaseInquire || result.NewRunNumber != tt.wantSource {
+				if result.EffectivePhase != feature.PhaseResearch || result.NewRunNumber != tt.wantSource+1 {
 					t.Fatalf("result = %+v, want the effective phase and new run", result)
+				}
+				stored, loadErr := fx.store.Load(tt.target)
+				if loadErr != nil || stored.ActiveRun != result.NewRunNumber {
+					t.Fatalf("stored rewind run = %v, load error %v; want run %d", stored, loadErr, result.NewRunNumber)
 				}
 			}
 			if result.SourceRunNumber != tt.wantSource {

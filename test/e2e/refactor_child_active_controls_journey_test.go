@@ -104,7 +104,7 @@ func TestRefactorChildActiveControlsJourney(t *testing.T) {
 	pr := journeyChildPhaseRunner(t, sm, store, stateDir)
 
 	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   mgr,
+		Manager:   mgr,
 		Store:       store,
 		Sessions:    sm,
 		Worktrees:   wm,

@@ -39,9 +39,9 @@ const (
 	// ReviewFeedbackChildName is the fixed display and branch-slug seed for
 	// every review-feedback child.
 	ReviewFeedbackChildName = "Address review feedback"
-	// RebaseChildName is the fixed display and branch-slug seed for every
+	// rebaseChildName is the fixed display and branch-slug seed for every
 	// rebase child.
-	RebaseChildName = "Rebase feature branches"
+	rebaseChildName = "Rebase feature branches"
 	// ReviewFeedbackOutcomesFilename is the well-known JSON file inside the
 	// child's active run directory where the agent records one entry per
 	// selected comment (disposition + explanation). The integration tail
@@ -86,9 +86,9 @@ var (
 	// ErrChildRelationshipClosed rejects every mutation addressed to a
 	// child after its Completed or Discarded outcome becomes durable.
 	ErrChildRelationshipClosed = errors.New("child relationship is closed")
-	// ErrChildRelationshipInvalid identifies a persisted child relationship
+	// errChildRelationshipInvalid identifies a persisted child relationship
 	// whose outcome and close timestamp do not form a valid lifecycle state.
-	ErrChildRelationshipInvalid = errors.New("child relationship is invalid")
+	errChildRelationshipInvalid = errors.New("child relationship is invalid")
 	// ErrCascadeDeleteNotAvailable: parent Delete is not available while
 	// a child is active. A complete recoverable cascade operation is
 	// required before parent deletion can be allowed.
@@ -100,26 +100,26 @@ var (
 	// ErrRebaseFetchFailed: a repository's remote fetch failed at rebase
 	// child creation. The failing repo is named in the typed error.
 	ErrRebaseFetchFailed = errors.New("rebase fetch failed")
-	// ErrRebaseAlreadyUpToDate: every repository is already up to date with
+	// errRebaseAlreadyUpToDate: every repository is already up to date with
 	// its resolved target, so no rebase child is needed.
-	ErrRebaseAlreadyUpToDate = errors.New("rebase feature is already up to date")
+	errRebaseAlreadyUpToDate = errors.New("rebase feature is already up to date")
 )
 
-// ChildRelationshipError identifies the child record that violates a
+// childRelationshipError identifies the child record that violates a
 // relationship lifecycle invariant.
-type ChildRelationshipError struct {
+type childRelationshipError struct {
 	ChildID string
 	Reason  string
 }
 
-func (e *ChildRelationshipError) Error() string {
+func (e *childRelationshipError) Error() string {
 	return fmt.Sprintf("child %s relationship is invalid: %s", e.ChildID, e.Reason)
 }
 
 // Unwrap lets callers classify malformed persisted records without parsing
 // the contextual child identifier.
-func (e *ChildRelationshipError) Unwrap() error {
-	return ErrChildRelationshipInvalid
+func (e *childRelationshipError) Unwrap() error {
+	return errChildRelationshipInvalid
 }
 
 // ActiveChildExistsError reports that the parent already has an active child
@@ -233,12 +233,12 @@ func (e *RebaseAlreadyUpToDateError) Error() string {
 }
 
 func (e *RebaseAlreadyUpToDateError) Unwrap() error {
-	return ErrRebaseAlreadyUpToDate
+	return errRebaseAlreadyUpToDate
 }
 
-// Is supports errors.Is matching against ErrRebaseAlreadyUpToDate.
+// Is supports errors.Is matching against errRebaseAlreadyUpToDate.
 func (e *RebaseAlreadyUpToDateError) Is(target error) bool {
-	return target == ErrRebaseAlreadyUpToDate
+	return target == errRebaseAlreadyUpToDate
 }
 
 // ChildRepoBase is the exact per-repository provenance captured at launch:
@@ -628,7 +628,7 @@ func (m *Manager) CreateRebaseChild(parentID string, spec RebaseChildSpec) (*Fea
 			return nil, nil, err
 		}
 		child := m.buildRefactorChild(lockedParent, RefactorChildSpec{
-			Name:               RebaseChildName,
+			Name:               rebaseChildName,
 			Description:        rebaseDescription(lockedParent, spec.Targets, spec.Behind),
 			Pipeline:           PipelineMedium,
 			Checkpoints:        lockedParent.Checkpoints,
@@ -1098,7 +1098,7 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 			run.RepoStates[fr.Name] = &RepoState{}
 		}
 	}
-	run.Setup = NewActiveSetupState(childRepos, spec.Images, spec.Attachments, now, SetupInitOptions{
+	run.Setup = NewActiveSetupState(childRepos, spec.Images, spec.Attachments, now, setupInitOptions{
 		ExactStartPointPerRepo: exactStart,
 		MergeTargetPerRepo:     spec.RebaseMergeTargets,
 	})

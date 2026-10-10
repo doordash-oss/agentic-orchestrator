@@ -39,7 +39,7 @@ type StoreSaveHook struct {
 
 // SetSaveHook installs a test-only save interceptor on the Store.
 func (s *Store) SetSaveHook(h *StoreSaveHook) {
-	s.testSaveInterceptor = func(f *Feature) error {
+	s.SetSaveInterceptor(func(f *Feature) error {
 		h.currentCall++
 		if h.FailOnCall > 0 && h.currentCall == h.FailOnCall {
 			if h.FailOnFeatureID == "" || h.FailOnFeatureID == f.ID {
@@ -47,12 +47,12 @@ func (s *Store) SetSaveHook(h *StoreSaveHook) {
 			}
 		}
 		return nil
-	}
+	})
 }
 
 // ResetSaveHook removes any test-only save interceptor.
 func (s *Store) ResetSaveHook() {
-	s.testSaveInterceptor = nil
+	s.SetSaveInterceptor(nil)
 }
 
 // RebaseDescriptionForTest exposes the machine-generated rebase child

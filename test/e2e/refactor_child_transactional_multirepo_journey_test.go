@@ -132,7 +132,7 @@ func (fx *multiRepoE2EFixture) orchestrator() *orchestrator.Orchestrator {
 
 func (fx *multiRepoE2EFixture) orchestratorWithWorktrees(wt feature.WorktreeOps) *orchestrator.Orchestrator {
 	return orchestrator.New(orchestrator.Deps{
-		Lifecycle: fx.mgr, Store: fx.store,
+		Manager: fx.mgr, Store: fx.store,
 		Worktrees: wt,
 	}, orchestrator.Hooks{})
 }
@@ -310,62 +310,18 @@ func (w *resetFailingWorktrees) ResetToCommit(worktreePath, commitSHA string) er
 	return w.WorktreeManager.ResetToCommit(worktreePath, commitSHA)
 }
 
-// failingStoreWrapper wraps *feature.Store and fails on the Nth Modify
-// call, simulating a persistence failure (crash) at a specific transaction
-// boundary. All other methods delegate to the embedded Store.
-type failingStoreWrapper struct {
-	*feature.Store
-	counter *sharedModifyCounter
-}
-
-func (s *failingStoreWrapper) Modify(id string, fn func(f *feature.Feature) error) error {
-	if s.counter.fail() {
-		return fmt.Errorf("simulated persistence failure at write %d", s.counter.counter)
-	}
-	return s.Store.Modify(id, fn)
-}
-
-// failingLifecycleWrapper wraps *feature.Manager and fails on the Nth
-// call to MarkCodeReady (which internally calls Store.Modify). The shared
-// counter ensures the failure index aligns across both wrappers.
-type failingLifecycleWrapper struct {
-	*feature.Manager
-	counter *sharedModifyCounter
-}
-
-func (w *failingLifecycleWrapper) MarkCodeReady(featureID string) error {
-	if w.counter.fail() {
-		return fmt.Errorf("simulated persistence failure at MarkCodeReady")
-	}
-	return w.Manager.MarkCodeReady(featureID)
-}
-
-type sharedModifyCounter struct {
-	counter int32
-	failAt  int32
-}
-
-func (c *sharedModifyCounter) fail() bool {
-	return atomic.AddInt32(&c.counter, 1) == c.failAt
-}
-
-func (fx *multiRepoE2EFixture) orchestratorWithFailingStore(failAt int32) *orchestrator.Orchestrator {
-	return fx.orchestratorWithFailingStoreAndWorktree(failAt, fx.wm)
-}
-
-func (fx *multiRepoE2EFixture) orchestratorWithFailingStoreAndWorktree(failAt int32, wt feature.WorktreeOps) *orchestrator.Orchestrator {
-	counter := &sharedModifyCounter{failAt: failAt}
-	// Create a new Store with the same BaseDir so both the failing and
-	// fresh orchestrators read/write the same feature files.
-	failStore := feature.NewStore(fx.store.BaseDir)
-	fs := &failingStoreWrapper{Store: failStore, counter: counter}
-	mgr := feature.NewManager(failStore, config.NewDefault())
-	mgr.Worktrees = fx.wm
-	fl := &failingLifecycleWrapper{Manager: mgr, counter: counter}
-	return orchestrator.New(orchestrator.Deps{
-		Lifecycle: fl, Store: fs,
-		Worktrees: wt,
-	}, orchestrator.Hooks{})
+// failOnSave injects a crash at the Nth feature write. Returning its reset
+// function makes each restart use the real store without the failed write.
+func (fx *multiRepoE2EFixture) failOnSave(failAt int32) func() {
+	var count int32
+	fx.store.SetSaveInterceptor(func(f *feature.Feature) error {
+		count++
+		if count == failAt {
+			return fmt.Errorf("simulated persistence failure at write %d", count)
+		}
+		return nil
+	})
+	return func() { fx.store.SetSaveInterceptor(nil) }
 }
 
 // --- Tests ---
@@ -1092,13 +1048,15 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 	for _, tc := range persistenceCrashCases {
 		t.Run(tc.name, func(t *testing.T) {
 			fx := newMultiRepoE2EFixture(t, 2)
-			failO := fx.orchestratorWithFailingStore(tc.failAt)
+			resetSave := fx.failOnSave(tc.failAt)
+			failO := fx.orchestrator()
 
 			// Run the transaction — it should fail at the injected
 			// persistence boundary, unless the failure is caught as a
 			// cleanup warning (in which case RunChildIntegration returns
 			// nil and the transaction is already complete with a warning).
 			err := failO.RunChildIntegration(fx.child.ID)
+			resetSave()
 			if err != nil {
 				// Create a fresh orchestrator with the original
 				// (non-failing) store reading from the same on-disk
@@ -1183,11 +1141,13 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 				raceRepoDir:     fx.repoDirs[2],
 				raceBranch:      "feature/parent",
 			}
-			failO := fx.orchestratorWithFailingStoreAndWorktree(tc.failAt, raceWT)
+			resetSave := fx.failOnSave(tc.failAt)
+			failO := fx.orchestratorWithWorktrees(raceWT)
 
 			// Run the transaction — it should fail at the injected
 			// rollback persistence boundary.
 			err := failO.RunChildIntegration(fx.child.ID)
+			resetSave()
 			if err == nil {
 				t.Fatalf("expected error at rollback boundary %d, got nil", tc.failAt)
 			}

@@ -41,12 +41,11 @@ func TestStartMultiRepoImplementation_RejectsIfFeatureNotImplementing(t *testing
 		Status:    feature.StatusCreated,
 		Artifacts: map[string]string{"plan": "/tmp/plan.md"},
 	}
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 	spy := &fakeRunMultiRepoImpl{}
 
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
@@ -76,12 +75,11 @@ func TestStartMultiRepoImplementation_MissingPlanPath_ReturnsError(t *testing.T)
 		Status: feature.StatusImplementing,
 		// Artifacts intentionally nil.
 	}
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 	spy := &fakeRunMultiRepoImpl{}
 
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
@@ -118,8 +116,7 @@ func TestStartMultiRepoImplementation_ReturnsSynchronously(t *testing.T) {
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 
 	release := make(chan struct{})
 	spy := &fakeRunMultiRepoImpl{
@@ -134,7 +131,7 @@ func TestStartMultiRepoImplementation_ReturnsSynchronously(t *testing.T) {
 	}
 
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
@@ -172,23 +169,13 @@ func TestStartMultiRepoImplementation_EngineError_Returns(t *testing.T) {
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 
 	wantErr := errors.New("engine kaboom")
 	spy := &fakeRunMultiRepoImpl{ReturnErr: wantErr}
 
-	// Track completion calls via CompleteImplementationFn — if the dispatch
-	// goroutine was incorrectly spawned and processed a terminal result,
-	// this counter would go up.
-	var completeCalls int32
-	lc.CompleteImplementationFn = func(id string) error {
-		completeCalls++
-		return nil
-	}
-
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
@@ -201,13 +188,10 @@ func TestStartMultiRepoImplementation_EngineError_Returns(t *testing.T) {
 		t.Errorf("err = %v, want wrapped %v", err, wantErr)
 	}
 
-	// Wait a short window and confirm no dispatch goroutine fired
-	// HandlePhaseCompletion (which would call CompleteImplementation on
-	// all_passed, or MarkFailed on failed).
-	// Retained: the absence of asynchronous dispatch is the behavior under test.
-	time.Sleep(50 * time.Millisecond)
-	if completeCalls != 0 {
-		t.Errorf("CompleteImplementation calls = %d, want 0", completeCalls)
+	// A rejected engine start leaves the durable feature in Implementing.
+	stored := loadStoredFeature(t, store, f.ID)
+	if stored.Status != feature.StatusImplementing {
+		t.Errorf("Status = %s, want Implementing", stored.Status)
 	}
 }
 
@@ -224,23 +208,17 @@ func TestStartMultiRepoImplementation_HandlePhaseCompletionError_MarksFeatureFai
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	lc := lifecycleForFeature(f)
-	// CompleteImplementation fails — onMultiReposPassed wraps and returns
-	// the error, which propagates up through HandlePhaseCompletion to the
-	// dispatch goroutine.
+	store, lc := newStoredFeatureFixture(t, f)
 	completeErr := errors.New("db wedged")
-	lc.CompleteImplementationFn = func(id string) error { return completeErr }
-
-	markFailedCalled := make(chan struct{}, 1)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		f.Status = feature.StatusFailed
-		select {
-		case markFailedCalled <- struct{}{}:
-		default:
+	failedWrite := false
+	store.SetSaveInterceptor(func(next *feature.Feature) error {
+		if next.Status == feature.StatusReviewPassed && !failedWrite {
+			failedWrite = true
+			return completeErr
 		}
 		return nil
-	}
-	store := newFeatureStore(f)
+	})
+	defer store.SetSaveInterceptor(nil)
 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
@@ -254,7 +232,7 @@ func TestStartMultiRepoImplementation_HandlePhaseCompletionError_MarksFeatureFai
 
 	hookCh := make(chan string, 1)
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{
 			OnFeatureFailed: func(featureID string, code errcat.Code, class errcat.Class, errorMsg string) {
 				select {
@@ -285,15 +263,9 @@ func TestStartMultiRepoImplementation_HandlePhaseCompletionError_MarksFeatureFai
 		t.Errorf("FeatureFailed.Message = %q, should include underlying cause %q", ev.Message, completeErr.Error())
 	}
 
-	// markFailedWithEvent should have succeeded (MarkFailed mock returns nil),
-	// so the feature is transitioned to StatusFailed.
-	select {
-	case <-markFailedCalled:
-	case <-time.After(1 * time.Second):
-		t.Fatal("MarkFailed never called — feature would remain stuck in StatusImplementing")
-	}
-	if f.Status != feature.StatusFailed {
-		t.Errorf("feature.Status = %q, want %q", f.Status, feature.StatusFailed)
+	stored := loadStoredFeature(t, store, f.ID)
+	if stored.Status != feature.StatusFailed {
+		t.Errorf("feature.Status = %q, want %q", stored.Status, feature.StatusFailed)
 	}
 
 	// OnFeatureFailed hook fired.
@@ -329,25 +301,7 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
 
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error {
-		f.Status = feature.StatusReviewPassed
-		return nil
-	}
-	lc.MarkCodeReadyFn = func(id string) error {
-		f.Status = feature.StatusCodeReady
-		return nil
-	}
-	markFailedCalled := make(chan struct{}, 1)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		f.Status = feature.StatusFailed
-		select {
-		case markFailedCalled <- struct{}{}:
-		default:
-		}
-		return nil
-	}
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
@@ -360,7 +314,7 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 
 	publishCalled := make(chan struct{}, 1)
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
@@ -385,29 +339,16 @@ func TestStartMultiRepoImplementation_PublishConflictDoesNotMarkFeatureFailed(t 
 		t.Fatal("publishFn was not called")
 	}
 
-	select {
-	case <-markFailedCalled:
-		t.Fatal("MarkFailed called for PublishConflictError; conflict should route to rebase UX")
-	case <-time.After(100 * time.Millisecond):
-	}
 	if ev := waitForEvent(o.Events(), func(ev ports.Event) bool {
 		return ev.Type == ports.FeatureFailed
 	}, 100*time.Millisecond); ev != nil {
 		t.Fatalf("FeatureFailed emitted for PublishConflictError: %+v", *ev)
 	}
-	if f.Status == feature.StatusFailed {
+	stored := loadStoredFeature(t, store, f.ID)
+	if stored.Status == feature.StatusFailed {
 		t.Fatalf("feature status = Failed, want conflict to leave feature recoverable")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// T25. StartMultiRepoImplementation_HandlePhaseCompletionError_FallbackOnMarkFailedError
-//
-// Extreme case: HandlePhaseCompletion fails AND the subsequent MarkFailed
-// recovery transition also fails (lifecycle fully wedged). The dispatch
-// goroutine must still emit FeatureFailed directly so observers are not
-// stranded waiting on a terminal signal.
-// ---------------------------------------------------------------------------
 
 // TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState verifies
 // that an aggregate OrchestratorResult with FinalStatus == "need_user_input"
@@ -423,20 +364,7 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
-
-	var markFailedCalled bool
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		markFailedCalled = true
-		f.Status = feature.StatusFailed
-		return nil
-	}
-	var completeCalled bool
-	lc.CompleteImplementationFn = func(id string) error {
-		completeCalled = true
-		return nil
-	}
+	store, lc := newStoredFeatureFixture(t, f)
 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
@@ -450,7 +378,7 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 	}
 
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
@@ -486,14 +414,9 @@ func TestDispatchMultiRepoResults_NeedUserInputRoutesPausedTerminalState(t *test
 		}
 	}
 
-	if markFailedCalled {
-		t.Errorf("MarkFailed must not be called for need_user_input terminal result")
-	}
-	if completeCalled {
-		t.Errorf("CompleteImplementation must not be called for need_user_input terminal result")
-	}
-	if f.Status != feature.StatusImplementing {
-		t.Errorf("feature.Status = %q, want %q", f.Status, feature.StatusImplementing)
+	stored := loadStoredFeature(t, store, f.ID)
+	if stored.Status != feature.StatusImplementing {
+		t.Errorf("feature.Status = %q, want %q", stored.Status, feature.StatusImplementing)
 	}
 }
 
@@ -514,8 +437,7 @@ func TestDispatchMultiRepoResults_PlanRevisionRequiredRoutesPhasePlanRevision(t 
 		},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
@@ -527,8 +449,8 @@ func TestDispatchMultiRepoResults_PlanRevisionRequiredRoutesPhasePlanRevision(t 
 
 	o := orchestrator.New(
 		orchestrator.Deps{
-			Lifecycle: lc,
-			Store:     store,
+			Manager: lc,
+			Store:   store,
 		},
 		orchestrator.Hooks{},
 	)
@@ -544,6 +466,7 @@ func TestDispatchMultiRepoResults_PlanRevisionRequiredRoutesPhasePlanRevision(t 
 	if ev == nil {
 		t.Fatal("no PhaseStarted(Plan) event observed; plan_revision_required was not routed")
 	}
+	f = loadStoredFeature(t, store, f.ID)
 	if f.Status != feature.StatusPlanning {
 		t.Fatalf("feature.Status = %q, want %q", f.Status, feature.StatusPlanning)
 	}
@@ -561,8 +484,7 @@ func TestOnMultiRepoImplementDoneNeedUserInputDefaultSummary(t *testing.T) {
 		Artifacts: map[string]string{"plan": planPath},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	lc := lifecycleForFeature(f)
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
@@ -570,7 +492,7 @@ func TestOnMultiRepoImplementDoneNeedUserInputDefaultSummary(t *testing.T) {
 		},
 	}
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())

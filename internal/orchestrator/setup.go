@@ -22,18 +22,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-type setupRunner interface {
-	RunSetup(featureID string, opts ...feature.SetupRunnerOptions) error
-	RetrySetup(featureID string, opts ...feature.SetupRunnerOptions) error
-}
-
-// activeSetupFailer is the lifecycle capability an async setup failure
-// handler uses to park a still-running setup durably (see
-// feature.Manager.FailActiveSetup).
-type activeSetupFailer interface {
-	FailActiveSetup(featureID, message string) (feature.SetupFailureOutcome, error)
-}
-
 // runSetupAsync runs runSetup in an orchestrator-owned goroutine tracked by
 // WaitForCycles, so asynchronous setup (currently the refactor-child launch
 // path) always has an owner: a terminal runSetup error is both recorded
@@ -77,8 +65,8 @@ func (o *Orchestrator) runSetupAsync(featureID string) {
 func (o *Orchestrator) recordAsyncSetupFailure(featureID string, setupErr error) {
 	msg := setupErr.Error()
 	var taskRecord *errcat.FailureRecord
-	if failer, ok := o.deps.Lifecycle.(activeSetupFailer); ok {
-		outcome, err := failer.FailActiveSetup(featureID, msg)
+	{
+		outcome, err := o.deps.Manager.FailActiveSetup(featureID, msg)
 		if err != nil {
 			msg = fmt.Sprintf("%s (recording the setup failure durably also failed: %v)", msg, err)
 		} else if outcome.Marked {
@@ -90,7 +78,7 @@ func (o *Orchestrator) recordAsyncSetupFailure(featureID string, setupErr error)
 		}
 	}
 	ev := feature.SetupEvent{Kind: feature.SetupEventFailed, FeatureID: featureID, Error: msg, Failure: taskRecord}
-	if f, err := o.deps.Lifecycle.Get(featureID); err == nil && f.Run() != nil {
+	if f, err := o.deps.Store.Load(featureID); err == nil && f.Run() != nil {
 		ev.RunNumber = f.ActiveRun
 		if setup := f.Run().Setup; setup != nil {
 			ev.Attempt = setup.Attempt
@@ -119,7 +107,7 @@ func (o *Orchestrator) retrySetup(featureID string) error {
 // after setup completes (initial or retried). Starting a child is an
 // explicit action routed through StartFeature and its capability gate.
 func (o *Orchestrator) startFeatureAfterSetup(featureID string) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature after setup: %w", err)
 	}
@@ -130,26 +118,22 @@ func (o *Orchestrator) startFeatureAfterSetup(featureID string) error {
 }
 
 func (o *Orchestrator) runSetupWith(retry bool, featureID string) error {
-	runner, ok := o.deps.Lifecycle.(setupRunner)
-	if !ok {
-		return fmt.Errorf("setup runner not configured")
-	}
 	opt := feature.SetupRunnerOptions{
 		OnEvent: func(ev feature.SetupEvent) {
 			o.emitSetupEvent(ev)
 		},
 	}
 	if retry {
-		return runner.RetrySetup(featureID, opt)
+		return o.deps.Manager.RetrySetup(featureID, opt)
 	}
-	return runner.RunSetup(featureID, opt)
+	return o.deps.Manager.RunSetup(featureID, opt)
 }
 
 // setupFailureAlreadyRecorded reports whether the durable record shows a
 // runner-recorded setup failure (as opposed to a post-setup error, which has
 // no durable failure yet and must still be signalled).
 func (o *Orchestrator) setupFailureAlreadyRecorded(featureID string) bool {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil || f.Run() == nil {
 		return false
 	}
@@ -165,7 +149,7 @@ func (o *Orchestrator) emitSetupEvent(ev feature.SetupEvent) {
 	// Setup events for a child feature carry both ids so consumers can
 	// correlate both projections; the lookup is cheap at setup-event rates.
 	// The parent's persisted lifecycle is never touched.
-	if f, err := o.deps.Lifecycle.Get(ev.FeatureID); err == nil && f.IsChild() {
+	if f, err := o.deps.Store.Load(ev.FeatureID); err == nil && f.IsChild() {
 		pe.ParentID = f.Parent.ParentID
 		pe.ChildID = f.ID
 	}

@@ -142,7 +142,7 @@ func TestRebaseGateFeedback_NonRebaseKindsEmpty(t *testing.T) {
 func TestNew_PhaseExitGateWiredForRebaseChildrenOnly(t *testing.T) {
 	fx := newRebaseGateFixture(t, false)
 	pr := &agent.PhaseRunner{}
-	New(Deps{Lifecycle: fx.mgr, Store: fx.store, Worktrees: fx.wm, PhaseRunner: pr}, Hooks{})
+	New(Deps{Manager: fx.mgr, Store: fx.store, Worktrees: fx.wm, PhaseRunner: pr}, Hooks{})
 
 	if pr.PhaseExitGateFor == nil {
 		t.Fatalf("PhaseExitGateFor not wired by New")

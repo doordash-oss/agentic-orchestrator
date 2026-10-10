@@ -189,7 +189,7 @@ func (fx *rebaseGateFixture) bases() []feature.ChildRepoBase {
 }
 
 func (fx *rebaseGateFixture) orchestrator() *Orchestrator {
-	return New(Deps{Lifecycle: fx.mgr, Store: fx.store, Worktrees: fx.wm}, Hooks{})
+	return New(Deps{Manager: fx.mgr, Store: fx.store, Worktrees: fx.wm}, Hooks{})
 }
 
 func (fx *rebaseGateFixture) reload() (*feature.Feature, *feature.Feature) {

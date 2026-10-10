@@ -58,47 +58,7 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 			"r1": {Touched: true},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.MarkCodeReadyFn = func(id string) error {
-		f.Status = feature.StatusCodeReady
-		return nil
-	}
-	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error {
-		if f.RepoStates == nil {
-			f.RepoStates = make(map[string]*feature.RepoState)
-		}
-		st := f.RepoStates[repo]
-		if st == nil {
-			st = &feature.RepoState{}
-			f.RepoStates[repo] = st
-		}
-		stored := record
-		st.Error = &stored
-		return nil
-	}
-	lc.SetRepoPublishedFn = func(id, repo, url string) error {
-		if f.RepoStates == nil {
-			f.RepoStates = make(map[string]*feature.RepoState)
-		}
-		st := f.RepoStates[repo]
-		if st == nil {
-			st = &feature.RepoState{}
-			f.RepoStates[repo] = st
-		}
-		st.Touched = true
-		st.PRURL = url
-		st.Error = nil
-		return nil
-	}
-	lc.TryCompletePublishFn = func(id string) (bool, error) {
-		if !f.AllReposPublished() {
-			return false, nil
-		}
-		f.Status = feature.StatusPublished
-		return true, nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	pub := mocks.NewMockRemoteOps()
 	pub.PushFn = func(path, branch string) error { return nil }
@@ -113,7 +73,7 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 
 	pr := newPublishDescriptionPhaseRunner(t, "TITLE: Session Title\nBODY:\n## Summary\n\nGenerated body", false)
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Remote:      pub,
 		PhaseRunner: pr,
@@ -143,13 +103,13 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 	}
 
 	// The feature stays at CodeReady with no run-level failure record.
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusCodeReady {
 		t.Fatalf("feature status = %v, want CodeReady (publish failures are never terminal)", f.Status)
 	}
 	if f.Run().Failure != nil {
 		t.Fatalf("run failure record = %+v, want none (the repository owns the condition)", f.Run().Failure)
 	}
-	refuteLifecycleCall(t, lc, "MarkFailed")
 
 	// The repository carries the classified record.
 	state := f.RepoStates["r1"]
@@ -192,6 +152,7 @@ func TestOrchestrator_RoadmapFinalAutoPublishFailureIsNeverTerminal(t *testing.T
 	if err := o.PublishWithOptions("feat-rf-nf", orchestrator.PublishOptions{Repos: []string{"r1"}}); err != nil {
 		t.Fatalf("retry PublishWithOptions: %v", err)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	state = f.RepoStates["r1"]
 	if state.Error != nil {
 		t.Fatalf("repo record = %+v, want cleared by the successful publish", state.Error)
@@ -232,26 +193,7 @@ func TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted(t *test
 			"r1": {Touched: true},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.MarkCodeReadyFn = func(id string) error {
-		f.Status = feature.StatusCodeReady
-		return nil
-	}
-	lc.SetRepoPublishErrorFn = func(id, repo string, record errcat.FailureRecord) error {
-		if f.RepoStates == nil {
-			f.RepoStates = make(map[string]*feature.RepoState)
-		}
-		st := f.RepoStates[repo]
-		if st == nil {
-			st = &feature.RepoState{}
-			f.RepoStates[repo] = st
-		}
-		stored := record
-		st.Error = &stored
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	// The command runner fails every ls-files invocation, so the scrub of the
 	// stranded artifact fails closed.
@@ -274,7 +216,7 @@ func TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted(t *test
 	pr := newPublishDescriptionPhaseRunner(t, "TITLE: Session Title\nBODY:\n## Summary\n\nGenerated body", false)
 	publishCompletedHook := 0
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Remote:      pub,
 		PhaseRunner: pr,
@@ -303,13 +245,13 @@ func TestOrchestrator_RoadmapFinalScrubFailureStillEmitsPublishCompleted(t *test
 	}
 
 	// The feature stays at CodeReady with the repository owning the record.
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusCodeReady {
 		t.Fatalf("feature status = %v, want CodeReady", f.Status)
 	}
 	if f.Run().Failure != nil {
 		t.Fatalf("run failure record = %+v, want none", f.Run().Failure)
 	}
-	refuteLifecycleCall(t, lc, "MarkFailed")
 	state := f.RepoStates["r1"]
 	if state.Error == nil || state.Error.Code != errcat.PublishPushFailed {
 		t.Fatalf("repo record = %+v, want publish_push_failed (artifact scrub class)", state.Error)

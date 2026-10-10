@@ -144,7 +144,7 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 	}
 
 	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   mgr,
+		Manager:   mgr,
 		Store:       store,
 		Sessions:    sm,
 		Remote:      remote,

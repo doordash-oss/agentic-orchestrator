@@ -1690,8 +1690,8 @@ func TestImplementLoopNoSkipIterationReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("implement"); got != 0.004 {
-		t.Errorf("PhaseCost(implement) = %v, want 0.004", got)
+	if got := updated.PhaseCosts["implement"]; got != 0.004 {
+		t.Errorf("PhaseCosts[implement] = %v, want 0.004", got)
 	}
 	if len(updated.SessionCosts) != 4 {
 		t.Fatalf("len(SessionCosts) = %d, want 4", len(updated.SessionCosts))

@@ -118,7 +118,7 @@ func TestExecuteRecoveryKill(t *testing.T) {
 	}
 
 	// Feature should be Interrupted
-	updated, _ := fm.Get("feat-kill")
+	updated, _ := fm.Store.Load("feat-kill")
 	if updated.Status != feature.StatusInterrupted {
 		t.Errorf("status = %v, want Interrupted", updated.Status)
 	}
@@ -168,7 +168,7 @@ func TestExecuteRecoveryResume(t *testing.T) {
 
 	// Feature should be transitioned back to Implementing for restart
 	// (via Interrupted → Implementing two-step)
-	updated, _ := fm.Get("feat-resume")
+	updated, _ := fm.Store.Load("feat-resume")
 	if updated.Status != feature.StatusImplementing {
 		t.Errorf("status = %v, want Implementing", updated.Status)
 	}
@@ -359,7 +359,7 @@ func TestExecuteRecoveryKillLiveProcess(t *testing.T) {
 	}
 
 	// Feature should be Interrupted.
-	updated, _ := fm.Get("feat-live-kill")
+	updated, _ := fm.Store.Load("feat-live-kill")
 	if updated.Status != feature.StatusInterrupted {
 		t.Errorf("status = %v, want Interrupted", updated.Status)
 	}

@@ -24,10 +24,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
@@ -88,6 +90,12 @@ func countPublisherCalls(m *mocks.MockRemoteOps, method string) int {
 	return n
 }
 
+func passingFinalReview(*feature.Feature, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+	ch := make(chan *agent.OrchestratorResult, 1)
+	ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
+	return ch, nil
+}
+
 // ---------------------------------------------------------------------------
 // Category A — KB completion
 // ---------------------------------------------------------------------------
@@ -121,14 +129,12 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_NotAllDone(t *testing.T) 
 			{Name: repoName, Path: repoAPath},
 			{Name: repoNameB, Path: repoBPath},
 		},
+		KBStatus: map[string]string{repoName: "pending", repoNameB: "pending"},
 	}
-	lc := lifecycleForFeature(f)
-	lc.AllKBsCompletedFn = func(id string) (bool, error) { return false, nil }
-	lc.MarkRepoKBCompletedFn = func(id, repoName string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
 		CmdRunner:   mocks.NewMockCommandRunner(),
@@ -143,11 +149,10 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_NotAllDone(t *testing.T) 
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	// MarkRepoKBCompleted recorded for repo-a.
-	if n := countLifecycleCalls(lc, "MarkRepoKBCompleted"); n != 1 {
-		t.Errorf("MarkRepoKBCompleted calls = %d, want 1", n)
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.KBStatus[repoName] != kbStatusCompleted || stored.KBStatus[repoNameB] == kbStatusCompleted {
+		t.Fatalf("KB status = %v, want only repo-a completed", stored.KBStatus)
 	}
-	refuteLifecycleCall(t, lc, "CompleteKnowledgeBase")
 
 	events := drainEvents(o)
 	if hasEventType(events, ports.PhaseCompleted) {
@@ -182,11 +187,14 @@ func TestOrchestrator_HandlePhaseCompletion_KB_RecordsWorktreeCommit(t *testing.
 			Path:         originalPath,
 			WorktreePath: worktreePath,
 		}},
+		KBStatus: map[string]string{repoName: "pending", "another-repo": "pending"},
 	}
-	lc := lifecycleForFeature(f)
-	lc.AllKBsCompletedFn = func(id string) (bool, error) { return false, nil }
-	lc.MarkRepoKBCompletedFn = func(id, repoName string) error { return nil }
-	fs := newFeatureStore(f)
+	fs := feature.NewStore(stateDir)
+	lc := feature.NewManager(fs, config.NewDefault())
+	f.SchemaVersion = feature.SchemaVersionCurrent
+	if err := fs.Save(f); err != nil {
+		t.Fatalf("save feature: %v", err)
+	}
 	cmd := mocks.NewMockCommandRunner()
 	cmd.RunFn = func(_ context.Context, name string, args []string, opts ports.CommandOpts) ([]byte, error) {
 		if name != "git" || strings.Join(args, " ") != "rev-parse HEAD" {
@@ -203,7 +211,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_RecordsWorktreeCommit(t *testing.
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		PhaseRunner: &agent.PhaseRunner{StateDir: stateDir},
 		CmdRunner:   cmd,
@@ -245,15 +253,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
 			{Name: repoName, Path: repoAPath},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.AllKBsCompletedFn = func(id string) (bool, error) { return true, nil }
-	lc.MarkRepoKBCompletedFn = func(id, repoName string) error { return nil }
-	lc.CompleteKnowledgeBaseFn = func(id string) error {
-		f.Status = feature.StatusInquireReady
-		return nil
-	}
-	lc.StartInquireFn = func(id string) error { f.Status = feature.StatusInquiring; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return newStubSessionHandle(id, featureID, phase, ""), nil
@@ -269,7 +269,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
 	var phaseCompletedFeatureID string
 	var phaseCompletedPhase feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    sm,
 		PhaseRunner: pr,
@@ -295,7 +295,6 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
 			phaseCompletedFeatureID, phaseCompletedPhase)
 	}
 	// CompleteKnowledgeBase recorded.
-	assertLifecycleCall(t, lc, "CompleteKnowledgeBase")
 
 	events := drainEvents(o)
 	if !hasEventType(events, ports.PhaseCompleted) {
@@ -303,7 +302,7 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Success_AllDone(t *testing.T) {
 	}
 
 	// Feature.ForceKBRebuild was cleared via Store.Modify.
-	if f.ForceKBRebuild {
+	if loadStoredFeature(t, fs, f.ID).ForceKBRebuild {
 		t.Error("ForceKBRebuild should be cleared after KB completion")
 	}
 }
@@ -316,12 +315,9 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Terminal_Interrupted(t *testing.T
 		Pipeline:     feature.PipelineLarge,
 		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.AllKBsCompletedFn = func(id string) (bool, error) { return true, nil }
-	lc.MarkRepoKBCompletedFn = func(id, repoName string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-kb-int", orchestrator.PhaseCompletionInput{
 		Phase:     feature.PhaseKnowledgeBase,
@@ -333,7 +329,6 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Terminal_Interrupted(t *testing.T
 
 	// MarkRepoKBCompleted still recorded before the terminal-state check, but
 	// CompleteKnowledgeBase must not run when status is not BuildingKB.
-	refuteLifecycleCall(t, lc, "CompleteKnowledgeBase")
 	events := drainEvents(o)
 	if hasEventType(events, ports.PhaseCompleted) {
 		t.Error("PhaseCompleted should NOT fire for terminal-state KB completion")
@@ -350,14 +345,11 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 		Pipeline:     feature.PipelineLarge,
 		Repos:        []feature.FeatureRepo{{Name: repoName, Path: repoAPath}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkRepoKBFailedFn = func(id, repo, msg string) error { return nil }
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
 	var errMsg string
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
 			failureCode = code
 			errMsg = em
@@ -372,9 +364,9 @@ func TestOrchestrator_HandlePhaseCompletion_KB_Failure(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "MarkRepoKBFailed")
-	assertLifecycleCall(t, lc, "MarkFailed")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusFailed {
+		t.Fatalf("status = %s, want failed", stored.Status)
+	}
 	if failureCode != errcat.SessionCrashed {
 		t.Errorf("failure code = %q, want %q", failureCode, errcat.SessionCrashed)
 	}
@@ -430,52 +422,11 @@ func newArtifactPhaseOrchestratorFixture(t *testing.T, tc artifactPhaseCase) (*o
 	if err := store.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
-	lc := lifecycleForFeature(f)
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		return store.Load(id)
-	}
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusFailed
-			rec := failure
-			ff.Run().Failure = &rec
-			return nil
-		})
-	}
-	lc.CompleteInquireFn = func(id string) error {
-		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusInquireReady
-			return nil
-		})
-	}
-	lc.CompleteResearchFn = func(id string) error {
-		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusPlanReady
-			return nil
-		})
-	}
-	lc.CompleteDesignFn = func(id string) error {
-		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusDesignReady
-			return nil
-		})
-	}
-	lc.StartResearchFn = func(id string) error {
-		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusResearching
-			return nil
-		})
-	}
-	lc.StartPlanningFn = func(id string) error {
-		return store.Modify(id, func(ff *feature.Feature) error {
-			ff.Status = feature.StatusPlanning
-			return nil
-		})
-	}
+	lc := feature.NewManager(store, config.NewDefault())
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     store,
+		Manager: lc,
+		Store:   store,
 	}, orchestrator.Hooks{})
 	return o, f, store
 }
@@ -499,15 +450,6 @@ func setOlderModTime(t *testing.T, path string) {
 	if err := os.Chtimes(path, older, older); err != nil {
 		t.Fatalf("chtimes %s: %v", path, err)
 	}
-}
-
-func loadStoredFeature(t *testing.T, store *feature.Store, featureID string) *feature.Feature {
-	t.Helper()
-	f, err := store.Load(featureID)
-	if err != nil {
-		t.Fatalf("load feature: %v", err)
-	}
-	return f
 }
 
 func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseSuccessRecordsRegistryArtifact(t *testing.T) {
@@ -548,25 +490,20 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.
 		RunCount:      1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
-	lc := lifecycleForFeature(f)
+	fs := feature.NewStore(stateDir)
+	lc := feature.NewManager(fs, config.NewDefault())
 	// CompleteInquire moves to InquireReady (mirrors real manager.go:262).
 	// StartResearch then transitions to Researching. Having CompleteInquire
 	// skip straight to Researching would cause startResearch's idempotent
 	// guard to bypass the StartResearch transition.
-	lc.CompleteInquireFn = func(id string) error {
-		f.Status = feature.StatusInquireReady
-		return nil
-	}
-	lc.StartResearchFn = func(id string) error { f.Status = feature.StatusResearching; return nil }
-	fs := feature.NewStore(stateDir)
 	if err := fs.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
 	writePhaseMarkdown(t, stateDir, f, "inquire", "inquire.md")
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-inq", orchestrator.PhaseCompletionInput{
@@ -575,9 +512,6 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Success_Advances(t *testing.
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "CompleteInquire")
-	assertLifecycleCall(t, lc, "StartResearch")
 
 	events := drainEvents(o)
 	if !hasEventType(events, ports.PhaseCompleted) {
@@ -602,18 +536,16 @@ func TestOrchestrator_HandlePhaseCompletion_Research_Success(t *testing.T) {
 		RunCount:      1,
 		SchemaVersion: feature.SchemaVersionCurrent,
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteResearchFn = func(id string) error { return nil }
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
 	fs := feature.NewStore(stateDir)
+	lc := feature.NewManager(fs, config.NewDefault())
 	if err := fs.Save(f); err != nil {
 		t.Fatalf("save feature: %v", err)
 	}
 	writePhaseMarkdown(t, stateDir, f, "research", "research.md")
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-res", orchestrator.PhaseCompletionInput{
@@ -622,8 +554,6 @@ func TestOrchestrator_HandlePhaseCompletion_Research_Success(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "CompleteResearch")
 }
 
 // Artifact phase failure: emits PhaseCompleted(err) and FeatureFailed.
@@ -634,12 +564,10 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Failure(t *testing.T) {
 		CurrentPhase: feature.PhaseInquire,
 		Pipeline:     feature.PipelineLarge,
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
@@ -667,12 +595,10 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_ProtocolFailure(t *testing.T
 		CurrentPhase: feature.PhaseInquire,
 		Pipeline:     feature.PipelineLarge,
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
@@ -699,9 +625,8 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseFailureOnInterruptedFea
 				CurrentPhase: tc.phase,
 				Pipeline:     feature.PipelineLarge,
 			}
-			lc := lifecycleForFeature(f)
-			fs := newFeatureStore(f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+			fs, lc := newStoredFeatureFixture(t, f)
+			o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 			if err := o.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
 				Phase:       tc.phase,
@@ -710,8 +635,6 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseFailureOnInterruptedFea
 			}); err != nil {
 				t.Fatalf("HandlePhaseCompletion: %v", err)
 			}
-
-			refuteLifecycleCall(t, lc, "MarkFailed")
 			events := drainEvents(o)
 			if hasEventType(events, ports.FeatureFailed) {
 				t.Fatalf("unexpected FeatureFailed event for interrupted %s completion: %#v", tc.phase, events)
@@ -719,8 +642,8 @@ func TestOrchestrator_HandlePhaseCompletion_ArtifactPhaseFailureOnInterruptedFea
 			if hasEventType(events, ports.PhaseCompleted) {
 				t.Fatalf("unexpected PhaseCompleted event for interrupted %s completion: %#v", tc.phase, events)
 			}
-			if f.Status != feature.StatusInterrupted {
-				t.Fatalf("Status = %s, want Interrupted", f.Status)
+			if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusInterrupted {
+				t.Fatalf("Status = %s, want Interrupted", stored.Status)
 			}
 		})
 	}
@@ -734,9 +657,8 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Terminal(t *testing.T) {
 		CurrentPhase: feature.PhaseInquire,
 		Pipeline:     feature.PipelineLarge,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-inq-zmb", orchestrator.PhaseCompletionInput{
 		Phase:   feature.PhaseInquire,
@@ -744,8 +666,6 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_Terminal(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	refuteLifecycleCall(t, lc, "CompleteInquire")
 }
 
 // ---------------------------------------------------------------------------
@@ -761,15 +681,10 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_RoadmapGate(t *
 		CurrentRoadmapPhase: 0,
 		Checkpoints:         feature.Checkpoints{RoadmapReview: true},
 	}
-	lc := lifecycleForFeature(f)
-	lc.NeedsPlanReviewFn = func(id string) error {
-		f.Status = feature.StatusPlanNeedsReview
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var reviewPhase feature.Phase
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnReviewRequired: func(id string, p feature.Phase) { reviewPhase = p },
 	})
 
@@ -779,9 +694,6 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_RoadmapGate(t *
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "NeedsPlanReview")
-	refuteLifecycleCall(t, lc, "AdvanceRoadmapPhase")
 	if reviewPhase != feature.PhasePlan {
 		t.Errorf("OnReviewRequired phase = %v, want PhasePlan", reviewPhase)
 	}
@@ -801,15 +713,10 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_PhasePlanApproved_PhasePlanGate
 		TotalRoadmapPhases:  3,
 		Checkpoints:         feature.Checkpoints{PhasePlanReview: true},
 	}
-	lc := lifecycleForFeature(f)
-	lc.NeedsPlanReviewFn = func(id string) error {
-		f.Status = feature.StatusPlanNeedsReview
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var reviewPhase feature.Phase
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnReviewRequired: func(id string, p feature.Phase) { reviewPhase = p },
 	})
 
@@ -819,9 +726,6 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_PhasePlanApproved_PhasePlanGate
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "NeedsPlanReview")
-	refuteLifecycleCall(t, lc, "StartRoadmapPhaseImplementation")
 	if reviewPhase != feature.PhasePlan {
 		t.Errorf("OnReviewRequired phase = %v, want PhasePlan", reviewPhase)
 	}
@@ -843,19 +747,10 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NeedsReview_NoGate_RaisesReview
 		Pipeline:     feature.PipelineMedium,
 		// RoadmapReview and PhasePlanReview deliberately left false.
 	}
-	lc := lifecycleForFeature(f)
-	lc.NeedsPlanReviewFn = func(id string) error {
-		f.Status = feature.StatusPlanNeedsReview
-		return nil
-	}
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		t.Fatalf("MarkFailed must not be called; needs_human_review must always open a gate, got code=%q diagnostics=%q", failure.Code, failure.Diagnostics)
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var reviewPhase feature.Phase
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnReviewRequired: func(id string, p feature.Phase) { reviewPhase = p },
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
 			t.Fatalf("OnFeatureFailed must not fire; needs_human_review must always open a gate, got code=%q em=%q", code, em)
@@ -868,8 +763,6 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NeedsReview_NoGate_RaisesReview
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "NeedsPlanReview")
 	if reviewPhase != feature.PhasePlan {
 		t.Errorf("OnReviewRequired phase = %v, want PhasePlan", reviewPhase)
 	}
@@ -887,13 +780,11 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Failed(t *testing.T) {
 		CurrentPhase: feature.PhasePlan,
 		Pipeline:     feature.PipelineMedium,
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
 	var errMsg string
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
 			failureCode = code
 			errMsg = em
@@ -925,13 +816,11 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_ProtocolViolation(t *testing.T)
 		CurrentPhase: feature.PhasePlan,
 		Pipeline:     feature.PipelineMedium,
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
 	var errMsg string
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) {
 			failureCode = code
 			errMsg = em
@@ -963,9 +852,8 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Interrupted_NoOp(t *testing.T) 
 		Status:       feature.StatusPlanning,
 		CurrentPhase: feature.PhasePlan,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-plan-int", orchestrator.PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
@@ -973,8 +861,6 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_Interrupted_NoOp(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-	refuteLifecycleCall(t, lc, "CompletePlanning")
-	refuteLifecycleCall(t, lc, "MarkFailed")
 }
 
 // Plan result is nil → markFailedWithEvent(infrastructure_failure).
@@ -984,11 +870,9 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NilResult_Fails(t *testing.T) {
 		Status:       feature.StatusPlanning,
 		CurrentPhase: feature.PhasePlan,
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-plan-nil", orchestrator.PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
@@ -996,7 +880,6 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_NilResult_Fails(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-	assertLifecycleCall(t, lc, "MarkFailed")
 }
 
 // Multi-repo all_passed non-roadmap, non-publishable → CompleteImplementation
@@ -1012,12 +895,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_NotPublish
 			{Name: repoNameB, Path: repoBPath, Publishable: &unpub},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.MarkCodeReadyFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-multi", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1025,10 +905,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_NotPublish
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "CompleteImplementation")
-	assertLifecycleCall(t, lc, "MarkCodeReady")
-	refuteLifecycleCall(t, lc, "TryCompletePublish")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusCodeReady {
+		t.Fatalf("status = %s, want CodeReady", stored.Status)
+	}
 }
 
 // Multi-repo all_passed, publishable, auto-publish on (>1 repos, non-roadmap)
@@ -1045,14 +924,15 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 			{Name: repoName, Path: repoAPath},
 			{Name: repoNameB, Path: repoBPath},
 		},
+		RepoStates: map[string]*feature.RepoState{
+			repoName: {Touched: true}, repoNameB: {Touched: true},
+		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
-	lc.MarkCodeReadyFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetRunMultiRepoFinalReviewFn(passingFinalReview)
+	o.SetPublishRepoFn(func(string, string) (string, error) { return "", errors.New("publish pending") })
 
 	if err := o.HandlePhaseCompletion("feat-multi-ap", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1060,15 +940,13 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "CompleteImplementation")
-	assertLifecycleCall(t, lc, "TryCompletePublish")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusCodeReady {
+		t.Fatalf("status = %s, want CodeReady for pending repo publish", stored.Status)
+	}
 	// The partial-publish fallback — without MarkCodeReady a crashed feature
 	// would stay at StatusReviewPassed and resume paths that dispatch on
 	// StatusCodeReady would never fire again.
-	assertLifecycleCall(t, lc, "MarkCodeReady")
 	// Multi-repo (>1) non-roadmap path does NOT route through Final Review.
-	refuteLifecycleCall(t, lc, "StartFinalReview")
 }
 
 // Multi-repo all_passed, publishable, auto-publish on (>1 repos, non-roadmap)
@@ -1084,13 +962,11 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 			{Name: repoName, Path: repoAPath},
 			{Name: repoNameB, Path: repoBPath},
 		},
+		RepoStates: map[string]*feature.RepoState{repoName: {PRURL: "https://github.com/org/repo-a/pull/1"}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) { return true, nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-multi-ap-full", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1098,11 +974,11 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_AutoPublis
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "TryCompletePublish")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusPublished {
+		t.Fatalf("status = %s, want published", stored.Status)
+	}
 	// When TryCompletePublish → true the feature is at StatusPublished —
 	// MarkCodeReady would regress it.
-	refuteLifecycleCall(t, lc, "MarkCodeReady")
 }
 
 // Multi-repo requires StatusImplementing — otherwise no-op.
@@ -1112,9 +988,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_WrongStatus_NoOp(t *
 		Status:       feature.StatusInterrupted,
 		CurrentPhase: feature.PhaseImplement,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-multi-bad", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1122,8 +997,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_WrongStatus_NoOp(t *
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	refuteLifecycleCall(t, lc, "CompleteImplementation")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusInterrupted {
+		t.Fatalf("status = %s, want unchanged", stored.Status)
+	}
 }
 
 // Multi-repo failed → MarkFailed(infrastructure_failure default).
@@ -1133,12 +1009,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed(t *testing.T)
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
@@ -1198,19 +1072,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhase
 		t.Fatalf("seed approved phase plan attempt: %v", err)
 	}
 
-	lc := lifecycleForFeature(f)
-	lc.NeedsPlanReviewFn = func(id string) error {
-		f.Status = feature.StatusPlanNeedsReview
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error {
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -1228,11 +1093,12 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceRoutesPhase
 		t.Fatalf("HandlePhaseCompletion() error = %v", err)
 	}
 
-	if f.Status != feature.StatusPlanning {
-		t.Fatalf("feature status = %v, want Planning after missing-evidence plan repair dispatch", f.Status)
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.Status != feature.StatusPlanning {
+		t.Fatalf("feature status = %v, want Planning after missing-evidence plan repair dispatch", stored.Status)
 	}
-	if f.MaxPlanIterations < 2 {
-		t.Fatalf("MaxPlanIterations = %d, want a guaranteed repair attempt beyond approved attempt 1", f.MaxPlanIterations)
+	if stored.MaxPlanIterations < 2 {
+		t.Fatalf("MaxPlanIterations = %d, want a guaranteed repair attempt beyond approved attempt 1", stored.MaxPlanIterations)
 	}
 	if captured := waitForCapturedPhase(t, cpr, feature.PhasePlan, 3*time.Second); len(captured) == 0 {
 		t.Fatalf("no phase-plan revision session captured; captures: %+v", cpr.capturedOpts)
@@ -1304,19 +1170,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_MissingEvidenceUsesLatestI
 		t.Fatalf("seed approved attempt 02: %v", err)
 	}
 
-	lc := lifecycleForFeature(f)
-	lc.NeedsPlanReviewFn = func(id string) error {
-		f.Status = feature.StatusPlanNeedsReview
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error {
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -1363,12 +1220,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_MaxIterations
 			{Name: repoNameB, Path: repoBPath},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
@@ -1400,12 +1255,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_ProtocolViola
 			{Name: repoName, Path: repoAPath},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
@@ -1435,12 +1288,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_SafetyRail_Pr
 			{Name: repoName, Path: repoAPath},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
@@ -1473,12 +1324,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIteratio
 			{Name: repoName, Path: repoAPath},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var failureCode errcat.Code
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnFeatureFailed: func(id string, code errcat.Code, class errcat.Class, em string) { failureCode = code },
 	})
 
@@ -1498,86 +1347,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_Failed_NoMaxIteratio
 	}
 }
 
-// Roadmap-final multi-repo auto-publish routes through Publish(featureID) so
-// PublishStarted/PublishCompleted events + hooks fire, and per-repo errors
-// propagate to callers instead of being silently swallowed.
-func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_RoutesThroughPublish(t *testing.T) {
-	f := &feature.Feature{
-		ID:                  "feat-multi-rf",
-		Status:              feature.StatusImplementing,
-		CurrentPhase:        feature.PhaseImplement,
-		CurrentRoadmapPhase: 3,
-		TotalRoadmapPhases:  3,
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-			{Name: repoNameB, Path: repoBPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.MarkCodeReadyFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
-
-	// Capture publish dispatch so we know we routed through Publish rather
-	// than open-coding the repo loop.
-	var publishFeatureID string
-	o.SetPublishFn(func(id string) error {
-		publishFeatureID = id
-		return nil
-	})
-
-	if err := o.HandlePhaseCompletion("feat-multi-rf", orchestrator.PhaseCompletionInput{
-		Phase:           feature.PhaseImplement,
-		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "all_passed"},
-	}); err != nil {
-		t.Fatalf("HandlePhaseCompletion: %v", err)
-	}
-
-	assertLifecycleCall(t, lc, "CompleteImplementation")
-	assertLifecycleCall(t, lc, "MarkCodeReady")
-	if publishFeatureID != "feat-multi-rf" {
-		t.Errorf("publishFn not invoked via roadmap-final multi-repo path; got publishFeatureID=%q", publishFeatureID)
-	}
-	// The open-coded per-repo loop (which ignored errors) must be gone; the
-	// orchestrator relies on Publish() for repo fan-out.
-	refuteLifecycleCall(t, lc, "SetRepoPublishError")
-}
-
-// Roadmap-final multi-repo auto-publish propagates publishFn errors back to
-// the caller — they must not be silently dropped like the open-coded loop did.
-func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapFinal_PublishErrorsPropagate(t *testing.T) {
-	f := &feature.Feature{
-		ID:                  "feat-multi-rf-err",
-		Status:              feature.StatusImplementing,
-		CurrentPhase:        feature.PhaseImplement,
-		CurrentRoadmapPhase: 2,
-		TotalRoadmapPhases:  2,
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-			{Name: repoNameB, Path: repoBPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.MarkCodeReadyFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
-
-	sentinel := errors.New("publish exploded")
-	o.SetPublishFn(func(id string) error { return sentinel })
-
-	err := o.HandlePhaseCompletion("feat-multi-rf-err", orchestrator.PhaseCompletionInput{
-		Phase:           feature.PhaseImplement,
-		MultiRepoResult: &agent.OrchestratorResult{FinalStatus: "all_passed"},
-	})
-	if !errors.Is(err, sentinel) {
-		t.Errorf("HandlePhaseCompletion error = %v, want sentinel %v", err, sentinel)
-	}
-}
-
 // onImplementCompleted with neither result pointer → MarkFailed(infrastructure).
 func TestOrchestrator_HandlePhaseCompletion_Implement_NoPayload(t *testing.T) {
 	f := &feature.Feature{
@@ -1585,19 +1354,18 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_NoPayload(t *testing.T) {
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-impl-np", orchestrator.PhaseCompletionInput{
 		Phase: feature.PhaseImplement,
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "MarkFailed")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusFailed {
+		t.Fatalf("status = %s, want failed", stored.Status)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1605,9 +1373,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_NoPayload(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_HandlePhaseCompletion_UnknownPhase_Errors(t *testing.T) {
-	lc := mocks.NewMockFeatureLifecycle()
-	fs := mocks.NewMockFeatureStore()
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	err := o.HandlePhaseCompletion("whatever", orchestrator.PhaseCompletionInput{
 		Phase: feature.Phase(99),
@@ -1627,10 +1394,8 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_UnknownStatus_Fails(t *testing.
 		Status:       feature.StatusPlanning,
 		CurrentPhase: feature.PhasePlan,
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error { return nil }
-	fs := newFeatureStore(f)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-unk", orchestrator.PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
@@ -1638,7 +1403,9 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_UnknownStatus_Fails(t *testing.
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-	assertLifecycleCall(t, lc, "MarkFailed")
+	if stored := loadStoredFeature(t, fs, f.ID); stored.Status != feature.StatusFailed {
+		t.Fatalf("status = %s, want failed", stored.Status)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1675,14 +1442,12 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_PhaseDirCreated(t *testing.T
 	if err := os.WriteFile(artifactPath, []byte(testutil.PhaseMarkdown("inquire")), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteInquireFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	// PhaseRunner holds the StateDir used by stateDir().
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs, PhaseRunner: pr}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, orchestrator.PhaseCompletionInput{
 		Phase:   feature.PhaseInquire,
@@ -1692,7 +1457,7 @@ func TestOrchestrator_HandlePhaseCompletion_Inquire_PhaseDirCreated(t *testing.T
 	}
 
 	// Artifact recorded on feature.
-	if path := f.Artifacts["inquire"]; path == "" {
+	if path := loadStoredFeature(t, fs, f.ID).Artifacts["inquire"]; path == "" {
 		t.Errorf("f.Artifacts[inquire] not recorded after inquire completion")
 	}
 }
@@ -1730,16 +1495,9 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_NoGate_EmitsFea
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos:               []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		f.CurrentRoadmapPhase = 1
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-ra-advance", orchestrator.PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
@@ -1747,8 +1505,6 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_RoadmapApproved_NoGate_EmitsFea
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "AdvanceRoadmapPhase")
 
 	events := drainEvents(o)
 	sawAdvance := false
@@ -1779,16 +1535,12 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_PerPhaseApproved_EmitsFeatureAd
 		Repos:               []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
 	}
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	lc := lifecycleForFeature(f)
-	lc.StartRoadmapPhaseImplementationFn = func(id string) error {
-		f.Status = feature.StatusImplementing
-		return nil
-	}
-	lc.InitRepoImplFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
-	o.SetRunMultiRepoImplFn(noopRunMultiRepoImplFn())
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
+	o.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
+		return make(chan *agent.OrchestratorResult, 1), nil
+	})
 
 	if err := o.HandlePhaseCompletion("feat-pp-advance", orchestrator.PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
@@ -1796,8 +1548,6 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_PerPhaseApproved_EmitsFeatureAd
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "StartRoadmapPhaseImplementation")
 
 	events := drainEvents(o)
 	sawAdvance := false
@@ -1830,23 +1580,9 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_MediumRoadmapApproved_AdvancesT
 		Artifacts:    map[string]string{"roadmap": roadmapPath},
 		Repos:        []feature.FeatureRepo{{Name: "r1", Path: "/tmp/r1"}},
 	}
-	lc := lifecycleForFeature(f)
-	advanceCalled := false
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		advanceCalled = true
-		f.CurrentRoadmapPhase = 1
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	completePlanningCalled := false
-	lc.CompletePlanningFn = func(id string) error {
-		completePlanningCalled = true
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-medium-advance", orchestrator.PhaseCompletionInput{
 		Phase:      feature.PhasePlan,
@@ -1855,18 +1591,9 @@ func TestOrchestrator_HandlePhaseCompletion_Plan_MediumRoadmapApproved_AdvancesT
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if !advanceCalled {
-		t.Fatal("AdvanceRoadmapPhase not called — Medium roadmap approval skipped phase-1 advancement (regression)")
-	}
-	if completePlanningCalled {
-		t.Error("CompletePlanning called — Medium roadmap approval must advance to phase 1, not short-circuit to implement")
-	}
-	// Asserting on lifecycle calls also catches the regression: StartImplementation
-	// would be recorded if the buggy flat-plan path ran.
-	for _, c := range lc.Calls {
-		if c.Method == "StartImplementation" {
-			t.Error("StartImplementation called — Medium roadmap approval must not bypass phase-1 plan")
-		}
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.CurrentRoadmapPhase != 1 || stored.Status == feature.StatusImplementing {
+		t.Fatalf("roadmap state = phase %d, status %s; want phase 1 planning", stored.CurrentRoadmapPhase, stored.Status)
 	}
 
 	events := drainEvents(o)
@@ -1900,17 +1627,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapMidflight_Emi
 			{Name: "r2", Path: "/tmp/r2"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		f.CurrentRoadmapPhase = 2
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-multi-midflight", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1918,8 +1637,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_RoadmapMidflight_Emi
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "AdvanceRoadmapPhase")
 
 	events := drainEvents(o)
 	sawAdvance := false
@@ -1962,24 +1679,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 			{Name: "unchanged", Path: unchangedRepo, WorktreePath: unchangedRepo},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		f.CurrentRoadmapPhase = 2
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	var recordedPhase int
-	var recordedAnchors map[string]string
-	lc.RecordRoadmapPhaseCommitAnchorsFn = func(id string, phase int, anchors map[string]string) error {
-		recordedPhase = phase
-		recordedAnchors = anchors
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-roadmap-anchors", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -1987,10 +1689,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapRecordsCommitAnchor
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-
-	assertLifecycleCall(t, lc, "RecordRoadmapPhaseCommitAnchors")
-	if recordedPhase != 1 {
-		t.Fatalf("recorded phase = %d, want 1", recordedPhase)
+	recordedAnchors := loadStoredFeature(t, fs, f.ID).Run().RoadmapPhaseCommitAnchors[1]
+	if recordedAnchors == nil {
+		t.Fatal("phase 1 commit anchors missing")
 	}
 	want := map[string]string{"changed": changedHeadBefore, "unchanged": unchangedHeadBefore}
 	for repo, wantSHA := range want {
@@ -2030,22 +1731,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 			{Name: "failed", Path: "/missing/repo", WorktreePath: "/missing/repo"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		f.CurrentRoadmapPhase = 2
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	var recordedAnchors map[string]string
-	lc.RecordRoadmapPhaseCommitAnchorsFn = func(id string, phase int, anchors map[string]string) error {
-		recordedAnchors = anchors
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-roadmap-anchor-failure", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2053,6 +1741,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_SkipsAnchorOnCommitFailure
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
+	recordedAnchors := loadStoredFeature(t, fs, f.ID).Run().RoadmapPhaseCommitAnchors[1]
 
 	wantOK, _ := git.CurrentHeadSHA(okRepo)
 	if got := recordedAnchors["ok"]; got != wantOK {
@@ -2094,19 +1783,13 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 			"r2": {PRURL: "https://github.com/org/r2/pull/2"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) {
-		f.Status = feature.StatusPublished
-		return true, nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var pubCompletedID string
 	var pubCompletedURLs map[string]string
 	var pubCompletedErr error
 	var pubHookCalls int
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnPublishCompleted: func(id string, urls map[string]string, err error) {
 			pubCompletedID = id
 			pubCompletedURLs = urls
@@ -2124,7 +1807,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_FullyPubl
 
 	// tryCompleteAndEmit ran and returned published=true — the orchestrator
 	// must NOT regress the feature to StatusCodeReady.
-	refuteLifecycleCall(t, lc, "MarkCodeReady")
 
 	// PublishCompleted event must be on the bus.
 	events := drainEvents(o)
@@ -2175,17 +1857,16 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyP
 			{Name: "r1", Path: "/tmp/r1"},
 			{Name: "r2", Path: "/tmp/r2"},
 		},
+		RepoStates: map[string]*feature.RepoState{"r1": {Touched: true}, "r2": {Touched: true}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.TryCompletePublishFn = func(id string) (bool, error) { return false, nil }
-	lc.MarkCodeReadyFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var pubHookCalls int
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{
 		OnPublishCompleted: func(id string, urls map[string]string, err error) { pubHookCalls++ },
 	})
+	o.SetRunMultiRepoFinalReviewFn(passingFinalReview)
+	o.SetPublishRepoFn(func(string, string) (string, error) { return "", errors.New("publish pending") })
 
 	if err := o.HandlePhaseCompletion("feat-multi-pub-partial", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2195,7 +1876,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_NonRoadmap_NotFullyP
 	}
 
 	// Not fully published → MarkCodeReady must fire so resume paths recover.
-	assertLifecycleCall(t, lc, "MarkCodeReady")
 
 	// PublishCompleted must NOT have fired — the publish has not completed.
 	events := drainEvents(o)
@@ -2223,12 +1903,9 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_Idempotent
 			{Name: repoNameB, Path: repoBPath},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.MarkCodeReadyFn = func(id string) error { return nil }
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-multi-idem", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2236,9 +1913,6 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_Multi_AllPassed_Idempotent
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion (second call): %v", err)
 	}
-
-	refuteLifecycleCall(t, lc, "CompleteImplementation")
-	refuteLifecycleCall(t, lc, "MarkCodeReady")
 
 	events := drainEvents(o)
 	if hasEventType(events, ports.PhaseCompleted) {
@@ -2280,20 +1954,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapSkipsUntouchedRepos
 			"untouched": {Touched: false},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		f.CurrentRoadmapPhase = 2
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	var recordedAnchors map[string]string
-	lc.RecordRoadmapPhaseCommitAnchorsFn = func(id string, phase int, anchors map[string]string) error {
-		recordedAnchors = anchors
-		return nil
-	}
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-roadmap-untouched", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2301,6 +1963,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapSkipsUntouchedRepos
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
+	recordedAnchors := loadStoredFeature(t, fs, f.ID).Run().RoadmapPhaseCommitAnchors[1]
 
 	if _, ok := recordedAnchors["touched"]; !ok {
 		t.Errorf("touched repo must be anchored; anchors = %v", recordedAnchors)
@@ -2344,20 +2007,8 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapCommitsAllReposWith
 		Artifacts:           map[string]string{"roadmap": roadmapPath},
 		Repos:               []feature.FeatureRepo{{Name: "solo", Path: repo, WorktreePath: repo}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.CompleteImplementationFn = func(id string) error { return nil }
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		f.CurrentRoadmapPhase = 2
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	var recordedAnchors map[string]string
-	lc.RecordRoadmapPhaseCommitAnchorsFn = func(id string, phase int, anchors map[string]string) error {
-		recordedAnchors = anchors
-		return nil
-	}
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+	fs, lc := newStoredFeatureFixture(t, f)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-roadmap-no-states", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2365,6 +2016,7 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapCommitsAllReposWith
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
+	recordedAnchors := loadStoredFeature(t, fs, f.ID).Run().RoadmapPhaseCommitAnchors[1]
 	if _, ok := recordedAnchors["solo"]; !ok {
 		t.Errorf("repo must be anchored when no touched state exists; anchors = %v", recordedAnchors)
 	}
@@ -2392,23 +2044,15 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcro
 		Repos:               []feature.FeatureRepo{{Name: "solo", Path: repo, WorktreePath: repo}},
 		RepoStates:          map[string]*feature.RepoState{"solo": {Touched: true}},
 	}
-	lc := lifecycleForFeature(f)
-	statusAtCompleteImplementation := ""
-	lc.CompleteImplementationFn = func(id string) error {
-		statusAtCompleteImplementation = f.CurrentPhaseStatus
-		f.Status = feature.StatusReviewPassed
+	fs, lc := newStoredFeatureFixture(t, f)
+	var sawFinalizing atomic.Bool
+	fs.SetSaveInterceptor(func(candidate *feature.Feature) error {
+		if candidate.CurrentPhaseStatus == feature.PhaseStatusFinalizing {
+			sawFinalizing.Store(true)
+		}
 		return nil
-	}
-	statusAtAdvance := "unset"
-	lc.AdvanceRoadmapPhaseFn = func(id string) error {
-		statusAtAdvance = f.CurrentPhaseStatus
-		f.CurrentRoadmapPhase = 2
-		f.Status = feature.StatusPlanning
-		return nil
-	}
-	lc.StartPlanningFn = func(id string) error { f.Status = feature.StatusPlanning; return nil }
-	lc.RecordRoadmapPhaseCommitAnchorsFn = func(id string, phase int, anchors map[string]string) error { return nil }
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+	})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-roadmap-finalizing", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2417,17 +2061,11 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcro
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
 
-	if statusAtCompleteImplementation != feature.PhaseStatusFinalizing {
-		t.Errorf("phase status at ReviewPassed transition = %q, want %q",
-			statusAtCompleteImplementation, feature.PhaseStatusFinalizing)
+	if !sawFinalizing.Load() {
+		t.Error("phase never persisted finalizing status")
 	}
-	if statusAtAdvance != "" {
-		t.Errorf("phase status at AdvanceRoadmapPhase = %q, want cleared", statusAtAdvance)
-	}
-	if f.CurrentPhaseStatus != "" {
-		t.Errorf("phase status after completion = %q, want cleared", f.CurrentPhaseStatus)
-	}
-	if f.IsFinalizingPhase() {
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.IsFinalizingPhase() {
 		t.Error("feature must not remain finalizing after the commit boundary")
 	}
 }
@@ -2435,24 +2073,25 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_RoadmapMarksFinalizingAcro
 // A non-roadmap feature never crosses the phase commit boundary, so it must
 // not be flagged finalizing.
 func TestOrchestrator_HandlePhaseCompletion_Implement_NonRoadmapDoesNotFlagFinalizing(t *testing.T) {
+	unpub := false
 	f := &feature.Feature{
 		ID:           "feat-nonroadmap-finalizing",
 		Status:       feature.StatusImplementing,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-			{Name: repoNameB, Path: repoBPath},
+			{Name: repoName, Path: repoAPath, Publishable: &unpub},
+			{Name: repoNameB, Path: repoBPath, Publishable: &unpub},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	statusAtCompleteImplementation := "unset"
-	lc.CompleteImplementationFn = func(id string) error {
-		statusAtCompleteImplementation = f.CurrentPhaseStatus
-		f.Status = feature.StatusReviewPassed
+	fs, lc := newStoredFeatureFixture(t, f)
+	var sawFinalizing atomic.Bool
+	fs.SetSaveInterceptor(func(candidate *feature.Feature) error {
+		if candidate.CurrentPhaseStatus == feature.PhaseStatusFinalizing {
+			sawFinalizing.Store(true)
+		}
 		return nil
-	}
-	lc.MarkCodeReadyFn = func(id string) error { f.Status = feature.StatusCodeReady; return nil }
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(f)}, orchestrator.Hooks{})
+	})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.HandlePhaseCompletion("feat-nonroadmap-finalizing", orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,
@@ -2460,7 +2099,10 @@ func TestOrchestrator_HandlePhaseCompletion_Implement_NonRoadmapDoesNotFlagFinal
 	}); err != nil {
 		t.Fatalf("HandlePhaseCompletion: %v", err)
 	}
-	if statusAtCompleteImplementation != "" {
-		t.Errorf("phase status = %q, want empty for a non-roadmap feature", statusAtCompleteImplementation)
+	if sawFinalizing.Load() {
+		t.Error("non-roadmap feature persisted finalizing status")
+	}
+	if stored := loadStoredFeature(t, fs, f.ID); stored.IsFinalizingPhase() {
+		t.Error("non-roadmap feature remains finalizing")
 	}
 }

@@ -51,7 +51,7 @@ func (o *Orchestrator) publishRepo(featureID, repoName string) (string, error) {
 }
 
 func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts PublishOptions) (string, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return "", fmt.Errorf("load feature: %w", err)
 	}
@@ -88,7 +88,7 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	if title == "" || body == "" {
 		generatedTitle, generatedBody, generateErr := o.generatePRDescription(f, prCtx)
 		if generateErr != nil {
-			generateErr = &PublishDescriptionError{RepoName: repoName, Err: generateErr}
+			generateErr = &publishDescriptionError{RepoName: repoName, Err: generateErr}
 			o.storePublishFailure(f, repoName, generateErr)
 			return "", generateErr
 		}
@@ -151,12 +151,12 @@ func (o *Orchestrator) publishRepoWithOptions(featureID, repoName string, opts P
 	}
 
 	// Record per-repo success.
-	if err := o.deps.Lifecycle.SetRepoPublished(featureID, repoName, prURL); err != nil {
+	if err := o.deps.Manager.SetRepoPublished(featureID, repoName, prURL); err != nil {
 		return prURL, fmt.Errorf("set repo published: %w", err)
 	}
 
 	// Apply cross-refs — best-effort; cross-ref failures do not fail the publish.
-	if freshF, getErr := o.deps.Lifecycle.Get(featureID); getErr == nil {
+	if freshF, getErr := o.deps.Store.Load(featureID); getErr == nil {
 		o.applyCrossRefs(freshF, repoName, prURL)
 	}
 
@@ -181,7 +181,7 @@ func (o *Orchestrator) republishRepo(f *feature.Feature, repo feature.FeatureRep
 		o.storePublishFailure(f, repo.Name, err)
 		return "", err
 	}
-	if err := o.deps.Lifecycle.SetRepoPublished(f.ID, repo.Name, prURL); err != nil {
+	if err := o.deps.Manager.SetRepoPublished(f.ID, repo.Name, prURL); err != nil {
 		return prURL, fmt.Errorf("set repo published: %w", err)
 	}
 	return prURL, nil
@@ -205,7 +205,7 @@ func (o *Orchestrator) assertPRAcceptsUpdates(f *feature.Feature, repo feature.F
 	if err != nil || state == "" || state == git.PRStateOpen {
 		return nil
 	}
-	closedErr := &PublishPRClosedError{RepoName: repo.Name, PRURL: prURL, State: state}
+	closedErr := &publishPRClosedError{RepoName: repo.Name, PRURL: prURL, State: state}
 	o.storePublishFailure(f, repo.Name, closedErr)
 	return closedErr
 }
@@ -278,7 +278,7 @@ type PublishDescriptionOptions struct {
 // publish set. The renderer may name repository identities; it never supplies
 // roadmap text, commit logs, diff stats, or fallback content.
 func (o *Orchestrator) GeneratePublishDescription(featureID string, opts PublishDescriptionOptions) (string, string, error) {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return "", "", fmt.Errorf("load feature: %w", err)
 	}

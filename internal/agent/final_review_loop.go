@@ -839,7 +839,7 @@ func featureDefaultDiffBase(f *feature.Feature) string {
 // Wraps Feature.TouchedRepos in a fresh-load so the FR loop sees the latest
 // committed dual-write rather than an in-memory shadow that may predate a
 // crash-recovery resume.
-func touchedReposFresh(store ports.FeatureStore, f *feature.Feature) []string {
+func touchedReposFresh(store FeatureStore, f *feature.Feature) []string {
 	fresh := f
 	if store != nil {
 		if loaded, err := store.Load(f.ID); err == nil && loaded != nil {

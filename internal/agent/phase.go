@@ -37,7 +37,7 @@ import (
 // PhaseRunner handles launching agent sessions for each feature phase.
 type PhaseRunner struct {
 	SessionManager ports.SessionManager
-	FeatureStore   ports.FeatureStore
+	FeatureStore   FeatureStore
 	CommandRunner  ports.CommandRunner
 	// CapabilityPolicy configures built-in capability probes for this
 	// server; nil uses the local default.
@@ -233,7 +233,7 @@ func (pr *PhaseRunner) logRuntimeWarning(f *feature.Feature, format string, args
 }
 
 // NewPhaseRunner creates a PhaseRunner with a default execCommandRunner.
-func NewPhaseRunner(sm ports.SessionManager, store ports.FeatureStore, stateDir string) *PhaseRunner {
+func NewPhaseRunner(sm ports.SessionManager, store FeatureStore, stateDir string) *PhaseRunner {
 	return &PhaseRunner{SessionManager: sm, FeatureStore: store, StateDir: stateDir, CommandRunner: &execCommandRunner{}}
 }
 

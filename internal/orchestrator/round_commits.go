@@ -70,7 +70,7 @@ func (o *Orchestrator) commitRound(input agent.RoundCommitInput) error {
 		return nil
 	}
 
-	f, err := o.deps.Lifecycle.Get(input.FeatureID)
+	f, err := o.deps.Store.Load(input.FeatureID)
 	if err != nil {
 		return fmt.Errorf("load feature %s for round commit: %w", input.FeatureID, err)
 	}

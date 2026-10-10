@@ -19,7 +19,6 @@ import (
 	"sort"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 // phaseOutcome is the verdict the unified phase implementer hands to
@@ -77,7 +76,7 @@ type AtomicPhaseStampInput struct {
 //
 // Ordering: repos are sorted before iteration so the on-disk YAML is stable
 // for tests; the resulting state is order-independent.
-func AtomicPhaseStamp(store ports.FeatureStore, in AtomicPhaseStampInput) error {
+func AtomicPhaseStamp(store FeatureStore, in AtomicPhaseStampInput) error {
 	if store == nil {
 		return fmt.Errorf("atomic phase stamp: store is nil")
 	}

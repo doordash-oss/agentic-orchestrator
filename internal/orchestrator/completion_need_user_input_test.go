@@ -65,10 +65,9 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 			repoNameC: {},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	// --- 1. Loop returns need_user_input → orchestrator must pause feature. ---
 	if err := o.HandlePhaseCompletion("feat-mr-nui", orchestrator.PhaseCompletionInput{
@@ -86,6 +85,10 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 	// 2. Feature must be persisted as paused: gate path written + status
 	// transitioned. This is the slice-2 fix — without it the resume
 	// dispatcher rejects with "is not paused".
+	f, err := fs.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if f.PendingNeedUserInputPath != gatePath {
 		t.Errorf("Feature.PendingNeedUserInputPath = %q, want %q", f.PendingNeedUserInputPath, gatePath)
 	}
@@ -115,7 +118,7 @@ func TestOrchestrator_HandlePhaseCompletion_MultiRepo_NeedUserInput_PausesFeatur
 	// The user attempts to resume without answering — the gate's own
 	// AllAnswered guard rejects, but crucially NOT with the
 	// "is not paused" sentinel that fired before the fix.
-	err := o.ResumeNeedUserInput("feat-mr-nui", orchestrator.NeedUserInputResume{})
+	err = o.ResumeNeedUserInput("feat-mr-nui", orchestrator.NeedUserInputResume{})
 	if err == nil {
 		t.Fatal("expected resume to error on unanswered question")
 	}

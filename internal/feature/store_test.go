@@ -112,7 +112,7 @@ func TestStoreSaveAndLoadInputNotifications(t *testing.T) {
 		t.Fatalf("InputNotifications = %q, want %q", loaded.InputNotifications, InputNotificationsMuted)
 	}
 
-	loaded.InputNotifications = PersistInputNotificationsMode(InputNotificationsDefault)
+	loaded.InputNotifications = PersistInputNotificationsMode(inputNotificationsDefault)
 	if err := store.Save(loaded); err != nil {
 		t.Fatalf("save default: %v", err)
 	}

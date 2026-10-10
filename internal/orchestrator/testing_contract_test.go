@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 )
@@ -47,7 +48,7 @@ func TestWaiveTestingContractItemsRevisesCurrentPhaseContract(t *testing.T) {
 	if err := agent.WriteTestingContract(contractPath, contract); err != nil {
 		t.Fatal(err)
 	}
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: feature.NewManager(store, config.NewDefault()), Store: store}, orchestrator.Hooks{})
 
 	if _, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"visual_1"}}); err == nil || !strings.Contains(err.Error(), "reason") {
 		t.Fatalf("missing reason error = %v", err)
@@ -87,7 +88,7 @@ func TestWaiveTestingContractItemsRequiresPhaseContract(t *testing.T) {
 	if err := store.Save(f); err != nil {
 		t.Fatal(err)
 	}
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: feature.NewManager(store, config.NewDefault()), Store: store}, orchestrator.Hooks{})
 	if _, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"x"}, Reason: "r"}); err == nil || !strings.Contains(err.Error(), "no testing contract") {
 		t.Fatalf("error = %v, want missing-contract error", err)
 	}
@@ -112,7 +113,7 @@ func TestWaiveTestingContractItemsRejectsStaleSelection(t *testing.T) {
 	if err := agent.WriteTestingContract(contractPath, contract); err != nil {
 		t.Fatal(err)
 	}
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: feature.NewManager(store, config.NewDefault()), Store: store}, orchestrator.Hooks{})
 	// A selection made against phase 1 must not waive phase 2's identically
 	// named row.
 	_, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"visual_1"}, Reason: "r", ExpectedPhase: 1, ExpectedRevision: 3})
@@ -153,7 +154,7 @@ func TestWaiveTestingContractItemsBindsRunAndSerializesWriters(t *testing.T) {
 	if err := agent.WriteTestingContract(contractPath, agent.TestingContract{Version: 2, Revision: 1, Items: items}); err != nil {
 		t.Fatal(err)
 	}
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lifecycleForFeature(f), Store: store}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: feature.NewManager(store, config.NewDefault()), Store: store}, orchestrator.Hooks{})
 
 	// A run-1 selection must not waive run 2's identically numbered phase.
 	_, err := o.WaiveTestingContractItems(f.ID, orchestrator.TestingContractWaiver{ItemIDs: []string{"visual_0"}, Reason: "r", ExpectedRun: 1, ExpectedPhase: 1, ExpectedRevision: 1})

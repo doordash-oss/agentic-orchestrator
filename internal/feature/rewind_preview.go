@@ -34,8 +34,8 @@ type RewindPRConsequence struct {
 // escapes the preview boundary.
 const (
 	ResetKindAnchor    = "anchor"
-	ResetKindBase      = "base"
-	ResetKindBaseLocal = "base-local"
+	resetKindBase      = "base"
+	resetKindBaseLocal = "base-local"
 	resetKindNone      = "none"
 )
 
@@ -92,10 +92,10 @@ type RewindPreviewResult struct {
 	ValidationFindings []string `json:"validation_findings"`
 }
 
-// ValidateRewindTarget checks that target appears in the rewind-choice list.
+// validateRewindTarget checks that target appears in the rewind-choice list.
 // It returns the same error messages used by both the preview and execution
 // paths so a client never reproduces the validation logic.
-func ValidateRewindTarget(choices []RewindChoice, target Phase, status Status) error {
+func validateRewindTarget(choices []RewindChoice, target Phase, status Status) error {
 	for _, c := range choices {
 		if c.Phase == target {
 			return nil
@@ -107,29 +107,29 @@ func ValidateRewindTarget(choices []RewindChoice, target Phase, status Status) e
 	return fmt.Errorf("cannot rewind to %s from current state %s", target, status)
 }
 
-// EffectiveRewindPhase applies the pipeline-medium escalation rule: when a
+// effectiveRewindPhase applies the pipeline-medium escalation rule: when a
 // feature was upgraded from PipelineMedium without rewinding, pre-plan phases
 // that PipelineMedium lacks are escalated to PhaseKnowledgeBase because KB was
 // never completed. Shared by the preview and RewindWithRequest.
-func EffectiveRewindPhase(f *Feature, target Phase) Phase {
+func effectiveRewindPhase(f *Feature, target Phase) Phase {
 	if f.PipelineUpgradedFrom == PipelineMedium && !PipelineMedium.HasPhase(target) {
 		return PhaseKnowledgeBase
 	}
 	return target
 }
 
-// WorktreeResetKind decides the worktree reset strategy for a repo during a
+// worktreeResetKind decides the worktree reset strategy for a repo during a
 // rewind. Returns one of the ResetKind constants, or resetKindNone when no reset
 // applies for this repo/target combination. Shared by the preview and
 // RewindWithRequest so the decision tree never drifts.
-func WorktreeResetKind(repo FeatureRepo, partial bool, roadmapPhase int) string {
+func worktreeResetKind(repo FeatureRepo, partial bool, roadmapPhase int) string {
 	switch {
 	case partial && roadmapPhase > 1:
 		return ResetKindAnchor
 	case repo.BaseBranch != "" && repo.Publishable != nil && !*repo.Publishable:
-		return ResetKindBaseLocal
+		return resetKindBaseLocal
 	case repo.BaseBranch != "":
-		return ResetKindBase
+		return resetKindBase
 	default:
 		return resetKindNone
 	}
@@ -194,17 +194,8 @@ func ParsePhaseName(in string) (Phase, error) {
 	}
 }
 
-// RewindPreviewForFeature computes an authoritative, side-effect-free rewind
-// preview from the current feature state. It mirrors RewindWithRequest's
-// choice validation, effective-target escalation, partial-roadmap semantics,
-// carry-forward discovery, PR/worktree consequences, and backup behavior —
-// without mutating, sealing, forking, or touching any external system
-// (no PR close, no branch creation, no worktree reset). The sealedRunDir is
-// the active run's directory (Store.RunDir(featureID, f.ActiveRun)) and is
-// used only to discover on-disk carry-forward directories.
-//
-// When upgrade is non-empty, choices and escalation are computed against the
-// upgraded pipeline profile (the preview never mutates f.Pipeline).
+// RewindPreviewForFeature renders the shared side-effect-free rewind plan.
+// The sealedRunDir is the active run directory used to discover carried files.
 func RewindPreviewForFeature(f *Feature, sealedRunDir string, request RewindRequest, upgrade PipelineProfile) RewindPreviewResult {
 	if f == nil {
 		return RewindPreviewResult{
@@ -214,75 +205,33 @@ func RewindPreviewForFeature(f *Feature, sealedRunDir string, request RewindRequ
 			ValidationFindings: []string{"feature not found"},
 		}
 	}
+	plan, planErr := buildRewindPlan(f, sealedRunDir, request, upgrade)
 	result := RewindPreviewResult{
-		SourceRunNumber: f.ActiveRun,
-		SourceRevision:  RewindRevision(f),
-		TargetPhase:     request.TargetPhase,
-		RoadmapPhase:    request.RoadmapPhase,
-		UpgradePipeline: upgrade,
+		SourceRunNumber:        f.ActiveRun,
+		SourceRevision:         plan.SourceRevision,
+		TargetPhase:            request.TargetPhase,
+		EffectivePhase:         plan.EffectiveTarget,
+		RoadmapPhase:           request.RoadmapPhase,
+		UpgradePipeline:        upgrade,
+		ValidPhases:            plan.Choices,
+		ValidRoadmapPhases:     plan.ValidRoadmapPhases,
+		UpgradePipelineOptions: plan.UpgradeOptions,
+		CarriedPhases:          plan.CarriedPhases,
+		CarriedFromRun:         f.ActiveRun,
+		PRConsequences:         plan.PRs,
+		BackupBranchRepos:      plan.BackupRepos,
 	}
-
-	// Compute choices against the (possibly upgraded) pipeline profile.
-	choices := rewindChoicesForPreview(f, upgrade)
-	result.ValidPhases = choices
-	result.UpgradePipelineOptions = rewindUpgradeOptionsForPreview(f, upgrade)
-	result.CarriedFromRun = f.ActiveRun
-
-	if err := ValidateRewindTarget(choices, request.TargetPhase, f.Status); err != nil {
-		result.ValidationFindings = []string{err.Error()}
+	if planErr != nil {
+		result.ValidationFindings = []string{planErr.Error()}
 		return result
 	}
-
-	// Effective target mirrors RewindWithRequest's escalation.
-	effective := FeatureWithUpgrade(f, upgrade)
-	result.EffectivePhase = EffectiveRewindPhase(&effective, request.TargetPhase)
-
-	// Partial-roadmap validation (reuses the same rule as execution).
-	if _, err := validatePartialRewindRequestForFeature(f, request); err != nil {
-		result.ValidationFindings = []string{err.Error()}
-		return result
-	}
-	result.ValidRoadmapPhases = validRoadmapPhasesForFeature(f, request.TargetPhase)
-
-	// Preview and execution intentionally share the same carry-forward rule.
-	dirs, err := carryForwardSet(request.TargetPhase, sealedRunDir, request.RoadmapPhase)
-	if err != nil {
-		result.ValidationFindings = []string{err.Error()}
-		return result
-	}
-	result.CarriedPhases = dirs
-
-	// PR consequences: which PRs would close (publishable features only).
-	if f.IsPublishable() {
-		prURLs := f.PRURLs()
-		repos := make([]string, 0, len(prURLs))
-		for name := range prURLs {
-			if prURLs[name] != "" {
-				repos = append(repos, name)
-			}
-		}
-		sort.Strings(repos)
-		for _, name := range repos {
-			result.PRConsequences = append(result.PRConsequences, RewindPRConsequence{Repo: name, PRURL: prURLs[name]})
+	for _, worktree := range plan.Worktrees {
+		if worktree.ResetKind != resetKindNone {
+			result.WorktreeConsequences = append(result.WorktreeConsequences, RewindWorktreeConsequence{
+				Repo: worktree.Repo.Name, ResetKind: worktree.ResetKind,
+			})
 		}
 	}
-
-	// Worktree + backup consequences mirror RewindWithRequest's reset loop.
-	partial := request.RoadmapPhase > 0 && request.TargetPhase == PhaseImplement
-	for _, repo := range f.Repos {
-		if repo.WorktreePath == "" {
-			continue
-		}
-		if request.TargetPhase.LogicalOrder() <= PhaseImplement.LogicalOrder() {
-			kind := WorktreeResetKind(repo, partial, request.RoadmapPhase)
-			if kind != resetKindNone {
-				result.WorktreeConsequences = append(result.WorktreeConsequences, RewindWorktreeConsequence{Repo: repo.Name, ResetKind: kind})
-			}
-			result.BackupBranchRepos = append(result.BackupBranchRepos, repo.Name)
-		}
-	}
-	sort.Strings(result.BackupBranchRepos)
-
 	result.Eligible = true
 	return result
 }
@@ -296,9 +245,8 @@ func rewindChoicesForPreview(f *Feature, upgrade PipelineProfile) []RewindChoice
 	return RewindChoicesForFeature(&upgraded)
 }
 
-// rewindUpgradeOptionsForPreview lists pipeline profiles the user may upgrade
-// into, mirroring the server's rewindUpgradePipelineOptions against the
-// (possibly already-upgraded) effective profile.
+// rewindUpgradeOptionsForPreview lists pipeline profiles available from the
+// effective profile, including a requested upgrade.
 func rewindUpgradeOptionsForPreview(f *Feature, upgrade PipelineProfile) []PipelineProfile {
 	current := f.EffectivePipeline()
 	if upgrade != "" {

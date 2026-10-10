@@ -29,8 +29,8 @@ type Params struct {
 	Config   *config.Config
 }
 
-// ManagerDeps is the runtime dependency surface the feature manager needs.
-type ManagerDeps struct {
+// managerDeps is the runtime dependency surface the feature manager needs.
+type managerDeps struct {
 	fx.In
 	Worktrees WorktreeOps `optional:"true"`
 	PRs       PRCloser    `optional:"true"`
@@ -55,7 +55,7 @@ var Module = fx.Module("feature",
 	fx.Provide(func(p Params) *Store {
 		return NewStore(p.StateDir)
 	}),
-	fx.Provide(func(p Params, deps ManagerDeps, store *Store) *Manager {
+	fx.Provide(func(p Params, deps managerDeps, store *Store) *Manager {
 		mgr := NewManager(store, p.Config)
 		mgr.Worktrees = deps.Worktrees
 		mgr.PRs = deps.PRs

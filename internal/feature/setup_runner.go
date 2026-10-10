@@ -30,18 +30,18 @@ import (
 
 var ErrSetupAlreadyRunning = errors.New("setup already running")
 
-type SetupEventKind string
+type setupEventKind string
 
 const (
-	SetupEventStarted       SetupEventKind = "started"
-	SetupEventTaskStarted   SetupEventKind = "task_started"
-	SetupEventTaskCompleted SetupEventKind = "task_completed"
-	SetupEventCompleted     SetupEventKind = "completed"
-	SetupEventFailed        SetupEventKind = "failed"
+	SetupEventStarted       setupEventKind = "started"
+	setupEventTaskStarted   setupEventKind = "task_started"
+	SetupEventTaskCompleted setupEventKind = "task_completed"
+	SetupEventCompleted     setupEventKind = "completed"
+	SetupEventFailed        setupEventKind = "failed"
 )
 
 type SetupEvent struct {
-	Kind      SetupEventKind
+	Kind      setupEventKind
 	FeatureID string
 	RunNumber int
 	Attempt   int
@@ -205,7 +205,7 @@ func (m *Manager) runSetup(featureID string, retry bool, opts ...SetupRunnerOpti
 		if err := m.markSetupTaskRunning(featureID, task, logPath); err != nil {
 			return err
 		}
-		emit(setupTaskEvent(SetupEventTaskStarted, featureID, current.ActiveRun, attempt, logPath, task, ""))
+		emit(setupTaskEvent(setupEventTaskStarted, featureID, current.ActiveRun, attempt, logPath, task, ""))
 
 		completed, err := m.executeSetupTask(current, task, logPath)
 		if err != nil {
@@ -608,7 +608,7 @@ func (m *Manager) completeSetup(featureID string) error {
 }
 
 func (m *Manager) ReconcileAbandonedSetups() ([]string, error) {
-	features, err := m.List()
+	features, err := m.Store.List()
 	if err != nil && !IsPartialLoadError(err) {
 		return nil, err
 	}
@@ -716,7 +716,7 @@ func setupTaskOrder(setup *SetupState) []string {
 	return append(order, rest...)
 }
 
-func setupTaskEvent(kind SetupEventKind, featureID string, runNumber, attempt int, logPath string, task SetupTask, errMsg string) SetupEvent {
+func setupTaskEvent(kind setupEventKind, featureID string, runNumber, attempt int, logPath string, task SetupTask, errMsg string) SetupEvent {
 	return SetupEvent{
 		Kind:       kind,
 		FeatureID:  featureID,

@@ -425,7 +425,6 @@ func automaticReviewJourneySessionOpts(
 	if err != nil {
 		t.Fatalf("BuildSession() error: %v", err)
 	}
-	opts.Protocol = nil
 	opts.ResultShutdownGrace = 50 * time.Millisecond
 	return opts
 }

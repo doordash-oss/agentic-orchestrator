@@ -21,33 +21,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-type childRelationshipCloser interface {
-	CloseChild(childID, outcome string, closedAt time.Time) error
-}
-
 func (o *Orchestrator) closeChildRelationship(childID, outcome string, closedAt time.Time) error {
-	closer, ok := o.deps.Store.(childRelationshipCloser)
-	if ok {
-		return closer.CloseChild(childID, outcome, closedAt)
-	}
-	// Lightweight port doubles may not expose the concrete store primitive.
-	// Preserve the same idempotent invariant in that compatibility path;
-	// production wiring always uses feature.Store.CloseChild.
-	return o.deps.Store.Modify(childID, func(child *feature.Feature) error {
-		if !child.IsChild() {
-			return fmt.Errorf("feature %s is not a child", childID)
-		}
-		if !child.IsActiveChild() {
-			if child.Parent.CloseOutcome == outcome {
-				return nil
-			}
-			return feature.ErrChildRelationshipClosed
-		}
-		child.Parent.CloseOutcome = outcome
-		timestamp := closedAt
-		child.Parent.ClosedAt = &timestamp
-		return nil
-	})
+	return o.deps.Store.CloseChild(childID, outcome, closedAt)
 }
 
 // mutationOperation identifies which orchestrator mutation is being guarded.
@@ -111,7 +86,7 @@ var allowedParentMutationsWhileChildActive = map[mutationOperation]bool{
 // the subsequent operation is not a simple Store.Modify.
 func (o *Orchestrator) relationshipGuard(featureID string, op mutationOperation) error {
 	o.trace(traceGuard)
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature for relationship guard: %w", err)
 	}
@@ -135,7 +110,7 @@ func (o *Orchestrator) relationshipGuard(featureID string, op mutationOperation)
 			return fmt.Errorf("checking active child for relationship guard: %w", err)
 		}
 		if childID != "" {
-			activeChild, err = o.deps.Lifecycle.Get(childID)
+			activeChild, err = o.deps.Store.Load(childID)
 			if err != nil {
 				return fmt.Errorf("loading child for relationship guard: %w", err)
 			}
@@ -205,31 +180,15 @@ func relationshipGuardCheck(f *feature.Feature, activeChild *feature.Feature, op
 
 // guardedModify combines the relationship guard check with a Store.Modify
 // under the same store mutex, closing the time-of-check/time-of-use gap with
-// concurrent child creation (CreateChildLocked). When the concrete store
-// supports ModifyGuarded, the guard and mutation are atomic; otherwise it
-// falls back to relationshipGuard + Store.Modify.
+// concurrent child creation (CreateChildLocked).
 func (o *Orchestrator) guardedModify(
 	featureID string,
 	op mutationOperation,
 	fn func(f *feature.Feature) error,
 ) error {
-	type guardedModifier interface {
-		ModifyGuarded(id string, guard feature.RelationshipGuardFunc, fn func(f *feature.Feature) error) error
-	}
-	if gm, ok := o.deps.Store.(guardedModifier); ok {
-		return gm.ModifyGuarded(
-			featureID,
-			func(f *feature.Feature, activeChild *feature.Feature) error {
-				return relationshipGuardCheck(f, activeChild, op)
-			},
-			fn,
-		)
-	}
-	// Fallback for stores that do not support ModifyGuarded.
-	if err := o.relationshipGuard(featureID, op); err != nil {
-		return err
-	}
-	return o.deps.Store.Modify(featureID, fn)
+	return o.deps.Store.ModifyGuarded(featureID, func(f *feature.Feature, activeChild *feature.Feature) error {
+		return relationshipGuardCheck(f, activeChild, op)
+	}, fn)
 }
 
 // withRelationshipReadLock acquires the relationship read lock and runs fn.

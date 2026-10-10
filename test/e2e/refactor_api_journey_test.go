@@ -102,7 +102,7 @@ func TestRefactorAPIJourney(t *testing.T) {
 	mgr := feature.NewManager(store, cfg)
 	mgr.Worktrees = wm
 
-	orch := orchestrator.New(orchestrator.Deps{Lifecycle: mgr, Store: store}, orchestrator.Hooks{})
+	orch := orchestrator.New(orchestrator.Deps{Manager: mgr, Store: store}, orchestrator.Hooks{})
 	t.Cleanup(func() {
 		_ = orch.Shutdown()
 		// Async child setup is tracked by the orchestrator; wait for it before

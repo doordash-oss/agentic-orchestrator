@@ -440,7 +440,7 @@ type planLoopConfig struct {
 	// Registry resolves each validator's prompt protocol from its own model.
 	Registry     *llm.Registry
 	Feature      *feature.Feature
-	FeatureStore ports.FeatureStore
+	FeatureStore FeatureStore
 	StateDir     string // feature state directory
 
 	ResearchArtifactPath string // historical primary planning artifact path also used by validators
@@ -1035,7 +1035,7 @@ var errPlanLoopSuperseded = errors.New("planning loop superseded by a restarted 
 // returns the feature to Planning, so status alone cannot tell the old loop
 // it is stale; the active run and phase start captured at entry can.
 type planLoopGuard struct {
-	store      ports.FeatureStore
+	store      FeatureStore
 	featureID  string
 	activeRun  int
 	phaseStart *time.Time
@@ -1927,7 +1927,7 @@ attemptLoop:
 // retryable infrastructure failure (fast exit, zero cost, empty log), so
 // without this check the loop would silently relaunch a session the user
 // just interrupted.
-func interruptiblePlanRetry(store ports.FeatureStore, featureID string, attempt int) (*PlanLoopResult, bool) {
+func interruptiblePlanRetry(store FeatureStore, featureID string, attempt int) (*PlanLoopResult, bool) {
 	if isFeatureInterrupted(store, featureID) {
 		return &PlanLoopResult{FinalStatus: "interrupted", Iterations: attempt - 1}, true
 	}
@@ -2091,7 +2091,7 @@ func formatPlanContractViolationFeedback(role Role, violations []ProtocolViolati
 
 // resolvePlanArtifactPath reads the plan artifact path from the feature store.
 // Falls back to globbing the artifact directory for common plan filenames.
-func resolvePlanArtifactPath(store ports.FeatureStore, featureID, artifactDir string) string {
+func resolvePlanArtifactPath(store FeatureStore, featureID, artifactDir string) string {
 	if store != nil {
 		if f, err := store.Load(featureID); err == nil && f.Artifacts != nil {
 			if p := f.Artifacts["plan"]; p != "" {

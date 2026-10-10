@@ -39,7 +39,7 @@ import (
 // ImplementConfig holds configuration for the implementation loop.
 type ImplementConfig struct {
 	Feature             *feature.Feature
-	FeatureStore        ports.FeatureStore // for reading updated help answers
+	FeatureStore        FeatureStore // for reading updated help answers
 	WorkDir             string
 	PlanPath            string // absolute path to the plan artifact; the agent reads it via tool use
 	MaxIterations       int
@@ -2840,7 +2840,7 @@ func waitForShutdownIntent(sm shutdownChecker, grace time.Duration) bool {
 // verificationContext returns a context that cancels once the feature is
 // interrupted or failed, so a hung verification command cannot outlive a user
 // interrupt by its full declared timeout. The caller must call cancel.
-func verificationContext(store ports.FeatureStore, featureID string) (context.Context, context.CancelFunc) {
+func verificationContext(store FeatureStore, featureID string) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	if store == nil {
 		return ctx, cancel
@@ -2863,7 +2863,7 @@ func verificationContext(store ports.FeatureStore, featureID string) (context.Co
 	return ctx, cancel
 }
 
-func isFeatureInterrupted(store ports.FeatureStore, featureID string) bool {
+func isFeatureInterrupted(store FeatureStore, featureID string) bool {
 	if store == nil {
 		return false
 	}

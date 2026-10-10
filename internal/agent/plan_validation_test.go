@@ -1056,8 +1056,8 @@ func TestPlanValidatorHelperUsesIsolatedDirAndHarnessReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("phase-1-plan"); got != 0.001 {
-		t.Errorf("PhaseCost(phase-1-plan) = %v, want 0.001", got)
+	if got := updated.PhaseCosts["phase-1-plan"]; got != 0.001 {
+		t.Errorf("PhaseCosts[phase-1-plan] = %v, want 0.001", got)
 	}
 	if len(updated.SessionCosts) != 1 {
 		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))

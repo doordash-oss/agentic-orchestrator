@@ -31,10 +31,6 @@ var _ llm.Protocol = (*mocks.MockProtocol)(nil)
 var _ llm.LLMProvider = (*mocks.MockProvider)(nil)
 var _ ports.SessionView = (*mocks.MockSessionView)(nil)
 
-// Feature ports
-var _ ports.FeatureStore = (*mocks.MockFeatureStore)(nil)
-var _ ports.FeatureLifecycle = (*mocks.MockFeatureLifecycle)(nil)
-
 // Session ports
 var _ ports.SessionManager = (*mocks.MockSessionManager)(nil)
 

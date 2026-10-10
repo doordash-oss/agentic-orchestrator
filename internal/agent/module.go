@@ -29,7 +29,7 @@ import (
 type agentParams struct {
 	fx.In
 	SessionManager  ports.SessionManager
-	FeatureStore    ports.FeatureStore
+	FeatureStore    FeatureStore
 	Config          *config.Config
 	Registry        *llm.Registry
 	PermissionCache *permission.Cache
@@ -42,7 +42,7 @@ type agentParams struct {
 var Module = fx.Module("agent",
 	// Bridge concrete types from sibling modules to port interfaces.
 	fx.Provide(func(sm *session.Manager) ports.SessionManager { return sm }),
-	fx.Provide(func(store *feature.Store) ports.FeatureStore { return store }),
+	fx.Provide(func(store *feature.Store) FeatureStore { return store }),
 	fx.Provide(func(p agentParams) *PhaseRunner {
 		pr := NewPhaseRunner(p.SessionManager, p.FeatureStore, p.StateDir)
 		pr.CommandRunner = &execCommandRunner{}

@@ -357,19 +357,6 @@ func normalizeToRunRelative(abs, sealedRunDir string) string {
 	return abs
 }
 
-// carryForwardArtifactsMap returns a fresh map containing only the entries
-// from `old` whose keys satisfy carryForwardArtifactKey for `target`, with
-// each surviving value normalized to run-relative form via
-// normalizeToRunRelative(v, sealedRunDir). Returns nil (not empty map)
-// when no entries survive, so the YAML `omitempty` tag on Run.Artifacts
-// keeps serialization clean for targets that carry nothing (PhaseInquire).
-// The `sealedRunDir` argument is the absolute path of the run being
-// sealed (as returned by Store.RunDir); callers pass the pre-seal active
-// run's directory.
-func carryForwardArtifactsMap(old map[string]string, target Phase, sealedRunDir string) map[string]string {
-	return carryForwardArtifactsMapForRequest(old, target, sealedRunDir, 0)
-}
-
 func carryForwardArtifactsMapForRequest(old map[string]string, target Phase, sealedRunDir string, targetRoadmapPhase int) map[string]string {
 	if len(old) == 0 {
 		return nil

@@ -137,7 +137,7 @@ func setPhasePlanDefaultAttempts(pr *PhaseRunner, n int) {
 	pr.Config = &config.Config{Defaults: config.DefaultsConfig{MaxPhasePlanIterations: n}}
 }
 
-func newPlanEntryRunner(sm ports.SessionManager, store ports.FeatureStore, stateDir string, buildSession buildSessionFunc) *PhaseRunner {
+func newPlanEntryRunner(sm ports.SessionManager, store FeatureStore, stateDir string, buildSession buildSessionFunc) *PhaseRunner {
 	return &PhaseRunner{
 		SessionManager:             sm,
 		FeatureStore:               store,

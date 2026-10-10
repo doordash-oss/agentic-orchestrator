@@ -61,32 +61,3 @@ func (f *Feature) IsDiscarding() bool {
 	return f != nil && f.IsChild() && f.DiscardIntent != nil &&
 		f.DiscardIntent.Step != DiscardStepCleanupDone
 }
-
-// DiscardClosureTailPending reports whether a discarded child's cleanup tail
-// is still unfinished (worktree paths or cleanup warnings remain).
-func (f *Feature) DiscardClosureTailPending() bool {
-	if f == nil || !f.IsChild() {
-		return false
-	}
-	if f.Parent == nil || f.Parent.CloseOutcome != ChildCloseOutcomeDiscarded {
-		return false
-	}
-	if f.DiscardIntent != nil && f.DiscardIntent.Step != DiscardStepCleanupDone {
-		return true
-	}
-	return f.AnyChildWorktreePending() || f.hasUnsettledDiscardCleanupWarning()
-}
-
-// hasUnsettledDiscardCleanupWarning checks for stored cleanup warning
-// records on a discarded child's transaction journal entries.
-func (f *Feature) hasUnsettledDiscardCleanupWarning() bool {
-	if f.Parent == nil || f.Parent.Transaction == nil {
-		return false
-	}
-	for i := range f.Parent.Transaction.Entries {
-		if f.Parent.Transaction.Entries[i].Cleanup != nil {
-			return true
-		}
-	}
-	return false
-}

@@ -95,7 +95,7 @@ func repoFailureCode(result *agent.OrchestratorResult) errcat.Code {
 // currentIteration reads the feature's live iteration counter for a phase
 // failure record. Best-effort: zero when the feature cannot be loaded.
 func (o *Orchestrator) currentIteration(featureID string, phase feature.Phase) int {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil || f == nil {
 		return 0
 	}
@@ -110,7 +110,7 @@ func (o *Orchestrator) currentIteration(featureID string, phase feature.Phase) i
 // do not carry a phase: the feature's current phase names the block. The
 // record carries no phase block when the feature cannot be loaded.
 func (o *Orchestrator) delegateFailureRecord(featureID string, code errcat.Code, diagnostics string) errcat.FailureRecord {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil || f == nil {
 		return errcat.FailureRecord{Code: code, Diagnostics: diagnostics}
 	}

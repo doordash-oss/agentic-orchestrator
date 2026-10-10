@@ -40,13 +40,12 @@ func TestOrchestrator_StartPublish_NotPublishable(t *testing.T) {
 			{Name: "r1", Path: "/tmp/r1", Publishable: &unpub},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var hookCalled bool
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnPhaseStarted: func(id string, p feature.Phase) { hookCalled = true },
 	})
@@ -87,13 +86,12 @@ func TestOrchestrator_StartPublish_AutoPublishDisabled(t *testing.T) {
 		},
 		Checkpoints: feature.Checkpoints{ManualPublish: true}, // AutoPublish=false
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var hookCalled bool
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnPhaseStarted: func(id string, p feature.Phase) { hookCalled = true },
 	})
@@ -137,13 +135,12 @@ func TestOrchestrator_StartPublish_AutoPublishEnabled(t *testing.T) {
 		},
 		// Checkpoints zero-value → AutoPublish()==true.
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var hookCalled bool
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnPhaseStarted: func(id string, p feature.Phase) { hookCalled = true },
 	})
@@ -191,13 +188,12 @@ func TestOrchestrator_StartPublish_PublishError(t *testing.T) {
 			{Name: "r1", Path: "/tmp/r1"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var hookCalled bool
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnPhaseStarted: func(id string, p feature.Phase) { hookCalled = true },
 	})

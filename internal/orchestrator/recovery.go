@@ -54,31 +54,21 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	// Recovery decisions (resume/kill/skip) must observe a consistent run set;
 	// otherwise a stale committing:true run or run_number > ActiveRun leftover
 	// could steer the desktop app toward a run that will be deleted a moment later.
-	if o.deps.Store != nil {
-		if err := o.cleanupOrphanRuns(); err != nil {
-			return nil, fmt.Errorf("cleanup orphan runs: %w", err)
-		}
+	if err := o.cleanupOrphanRuns(); err != nil {
+		return nil, fmt.Errorf("cleanup orphan runs: %w", err)
 	}
 	// Roll interrupted child creations forward before abandoned-setup
 	// reconciliation: a rebuilt child is left in SettingUpWorktrees with a
 	// running setup intent, which the pass below then marks retryable.
-	if reconciler, ok := o.deps.Store.(interface {
-		ReconcilePendingChildCreations() ([]string, error)
-	}); ok {
-		if _, err := reconciler.ReconcilePendingChildCreations(); err != nil {
-			return nil, fmt.Errorf("reconcile pending child creations: %w", err)
-		}
+	if _, err := o.deps.Store.ReconcilePendingChildCreations(); err != nil {
+		return nil, fmt.Errorf("reconcile pending child creations: %w", err)
 	}
-	if reconciler, ok := o.deps.Lifecycle.(interface {
-		ReconcileAbandonedSetups() ([]string, error)
-	}); ok {
-		ids, err := reconciler.ReconcileAbandonedSetups()
-		if err != nil {
-			return nil, fmt.Errorf("reconcile abandoned setup: %w", err)
-		}
-		for _, id := range ids {
-			o.emitSetupReconciled(id)
-		}
+	ids, err := o.deps.Manager.ReconcileAbandonedSetups()
+	if err != nil {
+		return nil, fmt.Errorf("reconcile abandoned setup: %w", err)
+	}
+	for _, id := range ids {
+		o.emitSetupReconciled(id)
 	}
 	// Child creation and abandoned setup establish the complete durable
 	// relationship first. Cascade then takes exclusive ownership before
@@ -89,12 +79,8 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	}
 	// Reconcile interrupted paired config updates before integration
 	// transactions so both records converge before any integration work.
-	if reconciler, ok := o.deps.Store.(interface {
-		ReconcilePendingConfigUpdates() ([]string, error)
-	}); ok {
-		if _, err := reconciler.ReconcilePendingConfigUpdates(); err != nil {
-			return nil, fmt.Errorf("reconcile pending config updates: %w", err)
-		}
+	if _, err := o.deps.Store.ReconcilePendingConfigUpdates(); err != nil {
+		return nil, fmt.Errorf("reconcile pending config updates: %w", err)
 	}
 	// Reconcile discard intents before integration transactions so a
 	// child with a durable discard intent is rolled back, closed, and
@@ -107,10 +93,8 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	}
 	// Reconcile interrupted integration transactions before ordinary session
 	// recovery observes or relaunches sessions.
-	if o.deps.Store != nil {
-		if err := o.ReconcileIntegrationTransactions(); err != nil {
-			return nil, fmt.Errorf("reconcile integration transactions: %w", err)
-		}
+	if err := o.ReconcileIntegrationTransactions(); err != nil {
+		return nil, fmt.Errorf("reconcile integration transactions: %w", err)
 	}
 	// Reconcile pending promotion journals after integration so a merged
 	// child with an unfinished promotion can be recovered before ordinary
@@ -165,13 +149,11 @@ func (o *Orchestrator) emitSetupReconciled(featureID string) {
 		FeatureID: featureID,
 		Error:     "setup was interrupted by shutdown or crash; retry setup to continue",
 	}
-	if o.deps.Store != nil {
-		if f, err := o.deps.Store.Load(featureID); err == nil && f != nil {
-			ev.RunNumber = f.ActiveRun
-			if setup := f.Run().Setup; setup != nil {
-				ev.Attempt = setup.Attempt
-				ev.LogPath = setup.LatestLogPath
-			}
+	if f, err := o.deps.Store.Load(featureID); err == nil && f != nil {
+		ev.RunNumber = f.ActiveRun
+		if setup := f.Run().Setup; setup != nil {
+			ev.Attempt = setup.Attempt
+			ev.LogPath = setup.LatestLogPath
 		}
 	}
 	o.emitSetupEvent(ev)
@@ -401,7 +383,7 @@ func (o *Orchestrator) reconcileOneIntegration(f *feature.Feature) error {
 		return fmt.Errorf("ref CAS operations not configured for reconciliation")
 	}
 
-	parent, err := o.deps.Lifecycle.Get(f.Parent.ParentID)
+	parent, err := o.deps.Store.Load(f.Parent.ParentID)
 	if err != nil {
 		return fmt.Errorf("load parent %s: %w", f.Parent.ParentID, err)
 	}

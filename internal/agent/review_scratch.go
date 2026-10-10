@@ -33,7 +33,7 @@ func PruneStaleReviewScratch(fm *feature.Manager, busyIDs []string) {
 	for _, id := range busyIDs {
 		busy[id] = true
 	}
-	features, _ := fm.List()
+	features, _ := fm.Store.List()
 	for _, f := range features {
 		if busy[f.ID] {
 			continue

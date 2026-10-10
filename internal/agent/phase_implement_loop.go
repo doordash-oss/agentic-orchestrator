@@ -296,7 +296,7 @@ func additionalDirsExcludingStateDir(ws workspaceSetup, stateDir string) []strin
 // setCurrentPhaseStatus writes the mid-flight phase status onto the feature.
 // Used by the unified loop to surface "implementing" / "" without lying about
 // per-repo state (which is now durable end-of-phase only).
-func setCurrentPhaseStatus(store ports.FeatureStore, featureID, status string) {
+func setCurrentPhaseStatus(store FeatureStore, featureID, status string) {
 	if store == nil {
 		return
 	}

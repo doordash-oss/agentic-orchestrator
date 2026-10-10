@@ -63,7 +63,7 @@ type TestingContractWaiverResult struct {
 func (o *Orchestrator) WaiveTestingContractItems(featureID string, waiver TestingContractWaiver) (TestingContractWaiverResult, error) {
 	testingContractWaiverMu.Lock()
 	defer testingContractWaiverMu.Unlock()
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return TestingContractWaiverResult{}, fmt.Errorf("load feature: %w", err)
 	}

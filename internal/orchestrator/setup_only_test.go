@@ -65,7 +65,7 @@ func TestDispatchSetupLeavesFeatureStartableWithoutStarting(t *testing.T) {
 	}
 
 	started := 0
-	orch := New(Deps{Lifecycle: manager, Store: store}, Hooks{
+	orch := New(Deps{Manager: manager, Store: store}, Hooks{
 		OnFeatureStarted: func(string) { started++ },
 	})
 
@@ -108,7 +108,7 @@ func TestDispatchSetupRetryRerunsOnlyUnfinishedTasksWithoutStarting(t *testing.T
 	}
 
 	started := 0
-	orch := New(Deps{Lifecycle: manager, Store: store}, Hooks{
+	orch := New(Deps{Manager: manager, Store: store}, Hooks{
 		OnFeatureStarted: func(string) { started++ },
 	})
 

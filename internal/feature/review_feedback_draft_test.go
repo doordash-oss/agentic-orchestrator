@@ -45,9 +45,9 @@ func draftComments() map[string][]ReviewFeedbackComment {
 func TestStableReviewFeedbackRefValidation(t *testing.T) {
 	t.Parallel()
 
-	ref, err := NewStableReviewFeedbackRef("api", "review", 11)
+	ref, err := newStableReviewFeedbackRef("api", "review", 11)
 	if err != nil {
-		t.Fatalf("NewStableReviewFeedbackRef() error = %v", err)
+		t.Fatalf("newStableReviewFeedbackRef() error = %v", err)
 	}
 	repo, commentType, id, err := ParseStableReviewFeedbackRef(string(ref))
 	if err != nil || repo != "api" || commentType != "review" || id != 11 {
@@ -69,8 +69,8 @@ func TestStableReviewFeedbackRefValidation(t *testing.T) {
 		}
 	}
 
-	if _, err := NewStableReviewFeedbackRef("api", "issue", -1); err == nil {
-		t.Fatal("NewStableReviewFeedbackRef() accepted a negative ID")
+	if _, err := newStableReviewFeedbackRef("api", "issue", -1); err == nil {
+		t.Fatal("newStableReviewFeedbackRef() accepted a negative ID")
 	}
 }
 
@@ -199,13 +199,4 @@ func TestStoreReviewFeedbackDraftRoundTripAndCAS(t *testing.T) {
 		t.Fatalf("addressed ledger = %v, want unchanged", addressed)
 	}
 
-	if err := store.DeleteReviewFeedbackDraft("parent-1"); err != nil {
-		t.Fatalf("DeleteReviewFeedbackDraft() error = %v", err)
-	}
-	if got, err := store.LoadReviewFeedbackDraft("parent-1"); err != nil || got != nil {
-		t.Fatalf("draft after delete = %+v, want nil", got)
-	}
-	if err := store.DeleteReviewFeedbackDraft("parent-1"); err != nil {
-		t.Fatalf("idempotent delete error = %v", err)
-	}
 }

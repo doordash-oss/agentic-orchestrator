@@ -33,9 +33,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var errTestLifecycleFailed = errors.New("lifecycle delete failed")
-
-func errorsIs(err, target error) bool { return errors.Is(err, target) }
+func newHookStore(t *testing.T, f *feature.Feature) *feature.Store {
+	t.Helper()
+	store := feature.NewStore(t.TempDir())
+	if f != nil {
+		f.SchemaVersion = feature.SchemaVersionCurrent
+		if err := store.Save(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store
+}
 
 // writeClaudeSettings writes a minimal .claude/settings.json into repoPath so
 // ImportRepoSettings has rules to consume.
@@ -123,7 +131,7 @@ func TestBuildHooks_OnFeatureCreated_FiresPermissionImport(t *testing.T) {
 		},
 	}
 
-	h := orchestrator.BuildHooks(nil, store, nil)
+	h := orchestrator.BuildHooks(nil, store, newHookStore(t, nil))
 	if h.OnFeatureCreated == nil {
 		t.Fatal("OnFeatureCreated hook is nil")
 	}
@@ -158,7 +166,6 @@ func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 		t.Fatalf("mkdir feature dir: %v", err)
 	}
 
-	fs := mocks.NewMockFeatureStore()
 	f := &feature.Feature{
 		ID:   "f1",
 		Name: "My feature",
@@ -166,9 +173,7 @@ func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 			{Name: "repoA", Path: "/tmp/repoA"},
 		},
 	}
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		return f, nil
-	}
+	fs := newHookStore(t, f)
 
 	h := orchestrator.BuildHooks(obs, nil, fs)
 	if h.OnFeatureStarted == nil {
@@ -206,8 +211,7 @@ func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 			{Name: "r", Path: "/tmp/r"},
 		},
 	}
-	fs := mocks.NewMockFeatureStore()
-	fs.LoadFn = func(id string) (*feature.Feature, error) { return f, nil }
+	fs := newHookStore(t, f)
 
 	h := orchestrator.BuildHooks(obs, nil, fs)
 
@@ -271,13 +275,13 @@ func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// T15. All hook fields populated and nil-safe.
+// T15. All hook fields populated with observability and permissions disabled.
 // ---------------------------------------------------------------------------
 
 func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
-	// Build with nil collaborators. Every field must be non-nil (no
-	// accidental omission) and every hook must be safely invokable.
-	h := orchestrator.BuildHooks(nil, nil, nil)
+	// Every field must be non-nil and safely invokable with optional
+	// observability and permission collaborators disabled.
+	h := orchestrator.BuildHooks(nil, nil, newHookStore(t, nil))
 
 	v := reflect.ValueOf(h)
 	typ := v.Type()
@@ -328,14 +332,11 @@ func TestBuildHooks_OnFeatureConfigChanged_FiresObserver(t *testing.T) {
 		t.Fatalf("mkdir feature dir: %v", err)
 	}
 
-	fs := mocks.NewMockFeatureStore()
 	f := &feature.Feature{
 		ID:   "f1",
 		Name: "My feature",
 	}
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		return f, nil
-	}
+	fs := newHookStore(t, f)
 
 	h := orchestrator.BuildHooks(obs, nil, fs)
 	if h.OnFeatureConfigChanged == nil {
@@ -359,31 +360,14 @@ func TestBuildHooks_OnFeatureRewound_FiresObserver(t *testing.T) {
 		t.Fatalf("mkdir feature dir: %v", err)
 	}
 	obs := newTestObserver(tmp)
-	fs := mocks.NewMockFeatureStore()
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		if id != featureID {
-			return nil, nil
-		}
-		return &feature.Feature{
-			ID:                 featureID,
-			Name:               "rewind hook",
-			TraceID:            "1234567890abcdef1234567890abcdef",
-			FeatureSpanID:      "1234567890abcdef",
-			ActiveRun:          2,
-			TotalRoadmapPhases: 4,
-		}, nil
-	}
-	fs.LoadRunFn = func(id string, runNumber int) (*feature.Run, error) {
-		switch runNumber {
-		case 1:
-			return &feature.Run{RunNumber: 1, BackupBranches: map[string]string{repoName: "feature/hook-backup"}}, nil
-		case 2:
-			return &feature.Run{RunNumber: 2, CarriedPhases: []string{"roadmap", "phase-01/plan"}}, nil
-		default:
-			return nil, nil
-		}
-	}
-
+	fs := newHookStore(t, &feature.Feature{
+		ID:                 featureID,
+		Name:               "rewind hook",
+		TraceID:            "1234567890abcdef1234567890abcdef",
+		FeatureSpanID:      "1234567890abcdef",
+		ActiveRun:          2,
+		TotalRoadmapPhases: 4,
+	})
 	h := orchestrator.BuildHooks(obs, nil, fs)
 	h.OnFeatureRewound(featureID, feature.RewindRequest{
 		TargetPhase:  feature.PhaseImplement,
@@ -427,8 +411,7 @@ func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *te
 		obs := newTestObserver(tmp)
 		defer obs.Shutdown()
 
-		fs := mocks.NewMockFeatureStore()
-		fs.LoadFn = func(id string) (*feature.Feature, error) { return f, nil }
+		fs := newHookStore(t, f)
 
 		h := orchestrator.BuildHooks(obs, nil, fs, tmp)
 		if h.OnFeatureSummaryNeeded == nil {
@@ -494,64 +477,33 @@ func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *te
 // T10. Orchestrator.Delete — stops sessions then calls lifecycle.
 // ---------------------------------------------------------------------------
 
-func TestOrchestrator_Delete_StopsSessionsAndCallsLifecycle(t *testing.T) {
-	t.Run("happy_path", func(t *testing.T) {
-		lifecycle := mocks.NewMockFeatureLifecycle()
-		sessions := mocks.NewMockSessionManager()
-		sessions.FeatureSessionsFn = func(featureID string) []ports.SessionView {
-			return []ports.SessionView{
-				mocks.NewMockSessionView("s1", featureID),
-				mocks.NewMockSessionView("s2", featureID),
-			}
+func TestOrchestrator_Delete_StopsSessionsAndDeletesStoredFeature(t *testing.T) {
+	f := &feature.Feature{ID: "f1", Name: "Delete me"}
+	store, manager := newStoredFeatureFixture(t, f)
+	sessions := mocks.NewMockSessionManager()
+	sessions.FeatureSessionsFn = func(featureID string) []ports.SessionView {
+		return []ports.SessionView{
+			mocks.NewMockSessionView("s1", featureID),
+			mocks.NewMockSessionView("s2", featureID),
 		}
+	}
+	o := orchestrator.New(orchestrator.Deps{Manager: manager, Store: store, Sessions: sessions}, orchestrator.Hooks{})
+	defer o.Shutdown()
 
-		o := orchestrator.New(orchestrator.Deps{
-			Lifecycle: lifecycle,
-			Sessions:  sessions,
-		}, orchestrator.Hooks{})
-
-		if _, err := o.Delete("f1"); err != nil {
-			t.Fatalf("Delete: %v", err)
-		}
-
-		if len(sessions.StopCalls) != 2 {
-			t.Errorf("StopSession calls = %d, want 2", len(sessions.StopCalls))
-		}
-		seen := map[string]bool{}
-		for _, id := range sessions.StopCalls {
-			seen[id] = true
-		}
-		if !seen["s1"] || !seen["s2"] {
-			t.Errorf("StopSession ids = %v, want both s1 and s2", sessions.StopCalls)
-		}
-
-		foundDelete := false
-		for _, c := range lifecycle.Calls {
-			if c.Method == "Delete" && len(c.Args) == 1 && c.Args[0] == "f1" {
-				foundDelete = true
-			}
-		}
-		if !foundDelete {
-			t.Errorf("Lifecycle.Delete(\"f1\") not recorded; calls = %+v", lifecycle.Calls)
-		}
-	})
-
-	t.Run("lifecycle_error_wrapped", func(t *testing.T) {
-		lifecycle := mocks.NewMockFeatureLifecycle()
-		lifecycle.DeleteFn = func(featureID string) error {
-			return errTestLifecycleFailed
-		}
-
-		o := orchestrator.New(orchestrator.Deps{
-			Lifecycle: lifecycle,
-		}, orchestrator.Hooks{})
-
-		_, err := o.Delete("f1")
-		if err == nil {
-			t.Fatal("Delete returned nil error, want wrapped")
-		}
-		if !errorsIs(err, errTestLifecycleFailed) {
-			t.Errorf("error chain does not contain lifecycle error; got %v", err)
-		}
-	})
+	if _, err := o.Delete(f.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if len(sessions.StopCalls) != 2 {
+		t.Errorf("StopSession calls = %d, want 2", len(sessions.StopCalls))
+	}
+	seen := map[string]bool{}
+	for _, id := range sessions.StopCalls {
+		seen[id] = true
+	}
+	if !seen["s1"] || !seen["s2"] {
+		t.Errorf("StopSession ids = %v, want both s1 and s2", sessions.StopCalls)
+	}
+	if _, err := store.Load(f.ID); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Load after delete = %v, want not exist", err)
+	}
 }

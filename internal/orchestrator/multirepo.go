@@ -34,7 +34,7 @@ import (
 // scratch with a fresh Claude session; durable state on disk is the resume
 // scaffolding.
 func (o *Orchestrator) startMultiRepoImplementation(featureID string) error {
-	f, err := o.deps.Lifecycle.Get(featureID)
+	f, err := o.deps.Store.Load(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
 	}
@@ -61,7 +61,7 @@ func (o *Orchestrator) startMultiRepoImplementation(featureID string) error {
 	// Clear any stale per-repo error state on the phase-declared subset so
 	// the unified loop starts against known state. Touched flags are
 	// monotonic and intentionally preserved across phase entries.
-	if err := o.deps.Lifecycle.RetryPhase(featureID, repoNames); err != nil {
+	if err := o.deps.Manager.RetryPhase(featureID, repoNames); err != nil {
 		return fmt.Errorf("reset phase repos: %w", err)
 	}
 
@@ -128,7 +128,7 @@ func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause er
 		// the desktop app owns routing that into the rebase-resolution child pipeline.
 		return
 	}
-	if f, err := o.deps.Lifecycle.Get(featureID); err == nil &&
+	if f, err := o.deps.Store.Load(featureID); err == nil &&
 		f.Status == feature.StatusFailed && f.HasTerminalFailure() {
 		return
 	}

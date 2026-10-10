@@ -135,14 +135,14 @@ func toSessionUsage(cost sessionCost, sessions ...ports.SessionView) observe.Ses
 // accumulateSessionCostToFeature adds a session's cost to the latest active
 // timing key on the feature, falling back to fallbackKey when no active key is
 // recorded.
-func accumulateSessionCostToFeature(store ports.FeatureStore, featureID, fallbackKey string, cost sessionCost, metadata ...sessionCostMetadata) error {
+func accumulateSessionCostToFeature(store FeatureStore, featureID, fallbackKey string, cost sessionCost, metadata ...sessionCostMetadata) error {
 	return accumulateSessionCost(store, featureID, fallbackKey, cost, true, firstSessionCostMetadata(metadata))
 }
 
 // accumulateSessionCostToFeatureKey adds a session's cost to key regardless of
 // ActiveTimingKey. Use this for phases such as Final Review where the lifecycle
 // phase can advance while the old timing key remains preserved for resume UI.
-func accumulateSessionCostToFeatureKey(store ports.FeatureStore, featureID, key string, cost sessionCost, metadata ...sessionCostMetadata) error {
+func accumulateSessionCostToFeatureKey(store FeatureStore, featureID, key string, cost sessionCost, metadata ...sessionCostMetadata) error {
 	return accumulateSessionCost(store, featureID, key, cost, false, firstSessionCostMetadata(metadata))
 }
 
@@ -153,7 +153,7 @@ func firstSessionCostMetadata(metadata []sessionCostMetadata) sessionCostMetadat
 	return metadata[0]
 }
 
-func accumulateSessionCost(store ports.FeatureStore, featureID, fallbackKey string, cost sessionCost, preferActiveKey bool, metadata sessionCostMetadata) error {
+func accumulateSessionCost(store FeatureStore, featureID, fallbackKey string, cost sessionCost, preferActiveKey bool, metadata sessionCostMetadata) error {
 	if store == nil || strings.TrimSpace(featureID) == "" || (cost.TotalCostUSD <= 0 && cost.Usage.CostCreditsMicros == nil) {
 		return nil
 	}

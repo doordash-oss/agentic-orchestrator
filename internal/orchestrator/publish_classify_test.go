@@ -23,7 +23,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
 // TestPublishFailureRecordClassifiesEveryFailureSite pins the one-code-per-
@@ -69,7 +68,7 @@ func TestPublishFailureRecordClassifiesEveryFailureSite(t *testing.T) {
 		},
 		{
 			name:       "closed pull request",
-			err:        &PublishPRClosedError{RepoName: "web", PRURL: "https://github.example/org/web/pull/9", State: "merged"},
+			err:        &publishPRClosedError{RepoName: "web", PRURL: "https://github.example/org/web/pull/9", State: "merged"},
 			wantCode:   errcat.PublishPullRequestClosed,
 			wantBranch: "agentico/f",
 			checkRecord: func(t *testing.T, repo errcat.CodeRepository) {
@@ -84,7 +83,7 @@ func TestPublishFailureRecordClassifiesEveryFailureSite(t *testing.T) {
 		},
 		{
 			name:       "description generation",
-			err:        &PublishDescriptionError{RepoName: "web", Err: errors.New("generating description: model unavailable")},
+			err:        &publishDescriptionError{RepoName: "web", Err: errors.New("generating description: model unavailable")},
 			wantCode:   errcat.PublishDescriptionFailed,
 			wantBranch: "agentico/f",
 		},
@@ -147,7 +146,7 @@ func TestPublishFailureRecordClassifiesEveryFailureSite(t *testing.T) {
 // contract: the pull-request URL travels in diagnostics because the row
 // already renders the link.
 func TestPublishFailureRecordClosedPRCarriesURLInDiagnostics(t *testing.T) {
-	closed := &PublishPRClosedError{RepoName: "web", PRURL: "https://github.example/org/web/pull/9", State: "merged"}
+	closed := &publishPRClosedError{RepoName: "web", PRURL: "https://github.example/org/web/pull/9", State: "merged"}
 	record := publishFailureRecord("web", "agentico/f", closed)
 	if record.Code != errcat.PublishPullRequestClosed {
 		t.Fatalf("code = %q, want publish_pull_request_closed", record.Code)
@@ -230,20 +229,19 @@ func TestSurfaceDispatchCompletionErrorSkipsPublishFailures(t *testing.T) {
 		Status:       feature.StatusCodeReady,
 		CurrentPhase: feature.PhasePublish,
 	}
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) { return f, nil }
-	fs := mocks.NewMockFeatureStore()
-	fs.LoadFn = func(id string) (*feature.Feature, error) { return f, nil }
-	o := New(Deps{Lifecycle: lc, Store: fs}, Hooks{})
+	deps := storedFeatureDeps(t, f)
+	o := New(deps, Hooks{})
 
 	o.surfaceDispatchCompletionError("feat-surface", &PublishDispatchError{
 		Err: &PublishPRCreateError{RepoName: "r1", Err: errors.New("502 Bad Gateway")},
 	})
 
-	for _, call := range lc.Calls {
-		if call.Method == "MarkFailed" {
-			t.Fatalf("MarkFailed called for a publish failure: %+v; publish failures are never terminal", call)
-		}
+	stored, err := deps.Store.Load(f.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != feature.StatusCodeReady || stored.Run().Failure != nil {
+		t.Fatalf("publish failure changed feature state: status=%s, failure=%+v", stored.Status, stored.Run().Failure)
 	}
 	for {
 		select {

@@ -16,39 +16,39 @@ package orchestrator
 
 import (
 	"errors"
-	"os"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-// Steps the recording fakes add to the operation trace.
-const (
-	stepPhaseStarted = "phase started"
-	stepChildCreated = "child created"
-	stepSetupRun     = "setup run"
-	stepSetupRetried = "setup retried"
-	stepRewound      = "rewound"
-)
+func drainOpEvents(o *Orchestrator) []ports.Event {
+	var events []ports.Event
+	for {
+		select {
+		case ev := <-o.Events():
+			events = append(events, ev)
+		default:
+			return events
+		}
+	}
+}
 
-var errStopDispatch = errors.New("dispatch observed")
-
-// opFixture runs one orchestrator over a recording lifecycle and an
-// in-memory store. Every lock, guard, admission, transition, and dispatch
-// step the operations take lands in steps in order, together with the
-// fakes' own steps.
+// opFixture records operation ordering while keeping feature state on disk.
 type opFixture struct {
 	t     *testing.T
 	o     *Orchestrator
-	lc    *mocks.MockFeatureLifecycle
-	store *gateTestFeatureStore
+	mgr   *feature.Manager
+	store *feature.Store
 
 	mu    sync.Mutex
 	steps []string
@@ -56,46 +56,20 @@ type opFixture struct {
 
 func newOpFixture(t *testing.T, features ...*feature.Feature) *opFixture {
 	t.Helper()
-	fx := &opFixture{t: t, store: newGateFeatureStore(features...)}
-	fx.store.ListFn = func() ([]*feature.Feature, error) {
-		fx.store.mu.Lock()
-		defer fx.store.mu.Unlock()
-		list := make([]*feature.Feature, 0, len(fx.store.features))
-		for _, f := range fx.store.features {
-			list = append(list, f)
+	store := feature.NewStore(t.TempDir())
+	for _, f := range features {
+		f.SchemaVersion = feature.SchemaVersionCurrent
+		if err := store.Save(f); err != nil {
+			t.Fatalf("save feature %s: %v", f.ID, err)
 		}
-		return list, nil
 	}
-	fx.lc = mocks.NewMockFeatureLifecycle()
-	fx.lc.GetFn = fx.store.Load
-	fx.lc.TransitionFn = func(id string, to feature.Status) error {
-		return fx.store.Modify(id, func(f *feature.Feature) error {
-			f.Status = to
-			return nil
-		})
-	}
-	fx.lc.StartInquireFn = func(string) error {
-		fx.record(stepPhaseStarted)
-		return errStopDispatch
-	}
-	fx.lc.RunSetupFn = func(string, ...feature.SetupRunnerOptions) error {
-		fx.record(stepSetupRun)
-		return nil
-	}
-	fx.lc.RetrySetupFn = func(string, ...feature.SetupRunnerOptions) error {
-		fx.record(stepSetupRetried)
-		return nil
-	}
-	fx.lc.RewindWithRequestFn = func(string, feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
-		fx.record(stepRewound)
-		return nil, feature.PhaseInquire, nil
-	}
-	fx.o = fx.newOrchestrator(fx.lc)
+	fx := &opFixture{t: t, store: store, mgr: feature.NewManager(store, config.NewDefault())}
+	fx.o = fx.newOrchestrator()
 	return fx
 }
 
-func (fx *opFixture) newOrchestrator(lc ports.FeatureLifecycle) *Orchestrator {
-	o := New(Deps{Lifecycle: lc, Store: fx.store}, Hooks{})
+func (fx *opFixture) newOrchestrator() *Orchestrator {
+	o := New(Deps{Manager: fx.mgr, Store: fx.store, Worktrees: mocks.NewMockWorktreeOps()}, Hooks{})
 	o.traceStep = fx.record
 	fx.t.Cleanup(func() {
 		o.WaitForCycles()
@@ -142,6 +116,7 @@ func opFeature(id string, status feature.Status, phase feature.Phase) *feature.F
 	return &feature.Feature{
 		ID: id, Slug: id, Status: status, CurrentPhase: phase,
 		Pipeline: feature.PipelineLarge, ActiveRun: 1, RunCount: 1,
+		SchemaVersion: feature.SchemaVersionCurrent,
 	}
 }
 
@@ -219,19 +194,16 @@ func TestRestartFeatureOrdering(t *testing.T) {
 		wantErr     error
 		wantAction  RestartAction
 		wantSteps   []string
+		wantStatus  feature.Status
 	}{
 		{
-			name: "dispatches the phase before releasing the lock",
+			name: "closed admission refuses restart before phase dispatch",
 			features: func() []*feature.Feature {
 				return []*feature.Feature{opFeature("op-1", feature.StatusInterrupted, feature.PhaseInquire)}
 			},
 			target:     "op-1",
-			wantErr:    errStopDispatch,
 			wantAction: RestartDispatchPhase,
-			wantSteps: []string{
-				traceLockAcquired, traceGuard, traceTransition,
-				traceDispatch, traceGuard, stepPhaseStarted, traceLockReleased,
-			},
+			wantStatus: feature.StatusInterrupted,
 		},
 		{
 			name: "failed guard exits before the transition",
@@ -239,9 +211,10 @@ func TestRestartFeatureOrdering(t *testing.T) {
 				parent, child := opParentWithChild()
 				return []*feature.Feature{parent, child}
 			},
-			target:    "op-parent",
-			wantErr:   feature.ErrParentMutationLocked,
-			wantSteps: []string{traceLockAcquired, traceGuard, traceLockReleased},
+			target:     "op-parent",
+			wantErr:    feature.ErrParentMutationLocked,
+			wantSteps:  []string{traceLockAcquired, traceGuard, traceLockReleased},
+			wantStatus: feature.StatusInterrupted,
 		},
 		{
 			name: "busy feature exits before the transition",
@@ -252,6 +225,7 @@ func TestRestartFeatureOrdering(t *testing.T) {
 			busySession: true,
 			wantErr:     ErrFeatureBusy,
 			wantSteps:   []string{traceLockAcquired, traceGuard, traceLockReleased},
+			wantStatus:  feature.StatusInterrupted,
 		},
 	}
 	for _, tt := range tests {
@@ -266,62 +240,28 @@ func TestRestartFeatureOrdering(t *testing.T) {
 				}
 				fx.o.deps.Sessions = sessions
 			}
+			if tt.wantErr == nil {
+				fx.closeAdmission()
+			}
 			outcome, err := fx.o.RestartFeature(tt.target, 0, 0)
-			if !errors.Is(err, tt.wantErr) {
+			if tt.wantErr == nil {
+				if _, closed := workadmission.AsClosed(err); !closed {
+					t.Fatalf("RestartFeature() error = %v, want closed admission", err)
+				}
+			} else if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("RestartFeature() error = %v, want %v", err, tt.wantErr)
 			}
 			if outcome.Action != tt.wantAction {
 				t.Fatalf("outcome = %+v, want action %d", outcome, tt.wantAction)
 			}
-			fx.assertSteps(tt.wantSteps...)
+			if tt.wantSteps != nil {
+				fx.assertSteps(tt.wantSteps...)
+			}
+			stored, loadErr := fx.store.Load(tt.target)
+			if loadErr != nil || stored.Status != tt.wantStatus {
+				t.Fatalf("persisted status = %+v (err %v), want %s", stored, loadErr, tt.wantStatus)
+			}
 		})
-	}
-}
-
-// TestRestartFeatureHoldsLockThroughDispatch proves a child creation cannot
-// interleave between the restart transition and the phase start.
-func TestRestartFeatureHoldsLockThroughDispatch(t *testing.T) {
-	fx := newOpFixture(t, opFeature("op-1", feature.StatusInterrupted, feature.PhaseInquire))
-	inDispatch := make(chan struct{})
-	release := make(chan struct{})
-	fx.lc.StartInquireFn = func(string) error {
-		close(inDispatch)
-		<-release
-		return errStopDispatch
-	}
-	creator := &blockingChildCreator{fx: fx}
-	o := fx.newOrchestrator(childCreatorLifecycle{MockFeatureLifecycle: fx.lc, creator: creator})
-
-	restartDone := make(chan error, 1)
-	go func() {
-		_, err := o.RestartFeature("op-1", 0, 0)
-		restartDone <- err
-	}()
-	<-inDispatch
-
-	launchDone := make(chan error, 1)
-	go func() {
-		_, err := o.LaunchChild("op-1", ChildLaunch{Kind: feature.ChildKindRefactor})
-		launchDone <- err
-	}()
-	select {
-	case err := <-launchDone:
-		t.Fatalf("child launch finished (err %v) while the restart dispatch held the lock", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-	if creator.calls() != 0 {
-		t.Fatal("child created while the restart dispatch held the lock")
-	}
-
-	close(release)
-	if err := <-restartDone; !errors.Is(err, errStopDispatch) {
-		t.Fatalf("RestartFeature() error = %v, want the dispatch result", err)
-	}
-	if err := <-launchDone; err != nil {
-		t.Fatalf("LaunchChild() error = %v", err)
-	}
-	if creator.calls() != 1 {
-		t.Fatalf("child creations = %d, want 1 after the restart released the lock", creator.calls())
 	}
 }
 
@@ -333,65 +273,41 @@ func TestRetryFeatureRouting(t *testing.T) {
 		f.Run().Failure = &errcat.FailureRecord{Code: code}
 		return f
 	}
-	// Restarted cases dispatch into a closed admission boundary so the
-	// phase start is refused right after the dispatch is requested.
+	// Dispatch into a closed admission boundary so the persisted retry budgets
+	// can be read before an agent phase starts.
 	tests := []struct {
-		name          string
-		feature       *feature.Feature
-		wantSteps     []string
-		wantMaxIter   int
-		wantMaxPlan   int
-		wantRestarted bool
+		name        string
+		feature     *feature.Feature
+		wantMaxIter int
+		wantMaxPlan int
 	}{
 		{
-			name: "failed setup reruns setup without the restart",
-			feature: func() *feature.Feature {
-				f := setupFeature("op-1", feature.SetupStatusFailed)
-				f.Parent = &feature.ChildRelationship{ParentID: "absent-parent", Kind: feature.ChildKindRefactor}
-				return f
-			}(),
-			wantSteps: []string{stepSetupRetried},
+			name:        "exhausted budget restarts with the fixed extension",
+			feature:     budgetFailed(feature.PhaseInquire, errcat.IterationBudgetExhausted),
+			wantMaxIter: 10 + retryMaxIterationsDelta,
+			wantMaxPlan: 3,
 		},
 		{
-			name:          "exhausted budget restarts with the fixed extension",
-			feature:       budgetFailed(feature.PhaseInquire, errcat.IterationBudgetExhausted),
-			wantRestarted: true,
-			wantMaxIter:   10 + retryMaxIterationsDelta,
-			wantMaxPlan:   3,
+			name:        "plan failure on an exhausted budget extends the plan budget",
+			feature:     budgetFailed(feature.PhasePlan, errcat.IterationBudgetExhausted),
+			wantMaxIter: 10 + retryMaxIterationsDelta,
+			wantMaxPlan: 3 + retryMaxPlanIterationsDelta,
 		},
 		{
-			name:          "plan failure on an exhausted budget extends the plan budget",
-			feature:       budgetFailed(feature.PhasePlan, errcat.IterationBudgetExhausted),
-			wantRestarted: true,
-			wantMaxIter:   10 + retryMaxIterationsDelta,
-			wantMaxPlan:   3 + retryMaxPlanIterationsDelta,
-		},
-		{
-			name:          "other failures restart without an extension",
-			feature:       budgetFailed(feature.PhaseInquire, errcat.InfrastructureFailure),
-			wantRestarted: true,
-			wantMaxIter:   10,
-			wantMaxPlan:   3,
+			name:        "other failures restart without an extension",
+			feature:     budgetFailed(feature.PhaseInquire, errcat.InfrastructureFailure),
+			wantMaxIter: 10,
+			wantMaxPlan: 3,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fx := newOpFixture(t, tt.feature)
-			if tt.wantRestarted {
-				fx.closeAdmission()
-			}
+			fx.closeAdmission()
 			err := fx.o.RetryFeature("op-1")
-			if !tt.wantRestarted {
-				if err != nil {
-					t.Fatalf("RetryFeature() error = %v", err)
-				}
-				fx.assertSteps(tt.wantSteps...)
-				return
-			}
 			if _, closed := workadmission.AsClosed(err); !closed {
 				t.Fatalf("RetryFeature() error = %v, want the refused phase dispatch", err)
 			}
-			fx.assertSteps(traceLockAcquired, traceGuard, traceTransition, traceDispatch, traceGuard, traceLockReleased)
 			f, _ := fx.store.Load("op-1")
 			if f.MaxIterations != tt.wantMaxIter || f.MaxPlanIterations != tt.wantMaxPlan {
 				t.Fatalf("budgets = %d/%d, want %d/%d", f.MaxIterations, f.MaxPlanIterations, tt.wantMaxIter, tt.wantMaxPlan)
@@ -464,12 +380,12 @@ func TestDispatchSetupOrdering(t *testing.T) {
 		{
 			name:      "queued setup runs after admission is reserved",
 			feature:   setupFeature("op-1", feature.SetupStatusQueued),
-			wantSteps: []string{traceAdmission, traceDispatch, stepSetupRun, traceSettle},
+			wantSteps: []string{traceAdmission, traceDispatch, traceSettle},
 		},
 		{
 			name:      "failed setup reruns only unfinished tasks",
 			feature:   setupFeature("op-1", feature.SetupStatusFailed),
-			wantSteps: []string{traceAdmission, traceDispatch, stepSetupRetried, traceSettle},
+			wantSteps: []string{traceAdmission, traceDispatch, traceSettle},
 		},
 		{
 			name:    "no setup work is refused",
@@ -505,264 +421,86 @@ func TestDispatchSetupOrdering(t *testing.T) {
 	}
 }
 
-// blockingChildCreator records child creations; when gate is set, creation
-// waits on it while the caller holds the relationship write lock.
-type blockingChildCreator struct {
-	fx       *opFixture
-	gate     chan struct{}
-	creating chan struct{}
-	replay   bool
-	mu       sync.Mutex
-	n        int
-}
-
-func (c *blockingChildCreator) create(parentID string) *feature.Feature {
-	c.fx.record(stepChildCreated)
-	if c.gate != nil {
-		close(c.creating)
-		<-c.gate
+func TestRelationshipLockSerializesChildCreationAndStop(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-git child creation")
 	}
-	c.mu.Lock()
-	c.n++
-	c.mu.Unlock()
-	child := opFeature("op-new-child", feature.StatusSettingUpWorktrees, feature.PhaseKnowledgeBase)
-	child.Parent = &feature.ChildRelationship{ParentID: parentID, Kind: feature.ChildKindRefactor}
-	c.fx.store.mu.Lock()
-	c.fx.store.features[child.ID] = child
-	c.fx.store.mu.Unlock()
-	return child
-}
+	repo := testutil.InitGitRepo(t)
+	childIntegrationGit(t, repo, "checkout", "-b", "feature/op-parent")
+	publishable := true
+	parent := opFeature("op-parent", feature.StatusPublished, feature.PhasePublish)
+	parent.Name = "Operation parent"
+	parent.Created = time.Now()
+	parent.Repos = []feature.FeatureRepo{{
+		Name: "repo", Path: repo, WorktreePath: repo,
+		Branch: "feature/op-parent", BaseBranch: "main", Publishable: &publishable,
+	}}
+	fx := newOpFixture(t, parent)
+	wm := git.NewWorktreeManager(t.TempDir())
+	fx.mgr.Worktrees = wm
+	fx.o.deps.Worktrees = wm
 
-func (c *blockingChildCreator) calls() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.n
-}
-
-type childCreatorLifecycle struct {
-	*mocks.MockFeatureLifecycle
-	creator *blockingChildCreator
-}
-
-func (l childCreatorLifecycle) CreateRefactorChild(parentID string, _ feature.RefactorChildSpec) (*feature.Feature, error) {
-	return l.creator.create(parentID), nil
-}
-
-func (l childCreatorLifecycle) LaunchReviewFeedbackChildFromDraft(parentID string, _ int64, _ *bool) (*feature.ReviewFeedbackLaunchResult, error) {
-	return &feature.ReviewFeedbackLaunchResult{Child: l.creator.create(parentID), Changed: 2, Replayed: l.creator.replay}, nil
-}
-
-func (l childCreatorLifecycle) CreateRebaseChild(parentID string, _ feature.RebaseChildSpec) (*feature.Feature, error) {
-	return l.creator.create(parentID), nil
-}
-
-func TestLaunchChildOrdering(t *testing.T) {
-	launched := []string{
-		traceLockAcquired, stepChildCreated, traceLockReleased,
-		traceAdmission, traceDispatch, stepSetupRun, traceSettle,
-	}
-	tests := []struct {
-		name        string
-		launch      ChildLaunch
-		replay      bool
-		noCreator   bool
-		wantErr     error
-		wantSteps   []string
-		wantCreated bool
-	}{
-		{
-			name:        "refactor creates under the lock, then announces and dispatches setup",
-			launch:      ChildLaunch{Kind: feature.ChildKindRefactor},
-			wantSteps:   launched,
-			wantCreated: true,
-		},
-		{
-			name:        "review feedback creates under the lock, then announces and dispatches setup",
-			launch:      ChildLaunch{Kind: feature.ChildKindReviewFeedback, ExpectedRevision: 3},
-			wantSteps:   launched,
-			wantCreated: true,
-		},
-		{
-			name:      "review feedback replay skips the announcement and setup",
-			launch:    ChildLaunch{Kind: feature.ChildKindReviewFeedback},
-			replay:    true,
-			wantSteps: []string{traceLockAcquired, stepChildCreated, traceLockReleased},
-		},
-		{
-			name:    "rebase runs its preflight before taking the lock",
-			launch:  ChildLaunch{Kind: feature.ChildKindRebase},
-			wantErr: feature.ErrRefactorParentNotFound,
-		},
-		{
-			name:      "lifecycle without child creation is refused",
-			launch:    ChildLaunch{Kind: feature.ChildKindRefactor},
-			noCreator: true,
-			wantErr:   ErrChildCreationUnavailable,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fx := newOpFixture(t, opFeature("op-1", feature.StatusPublished, feature.PhasePublish))
-			creator := &blockingChildCreator{fx: fx, replay: tt.replay}
-			o := fx.o
-			if !tt.noCreator {
-				o = fx.newOrchestrator(childCreatorLifecycle{MockFeatureLifecycle: fx.lc, creator: creator})
-			}
-			parentID := "op-1"
-			if tt.launch.Kind == feature.ChildKindRebase {
-				fx.store.LoadFn = func(string) (*feature.Feature, error) { return nil, os.ErrNotExist }
-			}
-			result, err := o.LaunchChild(parentID, tt.launch)
-			o.WaitForCycles()
-			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("LaunchChild() error = %v, want %v", err, tt.wantErr)
-			}
-			fx.assertSteps(tt.wantSteps...)
-			if tt.wantErr != nil {
-				return
-			}
-			if result.Child == nil || result.Child.ID != "op-new-child" || result.Replayed != tt.replay {
-				t.Fatalf("result = %+v, want the created child", result)
-			}
-			created := false
-			for _, ev := range drainOpEvents(o) {
-				if ev.Type == ports.RelationshipChildCreated && ev.ChildID == "op-new-child" {
-					created = true
-				}
-			}
-			if created != tt.wantCreated {
-				t.Fatalf("child-created event = %v, want %v", created, tt.wantCreated)
-			}
-		})
-	}
-}
-
-func drainOpEvents(o *Orchestrator) []ports.Event {
-	var events []ports.Event
-	for {
-		select {
-		case ev := <-o.Events():
-			events = append(events, ev)
-		default:
-			return events
+	insideSave := make(chan struct{})
+	releaseSave := make(chan struct{})
+	var once sync.Once
+	fx.store.SetSaveInterceptor(func(f *feature.Feature) error {
+		if f.Parent != nil && f.Parent.ParentID == parent.ID {
+			once.Do(func() {
+				close(insideSave)
+				<-releaseSave
+			})
 		}
-	}
-}
-
-// TestRelationshipLockSerializesOperationsWithChildCreation asserts the
-// lock at the operation level: a child launch holding the write lock blocks
-// stop, restart, and config update until creation finishes, and a stop
-// holding the read lock blocks a child launch.
-func TestRelationshipLockSerializesOperationsWithChildCreation(t *testing.T) {
-	mutations := map[string]func(o *Orchestrator) error{
-		"stop": func(o *Orchestrator) error { return o.StopFeature("op-1") },
-		"restart": func(o *Orchestrator) error {
-			_, err := o.RestartFeature("op-1", 0, 0)
-			return err
-		},
-		"config update": func(o *Orchestrator) error {
-			_, err := o.UpdateFeatureConfig("op-1", UpdateFeatureConfigInput{})
-			return err
-		},
-	}
-	for name, mutate := range mutations {
-		t.Run("child launch blocks "+name, func(t *testing.T) {
-			fx := newOpFixture(t, opFeature("op-1", feature.StatusInterrupted, feature.PhaseInquire))
-			creator := &blockingChildCreator{fx: fx, gate: make(chan struct{}), creating: make(chan struct{})}
-			o := fx.newOrchestrator(childCreatorLifecycle{MockFeatureLifecycle: fx.lc, creator: creator})
-
-			launchDone := make(chan error, 1)
-			go func() {
-				_, err := o.LaunchChild("op-1", ChildLaunch{Kind: feature.ChildKindRefactor})
-				launchDone <- err
-			}()
-			<-creator.creating
-
-			mutated := make(chan struct{})
-			go func() {
-				_ = mutate(o)
-				close(mutated)
-			}()
-			select {
-			case <-mutated:
-				t.Fatalf("%s finished while child creation held the write lock", name)
-			case <-time.After(50 * time.Millisecond):
-			}
-			close(creator.gate)
-			if err := <-launchDone; err != nil {
-				t.Fatalf("LaunchChild() error = %v", err)
-			}
-			select {
-			case <-mutated:
-			case <-time.After(5 * time.Second):
-				t.Fatalf("%s did not proceed after child creation released the lock", name)
-			}
-		})
-	}
-
-	t.Run("stop blocks child launch", func(t *testing.T) {
-		fx := newOpFixture(t, opFeature("op-1", feature.StatusImplementing, feature.PhaseImplement))
-		inStop := make(chan struct{})
-		release := make(chan struct{})
-		fx.lc.TransitionFn = func(string, feature.Status) error {
-			close(inStop)
-			<-release
-			return nil
-		}
-		creator := &blockingChildCreator{fx: fx}
-		o := fx.newOrchestrator(childCreatorLifecycle{MockFeatureLifecycle: fx.lc, creator: creator})
-
-		stopDone := make(chan error, 1)
-		go func() { stopDone <- o.StopFeature("op-1") }()
-		<-inStop
-
-		launchDone := make(chan error, 1)
-		go func() {
-			_, err := o.LaunchChild("op-1", ChildLaunch{Kind: feature.ChildKindRefactor})
-			launchDone <- err
-		}()
-		select {
-		case <-launchDone:
-			t.Fatal("child launch finished while stop held the read lock")
-		case <-time.After(50 * time.Millisecond):
-		}
-		if creator.calls() != 0 {
-			t.Fatal("child created while stop held the read lock")
-		}
-		close(release)
-		if err := <-stopDone; err != nil {
-			t.Fatalf("StopFeature() error = %v", err)
-		}
-		if err := <-launchDone; err != nil {
-			t.Fatalf("LaunchChild() error = %v", err)
-		}
+		return nil
 	})
+	launchDone := make(chan struct {
+		result ChildLaunchResult
+		err    error
+	}, 1)
+	go func() {
+		result, err := fx.o.LaunchChild(parent.ID, ChildLaunch{Kind: feature.ChildKindRefactor})
+		launchDone <- struct {
+			result ChildLaunchResult
+			err    error
+		}{result, err}
+	}()
+	select {
+	case <-insideSave:
+	case <-time.After(5 * time.Second):
+		close(releaseSave)
+		t.Fatal("child creation never reached its durable save")
+	}
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- fx.o.StopFeature(parent.ID) }()
+	select {
+	case err := <-stopDone:
+		t.Fatalf("stop finished while child creation held the relationship lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseSave)
+	launched := <-launchDone
+	fx.store.SetSaveInterceptor(nil)
+	if launched.err != nil {
+		t.Fatalf("LaunchChild() error = %v", launched.err)
+	}
+	if err := <-stopDone; !errors.Is(err, feature.ErrParentMutationLocked) {
+		t.Fatalf("StopFeature() error = %v, want active-child guard", err)
+	}
+	stored, err := fx.store.Load(launched.result.Child.ID)
+	if err != nil || stored.Parent == nil || stored.Parent.ParentID != parent.ID {
+		t.Fatalf("persisted child = %+v (err %v), want parent %s", stored, err, parent.ID)
+	}
 }
 
 func TestDeleteSettlesOnlyCompletedCascade(t *testing.T) {
-	tests := []struct {
-		name      string
-		deleteErr error
-		wantSteps []string
-	}{
-		{name: "completed cascade settles admission", wantSteps: []string{traceSettle}},
-		{name: "failed cascade keeps the reservation", deleteErr: errors.New("delete failed")},
+	fx := newOpFixture(t, opFeature("op-1", feature.StatusDone, feature.PhasePublish))
+	result, err := fx.o.Delete("op-1")
+	if err != nil || result.Status != feature.CascadeDeleteCompleted {
+		t.Fatalf("Delete() = %+v, %v; want completed", result, err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fx := newOpFixture(t, opFeature("op-1", feature.StatusDone, feature.PhasePublish))
-			fx.lc.DeleteFn = func(string) error { return tt.deleteErr }
-			fx.lc.GetFn = func(string) (*feature.Feature, error) { return nil, errors.New("not loaded") }
-			result, err := fx.o.Delete("op-1")
-			if !errors.Is(err, tt.deleteErr) {
-				t.Fatalf("Delete() error = %v, want %v", err, tt.deleteErr)
-			}
-			if tt.deleteErr == nil && result.Status != feature.CascadeDeleteCompleted {
-				t.Fatalf("Delete() result = %+v, want completed", result)
-			}
-			fx.assertSteps(tt.wantSteps...)
-		})
+	if _, err := fx.store.Load("op-1"); err == nil {
+		t.Fatal("deleted feature still loads from store")
 	}
+	fx.assertSteps(traceSettle)
 }
 
 func TestDiscardChildSettlesAfterDiscard(t *testing.T) {

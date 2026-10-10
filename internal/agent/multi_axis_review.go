@@ -18,7 +18,6 @@ import (
 	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
 type multiAxisReviewResult struct {
@@ -86,7 +85,7 @@ func validatorResultsToMultiAxisResults(results []validatorResult) []multiAxisRe
 	return out
 }
 
-func setMultiAxisValidatorStatuses(store ports.FeatureStore, featureID string, axes []string) {
+func setMultiAxisValidatorStatuses(store FeatureStore, featureID string, axes []string) {
 	if store == nil || featureID == "" {
 		return
 	}
@@ -99,7 +98,7 @@ func setMultiAxisValidatorStatuses(store ports.FeatureStore, featureID string, a
 	})
 }
 
-func updateMultiAxisValidatorStatus(store ports.FeatureStore, featureID, axis string, status reviewStatus, err error) {
+func updateMultiAxisValidatorStatus(store FeatureStore, featureID, axis string, status reviewStatus, err error) {
 	if store == nil || featureID == "" {
 		return
 	}
@@ -116,7 +115,7 @@ func updateMultiAxisValidatorStatus(store ports.FeatureStore, featureID, axis st
 	})
 }
 
-func clearMultiAxisValidatorStatuses(store ports.FeatureStore, featureID string) {
+func clearMultiAxisValidatorStatuses(store FeatureStore, featureID string) {
 	if store == nil || featureID == "" {
 		return
 	}

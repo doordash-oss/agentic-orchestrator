@@ -317,7 +317,7 @@ func (m *Manager) resolveCurrentReviewFeedback(parent *Feature) (map[StableRevie
 			if addressed[comment.ID] {
 				continue
 			}
-			ref, err := NewStableReviewFeedbackRef(repo.Name, comment.Type, comment.ID)
+			ref, err := newStableReviewFeedbackRef(repo.Name, comment.Type, comment.ID)
 			if err != nil {
 				continue // unsupported types never contribute to launch
 			}

@@ -41,9 +41,9 @@ func publishFailureRecord(repoName, branch string, err error) errcat.FailureReco
 	var conflict *PublishConflictError
 	var diverged *PublishRemoteDivergedError
 	var changed *PublishRemoteChangedError
-	var closed *PublishPRClosedError
+	var closed *publishPRClosedError
 	var created *PublishPRCreateError
-	var described *PublishDescriptionError
+	var described *publishDescriptionError
 	switch {
 	case errors.As(err, &conflict):
 		code = errcat.PublishRebaseConflict
@@ -103,7 +103,7 @@ func (o *Orchestrator) storePublishFailure(f *feature.Feature, repoName string, 
 	if repo, ok := findRepo(f, repoName); ok {
 		branch = repoBranch(f, repo)
 	}
-	_ = o.deps.Lifecycle.SetRepoPublishError(f.ID, repoName, publishFailureRecord(repoName, branch, err))
+	_ = o.deps.Manager.SetRepoPublishError(f.ID, repoName, publishFailureRecord(repoName, branch, err))
 }
 
 // firstFailedRepoError renders the stored record of the first repository

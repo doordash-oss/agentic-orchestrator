@@ -20,7 +20,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-func askUserAutoPickConfig(store ports.FeatureStore, observer *observe.Observer, f *feature.Feature, purpose ports.AskUserAutoPickPurpose, sc observe.SpanContext, sessionID, repoName string, iteration int) *ports.AskUserAutoPickConfig {
+func askUserAutoPickConfig(store FeatureStore, observer *observe.Observer, f *feature.Feature, purpose ports.AskUserAutoPickPurpose, sc observe.SpanContext, sessionID, repoName string, iteration int) *ports.AskUserAutoPickConfig {
 	if f == nil || !askUserAutoPickAllowedPurpose(purpose) {
 		return nil
 	}

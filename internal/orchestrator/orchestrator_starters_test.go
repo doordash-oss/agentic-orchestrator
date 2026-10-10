@@ -39,7 +39,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 		name              string
 		phase             feature.Phase
 		setupFeature      func(f *feature.Feature)
-		wantTransition    string
+		wantStatus        feature.Status
 		wantPhaseStarted  bool
 		wantDispatchPhase feature.Phase
 		wantError         bool
@@ -48,7 +48,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 			name:              "KB_NoReposSkipsToInquire",
 			phase:             feature.PhaseKnowledgeBase,
 			setupFeature:      func(f *feature.Feature) { f.Repos = nil },
-			wantTransition:    "StartInquire",
+			wantStatus:        feature.StatusInquiring,
 			wantPhaseStarted:  true,
 			wantDispatchPhase: feature.PhaseInquire,
 		},
@@ -56,7 +56,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 			name:              "Inquire",
 			phase:             feature.PhaseInquire,
 			setupFeature:      func(f *feature.Feature) {},
-			wantTransition:    "StartInquire",
+			wantStatus:        feature.StatusInquiring,
 			wantPhaseStarted:  true,
 			wantDispatchPhase: feature.PhaseInquire,
 		},
@@ -72,7 +72,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 				started := time.Now().Add(-time.Hour)
 				f.StartedAt = &started
 			},
-			wantTransition:    "StartResearch",
+			wantStatus:        feature.StatusResearching,
 			wantPhaseStarted:  true,
 			wantDispatchPhase: feature.PhaseResearch,
 		},
@@ -82,7 +82,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 			setupFeature: func(f *feature.Feature) {
 				f.Artifacts = map[string]string{"research": researchPath}
 			},
-			wantTransition:    "StartDesign",
+			wantStatus:        feature.StatusDesigning,
 			wantPhaseStarted:  true,
 			wantDispatchPhase: feature.PhaseDesign,
 		},
@@ -92,7 +92,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 			setupFeature: func(f *feature.Feature) {
 				// No design/research → error on large pipeline.
 			},
-			wantTransition:   "StartPlanning",
+			wantStatus:       feature.StatusPlanning,
 			wantPhaseStarted: false,
 			wantError:        true,
 		},
@@ -102,7 +102,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 			setupFeature: func(f *feature.Feature) {
 				f.Pipeline = feature.PipelineMedium
 			},
-			wantTransition:    "StartPlanning",
+			wantStatus:        feature.StatusPlanning,
 			wantPhaseStarted:  true,
 			wantDispatchPhase: feature.PhasePlan,
 		},
@@ -116,7 +116,7 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 				}
 				writeExecOrderNextToPlan(t, planPath, f.Repos)
 			},
-			wantTransition:    "StartImplementation",
+			wantStatus:        feature.StatusImplementing,
 			wantPhaseStarted:  true,
 			wantDispatchPhase: feature.PhaseImplement,
 		},
@@ -134,23 +134,13 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 				tt.setupFeature(f)
 			}
 
-			lc := lifecycleForFeature(f)
-			// Implement path delegates to StartMultiRepoImplementation which
-			// requires StatusImplementing; wire the transition explicitly.
-			if tt.phase == feature.PhaseImplement {
-				lc.StartImplementationFn = func(id string) error {
-					f.Status = feature.StatusImplementing
-					return nil
-				}
-				lc.InitRepoImplFn = func(id string) error { return nil }
-			}
-			fs := newFeatureStore(f)
+			fs, lc := newStoredFeatureFixture(t, f)
 
 			var startedPhase feature.Phase
 			var startedCalled bool
 			o := orchestrator.New(orchestrator.Deps{
-				Lifecycle: lc,
-				Store:     fs,
+				Manager: lc,
+				Store:   fs,
 			}, orchestrator.Hooks{
 				OnPhaseStarted: func(id string, p feature.Phase) {
 					startedCalled = true
@@ -173,8 +163,8 @@ func TestOrchestrator_StartPhase_AllPhaseTypes(t *testing.T) {
 				t.Fatalf("StartFeature: unexpected error: %v", err)
 			}
 
-			if tt.wantTransition != "" {
-				assertLifecycleCall(t, lc, tt.wantTransition)
+			if stored := loadStoredFeature(t, fs, f.ID); stored.Status != tt.wantStatus {
+				t.Errorf("stored status = %s, want %s", stored.Status, tt.wantStatus)
 			}
 
 			events := drainEvents(o)

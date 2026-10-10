@@ -78,7 +78,7 @@ type SetupState struct {
 	TaskOrder     []string             `yaml:"task_order,omitempty"`
 }
 
-type SetupInitOptions struct {
+type setupInitOptions struct {
 	UseCurrentBranch        bool
 	UseCurrentBranchPerRepo map[string]bool
 	// ExactStartPointPerRepo pins a repo's worktree task to an immutable full
@@ -92,8 +92,8 @@ type SetupInitOptions struct {
 	MergeTargetPerRepo map[string]string
 }
 
-func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now time.Time, opts ...SetupInitOptions) *SetupState {
-	var opt SetupInitOptions
+func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now time.Time, opts ...setupInitOptions) *SetupState {
+	var opt setupInitOptions
 	if len(opts) > 0 {
 		opt = opts[0]
 	}

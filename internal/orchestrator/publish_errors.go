@@ -39,16 +39,16 @@ func (e *PublishRemoteChangedError) Error() string {
 	return "pull-request branch changed while Agentico was publishing"
 }
 
-// PublishPRClosedError reports a republish whose existing pull request is
+// publishPRClosedError reports a republish whose existing pull request is
 // closed or merged and can no longer receive commits. The pull-request URL
 // travels in the error text, which becomes the stored record's diagnostics.
-type PublishPRClosedError struct {
+type publishPRClosedError struct {
 	RepoName string
 	PRURL    string
 	State    string
 }
 
-func (e *PublishPRClosedError) Error() string {
+func (e *publishPRClosedError) Error() string {
 	return fmt.Sprintf("pull request %s is %s; new commits cannot be delivered to it", e.PRURL, e.State)
 }
 
@@ -64,18 +64,18 @@ func (e *PublishPRCreateError) Error() string {
 
 func (e *PublishPRCreateError) Unwrap() error { return e.Err }
 
-// PublishDescriptionError reports a failed pull-request description
+// publishDescriptionError reports a failed pull-request description
 // generation. Publishing cannot proceed with synthetic fallback content.
-type PublishDescriptionError struct {
+type publishDescriptionError struct {
 	RepoName string
 	Err      error
 }
 
-func (e *PublishDescriptionError) Error() string {
+func (e *publishDescriptionError) Error() string {
 	return fmt.Sprintf("generate PR description: %v", e.Err)
 }
 
-func (e *PublishDescriptionError) Unwrap() error { return e.Err }
+func (e *publishDescriptionError) Unwrap() error { return e.Err }
 
 // PublishDispatchError marks every error returned by the completion
 // dispatch's auto-publish call. Publish failures are owned by repository

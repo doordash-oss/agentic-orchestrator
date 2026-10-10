@@ -151,11 +151,11 @@ func TestImplementCostAttributionUsesStoreKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("implement"); got != 1.50 {
-		t.Errorf("PhaseCost(implement) = %v, want 1.50", got)
+	if got := updated.PhaseCosts["implement"]; got != 1.50 {
+		t.Errorf("PhaseCosts[implement] = %v, want 1.50", got)
 	}
-	if got := updated.PhaseCost("plan"); got != 0 {
-		t.Errorf("PhaseCost(plan) = %v, want 0", got)
+	if got := updated.PhaseCosts["plan"]; got != 0 {
+		t.Errorf("PhaseCosts[plan] = %v, want 0", got)
 	}
 }
 
@@ -183,11 +183,11 @@ func TestAccumulateSessionCostToFeatureUsesActiveTimingKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("phase-2-impl"); got != 0.42 {
-		t.Errorf("PhaseCost(phase-2-impl) = %v, want 0.42", got)
+	if got := updated.PhaseCosts["phase-2-impl"]; got != 0.42 {
+		t.Errorf("PhaseCosts[phase-2-impl] = %v, want 0.42", got)
 	}
-	if got := updated.PhaseCost("review"); got != 0 {
-		t.Errorf("PhaseCost(review) = %v, want 0", got)
+	if got := updated.PhaseCosts["review"]; got != 0 {
+		t.Errorf("PhaseCosts[review] = %v, want 0", got)
 	}
 }
 
@@ -219,8 +219,8 @@ func TestAccumulateSessionCostToFeatureRecordsIndividualSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("phase-2-impl"); got != 0.42 {
-		t.Errorf("PhaseCost(phase-2-impl) = %v, want 0.42", got)
+	if got := updated.PhaseCosts["phase-2-impl"]; got != 0.42 {
+		t.Errorf("PhaseCosts[phase-2-impl] = %v, want 0.42", got)
 	}
 	if len(updated.SessionCosts) != 1 {
 		t.Fatalf("len(SessionCosts) = %d, want 1", len(updated.SessionCosts))
@@ -266,8 +266,8 @@ func TestAccumulateSessionCostToFeatureUsesFallbackKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("review"); got != 0.31 {
-		t.Errorf("PhaseCost(review) = %v, want 0.31", got)
+	if got := updated.PhaseCosts["review"]; got != 0.31 {
+		t.Errorf("PhaseCosts[review] = %v, want 0.31", got)
 	}
 }
 
@@ -295,11 +295,11 @@ func TestAccumulateSessionCostToFeatureKeyIgnoresStaleActiveTimingKey(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := updated.PhaseCost("review"); got != 0.29 {
-		t.Errorf("PhaseCost(review) = %v, want 0.29", got)
+	if got := updated.PhaseCosts["review"]; got != 0.29 {
+		t.Errorf("PhaseCosts[review] = %v, want 0.29", got)
 	}
-	if got := updated.PhaseCost("phase-3-impl"); got != 0 {
-		t.Errorf("PhaseCost(phase-3-impl) = %v, want 0", got)
+	if got := updated.PhaseCosts["phase-3-impl"]; got != 0 {
+		t.Errorf("PhaseCosts[phase-3-impl] = %v, want 0", got)
 	}
 }
 

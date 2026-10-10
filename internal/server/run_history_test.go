@@ -30,17 +30,26 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"gopkg.in/yaml.v3"
 )
 
 // seedHistoryFeature builds a store with one feature whose active run is
-// run-001, then creates the supplied sealed runs via CreateRun. Returns the
+// run-001, then writes the supplied sealed run fixtures. Returns the
 // store and feature for handler construction.
 func seedHistoryFeature(t *testing.T, sealedRuns ...*feature.Run) (*feature.Store, *feature.Feature) {
 	t.Helper()
 	store, f := seedReadFeature(t)
 	for _, run := range sealedRuns {
-		if err := store.CreateRun(f.ID, run); err != nil {
-			t.Fatalf("CreateRun(%d) error = %v", run.RunNumber, err)
+		dir := filepath.Join(store.BaseDir, f.ID, "runs", feature.RunDirName(run.RunNumber))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("create run fixture directory: %v", err)
+		}
+		data, err := yaml.Marshal(run)
+		if err != nil {
+			t.Fatalf("marshal run fixture %d: %v", run.RunNumber, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "run.yaml"), data, 0o644); err != nil {
+			t.Fatalf("write run fixture %d: %v", run.RunNumber, err)
 		}
 	}
 	return store, f

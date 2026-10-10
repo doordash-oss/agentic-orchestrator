@@ -108,7 +108,7 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	pr := journeyChildPhaseRunner(t, sm, store, stateDir)
 
 	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   mgr,
+		Manager:   mgr,
 		Store:       store,
 		Sessions:    sm,
 		Remote:      failingPRRemoteOps{},
@@ -266,10 +266,6 @@ type failingPRRemoteOps struct{}
 
 func (failingPRRemoteOps) Push(worktreePath, branch string) error {
 	return git.Push(worktreePath, branch)
-}
-
-func (failingPRRemoteOps) ForcePush(worktreePath, branch string) error {
-	return git.ForcePush(worktreePath, branch)
 }
 
 func (failingPRRemoteOps) PushRewrittenBranch(worktreePath, branch string) error {

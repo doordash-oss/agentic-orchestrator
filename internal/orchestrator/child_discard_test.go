@@ -48,18 +48,9 @@ func TestDiscardChildRecordsIntentAndCloses(t *testing.T) {
 		Status:   feature.StatusPublished,
 		Pipeline: feature.PipelineMoonshot,
 	}
-	store := newFeatureStore(child, parent)
+	store, lc := newStoredFeatureFixture(t, child, parent)
 
-	// The lifecycle Get needs to return the right feature by ID.
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		if f, ok := store.features[id]; ok {
-			return f, nil
-		}
-		return nil, errors.New("not found")
-	}
-
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	err := o.DiscardChild("discard-child")
 	if err != nil {
@@ -101,15 +92,8 @@ func TestDiscardChildClosesThenRejectsStaleRetry(t *testing.T) {
 		Status:   feature.StatusPublished,
 		Pipeline: feature.PipelineMoonshot,
 	}
-	store := newFeatureStore(child, parent)
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		if f, ok := store.features[id]; ok {
-			return f, nil
-		}
-		return nil, errors.New("not found")
-	}
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	store, lc := newStoredFeatureFixture(t, child, parent)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	// First discard.
 	if err := o.DiscardChild("discard-idempotent"); err != nil {
@@ -124,7 +108,7 @@ func TestDiscardChildClosesThenRejectsStaleRetry(t *testing.T) {
 		t.Fatalf("second DiscardChild error = %v, want ErrChildRelationshipClosed", err)
 	}
 	secondLoaded, _ := store.Load("discard-idempotent")
-	if secondLoaded.Parent.ClosedAt != firstCloseTime {
+	if !secondLoaded.Parent.ClosedAt.Equal(*firstCloseTime) {
 		t.Fatal("close timestamp changed on second discard")
 	}
 }
@@ -143,9 +127,8 @@ func TestDiscardChildRejectsCompletedChild(t *testing.T) {
 			ClosedAt:     &closedAt,
 		},
 	}
-	store := newFeatureStore(child)
-	lc := lifecycleForFeature(child)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	store, lc := newStoredFeatureFixture(t, child)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	err := o.DiscardChild("discard-completed")
 	if !errors.Is(err, feature.ErrChildRelationshipClosed) {
@@ -172,9 +155,8 @@ func TestDiscardChildDoesNotResumeClosedDiscardCleanup(t *testing.T) {
 			ClosedAt:    &closedAt,
 		},
 	}
-	store := newFeatureStore(child)
-	lc := lifecycleForFeature(child)
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	store, lc := newStoredFeatureFixture(t, child)
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	err := o.DiscardChild(child.ID)
 	if !errors.Is(err, feature.ErrChildRelationshipClosed) {
@@ -214,17 +196,10 @@ func TestDiscardChildCleanupFailureRemainsRetryable(t *testing.T) {
 		Status:   feature.StatusPublished,
 		Pipeline: feature.PipelineMoonshot,
 	}
-	store := newFeatureStore(child, parent)
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		if f, ok := store.features[id]; ok {
-			return f, nil
-		}
-		return nil, errors.New("not found")
-	}
+	store, lc := newStoredFeatureFixture(t, child, parent)
 	// No Worktrees dependency — cleanup will fail because the path
 	// cannot be removed, leaving the worktree pending.
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	err := o.DiscardChild("discard-cleanup-fail")
 	if err == nil {
@@ -285,14 +260,7 @@ func TestDiscardChildWithActiveSession(t *testing.T) {
 		Status:   feature.StatusPublished,
 		Pipeline: feature.PipelineMoonshot,
 	}
-	store := newFeatureStore(child, parent)
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		if f, ok := store.features[id]; ok {
-			return f, nil
-		}
-		return nil, errors.New("not found")
-	}
+	store, lc := newStoredFeatureFixture(t, child, parent)
 
 	// Wire a mock session manager with an active session for the child.
 	// The session stays active even after StopSession is called (it is
@@ -315,9 +283,9 @@ func TestDiscardChildWithActiveSession(t *testing.T) {
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     store,
-		Sessions:  sm,
+		Manager:  lc,
+		Store:    store,
+		Sessions: sm,
 	}, orchestrator.Hooks{})
 
 	// First call: intent is recorded, StopFeatureSessions is called
@@ -393,15 +361,6 @@ func TestDiscardChildAttentionResolveFailureDoesNotAdvance(t *testing.T) {
 		Status:   feature.StatusPublished,
 		Pipeline: feature.PipelineMoonshot,
 	}
-	store := newFeatureStore(child, parent)
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		if f, ok := store.features[id]; ok {
-			return f, nil
-		}
-		return nil, errors.New("not found")
-	}
-
 	// Pre-seed the discard intent at SessionsQuiesced so the discard
 	// resume jumps straight to the attention-resolution step.
 	child.DiscardIntent = &feature.DiscardIntent{
@@ -410,30 +369,19 @@ func TestDiscardChildAttentionResolveFailureDoesNotAdvance(t *testing.T) {
 	}
 	reviewPhase := feature.PhaseReview
 	child.PendingReviewPhase = &reviewPhase
+	store, lc := newStoredFeatureFixture(t, child, parent)
 
-	// Inject a Modify failure only for the attention-clearing call
-	// (the one that nils the queues). A sentinel error makes the
-	// assertion precise.
+	// Fail only the save that clears pending attention.
 	attnErr := errors.New("attention save disk full")
-	origModify := store.ModifyFn
-	store.ModifyFn = func(id string, fn func(*feature.Feature) error) error {
-		if id == child.ID {
-			cur := store.features[id]
-			// Detect the attention-clearing callback by the fields it
-			// touches: it nils PermissionsQueue. Run the callback against
-			// a throwaway clone to identify it without mutating state.
-			if cur != nil && cur.PermissionsQueue != nil {
-				probe := *cur
-				_ = fn(&probe)
-				if probe.PermissionsQueue == nil {
-					return attnErr
-				}
-			}
+	store.SetSaveInterceptor(func(candidate *feature.Feature) error {
+		if candidate.ID == child.ID && candidate.PermissionsQueue == nil {
+			return attnErr
 		}
-		return origModify(id, fn)
-	}
+		return nil
+	})
+	t.Cleanup(func() { store.SetSaveInterceptor(nil) })
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: store}, orchestrator.Hooks{})
 
 	err := o.DiscardChild(child.ID)
 	if err == nil {

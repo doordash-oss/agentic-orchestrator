@@ -157,7 +157,7 @@ func newMultiRepoTransactionFixture(t *testing.T, numRepos int) *multiRepoTransa
 
 func (fx *multiRepoTransactionFixture) orchestrator() *Orchestrator {
 	return New(Deps{
-		Lifecycle: fx.mgr,
+		Manager:   fx.mgr,
 		Store:     fx.store,
 		Worktrees: fx.wm,
 	}, Hooks{})
@@ -990,7 +990,7 @@ func TestTransactionApplySyncFailureContinuesForward(t *testing.T) {
 		failAlways:      true,
 	}
 	applyO := New(Deps{
-		Lifecycle: fx.mgr,
+		Manager:   fx.mgr,
 		Store:     fx.store,
 		Worktrees: resetWT,
 	}, Hooks{})
@@ -1144,7 +1144,7 @@ func TestTransactionPassThroughSyncFailureRollsBackApplied(t *testing.T) {
 		failRepoDir:     fx.repoDirs[1],
 	}
 	applyO := New(Deps{
-		Lifecycle: fx.mgr,
+		Manager:   fx.mgr,
 		Store:     fx.store,
 		Worktrees: resetWT,
 	}, Hooks{})

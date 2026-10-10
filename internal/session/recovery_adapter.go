@@ -48,7 +48,7 @@ func (a *RecoveryAdapter) ScanForRecovery(_ context.Context) ([]ports.RecoveryIt
 		alive := isProcessGroupAlive(pf.PID)
 		var f *feature.Feature
 		if a.FeatureManager != nil {
-			f, _ = a.FeatureManager.Get(pf.FeatureID)
+			f, _ = a.FeatureManager.Store.Load(pf.FeatureID)
 		}
 		items = append(items, ports.RecoveryItem{
 			PIDFile:      pf,

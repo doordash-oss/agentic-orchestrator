@@ -27,9 +27,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// writeRunYAML writes a run.yaml directly to disk without going through
-// Store.SaveRun, so tests can fabricate sealed / committing / ordinary run
-// states that Store.SaveRun would refuse or rewrite.
+// writeRunYAML writes a run.yaml directly to disk so tests can fabricate
+// sealed, committing, and ordinary run states.
 func writeRunYAML(t *testing.T, baseDir, featureID string, r *Run) {
 	t.Helper()
 	dir := filepath.Join(baseDir, featureID, "runs", RunDirName(r.RunNumber))
@@ -114,9 +113,7 @@ func TestStore_CleanupOrphanRuns(t *testing.T) {
 				if err := store.Save(f); err != nil {
 					t.Fatalf("save: %v", err)
 				}
-				if err := store.CreateRun(id, &Run{RunNumber: 2, CarriedFromRun: 1}); err != nil {
-					t.Fatalf("create stale run-002: %v", err)
-				}
+				writeRunYAML(t, dir, id, &Run{RunNumber: 2, CarriedFromRun: 1})
 			},
 			wantDeleted: []int{2},
 			assert: func(t *testing.T, dir string, store *Store, id string) {

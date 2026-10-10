@@ -16,14 +16,14 @@ package orchestrator_test
 
 import (
 	"errors"
-	"strings"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
 // queuedChild returns a child feature parked after launch (setup queued).
@@ -118,195 +118,110 @@ func closedCompletedChild(cleanupPending bool) *feature.Feature {
 	return child
 }
 
-// TestOrchestrator_ClosedChildExecutionRefused pins the settled-relationship
-// half of the child execution gate: a child whose relationship closed
-// (Completed, merged into the parent) can never start, resume, retry, or
-// replay pipeline phases again — its disposable worktree may already be
-// gone. The refusal is the stable typed ErrChildExecutionClosed, never a
-// capability or setup error, and it leaves the closed record untouched. The
-// Automatic reconciliation owns any unfinished cleanup tail; all user
-// execution routes stay refused.
+func newChildExecutionFixture(t *testing.T, child *feature.Feature) (*orchestrator.Orchestrator, *feature.Store) {
+	t.Helper()
+	store, mgr := newStoredFeatureFixture(t, child)
+	o := orchestrator.New(orchestrator.Deps{Manager: mgr, Store: store}, orchestrator.Hooks{})
+	t.Cleanup(func() { _ = o.Shutdown() })
+	return o, store
+}
+
 func TestOrchestrator_ClosedChildExecutionRefused(t *testing.T) {
-	children := []struct {
-		name string
-		f    *feature.Feature
+	for _, tc := range []struct {
+		name  string
+		child *feature.Feature
 	}{
-		{"settled child (cleanup finished)", closedCompletedChild(false)},
-		{"closed child with resumable cleanup tail", closedCompletedChild(true)},
-	}
-	for _, tc := range children {
-		t.Run("start/"+tc.name, func(t *testing.T) {
-			lc := lifecycleForFeature(tc.f)
-			store := newFeatureStore(tc.f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
-			err := o.StartFeature(tc.f.ID)
-			if !errors.Is(err, feature.ErrChildExecutionClosed) {
-				t.Fatalf("StartFeature() error = %v, want ErrChildExecutionClosed", err)
+		{"settled", closedCompletedChild(false)},
+		{"cleanup pending", closedCompletedChild(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, store := newChildExecutionFixture(t, tc.child)
+			if err := o.StartFeature(tc.child.ID); !errors.Is(err, feature.ErrChildExecutionClosed) {
+				t.Fatalf("StartFeature() error = %v, want closed child", err)
 			}
-			if errors.Is(err, feature.ErrChildExecutionBlocked) {
-				t.Fatalf("StartFeature() error = %v, want the closed-relationship error, not a capability/setup block", err)
+			if _, err := o.RestartFeature(tc.child.ID, 0, 0); !errors.Is(err, feature.ErrChildExecutionClosed) {
+				t.Fatalf("RestartPhase() error = %v, want closed child", err)
 			}
-			refuteLifecycleCall(t, lc, "RunSetup")
-			refuteLifecycleCall(t, lc, "StartPlanning")
-			refuteLifecycleCall(t, lc, "StartImplementing")
-			refuteLifecycleCall(t, lc, "StartFinalReview")
-			parked, loadErr := store.Load(tc.f.ID)
-			if loadErr != nil {
-				t.Fatalf("reload child: %v", loadErr)
-			}
-			if parked.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted ||
-				parked.Status != feature.StatusReviewPassed {
-				t.Fatalf("closed child mutated by rejected start: outcome=%q status=%s", parked.Parent.CloseOutcome, parked.Status)
+			stored, err := store.Load(tc.child.ID)
+			if err != nil || stored.Parent.CloseOutcome != feature.ChildCloseOutcomeCompleted || stored.Status != feature.StatusReviewPassed {
+				t.Fatalf("closed child changed after refused execution: %+v (err %v)", stored, err)
 			}
 		})
 	}
-
-	t.Run("restart/settled child replays no pipeline phases", func(t *testing.T) {
-		child := closedCompletedChild(false)
-		lc := lifecycleForFeature(child)
-		o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(child)}, orchestrator.Hooks{})
-		_, err := o.RestartPhase(child.ID, 0, 0)
-		if !errors.Is(err, feature.ErrChildExecutionClosed) {
-			t.Fatalf("RestartPhase() error = %v, want ErrChildExecutionClosed", err)
-		}
-		refuteLifecycleCall(t, lc, "MarkImplementing")
-		refuteLifecycleCall(t, lc, "StartFinalReview")
-	})
 }
 
-// TestOrchestrator_ChildExecutionBlocked pins the setup-state half of the
-// supported child capability gate: start/restart/retry on a
-// child whose setup is queued, running, or failed returns
-// ErrChildExecutionBlocked and never
-// routes into phase execution. Setup runs solely via RunSetup/RetrySetup.
 func TestOrchestrator_ChildExecutionBlocked(t *testing.T) {
-	children := []struct {
-		name string
-		f    *feature.Feature
+	for _, tc := range []struct {
+		name  string
+		child *feature.Feature
 	}{
-		{"queued child", queuedChild()},
-		{"failed-setup child", failedSetupChild()},
-	}
-	for _, tc := range children {
-		t.Run("start/"+tc.name, func(t *testing.T) {
-			lc := lifecycleForFeature(tc.f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(tc.f)}, orchestrator.Hooks{})
-			err := o.StartFeature(tc.f.ID)
-			if !errors.Is(err, feature.ErrChildExecutionBlocked) {
-				t.Fatalf("StartFeature() error = %v, want ErrChildExecutionBlocked", err)
+		{"queued", queuedChild()},
+		{"failed setup", failedSetupChild()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, store := newChildExecutionFixture(t, tc.child)
+			if err := o.StartFeature(tc.child.ID); !errors.Is(err, feature.ErrChildExecutionBlocked) {
+				t.Fatalf("StartFeature() error = %v, want blocked child", err)
 			}
-			refuteLifecycleCall(t, lc, "RunSetup")
-			refuteLifecycleCall(t, lc, "RetrySetup")
-			refuteLifecycleCall(t, lc, "StartPlanning")
-			refuteLifecycleCall(t, lc, "StartInquire")
-		})
-		t.Run("restart/"+tc.name, func(t *testing.T) {
-			lc := lifecycleForFeature(tc.f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(tc.f)}, orchestrator.Hooks{})
-			_, err := o.RestartPhase(tc.f.ID, 0, 0)
-			if !errors.Is(err, feature.ErrChildExecutionBlocked) {
-				t.Fatalf("RestartPhase() error = %v, want ErrChildExecutionBlocked", err)
+			if _, err := o.RestartFeature(tc.child.ID, 0, 0); !errors.Is(err, feature.ErrChildExecutionBlocked) {
+				t.Fatalf("RestartPhase() error = %v, want blocked child", err)
 			}
-			refuteLifecycleCall(t, lc, "RunSetup")
+			stored, err := store.Load(tc.child.ID)
+			if err != nil || stored.Status != tc.child.Status {
+				t.Fatalf("blocked child changed after refused execution: %+v (err %v)", stored, err)
+			}
 		})
 	}
 }
 
-// TestOrchestrator_ChildGatePropagatesLookupErrors pins fail-closed gate
-// behavior: when the feature record cannot be loaded the gate must surface
-// the lookup failure rather than silently skipping the child check.
 func TestOrchestrator_ChildGatePropagatesLookupErrors(t *testing.T) {
-	lookupErr := errors.New("disk read failed")
-	newOrchestrator := func() *orchestrator.Orchestrator {
-		lc := mocks.NewMockFeatureLifecycle()
-		lc.GetFn = func(string) (*feature.Feature, error) { return nil, lookupErr }
-		return orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore()}, orchestrator.Hooks{})
-	}
-
-	if err := newOrchestrator().StartFeature("child-x"); err == nil ||
-		!strings.Contains(err.Error(), "loading feature") ||
-		errors.Is(err, feature.ErrChildExecutionBlocked) {
-		t.Fatalf("StartFeature() error = %v, want propagated lookup failure", err)
-	}
-	if _, err := newOrchestrator().RestartPhase("child-x", 0, 0); err == nil ||
-		!strings.Contains(err.Error(), "loading feature") ||
-		errors.Is(err, feature.ErrChildExecutionBlocked) {
-		t.Fatalf("RestartPhase() error = %v, want propagated lookup failure", err)
-	}
-}
-
-// TestOrchestrator_ChildSetupRunsOnlyViaSetupEntrypoints confirms the queued
-// child's setup is reachable exclusively through RunSetup/RetrySetup.
-func TestOrchestrator_ChildSetupRunsOnlyViaSetupEntrypoints(t *testing.T) {
-	child := queuedChild()
-	lc := lifecycleForFeature(child)
-	lc.RunSetupFn = func(featureID string, opts ...feature.SetupRunnerOptions) error { return nil }
-	lc.RetrySetupFn = func(featureID string, opts ...feature.SetupRunnerOptions) error { return nil }
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(child)}, orchestrator.Hooks{})
-
-	if err := o.RunSetup(child.ID); err != nil {
-		t.Fatalf("RunSetup() error = %v", err)
-	}
-	assertLifecycleCall(t, lc, "RunSetup")
-	if err := o.RetrySetup(child.ID); err != nil {
-		t.Fatalf("RetrySetup() error = %v", err)
-	}
-	assertLifecycleCall(t, lc, "RetrySetup")
-}
-
-// TestOrchestrator_ChildCapabilityGate pins the child capability matrix:
-// a setup-complete Medium child with exactly one repository passes start,
-// resume/retry, and restart; Large children also pass since the temporary
-// profile restriction is retired, and a multi-repository child passes too.
-// Rejection never invalidates or closes the child, which stays
-// setup-complete and active.
-func TestOrchestrator_ChildCapabilityGate(t *testing.T) {
-	t.Run("eligible medium single-repo child starts", func(t *testing.T) {
-		child := setupCompleteChild()
-		lc := lifecycleForFeature(child)
-		store := newFeatureStore(child)
-		o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
-		if err := o.StartFeature(child.ID); err != nil {
-			t.Fatalf("StartFeature() error = %v, want nil for eligible child", err)
-		}
-		refuteLifecycleCall(t, lc, "RunSetup")
-		refuteLifecycleCall(t, lc, "RetrySetup")
-	})
-
-	t.Run("eligible medium multi-repo child starts", func(t *testing.T) {
-		child := multiRepoChild()
-		lc := lifecycleForFeature(child)
-		store := newFeatureStore(child)
-		o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
-		if err := o.StartFeature(child.ID); err != nil {
-			t.Fatalf("StartFeature() error = %v, want nil for eligible multi-repo child", err)
-		}
-	})
-
-	profileChildren := []struct {
+	store, mgr := newStoredFeatureFixture(t)
+	o := orchestrator.New(orchestrator.Deps{Manager: mgr, Store: store}, orchestrator.Hooks{})
+	for _, run := range []struct {
 		name string
-		f    *feature.Feature
+		fn   func() error
 	}{
-		{"large child", largeProfileChild()},
-	}
-	for _, tc := range profileChildren {
-		t.Run("start/"+tc.name, func(t *testing.T) {
-			lc := lifecycleForFeature(tc.f)
-			store := newFeatureStore(tc.f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: store}, orchestrator.Hooks{})
-			err := o.StartFeature(tc.f.ID)
-			if err != nil {
-				t.Fatalf("StartFeature() error = %v, want nil for eligible %s child", err, tc.name)
+		{"start", func() error { return o.StartFeature("missing-child") }},
+		{"restart", func() error { _, err := o.RestartFeature("missing-child", 0, 0); return err }},
+	} {
+		t.Run(run.name, func(t *testing.T) {
+			err := run.fn()
+			if !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s error = %v, want missing feature", run.name, err)
 			}
-			refuteLifecycleCall(t, lc, "RunSetup")
-			refuteLifecycleCall(t, lc, "RetrySetup")
 		})
-		t.Run("restart/"+tc.name, func(t *testing.T) {
-			lc := lifecycleForFeature(tc.f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(tc.f)}, orchestrator.Hooks{})
-			_, err := o.RestartPhase(tc.f.ID, 0, 0)
-			if err != nil {
-				t.Fatalf("RestartPhase() error = %v, want nil for eligible %s child", err, tc.name)
+	}
+}
+
+func TestOrchestrator_ChildCapabilityGate(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		child *feature.Feature
+	}{
+		{"medium single repo", setupCompleteChild()},
+		{"medium multi repo", multiRepoChild()},
+		{"large single repo", largeProfileChild()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, store := newChildExecutionFixture(t, tc.child)
+			admission := workadmission.New(workadmission.Options{})
+			o.SetAdmissionBoundary(admission)
+			if !admission.CloseIfQuiesced() {
+				t.Fatal("admission boundary did not close")
+			}
+			if err := o.StartFeature(tc.child.ID); err != nil {
+				if _, closed := workadmission.AsClosed(err); !closed {
+					t.Fatalf("StartFeature() error = %v, want dispatch refused by admission after capability check", err)
+				}
+			} else {
+				t.Fatal("StartFeature() bypassed closed admission")
+			}
+			stored, err := store.Load(tc.child.ID)
+			if err != nil || stored.Parent == nil || stored.Parent.CloseOutcome != "" {
+				t.Fatalf("eligible child lost active relationship: %+v (err %v)", stored, err)
+			}
+			if stored.Status != feature.StatusPlanReady && stored.Status != feature.StatusCreated {
+				t.Fatalf("eligible child status = %s, want created or plan-ready", stored.Status)
 			}
 		})
 	}

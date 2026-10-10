@@ -27,6 +27,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	gitadapter "github.com/doordash-oss/agentic-orchestrator/internal/git"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/orchestrator"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
@@ -81,7 +82,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 				return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
 			}
 			manager.Worktrees = worktrees
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
+			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})}
 			f, err := manager.Create("response shape setup", "desc", []string{testRepoAName}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{
 				QueueSetup: true, Pipeline: feature.PipelineMedium,
 			})
@@ -97,7 +98,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		}},
 		{"StartFeature", resultStarted, func(t *testing.T) (string, string, string) {
 			store, manager, f := newMutationTestFeature(t, "response shape start", feature.CreateOptions{Pipeline: feature.PipelineLarge}, feature.StatusCreated, 0)
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
+			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})}
 			resp, err := target.StartFeature(f.ID)
 			if err != nil {
 				t.Fatalf("StartFeature() error = %v", err)
@@ -106,7 +107,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		}},
 		{"StopFeature", resultStopped, func(t *testing.T) (string, string, string) {
 			store, manager, f := newMutationTestFeature(t, "response shape stop", feature.CreateOptions{Pipeline: feature.PipelineLarge}, feature.StatusCreated, 0)
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
+			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})}
 			if _, err := target.StartFeature(f.ID); err != nil {
 				t.Fatalf("StartFeature() error = %v", err)
 			}
@@ -314,7 +315,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 		{"GeneratePublishDescription", resultGenerated, func(t *testing.T) (string, string, string) {
 			_, manager, store, f := newPublishActionTarget(t)
 			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{
-				Lifecycle: manager, Store: store,
+				Manager: manager, Store: store,
 				PhaseRunner: newResponseShapeDescriptionRunner(t, "TITLE: Generated title\nBODY:\nGenerated body"),
 			}, orchestrator.Hooks{})}
 			resp, err := target.GeneratePublishDescription(f.ID, serverruntime.PublishDescriptionRequest{Repos: []string{testRepoAName}})
@@ -351,7 +352,7 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("prepare feature: %v", err)
 			}
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
+			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})}
 			resp, err := target.RewindFeature(f.ID, serverruntime.RewindFeatureRequest{TargetPhase: phaseNameImplement})
 			if err != nil {
 				t.Fatalf("RewindFeature() error = %v", err)
@@ -385,29 +386,36 @@ func TestMutationTargetSuccessResponsesNameFeatureAndResult(t *testing.T) {
 			if resp.ParentID != parentID {
 				t.Fatalf("RebaseFeature() parent = %q; want %q", resp.ParentID, parentID)
 			}
-			return resp.FeatureID, responseShapeRebaseChildID, resp.Result
+			if resp.FeatureID == "" {
+				t.Fatal("rebase child ID is empty")
+			}
+			return resp.FeatureID, resp.FeatureID, resp.Result
 		}},
 		{"RefactorFeature", resultCreated, func(t *testing.T) (string, string, string) {
-			creator := &fakeRefactorChildCreator{child: &feature.Feature{ID: "child-refactor-shape"}}
-			target, _ := newChildLaunchTarget(t, childCreatorLifecycle{refactor: creator})
-			resp, err := target.RefactorFeature("parent-1", serverruntime.RefactorFeatureRequest{Name: "Rework auth"})
+			target, store, parent := newChildLaunchTarget(t)
+			resp, err := target.RefactorFeature(parent.ID, serverruntime.RefactorFeatureRequest{Name: "Rework auth"})
 			if err != nil {
 				t.Fatalf("RefactorFeature() error = %v", err)
 			}
-			return resp.FeatureID, "child-refactor-shape", resp.Result
+			if child, err := store.Load(resp.FeatureID); err != nil || child.Parent == nil || child.Parent.ParentID != parent.ID {
+				t.Fatalf("stored refactor child = %+v, %v", child, err)
+			}
+			return resp.FeatureID, resp.FeatureID, resp.Result
 		}},
 		{"ReviewFeedbackFeature", resultCreated, func(t *testing.T) (string, string, string) {
-			creator := &fakeReviewFeedbackChildCreator{child: &feature.Feature{ID: "child-review-shape"}}
-			target, _ := newChildLaunchTarget(t, childCreatorLifecycle{review: creator})
-			resp, err := target.ReviewFeedbackFeature("parent-1", serverruntime.ReviewFeedbackFeatureRequest{ExpectedRevision: 1})
+			target, store, parent, revision := newReviewFeedbackLaunchTarget(t, nil)
+			resp, err := target.ReviewFeedbackFeature(parent.ID, serverruntime.ReviewFeedbackFeatureRequest{ExpectedRevision: int(revision)})
 			if err != nil {
 				t.Fatalf("ReviewFeedbackFeature() error = %v", err)
 			}
-			return resp.FeatureID, "child-review-shape", resp.Result
+			if child, err := store.Load(resp.FeatureID); err != nil || child.Parent == nil || child.Parent.ParentID != parent.ID {
+				t.Fatalf("stored feedback child = %+v, %v", child, err)
+			}
+			return resp.FeatureID, resp.FeatureID, resp.Result
 		}},
 		{"MarkDone", resultDone, func(t *testing.T) (string, string, string) {
 			store, manager, f := newMutationTestFeature(t, "response shape done", feature.CreateOptions{}, feature.StatusPublished, feature.PhasePublish)
-			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})}
+			target := mutationTarget{orch: orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})}
 			resp, err := target.MarkDone(f.ID, serverruntime.GuardedFeatureActionRequest{})
 			if err != nil {
 				t.Fatalf("MarkDone() error = %v", err)
@@ -469,7 +477,7 @@ func newResponseShapeImplementTarget(t *testing.T, name string, mutate func(*fea
 	}); err != nil {
 		t.Fatalf("prepare feature: %v", err)
 	}
-	orch := orchestrator.New(orchestrator.Deps{Lifecycle: manager, Store: store}, orchestrator.Hooks{})
+	orch := orchestrator.New(orchestrator.Deps{Manager: manager, Store: store}, orchestrator.Hooks{})
 	orch.SetRunMultiRepoImplFn(func(*feature.Feature, string, ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
 		ch := make(chan *agent.OrchestratorResult)
 		close(ch)
@@ -598,29 +606,6 @@ func newResponseShapeLocalMergeTarget(t *testing.T) (mutationTarget, string) {
 	return mutationTarget{orch: newStoreOrchestrator(store)}, f.ID
 }
 
-const responseShapeRebaseChildID = "child-rebase-shape"
-
-// responseShapeRebaseLifecycle creates the rebase child the orchestrator's
-// child launch asks for.
-type responseShapeRebaseLifecycle struct {
-	*mocks.MockFeatureLifecycle
-}
-
-func (responseShapeRebaseLifecycle) CreateRefactorChild(string, feature.RefactorChildSpec) (*feature.Feature, error) {
-	return nil, os.ErrInvalid
-}
-
-func (responseShapeRebaseLifecycle) LaunchReviewFeedbackChildFromDraft(string, int64, *bool) (*feature.ReviewFeedbackLaunchResult, error) {
-	return nil, os.ErrInvalid
-}
-
-func (responseShapeRebaseLifecycle) CreateRebaseChild(parentID string, _ feature.RebaseChildSpec) (*feature.Feature, error) {
-	return &feature.Feature{
-		ID:     responseShapeRebaseChildID,
-		Parent: &feature.ChildRelationship{ParentID: parentID, Kind: feature.ChildKindRebase},
-	}, nil
-}
-
 // newResponseShapeRebaseTarget builds a published, non-publishable parent
 // whose clean worktree sits one commit behind its local base branch, so the
 // rebase preflight finds work and launches a child.
@@ -646,15 +631,13 @@ func newResponseShapeRebaseTarget(t *testing.T) (mutationTarget, string) {
 	if err := store.Save(parent); err != nil {
 		t.Fatalf("Save parent: %v", err)
 	}
-	worktrees := mocks.NewMockWorktreeOps()
-	worktrees.CurrentHeadSHAFn = func(string) (string, error) { return "0123456789abcdef0123456789abcdef01234567", nil }
-	lifecycle := mocks.NewMockFeatureLifecycle()
-	lifecycle.GetFn = func(id string) (*feature.Feature, error) {
-		return &feature.Feature{ID: id, Parent: &feature.ChildRelationship{ParentID: parent.ID, Kind: feature.ChildKindRebase}}, nil
-	}
-	lifecycle.RunSetupFn = func(string, ...feature.SetupRunnerOptions) error { return nil }
+	cfg := config.NewDefault()
+	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
+	manager := feature.NewManager(store, cfg)
+	worktrees := gitadapter.NewWorktreeManager(filepath.Join(runtimeDir, "worktrees"))
+	manager.Worktrees = worktrees
 	orch := orchestrator.New(orchestrator.Deps{
-		Lifecycle: responseShapeRebaseLifecycle{MockFeatureLifecycle: lifecycle},
+		Manager:   manager,
 		Store:     store,
 		Worktrees: worktrees,
 	}, orchestrator.Hooks{})

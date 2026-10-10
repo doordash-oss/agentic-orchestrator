@@ -34,10 +34,7 @@ func (o *Orchestrator) stateDir() string {
 	if o.deps.PhaseRunner != nil && o.deps.PhaseRunner.StateDir != "" {
 		return o.deps.PhaseRunner.StateDir
 	}
-	if s, ok := o.deps.Store.(*feature.Store); ok && s != nil {
-		return s.BaseDir
-	}
-	return ""
+	return o.deps.Store.BaseDir
 }
 
 // computeKBInfos builds KB info metadata for all feature repos.

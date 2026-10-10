@@ -89,21 +89,21 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	// Walk inquire → research → design with real writers.
 	phaseSteps := []struct {
 		name  string
-		start func(string) error
-		done  func(string) error
+		phase feature.Phase
+		done  feature.Status
 	}{
-		{"inquire", mgr.StartInquire, mgr.CompleteInquire},
-		{"research", mgr.StartResearch, mgr.CompleteResearch},
-		{"design", mgr.StartDesign, mgr.CompleteDesign},
+		{"inquire", feature.PhaseInquire, feature.StatusInquireReady},
+		{"research", feature.PhaseResearch, feature.StatusDesignReady},
+		{"design", feature.PhaseDesign, feature.StatusPlanReady},
 	}
 	for _, step := range phaseSteps {
-		if err := step.start(f.ID); err != nil {
+		if err := mgr.StartPhase(f.ID, step.phase); err != nil {
 			t.Fatalf("Start%s: %v", step.name, err)
 		}
-		if err := step.done(f.ID); err != nil {
+		if err := mgr.Transition(f.ID, step.done); err != nil {
 			t.Fatalf("Complete%s: %v", step.name, err)
 		}
-		if f, err = mgr.Get(f.ID); err != nil {
+		if f, err = mgr.Store.Load(f.ID); err != nil {
 			t.Fatalf("Get after %s: %v", step.name, err)
 		}
 		// Write a marker file with the phase name under <run-001>/<phase>/.
@@ -140,8 +140,8 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 	}
 
 	// Rewind to plan.
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
 	run2Dir := filepath.Join(stateDir, f.ID, "runs", "run-002")
@@ -235,7 +235,7 @@ func TestRewindToPlan_EndToEnd_CarriesForwardContent(t *testing.T) {
 // This test seeds the lifecycle through inquire → research → design,
 // writes phase-NN/plan/plan.md under run-001 (simulating a roadmap planner's
 // output), populates f.Artifacts["plan"] with the absolute path (matching
-// orchestrator.go:854's write), then drives RewindToPhase(PhaseImplement)
+// orchestrator.go:854's write), then drives RewindWithRequest(PhaseImplement)
 // end-to-end. Assertions:
 //
 //  1. run-002/phase-NN/plan/plan.md exists with identical content to run-001.
@@ -294,21 +294,21 @@ func TestRewindToImplement_RoadmapPipeline_CarriedPlanPathResolves(t *testing.T)
 	// has genuine content to copy, not just seeded fixtures.
 	phaseSteps := []struct {
 		name  string
-		start func(string) error
-		done  func(string) error
+		phase feature.Phase
+		done  feature.Status
 	}{
-		{"inquire", mgr.StartInquire, mgr.CompleteInquire},
-		{"research", mgr.StartResearch, mgr.CompleteResearch},
-		{"design", mgr.StartDesign, mgr.CompleteDesign},
+		{"inquire", feature.PhaseInquire, feature.StatusInquireReady},
+		{"research", feature.PhaseResearch, feature.StatusDesignReady},
+		{"design", feature.PhaseDesign, feature.StatusPlanReady},
 	}
 	for _, step := range phaseSteps {
-		if err := step.start(f.ID); err != nil {
+		if err := mgr.StartPhase(f.ID, step.phase); err != nil {
 			t.Fatalf("Start%s: %v", step.name, err)
 		}
-		if err := step.done(f.ID); err != nil {
+		if err := mgr.Transition(f.ID, step.done); err != nil {
 			t.Fatalf("Complete%s: %v", step.name, err)
 		}
-		if f, err = mgr.Get(f.ID); err != nil {
+		if f, err = mgr.Store.Load(f.ID); err != nil {
 			t.Fatalf("Get after %s: %v", step.name, err)
 		}
 	}
@@ -356,8 +356,8 @@ func TestRewindToImplement_RoadmapPipeline_CarriedPlanPathResolves(t *testing.T)
 	}
 
 	// Drive the rewind to Implement.
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhaseImplement); err != nil {
-		t.Fatalf("RewindToPhase(PhaseImplement): %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhaseImplement}); err != nil {
+		t.Fatalf("RewindWithRequest(PhaseImplement): %v", err)
 	}
 
 	run2Dir := filepath.Join(stateDir, f.ID, "runs", "run-002")
@@ -410,7 +410,7 @@ func TestRewindToImplement_RoadmapPipeline_CarriedPlanPathResolves(t *testing.T)
 	// resolvePlanPath perform after iteration-02's fix — the rewind review
 	// path ("startRewindReviewSessionCmd") and the proceed path
 	// ("reviewProceed") both rely on this resolution.
-	if fresh, err := mgr.Get(f.ID); err != nil {
+	if fresh, err := mgr.Store.Load(f.ID); err != nil {
 		t.Fatalf("Get after rewind: %v", err)
 	} else {
 		activeRun := agent.ActiveRunDir(stateDir, fresh)

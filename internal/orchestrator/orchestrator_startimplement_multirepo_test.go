@@ -33,7 +33,7 @@ import (
 // Each test overrides runMultiRepoImplFn with a spy and asserts the full
 // chain fires end-to-end.
 //
-// All three use a feature pre-staged at StatusPlanReady with a plan artifact
+// All three use a feature pre-staged at StatusImplementReady with a plan artifact
 // in place, so StartFeature → startPhase(PhaseImplement) → startImplement is
 // the natural entry point.
 
@@ -45,7 +45,7 @@ func newImplEndToEndFeature(id string) *feature.Feature {
 	unpub := false
 	return &feature.Feature{
 		ID:           id,
-		Status:       feature.StatusPlanReady,
+		Status:       feature.StatusImplementReady,
 		CurrentPhase: feature.PhaseImplement,
 		Repos: []feature.FeatureRepo{
 			{Name: repoName, Path: repoAPath, Publishable: &unpub},
@@ -76,32 +76,7 @@ func TestStartFeature_ImplementPhase_AllPassed_CompletesFeature(t *testing.T) {
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
 
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	// MarkCodeReady is the last lifecycle mutation in the happy path. Signal it
-	// so the test can wait for the dispatch goroutine to finish before touching
-	// the mock's Calls slice (the mock isn't internally synchronized).
-	completeImplDone := make(chan struct{}, 1)
-	markCodeReadyDone := make(chan struct{}, 1)
-	lc := lifecycleForFeature(f)
-	lc.StartImplementationFn = func(id string) error {
-		f.Status = feature.StatusImplementing
-		return nil
-	}
-	lc.InitRepoImplFn = func(id string) error { return nil }
-	lc.CompleteImplementationFn = func(id string) error {
-		select {
-		case completeImplDone <- struct{}{}:
-		default:
-		}
-		return nil
-	}
-	lc.MarkCodeReadyFn = func(id string) error {
-		select {
-		case markCodeReadyDone <- struct{}{}:
-		default:
-		}
-		return nil
-	}
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
@@ -114,7 +89,7 @@ func TestStartFeature_ImplementPhase_AllPassed_CompletesFeature(t *testing.T) {
 	}
 
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{},
 	)
 	o.SetRunMultiRepoImplFn(spy.Fn())
@@ -134,30 +109,16 @@ func TestStartFeature_ImplementPhase_AllPassed_CompletesFeature(t *testing.T) {
 		t.Errorf("PhaseCompleted.Error = %v, want nil for all_passed", ev.Error)
 	}
 
-	// Wait for MarkCodeReady to land before asserting on the mock's Calls
-	// slice — this gives us a happens-before edge against the dispatch
-	// goroutine's append() in record().
-	select {
-	case <-completeImplDone:
-	case <-time.After(1 * time.Second):
-		t.Fatal("CompleteImplementation never called")
-	}
-	select {
-	case <-markCodeReadyDone:
-	case <-time.After(1 * time.Second):
-		t.Fatal("MarkCodeReady never called")
-	}
-
 	// Spy argument sanity — proves the engine was invoked with expected wiring.
 	if spy.numCalls() != 1 {
 		t.Fatalf("runMultiRepoImplFn calls = %d, want 1", spy.numCalls())
 	}
 
-	// HandlePhaseCompletion dispatches CompleteImplementation via the
-	// completion handler. Non-publishable multi-repo routes through
-	// MarkCodeReady.
-	assertLifecycleCall(t, lc, "CompleteImplementation")
-	assertLifecycleCall(t, lc, "MarkCodeReady")
+	// Non-publishable multi-repo completion leaves the feature CodeReady.
+	o.WaitForCycles()
+	if stored := loadStoredFeature(t, store, f.ID); stored.Status != feature.StatusCodeReady {
+		t.Fatalf("stored status = %s, want CodeReady", stored.Status)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -179,17 +140,7 @@ func TestStartFeature_ImplementPhase_Failed_MarksFeatureFailed(t *testing.T) {
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
 
 	writeExecOrderNextToPlan(t, planPath, f.Repos)
-	lc := lifecycleForFeature(f)
-	lc.StartImplementationFn = func(id string) error {
-		f.Status = feature.StatusImplementing
-		return nil
-	}
-	lc.InitRepoImplFn = func(id string) error { return nil }
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		f.Status = feature.StatusFailed
-		return nil
-	}
-	store := newFeatureStore(f)
+	store, lc := newStoredFeatureFixture(t, f)
 
 	spy := &fakeRunMultiRepoImpl{
 		TerminalResult: &agent.OrchestratorResult{
@@ -203,7 +154,7 @@ func TestStartFeature_ImplementPhase_Failed_MarksFeatureFailed(t *testing.T) {
 	// the test goroutine reading below.
 	hookCh := make(chan string, 1)
 	o := orchestrator.New(
-		orchestrator.Deps{Lifecycle: lc, Store: store},
+		orchestrator.Deps{Manager: lc, Store: store},
 		orchestrator.Hooks{
 			OnFeatureFailed: func(featureID string, code errcat.Code, class errcat.Class, errorMsg string) {
 				select {
@@ -228,6 +179,9 @@ func TestStartFeature_ImplementPhase_Failed_MarksFeatureFailed(t *testing.T) {
 	}
 	if ev.Message != "boom" {
 		t.Errorf("FeatureFailed.Message = %q, want %q", ev.Message, "boom")
+	}
+	if stored := loadStoredFeature(t, store, f.ID); stored.Status != feature.StatusFailed || stored.Run().Failure == nil {
+		t.Fatalf("stored failure state = status %s, failure %+v", stored.Status, stored.Run().Failure)
 	}
 	// Hook fires after emitEventBlocking; wait for it explicitly.
 	select {

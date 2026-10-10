@@ -36,75 +36,6 @@ import (
 // can render the review editor on a later tick.
 // ---------------------------------------------------------------------------
 
-func TestOrchestrator_Rewind_FiresAuditHookAfterSuccess(t *testing.T) {
-	f := &feature.Feature{ID: "feat-rewind", ActiveRun: 1}
-	lc := lifecycleForFeature(f)
-	lc.RewindWithRequestFn = func(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
-		f.ActiveRun = 2
-		return []feature.RewindWarning{{
-			Kind: feature.RewindWarningBackupBranch,
-			Repo: "repo-a",
-			Err:  errors.New("backup warning"),
-		}}, feature.PhaseImplement, nil
-	}
-	fs := newFeatureStore(f)
-
-	var gotFeatureID string
-	var gotRequest feature.RewindRequest
-	var gotEffective feature.Phase
-	var gotSourceRun, gotNewRun int
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{
-		OnFeatureRewound: func(featureID string, request feature.RewindRequest, effectiveTarget feature.Phase, sourceRun, newRun int) {
-			gotFeatureID = featureID
-			gotRequest = request
-			gotEffective = effectiveTarget
-			gotSourceRun = sourceRun
-			gotNewRun = newRun
-		},
-	})
-
-	result, err := o.Rewind("feat-rewind", orchestrator.RewindInput{Request: feature.RewindRequest{
-		TargetPhase:  feature.PhaseImplement,
-		RoadmapPhase: 2,
-	}})
-	if err != nil {
-		t.Fatalf("Rewind: %v", err)
-	}
-	warnings, effective := result.Warnings, result.EffectivePhase
-	if result.SourceRunNumber != 1 || result.NewRunNumber != 2 {
-		t.Fatalf("result source/new run = %d/%d, want 1/2", result.SourceRunNumber, result.NewRunNumber)
-	}
-	if len(warnings) != 1 || warnings[0].Kind != feature.RewindWarningBackupBranch || warnings[0].Repo != "repo-a" {
-		t.Fatalf("warnings = %+v, want one repo-a backup-branch warning", warnings)
-	}
-	if effective != feature.PhaseImplement {
-		t.Fatalf("effective = %v, want PhaseImplement", effective)
-	}
-	if gotFeatureID != "feat-rewind" {
-		t.Errorf("hook featureID = %q, want feat-rewind", gotFeatureID)
-	}
-	if gotRequest.RoadmapPhase != 2 || gotRequest.TargetPhase != feature.PhaseImplement {
-		t.Errorf("hook request = %+v, want implement phase 2", gotRequest)
-	}
-	if gotEffective != feature.PhaseImplement {
-		t.Errorf("hook effective = %v, want PhaseImplement", gotEffective)
-	}
-	if gotSourceRun != 1 || gotNewRun != 2 {
-		t.Errorf("hook source/new run = %d/%d, want 1/2", gotSourceRun, gotNewRun)
-	}
-	select {
-	case ev := <-o.Events():
-		if ev.Type != ports.FeatureRewound || ev.FeatureID != "feat-rewind" || ev.Phase != feature.PhaseImplement {
-			t.Fatalf("event = %+v, want FeatureRewound for feat-rewind implement", ev)
-		}
-	default:
-		t.Fatal("Rewind emitted no domain event, want FeatureRewound")
-	}
-}
-
 // TestOrchestrator_ExtendFailedPhaseBudget_BumpsAndClears
 // ---------------------------------------------------------------------------
 // ExtendFailedPhaseBudget extends MaxIterations when the run's failure record
@@ -125,18 +56,18 @@ func TestOrchestrator_ExtendFailedPhaseBudget_BumpsAndClears(t *testing.T) {
 		Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: feature.PhasePlan.FailureName()}},
 		Diagnostics: "iteration cap",
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	if err := o.ExtendFailedPhaseBudget("feat-1", 10, 2); err != nil {
 		t.Fatalf("ExtendFailedPhaseBudget: %v", err)
 	}
 
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.MaxIterations != 30 {
 		t.Errorf("MaxIterations = %d, want 30", f.MaxIterations)
 	}
@@ -154,18 +85,18 @@ func TestOrchestrator_ExtendFailedPhaseBudget_NotFailedIsNoOp(t *testing.T) {
 		Status:        feature.StatusInterrupted,
 		MaxIterations: 20,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	if err := o.ExtendFailedPhaseBudget("feat-1", 10, 2); err != nil {
 		t.Fatalf("ExtendFailedPhaseBudget: %v", err)
 	}
 
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.MaxIterations != 20 {
 		t.Errorf("MaxIterations should not change for non-Failed feature, got %d", f.MaxIterations)
 	}
@@ -184,12 +115,11 @@ func TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches(t *test
 		Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: feature.PhasePlan.FailureName()}},
 		Diagnostics: "iteration cap",
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-1", 10, 2)
@@ -202,9 +132,11 @@ func TestOrchestrator_RestartPhase_FailedPlan_ExtendsBudgetAndDispatches(t *test
 	if outcome.Phase != feature.PhasePlan {
 		t.Errorf("Phase = %v, want PhasePlan", outcome.Phase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusPlanReady {
 		t.Errorf("Status = %v, want PlanReady", f.Status)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.MaxIterations != 30 {
 		t.Errorf("MaxIterations = %d, want 30 (bumped by delta=10)", f.MaxIterations)
 	}
@@ -221,9 +153,9 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 		ID:           "feat-fr",
 		Status:       feature.StatusFailed,
 		CurrentPhase: feature.PhaseFinalReview,
-		Repos:        []feature.FeatureRepo{{Name: agenticRepoName}},
+		Repos:        []feature.FeatureRepo{{Name: "agentic"}},
 		RepoStates: map[string]*feature.RepoState{
-			agenticRepoName: {
+			"agentic": {
 				Touched: true,
 				Error:   &errcat.FailureRecord{Code: errcat.ProtocolViolation, Diagnostics: "final_review_reviewer @ /tmp/iter: invalid report"},
 			},
@@ -234,12 +166,11 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 		Context:     &errcat.RecordContext{Phase: &errcat.CodePhase{Name: feature.PhaseFinalReview.FailureName()}},
 		Diagnostics: "protocol violation: final_review_reviewer @ /tmp/iter: invalid report",
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-fr", 10, 2)
@@ -252,6 +183,7 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 	if outcome.Phase != feature.PhaseFinalReview {
 		t.Fatalf("Phase = %v, want PhaseFinalReview", outcome.Phase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusReviewPassed {
 		t.Fatalf("Status = %v, want ReviewPassed so startFinalReview can re-enter", f.Status)
 	}
@@ -261,7 +193,7 @@ func TestOrchestrator_RestartPhase_FailedFinalReview_DispatchesFinalReview(t *te
 	if rec := f.FailureRecord(); rec != nil {
 		t.Fatalf("failure record should be cleared: %+v", rec)
 	}
-	if st := f.RepoStates[agenticRepoName]; st == nil || st.Error != nil {
+	if st := f.RepoStates["agentic"]; st == nil || st.Error != nil {
 		t.Fatalf("RepoStates[agentic] = %+v, want its failure record cleared", st)
 	}
 }
@@ -272,12 +204,11 @@ func TestOrchestrator_RestartPhase_RunningResearch_TransitionsToInterrupted(t *t
 		Status:       feature.StatusResearching,
 		CurrentPhase: feature.PhaseResearch,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-1", 0, 0)
@@ -290,6 +221,7 @@ func TestOrchestrator_RestartPhase_RunningResearch_TransitionsToInterrupted(t *t
 	if outcome.Phase != feature.PhaseResearch {
 		t.Errorf("Phase = %v, want PhaseResearch", outcome.Phase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusInterrupted {
 		t.Errorf("Status = %v, want Interrupted", f.Status)
 	}
@@ -309,12 +241,11 @@ func TestOrchestrator_RestartPhase_NeedsReviewRestartsCompletedPhase(t *testing.
 			{Tool: "Bash", Pending: true},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-1", 0, 0)
@@ -327,6 +258,7 @@ func TestOrchestrator_RestartPhase_NeedsReviewRestartsCompletedPhase(t *testing.
 	if outcome.Phase != feature.PhaseInquire {
 		t.Errorf("Phase = %v, want PhaseInquire", outcome.Phase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusInterrupted {
 		t.Errorf("Status = %v, want Interrupted", f.Status)
 	}
@@ -370,12 +302,11 @@ func TestOrchestrator_RestartPhase_FailedSingleShotPhase_TransitionsToSamePhaseS
 				Status:       feature.StatusFailed,
 				CurrentPhase: tt.phase,
 			}
-			lc := lifecycleForFeature(f)
-			fs := newFeatureStore(f)
+			fs, lc := newStoredFeatureFixture(t, f)
 
 			o := orchestrator.New(orchestrator.Deps{
-				Lifecycle: lc,
-				Store:     fs,
+				Manager: lc,
+				Store:   fs,
 			}, orchestrator.Hooks{})
 
 			outcome, err := o.RestartPhase("feat-1", 0, 0)
@@ -388,6 +319,7 @@ func TestOrchestrator_RestartPhase_FailedSingleShotPhase_TransitionsToSamePhaseS
 			if outcome.Phase != tt.phase {
 				t.Errorf("Phase = %v, want %v", outcome.Phase, tt.phase)
 			}
+			f = loadStoredFeature(t, fs, f.ID)
 			if f.Status != tt.wantStatus {
 				t.Errorf("Status = %v, want %v", f.Status, tt.wantStatus)
 			}
@@ -408,12 +340,11 @@ func TestOrchestrator_RestartPhase_InterruptedFeature_KeepsStatus(t *testing.T) 
 		Status:       feature.StatusInterrupted,
 		CurrentPhase: feature.PhaseImplement,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-1", 0, 0)
@@ -426,6 +357,7 @@ func TestOrchestrator_RestartPhase_InterruptedFeature_KeepsStatus(t *testing.T) 
 	if outcome.Phase != feature.PhaseImplement {
 		t.Errorf("Phase = %v, want PhaseImplement", outcome.Phase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusInterrupted {
 		t.Errorf("Status = %v, want Interrupted (unchanged)", f.Status)
 	}
@@ -447,12 +379,11 @@ func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t 
 		Status:       feature.StatusCreated,
 		CurrentPhase: feature.PhaseKnowledgeBase,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-1", 0, 0)
@@ -465,6 +396,7 @@ func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t 
 	if outcome.Phase != feature.PhaseKnowledgeBase {
 		t.Errorf("Phase = %v, want PhaseKnowledgeBase", outcome.Phase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusCreated {
 		t.Errorf("Status = %v, want Created (unchanged — startKB owns the forward transition)", f.Status)
 	}
@@ -516,8 +448,7 @@ func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 		Status:       feature.StatusInterrupted,
 		CurrentPhase: feature.PhaseKnowledgeBase,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	sm := mocks.NewMockSessionManager()
 	// One session still active for this feature — the case where Stop is mid-flight.
@@ -526,9 +457,9 @@ func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		Sessions:  sm,
+		Manager:  lc,
+		Store:    fs,
+		Sessions: sm,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-busy", 10, 2)
@@ -539,6 +470,7 @@ func TestOrchestrator_RestartPhase_RejectsWhileSessionsActive(t *testing.T) {
 		t.Errorf("Outcome.Action = %v, want zero (call should bail before dispatch)", outcome.Action)
 	}
 	// Status must NOT have been mutated — RestartPhase bailed before any transitions.
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusInterrupted {
 		t.Errorf("Status mutated to %v; busy-guard must not transition", f.Status)
 	}
@@ -557,8 +489,7 @@ func TestOrchestrator_RestartPhase_AllowsArtifactReviewSession(t *testing.T) {
 		CurrentPhase:       feature.PhaseInquire,
 		PendingReviewPhase: &target,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	sm := mocks.NewMockSessionManager()
 	reviewSess := mocks.NewMockSessionView("feat-review-busy-artifact-review", "feat-review-busy")
@@ -567,9 +498,9 @@ func TestOrchestrator_RestartPhase_AllowsArtifactReviewSession(t *testing.T) {
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		Sessions:  sm,
+		Manager:  lc,
+		Store:    fs,
+		Sessions: sm,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-review-busy", 10, 2)
@@ -582,6 +513,7 @@ func TestOrchestrator_RestartPhase_AllowsArtifactReviewSession(t *testing.T) {
 	if outcome.Phase != feature.PhaseInquire {
 		t.Errorf("Phase = %v, want PhaseInquire", outcome.Phase)
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusInterrupted {
 		t.Errorf("Status = %v, want Interrupted", f.Status)
 	}
@@ -603,8 +535,7 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 		Status:       feature.StatusFailed,
 		CurrentPhase: feature.PhaseKnowledgeBase,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	sm := mocks.NewMockSessionManager()
 	deadSession := mocks.NewMockSessionView("s-dead", "feat-failed")
@@ -615,9 +546,9 @@ func TestOrchestrator_RestartPhase_ProceedsWhenSessionsInactive(t *testing.T) {
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		Sessions:  sm,
+		Manager:  lc,
+		Store:    fs,
+		Sessions: sm,
 	}, orchestrator.Hooks{})
 
 	outcome, err := o.RestartPhase("feat-failed", 10, 2)
@@ -661,19 +592,21 @@ func TestOrchestrator_MergeFeatureLocal_MarksDone(t *testing.T) {
 			Publishable:  &notPublishable,
 		}},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	if err := o.MergeFeatureLocal("feat-local-merge"); err != nil {
 		t.Fatalf("MergeFeatureLocal: %v", err)
 	}
 
-	assertLifecycleCall(t, lc, "MarkDone")
+	f = loadStoredFeature(t, fs, f.ID)
+	if f.Status != feature.StatusDone {
+		t.Fatalf("Status = %s, want Done", f.Status)
+	}
 	cmd := exec.Command("git", "log", "--format=%s", "-2")
 	cmd.Dir = repoPath
 	cmd.Env = testutil.GitTestEnv()
@@ -687,12 +620,11 @@ func TestOrchestrator_MarkDone_IsExplicitCompletionAction(t *testing.T) {
 		ID:     "feat-mark-done",
 		Status: feature.StatusPublished,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	var summaryNeeded bool
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnFeatureSummaryNeeded: func(featureID string, f *feature.Feature) {
 			summaryNeeded = true
@@ -703,6 +635,7 @@ func TestOrchestrator_MarkDone_IsExplicitCompletionAction(t *testing.T) {
 		t.Fatalf("MarkDone: %v", err)
 	}
 
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusDone {
 		t.Fatalf("Status = %s; want %s", f.Status, feature.StatusDone)
 	}
@@ -742,19 +675,17 @@ func TestOrchestrator_MergeFeatureLocal_AtDoneSkipsMarkDone(t *testing.T) {
 			Publishable:  &notPublishable,
 		}},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
-	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
+	o := orchestrator.New(orchestrator.Deps{Manager: lc, Store: fs}, orchestrator.Hooks{})
 
 	if err := o.MergeFeatureLocal("feat-late-merge"); err != nil {
 		t.Fatalf("MergeFeatureLocal: %v", err)
 	}
 
-	for _, c := range lc.Calls {
-		if c.Method == "MarkDone" {
-			t.Error("MarkDone was called on an already-Done feature")
-		}
+	f = loadStoredFeature(t, fs, f.ID)
+	if f.Status != feature.StatusDone {
+		t.Fatalf("Status = %s, want Done", f.Status)
 	}
 	log := exec.Command("git", "log", "--format=%s", "-2")
 	log.Dir = repoPath

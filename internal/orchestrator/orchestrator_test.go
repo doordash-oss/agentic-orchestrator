@@ -33,17 +33,12 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 	"go.uber.org/fx"
 )
 
 // ---------------------------------------------------------------------------
 // Compile-time interface satisfaction checks
 // ---------------------------------------------------------------------------
-
-// These methods require no adapters.
-var _ ports.FeatureStore = (*feature.Store)(nil)
-var _ ports.FeatureLifecycle = (*feature.Manager)(nil)
 
 // Session lifecycle methods require the concrete session manager.
 var _ ports.SessionManager = (*session.Manager)(nil)
@@ -53,25 +48,15 @@ var _ ports.SessionManager = (*session.Manager)(nil)
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_CreateFeature(t *testing.T) {
-	testFeature := &feature.Feature{
-		ID:   "feat-123",
-		Name: "test feature",
-	}
-
-	lifecycle := mocks.NewMockFeatureLifecycle()
-	lifecycle.CreateFn = func(name, description string, repos []string, models config.ModelConfig,
-		exitCriteria, inquireness string, images []string,
-		opts ...feature.CreateOptions) (*feature.Feature, error) {
-		return testFeature, nil
-	}
+	store, lifecycle := newStoredFeatureFixture(t)
 
 	var hookCalled bool
 	var hookFeature *feature.Feature
 
 	o := orchestrator.New(
 		orchestrator.Deps{
-			Lifecycle: lifecycle,
-			Store:     mocks.NewMockFeatureStore(),
+			Manager: lifecycle,
+			Store:   store,
 		},
 		orchestrator.Hooks{
 			OnFeatureCreated: func(f *feature.Feature) {
@@ -81,20 +66,24 @@ func TestOrchestrator_CreateFeature(t *testing.T) {
 		},
 	)
 
-	f, err := o.CreateFeature("test feature", "description", []string{"/repo"},
-		config.ModelConfig{}, "exit criteria", "ask questions", nil)
+	f, err := o.CreateFeature("test feature", "description", nil,
+		config.ModelConfig{}, "exit criteria", string(feature.InquirenessHigh), nil)
 	if err != nil {
 		t.Fatalf("CreateFeature: unexpected error: %v", err)
 	}
-	if f.ID != "feat-123" {
-		t.Errorf("returned feature ID = %q, want %q", f.ID, "feat-123")
+	if f.ID == "" {
+		t.Fatal("returned feature has no ID")
+	}
+	stored := loadStoredFeature(t, store, f.ID)
+	if stored.Name != "test feature" {
+		t.Errorf("stored feature name = %q, want test feature", stored.Name)
 	}
 
 	// Assert: hook was called with the feature
 	if !hookCalled {
 		t.Error("OnFeatureCreated hook was not called")
 	}
-	if hookFeature != testFeature {
+	if hookFeature != f {
 		t.Error("OnFeatureCreated hook received wrong feature")
 	}
 
@@ -104,23 +93,16 @@ func TestOrchestrator_CreateFeature(t *testing.T) {
 		if ev.Type != ports.FeatureCreated {
 			t.Errorf("event type = %v, want FeatureCreated", ev.Type)
 		}
-		if ev.FeatureID != "feat-123" {
-			t.Errorf("event FeatureID = %q, want %q", ev.FeatureID, "feat-123")
+		if ev.FeatureID != f.ID {
+			t.Errorf("event FeatureID = %q, want %q", ev.FeatureID, f.ID)
 		}
-		if ev.Feature != testFeature {
+		if ev.Feature != f {
 			t.Error("event Feature does not match returned feature")
 		}
 	default:
 		t.Error("no event received on Events() channel")
 	}
 
-	// Assert: mock recorded the Create call
-	if len(lifecycle.Calls) != 1 {
-		t.Fatalf("lifecycle.Calls = %d, want 1", len(lifecycle.Calls))
-	}
-	if lifecycle.Calls[0].Method != "Create" {
-		t.Errorf("lifecycle.Calls[0].Method = %q, want %q", lifecycle.Calls[0].Method, "Create")
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -129,18 +111,15 @@ func TestOrchestrator_CreateFeature(t *testing.T) {
 
 func TestOrchestrator_CreateFeature_Error(t *testing.T) {
 	wantErr := errors.New("storage full")
-	lifecycle := mocks.NewMockFeatureLifecycle()
-	lifecycle.CreateFn = func(name, description string, repos []string, models config.ModelConfig,
-		exitCriteria, inquireness string, images []string,
-		opts ...feature.CreateOptions) (*feature.Feature, error) {
-		return nil, wantErr
-	}
+	store, lifecycle := newStoredFeatureFixture(t)
+	store.SetSaveInterceptor(func(*feature.Feature) error { return wantErr })
+	t.Cleanup(func() { store.SetSaveInterceptor(nil) })
 
 	var hookCalled bool
 	o := orchestrator.New(
 		orchestrator.Deps{
-			Lifecycle: lifecycle,
-			Store:     mocks.NewMockFeatureStore(),
+			Manager: lifecycle,
+			Store:   store,
 		},
 		orchestrator.Hooks{
 			OnFeatureCreated: func(f *feature.Feature) { hookCalled = true },
@@ -197,18 +176,13 @@ func TestNewWiresVerificationProgressToEventStream(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOrchestrator_CreateFeature_NilHook(t *testing.T) {
-	lifecycle := mocks.NewMockFeatureLifecycle()
-	lifecycle.CreateFn = func(name, description string, repos []string, models config.ModelConfig,
-		exitCriteria, inquireness string, images []string,
-		opts ...feature.CreateOptions) (*feature.Feature, error) {
-		return &feature.Feature{ID: "feat-1"}, nil
-	}
+	store, lifecycle := newStoredFeatureFixture(t)
 
 	// All hooks are nil (zero value).
 	o := orchestrator.New(
 		orchestrator.Deps{
-			Lifecycle: lifecycle,
-			Store:     mocks.NewMockFeatureStore(),
+			Manager: lifecycle,
+			Store:   store,
 		},
 		orchestrator.Hooks{},
 	)
@@ -217,8 +191,11 @@ func TestOrchestrator_CreateFeature_NilHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateFeature: %v", err)
 	}
-	if f.ID != "feat-1" {
-		t.Errorf("feature ID = %q, want %q", f.ID, "feat-1")
+	if f.ID == "" {
+		t.Fatal("feature ID is empty")
+	}
+	if stored := loadStoredFeature(t, store, f.ID); stored.Name != "test" {
+		t.Errorf("stored feature name = %q, want test", stored.Name)
 	}
 }
 

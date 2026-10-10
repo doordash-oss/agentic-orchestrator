@@ -25,7 +25,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
-func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
+func TestRewindWithRequest_CarryForwardArtifactPathEdges(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	if testing.Short() {
@@ -54,11 +54,11 @@ func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
 		t.Fatalf("modify artifacts: %v", err)
 	}
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestRewindToPhase_CarryForwardArtifactPathEdges(t *testing.T) {
 	}
 }
 
-func TestRewindToPhase_CarriesCostsOfKeptPhases(t *testing.T) {
+func TestRewindWithRequest_CarriesCostsOfKeptPhases(t *testing.T) {
 	t.Parallel()
 
 	mgr := newTestManager(t)
@@ -112,11 +112,11 @@ func TestRewindToPhase_CarriesCostsOfKeptPhases(t *testing.T) {
 		t.Fatalf("modify costs: %v", err)
 	}
 
-	if _, _, err := mgr.RewindToPhase(f.ID, feature.PhasePlan); err != nil {
-		t.Fatalf("RewindToPhase: %v", err)
+	if _, _, err := mgr.RewindWithRequest(f.ID, feature.RewindRequest{TargetPhase: feature.PhasePlan}); err != nil {
+		t.Fatalf("RewindWithRequest: %v", err)
 	}
 
-	got, err := mgr.Get(f.ID)
+	got, err := mgr.Store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}

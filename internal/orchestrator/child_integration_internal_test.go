@@ -144,7 +144,7 @@ func newChildIntegrationFixture(t *testing.T, parentStatus feature.Status, manua
 
 func (fx *childIntegrationFixture) orchestrator() *Orchestrator {
 	return New(Deps{
-		Lifecycle: fx.mgr,
+		Manager:   fx.mgr,
 		Store:     fx.store,
 		Worktrees: fx.wm,
 	}, Hooks{})
@@ -249,7 +249,7 @@ func TestPreserveChildDiffSummaryBoundsHugeDiff(t *testing.T) {
 	if err := store.Save(child); err != nil {
 		t.Fatalf("save child: %v", err)
 	}
-	o := New(Deps{Store: store, Lifecycle: feature.NewManager(store, config.NewDefault())}, Hooks{})
+	o := New(Deps{Store: store, Manager: feature.NewManager(store, config.NewDefault())}, Hooks{})
 
 	o.preserveChildDiffSummary(child.ID)
 
@@ -399,7 +399,7 @@ func TestChildIntegrationDirtyParentBlocksMerge(t *testing.T) {
 	if err := os.Remove(fx.repoDir + "/stray.txt"); err != nil {
 		t.Fatalf("clean parent: %v", err)
 	}
-	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
+	outcome, err := fx.orchestrator().RestartFeature(fx.child.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("RestartPhase() error = %v", err)
 	}
@@ -482,7 +482,7 @@ func TestChildIntegrationConflictAttentionAndRetry(t *testing.T) {
 	if err := fx.store.Save(pinned); err != nil {
 		t.Fatalf("re-pin child base: %v", err)
 	}
-	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
+	outcome, err := fx.orchestrator().RestartFeature(fx.child.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("RestartPhase() error = %v", err)
 	}
@@ -757,7 +757,7 @@ func TestChildIntegrationCleanupWarningNonFatal(t *testing.T) {
 }
 
 func isIntegrationRefused(err error) bool {
-	return err != nil && strings.Contains(err.Error(), ErrChildIntegrationRefused.Error())
+	return err != nil && strings.Contains(err.Error(), errChildIntegrationRefused.Error())
 }
 
 // TestChildIntegrationAutoPublish proves the close-before-publish ordering:
@@ -775,11 +775,11 @@ func TestChildIntegrationAutoPublish(t *testing.T) {
 	o.publishRepoFn = func(featureID, repoName string) (string, error) {
 		// Close-before-publish: the child must already be Completed and the
 		// parent already CodeReady when the publication path runs.
-		c, _ := o.deps.Lifecycle.Get(fx.child.ID)
-		p, _ := o.deps.Lifecycle.Get(fx.parent.ID)
+		c, _ := fx.store.Load(fx.child.ID)
+		p, _ := fx.store.Load(fx.parent.ID)
 		childClosedAtPublish = c.Parent.CloseOutcome == feature.ChildCloseOutcomeCompleted &&
 			p.Status == feature.StatusCodeReady
-		if err := o.deps.Lifecycle.SetRepoPublished(featureID, repoName, "https://example/pr/1"); err != nil {
+		if err := fx.mgr.SetRepoPublished(featureID, repoName, "https://example/pr/1"); err != nil {
 			return "", err
 		}
 		return "https://example/pr/1", nil
@@ -848,7 +848,7 @@ func TestReviewFeedbackIntegrationTailReturnsParentPublished(t *testing.T) {
 
 	publishStarts := 0
 	o := New(Deps{
-		Lifecycle: fx.mgr,
+		Manager:   fx.mgr,
 		Store:     fx.store,
 		Worktrees: fx.wm,
 	}, Hooks{OnPublishStarted: func(string) { publishStarts++ }})
@@ -1015,7 +1015,7 @@ func TestChildIntegrationParentBranchMismatch(t *testing.T) {
 	// Restore the recorded parent branch and retry: the merge lands on
 	// feature/parent, never on the stray checkout.
 	childIntegrationGit(t, fx.repoDir, "checkout", "feature/parent")
-	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
+	outcome, err := fx.orchestrator().RestartFeature(fx.child.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("RestartPhase() error = %v", err)
 	}
@@ -1039,15 +1039,6 @@ func TestChildIntegrationParentBranchMismatch(t *testing.T) {
 	}
 }
 
-// failingCodeReadyLifecycle fails MarkCodeReady, simulating a persistence
-// failure inside the durable parent transition.
-type failingCodeReadyLifecycle struct {
-	ports.FeatureLifecycle
-	err error
-}
-
-func (l failingCodeReadyLifecycle) MarkCodeReady(featureID string) error { return l.err }
-
 // TestChildIntegrationParentTransitionFailureIsRetryable proves a failure
 // while moving the parent to CodeReady leaves the child open, so a retry
 // repeats the relationship transition instead of being refused on an
@@ -1058,10 +1049,16 @@ func TestChildIntegrationParentTransitionFailureIsRetryable(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
-	o.deps.Lifecycle = failingCodeReadyLifecycle{FeatureLifecycle: fx.mgr, err: errors.New("simulated code-ready persistence failure")}
+	fx.store.SetSaveInterceptor(func(f *feature.Feature) error {
+		if f.ID == fx.parent.ID && f.Status == feature.StatusCodeReady {
+			return errors.New("simulated code-ready persistence failure")
+		}
+		return nil
+	})
 
 	preHEAD := childIntegrationGit(t, fx.repoDir, "rev-parse", "HEAD")
 	err := o.RunChildIntegration(fx.child.ID)
+	fx.store.SetSaveInterceptor(nil)
 	if err == nil || !strings.Contains(err.Error(), "mark parent code ready") {
 		t.Fatalf("runChildIntegration() error = %v, want wrapped parent transition failure", err)
 	}
@@ -1100,26 +1097,6 @@ func TestChildIntegrationParentTransitionFailureIsRetryable(t *testing.T) {
 	}
 }
 
-// failNthModifyStore fails the Nth Modify call against the target feature,
-// simulating a transient storage failure at a chosen persistence boundary.
-type failNthModifyStore struct {
-	ports.FeatureStore
-	target string
-	n      int
-	err    error
-	count  int
-}
-
-func (s *failNthModifyStore) Modify(id string, fn func(*feature.Feature) error) error {
-	if id == s.target {
-		s.count++
-		if s.count == s.n {
-			return s.err
-		}
-	}
-	return s.FeatureStore.Modify(id, fn)
-}
-
 // TestChildIntegrationCloseWriteFailureIsRetryable proves a storage failure
 // while writing the child's Completed outcome returns a wrapped error,
 // leaves the child open (with the parent already CodeReady, since the parent
@@ -1130,12 +1107,15 @@ func TestChildIntegrationCloseWriteFailureIsRetryable(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
-	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
-	// 3=applying, 4=apply progress, 5=applied, 6=close write.
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 6, err: errors.New("simulated close-write failure")}
-	o.deps.Store = store
+	fx.store.SetSaveInterceptor(func(f *feature.Feature) error {
+		if f.ID == fx.child.ID && f.Parent.CloseOutcome == feature.ChildCloseOutcomeCompleted {
+			return errors.New("simulated close-write failure")
+		}
+		return nil
+	})
 
 	err := o.RunChildIntegration(fx.child.ID)
+	fx.store.SetSaveInterceptor(nil)
 	if err == nil || !strings.Contains(err.Error(), "close child relationship") {
 		t.Fatalf("runChildIntegration() error = %v, want wrapped close-write failure", err)
 	}
@@ -1169,15 +1149,17 @@ func TestChildIntegrationCleanupWarningPersistenceFailure(t *testing.T) {
 	}
 	fx := newChildIntegrationFixture(t, feature.StatusPublished, true)
 	o := fx.orchestrator()
-	// Transaction path Modify calls on child: 1=prep progress, 2=prepared,
-	// 3=applying, 4=apply progress, 5=applied, 6=close write, 7=merged,
-	// 8=cleanup warning record. (The closure-error clear that used to sit
-	// between close and merged was removed with the child last-error mirror.)
 	o.deps.Worktrees = failingRemoveWorktrees{WorktreeManager: fx.wm, removeErr: errors.New("simulated worktree removal failure")}
-	store := &failNthModifyStore{FeatureStore: fx.store, target: fx.child.ID, n: 8, err: errors.New("simulated warning-write failure")}
-	o.deps.Store = store
+	fx.store.SetSaveInterceptor(func(f *feature.Feature) error {
+		if f.ID == fx.child.ID && f.Parent.Transaction != nil &&
+			len(f.Parent.Transaction.Entries) > 0 && f.Parent.Transaction.Entries[0].Cleanup != nil {
+			return errors.New("simulated warning-write failure")
+		}
+		return nil
+	})
 
 	err := o.RunChildIntegration(fx.child.ID)
+	fx.store.SetSaveInterceptor(nil)
 	if err == nil || !strings.Contains(err.Error(), "record cleanup warning") {
 		t.Fatalf("runChildIntegration() error = %v, want wrapped warning-write failure", err)
 	}
@@ -1237,8 +1219,8 @@ func TestRunChildIntegrationRefusesWithDiscardIntent(t *testing.T) {
 	if err == nil {
 		t.Fatal("RunChildIntegration succeeded with discard intent; should refuse")
 	}
-	if !errors.Is(err, ErrChildDiscardInProgress) {
-		t.Fatalf("RunChildIntegration error = %v, want ErrChildDiscardInProgress", err)
+	if !errors.Is(err, errChildDiscardInProgress) {
+		t.Fatalf("RunChildIntegration error = %v, want errChildDiscardInProgress", err)
 	}
 
 	parent, child := fx.reload()
@@ -1315,8 +1297,8 @@ func TestConcurrentDiscardAndIntegrationSerialization(t *testing.T) {
 		if integErr == nil {
 			t.Fatal("integration should have failed when discard won")
 		}
-		if !errors.Is(integErr, ErrChildDiscardInProgress) {
-			t.Fatalf("integration error = %v, want ErrChildDiscardInProgress", integErr)
+		if !errors.Is(integErr, errChildDiscardInProgress) {
+			t.Fatalf("integration error = %v, want errChildDiscardInProgress", integErr)
 		}
 	}
 
@@ -1437,8 +1419,8 @@ func TestConcurrentDiscardAndIntegrationAutoPublish(t *testing.T) {
 		if integErr == nil {
 			t.Fatal("integration should have failed when discard won")
 		}
-		if !errors.Is(integErr, ErrChildDiscardInProgress) {
-			t.Fatalf("integration error = %v, want ErrChildDiscardInProgress", integErr)
+		if !errors.Is(integErr, errChildDiscardInProgress) {
+			t.Fatalf("integration error = %v, want errChildDiscardInProgress", integErr)
 		}
 	}
 
@@ -1472,7 +1454,7 @@ func TestRestartPhase_ReviewPassedFinalReviewNilTransaction_DispatchesIntegratio
 		t.Fatal("fixture precondition: child transaction must be nil")
 	}
 
-	outcome, err := fx.orchestrator().RestartPhase(fx.child.ID, 0, 0)
+	outcome, err := fx.orchestrator().RestartFeature(fx.child.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("RestartPhase() error = %v", err)
 	}
@@ -1551,7 +1533,7 @@ func TestReviewFeedbackTailPushFailureStaysRetryable(t *testing.T) {
 	remote := mocks.NewMockRemoteOps()
 	remote.PullRebaseFn = func(string, string) error { return nil }
 	remote.PushFn = func(string, string) error { return errors.New("rejected (non-fast-forward)") }
-	o := New(Deps{Lifecycle: fx.mgr, Store: fx.store, Worktrees: fx.wm, Remote: remote}, Hooks{})
+	o := New(Deps{Manager: fx.mgr, Store: fx.store, Worktrees: fx.wm, Remote: remote}, Hooks{})
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("RunChildIntegration() error = %v", err)
@@ -1615,7 +1597,7 @@ func TestReviewFeedbackTailSettlesOnSuccess(t *testing.T) {
 	remote := mocks.NewMockRemoteOps()
 	remote.PullRebaseFn = func(string, string) error { return nil }
 	remote.PushFn = func(string, string) error { pushes++; return nil }
-	o := New(Deps{Lifecycle: fx.mgr, Store: fx.store, Worktrees: fx.wm, Remote: remote}, Hooks{})
+	o := New(Deps{Manager: fx.mgr, Store: fx.store, Worktrees: fx.wm, Remote: remote}, Hooks{})
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
 		t.Fatalf("RunChildIntegration() error = %v", err)

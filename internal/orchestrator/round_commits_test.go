@@ -15,7 +15,6 @@
 package orchestrator_test
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,10 +35,10 @@ import (
 func newRoundCommitHarness(t *testing.T, f *feature.Feature) (agent.RoundCommitHook, *orchestrator.Orchestrator) {
 	t.Helper()
 	pr := &agent.PhaseRunner{CommandRunner: agent.NewExecCommandRunner()}
-	lc := lifecycleForFeature(f)
+	store, lc := newStoredFeatureFixture(t, f)
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
-		Store:       newFeatureStore(f),
+		Manager:     lc,
+		Store:       store,
 		PhaseRunner: pr,
 		CmdRunner:   pr.CommandRunner,
 	}, orchestrator.Hooks{})
@@ -260,9 +259,8 @@ func TestOrchestrator_RoundCommitHook_FailsWhenFeatureMissing(t *testing.T) {
 	dirtyRepo(t, repo, "round-1.txt", "change\n")
 
 	pr := &agent.PhaseRunner{}
-	lc := lifecycleForFeature(&feature.Feature{ID: "feat-gone"})
-	lc.GetFn = func(id string) (*feature.Feature, error) { return nil, fmt.Errorf("feature not found") }
-	orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(), PhaseRunner: pr}, orchestrator.Hooks{})
+	store, lc := newStoredFeatureFixture(t)
+	orchestrator.New(orchestrator.Deps{Manager: lc, Store: store, PhaseRunner: pr}, orchestrator.Hooks{})
 
 	err := pr.RoundCommitHook(agent.RoundCommitInput{
 		FeatureID: "feat-gone",
@@ -273,7 +271,7 @@ func TestOrchestrator_RoundCommitHook_FailsWhenFeatureMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("round commit must fail when the feature cannot be loaded")
 	}
-	if !strings.Contains(err.Error(), "feature not found") {
+	if !strings.Contains(err.Error(), "reading feature file") {
 		t.Errorf("error = %v, want load failure surfaced", err)
 	}
 }
@@ -292,15 +290,10 @@ func TestOrchestrator_RoundCommitHook_CleanRoundSkipsFeatureLoad(t *testing.T) {
 
 	f := roadmapFeature(t, repo)
 	pr := &agent.PhaseRunner{CommandRunner: agent.NewExecCommandRunner()}
-	lc := lifecycleForFeature(f)
-	getCalls := 0
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		getCalls++
-		return f, nil
-	}
+	store, lc := newStoredFeatureFixture(t, f)
 	orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
-		Store:       newFeatureStore(f),
+		Manager:     lc,
+		Store:       store,
 		PhaseRunner: pr,
 		CmdRunner:   pr.CommandRunner,
 	}, orchestrator.Hooks{})
@@ -314,8 +307,8 @@ func TestOrchestrator_RoundCommitHook_CleanRoundSkipsFeatureLoad(t *testing.T) {
 		t.Fatalf("clean round commit: %v", err)
 	}
 
-	if getCalls != 0 {
-		t.Errorf("lifecycle Get called %d times on a clean round, want 0", getCalls)
+	if stored := loadStoredFeature(t, store, f.ID); stored.Status != f.Status {
+		t.Errorf("clean round changed stored status to %q, want %q", stored.Status, f.Status)
 	}
 	headAfter, _ := git.CurrentHeadSHA(repo)
 	if headAfter != headBefore {

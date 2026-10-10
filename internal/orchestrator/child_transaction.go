@@ -75,10 +75,10 @@ func (o *Orchestrator) prepareTransactionCandidates(child, parent *feature.Featu
 	for _, childRepo := range child.Repos {
 		parentRepo := featureRepoByName(parent, childRepo.Name)
 		if parentRepo == nil {
-			return nil, fmt.Errorf("%w: parent %s no longer has repository %s", ErrChildIntegrationRefused, parent.ID, childRepo.Name)
+			return nil, fmt.Errorf("%w: parent %s no longer has repository %s", errChildIntegrationRefused, parent.ID, childRepo.Name)
 		}
 		if parentRepo.Path != childRepo.Path {
-			return nil, fmt.Errorf("%w: repository %s path changed since launch (%s != %s)", ErrChildIntegrationRefused, childRepo.Name, parentRepo.Path, childRepo.Path)
+			return nil, fmt.Errorf("%w: repository %s path changed since launch (%s != %s)", errChildIntegrationRefused, childRepo.Name, parentRepo.Path, childRepo.Path)
 		}
 
 		childWorktree := childRepo.WorktreePath
@@ -646,15 +646,15 @@ func (o *Orchestrator) persistTransaction(childID string, journal *feature.Trans
 // parent repository with the same path.
 func validateTransactionParent(child, parent *feature.Feature) error {
 	if parent == nil || parent.IsChild() {
-		return fmt.Errorf("%w: parent record %s no longer matches the relationship", ErrChildIntegrationRefused, child.Parent.ParentID)
+		return fmt.Errorf("%w: parent record %s no longer matches the relationship", errChildIntegrationRefused, child.Parent.ParentID)
 	}
 	for _, childRepo := range child.Repos {
 		parentRepo := featureRepoByName(parent, childRepo.Name)
 		if parentRepo == nil {
-			return fmt.Errorf("%w: parent %s no longer has repository %s", ErrChildIntegrationRefused, parent.ID, childRepo.Name)
+			return fmt.Errorf("%w: parent %s no longer has repository %s", errChildIntegrationRefused, parent.ID, childRepo.Name)
 		}
 		if parentRepo.Path != childRepo.Path {
-			return fmt.Errorf("%w: repository %s path changed since launch (%s != %s)", ErrChildIntegrationRefused, childRepo.Name, parentRepo.Path, childRepo.Path)
+			return fmt.Errorf("%w: repository %s path changed since launch (%s != %s)", errChildIntegrationRefused, childRepo.Name, parentRepo.Path, childRepo.Path)
 		}
 	}
 	return nil

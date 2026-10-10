@@ -15,7 +15,6 @@
 package feature
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -135,7 +134,7 @@ func TestAcquireReleaseOverlayLock(t *testing.T) {
 	if err := ReleaseOverlayLock(dir, "child-2"); err != nil {
 		t.Fatalf("ReleaseOverlayLock by wrong child: %v", err)
 	}
-	if _, err := os.Stat(OverlayLockPath(dir)); err != nil {
+	if _, err := os.Stat(overlayLockPath(dir)); err != nil {
 		t.Fatal("lock file should still exist after wrong-child release")
 	}
 
@@ -143,7 +142,7 @@ func TestAcquireReleaseOverlayLock(t *testing.T) {
 	if err := ReleaseOverlayLock(dir, "child-1"); err != nil {
 		t.Fatalf("ReleaseOverlayLock: %v", err)
 	}
-	if _, err := os.Stat(OverlayLockPath(dir)); !os.IsNotExist(err) {
+	if _, err := os.Stat(overlayLockPath(dir)); !os.IsNotExist(err) {
 		t.Fatal("lock file should be removed after owner release")
 	}
 }
@@ -191,7 +190,7 @@ func TestAcquireOverlayLockCreationFailureFailsClosed(t *testing.T) {
 	}
 	// A directory at the lock path defeats exclusive file creation while
 	// remaining readable, forcing the read-existing path to fail too.
-	if err := os.MkdirAll(OverlayLockPath(overlayDir), 0o755); err != nil {
+	if err := os.MkdirAll(overlayLockPath(overlayDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -213,7 +212,7 @@ func TestAcquireOverlayLockCorruptExistingFailsClosed(t *testing.T) {
 	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(OverlayLockPath(overlayDir), []byte("{corrupt"), 0o644); err != nil {
+	if err := os.WriteFile(overlayLockPath(overlayDir), []byte("{corrupt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +238,7 @@ func TestAcquireOverlayLockRefreshFailureFailsClosed(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("AcquireOverlayLock = %v, %v", acquired, err)
 	}
-	lockPath := OverlayLockPath(overlayDir)
+	lockPath := overlayLockPath(overlayDir)
 	if err := os.Chmod(lockPath, 0o444); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +261,7 @@ func TestReleaseOverlayLockFailureFailsClosed(t *testing.T) {
 	if err := os.MkdirAll(overlayDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	lockPath := OverlayLockPath(overlayDir)
+	lockPath := overlayLockPath(overlayDir)
 
 	// Corrupt payload: release by a specific child must fail closed rather
 	// than deleting a potentially valid lock.
@@ -287,40 +286,6 @@ func TestReleaseOverlayLockFailureFailsClosed(t *testing.T) {
 	defer func() { _ = os.Chmod(lockPath, 0o644) }()
 	if err := ReleaseOverlayLock(overlayDir, "child-1"); err == nil {
 		t.Fatal("expected release of an unreadable lock to fail")
-	}
-}
-
-func TestIsOverlayLockStale(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Write a lock with an old timestamp.
-	lockPath := OverlayLockPath(dir)
-	data := []byte(`{"child_id":"child-1","timestamp":"2020-01-01T00:00:00Z"}`)
-	if err := os.WriteFile(lockPath, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if !IsOverlayLockStale(dir, 5*time.Minute) {
-		t.Fatal("expected lock to be stale")
-	}
-
-	// Write a lock with a fresh timestamp.
-	info := OverlayLockInfo{ChildID: "child-1", Timestamp: time.Now()}
-	fresh, _ := json.Marshal(info)
-	if err := os.WriteFile(lockPath, fresh, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if IsOverlayLockStale(dir, 5*time.Minute) {
-		t.Fatal("expected lock to be fresh")
-	}
-
-	// Corrupt lock is stale.
-	if err := os.WriteFile(lockPath, []byte("corrupt"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if !IsOverlayLockStale(dir, 5*time.Minute) {
-		t.Fatal("expected corrupt lock to be stale")
 	}
 }
 

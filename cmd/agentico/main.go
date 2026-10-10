@@ -1678,7 +1678,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 		AuthToken:    authToken,
 		ListenAddr:   listenAddr,
 		Name:         resolvedName,
-		Features:     boot.featureManager,
+		Features:     boot.featureManager.Store,
 		FeatureStore: boot.featureManager.Store,
 		Freshness:    newGitFreshnessProvider(),
 		Config:       boot.cfg,

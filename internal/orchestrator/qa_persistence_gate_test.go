@@ -15,10 +15,8 @@
 package orchestrator
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent"
@@ -27,62 +25,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
-
-// gateTestFeatureStore is a featureStore stand-in scoped to this test file —
-// the orchestrator_test package has its own helpers but they live in a
-// different package and are not reachable from the internal package, so this
-// file defines a minimal implementation.
-type gateTestFeatureStore struct {
-	*mocks.MockFeatureStore
-	mu       sync.Mutex
-	features map[string]*feature.Feature
-}
-
-func newGateFeatureStore(features ...*feature.Feature) *gateTestFeatureStore {
-	fs := &gateTestFeatureStore{
-		MockFeatureStore: mocks.NewMockFeatureStore(),
-		features:         make(map[string]*feature.Feature),
-	}
-	for _, f := range features {
-		fs.features[f.ID] = f
-	}
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		fs.mu.Lock()
-		defer fs.mu.Unlock()
-		f, ok := fs.features[id]
-		if !ok {
-			return nil, errors.New("feature not found")
-		}
-		return f, nil
-	}
-	fs.ModifyFn = func(id string, fn func(ff *feature.Feature) error) error {
-		fs.mu.Lock()
-		defer fs.mu.Unlock()
-		f, ok := fs.features[id]
-		if !ok {
-			return errors.New("feature not found")
-		}
-		return fn(f)
-	}
-	return fs
-}
-
-func newGateLifecycle(f *feature.Feature) *mocks.MockFeatureLifecycle {
-	lc := mocks.NewMockFeatureLifecycle()
-	lc.GetFn = func(id string) (*feature.Feature, error) { return f, nil }
-	lc.TransitionFn = func(id string, to feature.Status) error {
-		f.Status = to
-		return nil
-	}
-	lc.CompleteInquireFn = func(id string) error { return nil }
-	lc.CompleteResearchFn = func(id string) error { return nil }
-	lc.CompleteDesignFn = func(id string) error { return nil }
-	lc.StartInquireFn = func(id string) error { return nil }
-	lc.StartResearchFn = func(id string) error { return nil }
-	lc.StartDesignFn = func(id string) error { return nil }
-	lc.StartPlanningFn = func(id string) error { return nil }
-	return lc
-}
 
 // sessionManagerWithQALog returns a MockSessionManager whose GetSession
 // returns a MockSessionView with one Q&A pair so the writeQAFile path has
@@ -112,23 +54,24 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 	cases := []struct {
 		phaseKey       string
 		phase          feature.Phase
+		status         feature.Status
 		wantQAFile     bool
-		completionFnFn func(lc *mocks.MockFeatureLifecycle) func(string) error
+		completionFnFn func(lc *feature.Manager) func(string) error
 	}{
-		{"inquire", feature.PhaseInquire, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
-			return lc.CompleteInquire
+		{"inquire", feature.PhaseInquire, feature.StatusInquiring, true, func(lc *feature.Manager) func(string) error {
+			return func(id string) error { return lc.Transition(id, feature.StatusInquireReady) }
 		}},
-		{"design", feature.PhaseDesign, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
-			return lc.CompleteDesign
+		{"design", feature.PhaseDesign, feature.StatusDesigning, true, func(lc *feature.Manager) func(string) error {
+			return func(id string) error { return lc.Transition(id, feature.StatusPlanReady) }
 		}},
-		{"roadmap", feature.PhaseInquire /* unused */, false, func(lc *mocks.MockFeatureLifecycle) func(string) error {
+		{"roadmap", feature.PhaseInquire /* unused */, feature.StatusCreated, false, func(lc *feature.Manager) func(string) error {
 			return func(string) error { return nil }
 		}},
-		{"phase-plan", feature.PhaseInquire /* unused */, false, func(lc *mocks.MockFeatureLifecycle) func(string) error {
+		{"phase-plan", feature.PhaseInquire /* unused */, feature.StatusCreated, false, func(lc *feature.Manager) func(string) error {
 			return func(string) error { return nil }
 		}},
-		{"research", feature.PhaseResearch, true, func(lc *mocks.MockFeatureLifecycle) func(string) error {
-			return lc.CompleteResearch
+		{"research", feature.PhaseResearch, feature.StatusResearching, true, func(lc *feature.Manager) func(string) error {
+			return func(id string) error { return lc.Transition(id, feature.StatusDesignReady) }
 		}},
 	}
 
@@ -138,6 +81,7 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 			featureID := "feat-gate"
 			f := &feature.Feature{
 				ID:           featureID,
+				Status:       tc.status,
 				ActiveRun:    1,
 				RunCount:     1,
 				CurrentPhase: tc.phase,
@@ -165,12 +109,12 @@ func TestOrchestrator_OnArtifactPhaseCompleted_QAWritesForInteractivePlanningPha
 				t.Fatalf("write artifact: %v", err)
 			}
 
-			lc := newGateLifecycle(f)
-			fs := newGateFeatureStore(f)
+			deps := storedFeatureDepsAt(t, tmpStateDir, f)
+			lc, fs := deps.Manager, deps.Store
 			sm := sessionManagerWithQALog("sess-1")
 			pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-			o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+			o := New(Deps{Manager: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
 
 			input := PhaseCompletionInput{
 				Phase:     tc.phase,
@@ -253,12 +197,12 @@ func TestInquirePhase_WritesHarnessOwnedQAFile(t *testing.T) {
 		t.Fatalf("pre-write qa-answers.md: %v", err)
 	}
 
-	lc := newGateLifecycle(f)
-	fs := newGateFeatureStore(f)
+	deps := storedFeatureDepsAt(t, tmpStateDir, f)
+	lc, fs := deps.Manager, deps.Store
 	sm := sessionManagerWithQALog("sess-1")
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+	o := New(Deps{Manager: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
 		Phase:     feature.PhaseInquire,
@@ -322,12 +266,12 @@ func TestInquirePhase_AutoPickAnnotationPreserved(t *testing.T) {
 		t.Fatalf("pre-write qa: %v", err)
 	}
 
-	lc := newGateLifecycle(f)
-	fs := newGateFeatureStore(f)
+	deps := storedFeatureDepsAt(t, tmpStateDir, f)
+	lc, fs := deps.Manager, deps.Store
 	sm := sessionManagerWithQALog("sess-1")
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+	o := New(Deps{Manager: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
 		Phase:     feature.PhaseInquire,
@@ -380,12 +324,12 @@ func TestInquirePhase_NoExistingQAFile_WritesHarnessOwnedFile(t *testing.T) {
 	if err := os.WriteFile(artifactPath, []byte(testutil.PhaseMarkdown("inquire")), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
-	lc := newGateLifecycle(f)
-	fs := newGateFeatureStore(f)
+	deps := storedFeatureDepsAt(t, tmpStateDir, f)
+	lc, fs := deps.Manager, deps.Store
 	sm := sessionManagerWithQALog("sess-1")
 	pr := &agent.PhaseRunner{StateDir: tmpStateDir}
 
-	o := New(Deps{Lifecycle: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
+	o := New(Deps{Manager: lc, Store: fs, Sessions: sm, PhaseRunner: pr}, Hooks{})
 
 	if err := o.HandlePhaseCompletion(featureID, PhaseCompletionInput{
 		Phase:     feature.PhaseInquire,

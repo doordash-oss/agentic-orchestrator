@@ -27,10 +27,10 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-// RebaseRepoFreshnessInput captures the resolved rebase target and worktree
+// rebaseRepoFreshnessInput captures the resolved rebase target and worktree
 // identity for a single repository. The freshness/blocker helpers shared by
 // completion preflight consume it.
-type RebaseRepoFreshnessInput struct {
+type rebaseRepoFreshnessInput struct {
 	RebaseTarget string
 	Publishable  bool
 	WorktreePath string
@@ -79,8 +79,8 @@ func repoBranch(f *feature.Feature, repo feature.FeatureRepo) string {
 
 // rebaseFreshnessInputForRepo builds the per-repo input carrying the resolved
 // rebase target and worktree identity for freshness/blocker decisions.
-func (o *Orchestrator) rebaseFreshnessInputForRepo(f *feature.Feature, repo feature.FeatureRepo) RebaseRepoFreshnessInput {
-	return RebaseRepoFreshnessInput{
+func (o *Orchestrator) rebaseFreshnessInputForRepo(f *feature.Feature, repo feature.FeatureRepo) rebaseRepoFreshnessInput {
+	return rebaseRepoFreshnessInput{
 		RebaseTarget: o.resolveRebaseTarget(f, &repo),
 		Publishable:  repo.Publishable == nil || *repo.Publishable,
 		WorktreePath: repoWorkDir(repo),

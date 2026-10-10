@@ -46,13 +46,12 @@ func TestOrchestrator_StartKB_NoRepos(t *testing.T) {
 		Pipeline:     feature.PipelineLarge,
 		Repos:        nil,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var startedPhase feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnPhaseStarted: func(id string, p feature.Phase) { startedPhase = p },
 	})
@@ -62,8 +61,9 @@ func TestOrchestrator_StartKB_NoRepos(t *testing.T) {
 	}
 
 	// KB was skipped (no repos); Inquire was dispatched.
-	refuteLifecycleCall(t, lc, "StartKnowledgeBase")
-	assertLifecycleCall(t, lc, "StartInquire")
+	if got := loadStoredFeature(t, fs, f.ID).Status; got != feature.StatusInquiring {
+		t.Fatalf("persisted status = %s, want Inquiring", got)
+	}
 
 	if startedPhase != feature.PhaseInquire {
 		t.Errorf("OnPhaseStarted phase = %v, want PhaseInquire", startedPhase)
@@ -107,13 +107,12 @@ func TestOrchestrator_StartKB_MixedFresh(t *testing.T) {
 			{Name: repoNameB, Path: repoBPath},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	var startedPhase feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{
 		OnPhaseStarted: func(id string, p feature.Phase) { startedPhase = p },
 	})
@@ -123,8 +122,9 @@ func TestOrchestrator_StartKB_MixedFresh(t *testing.T) {
 	}
 
 	// All repos need rebuilding (no KB fixtures) → KB transition happens.
-	assertLifecycleCall(t, lc, "StartKnowledgeBase")
-	assertLifecycleCall(t, lc, "InitKBStatus")
+	if got := loadStoredFeature(t, fs, f.ID); got.Status != feature.StatusBuildingKB || len(got.KBStatus) != len(f.Repos) {
+		t.Fatalf("persisted KB state = status %s, repos %v", got.Status, got.KBStatus)
+	}
 
 	if startedPhase != feature.PhaseKnowledgeBase {
 		t.Errorf("OnPhaseStarted phase = %v, want PhaseKnowledgeBase", startedPhase)
@@ -179,25 +179,11 @@ func TestOrchestrator_StartKB_LockHeldByOther_SetsWaitMessage(t *testing.T) {
 		Status: feature.StatusBuildingKB,
 	}
 
-	lc := lifecycleForFeature(waiter)
-	// Override Get so the orchestrator can resolve the lock owner's display name
-	// when building KBWaitMessage. lifecycleForFeature wires GetFn to always
-	// return the waiter; we need a per-id lookup.
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		switch id {
-		case "feat-waiter":
-			return waiter, nil
-		case "feat-owner":
-			return ownerFeat, nil
-		}
-		return nil, os.ErrNotExist
-	}
-
-	fs := newFeatureStore(waiter, ownerFeat)
+	fs, lc := newStoredFeatureFixture(t, waiter, ownerFeat)
 	cpr.pr.FeatureStore = fs
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -214,10 +200,12 @@ func TestOrchestrator_StartKB_LockHeldByOther_SetsWaitMessage(t *testing.T) {
 	}
 
 	// Feature transitioned to BuildingKB so wakeup can find it later.
-	assertLifecycleCall(t, lc, "StartKnowledgeBase")
-	assertLifecycleCall(t, lc, "InitKBStatus")
+	if got := loadStoredFeature(t, fs, waiter.ID).Status; got != feature.StatusBuildingKB {
+		t.Fatalf("persisted status = %s, want BuildingKB", got)
+	}
 
 	// KBWaitMessage was populated with the lock owner's display name.
+	waiter = loadStoredFeature(t, fs, waiter.ID)
 	if waiter.KBWaitMessage == "" {
 		t.Fatal("KBWaitMessage was not set; dashboard would not show wait state")
 	}
@@ -251,22 +239,11 @@ func TestOrchestrator_StartKB_OrphanedLockStartsSession(t *testing.T) {
 			{Name: "repo-orphaned", Path: "/tmp/repo-orphaned"},
 		},
 	}
-	lc := lifecycleForFeature(waiter)
-	fs := newFeatureStore(waiter)
-	fs.LoadFn = func(id string) (*feature.Feature, error) {
-		if id == "feat-missing" {
-			return nil, os.ErrNotExist
-		}
-		f, ok := fs.features[id]
-		if !ok {
-			return nil, os.ErrNotExist
-		}
-		return f, nil
-	}
+	fs, lc := newStoredFeatureFixture(t, waiter)
 	cpr.pr.FeatureStore = fs
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -284,6 +261,7 @@ func TestOrchestrator_StartKB_OrphanedLockStartsSession(t *testing.T) {
 	if kbSessions[0].ID != "feat-waiter-kb-repo-orphaned" {
 		t.Errorf("session ID = %q, want feat-waiter-kb-repo-orphaned", kbSessions[0].ID)
 	}
+	waiter = loadStoredFeature(t, fs, waiter.ID)
 	if waiter.KBWaitMessage != "" {
 		t.Errorf("KBWaitMessage = %q, want no wait message after orphan recovery", waiter.KBWaitMessage)
 	}
@@ -322,16 +300,14 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 			{Name: "repo-locked", Path: "/tmp/repo-locked"},
 		},
 	}
-	lc := lifecycleForFeature(waiter)
-	lc.StartKnowledgeBaseFn = func(id string) error {
-		waiter.Status = feature.StatusBuildingKB
-		return nil
-	}
-	fs := newFeatureStore(waiter)
+	fs, lc := newStoredFeatureFixture(t, waiter, &feature.Feature{
+		ID:     "feat-owner",
+		Status: feature.StatusBuildingKB,
+	})
 	cpr.pr.FeatureStore = fs
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -345,6 +321,7 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 	if got := len(cpr.startSessionsByPhase(feature.PhaseKnowledgeBase)); got != 0 {
 		t.Fatalf("KB StartSession calls (locked) = %d, want 0", got)
 	}
+	waiter = loadStoredFeature(t, fs, waiter.ID)
 	if waiter.KBWaitMessage == "" {
 		t.Fatal("KBWaitMessage not set after lock-blocked attempt")
 	}
@@ -366,6 +343,7 @@ func TestOrchestrator_StartKB_AfterLockReleased_StartsSession(t *testing.T) {
 	if kbSessions[0].ID != "feat-waiter-kb-repo-locked" {
 		t.Errorf("session ID = %q, want feat-waiter-kb-repo-locked", kbSessions[0].ID)
 	}
+	waiter = loadStoredFeature(t, fs, waiter.ID)
 	if waiter.KBWaitMessage != "" {
 		t.Errorf("KBWaitMessage = %q, want cleared after successful start", waiter.KBWaitMessage)
 	}
@@ -385,20 +363,13 @@ func TestOrchestrator_StartKB_SessionBuildFailureMarksFeatureFailed(t *testing.T
 		Models:       config.ModelConfig{KBBuild: "sonnet[200K]"},
 		Repos:        []feature.FeatureRepo{{Name: "repo-a", Path: "/tmp/repo-a"}},
 	}
-	lc := lifecycleForFeature(f)
-	lc.MarkFailedFn = func(id string, failure errcat.FailureRecord) error {
-		f.Status = feature.StatusFailed
-		rec := failure
-		f.Run().Failure = &rec
-		return nil
-	}
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 	cpr.pr.FeatureStore = fs
 
 	var failureCode errcat.Code
 	var failureMessage string
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    cpr.sm,
 		PhaseRunner: cpr.pr,
@@ -414,6 +385,7 @@ func TestOrchestrator_StartKB_SessionBuildFailureMarksFeatureFailed(t *testing.T
 	if err == nil {
 		t.Fatal("StartFeature() error = nil; want KB build failure")
 	}
+	f = loadStoredFeature(t, fs, f.ID)
 	if f.Status != feature.StatusFailed {
 		t.Fatalf("feature status = %s; want Failed", f.Status)
 	}
@@ -471,37 +443,11 @@ func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 		KBWaitMessage: `Waiting for KB build on repo "repo-shared" by feature "Holder"`,
 	}
 
-	lc := lifecycleForFeature(holder)
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		switch id {
-		case "feat-holder":
-			return holder, nil
-		case "feat-waiter":
-			return waiter, nil
-		}
-		return nil, errors.New("not found")
+	fs, lc := newStoredFeatureFixture(t, holder, waiter)
+	brokenDir := filepath.Join(fs.BaseDir, "feat-broken")
+	if err := os.MkdirAll(brokenDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	// Simulate the production trap: List returns the healthy features along
-	// with a PartialLoadError describing a malformed feature dir.
-	lc.ListFn = func() ([]*feature.Feature, error) {
-		return []*feature.Feature{holder, waiter},
-			&feature.PartialLoadError{
-				Warnings: []feature.LoadWarning{{ID: "feat-broken", Err: errors.New("missing feature.yaml")}},
-			}
-	}
-	lc.AllKBsCompletedFn = func(id string) (bool, error) { return true, nil }
-	lc.MarkRepoKBCompletedFn = func(id, repoName string) error { return nil }
-	lc.CompleteKnowledgeBaseFn = func(id string) error {
-		if id == "feat-holder" {
-			holder.Status = feature.StatusInquireReady
-		}
-		if id == "feat-waiter" {
-			waiter.Status = feature.StatusInquireReady
-		}
-		return nil
-	}
-	lc.StartInquireFn = func(id string) error { return nil }
-	fs := newFeatureStore(holder, waiter)
 	sm := mocks.NewMockSessionManager()
 	sm.StartSessionFn = func(id, featureID string, phase feature.Phase, command []string, workdir string, env []string, opts ...*session.SessionOpts) (ports.SessionHandle, error) {
 		return newStubSessionHandle(id, featureID, phase, ""), nil
@@ -515,7 +461,7 @@ func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle:   lc,
+		Manager:     lc,
 		Store:       fs,
 		Sessions:    sm,
 		PhaseRunner: pr,
@@ -536,8 +482,8 @@ func TestOrchestrator_wakeKBWaiters_TolerantOfPartialLoadError(t *testing.T) {
 	// CompleteKnowledgeBase fires twice — once for the holder (all KBs done)
 	// and once for the waiter via wakeKBWaiters → startKB → finalizeKBForSkip.
 	// Pre-fix this was 1 (only the holder advanced; waiter stayed parked).
-	if got := countLifecycleCalls(lc, "CompleteKnowledgeBase"); got != 2 {
-		t.Errorf("CompleteKnowledgeBase calls = %d, want 2 (holder + waiter wake)", got)
+	if got := loadStoredFeature(t, fs, waiter.ID).Status; got != feature.StatusInquiring {
+		t.Errorf("persisted waiter status = %s, want Inquiring after wake", got)
 	}
 }
 
@@ -581,42 +527,11 @@ func TestOrchestrator_wakeKBWaiters_AdvancesPastSkippedKB(t *testing.T) {
 		KBWaitMessage: `Waiting for KB build on repo "repo-shared" by feature "Holder"`,
 	}
 
-	lc := lifecycleForFeature(holder)
-	lc.GetFn = func(id string) (*feature.Feature, error) {
-		switch id {
-		case "feat-holder":
-			return holder, nil
-		case "feat-waiter":
-			return waiter, nil
-		}
-		return nil, errors.New("not found")
-	}
-	lc.ListFn = func() ([]*feature.Feature, error) {
-		return []*feature.Feature{holder, waiter}, nil
-	}
-	lc.AllKBsCompletedFn = func(id string) (bool, error) { return true, nil }
-	lc.MarkRepoKBCompletedFn = func(id, repoName string) error { return nil }
-	lc.CompleteKnowledgeBaseFn = func(id string) error {
-		// Mirror the production transition: BuildingKB → Created.
-		if id == "feat-holder" {
-			holder.Status = feature.StatusCreated
-		}
-		if id == "feat-waiter" {
-			waiter.Status = feature.StatusCreated
-		}
-		return nil
-	}
-	lc.StartInquireFn = func(id string) error {
-		if id == "feat-waiter" {
-			waiter.Status = feature.StatusInquiring
-		}
-		return nil
-	}
-	fs := newFeatureStore(holder, waiter)
+	fs, lc := newStoredFeatureFixture(t, holder, waiter)
 
 	var startedPhases []feature.Phase
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
+		Manager:   lc,
 		Store:     fs,
 		CmdRunner: mocks.NewMockCommandRunner(),
 	}, orchestrator.Hooks{
@@ -642,12 +557,12 @@ func TestOrchestrator_wakeKBWaiters_AdvancesPastSkippedKB(t *testing.T) {
 	if !slices.Contains(startedPhases, feature.PhaseInquire) {
 		t.Errorf("waiter did not advance to PhaseInquire after wake-up; OnPhaseStarted phases = %v", startedPhases)
 	}
-	assertLifecycleCall(t, lc, "StartInquire")
+	if got := loadStoredFeature(t, fs, waiter.ID).Status; got != feature.StatusInquiring {
+		t.Errorf("persisted waiter status = %s, want Inquiring", got)
+	}
 
 	// Waiter must not be stranded in Created (the pre-fix symptom).
-	if waiter.Status == feature.StatusCreated {
-		t.Errorf("waiter stuck in StatusCreated after wake-up; CurrentPhase=%v", waiter.CurrentPhase)
-	}
+
 }
 
 // ---------------------------------------------------------------------------
@@ -678,12 +593,11 @@ func TestOrchestrator_OnKBCompleted_FailureOnInterruptedFeature_DoesNotMarkFaile
 			{Name: agenticRepoName, Path: "/tmp/agentic"},
 		},
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
+		Manager: lc,
+		Store:   fs,
 	}, orchestrator.Hooks{})
 
 	err := o.HandlePhaseCompletion("feat-int-kb", orchestrator.PhaseCompletionInput{
@@ -698,10 +612,10 @@ func TestOrchestrator_OnKBCompleted_FailureOnInterruptedFeature_DoesNotMarkFaile
 
 	// MarkFailed must NOT have been called — the feature was already at
 	// StatusInterrupted, and InterruptFeature owns the terminal transition.
-	refuteLifecycleCall(t, lc, "MarkFailed")
-	// MarkRepoKBFailed must NOT have been called — KBStatus is preserved
-	// across an interrupt for resume; only a real KB failure stamps it.
-	refuteLifecycleCall(t, lc, "MarkRepoKBFailed")
+	stored := loadStoredFeature(t, fs, f.ID)
+	if stored.FailureRecord() != nil || len(stored.KBStatus) != 0 {
+		t.Errorf("interrupted feature gained failure state: failure=%+v KB=%v", stored.FailureRecord(), stored.KBStatus)
+	}
 
 	// No FeatureFailed event should have been emitted.
 	events := drainEvents(o)
@@ -710,8 +624,8 @@ func TestOrchestrator_OnKBCompleted_FailureOnInterruptedFeature_DoesNotMarkFaile
 	}
 
 	// Status must remain Interrupted, not flip to Failed.
-	if f.Status != feature.StatusInterrupted {
-		t.Errorf("Status = %v, want StatusInterrupted (must not flip to Failed)", f.Status)
+	if stored.Status != feature.StatusInterrupted {
+		t.Errorf("persisted Status = %v, want Interrupted", stored.Status)
 	}
 }
 
@@ -729,8 +643,7 @@ func TestOrchestrator_InterruptFeature_TransitionBeforeStopSession(t *testing.T)
 		ID:     "feat-order",
 		Status: feature.StatusBuildingKB,
 	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
+	fs, lc := newStoredFeatureFixture(t, f)
 
 	sm := mocks.NewMockSessionManager()
 	sm.FeatureSessionsFn = func(id string) []ports.SessionView {
@@ -738,14 +651,14 @@ func TestOrchestrator_InterruptFeature_TransitionBeforeStopSession(t *testing.T)
 	}
 	var statusAtStop feature.Status
 	sm.StopSessionFn = func(id string) error {
-		statusAtStop = f.Status
+		statusAtStop = loadStoredFeature(t, fs, f.ID).Status
 		return nil
 	}
 
 	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-		Sessions:  sm,
+		Manager:  lc,
+		Store:    fs,
+		Sessions: sm,
 	}, orchestrator.Hooks{})
 
 	if err := o.InterruptFeature("feat-order"); err != nil {

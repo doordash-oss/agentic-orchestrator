@@ -33,11 +33,14 @@ func NewMessageLog() *MessageLog {
 	return &MessageLog{}
 }
 
-// Append adds a message to the log.
-func (l *MessageLog) Append(msg llm.SDKMessage) {
+// Append adds a message to the log and returns the index of the row it
+// wrote, assigned under the log's own lock so concurrent appenders each
+// observe the index their message actually landed at.
+func (l *MessageLog) Append(msg llm.SDKMessage) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.messages = append(l.messages, msg)
+	return len(l.messages) - 1
 }
 
 // Prepend adds messages before the existing log entries.
@@ -67,7 +70,11 @@ func (l *MessageLog) UpdateLast(msg llm.SDKMessage) {
 
 // UpdateLastAssistantPartial coalesces an incoming assistant message into the
 // most recent in-flight streaming partial.
-func (l *MessageLog) UpdateLastAssistantPartial(msg llm.SDKMessage) {
+// UpdateLastAssistantPartial coalesces an incoming assistant message into
+// the most recent in-flight streaming partial. It returns the index of the
+// row it wrote — the replaced partial's index or the appended row's —
+// assigned under the log's own lock.
+func (l *MessageLog) UpdateLastAssistantPartial(msg llm.SDKMessage) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for i := len(l.messages) - 1; i >= 0; i-- {
@@ -77,13 +84,14 @@ func (l *MessageLog) UpdateLastAssistantPartial(msg llm.SDKMessage) {
 				break
 			}
 			l.messages[i] = msg
-			return
+			return i
 		}
 		if isPartialCoalesceBoundary(existing) {
 			break
 		}
 	}
 	l.messages = append(l.messages, msg)
+	return len(l.messages) - 1
 }
 
 func assistantPartialCanReplace(existing, incoming llm.SDKMessage) bool {

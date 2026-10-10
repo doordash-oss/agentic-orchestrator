@@ -17,6 +17,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -1494,6 +1495,97 @@ func TestSessionSendUserMessageWithHiddenContextSplitsWireFromEcho(t *testing.T)
 	}
 	if len(proto.sent) != 2 || proto.sent[1] != "Follow up" {
 		t.Fatalf("provider wire text = %q, want the plain follow-up unchanged", proto.sent)
+	}
+}
+
+// TestSessionPersistTranscriptRowMatchesIndexUnderConcurrentAppends pins that
+// each persisted row's index is the index the message log assigned to that
+// message under its own lock when a reader-delivered assistant message and a
+// hidden-context user message are appended concurrently.
+func TestSessionPersistTranscriptRowMatchesIndexUnderConcurrentAppends(t *testing.T) {
+	t.Parallel()
+	// parallel-candidate: in-process protocol double with per-test session state.
+	s := NewSession("supervisor-concurrent-test", "__supervisor__", feature.PhaseResearch)
+	s.SetKind(ports.KindSupervisor)
+	s.protocol = &wireRecordingProtocol{}
+	s.transcriptPath = filepath.Join(t.TempDir(), "transcript.jsonl")
+
+	const rounds = 64
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			msg := llm.SDKMessage{Type: "assistant", Assistant: &llm.AssistantMessage{
+				Message: llm.ConversationMsg{Role: "assistant", Content: []llm.ContentBlock{
+					{Type: "text", Text: fmt.Sprintf("assistant turn %d", i)},
+				}},
+			}}
+			row := s.messageLog.UpdateLastAssistantPartial(msg)
+			if err := s.persistTranscriptRow(row, msg); err != nil {
+				t.Errorf("persist assistant row: %v", err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < rounds; i++ {
+			if err := s.SendUserMessageWithHiddenContext(fmt.Sprintf("user turn %d", i), "hidden context"); err != nil {
+				t.Errorf("SendUserMessageWithHiddenContext: %v", err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+
+	messages := s.messageLog.Messages()
+	if len(messages) != 2*rounds {
+		t.Fatalf("message log rows = %d, want %d", len(messages), 2*rounds)
+	}
+	textAt := func(i int) string {
+		m := messages[i]
+		switch {
+		case m.Assistant != nil:
+			return "assistant: " + m.Assistant.Message.Content[0].Text
+		case m.User != nil:
+			return "user: " + m.User.Message.Content[0].Text
+		default:
+			return ""
+		}
+	}
+
+	data, err := os.ReadFile(s.transcriptPath)
+	if err != nil {
+		t.Fatalf("reading transcript: %v", err)
+	}
+	var rows int
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var record persistedTranscriptRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("parsing transcript row %q: %v", line, err)
+		}
+		rows++
+		if record.Index < 0 || record.Index >= len(messages) {
+			t.Fatalf("transcript row index %d out of range (log rows = %d)", record.Index, len(messages))
+		}
+		msg := record.Message.sdkMessage()
+		got := ""
+		switch {
+		case msg.Assistant != nil:
+			got = "assistant: " + msg.Assistant.Message.Content[0].Text
+		case msg.User != nil:
+			got = "user: " + msg.User.Message.Content[0].Text
+		}
+		if want := textAt(record.Index); got != want {
+			t.Fatalf("transcript row %d persisted %q, but the message log at that index is %q", record.Index, got, want)
+		}
+	}
+	if rows != 2*rounds {
+		t.Fatalf("persisted rows = %d, want %d", rows, 2*rounds)
 	}
 }
 

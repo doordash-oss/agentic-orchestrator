@@ -362,9 +362,9 @@ type AutoReviewSnapshot struct {
 // message stream. It mirrors the methods on the concrete session MessageLog
 // so *session.MessageLog satisfies it structurally.
 type MessageLog interface {
-	Append(msg llm.SDKMessage)
+	Append(msg llm.SDKMessage) int
 	UpdateLast(msg llm.SDKMessage)
-	UpdateLastAssistantPartial(msg llm.SDKMessage)
+	UpdateLastAssistantPartial(msg llm.SDKMessage) int
 	Messages() []llm.SDKMessage
 	Len() int
 	Text() string

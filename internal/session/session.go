@@ -1232,12 +1232,13 @@ func (s *Session) readMessages(onMessage func(llm.SDKMessage)) {
 			// UpdateLastAssistantPartial so that a final (non-partial) assistant
 			// message replaces the accumulated partial from streaming deltas
 			// instead of being appended alongside it.
+			var row int
 			if msg.Assistant != nil {
-				s.messageLog.UpdateLastAssistantPartial(msg)
+				row = s.messageLog.UpdateLastAssistantPartial(msg)
 			} else {
-				s.messageLog.Append(msg)
+				row = s.messageLog.Append(msg)
 			}
-			if err := s.persistTranscriptTail(); err != nil {
+			if err := s.persistTranscriptRow(row, msg); err != nil {
 				log.Printf("session %s: persist transcript: %v", s.id, err)
 			}
 
@@ -1669,15 +1670,16 @@ func (s *Session) SendUserMessageWithHiddenContext(visible, hiddenContext string
 	}
 
 	if s.Kind().Conversational() && strings.TrimSpace(visible) != "" {
-		s.messageLog.Append(llm.SDKMessage{
+		msg := llm.SDKMessage{
 			Type:            "user",
 			LocallyAppended: true,
 			User: &llm.UserMessage{Message: llm.ConversationMsg{
 				Role:    "user",
 				Content: []llm.ContentBlock{{Type: "text", Text: visible}},
 			}},
-		})
-		if err := s.persistTranscriptTail(); err != nil {
+		}
+		row := s.messageLog.Append(msg)
+		if err := s.persistTranscriptRow(row, msg); err != nil {
 			log.Printf("session %s: persist chat user message: %v", s.id, err)
 		}
 	}
@@ -2823,18 +2825,18 @@ func (m persistedSDKMessage) sdkMessage() llm.SDKMessage {
 	}
 }
 
-func (s *Session) persistTranscriptTail() error {
+// persistTranscriptRow appends one row to the on-disk transcript: the index
+// the message log assigned to msg under its own lock, and msg itself. The
+// caller captures both at append time so a concurrent appender can never
+// cause another row to be persisted in this row's place.
+func (s *Session) persistTranscriptRow(index int, msg llm.SDKMessage) error {
 	s.mu.Lock()
 	path := s.transcriptPath
 	s.mu.Unlock()
 	if path == "" {
 		return nil
 	}
-	messages := s.messageLog.Messages()
-	if len(messages) == 0 {
-		return nil
-	}
-	record := persistedTranscriptRecord{Index: len(messages) - 1, Message: persistableSDKMessage(messages[len(messages)-1])}
+	record := persistedTranscriptRecord{Index: index, Message: persistableSDKMessage(msg)}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("marshaling record: %w", err)

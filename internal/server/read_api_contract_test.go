@@ -3820,9 +3820,9 @@ type fakeMessageLog struct {
 	messages []llm.SDKMessage
 }
 
-func (l fakeMessageLog) Append(llm.SDKMessage)                     {}
-func (l fakeMessageLog) UpdateLast(llm.SDKMessage)                 {}
-func (l fakeMessageLog) UpdateLastAssistantPartial(llm.SDKMessage) {}
+func (l fakeMessageLog) Append(llm.SDKMessage) int                     { return len(l.messages) - 1 }
+func (l fakeMessageLog) UpdateLast(llm.SDKMessage)                     {}
+func (l fakeMessageLog) UpdateLastAssistantPartial(llm.SDKMessage) int { return 0 }
 func (l fakeMessageLog) Messages() []llm.SDKMessage {
 	return append([]llm.SDKMessage(nil), l.messages...)
 }

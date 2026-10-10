@@ -41,7 +41,7 @@ import (
 
 // checkChildExecution is the fail-closed capability gate for child feature
 // execution. Queued, setting-up, and failed-setup children stay reachable
-// only through RunSetup / RetrySetup; setup-complete children must satisfy
+// only through runSetup / retrySetup; setup-complete children must satisfy
 // the supported execution shape (any active pipeline profile); a child
 // whose relationship has settled can never replay pipeline phases.
 // Feature-lookup failures propagate so the gate can never be silently
@@ -79,14 +79,16 @@ var ErrChildDiscardInProgress = errors.New("child discard in progress")
 // DiscardChild (which holds the write lock to record its intent) cannot
 // interleave. If a discard intent is already durable on the child, the
 // integration is refused.
+// Test-reachable seam: production integration runs from phase completion;
+// e2e and integration tests drive it directly.
 func (o *Orchestrator) RunChildIntegration(childID string) error {
-	return o.WithRelationshipReadLock(func() error {
+	return o.withRelationshipReadLock(func() error {
 		return o.runChildIntegrationLocked(childID)
 	})
 }
 
 // runChildIntegrationLocked is the lock-held integration entry point.
-// Callers must hold the relationship read lock. RestartPhase, which already
+// Callers must hold the relationship read lock. restartPhaseLocked, which already
 // holds the read lock, calls this directly to avoid a recursive RLock.
 func (o *Orchestrator) runChildIntegrationLocked(childID string) error {
 	child, err := o.deps.Lifecycle.Get(childID)
@@ -468,7 +470,7 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 			})
 			// Promotion is pending — block cleanup and auto-publish. The
 			// child stays Completed with its workspace preserved for
-			// idempotent recovery by ReconcilePromotions.
+			// idempotent recovery by reconcilePromotions.
 			return fmt.Errorf("child KB promotion pending for %s: %w", childID, err)
 		}
 	}
@@ -489,7 +491,7 @@ func (o *Orchestrator) settleChildClosureTail(childID, parentID string) error {
 			// only be removed once "promoted and unlocked" is durable. The
 			// PromoteChildKBWorkspaces call above establishes LocksReleased
 			// before returning success; anything less keeps the journal for
-			// ReconcilePromotions.
+			// reconcilePromotions.
 			if journal != nil && journal.Phase == feature.PromotionPhasePromoted && journal.LocksReleased {
 				for _, repo := range child.Repos {
 					workspaceDir := feature.ChildKBWorkspaceDir(baseDir, childID, repo.Name)

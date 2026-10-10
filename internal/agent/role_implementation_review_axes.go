@@ -12,12 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
-import (
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-)
+import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
 const (
 	// RoleImplementationReviewCraft reviews implementation craft.
@@ -32,7 +29,7 @@ const (
 	RoleImplementationReviewDesign Role = "implementation_review_design"
 )
 
-var implementationReviewAxisRoleSpecs = []RoleSpec{
+var implementationReviewAxisRoleSpecs = []roleSpec{
 	implementationReviewAxisRoleSpec(RoleImplementationReviewCraft, "review-implementation-craft"),
 	implementationReviewAxisRoleSpec(RoleImplementationReviewFunctionalityEvidence, "review-implementation-functionality-evidence"),
 	implementationReviewAxisRoleSpec(RoleImplementationReviewCleanliness, "review-implementation-cleanliness"),
@@ -40,57 +37,28 @@ var implementationReviewAxisRoleSpecs = []RoleSpec{
 	implementationReviewAxisRoleSpec(RoleImplementationReviewDesign, "review-implementation-design"),
 }
 
-// ImplementationReviewAxisRoleSpecs returns the RoleSpec-backed per-axis
-// implementation review roles.
-func ImplementationReviewAxisRoleSpecs() []RoleSpec {
-	out := make([]RoleSpec, 0, len(implementationReviewAxisRoleSpecs))
-	for _, spec := range implementationReviewAxisRoleSpecs {
-		out = append(out, CloneRoleSpec(spec))
-	}
-	return out
-}
-
-// ImplementationReviewAxisRoleForSkill returns the implementation review axis
-// RoleSpec for a skill name such as "review-implementation-craft".
-func ImplementationReviewAxisRoleForSkill(skillName string) (RoleSpec, bool) {
-	for _, spec := range implementationReviewAxisRoleSpecs {
-		if spec.SkillName == skillName {
-			return CloneRoleSpec(spec), true
-		}
-	}
-	return RoleSpec{}, false
-}
-
-func implementationReviewAxisRoleSpec(role Role, skillName string) RoleSpec {
-	return reviewFeedbackAxisRoleSpec(reviewFeedbackAxisRoleSpecConfig{
-		Phase:        feature.PhaseReview,
-		Role:         role,
-		SkillName:    skillName,
-		UserTemplate: "implementation_review_axis.user",
-		Required:     []feature.Phase{feature.PhaseImplement},
-		OutputRoots: []OutputRootSpec{
+func implementationReviewAxisRoleSpec(role Role, skillName string) roleSpec {
+	return roleSpec{
+		Phase:     feature.PhaseReview,
+		Role:      role,
+		SkillName: skillName,
+		OutputRoots: []outputRootSpec{
 			{
 				Name:        "helper_dir",
 				Description: "Implementation review axis helper artifact directory.",
-				ResolvePath: func(rt RoleRuntime) string {
+				ResolvePath: func(rt roleRuntime) string {
 					return rt.IterationDir
 				},
 			},
 		},
-		Artifact:             reviewFeedbackRoleArtifact("helper_dir"),
+		Artifacts:            []roleArtifactSpec{reviewFeedbackRoleArtifact("helper_dir")},
 		ReadOnlyOutsideRoots: true,
-	})
+	}
 }
 
-// ImplementationReviewAxisUserInput is the data passed to
+// implementationReviewAxisUserInput is the data passed to
 // implementation_review_axis.user.tmpl.
-type ImplementationReviewAxisUserInput struct {
-	ReviewUserInput
+type implementationReviewAxisUserInput struct {
+	reviewUserInput
 	AxisLabel string
-}
-
-// BuildImplementationReviewAxisPrompt renders the implementation review axis
-// prompt.
-func BuildImplementationReviewAxisPrompt(in ImplementationReviewAxisUserInput) string {
-	return prompts.ImplementationReviewAxisUserPrompt(in)
 }

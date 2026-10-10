@@ -18,6 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // SDKMessage is the envelope for all JSON messages from LLM CLI tools.
@@ -518,37 +520,13 @@ func NewDenyResponse(requestID string, reason string) ControlResponse {
 	}
 }
 
-// AskUserAnnotation carries optional per-question annotations returned alongside
-// an AskUserQuestion answer. Mirrors the Claude Agent SDK shape
-// (updatedInput.annotations[questionText] = {notes?, preview?}).
-type AskUserAnnotation struct {
-	Notes   string `json:"notes,omitempty"`
-	Preview string `json:"preview,omitempty"`
-}
-
 // NewAskUserResponse creates a control_response that allows an AskUserQuestion
-// tool use and supplies the user's answers. Pass annotations to attach
-// per-question notes/preview; the key is omitted from the payload when no
-// annotation entry carries a non-empty field.
-func NewAskUserResponse(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]AskUserAnnotation) ControlResponse {
-	var questionsVal any
-	if err := json.Unmarshal(questions, &questionsVal); err != nil {
-		questionsVal = questions
-	}
-	// Production callers pass the entire tool input ({"questions":[...]}),
-	// while the SDK expects updatedInput.questions to be the inner array.
-	// Unwrap the envelope so the CLI's response handler can iterate it.
-	if envelope, ok := questionsVal.(map[string]any); ok {
-		if inner, ok := envelope["questions"].([]any); ok {
-			questionsVal = inner
-		}
-	}
-	updated := map[string]any{
-		"questions": questionsVal,
-		"answers":   answers,
-	}
-	if filtered := filterAnnotations(annotations); len(filtered) > 0 {
-		updated["annotations"] = filtered
+// tool use and supplies the user's answers keyed by question text. The bundle
+// is sent as the SDK's updatedInput.questions array.
+func NewAskUserResponse(requestID string, bundle askuser.Bundle, answers map[string]string) ControlResponse {
+	questions := bundle.Questions
+	if questions == nil {
+		questions = []askuser.Question{}
 	}
 	return ControlResponse{
 		Type: "control_response",
@@ -556,27 +534,14 @@ func NewAskUserResponse(requestID string, questions json.RawMessage, answers map
 			Subtype:   "success",
 			RequestID: requestID,
 			Response: map[string]any{
-				"behavior":     "allow",
-				"updatedInput": updated,
+				"behavior": "allow",
+				"updatedInput": map[string]any{
+					"questions": questions,
+					"answers":   answers,
+				},
 			},
 		},
 	}
-}
-
-// filterAnnotations drops entries whose fields are all empty so the emitted
-// JSON omits noise when the user skipped notes on every question.
-func filterAnnotations(in map[string]AskUserAnnotation) map[string]AskUserAnnotation {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]AskUserAnnotation, len(in))
-	for k, v := range in {
-		if v.Notes == "" && v.Preview == "" {
-			continue
-		}
-		out[k] = v
-	}
-	return out
 }
 
 // InitializeRequestMessage is the handshake sent to the CLI to activate the

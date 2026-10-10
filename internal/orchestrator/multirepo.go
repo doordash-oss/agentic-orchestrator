@@ -24,7 +24,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// StartMultiRepoImplementation is the single entry point for launching the
+// startMultiRepoImplementation is the single entry point for launching the
 // unified phase-implement loop. It validates feature state, resolves the plan
 // path, runs PhaseScope to derive the phase-declared repo subset, clears any
 // stale per-repo error state on that subset (so the loop starts fresh
@@ -33,7 +33,7 @@ import (
 // HandlePhaseCompletion. Crash recovery re-runs the interrupted unit from
 // scratch with a fresh Claude session; durable state on disk is the resume
 // scaffolding.
-func (o *Orchestrator) StartMultiRepoImplementation(featureID string) error {
+func (o *Orchestrator) startMultiRepoImplementation(featureID string) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("load feature: %w", err)
@@ -104,7 +104,7 @@ func repoSubsetForPhaseStart(f *feature.Feature, planPath string) []string {
 // signal. Either way, the goroutine exits — there is no retry loop.
 func (o *Orchestrator) surfaceDispatchCompletionError(featureID string, cause error) {
 	// User-initiated Stop during Final Review surfaces as
-	// errFinalReviewInterrupted. The InterruptFeature path already
+	// errFinalReviewInterrupted. The interruptFeature path already
 	// transitioned the feature to StatusInterrupted and emitted
 	// FeatureInterrupted; overwriting that with a Failed transition would
 	// surface a spurious "Failure Info — final review interrupted" panel

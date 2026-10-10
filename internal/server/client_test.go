@@ -131,7 +131,7 @@ func TestClientRetainedReadAndMutationSemantics(t *testing.T) {
 			writeJSON(w, http.StatusOK, FeatureConfigUpdateResponse{
 				APIVersion: APIVersion,
 				FeatureID:  fixtureFeatureID,
-				Result:     resultUpdated,
+				Result:     "updated",
 			})
 		default:
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
@@ -159,7 +159,7 @@ func TestClientRetainedReadAndMutationSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateFeatureConfig() error = %v", err)
 	}
-	if updated.FeatureID != fixtureFeatureID || updated.Result != resultUpdated || !sawMutationAuth || !sawTrustedMutation {
+	if updated.FeatureID != fixtureFeatureID || updated.Result != "updated" || !sawMutationAuth || !sawTrustedMutation {
 		t.Fatalf("UpdateFeatureConfig() = %+v auth=%v trusted=%v, want updated authenticated trusted mutation", updated, sawMutationAuth, sawTrustedMutation)
 	}
 }
@@ -194,7 +194,7 @@ func TestClientRetainedMutationReturnsStructuredAPIError(t *testing.T) {
 	}
 
 	_, err = client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{})
-	var apiErr *APIError
+	var apiErr *apiError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("UpdateFeatureConfig() error = %v, want APIError", err)
 	}
@@ -238,7 +238,7 @@ func TestClientRefactorFeatureReturnsTypedResult(t *testing.T) {
 			APIVersion: APIVersion,
 			FeatureID:  "child-1",
 			ParentID:   fixtureFeatureID,
-			Result:     resultCreated,
+			Result:     "created",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -278,7 +278,7 @@ func TestClientReviewFeedbackFeatureReturnsTypedResult(t *testing.T) {
 			APIVersion: APIVersion,
 			FeatureID:  "child-1",
 			ParentID:   fixtureFeatureID,
-			Result:     resultCreated,
+			Result:     "created",
 		})
 	}))
 	t.Cleanup(srv.Close)

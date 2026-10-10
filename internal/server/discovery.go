@@ -173,18 +173,18 @@ func PrepareDiscovery(ctx context.Context, runtimeDir string, identity RuntimeId
 // file.
 var ErrDiscoveryMissing = errors.New("discovery file missing")
 
-// ErrDiscoveryUntrusted marks a discovery file that a client must not trust:
+// errDiscoveryUntrusted marks a discovery file that a client must not trust:
 // not an owner-only regular file owned by the caller, or unusable.
-var ErrDiscoveryUntrusted = errors.New("discovery file untrusted")
+var errDiscoveryUntrusted = errors.New("discovery file untrusted")
 
 // ReadTrustedDiscovery reads runtimeDir's discovery record for a client that
 // will send its bearer token, applying the same security check the server
 // applies before trusting a record. Failures wrap ErrDiscoveryMissing or
-// ErrDiscoveryUntrusted and never carry the token.
+// errDiscoveryUntrusted and never carry the token.
 func ReadTrustedDiscovery(runtimeDir string) (DiscoveryRecord, error) {
 	path := DiscoveryPath(runtimeDir)
 	untrusted := func(reason string) (DiscoveryRecord, error) {
-		return DiscoveryRecord{}, fmt.Errorf("%w: %s: %s", ErrDiscoveryUntrusted, path, reason)
+		return DiscoveryRecord{}, fmt.Errorf("%w: %s: %s", errDiscoveryUntrusted, path, reason)
 	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {

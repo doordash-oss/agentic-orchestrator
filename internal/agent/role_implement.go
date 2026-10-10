@@ -12,69 +12,56 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"path/filepath"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
 // RoleImplementer is the phase implementer session.
 const RoleImplementer Role = "implementer"
 
-var implementRoleSpec = RoleSpec{
-	Phase:        feature.PhaseImplement,
-	Role:         RoleImplementer,
-	SkillName:    "implement",
-	UserTemplate: "implement.user",
-	Required:     []feature.Phase{feature.PhasePlan},
-	OutputRoots: []OutputRootSpec{
+var implementRoleSpec = roleSpec{
+	Phase:     feature.PhaseImplement,
+	Role:      RoleImplementer,
+	SkillName: "implement",
+	OutputRoots: []outputRootSpec{
 		{
 			Name:        "phase_dir",
 			Description: "Phase-level implement artifact root shared across iterations.",
-			ResolvePath: func(rt RoleRuntime) string {
+			ResolvePath: func(rt roleRuntime) string {
 				return filepath.Dir(rt.IterationDir)
 			},
 		},
 		{
 			Name:        "iteration_dir",
 			Description: "Active iteration artifact directory.",
-			ResolvePath: func(rt RoleRuntime) string {
+			ResolvePath: func(rt roleRuntime) string {
 				return rt.IterationDir
 			},
 		},
 	},
-	Artifacts: []RoleArtifactSpec{
+	Artifacts: []roleArtifactSpec{
 		{
 			Name:         "progress",
 			DisplayPath:  "progress.md",
 			RootName:     "phase_dir",
 			RelativePath: "progress.md",
-			Presence:     ArtifactRequired,
 			Description:  "structured progress markdown with iteration handoff, deferrals, and iteration state",
-			Validate:     ValidatorProgress,
+			Validate:     validateProgressArtifact,
 		},
 	},
+	IterationState: true,
 }
 
-// ImplementRoleSpec returns the RoleSpec-backed implement role.
-func ImplementRoleSpec() RoleSpec {
-	return CloneRoleSpec(implementRoleSpec)
-}
-
-// ImplementUserInput is the data passed to implement.user.tmpl.
-type ImplementUserInput struct {
+// implementUserInput is the data passed to implement.user.tmpl.
+type implementUserInput struct {
 	PlanPath             string
 	ExitCriteria         string
 	Feedback             string
 	PlanRevisionFeedback string
 	HelpAnswers          string
 	Iteration            int
-}
-
-// BuildImplementPrompt renders the implement user prompt.
-func BuildImplementPrompt(in ImplementUserInput) string {
-	return prompts.ImplementUserPrompt(in)
 }

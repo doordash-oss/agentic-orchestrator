@@ -233,7 +233,7 @@ func TestWorkAdmissionUploadOriginRepositoryDetectors(t *testing.T) {
 	// count as repository work, and only while in flight.
 	tracker := newSourceUpdateTracker()
 	releaseUpdate := tracker.begin(git.RepoIdentity{Path: "/repo", CommonDir: "/repo/.git"})
-	probes := NewProbeActivity()
+	probes := newProbeActivity()
 	releaseProbe := probes.enter()
 	h = &apiHandler{sourceUpdates: tracker, probeActivity: probes}
 	if activity, _ := h.detectRepositoryWork(ctx); activity.RepositoryWork != 2 {

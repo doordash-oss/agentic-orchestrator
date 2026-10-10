@@ -36,9 +36,6 @@ func WriteQAFile(qaLog []ports.QAPair, dir string) (string, error) {
 	for _, pair := range qaLog {
 		fmt.Fprintf(&b, "## Q: %s\n\n", pair.Question)
 		fmt.Fprintf(&b, "**A:** %s\n\n", pair.Answer)
-		if pair.Notes != "" {
-			fmt.Fprintf(&b, "**Notes:** %s\n\n", pair.Notes)
-		}
 		if pair.AutoPicked {
 			fmt.Fprintf(&b, "_(auto-picked, confidence: %.2f)_\n\n", pair.Confidence)
 		}

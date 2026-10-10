@@ -15,6 +15,8 @@
 package mocks
 
 import (
+	"sync"
+
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -30,6 +32,9 @@ type MockCall struct {
 // Commonly-tested methods have dedicated Fn overrides; all others record
 // a MockCall and return DefaultError.
 type MockFeatureLifecycle struct {
+	// Protect recording only: callbacks may deliberately overlap in concurrency
+	// tests. Configure overrides before use and inspect Calls after work joins.
+	callsMu  sync.Mutex
 	CreateFn func(name, description string, repos []string, models config.ModelConfig,
 		exitCriteria, inquireness string, images []string,
 		opts ...feature.CreateOptions) (*feature.Feature, error)
@@ -103,6 +108,8 @@ func NewMockFeatureLifecycle() *MockFeatureLifecycle {
 }
 
 func (m *MockFeatureLifecycle) record(method string, args ...any) {
+	m.callsMu.Lock()
+	defer m.callsMu.Unlock()
 	m.Calls = append(m.Calls, MockCall{Method: method, Args: args})
 }
 

@@ -16,7 +16,6 @@ package session
 
 import (
 	"bufio"
-	"encoding/json"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -24,6 +23,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // stdinDenyWatcher returns a channel that fires if anything resembling a
@@ -239,8 +239,7 @@ func TestControlRequest_ParksIndefinitelyWhenNoConsumer(t *testing.T) {
 // TestPendingControlRequests_TracksMultipleInFlight verifies that
 // concurrently-pending control_requests are all preserved by the
 // session's tracking layer. This is the second half of the Phase-2
-// invariant: each requestID survives until ClearPendingQuestion or
-// RespondToAskUser explicitly removes it.
+// invariant: each requestID survives until it is explicitly removed.
 func TestPendingControlRequests_TracksMultipleInFlight(t *testing.T) {
 	s := NewSession("multi", "feat", 0)
 
@@ -273,9 +272,11 @@ func TestPendingControlRequests_TracksMultipleInFlight(t *testing.T) {
 	}
 
 	// Removing the first leaves the second.
-	s.ClearPendingQuestion("ask-1")
+	s.mu.Lock()
+	s.removePendingControlRequestLocked("ask-1")
+	s.mu.Unlock()
 	if pending := s.PendingControlRequests(); len(pending) != 1 || pending[0].RequestID != "ask-2" {
-		t.Errorf("after ClearPendingQuestion(ask-1), pending=%v", pending)
+		t.Errorf("after removing ask-1, pending=%v", pending)
 	}
 
 	// HasPendingAskUserQuestion should still be true.
@@ -284,7 +285,9 @@ func TestPendingControlRequests_TracksMultipleInFlight(t *testing.T) {
 	}
 
 	// Removing the second clears the list and the AUQ flag.
-	s.ClearPendingQuestion("ask-2")
+	s.mu.Lock()
+	s.removePendingControlRequestLocked("ask-2")
+	s.mu.Unlock()
 	if s.LastControlRequest() != nil {
 		t.Error("LastControlRequest should be nil after both cleared")
 	}
@@ -374,7 +377,7 @@ func TestRespondToAskUser_OnlyClearsMatching(t *testing.T) {
 
 	// A failed answer write (no subprocess attached here) must leave the
 	// request pending so it can be answered again.
-	if err := s.RespondToAskUser("ask-B", json.RawMessage(`[]`), nil, nil); err == nil {
+	if err := s.RespondToAskUser("ask-B", askuser.Resolved{}); err == nil {
 		t.Fatal("RespondToAskUser should fail without a provider pipe")
 	}
 	if got := s.PendingControlRequests(); len(got) != 1 || got[0].RequestID != "ask-B" {

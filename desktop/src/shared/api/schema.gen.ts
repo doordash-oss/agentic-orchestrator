@@ -538,11 +538,7 @@ export interface paths {
         };
         /** Read runtime configuration. */
         get: operations["getRuntimeConfig"];
-        /**
-         * Replace runtime configuration.
-         * @description Replaces the runtime configuration. Submitted workspace_roots are validated the same way as for PATCH: each root must exist and resolve to a directory, otherwise the request fails with a 400 invalid_workspace_root error and nothing is persisted.
-         */
-        put: operations["putRuntimeConfig"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -697,7 +693,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Answer an ask-user prompt. */
+        /**
+         * Answer an ask-user prompt.
+         * @description The generic JSON mutation body carries `answers`, an object keyed by each question's `index` rendered as a string (one-based, e.g. `"1"`), valued with an array of one-based option indexes (e.g. `[1, 3]`) or a text answer. Option indexes refer to the original option order; display labels may be trimmed or truncated. Text answers still accept verbatim option labels for compatibility. Every question must be answered.
+         */
         post: operations["answerAskUserPrompt"];
         delete?: never;
         options?: never;
@@ -3185,7 +3184,7 @@ export interface components {
             remediation: string;
         };
         NeedUserInputQuestion: {
-            index?: number;
+            index: number;
             prompt?: string;
             answer?: string;
         };
@@ -3428,7 +3427,9 @@ export interface components {
             confidence?: number;
         };
         AskUserQuestion: {
-            question?: string;
+            /** @description One-based position of the question within its prompt; answers are keyed by it. */
+            index: number;
+            question: string;
             header?: string;
             multi_select?: boolean;
             options?: components["schemas"]["AskUserOption"][];
@@ -4836,23 +4837,6 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["RuntimeConfigResponse"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    putRuntimeConfig: {
-        parameters: {
-            query?: never;
-            header: {
-                /** @description CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required. */
-                "X-Agentico-Client": components["parameters"]["TrustedMutationHeader"];
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: components["requestBodies"]["JSONMutation"];
-        responses: {
-            200: components["responses"]["ActionResponse"];
-            400: components["responses"]["ErrorResponse"];
             401: components["responses"]["Unauthorized"];
         };
     };

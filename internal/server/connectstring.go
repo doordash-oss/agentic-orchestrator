@@ -30,27 +30,14 @@ import (
 // server-advertised dialable address — a wildcard bind address like 0.0.0.0
 // never appears. The name query parameter is optional and query-escaped
 // (spaces as "+"); unknown query parameters are preserved-parsable but
-// ignored by this package.
+// ignored by clients.
 const connectionStringScheme = "agentico"
 
-// ConnectionString is the parsed form of the one-line network attach string.
-type ConnectionString struct {
-	Token string
-	Host  string
-	Port  int
-	Name  string
-}
-
-// BaseURL returns the dialable http base URL the connection string targets.
-func (c ConnectionString) BaseURL() string {
-	return "http://" + net.JoinHostPort(c.Host, strconv.Itoa(c.Port))
-}
-
-// GenerateConnectionString builds the one-line connection string for a
+// generateConnectionString builds the one-line connection string for a
 // network-bound server. Generation is strict: the token must be non-empty
 // and the host must be non-empty, non-wildcard, and dialable, with a port in
 // range.
-func GenerateConnectionString(token, host string, port int, name string) (string, error) {
+func generateConnectionString(token, host string, port int, name string) (string, error) {
 	if token == "" {
 		return "", fmt.Errorf("connection string: token is required")
 	}
@@ -93,43 +80,7 @@ func ConnectionStringFromBaseURL(baseURL, token, name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("connection string: base URL %q has an unparseable port: %v", baseURL, err)
 	}
-	return GenerateConnectionString(token, host, port, name)
-}
-
-// ParseConnectionString parses and validates the one-line attach string,
-// rejecting malformed input with distinct, actionable errors.
-func ParseConnectionString(raw string) (ConnectionString, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return ConnectionString{}, fmt.Errorf("connection string %q is not a valid URL: %v", raw, err)
-	}
-	if u.Scheme != connectionStringScheme {
-		return ConnectionString{}, fmt.Errorf("connection string must use the %s:// scheme, got %q", connectionStringScheme, u.Scheme)
-	}
-	if u.User == nil || u.User.Username() == "" {
-		return ConnectionString{}, fmt.Errorf("connection string is missing the bearer token in userinfo (agentico://<token>@<host>:<port>)")
-	}
-	host := u.Hostname()
-	if host == "" {
-		return ConnectionString{}, fmt.Errorf("connection string is missing a host")
-	}
-	if isWildcardHost(host) {
-		return ConnectionString{}, fmt.Errorf("connection string host %q is a wildcard bind address, not dialable", host)
-	}
-	portText := u.Port()
-	if portText == "" {
-		return ConnectionString{}, fmt.Errorf("connection string is missing an explicit port")
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil || port < 1 || port > 65535 {
-		return ConnectionString{}, fmt.Errorf("connection string port %q is unparseable or out of range 1-65535", portText)
-	}
-	return ConnectionString{
-		Token: u.User.Username(),
-		Host:  host,
-		Port:  port,
-		Name:  u.Query().Get("name"),
-	}, nil
+	return generateConnectionString(token, host, port, name)
 }
 
 func isWildcardHost(host string) bool {

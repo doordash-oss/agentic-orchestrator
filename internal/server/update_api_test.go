@@ -340,7 +340,7 @@ func TestPostUpdateCheckMutationValidation(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
 	req.Body = http.NoBody
-	req.ContentLength = MaxMutationBodyBytes + 1
+	req.ContentLength = maxMutationBodyBytes + 1
 	fixture.handler.routes().ServeHTTP(w, req)
 	if w.Result().StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized status = %d, want 413", w.Code)

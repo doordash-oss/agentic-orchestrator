@@ -500,11 +500,15 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	newerRepo0Tip := fx.refSHA(0, "refs/heads/feature/parent")
 
 	// Install a mock final-review function so the e2e test can exercise
-	// the full RestartPhase → StartFeature → advanceAfterFinalReview →
-	// RunChildIntegration flow without booting real agent sessions.
+	// the full RestartFeature → advanceAfterFinalReview →
+	// RunChildIntegration flow without booting real agent sessions. It
+	// snapshots the child as Final Review is dispatched, after the restart
+	// transition and before integration rebuilds the journal.
 	var frCalled int32
+	var childAtReview *feature.Feature
 	o.SetRunMultiRepoFinalReviewFn(func(f *feature.Feature, kbInfos ...agent.KBInfo) (chan *agent.OrchestratorResult, error) {
 		atomic.StoreInt32(&frCalled, 1)
+		_, childAtReview = fx.reload()
 		ch := make(chan *agent.OrchestratorResult, 1)
 		ch <- &agent.OrchestratorResult{FinalStatus: "all_passed"}
 		close(ch)
@@ -512,44 +516,30 @@ func TestRefactorChildTransactionalMultiRepoStagedConflictRestartAndReviewRenewa
 	})
 
 	// Restart: child head changed, so invalidateFinalReview clears the
-	// journal and sets StatusReviewPassed + PhaseFinalReview. RestartPhase
-	// detects this and returns RestartDispatchPhase.
-	outcome, err := o.RestartPhase(fx.child.ID, 0, 0)
-	if err != nil {
-		t.Fatalf("RestartPhase() error = %v", err)
-	}
-	if outcome.Action != orchestrator.RestartDispatchPhase || outcome.Phase != feature.PhaseFinalReview {
-		t.Fatalf("RestartPhase outcome = %+v, want RestartDispatchPhase/PhaseFinalReview", outcome)
-	}
-
-	// Assert the renewal contract: child remains open, transaction
-	// is cleared, and status is reset to the pre-review state.
-	_, child = fx.reload()
-	if child.Parent.CloseOutcome != "" {
-		t.Fatalf("child close outcome = %q, want empty (child remains open)", child.Parent.CloseOutcome)
-	}
-	if child.Parent.Transaction != nil {
-		t.Fatalf("transaction journal = %+v, want nil (cleared by review invalidation)", child.Parent.Transaction)
-	}
-	if child.Status == feature.StatusReviewPassed {
-		// After RestartPhase reloads and returns, the status should be
-		// StatusReviewPassed + PhaseFinalReview (pre-final-review state).
-		// But after StartFeature runs Final Review, it will transition
-		// through StatusFinalReviewing and back to StatusReviewPassed.
-	}
-
-	// Dispatch Final Review via StartFeature — the same entry point the
-	// client uses for RestartDispatchPhase. invalidateFinalReview set
-	// CurrentPhase=PhaseFinalReview, so StartFeature dispatches it.
+	// journal and sets StatusReviewPassed + PhaseFinalReview. RestartFeature
+	// detects this and dispatches Final Review in the same guard window.
 	// The mock returns all_passed, then advanceAfterFinalReview calls
 	// RunChildIntegration to re-prepare candidates against the latest
-	// parent tips and complete.
-	if err := o.StartFeature(fx.child.ID); err != nil {
-		t.Fatalf("StartFeature() after review invalidation: %v", err)
+	// parent tips.
+	outcome, err := o.RestartFeature(fx.child.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("RestartFeature() error = %v", err)
+	}
+	if outcome.Action != orchestrator.RestartDispatchPhase || outcome.Phase != feature.PhaseFinalReview {
+		t.Fatalf("RestartFeature outcome = %+v, want RestartDispatchPhase/PhaseFinalReview", outcome)
 	}
 
 	if atomic.LoadInt32(&frCalled) == 0 {
 		t.Fatal("final review was not dispatched")
+	}
+
+	// Assert the renewal contract as Final Review starts: child remains
+	// open and the transaction is cleared by review invalidation.
+	if childAtReview.Parent.CloseOutcome != "" {
+		t.Fatalf("child close outcome = %q, want empty (child remains open)", childAtReview.Parent.CloseOutcome)
+	}
+	if childAtReview.Parent.Transaction != nil {
+		t.Fatalf("transaction journal = %+v, want nil (cleared by review invalidation)", childAtReview.Parent.Transaction)
 	}
 
 	// startFinalReview completes the pass and advanceAfterFinalReview in a

@@ -87,15 +87,15 @@ func (s *phaseSupervisor) superviseSingleShotSession(featureID, sessionID string
 	if !s.claimSingleShotSession(sessionID) {
 		return
 	}
-	sess := s.sessions.GetSession(sessionID)
-	if sess == nil {
+	sess, ok := s.sessions.GetSession(sessionID).(ports.SessionHandle)
+	if !ok {
 		s.releaseSingleShotSession(sessionID)
 		return
 	}
 	s.spawn(func() { s.runSingleShotSession(featureID, sessionID, phase, sess) })
 }
 
-func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phase feature.Phase, sess ports.SessionView) {
+func (s *phaseSupervisor) runSingleShotSession(featureID, sessionID string, phase feature.Phase, sess ports.SessionHandle) {
 	result := agent.WaitForPhaseOutcome(sess, agent.PhaseOutcomeWaitOptions{
 		CommitOutcome: func(intent llm.CompletionIntent) ([]agent.ProtocolViolation, error) {
 			if s.commitOutcome == nil {

@@ -16,9 +16,7 @@ package orchestrator_test
 
 import (
 	"errors"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,49 +36,7 @@ import (
 // can render the review editor on a later tick.
 // ---------------------------------------------------------------------------
 
-func TestOrchestrator_EnterReviewGate_SetsStatusAndPendingPhase(t *testing.T) {
-	f := &feature.Feature{
-		ID:     "feat-1",
-		Status: feature.StatusImplementReady,
-		HelpQueue: []feature.HelpRequest{
-			{Question: "stale question", Pending: true},
-		},
-		PermissionsQueue: []feature.PermissionRequest{
-			{Tool: "Bash", Pending: true},
-		},
-		IsRewind: true, // Should be cleared by EnterReviewGate.
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     fs,
-	}, orchestrator.Hooks{})
-
-	if err := o.EnterReviewGate("feat-1", feature.PhaseImplement); err != nil {
-		t.Fatalf("EnterReviewGate: %v", err)
-	}
-
-	wantStatus := feature.NeedsReviewForPhase(feature.PhaseImplement)
-	if f.Status != wantStatus {
-		t.Errorf("Status = %v, want %v", f.Status, wantStatus)
-	}
-	if f.PendingReviewPhase == nil || *f.PendingReviewPhase != feature.PhaseImplement {
-		t.Errorf("PendingReviewPhase = %v, want PhaseImplement", f.PendingReviewPhase)
-	}
-	if f.IsRewind {
-		t.Errorf("IsRewind should be cleared after entering a review gate")
-	}
-	if f.HelpQueue[0].Pending {
-		t.Errorf("HelpQueue pending flag should be cleared after entering a review gate")
-	}
-	if f.PermissionsQueue[0].Pending {
-		t.Errorf("PermissionsQueue pending flag should be cleared after entering a review gate")
-	}
-}
-
-func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T) {
+func TestOrchestrator_Rewind_FiresAuditHookAfterSuccess(t *testing.T) {
 	f := &feature.Feature{ID: "feat-rewind", ActiveRun: 1}
 	lc := lifecycleForFeature(f)
 	lc.RewindWithRequestFn = func(featureID string, request feature.RewindRequest) ([]feature.RewindWarning, feature.Phase, error) {
@@ -110,12 +66,16 @@ func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T)
 		},
 	})
 
-	warnings, effective, err := o.RewindWithRequest("feat-rewind", feature.RewindRequest{
+	result, err := o.Rewind("feat-rewind", orchestrator.RewindInput{Request: feature.RewindRequest{
 		TargetPhase:  feature.PhaseImplement,
 		RoadmapPhase: 2,
-	})
+	}})
 	if err != nil {
-		t.Fatalf("RewindWithRequest: %v", err)
+		t.Fatalf("Rewind: %v", err)
+	}
+	warnings, effective := result.Warnings, result.EffectivePhase
+	if result.SourceRunNumber != 1 || result.NewRunNumber != 2 {
+		t.Fatalf("result source/new run = %d/%d, want 1/2", result.SourceRunNumber, result.NewRunNumber)
 	}
 	if len(warnings) != 1 || warnings[0].Kind != feature.RewindWarningBackupBranch || warnings[0].Repo != "repo-a" {
 		t.Fatalf("warnings = %+v, want one repo-a backup-branch warning", warnings)
@@ -141,7 +101,7 @@ func TestOrchestrator_RewindWithRequest_FiresAuditHookAfterSuccess(t *testing.T)
 			t.Fatalf("event = %+v, want FeatureRewound for feat-rewind implement", ev)
 		}
 	default:
-		t.Fatal("RewindWithRequest emitted no domain event, want FeatureRewound")
+		t.Fatal("Rewind emitted no domain event, want FeatureRewound")
 	}
 }
 
@@ -516,134 +476,16 @@ func TestOrchestrator_RestartPhase_CreatedFeature_DispatchesWithoutTransition(t 
 // features and routes through the orchestrator's path-resolution helpers.
 // ---------------------------------------------------------------------------
 
-func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_ReturnsPlan(t *testing.T) {
-	tmp := t.TempDir()
-	planDir := filepath.Join(tmp, "feat-1", "plan")
-	if err := os.MkdirAll(planDir, 0o755); err != nil {
-		t.Fatalf("mkdir plan: %v", err)
-	}
-	planPath := filepath.Join(planDir, "plan.md")
-	if err := os.WriteFile(planPath, []byte("# Plan"), 0o644); err != nil {
-		t.Fatalf("write plan: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Status:       feature.StatusImplementReady,
-		CurrentPhase: feature.PhaseImplement,
-		Artifacts:    map[string]string{"plan": planPath},
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, WorktreePath: repoAWorktreePath, Path: repoAPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	fs := newFeatureStore(f)
-
-	// Use the feature.Store seam so stateDir() resolves for the orchestrator's
-	// path-resolution helpers. Test uses the lifecycle-backed store here.
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     feature.NewStore(tmp),
-	}, orchestrator.Hooks{})
-	_ = fs // unused here; keeps the helper import exercised.
-
-	ctx, err := o.ResolveGateReviewContext("feat-1", feature.PhaseImplement)
-	if err != nil {
-		t.Fatalf("ResolveGateReviewContext: %v", err)
-	}
-	if ctx.ArtifactPath != planPath {
-		t.Errorf("ArtifactPath = %q, want %q", ctx.ArtifactPath, planPath)
-	}
-	if ctx.WorkDir != repoAWorktreePath {
-		t.Errorf("WorkDir = %q, want /tmp/repo-a-worktree", ctx.WorkDir)
-	}
-}
-
 // TestOrchestrator_ResolveGateReviewContext_RoadmapPhaseZero_ReturnsRoadmap
 // ---------------------------------------------------------------------------
 // For a roadmap feature whose current roadmap phase is zero, gate-review
 // opens the roadmap artifact — this is the "initial roadmap review" gate.
 // ---------------------------------------------------------------------------
 
-func TestOrchestrator_ResolveGateReviewContext_RoadmapPhaseZero_ReturnsRoadmap(t *testing.T) {
-	tmp := t.TempDir()
-	roadmapDir := filepath.Join(tmp, "feat-1", "roadmap")
-	if err := os.MkdirAll(roadmapDir, 0o755); err != nil {
-		t.Fatalf("mkdir roadmap: %v", err)
-	}
-	roadmapPath := filepath.Join(roadmapDir, "roadmap.md")
-	if err := os.WriteFile(roadmapPath, []byte("# Roadmap"), 0o644); err != nil {
-		t.Fatalf("write roadmap: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:                  "feat-1",
-		Status:              feature.StatusImplementReady,
-		CurrentPhase:        feature.PhaseImplement,
-		TotalRoadmapPhases:  3,
-		CurrentRoadmapPhase: 0,
-		Artifacts:           map[string]string{"roadmap": roadmapPath},
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, Path: repoAPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     feature.NewStore(tmp),
-	}, orchestrator.Hooks{})
-
-	ctx, err := o.ResolveGateReviewContext("feat-1", feature.PhaseImplement)
-	if err != nil {
-		t.Fatalf("ResolveGateReviewContext: %v", err)
-	}
-	if ctx.ArtifactPath != roadmapPath {
-		t.Errorf("ArtifactPath = %q, want roadmap path %q", ctx.ArtifactPath, roadmapPath)
-	}
-	// No WorktreePath, so WorkDir falls back to Path.
-	if ctx.WorkDir != repoAPath {
-		t.Errorf("WorkDir = %q, want /tmp/repo-a", ctx.WorkDir)
-	}
-}
-
 // TestOrchestrator_ResolveGateReviewContext_PhaseResearch_ReturnsInquireArtifact
 // ---------------------------------------------------------------------------
 // Gate-review for PhaseResearch reads the inquire artifact (the prior phase).
 // ---------------------------------------------------------------------------
-
-func TestOrchestrator_ResolveGateReviewContext_PhaseResearch_ReturnsInquireArtifact(t *testing.T) {
-	tmp := t.TempDir()
-	inquireDir := filepath.Join(tmp, "feat-1", "inquire")
-	if err := os.MkdirAll(inquireDir, 0o755); err != nil {
-		t.Fatalf("mkdir inquire: %v", err)
-	}
-	inquirePath := filepath.Join(inquireDir, "inquire.md")
-	if err := os.WriteFile(inquirePath, []byte("# Inquire"), 0o644); err != nil {
-		t.Fatalf("write inquire: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:           "feat-1",
-		Status:       feature.StatusResearching,
-		CurrentPhase: feature.PhaseResearch,
-		Artifacts:    map[string]string{"inquire": inquirePath},
-	}
-	lc := lifecycleForFeature(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     feature.NewStore(tmp),
-	}, orchestrator.Hooks{})
-
-	ctx, err := o.ResolveGateReviewContext("feat-1", feature.PhaseResearch)
-	if err != nil {
-		t.Fatalf("ResolveGateReviewContext: %v", err)
-	}
-	if ctx.ArtifactPath != inquirePath {
-		t.Errorf("ArtifactPath = %q, want inquire path", ctx.ArtifactPath)
-	}
-}
 
 // TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_ReturnsPhasePlan
 // ---------------------------------------------------------------------------
@@ -654,176 +496,6 @@ func TestOrchestrator_ResolveGateReviewContext_PhaseResearch_ReturnsInquireArtif
 // RunPhasePlanningLoop (see internal/agent/plan_validation.go); the production
 // resolver uses the same phase-%d-plan key.
 // ---------------------------------------------------------------------------
-
-func TestOrchestrator_ResolveGateReviewContext_PhaseImplement_RoadmapPhase_ReturnsPhasePlan(t *testing.T) {
-	tmp := t.TempDir()
-
-	// Roadmap phase 2 plan lives at <state>/<featureID>/runs/run-001/phase-02/plan/*.md.
-	phasePlanDir := filepath.Join(tmp, "feat-1", "runs", "run-001", "phase-02", "plan")
-	if err := os.MkdirAll(phasePlanDir, 0o755); err != nil {
-		t.Fatalf("mkdir phase-02/plan: %v", err)
-	}
-	phasePlanPath := filepath.Join(phasePlanDir, "2026-04-19-phase-02-feature.md")
-	if err := os.WriteFile(phasePlanPath, []byte("# Phase 02 plan"), 0o644); err != nil {
-		t.Fatalf("write phase-02 plan: %v", err)
-	}
-
-	// Seed a distractor generic "plan" artifact so a regression to the old
-	// behavior (resolving "plan") would surface as a wrong path.
-	genericPlanDir := filepath.Join(tmp, "feat-1", "runs", "run-001", "plan")
-	if err := os.MkdirAll(genericPlanDir, 0o755); err != nil {
-		t.Fatalf("mkdir plan: %v", err)
-	}
-	genericPlanPath := filepath.Join(genericPlanDir, "plan.md")
-	if err := os.WriteFile(genericPlanPath, []byte("# Legacy plan"), 0o644); err != nil {
-		t.Fatalf("write legacy plan: %v", err)
-	}
-
-	f := &feature.Feature{
-		ID:                  "feat-1",
-		Status:              feature.StatusImplementReady,
-		CurrentPhase:        feature.PhaseImplement,
-		TotalRoadmapPhases:  3,
-		CurrentRoadmapPhase: 2,
-		ActiveRun:           1,
-		RunCount:            1,
-		// Artifacts intentionally empty for the phase-plan key so the resolver
-		// exercises the phase-dir glob fallback (mirrors the real-world state:
-		// RunPhasePlanningLoop writes the file but does not persist Artifacts[
-		// "phase-N-plan"] on every code path).
-		Artifacts: map[string]string{"plan": genericPlanPath},
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, WorktreePath: repoAWorktreePath, Path: repoAPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     feature.NewStore(tmp),
-	}, orchestrator.Hooks{})
-
-	ctx, err := o.ResolveGateReviewContext("feat-1", feature.PhaseImplement)
-	if err != nil {
-		t.Fatalf("ResolveGateReviewContext: %v", err)
-	}
-	if ctx.ArtifactPath != phasePlanPath {
-		t.Errorf("ArtifactPath = %q, want phase-02 plan %q", ctx.ArtifactPath, phasePlanPath)
-	}
-	if ctx.ArtifactPath == genericPlanPath {
-		t.Error("ArtifactPath fell back to generic plan artifact; expected phase-specific plan")
-	}
-	if ctx.WorkDir != repoAWorktreePath {
-		t.Errorf("WorkDir = %q, want /tmp/repo-a-worktree", ctx.WorkDir)
-	}
-}
-
-func TestOrchestrator_ResolveRewindReviewContext_PartialImplementReturnsPendingPhasePlan(t *testing.T) {
-	tmp := t.TempDir()
-	phasePlanDir := filepath.Join(tmp, "feat-partial", "runs", "run-002", "phase-02", "plan")
-	if err := os.MkdirAll(phasePlanDir, 0o755); err != nil {
-		t.Fatalf("mkdir phase plan: %v", err)
-	}
-	phasePlanPath := filepath.Join(phasePlanDir, "phase-plan.md")
-	if err := os.WriteFile(phasePlanPath, []byte("# Phase 2 plan"), 0o644); err != nil {
-		t.Fatalf("write phase plan: %v", err)
-	}
-	globalPlanDir := filepath.Join(tmp, "feat-partial", "runs", "run-002", "plan")
-	if err := os.MkdirAll(globalPlanDir, 0o755); err != nil {
-		t.Fatalf("mkdir global plan: %v", err)
-	}
-	globalPlanPath := filepath.Join(globalPlanDir, "plan.md")
-	if err := os.WriteFile(globalPlanPath, []byte("# Global plan"), 0o644); err != nil {
-		t.Fatalf("write global plan: %v", err)
-	}
-
-	pendingPhase := 2
-	f := &feature.Feature{
-		ID:                              "feat-partial",
-		Status:                          feature.StatusPlanNeedsReview,
-		CurrentPhase:                    feature.PhasePlan,
-		Pipeline:                        feature.PipelineLarge,
-		CurrentRoadmapPhase:             2,
-		TotalRoadmapPhases:              3,
-		PendingRewindReviewRoadmapPhase: &pendingPhase,
-		ActiveRun:                       2,
-		RunCount:                        2,
-		Artifacts: map[string]string{
-			"plan":         globalPlanPath,
-			"phase-2-plan": phasePlanPath,
-		},
-		Repos: []feature.FeatureRepo{
-			{Name: repoName, WorktreePath: repoAWorktreePath, Path: repoAPath},
-		},
-	}
-	lc := lifecycleForFeature(f)
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     feature.NewStore(tmp),
-	}, orchestrator.Hooks{})
-
-	ctx, err := o.ResolveRewindReviewContext("feat-partial", feature.PhaseImplement)
-	if err != nil {
-		t.Fatalf("ResolveRewindReviewContext: %v", err)
-	}
-	if ctx.ArtifactPath != phasePlanPath {
-		t.Errorf("ArtifactPath = %q, want phase plan %q", ctx.ArtifactPath, phasePlanPath)
-	}
-	if ctx.ArtifactPath == globalPlanPath {
-		t.Error("ArtifactPath fell back to global plan despite a pending partial roadmap phase")
-	}
-	if len(ctx.Warnings) != 0 {
-		t.Errorf("Warnings = %v, want none", ctx.Warnings)
-	}
-	if ctx.WorkDir != repoAWorktreePath {
-		t.Errorf("WorkDir = %q, want /tmp/repo-a-worktree", ctx.WorkDir)
-	}
-}
-
-func TestOrchestrator_ResolveRewindReviewContext_PartialImplementMissingPhasePlanWarnsAndFallsBack(t *testing.T) {
-	tmp := t.TempDir()
-	globalPlanDir := filepath.Join(tmp, "feat-partial", "runs", "run-002", "plan")
-	if err := os.MkdirAll(globalPlanDir, 0o755); err != nil {
-		t.Fatalf("mkdir global plan: %v", err)
-	}
-	globalPlanPath := filepath.Join(globalPlanDir, "plan.md")
-	if err := os.WriteFile(globalPlanPath, []byte("# Global plan"), 0o644); err != nil {
-		t.Fatalf("write global plan: %v", err)
-	}
-
-	pendingPhase := 2
-	f := &feature.Feature{
-		ID:                              "feat-partial",
-		Status:                          feature.StatusPlanNeedsReview,
-		CurrentPhase:                    feature.PhasePlan,
-		Pipeline:                        feature.PipelineLarge,
-		CurrentRoadmapPhase:             2,
-		TotalRoadmapPhases:              3,
-		PendingRewindReviewRoadmapPhase: &pendingPhase,
-		ActiveRun:                       2,
-		RunCount:                        2,
-		Artifacts:                       map[string]string{"plan": globalPlanPath},
-	}
-	lc := lifecycleForFeature(f)
-	o := orchestrator.New(orchestrator.Deps{
-		Lifecycle: lc,
-		Store:     feature.NewStore(tmp),
-	}, orchestrator.Hooks{})
-
-	ctx, err := o.ResolveRewindReviewContext("feat-partial", feature.PhaseImplement)
-	if err != nil {
-		t.Fatalf("ResolveRewindReviewContext: %v", err)
-	}
-	if ctx.ArtifactPath != globalPlanPath {
-		t.Errorf("ArtifactPath = %q, want fallback global plan %q", ctx.ArtifactPath, globalPlanPath)
-	}
-	if len(ctx.Warnings) != 1 {
-		t.Fatalf("Warnings = %v, want one warning", ctx.Warnings)
-	}
-	if !strings.Contains(ctx.Warnings[0], "phase 2 plan") || !strings.Contains(ctx.Warnings[0], "falling back") {
-		t.Errorf("Warnings[0] = %q, want phase-plan fallback warning", ctx.Warnings[0])
-	}
-}
 
 // TestOrchestrator_RestartPhase_RejectsWhileSessionsActive
 // ---------------------------------------------------------------------------

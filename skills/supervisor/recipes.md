@@ -44,8 +44,8 @@ Relay the question to the user and send only their answer. Never answer on the u
 
 1. `"$AGENTICO_BIN" api GET /api/v1/prompts`
    Show the user each question and its options.
-2. Answer with the question text as the key:
-   `"$AGENTICO_BIN" api POST /api/v1/prompts/ask-user/answer '{"request_id":"{request_id}","session_id":"{session_id}","answers":{"Which branch?":"main"}}'`
+2. Answer with each question's `index` as the key and the option label verbatim (or free text) as the value:
+   `"$AGENTICO_BIN" api POST /api/v1/prompts/ask-user/answer '{"request_id":"{request_id}","session_id":"{session_id}","answers":{"1":"main"}}'`
 3. Validate: `"$AGENTICO_BIN" api GET /api/v1/prompts` no longer lists that `request_id`.
 
 ### A help request
@@ -66,7 +66,7 @@ Relay the question to the user and send only their answer. Never answer on the u
 1. `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}`
    Read `need_user_input`: the `summary` and each question's `index` and `prompt`. If `verification.allowed_actions` is present the gate is a missing capability; explain the blockers and the allowed actions.
 2. Save the user's answers, keyed by question index:
-   `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input-draft '{"answers":{"0":"Use the existing export service."}}'`
+   `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input-draft '{"answers":{"1":"Use the existing export service."}}'`
 3. Resume the feature:
    `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input '{}'`
 4. Validate: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}` shows the gate closed (`need_user_input.open` false or absent) and the feature moving again.

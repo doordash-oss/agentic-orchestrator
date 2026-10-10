@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // ErrSessionShuttingDown is the canonical sentinel returned by SessionManager
@@ -126,9 +127,6 @@ func (k SessionKind) String() string {
 type QAPair struct {
 	Question string
 	Answer   string
-	// Notes captures freeform text the user entered alongside the answer
-	// (Claude Agent SDK annotations.notes). Empty when the user skipped notes.
-	Notes string
 	// AutoPicked marks answers synthesized by the session-layer grill-me
 	// auto-pick policy rather than typed or selected by a human.
 	AutoPicked bool
@@ -481,9 +479,9 @@ type SessionView interface {
 
 	SendUserMessage(text string) error
 	RespondToControl(requestID string, allow bool, reason string) error
-	RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error
-	ClearPendingQuestion(requestID string)
-	ResetWaitingStatus()
+	// RespondToAskUser answers the pending AskUserQuestion request with
+	// answers resolved against its question bundle.
+	RespondToAskUser(requestID string, resolved askuser.Resolved) error
 	Stop() error
 	Interrupt() error
 	Wait()

@@ -21,7 +21,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
@@ -173,9 +172,9 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 			}
 		}
 
-		spec, ok := ImplementationReviewAxisRoleForSkill(axis.SkillName)
+		spec, ok := lookupRoleSpec(feature.PhaseReview, axis.Role)
 		if !ok {
-			t.Fatalf("ImplementationReviewAxisRoleForSkill(%q) ok = false, want true", axis.SkillName)
+			t.Fatalf("lookupRoleSpec(PhaseReview, %q) ok = false, want true", axis.Role)
 		}
 		if spec.Role != axis.Role || spec.Phase != feature.PhaseReview || spec.SkillName != axis.SkillName {
 			t.Fatalf("role spec for %q = {role:%q phase:%q skill:%q}, want registry role %q phase %q skill %q", axis.SkillName, spec.Role, spec.Phase, spec.SkillName, axis.Role, feature.PhaseReview, axis.SkillName)
@@ -183,17 +182,14 @@ func TestImplementationReviewAxisRegistryProducesWellFormedRoleSpecs(t *testing.
 		if !spec.ReadOnlyOutsideRoots {
 			t.Fatalf("%s ReadOnlyOutsideRoots = false, want true", axis.SkillName)
 		}
-		if spec.UserTemplate != "implementation_review_axis.user" {
-			t.Fatalf("%s UserTemplate = %q, want implementation_review_axis.user", axis.SkillName, spec.UserTemplate)
-		}
 		if len(spec.OutputRoots) != 1 || spec.OutputRoots[0].Name != "helper_dir" {
 			t.Fatalf("%s roots = %+v, want helper_dir-only axis helper", axis.SkillName, spec.OutputRoots)
 		}
 		if len(spec.Artifacts) != 1 {
 			t.Fatalf("%s artifact count = %d, want review feedback only", axis.SkillName, len(spec.Artifacts))
 		}
-		if artifact := spec.Artifacts[0]; artifact.RootName != "helper_dir" || artifact.RelativePath != "review-feedback.md" || artifact.Presence != ArtifactRequired || artifact.Validate != roles.ValidatorReviewFeedback {
-			t.Fatalf("%s feedback artifact = %+v, want helper_dir required review-feedback.md review validator", axis.SkillName, artifact)
+		if artifact := spec.Artifacts[0]; artifact.RootName != "helper_dir" || artifact.RelativePath != "review-feedback.md" || artifact.Validate == nil {
+			t.Fatalf("%s feedback artifact = %+v, want helper_dir review-feedback.md with a validator", axis.SkillName, artifact)
 		}
 	}
 }

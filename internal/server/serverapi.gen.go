@@ -1727,21 +1727,6 @@ func (e PatchRuntimeConfigParamsXAgenticoClient) Valid() bool {
 	}
 }
 
-// Defines values for PutRuntimeConfigParamsXAgenticoClient.
-const (
-	PutRuntimeConfigParamsXAgenticoClientLocal PutRuntimeConfigParamsXAgenticoClient = "local"
-)
-
-// Valid indicates whether the value is a known member of the PutRuntimeConfigParamsXAgenticoClient enum.
-func (e PutRuntimeConfigParamsXAgenticoClient) Valid() bool {
-	switch e {
-	case PutRuntimeConfigParamsXAgenticoClientLocal:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for CreateFeatureParamsXAgenticoClient.
 const (
 	CreateFeatureParamsXAgenticoClientLocal CreateFeatureParamsXAgenticoClient = "local"
@@ -2362,13 +2347,13 @@ func (e InspectWorkspaceRepositorySourcesParamsXAgenticoClient) Valid() bool {
 
 // Defines values for UpdateWorkspaceRepositorySourceParamsXAgenticoClient.
 const (
-	Local UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
+	UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal UpdateWorkspaceRepositorySourceParamsXAgenticoClient = "local"
 )
 
 // Valid indicates whether the value is a known member of the UpdateWorkspaceRepositorySourceParamsXAgenticoClient enum.
 func (e UpdateWorkspaceRepositorySourceParamsXAgenticoClient) Valid() bool {
 	switch e {
-	case Local:
+	case UpdateWorkspaceRepositorySourceParamsXAgenticoClientLocal:
 		return true
 	default:
 		return false
@@ -2515,10 +2500,13 @@ type AskUserOption struct {
 
 // AskUserQuestion defines model for AskUserQuestion.
 type AskUserQuestion struct {
-	Header      string          `json:"header,omitempty"`
+	Header string `json:"header,omitempty"`
+
+	// Index One-based position of the question within its prompt; answers are keyed by it.
+	Index       int             `json:"index"`
 	MultiSelect bool            `json:"multi_select,omitempty"`
 	Options     []AskUserOption `json:"options,omitempty"`
-	Question    string          `json:"question,omitempty"`
+	Question    string          `json:"question"`
 }
 
 // AutomaticReviewState defines model for AutomaticReviewState.
@@ -3452,7 +3440,7 @@ type NeedUserInputGate struct {
 // NeedUserInputQuestion defines model for NeedUserInputQuestion.
 type NeedUserInputQuestion struct {
 	Answer string `json:"answer,omitempty"`
-	Index  int    `json:"index,omitempty"`
+	Index  int    `json:"index"`
 	Prompt string `json:"prompt,omitempty"`
 }
 
@@ -5640,18 +5628,6 @@ type PatchRuntimeConfigParams struct {
 // PatchRuntimeConfigParamsXAgenticoClient defines parameters for PatchRuntimeConfig.
 type PatchRuntimeConfigParamsXAgenticoClient string
 
-// PutRuntimeConfigJSONBody defines parameters for PutRuntimeConfig.
-type PutRuntimeConfigJSONBody map[string]interface{}
-
-// PutRuntimeConfigParams defines parameters for PutRuntimeConfig.
-type PutRuntimeConfigParams struct {
-	// XAgenticoClient CSRF defense-in-depth for local browser-origin mutations. Bearer auth is still required.
-	XAgenticoClient PutRuntimeConfigParamsXAgenticoClient `json:"X-Agentico-Client"`
-}
-
-// PutRuntimeConfigParamsXAgenticoClient defines parameters for PutRuntimeConfig.
-type PutRuntimeConfigParamsXAgenticoClient string
-
 // StreamEventsParams defines parameters for StreamEvents.
 type StreamEventsParams struct {
 	After       uint64 `form:"after,omitempty" json:"after,omitempty"`
@@ -6168,9 +6144,6 @@ type RefreshProviderModelsJSONRequestBody = ProviderModelRefreshRequest
 
 // PatchRuntimeConfigJSONRequestBody defines body for PatchRuntimeConfig for application/json ContentType.
 type PatchRuntimeConfigJSONRequestBody PatchRuntimeConfigJSONBody
-
-// PutRuntimeConfigJSONRequestBody defines body for PutRuntimeConfig for application/json ContentType.
-type PutRuntimeConfigJSONRequestBody PutRuntimeConfigJSONBody
 
 // CreateFeatureJSONRequestBody defines body for CreateFeature for application/json ContentType.
 type CreateFeatureJSONRequestBody = CreateFeatureMutationRequest

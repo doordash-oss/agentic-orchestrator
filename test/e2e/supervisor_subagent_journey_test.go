@@ -154,7 +154,7 @@ func TestSupervisorSubagentQuestionSurfacesTaggedAndAnswerReturnsToTheSubagent(t
 	}
 	requestID := st.PendingRequests[0].RequestID
 	h.do(http.MethodPost, "/api/v1/prompts/ask-user/answer", map[string]any{
-		"request_id": requestID, "session_id": st.SessionID, "answers": map[string]string{"Which branch?": "dev"},
+		"request_id": requestID, "session_id": st.SessionID, "answers": map[string]string{"1": "dev"},
 	}, http.StatusOK, nil)
 	stream.until("question idle", isState(server.SupervisorLifecycleIdle))
 	items := h.transcript("?limit=500").Items

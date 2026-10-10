@@ -57,6 +57,7 @@ import {
 } from '../../src/main/gateway/runtimeGateway';
 import { ServerListService } from '../../src/main/gateway/serverListService';
 import { SettingsStore } from '../../src/main/settings';
+import { DESKTOP_SCHEMA_VERSION } from '../../src/main/gateway/compatibility';
 
 const REMOTE_BASE = 'http://10.9.8.7:8080';
 const REMOTE_TOKEN = 'tok-remote-secret-zzz-0123456789';
@@ -83,8 +84,8 @@ function healthBody(overrides: Record<string, unknown> = {}): Record<string, unk
     runtime: { state_dir: '/srv/remote/features' },
     compatibility: {
       api_version: 'v1',
-      schema_version: 2,
-      min_client_schema: 2,
+      schema_version: DESKTOP_SCHEMA_VERSION,
+      min_client_schema: DESKTOP_SCHEMA_VERSION,
       runtime_policy: 'network-bearer-v1',
       server_build: { version: 'v9.9.9-remote' },
     },

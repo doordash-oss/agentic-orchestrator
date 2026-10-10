@@ -32,7 +32,7 @@ export type QuestionsAttentionItem = Extract<AttentionItem, { kind: 'questions' 
 
 export function questionsComplete(item: QuestionsAttentionItem, drafts: AttentionDrafts): boolean {
   const questionDraft = drafts.questions[`${item.kind}:${item.id}`] ?? {};
-  return item.questions.every((question) => questionAnswer(questionDraft[question.key]) !== '');
+  return item.questions.every((question) => questionAnswer(questionDraft[question.index]) !== '');
 }
 
 export function questionAnswersRequest(
@@ -44,7 +44,10 @@ export function questionAnswersRequest(
     requestId: item.id,
     ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
     answers: Object.fromEntries(
-      item.questions.map((question) => [question.key, questionAnswer(questionDraft[question.key])]),
+      item.questions.map((question) => [
+        String(question.index),
+        questionAnswer(questionDraft[question.index]),
+      ]),
     ),
   };
 }
@@ -79,7 +82,7 @@ export function QuestionConversationTurn({
     <>
       <div className="question-turn" role="group" aria-label="Agent question">
         {item.questions.map((question, questionIndex) => {
-          const draft = questionDraft[question.key] ?? { selected: [], freeText: '' };
+          const draft = questionDraft[question.index] ?? { selected: [], freeText: '' };
           let recommendedIndex = -1;
           let highestConfidence = Number.NEGATIVE_INFINITY;
           if (!question.multiSelect) {
@@ -90,13 +93,13 @@ export function QuestionConversationTurn({
               }
             });
           }
-          const chooseOption = (label: string, checked: boolean) =>
-            setQuestionDraft(setDrafts, detailKey, question.key, {
+          const chooseOption = (index: number, checked: boolean) =>
+            setQuestionDraft(setDrafts, detailKey, question.index, {
               selected: question.multiSelect
                 ? checked
-                  ? [...new Set([...draft.selected, label])]
-                  : draft.selected.filter((value) => value !== label)
-                : [label],
+                  ? [...new Set([...draft.selected, index])]
+                  : draft.selected.filter((value) => value !== index)
+                : [index],
               freeText: '',
             });
           const handleKeys = (event: ReactKeyboardEvent<HTMLFieldSetElement>) => {
@@ -120,11 +123,10 @@ export function QuestionConversationTurn({
             }
             if (!Number.isInteger(digit) || digit < 1 || digit > question.options.length) return;
             event.preventDefault();
-            const option = question.options[digit - 1]!;
-            chooseOption(option.label, !draft.selected.includes(option.label));
+            chooseOption(digit, !draft.selected.includes(digit));
           };
           return (
-            <fieldset key={question.key} className="attention-question" onKeyDown={handleKeys}>
+            <fieldset key={question.index} className="attention-question" onKeyDown={handleKeys}>
               <legend>
                 <span className="question-turn__head">
                   {subagent && questionIndex === 0 ? (
@@ -143,7 +145,7 @@ export function QuestionConversationTurn({
                   ) : null}
                 </span>
                 <span className="question-turn__prompt" role="heading" aria-level={3}>
-                  {question.key}
+                  {question.question}
                 </span>
               </legend>
               {question.multiSelect ? (
@@ -151,10 +153,10 @@ export function QuestionConversationTurn({
               ) : null}
               {question.options.map((option, optionIndex) => {
                 const selected =
-                  draft.freeText.trim() === '' && draft.selected.includes(option.label);
+                  draft.freeText.trim() === '' && draft.selected.includes(optionIndex + 1);
                 return (
                   <label
-                    key={option.label}
+                    key={optionIndex}
                     className="attention-option"
                     data-recommended={optionIndex === recommendedIndex ? true : undefined}
                     data-selected={selected ? true : undefined}
@@ -162,10 +164,12 @@ export function QuestionConversationTurn({
                     <input
                       className="sr-only"
                       type={question.multiSelect ? 'checkbox' : 'radio'}
-                      name={`${detailKey}:${question.key}`}
-                      value={option.label}
+                      name={`${detailKey}:${question.index}`}
+                      value={optionIndex + 1}
                       checked={selected}
-                      onChange={(event) => chooseOption(option.label, event.currentTarget.checked)}
+                      onChange={(event) =>
+                        chooseOption(optionIndex + 1, event.currentTarget.checked)
+                      }
                     />
                     <span className="attention-option__number" aria-hidden="true">
                       {optionIndex + 1}
@@ -205,7 +209,7 @@ export function QuestionConversationTurn({
                     }
                     value={draft.freeText}
                     onChange={(event) =>
-                      setQuestionDraft(setDrafts, detailKey, question.key, {
+                      setQuestionDraft(setDrafts, detailKey, question.index, {
                         freeText: event.target.value,
                       })
                     }
@@ -220,18 +224,17 @@ export function QuestionConversationTurn({
         <div className="question-turn__reply" aria-label="Your reply, not sent yet">
           <span className="question-turn__reply-who">Your reply — not sent yet</span>
           {item.questions.map((question) => {
-            const draft = questionDraft[question.key] ?? { selected: [], freeText: '' };
+            const draft = questionDraft[question.index] ?? { selected: [], freeText: '' };
             const text =
               draft.freeText.trim() !== ''
                 ? draft.freeText.trim()
                 : draft.selected
-                    .map((label) => {
-                      const index = question.options.findIndex((option) => option.label === label);
-                      const display = displayQuestionOptionLabel(label);
-                      return index >= 0 ? `${index + 1} · ${display}` : display;
-                    })
+                    .map(
+                      (index) =>
+                        `${index} · ${displayQuestionOptionLabel(question.options[index - 1]!.label)}`,
+                    )
                     .join(', ');
-            return <strong key={question.key}>{text}</strong>;
+            return <strong key={question.index}>{text}</strong>;
           })}
         </div>
       ) : null}

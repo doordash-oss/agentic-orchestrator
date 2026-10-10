@@ -23,7 +23,7 @@ import (
 
 func TestValidateServerName(t *testing.T) {
 	t.Parallel()
-	valid := []string{"frothy-macchiato", "a", strings.Repeat("x", MaxServerNameLength), "my server 01"}
+	valid := []string{"frothy-macchiato", "a", strings.Repeat("x", maxServerNameLength), "my server 01"}
 	for _, name := range valid {
 		if err := ValidateServerName(name); err != nil {
 			t.Errorf("ValidateServerName(%q) error = %v; want nil", name, err)
@@ -32,7 +32,7 @@ func TestValidateServerName(t *testing.T) {
 	invalid := []string{
 		"",
 		"   ",
-		strings.Repeat("x", MaxServerNameLength+1),
+		strings.Repeat("x", maxServerNameLength+1),
 		"bad\nname",
 		"bad\tname",
 		"bad\x00name",
@@ -48,7 +48,7 @@ func TestValidateServerName(t *testing.T) {
 func TestGenerateServerNameShape(t *testing.T) {
 	t.Parallel()
 	for i := 0; i < 20; i++ {
-		name, err := GenerateServerName()
+		name, err := generateServerName()
 		if err != nil {
 			t.Fatalf("GenerateServerName() error = %v", err)
 		}
@@ -66,14 +66,14 @@ func TestEnsureServerNameGeneratesPersistsOwnerOnlyStableName(t *testing.T) {
 	t.Parallel()
 	runtimeDir := t.TempDir()
 
-	first, err := EnsureServerName(runtimeDir)
+	first, err := ensureServerName(runtimeDir)
 	if err != nil {
 		t.Fatalf("EnsureServerName() error = %v", err)
 	}
 	if err := ValidateServerName(first); err != nil {
 		t.Fatalf("EnsureServerName() = %q fails validation: %v", first, err)
 	}
-	info, err := os.Stat(ServerNamePath(runtimeDir))
+	info, err := os.Stat(serverNamePath(runtimeDir))
 	if err != nil {
 		t.Fatalf("stat server name file: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestEnsureServerNameGeneratesPersistsOwnerOnlyStableName(t *testing.T) {
 	}
 
 	// A restart against the same runtime dir must reuse the persisted name.
-	second, err := EnsureServerName(runtimeDir)
+	second, err := ensureServerName(runtimeDir)
 	if err != nil {
 		t.Fatalf("EnsureServerName() second call error = %v", err)
 	}
@@ -94,17 +94,17 @@ func TestEnsureServerNameGeneratesPersistsOwnerOnlyStableName(t *testing.T) {
 func TestEnsureServerNameRegeneratesCorruptFile(t *testing.T) {
 	t.Parallel()
 	runtimeDir := t.TempDir()
-	if err := os.WriteFile(ServerNamePath(runtimeDir), []byte("bad\nname\n"), 0o600); err != nil {
+	if err := os.WriteFile(serverNamePath(runtimeDir), []byte("bad\nname\n"), 0o600); err != nil {
 		t.Fatalf("write corrupt name file: %v", err)
 	}
-	name, err := EnsureServerName(runtimeDir)
+	name, err := ensureServerName(runtimeDir)
 	if err != nil {
 		t.Fatalf("EnsureServerName() error = %v", err)
 	}
 	if err := ValidateServerName(name); err != nil {
 		t.Fatalf("EnsureServerName() = %q fails validation: %v", name, err)
 	}
-	data, err := os.ReadFile(ServerNamePath(runtimeDir))
+	data, err := os.ReadFile(serverNamePath(runtimeDir))
 	if err != nil {
 		t.Fatalf("read regenerated name file: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestResolveServerNamePrecedence(t *testing.T) {
 	if flagged != "flag-name" {
 		t.Fatalf("ResolveServerName(flag) = %q; want flag-name (trimmed)", flagged)
 	}
-	data, err := os.ReadFile(ServerNamePath(runtimeDir))
+	data, err := os.ReadFile(serverNamePath(runtimeDir))
 	if err != nil {
 		t.Fatalf("read persisted name file: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestResolveServerNameRejectsInvalidExplicitOverrides(t *testing.T) {
 	if _, err := ResolveServerName("bad\nname", "", runtimeDir); err == nil {
 		t.Error("ResolveServerName with invalid flag value succeeded; want error")
 	}
-	if _, err := ResolveServerName("", strings.Repeat("n", MaxServerNameLength+1), runtimeDir); err == nil {
+	if _, err := ResolveServerName("", strings.Repeat("n", maxServerNameLength+1), runtimeDir); err == nil {
 		t.Error("ResolveServerName with invalid config value succeeded; want error")
 	}
 	// A valid flag override shields an invalid config value (flag wins).

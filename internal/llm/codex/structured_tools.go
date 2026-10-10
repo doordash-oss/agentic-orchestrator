@@ -22,10 +22,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // Dynamic tools are the experimental app-server contract. Keep their wire
@@ -57,6 +59,10 @@ type pendingQuestionRequest struct {
 	Dynamic     bool
 	CallID      string
 	QuestionIDs map[string]string
+	// TurnEnded is set when the root turn completed while this question was
+	// still unanswered. Codex drops the tool call with the turn, so the answer
+	// must open a follow-up turn instead of replying to the dead call.
+	TurnEnded bool
 }
 
 func (p *Protocol) developerInstructions() *string {
@@ -204,7 +210,7 @@ func (p *Protocol) handleDynamicToolCall(id int, raw json.RawMessage) (llm.SDKMe
 	p.mu.Lock()
 	isRoot := p.isMainThread(call.ThreadID)
 	stale := isRoot && p.turnID != "" && call.TurnID != p.turnID
-	pendingQuestion := len(p.pendingQuestions) > 0
+	pendingQuestion := p.hasLiveQuestionLocked()
 	pendingCompletion := p.pendingCompletion != ""
 	p.mu.Unlock()
 	if stale {
@@ -225,14 +231,13 @@ func (p *Protocol) handleDynamicToolCall(id int, raw json.RawMessage) (llm.SDKMe
 		if err := question.validate(); err != nil {
 			return p.rejectDynamicTool(id, "Invalid ask_user arguments: "+err.Error())
 		}
-		options := make([]questionOption, len(question.Options))
-		copy(options, question.Options)
-		for i := range options {
-			if *options[i].Recommended {
-				options[i].Label += " (Recommended)"
+		bundle := askuser.Bundle{Questions: []askuser.Question{{Question: question.Question, Header: question.Header, Options: askUserOptions(question.Options)}}}
+		for i, o := range question.Options {
+			if *o.Recommended {
+				bundle.Questions[0].Options[i].Label += " (Recommended)"
 			}
 		}
-		input, _ := json.Marshal(map[string]any{"questions": []map[string]any{{"question": question.Question, "header": question.Header, "multiSelect": false, "options": options}}})
+		input := bundle.Encode()
 		p.rememberQuestions(id, pendingQuestionRequest{Dynamic: true, CallID: call.CallID, QuestionIDs: map[string]string{question.Question: question.ID}})
 		return p.askUserControl(id, call.ThreadID, input), true
 	case llm.CompletePhaseToolName:
@@ -310,13 +315,55 @@ func (p *Protocol) rememberQuestions(id int, request pendingQuestionRequest) {
 	p.pendingQuestions[strconv.Itoa(id)] = request
 }
 
+// hasLiveQuestionLocked reports whether a question is pending whose tool call
+// Codex still holds open. A question orphaned by turn completion no longer
+// blocks a new one. Caller must hold p.mu.
+func (p *Protocol) hasLiveQuestionLocked() bool {
+	for _, pending := range p.pendingQuestions {
+		if !pending.TurnEnded {
+			return true
+		}
+	}
+	return false
+}
+
+// orphanPendingQuestionsLocked marks every unanswered question as outliving
+// its turn. Codex keeps sampling while an ask_user call is outstanding and
+// may end the turn with a final message; it then discards the call, so a
+// later answer cannot be delivered as its result. Caller must hold p.mu.
+func (p *Protocol) orphanPendingQuestionsLocked() {
+	for id, pending := range p.pendingQuestions {
+		pending.TurnEnded = true
+		p.pendingQuestions[id] = pending
+	}
+}
+
+// orphanedAnswerTurn is the user text that carries an answer into a new turn
+// once the asking turn has ended.
+func orphanedAnswerTurn(pending pendingQuestionRequest, answers map[string]string) string {
+	questions := make([]string, 0, len(pending.QuestionIDs))
+	for question := range pending.QuestionIDs {
+		questions = append(questions, question)
+	}
+	sort.Strings(questions)
+	var b strings.Builder
+	b.WriteString("The user answered your ask_user question after your previous turn ended.\n")
+	for _, question := range questions {
+		fmt.Fprintf(&b, "\nQuestion: %s\nAnswer: %s\n", question, answers[question])
+	}
+	b.WriteString("\nContinue from this answer.")
+	return b.String()
+}
+
 func (p *Protocol) askUserControl(id int, threadID string, input json.RawMessage) llm.SDKMessage {
 	return p.controlMessageOrigin(llm.SDKMessage{Type: "control_request", Subtype: "can_use_tool", ControlRequest: &llm.ControlRequestMessage{
 		Type: "control_request", RequestID: strconv.Itoa(id), Request: llm.ControlRequest{Subtype: "can_use_tool", ToolName: "AskUserQuestion", Input: input},
 	}}, threadID)
 }
 
-func (p *Protocol) respondToAskUser(requestID string, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+// respondToAskUser sends each question's answer, keyed by question text, to
+// the question id Codex asked it under.
+func (p *Protocol) respondToAskUser(requestID string, answers map[string]string) error {
 	id, err := strconv.Atoi(requestID)
 	if err != nil {
 		return fmt.Errorf("invalid Codex request ID %q: %w", requestID, err)
@@ -328,16 +375,12 @@ func (p *Protocol) respondToAskUser(requestID string, answers map[string]string,
 		return fmt.Errorf("no pending Codex question for request %s", requestID)
 	}
 	mapped := map[string]map[string][]string{}
-	mappedAnnotations := map[string]llm.AskUserAnnotation{}
 	for question, qID := range pending.QuestionIDs {
 		answer, exists := answers[question]
 		if !exists || strings.TrimSpace(answer) == "" {
 			return fmt.Errorf("missing answer for question %q", question)
 		}
 		mapped[qID] = map[string][]string{"answers": {answer}}
-		if note, ok := annotations[question]; ok {
-			mappedAnnotations[qID] = note
-		}
 	}
 	p.mu.Lock()
 	if _, exists := p.pendingQuestions[requestID]; !exists {
@@ -348,10 +391,13 @@ func (p *Protocol) respondToAskUser(requestID string, answers map[string]string,
 	// must observe that this answer has already released the previous one.
 	delete(p.pendingQuestions, requestID)
 	p.mu.Unlock()
-	if pending.Dynamic {
-		data, _ := json.Marshal(map[string]any{"callId": pending.CallID, "answers": mapped, "annotations": mappedAnnotations})
+	switch {
+	case pending.TurnEnded:
+		err = p.sendFollowUpTurn(orphanedAnswerTurn(pending, answers))
+	case pending.Dynamic:
+		data, _ := json.Marshal(map[string]any{"callId": pending.CallID, "answers": mapped})
 		err = p.respondDynamicTool(id, true, string(data))
-	} else {
+	default:
 		err = p.writeJSON(Response{JSONRPC: "2.0", ID: id, Result: map[string]any{"answers": mapped}})
 	}
 	if err != nil {
@@ -388,7 +434,7 @@ func (p *Protocol) handleNativeUserInput(id int, raw json.RawMessage) (llm.SDKMe
 	}
 	seen := map[string]int{}
 	ids := map[string]string{}
-	questions := []map[string]any{}
+	bundle := askuser.Bundle{Questions: make([]askuser.Question, 0, len(params.Questions))}
 	for _, question := range params.Questions {
 		display := question.Question
 		seen[display]++
@@ -396,15 +442,20 @@ func (p *Protocol) handleNativeUserInput(id int, raw json.RawMessage) (llm.SDKMe
 			display = fmt.Sprintf("%s (#%d)", display, seen[display])
 		}
 		ids[display] = question.ID
-		options := question.Options
-		if options == nil {
-			options = []questionOption{}
-		}
-		questions = append(questions, map[string]any{"question": display, "header": question.Header, "options": options, "multiSelect": false})
+		bundle.Questions = append(bundle.Questions, askuser.Question{Question: display, Header: question.Header, Options: askUserOptions(question.Options)})
 	}
 	p.rememberQuestions(id, pendingQuestionRequest{QuestionIDs: ids})
-	input, _ := json.Marshal(map[string]any{"questions": questions})
-	return p.askUserControl(id, params.ThreadID, input), true
+	return p.askUserControl(id, params.ThreadID, bundle.Encode()), true
+}
+
+// askUserOptions converts decoded Codex options to envelope options. The result
+// is never nil, so the envelope always carries an explicit options list.
+func askUserOptions(options []questionOption) []askuser.Option {
+	out := make([]askuser.Option, 0, len(options))
+	for _, o := range options {
+		out = append(out, askuser.Option{Label: o.Label, Description: o.Description, Confidence: o.Confidence})
+	}
+	return out
 }
 
 // Dynamic tools are persisted by Codex at thread creation, and cannot be added

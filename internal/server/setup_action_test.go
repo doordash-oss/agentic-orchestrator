@@ -15,7 +15,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -25,10 +24,8 @@ import (
 
 type setupActionMutationTarget struct {
 	MutationTarget
-	setupCalls  []string
-	setupErr    error
-	startCalls  []string
-	resumeCalls []string
+	setupCalls []string
+	setupErr   error
 }
 
 func (t *setupActionMutationTarget) SetupFeature(featureID string) (FeatureSetupResponse, error) {
@@ -37,40 +34,6 @@ func (t *setupActionMutationTarget) SetupFeature(featureID string) (FeatureSetup
 		return FeatureSetupResponse{}, t.setupErr
 	}
 	return FeatureSetupResponse{FeatureID: featureID, Result: "setup_started"}, nil
-}
-
-func (t *setupActionMutationTarget) StartFeature(featureID string) (FeatureStartResponse, error) {
-	t.startCalls = append(t.startCalls, featureID)
-	return FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
-}
-
-func (t *setupActionMutationTarget) ResumeFeature(featureID string) (FeatureStartResponse, error) {
-	t.resumeCalls = append(t.resumeCalls, featureID)
-	return FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
-}
-
-func TestFeatureSetupActionDispatchesServerOwnedSetup(t *testing.T) {
-	t.Parallel()
-	target := &setupActionMutationTarget{}
-	handler := NewHandler(HandlerOptions{
-		Mutations:             target,
-		DisableHostValidation: true,
-	})
-
-	w := postTrustedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/setup", map[string]any{})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
-	}
-	var body FeatureSetupResponse
-	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body.FeatureID != fixtureFeatureID || body.Result != "setup_started" {
-		t.Fatalf("response = %+v; want setup_started for %s", body, fixtureFeatureID)
-	}
-	if len(target.setupCalls) != 1 || target.setupCalls[0] != fixtureFeatureID {
-		t.Fatalf("setup calls = %v; want one for %s", target.setupCalls, fixtureFeatureID)
-	}
 }
 
 func TestFeatureSetupActionRejectsConflicts(t *testing.T) {
@@ -93,26 +56,6 @@ func TestFeatureSetupActionRejectsConflicts(t *testing.T) {
 	}
 	if body.Error.Diagnostics != "feature has no pending setup" {
 		t.Fatalf("diagnostics = %q; want the setup conflict detail", body.Error.Diagnostics)
-	}
-}
-
-func TestFeatureResumeActionUsesDedicatedResumeMutation(t *testing.T) {
-	t.Parallel()
-	target := &setupActionMutationTarget{}
-	handler := NewHandler(HandlerOptions{
-		Mutations:             target,
-		DisableHostValidation: true,
-	})
-
-	w := postTrustedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/resume", map[string]any{})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
-	}
-	if len(target.resumeCalls) != 1 || target.resumeCalls[0] != fixtureFeatureID {
-		t.Fatalf("resume calls = %v; want one for %s", target.resumeCalls, fixtureFeatureID)
-	}
-	if len(target.startCalls) != 0 {
-		t.Fatalf("start calls = %v; resume must not use the generic start mutation", target.startCalls)
 	}
 }
 

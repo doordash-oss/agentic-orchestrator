@@ -22,6 +22,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 type completionResponse struct {
@@ -50,7 +51,7 @@ func (p *completionProtocol) RespondToCompletion(requestID string, accepted bool
 	return nil
 }
 
-func (p *completionProtocol) RespondToAskUser(_ string, _ json.RawMessage, _ map[string]string, _ map[string]llm.AskUserAnnotation) error {
+func (p *completionProtocol) RespondToAskUser(string, askuser.Resolved) error {
 	if p.onAnswer != nil {
 		p.onAnswer()
 	}
@@ -268,7 +269,7 @@ func TestAskUserResponsePreservesImmediatelyNextQuestion(t *testing.T) {
 		s.recordPendingControlRequestLocked(question("next"))
 		s.mu.Unlock()
 	}
-	if err := s.RespondToAskUser("first", input, map[string]string{"First?": "Choice"}, nil); err != nil {
+	if err := s.RespondToAskUser("first", resolveAskUser(t, input, map[string]string{"1": "Choice"})); err != nil {
 		t.Fatal(err)
 	}
 	pending := s.PendingControlRequests()

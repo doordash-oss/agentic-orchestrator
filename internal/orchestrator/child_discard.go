@@ -32,6 +32,17 @@ import (
 // and then enters the retryable cleanup tail. Repeated or concurrent requests
 // converge on the same outcome and close timestamp.
 func (o *Orchestrator) DiscardChild(childID string) error {
+	if err := o.discardChild(childID); err != nil {
+		return err
+	}
+	// The discard settled: the child's reservation settles with it (any
+	// still-draining session keeps it until the completion funnel).
+	o.trace(traceSettle)
+	o.admission.settle(childID)
+	return nil
+}
+
+func (o *Orchestrator) discardChild(childID string) error {
 	child, err := o.deps.Lifecycle.Get(childID)
 	if err != nil {
 		return fmt.Errorf("load child: %w", err)
@@ -52,7 +63,7 @@ func (o *Orchestrator) DiscardChild(childID string) error {
 	// the read lock) so a discard request cannot interleave with an
 	// integration that is already in progress.
 	if child.DiscardIntent == nil {
-		if err := o.WithRelationshipWriteLock(func() error {
+		if err := o.withRelationshipWriteLock(func() error {
 			return o.deps.Store.Modify(childID, func(f *feature.Feature) error {
 				if f.DiscardIntent != nil {
 					return nil
@@ -93,7 +104,7 @@ func (o *Orchestrator) resumeDiscard(childID string) error {
 
 	// Step 2: Stop sessions.
 	if step == feature.DiscardStepIntentRecorded {
-		o.StopFeatureSessions(childID)
+		o.stopFeatureSessions(childID)
 		if err := o.setDiscardStep(childID, feature.DiscardStepSessionsStopping); err != nil {
 			return err
 		}
@@ -439,6 +450,8 @@ func countPendingWorktrees(f *feature.Feature) int {
 // ReconcileDiscardIntents processes discard intents at startup before
 // ordinary session recovery. It resumes interrupted discards from the durable
 // step.
+// Test-reachable seam: production runs it from startup recovery; e2e
+// recovery tests drive it directly.
 func (o *Orchestrator) ReconcileDiscardIntents() error {
 	if o.deps.Store == nil {
 		return nil

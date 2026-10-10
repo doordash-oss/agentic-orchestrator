@@ -31,7 +31,7 @@ func (t waiveMutationTarget) WaiveTestingContractItems(featureID string, req Tes
 	if t.received != nil {
 		*t.received = append(*t.received, req)
 	}
-	return TestingContractWaiveResponse{FeatureID: featureID, ContractRevision: 2, WaivedItems: req.ItemIDs}, nil
+	return TestingContractWaiveResponse{FeatureID: featureID, Result: "waived", ContractRevision: 2, WaivedItems: req.ItemIDs}, nil
 }
 
 func TestTestingContractWaiveAction(t *testing.T) {

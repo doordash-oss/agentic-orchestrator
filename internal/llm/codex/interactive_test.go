@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -416,6 +417,52 @@ func TestCodexInterruptSendsTurnInterruptForInteractiveTurn(t *testing.T) {
 	}
 	if err := p.Interrupt(); !errors.Is(err, llm.ErrNotSupported) {
 		t.Fatalf("Interrupt after the turn = %v, want ErrNotSupported", err)
+	}
+}
+
+func TestCodexInterruptBeforeTurnID(t *testing.T) {
+	for _, notificationFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("notificationFirst=%t", notificationFirst), func(t *testing.T) {
+			p := NewProtocol(llm.ProtocolOpts{WorkDir: "/w", Interactive: true})
+			p.SetThreadIDForTest("th")
+			for turn := 1; turn <= 2; turn++ {
+				w := &wire{}
+				p.SetStdin(w)
+				var err error
+				if turn == 1 {
+					err = p.startTurn("hold")
+				} else {
+					err = p.SendUserMessage("hold again")
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				requestID, _ := w.await(t, "turn/start")
+				if err := p.Interrupt(); err != nil {
+					t.Fatalf("interrupt before turn ID: %v", err)
+				}
+				parse(t, p, `{"method":"turn/started","params":{"threadId":"child","turn":{"id":"child-turn","status":"inProgress"}}}`)
+				if got := strings.Join(w.methods(), ","); got != "turn/start" {
+					t.Fatalf("interrupted before the root turn ID arrived: %s", got)
+				}
+				turnID := fmt.Sprintf("tu-%d", turn)
+				response := fmt.Sprintf(`{"id":%s,"result":{"turn":{"id":%q,"status":"inProgress"}}}`, requestID, turnID)
+				notification := fmt.Sprintf(`{"method":"turn/started","params":{"threadId":"th","turn":{"id":%q,"status":"inProgress"}}}`, turnID)
+				if notificationFirst {
+					response, notification = notification, response
+				}
+				parse(t, p, response)
+				_, params := w.await(t, "turn/interrupt")
+				if string(params) != fmt.Sprintf(`{"threadId":"th","turnId":%q}`, turnID) {
+					t.Fatalf("interrupt targeted the wrong turn: %s", params)
+				}
+				parse(t, p, notification)
+				if got := strings.Join(w.methods(), ","); got != "turn/start,turn/interrupt" {
+					t.Fatalf("duplicate interrupt: %s", got)
+				}
+				parse(t, p, fmt.Sprintf(`{"method":"turn/completed","params":{"threadId":"th","turn":{"id":%q,"status":"interrupted"}}}`, turnID))
+			}
+		})
 	}
 }
 

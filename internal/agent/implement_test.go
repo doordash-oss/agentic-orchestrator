@@ -3916,6 +3916,52 @@ func TestWaitForPhaseOutcome_ContextEndCommitsPresentOutcome(t *testing.T) {
 	}
 }
 
+// unansweredFlagSession records the unanswered-question flag the waiter owns.
+type unansweredFlagSession struct {
+	*outcomeSignalSession
+	unanswered atomic.Bool
+}
+
+func (s *unansweredFlagSession) SetHasUnansweredQuestion(v bool) { s.unanswered.Store(v) }
+
+// TestWaitForPhaseOutcome_CleanCommitClearsUnansweredQuestion pins that only a
+// commit with no error and no violations clears the unanswered-question flag.
+func TestWaitForPhaseOutcome_CleanCommitClearsUnansweredQuestion(t *testing.T) {
+	tests := []struct {
+		name          string
+		violations    []ProtocolViolation
+		err           error
+		wantCleared   bool
+		wantStatusOut string
+	}{
+		{name: "clean", wantCleared: true, wantStatusOut: agentStatusSuccess},
+		{name: "violations", violations: []ProtocolViolation{{Artifact: "plan.md", Reason: "missing"}}, wantStatusOut: agentStatusProtocolViolation},
+		{name: "error", err: errors.New("commit failed"), wantStatusOut: agentStatusFailed},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			sess := &unansweredFlagSession{outcomeSignalSession: newOutcomeSignalSession()}
+			sess.setRootIntent(validSuccessCompletionIntent())
+			sess.unanswered.Store(true)
+
+			result := WaitForPhaseOutcome(sess, PhaseOutcomeWaitOptions{
+				Ctx: ctx,
+				CommitOutcome: func(llm.CompletionIntent) ([]ProtocolViolation, error) {
+					return tt.violations, tt.err
+				},
+			})
+			if result.Status != tt.wantStatusOut {
+				t.Fatalf("WaitForPhaseOutcome() = %+v, want status %s", result, tt.wantStatusOut)
+			}
+			if cleared := !sess.unanswered.Load(); cleared != tt.wantCleared {
+				t.Fatalf("unanswered question cleared = %v, want %v", cleared, tt.wantCleared)
+			}
+		})
+	}
+}
+
 // TestAppendHarnessVerdict_RecordsRejectionInTranscripts proves the harness
 // verdict is visible next to the provider's own [result] line, which reports
 // only the provider subtype.

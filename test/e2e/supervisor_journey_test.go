@@ -36,8 +36,8 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
+	"github.com/doordash-oss/agentic-orchestrator/internal/server/mutations"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor/claudesession"
@@ -48,42 +48,6 @@ import (
 )
 
 const supervisorTestToken = "supervisor-test-token"
-
-// supervisorAnswerTarget serves the existing permission and ask-user answer
-// routes by answering the session directly, the way the CLI mutation
-// target does. Every other mutation is unused by these journeys.
-type supervisorAnswerTarget struct {
-	server.MutationTarget
-	sessions ports.SessionManager
-}
-
-func (t supervisorAnswerTarget) AnswerPermission(req server.PermissionAnswerRequest) (server.PermissionAnswerResponse, error) {
-	sess := t.sessions.GetSession(req.SessionID)
-	if sess == nil {
-		return server.PermissionAnswerResponse{}, fmt.Errorf("session %s not found", req.SessionID)
-	}
-	if err := sess.RespondToControl(req.RequestID, req.Decision != "deny", ""); err != nil {
-		return server.PermissionAnswerResponse{}, err
-	}
-	return server.PermissionAnswerResponse{SessionID: sess.ID(), RequestID: req.RequestID, Decision: req.Decision, Result: "answered"}, nil
-}
-
-func (t supervisorAnswerTarget) AnswerAskUser(req server.AskUserAnswerRequest) (server.AskUserAnswerResponse, error) {
-	sess := t.sessions.GetSession(req.SessionID)
-	if sess == nil {
-		return server.AskUserAnswerResponse{}, fmt.Errorf("session %s not found", req.SessionID)
-	}
-	var questions json.RawMessage
-	for _, pending := range sess.PendingControlRequests() {
-		if pending.RequestID == req.RequestID {
-			questions = pending.Request.Input
-		}
-	}
-	if err := sess.RespondToAskUser(req.RequestID, questions, req.Answers, nil); err != nil {
-		return server.AskUserAnswerResponse{}, err
-	}
-	return server.AskUserAnswerResponse{SessionID: sess.ID(), RequestID: req.RequestID, Result: "answered"}, nil
-}
 
 type supervisorHarness struct {
 	t        *testing.T
@@ -225,7 +189,7 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 			FeatureStore: h.store,
 			Features:     h.store,
 			Sessions:     h.sessions,
-			Mutations:    supervisorAnswerTarget{sessions: h.sessions},
+			Mutations:    mutations.New(mutations.Deps{Sessions: h.sessions}),
 			Supervisor:   coord,
 			Admission:    h.admission,
 			Updates:      *h.updates,
@@ -244,7 +208,7 @@ func (h *supervisorHarness) start(mutate ...func(*supervisor.Options)) {
 		FeatureStore:          h.store,
 		Features:              h.store,
 		Sessions:              h.sessions,
-		Mutations:             supervisorAnswerTarget{sessions: h.sessions},
+		Mutations:             mutations.New(mutations.Deps{Sessions: h.sessions}),
 		Supervisor:            coord,
 		Admission:             h.admission,
 		// The runtime state directory backs the uploads route, so staged
@@ -777,7 +741,7 @@ func TestSupervisorPermissionAndQuestionRequests(t *testing.T) {
 		t.Fatalf("question pending = %+v", st.PendingRequests)
 	}
 	h.do(http.MethodPost, "/api/v1/prompts/ask-user/answer", map[string]any{
-		"request_id": st.PendingRequests[0].RequestID, "session_id": st.SessionID, "answers": map[string]string{"Which branch?": "main"},
+		"request_id": st.PendingRequests[0].RequestID, "session_id": st.SessionID, "answers": map[string]string{"1": "main"},
 	}, http.StatusOK, nil)
 	stream.until("question idle", isState(server.SupervisorLifecycleIdle))
 

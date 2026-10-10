@@ -452,3 +452,42 @@ func TestValidateVerificationReportExplainsDeclinedWaiver(t *testing.T) {
 		t.Fatalf("details = %q, want unchanged finding for plan_2", details)
 	}
 }
+
+func TestReadNeedUserInputRecordRejectsInvalidQuestionIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		questions []NeedUserInputQuestion
+		wantErr   string
+	}{
+		{name: "zero", questions: []NeedUserInputQuestion{{Index: 1, Prompt: "Which database?"}, {Prompt: "Which rollout?"}}, wantErr: `"Which rollout?"`},
+		{name: "negative", questions: []NeedUserInputQuestion{{Index: -2, Prompt: "Which database?"}}, wantErr: `"Which database?"`},
+		{name: "duplicate", questions: []NeedUserInputQuestion{{Index: 1, Prompt: "Which database?"}, {Index: 1, Prompt: "Which rollout?"}}, wantErr: `"Which rollout?"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), NeedUserInputArtifactName)
+			if err := WriteNeedUserInputRecord(path, NeedUserInputRecord{Summary: "blocked", Questions: tt.questions}); err != nil {
+				t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+			}
+			_, err := ReadNeedUserInputRecord(path)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ReadNeedUserInputRecord() error = %v, want error naming %s", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestReadNeedUserInputRecordKeepsStoredIndexes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), NeedUserInputArtifactName)
+	want := []NeedUserInputQuestion{{Index: 1, Prompt: "Which database?"}, {Index: 3, Prompt: "Which rollout?"}}
+	if err := WriteNeedUserInputRecord(path, NeedUserInputRecord{Summary: "blocked", Questions: want}); err != nil {
+		t.Fatalf("WriteNeedUserInputRecord() error = %v", err)
+	}
+	rec, err := ReadNeedUserInputRecord(path)
+	if err != nil {
+		t.Fatalf("ReadNeedUserInputRecord() error = %v", err)
+	}
+	if !reflect.DeepEqual(rec.Questions, want) {
+		t.Fatalf("Questions = %+v, want %+v", rec.Questions, want)
+	}
+}

@@ -82,7 +82,7 @@ func TestSupervisorOpenCodeRootControls(t *testing.T) {
 	}
 	h.do(http.MethodPost, "/api/v1/prompts/ask-user/answer", map[string]any{
 		"request_id": st.PendingRequests[0].RequestID, "session_id": st.SessionID,
-		"answers": map[string]string{testutil.FakeOpenCodeQuestion: "dev"},
+		"answers": map[string]string{"1": "dev"},
 	}, http.StatusOK, nil)
 	h.waitLifecycle(server.SupervisorLifecycleIdle)
 	if got := lastAssistantText(h.transcript("").Items); got != "You chose dev" {
@@ -385,7 +385,7 @@ func TestSupervisorOpenCodeChildPermissionAndQuestion(t *testing.T) {
 		pending := st.PendingRequests[0]
 		var body any = map[string]string{"request_id": pending.RequestID, "session_id": st.SessionID, "decision": "allow_once"}
 		if tc.tool == "AskUserQuestion" {
-			body = map[string]any{"request_id": pending.RequestID, "session_id": st.SessionID, "answers": map[string]string{testutil.FakeOpenCodeQuestion: "dev"}}
+			body = map[string]any{"request_id": pending.RequestID, "session_id": st.SessionID, "answers": map[string]string{"1": "dev"}}
 		}
 		h.do(http.MethodPost, tc.answerPath, body, http.StatusOK, nil)
 		stream.until("child reply", isState(server.SupervisorLifecycleIdle))

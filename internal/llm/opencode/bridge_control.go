@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // Request-id prefixes for bridged control requests. ACP request ids are
@@ -66,9 +67,6 @@ type openCodeQuestion struct {
 		Description string `json:"description"`
 	} `json:"options"`
 	Multiple bool `json:"multiple"`
-	// Custom defaults to true in OpenCode: a free-text answer is allowed
-	// unless the question turns it off.
-	Custom *bool `json:"custom"`
 }
 
 // requestResolved is the properties of permission.replied,
@@ -172,25 +170,19 @@ func (p *Protocol) bridgeQuestion(ev questionAsked) []llm.SDKMessage {
 		go func() { _ = p.respondBridged(reqID, replyReject, nil) }()
 		return nil
 	}
-	questions := make([]map[string]any, 0, len(ev.Questions))
+	bundle := askuser.Bundle{Questions: make([]askuser.Question, 0, len(ev.Questions))}
 	for _, q := range ev.Questions {
-		options := make([]map[string]string, 0, len(q.Options))
+		options := make([]askuser.Option, 0, len(q.Options))
 		for _, o := range q.Options {
-			options = append(options, map[string]string{"label": o.Label, "description": o.Description})
+			options = append(options, askuser.Option{Label: o.Label, Description: o.Description})
 		}
 		header := strings.TrimSpace(q.Header)
 		if header == "" {
 			header = "Agent Question"
 		}
-		questions = append(questions, map[string]any{
-			"question":    q.Question,
-			"header":      header,
-			"multiSelect": q.Multiple,
-			"custom":      q.Custom == nil || *q.Custom,
-			"options":     options,
-		})
+		bundle.Questions = append(bundle.Questions, askuser.Question{Question: q.Question, Header: header, MultiSelect: q.Multiple, Options: options})
 	}
-	input, _ := json.Marshal(map[string]any{"questions": questions})
+	input := bundle.Encode()
 	return []llm.SDKMessage{p.bridgedControl(reqID, ev.SessionID, "AskUserQuestion", input)}
 }
 
@@ -360,57 +352,33 @@ func (p *Protocol) respondBridged(requestID, reply string, answers [][]string) e
 	return nil
 }
 
-// bridgedAnswers maps the session's answers, keyed by question text, to
-// OpenCode's per-question label lists. A multi-select answer is split on the
-// ", " the answer surfaces join labels with when every part names an option;
-// any other answer that matches no option is a custom answer.
-func bridgedAnswers(questions []openCodeQuestion, answers map[string]string) ([][]string, error) {
-	out := make([][]string, 0, len(questions))
-	for _, q := range questions {
-		answer, ok := answers[q.Question]
-		if !ok || strings.TrimSpace(answer) == "" {
-			return nil, fmt.Errorf("missing answer for question %q", q.Question)
-		}
-		labels := make([]string, 0, len(q.Options))
-		for _, o := range q.Options {
-			labels = append(labels, o.Label)
-		}
-		if label, ok := llm.MatchAskUserOptionLabel(labels, answer); ok {
-			out = append(out, []string{label})
+// bridgedAnswers maps the resolved answers to OpenCode's per-question label
+// lists: a selected answer sends its labels and a free-text answer is a
+// custom answer.
+func bridgedAnswers(questions []openCodeQuestion, resolved askuser.Resolved) ([][]string, error) {
+	if len(resolved.Answers) != len(questions) {
+		return nil, fmt.Errorf("resolved %d answers for %d questions", len(resolved.Answers), len(questions))
+	}
+	out := make([][]string, 0, len(resolved.Answers))
+	for _, answer := range resolved.Answers {
+		if answer.Selected {
+			out = append(out, append([]string(nil), answer.Labels...))
 			continue
 		}
-		if q.Multiple {
-			if picked, ok := matchAllLabels(labels, strings.Split(answer, ", ")); ok {
-				out = append(out, picked)
-				continue
-			}
-		}
-		out = append(out, []string{answer})
+		out = append(out, []string{answer.Raw})
 	}
 	return out, nil
 }
 
-func matchAllLabels(labels, parts []string) ([]string, bool) {
-	picked := make([]string, 0, len(parts))
-	for _, part := range parts {
-		label, ok := llm.MatchAskUserOptionLabel(labels, strings.TrimSpace(part))
-		if !ok {
-			return nil, false
-		}
-		picked = append(picked, label)
-	}
-	return picked, len(picked) > 0
-}
-
 // respondBridgedAskUser answers a bridged question.
-func (p *Protocol) respondBridgedAskUser(requestID string, answers map[string]string) error {
+func (p *Protocol) respondBridgedAskUser(requestID string, resolved askuser.Resolved) error {
 	p.mu.Lock()
 	req, held := p.bridged[requestID]
 	p.mu.Unlock()
 	if !held {
 		return p.respondBridged(requestID, "", nil)
 	}
-	mapped, err := bridgedAnswers(req.questions, answers)
+	mapped, err := bridgedAnswers(req.questions, resolved)
 	if err != nil {
 		return err
 	}

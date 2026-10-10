@@ -15,12 +15,14 @@
 package opencode
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 func TestBuildCommand_InteractiveAddsServerBridge(t *testing.T) {
@@ -112,11 +114,23 @@ func TestBridgedAnswers(t *testing.T) {
 	]`), &questions); err != nil {
 		t.Fatal(err)
 	}
-	got, err := bridgedAnswers(questions, map[string]string{
-		"Which branch?":  "main",
-		"Which checks?":  "lint, vet",
-		"Anything else?": "Use the staging cluster",
+	bundle := askuser.Bundle{}
+	for _, q := range questions {
+		options := make([]askuser.Option, 0, len(q.Options))
+		for _, o := range q.Options {
+			options = append(options, askuser.Option{Label: o.Label})
+		}
+		bundle.Questions = append(bundle.Questions, askuser.Question{Question: q.Question, MultiSelect: q.Multiple, Options: options})
+	}
+	resolved, err := bundle.Resolve(map[string]string{
+		"1": "main (Recommended)",
+		"2": "lint, vet",
+		"3": "Use the staging cluster",
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := bridgedAnswers(questions, resolved)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,8 +138,8 @@ func TestBridgedAnswers(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("answers = %q, want %q", got, want)
 	}
-	if _, err := bridgedAnswers(questions, map[string]string{"Which branch?": "dev"}); err == nil {
-		t.Fatal("missing answers accepted")
+	if _, err := bridgedAnswers(questions[:1], resolved); err == nil {
+		t.Fatal("answers for a different question set accepted")
 	}
 }
 
@@ -227,11 +241,17 @@ func TestParseLine_BridgeLines(t *testing.T) {
 		if len(msgs) != 1 || msgs[0].ControlRequest.Request.ToolName != "AskUserQuestion" || msgs[0].Origin.Kind != llm.EventOriginRoot {
 			t.Fatalf("question msgs = %+v", msgs)
 		}
-		input := string(msgs[0].ControlRequest.Request.Input)
-		for _, want := range []string{`"multiSelect":true`, `"custom":false`, `"header":"Agent Question"`, `"label":"a"`} {
-			if !strings.Contains(input, want) {
-				t.Fatalf("question input %s lacks %s", input, want)
-			}
+		input := msgs[0].ControlRequest.Request.Input
+		bundle, err := askuser.Parse(input)
+		if err != nil {
+			t.Fatalf("question input %s: %v", input, err)
+		}
+		want := askuser.Bundle{Questions: []askuser.Question{{Question: "Pick", Header: "Agent Question", MultiSelect: true, Options: []askuser.Option{{Label: "a", Description: "A"}}}}}
+		if !reflect.DeepEqual(bundle, want) {
+			t.Fatalf("question bundle = %+v, want %+v", bundle, want)
+		}
+		if !bytes.Equal(input, want.Encode()) {
+			t.Fatalf("question input %s is not the canonical envelope %s", input, want.Encode())
 		}
 	})
 }

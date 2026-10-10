@@ -48,10 +48,10 @@ func (o *Orchestrator) cascadeOwnsRelationship(parentID string) (bool, error) {
 	return false, fmt.Errorf("loading cascade ownership for %s: %w", parentID, err)
 }
 
-// ReconcileCascadeDeletes resumes every discoverable durable delete intent.
+// reconcileCascadeDeletes resumes every discoverable durable delete intent.
 // Attention is a convergent outcome, not a startup failure; material journal
 // read/write failures fail recovery closed.
-func (o *Orchestrator) ReconcileCascadeDeletes() error {
+func (o *Orchestrator) reconcileCascadeDeletes() error {
 	if o.deps.Store == nil {
 		return nil
 	}
@@ -73,17 +73,17 @@ func (o *Orchestrator) ReconcileCascadeDeletes() error {
 			}
 			return fmt.Errorf("loading cascade delete for %s: %w", f.ID, err)
 		}
-		if _, err := o.DeleteCascade(f.ID); err != nil {
+		if _, err := o.deleteCascade(f.ID); err != nil {
 			return fmt.Errorf("resuming cascade delete for %s: %w", f.ID, err)
 		}
 	}
 	return nil
 }
 
-// DeleteCascade resumes or begins the single durable delete operation for a
+// deleteCascade resumes or begins the single durable delete operation for a
 // parent relationship. The relationship write lock excludes child creation
 // and guarded relationship mutations for the operation's complete lifetime.
-func (o *Orchestrator) DeleteCascade(featureID string) (feature.CascadeDeleteResult, error) {
+func (o *Orchestrator) deleteCascade(featureID string) (feature.CascadeDeleteResult, error) {
 	o.relationshipMu.Lock()
 	defer o.relationshipMu.Unlock()
 
@@ -222,7 +222,7 @@ func (o *Orchestrator) emitCascadeProgressIfChanged(
 }
 
 func (o *Orchestrator) deleteWithoutCascade(featureID string) error {
-	o.StopFeatureSessions(featureID)
+	o.stopFeatureSessions(featureID)
 	if o.deps.Lifecycle != nil {
 		if err := o.deps.Lifecycle.Delete(featureID); err != nil {
 			return fmt.Errorf("deleting feature: %w", err)

@@ -34,15 +34,15 @@ type activeSetupFailer interface {
 	FailActiveSetup(featureID, message string) (feature.SetupFailureOutcome, error)
 }
 
-// RunSetupAsync runs RunSetup in an orchestrator-owned goroutine tracked by
+// runSetupAsync runs runSetup in an orchestrator-owned goroutine tracked by
 // WaitForCycles, so asynchronous setup (currently the refactor-child launch
-// path) always has an owner: a terminal RunSetup error is both recorded
+// path) always has an owner: a terminal runSetup error is both recorded
 // durably and emitted as a correlated failure signal, and emit paths select
-// on shutdown. A detached "go RunSetup()" can return before the runner
+// on shutdown. A detached "go runSetup()" can return before the runner
 // durably marks setup failed or emits a failure event (reload, transition
 // persistence, or completion failures), silently stranding the feature in
 // SettingUpWorktrees; this method is the only sanctioned async entry point.
-func (o *Orchestrator) RunSetupAsync(featureID string) {
+func (o *Orchestrator) runSetupAsync(featureID string) {
 	// Reserve admission before the goroutine launches so background setup
 	// is never invisible to the work boundary. A closed boundary records a
 	// durably retryable setup failure rather than silently dropping the
@@ -60,7 +60,8 @@ func (o *Orchestrator) RunSetupAsync(featureID string) {
 	go func() {
 		defer o.cycleWG.Done()
 		defer o.admissionEndAsync(featureID)
-		if err := o.RunSetup(featureID); err != nil {
+		o.trace(traceDispatch)
+		if err := o.runSetup(featureID); err != nil {
 			o.recordAsyncSetupFailure(featureID, err)
 		}
 	}()
@@ -99,14 +100,14 @@ func (o *Orchestrator) recordAsyncSetupFailure(featureID string, setupErr error)
 	o.emitSetupEvent(ev)
 }
 
-func (o *Orchestrator) RunSetup(featureID string) error {
+func (o *Orchestrator) runSetup(featureID string) error {
 	if err := o.runSetupWith(false, featureID); err != nil {
 		return err
 	}
 	return o.startFeatureAfterSetup(featureID)
 }
 
-func (o *Orchestrator) RetrySetup(featureID string) error {
+func (o *Orchestrator) retrySetup(featureID string) error {
 	if err := o.runSetupWith(true, featureID); err != nil {
 		return err
 	}
@@ -126,23 +127,6 @@ func (o *Orchestrator) startFeatureAfterSetup(featureID string) error {
 		return nil
 	}
 	return o.StartFeature(featureID)
-}
-
-// RunSetupOnly runs the queued durable setup without starting orchestration:
-// on success the feature returns to StatusCreated, a startable
-// pre-orchestration state where the action catalogue enables Start but no
-// planning or provider session has begun. Setup progress and failure are
-// still emitted through the standard setup events.
-func (o *Orchestrator) RunSetupOnly(featureID string) error {
-	return o.runSetupWith(false, featureID)
-}
-
-// RetrySetupOnly reruns only the unfinished setup tasks of a failed setup,
-// preserving completed task state, without starting orchestration. On
-// success the feature reaches the same startable StatusCreated state as
-// RunSetupOnly.
-func (o *Orchestrator) RetrySetupOnly(featureID string) error {
-	return o.runSetupWith(true, featureID)
 }
 
 func (o *Orchestrator) runSetupWith(retry bool, featureID string) error {

@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // nextID is an atomic counter for JSON-RPC request IDs.
@@ -77,6 +78,7 @@ type Protocol struct {
 	// Session state
 	threadID              string
 	turnID                string
+	interruptPending      bool
 	model                 string
 	effort                string
 	settingsRequests      map[int]chan error
@@ -411,25 +413,38 @@ func (p *Protocol) RespondToHook(_ string) error {
 }
 
 // RespondToAskUser returns the actual answer to its pending Codex tool call.
-func (p *Protocol) RespondToAskUser(requestID string, _ json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
-	return p.respondToAskUser(requestID, answers, annotations)
+func (p *Protocol) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
+	return p.respondToAskUser(requestID, resolved.ByText())
 }
 
 // Interrupt sends turn/interrupt for the running turn of an interactive
 // session; the app-server answers with a turn/completed whose status is
 // "interrupted" (handled in ParseLine). Other sessions, and an interactive
 // one with no active turn, return ErrNotSupported so the session layer
-// keeps its SIGINT fallback on the process group.
+// keeps its SIGINT fallback on the process group. While turn/start is awaiting
+// its ID, retain the interrupt until the response or turn/started arrives.
 func (p *Protocol) Interrupt() error {
 	if !p.opts.Interactive {
 		return llm.ErrNotSupported
 	}
 	p.mu.Lock()
-	threadID, turnID, active := p.threadID, p.turnID, p.turnActive
-	if !active || threadID == "" || turnID == "" {
+	if !p.turnActive || p.threadID == "" {
 		p.mu.Unlock()
 		return llm.ErrNotSupported
 	}
+	p.interruptPending = true
+	p.mu.Unlock()
+	return p.flushPendingInterrupt()
+}
+
+func (p *Protocol) flushPendingInterrupt() error {
+	p.mu.Lock()
+	if !p.interruptPending || !p.turnActive || p.turnID == "" {
+		p.mu.Unlock()
+		return nil
+	}
+	threadID, turnID := p.threadID, p.turnID
+	p.interruptPending = false
 	id := int(nextID.Add(1))
 	if p.interruptReqIDs == nil {
 		p.interruptReqIDs = map[int]bool{}
@@ -598,6 +613,8 @@ func (p *Protocol) startTurn(userPrompt string) error {
 
 	p.mu.Lock()
 	p.turnActive = true
+	p.turnID = ""
+	p.interruptPending = false
 	threadID := p.threadID
 	writableRoots := append([]string(nil), p.opts.WritableRoots...)
 	policy := p.approvalPolicy
@@ -669,6 +686,8 @@ func (p *Protocol) sendFollowUpTurn(text string) error {
 
 	p.mu.Lock()
 	p.turnActive = true
+	p.turnID = ""
+	p.interruptPending = false
 	p.usageState.revision++
 	p.pricingModel = p.model
 	threadID := p.threadID
@@ -853,6 +872,9 @@ func (p *Protocol) handleResponse(id int, result, errData json.RawMessage) (msg 
 		p.turnActive = true
 		p.mu.Unlock()
 		p.logDebug("[codex] turn started: %s (status=%s)", turnResult.Turn.ID, turnResult.Turn.Status)
+		if err := p.flushPendingInterrupt(); err != nil {
+			p.logDebug("[codex] deferred interrupt failed: %v", err)
+		}
 		return llm.SDKMessage{}, false, true
 	}
 
@@ -1274,6 +1296,8 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 
 		p.mu.Lock()
 		p.turnActive = false
+		p.interruptPending = false
+		p.orphanPendingQuestionsLocked()
 		p.mu.Unlock()
 		p.requestUsageRead()
 
@@ -1791,6 +1815,11 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 		}
 		if p.opts.NativeToollessReview && isMain && alreadyStarted {
 			return p.nativeToollessViolation("unexpected extra turn"), true
+		}
+		if isMain {
+			if err := p.flushPendingInterrupt(); err != nil {
+				p.logDebug("[codex] deferred interrupt failed: %v", err)
+			}
 		}
 		return llm.SDKMessage{}, false
 

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -103,7 +104,7 @@ func (p *scriptedProtocol) RespondToControl(string, bool, json.RawMessage, strin
 	return nil
 }
 func (p *scriptedProtocol) RespondToHook(string) error { return nil }
-func (p *scriptedProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+func (p *scriptedProtocol) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
 func (p *scriptedProtocol) Interrupt() error       { return llm.ErrNotSupported }
@@ -130,4 +131,19 @@ func (p *scriptedProtocol) ParseLine([]byte) ([]llm.SDKMessage, error) {
 	}
 	p.msgIndex++
 	return []llm.SDKMessage{msg}, nil
+}
+
+// resolveAskUser resolves index-keyed answers against an AskUserQuestion
+// control request input, as the mutation module does before answering.
+func resolveAskUser(t testing.TB, input json.RawMessage, answers map[string]string) askuser.Resolved {
+	t.Helper()
+	bundle, err := askuser.Parse(input)
+	if err != nil {
+		t.Fatalf("parse ask-user input: %v (%s)", err, input)
+	}
+	resolved, err := bundle.Resolve(answers)
+	if err != nil {
+		t.Fatalf("resolve ask-user answers: %v", err)
+	}
+	return resolved
 }

@@ -19,12 +19,11 @@ import (
 	"path/filepath"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 )
 
-// BuildImplementSystemPromptInput carries runtime values for the
+// implementSystemPromptInput carries runtime values for the
 // RoleSpec-backed implement system prompt.
-type BuildImplementSystemPromptInput struct {
+type implementSystemPromptInput struct {
 	IterationDir   string
 	SkillsDir      string
 	GuidelinesDir  string
@@ -34,15 +33,14 @@ type BuildImplementSystemPromptInput struct {
 	Frontend       bool
 }
 
-// BuildRoleSystemPromptInput carries runtime values for a RoleSpec-backed
+// roleSystemPromptInput carries runtime values for a RoleSpec-backed
 // system prompt.
-type BuildRoleSystemPromptInput struct {
-	Spec           RoleSpec
+type roleSystemPromptInput struct {
+	Spec           roleSpec
 	IterationDir   string
 	SkillsDir      string
 	GuidelinesDir  string
 	KBInfos        []KBInfo
-	Model          string
 	AskingClause   string
 	CompletionTool string
 	// RequiredSkillNames lists utility skills the role must read and apply,
@@ -58,9 +56,9 @@ type BuildRoleSystemPromptInput struct {
 	SuppressSubagents bool
 }
 
-// BuildImplementSystemPrompt renders the RoleSpec-backed system prompt for
+// buildImplementSystemPrompt renders the RoleSpec-backed system prompt for
 // one implement iteration.
-func BuildImplementSystemPrompt(in BuildImplementSystemPromptInput) string {
+func buildImplementSystemPrompt(in implementSystemPromptInput) string {
 	requiredSkillNames := []string(nil)
 	var requiredSkillConditions map[string]string
 	if in.Frontend {
@@ -72,8 +70,8 @@ func BuildImplementSystemPrompt(in BuildImplementSystemPromptInput) string {
 			"frontend-design": "this iteration creates new UI or visually reshapes existing UI (components, layout, styling, motion); skip for mechanical fixes, test repair, refactors, or other non-visual changes",
 		}
 	}
-	return BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:                    ImplementRoleSpec(),
+	return buildRoleSystemPrompt(roleSystemPromptInput{
+		Spec:                    implementRoleSpec,
 		IterationDir:            in.IterationDir,
 		SkillsDir:               in.SkillsDir,
 		GuidelinesDir:           in.GuidelinesDir,
@@ -85,10 +83,10 @@ func BuildImplementSystemPrompt(in BuildImplementSystemPromptInput) string {
 	})
 }
 
-// BuildRoleSystemPrompt renders the generic RoleSpec-backed system prompt.
-func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
+// buildRoleSystemPrompt renders the generic RoleSpec-backed system prompt.
+func buildRoleSystemPrompt(in roleSystemPromptInput) string {
 	spec := in.Spec
-	rt := RoleRuntime{IterationDir: in.IterationDir}
+	rt := roleRuntime{IterationDir: in.IterationDir}
 	roots := spec.OutputRootPaths(rt)
 	rootViews := make([]prompts.OutputRootView, 0, len(spec.OutputRoots))
 	for _, root := range spec.OutputRoots {
@@ -104,11 +102,6 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 		skillPath = filepath.Join(in.SkillsDir, spec.SkillName, "SKILL.md")
 	}
 
-	askingClause := in.AskingClause
-	if askingClause == "" && spec.AskingClauseFor != nil {
-		askingClause = spec.AskingClauseFor(in.Model)
-	}
-
 	requiredSkills := resolveSkillViews(in.RequiredSkillNames, in.SkillsDir)
 	for i := range requiredSkills {
 		requiredSkills[i].Condition = in.RequiredSkillConditions[requiredSkills[i].Name]
@@ -121,14 +114,14 @@ func BuildRoleSystemPrompt(in BuildRoleSystemPromptInput) string {
 		Preflight:            buildPreflightInput(spec.Phase, in.SkillsDir, in.KBInfos, in.GuidelinesDir, in.RequiredSkillNames...),
 		ReadOnlyOutsideRoots: spec.ReadOnlyOutsideRoots,
 		SubagentsAvailable:   !in.SuppressSubagents,
-		RetryOutcomeAllowed:  roles.RoleSpec(spec).SupportsRetryOutcome(),
-		AskingClause:         askingClause,
+		RetryOutcomeAllowed:  spec.IterationState,
+		AskingClause:         in.AskingClause,
 		CompletionTool:       in.CompletionTool,
 	})
 }
 
-func artifactPreflightCommand(spec RoleSpec, iterationDir string) string {
-	if spec.NoOp || spec.Role == "" || iterationDir == "" {
+func artifactPreflightCommand(spec roleSpec, iterationDir string) string {
+	if spec.Role == "" || iterationDir == "" {
 		return ""
 	}
 	return fmt.Sprintf(`"$AGENTICO_BIN" validate-artifacts --phase %s --role %s --dir %q`,

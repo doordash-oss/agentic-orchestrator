@@ -95,7 +95,7 @@ func sessionManagerWithQALog(sessionID string) *mocks.MockSessionManager {
 		}
 		v := mocks.NewMockSessionView(sessionID, "feat-gate")
 		v.QALogVal = []ports.QAPair{
-			{Question: "Q1", Answer: "A1", Notes: "note one"},
+			{Question: "Q1", Answer: "A1"},
 			{Question: "Q2", Answer: "Auto (Recommended)", AutoPicked: true, Confidence: 0.85},
 		}
 		return v
@@ -208,8 +208,6 @@ const sampleHarnessOwnedQA = `# User Q&A — Phase Clarifications
 ## Q: Q1
 
 **A:** A1
-
-**Notes:** note one
 
 ## Q: Q2
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -22,31 +22,25 @@ import (
 // RolePlanPhaseReviser is the per-roadmap-phase plan revision session.
 const RolePlanPhaseReviser Role = "plan_phase_reviser"
 
-var phasePlanReviserRoleSpec = RoleSpec{
-	Phase:        feature.PhasePlan,
-	Role:         RolePlanPhaseReviser,
-	SkillName:    "revise-phase-plan",
-	UserTemplate: "phase_plan_revision.user",
-	OutputRoots: []OutputRootSpec{
+var phasePlanReviserRoleSpec = roleSpec{
+	Phase:     feature.PhasePlan,
+	Role:      RolePlanPhaseReviser,
+	SkillName: "revise-phase-plan",
+	OutputRoots: []outputRootSpec{
 		artifactDirOutputRoot("Shared per-phase plan artifact root. Revisions update the phase plan markdown here across attempts."),
 		attemptDirOutputRoot("Active phase-plan revision attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
 	},
-	Artifacts: []RoleArtifactSpec{
+	Artifacts: []roleArtifactSpec{
 		phasePlanMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),
 	},
 	ReadOnlyOutsideRoots: true,
 }
 
-// PhasePlanReviserRoleSpec returns the RoleSpec-backed phase-plan revision role.
-func PhasePlanReviserRoleSpec() RoleSpec {
-	return CloneRoleSpec(phasePlanReviserRoleSpec)
-}
-
-// PhasePlanRevisionUserInput is the data passed to phase_plan_revision.user.tmpl.
-type PhasePlanRevisionUserInput struct {
+// phasePlanRevisionUserInput is the data passed to phase_plan_revision.user.tmpl.
+type phasePlanRevisionUserInput struct {
 	Attempt int
-	Phase   PhasePlanView
+	Phase   phasePlanView
 
 	Feedback string
 
@@ -58,9 +52,4 @@ type PhasePlanRevisionUserInput struct {
 	Inquireness prompts.AutonomousInquirenessInput
 
 	AutomatedVerificationOnly bool
-}
-
-// BuildPhasePlanRevisionPrompt renders the phase-plan revision prompt.
-func BuildPhasePlanRevisionPrompt(in PhasePlanRevisionUserInput) string {
-	return prompts.PhasePlanRevisionUserPrompt(in)
 }

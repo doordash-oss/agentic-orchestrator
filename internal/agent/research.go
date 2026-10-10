@@ -24,7 +24,6 @@ import (
 	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -58,7 +57,7 @@ func researchFeatureViews(f *feature.Feature) (repos []prompts.RepoView, images 
 // internal/agent/prompts/templates/research_from_questions.user.tmpl.
 func BuildResearchFromQuestionsPrompt(f *feature.Feature, skillsDir, questionsPath string, kbInfos ...KBInfo) string {
 	repos, _, _ := researchFeatureViews(f)
-	return roles.BuildResearchFromQuestionsPrompt(roles.ResearchFromQuestionsUserInput{
+	return prompts.ResearchFromQuestionsUserPrompt(researchFromQuestionsUserInput{
 		QuestionsPath: questionsPath,
 		Repos:         repos,
 	})

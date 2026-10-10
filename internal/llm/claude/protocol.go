@@ -27,6 +27,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/claudeconfig"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // interruptSeq gives each interrupt control_request a unique ID so the CLI
@@ -174,109 +175,54 @@ func (p *Protocol) RespondToHook(requestID string) error {
 // RespondToAskUser sends a control response for an AskUserQuestion tool use.
 // The CLI resolves each answer against the question's option labels; an
 // answer matching no label selects nothing and the turn never receives a
-// tool_result, so answers are aligned to labels first and free-text answers
-// are injected as an extra option before being selected.
-func (p *Protocol) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
-	questions, answers = alignAskUserAnswers(questions, answers)
-	return p.writeJSON(llm.NewAskUserResponse(requestID, questions, answers, annotations))
+// tool_result, so a selected answer is sent as its labels verbatim and a
+// free-text answer is injected as an extra option before being selected.
+func (p *Protocol) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
+	bundle, answers := presentAskUserAnswers(resolved)
+	return p.writeJSON(llm.NewAskUserResponse(requestID, bundle, answers))
 }
 
-// alignAskUserAnswers rewrites each answer to the exact option label it
-// selects (recommended-suffix and display-truncation tolerant) and injects a
-// free-text answer that matches no label as an option, so the CLI's label
-// resolution always finds a selection. The resulting option list stays within
-// Claude's required 2-4 cardinality: an optionless question receives one
-// padding choice, while a full list reserves its final slot for the custom
-// answer.
-func alignAskUserAnswers(questions json.RawMessage, answers map[string]string) (json.RawMessage, map[string]string) {
-	if len(answers) == 0 {
-		return questions, answers
-	}
-	var root any
-	if err := json.Unmarshal(questions, &root); err != nil {
-		return questions, answers
-	}
-	list := askUserQuestionList(root)
-	if len(list) == 0 {
-		return questions, answers
-	}
-
-	aligned := make(map[string]string, len(answers))
-	for k, v := range answers {
-		aligned[k] = v
-	}
-	changed := false
-	for _, item := range list {
-		q, ok := item.(map[string]any)
-		if !ok {
+// presentAskUserAnswers returns the bundle to echo and the answers keyed by
+// question text. A selected answer is its labels verbatim, joined with ", "
+// for multi-select; a free-text answer is injected as an option so the CLI's
+// label resolution always finds a selection. The resulting option list stays
+// within Claude's required 2-4 cardinality: an optionless question receives
+// one padding choice, while a full list reserves its final slot for the
+// custom answer.
+func presentAskUserAnswers(resolved askuser.Resolved) (askuser.Bundle, map[string]string) {
+	bundle := askuser.Bundle{Questions: append([]askuser.Question(nil), resolved.Bundle.Questions...)}
+	answers := make(map[string]string, len(resolved.Answers))
+	for _, answer := range resolved.Answers {
+		if answer.Selected {
+			answers[answer.Question] = strings.Join(answer.Labels, ", ")
 			continue
 		}
-		text, _ := q["question"].(string)
-		answer, ok := answers[text]
-		if !ok || strings.TrimSpace(answer) == "" {
+		answers[answer.Question] = answer.Raw
+		i := answer.Index - 1
+		if i < 0 || i >= len(bundle.Questions) {
 			continue
 		}
-		opts, _ := q["options"].([]any)
-		if label, ok := llm.MatchAskUserOptionLabel(askUserOptionLabels(opts), answer); ok {
-			if label != answer {
-				aligned[text] = label
-				changed = true
-			}
-			continue
-		}
+		q := &bundle.Questions[i]
+		opts := append([]askuser.Option(nil), q.Options...)
 		if len(opts) == 0 {
 			paddingLabel := "Other"
-			if _, matchesAnswer := llm.MatchAskUserOptionLabel([]string{paddingLabel}, answer); matchesAnswer {
+			if strings.TrimSpace(answer.Raw) == paddingLabel {
 				paddingLabel = "Alternative answer"
 			}
-			opts = append(opts, map[string]any{
-				"label":       paddingLabel,
-				"description": "Provide a different custom answer.",
+			opts = append(opts, askuser.Option{
+				Label:       paddingLabel,
+				Description: "Provide a different custom answer.",
 			})
 		}
 		if len(opts) >= 4 {
 			opts = opts[:3]
 		}
-		q["options"] = append(opts, map[string]any{
-			"label":       answer,
-			"description": "User-provided custom answer.",
+		q.Options = append(opts, askuser.Option{
+			Label:       answer.Raw,
+			Description: "User-provided custom answer.",
 		})
-		changed = true
 	}
-	if !changed {
-		return questions, answers
-	}
-	out, err := json.Marshal(root)
-	if err != nil {
-		return questions, answers
-	}
-	return out, aligned
-}
-
-// askUserQuestionList returns the questions array from either the tool input
-// envelope ({"questions":[...]}) or a bare array.
-func askUserQuestionList(root any) []any {
-	switch v := root.(type) {
-	case map[string]any:
-		list, _ := v["questions"].([]any)
-		return list
-	case []any:
-		return v
-	default:
-		return nil
-	}
-}
-
-func askUserOptionLabels(opts []any) []string {
-	labels := make([]string, 0, len(opts))
-	for _, opt := range opts {
-		if m, ok := opt.(map[string]any); ok {
-			if label, ok := m["label"].(string); ok {
-				labels = append(labels, label)
-			}
-		}
-	}
-	return labels
+	return bundle, answers
 }
 
 // Interrupt sends a control_request with subtype "interrupt" to cancel the

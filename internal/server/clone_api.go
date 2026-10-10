@@ -30,10 +30,10 @@ import (
 // clone, GET lists operations, and sub-routes address one operation.
 const apiPathWorkspaceClone = "/api/v1/workspace/repositories/clone"
 
-// CloneService is the server-side clone lifecycle boundary. Handlers stay
+// cloneService is the server-side clone lifecycle boundary. Handlers stay
 // thin: validation, durable state and process control live in the service;
 // every response is an authoritative snapshot.
-type CloneService interface {
+type cloneService interface {
 	Start(ctx context.Context, input clone.StartInput) (clone.Record, error)
 	// Create runs the shared destination/publication boundary for a new
 	// child repository with one empty initial commit; it returns the

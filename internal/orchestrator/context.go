@@ -27,7 +27,7 @@ import (
 // Uses PhaseRunner.StateDir which points at the same base dir as
 // feature.Store.BaseDir. Falls back to feature.Store.BaseDir when
 // PhaseRunner is unset (tests that don't use context assembly), so
-// path-resolution helpers (RecordRoadmapRejection, artifact resolution)
+// path-resolution helpers (recordRoadmapRejection, artifact resolution)
 // continue to work in unit tests that inject a real feature.Store
 // but no PhaseRunner.
 func (o *Orchestrator) stateDir() string {
@@ -172,7 +172,7 @@ func (o *Orchestrator) phasePlanDirForFeature(f *feature.Feature, phase int) str
 // (Per SchemaVersionCurrent = 3, callers resolve the per-phase plan
 // directory by taking filepath.Dir of the plan markdown path — the planner
 // authors `<plan-dir>/plan.md` and `<plan-dir>/execution-order.yaml`
-// together. See StartMultiRepoImplementation in multirepo.go and
+// together. See startMultiRepoImplementation in multirepo.go and
 // tryLoadPhasePlan in lifecycle_delegates.go.)
 
 // collectQAFilePaths gathers Q&A answer files from earlier phases (inquire,

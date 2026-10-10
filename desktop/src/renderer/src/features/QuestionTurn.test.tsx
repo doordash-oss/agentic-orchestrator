@@ -37,7 +37,8 @@ const item: QuestionsAttentionItem = {
   waitingSince: '2026-08-01T10:00:00.000Z',
   questions: [
     {
-      key: 'Which overall direction should this project take?',
+      index: 1,
+      question: 'Which overall direction should this project take?',
       header: 'Project direction',
       multiSelect: false,
       options: [
@@ -128,13 +129,38 @@ describe('QuestionConversationTurn', () => {
       requestId: 'questions-1',
       sessionId: 'session-1',
       answers: {
-        'Which overall direction should this project take?': 'Build user-facing features',
+        '1': [2],
       },
     });
   });
 });
 
 describe('Question answers', () => {
+  it('submits option indexes independently of duplicate, truncated, and comma-bearing labels', async () => {
+    const user = userEvent.setup();
+    const questionItem: QuestionsAttentionItem = {
+      ...item,
+      questions: [
+        {
+          index: 1,
+          question: 'Choose',
+          header: 'Choices',
+          multiSelect: true,
+          options: [{ label: 'truncated...' }, { label: 'truncated...' }, { label: 'red, green' }],
+        },
+      ],
+    };
+    render(<Harness questionItem={questionItem} />);
+    const choices = screen.getAllByRole('checkbox');
+    await user.click(choices[1]!);
+    await user.click(choices[2]!);
+    expect(choices[0]).not.toBeChecked();
+    expect(questionAnswersRequest(questionItem, latestDrafts).answers).toEqual({ '1': [2, 3] });
+    expect(screen.getByLabelText('Your reply, not sent yet')).toHaveTextContent(
+      '2 · truncated..., 3 · red, green',
+    );
+  });
+
   it('free text answers the question, replacing any selection', async () => {
     const onSubmit = vi.fn();
     const user = userEvent.setup();
@@ -158,7 +184,7 @@ describe('Question answers', () => {
     expect(questionAnswersRequest(item, latestDrafts)).toEqual({
       requestId: 'questions-1',
       sessionId: 'session-1',
-      answers: { 'Which overall direction should this project take?': 'Focus on speed' },
+      answers: { '1': 'Focus on speed' },
     });
 
     await user.click(send);
@@ -176,7 +202,7 @@ describe('Question answers', () => {
       ...item,
       questions: [
         ...item.questions,
-        { key: 'Any notes?', header: 'Notes', multiSelect: false, options: [] },
+        { index: 2, question: 'Any notes?', header: 'Notes', multiSelect: false, options: [] },
       ],
     };
     const { rerender } = render(<Harness questionItem={questionItem} onSubmit={onSubmit} />);
@@ -186,8 +212,8 @@ describe('Question answers', () => {
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
     await user.type(within(turn).getByLabelText('Notes free text'), 'Ship 3 fixes');
     expect(questionAnswersRequest(questionItem, latestDrafts).answers).toEqual({
-      'Which overall direction should this project take?': 'Plan 2',
-      'Any notes?': 'Ship 3 fixes',
+      '1': 'Plan 2',
+      '2': 'Ship 3 fixes',
     });
     rerender(<Harness questionItem={questionItem} onSubmit={onSubmit} busy />);
     await user.keyboard('{Enter}');

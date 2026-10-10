@@ -25,6 +25,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
@@ -163,11 +164,9 @@ func (s *utilityTestSession) SendUserMessage(text string) error { return nil }
 func (s *utilityTestSession) RespondToControl(requestID string, allow bool, reason string) error {
 	return nil
 }
-func (s *utilityTestSession) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+func (s *utilityTestSession) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
-func (s *utilityTestSession) ClearPendingQuestion(requestID string)  {}
-func (s *utilityTestSession) ResetWaitingStatus()                    {}
 func (s *utilityTestSession) Stop() error                            { return nil }
 func (s *utilityTestSession) Interrupt() error                       { return nil }
 func (s *utilityTestSession) Wait()                                  {}

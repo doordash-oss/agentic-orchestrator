@@ -39,7 +39,7 @@ type runtimeConfigRecorder struct {
 
 func (r *runtimeConfigRecorder) RuntimeConfig(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
 	r.calls.Add(1)
-	return RuntimeConfigUpdateResponse{Result: resultUpdated}, nil
+	return RuntimeConfigUpdateResponse{Result: "updated"}, nil
 }
 
 func newRuntimeConfigHandler(t *testing.T, recorder *runtimeConfigRecorder) http.Handler {
@@ -198,26 +198,31 @@ func TestPatchRuntimeConfigRejectsInvalidWorkspaceRoots(t *testing.T) {
 	}
 }
 
-func TestPutRuntimeConfigRejectsInvalidWorkspaceRoots(t *testing.T) {
+// PUT was removed in REST schema series 3; PATCH is the only runtime-config
+// mutation, so a well-formed trusted PUT never reaches the mutation target.
+func TestPutRuntimeConfigAnswersMethodNotAllowed(t *testing.T) {
 	t.Parallel()
 	recorder := &runtimeConfigRecorder{}
 	handler := newRuntimeConfigHandler(t, recorder)
 
 	payload, _ := json.Marshal(map[string]any{
-		"workspace_roots": []string{filepath.Join(t.TempDir(), "missing")},
+		"workspace_roots": []string{t.TempDir()},
 	})
 	req := httptest.NewRequest(http.MethodPut, apiPathConfigRuntime, bytes.NewReader(payload))
 	req.Header.Set("Content-Type", contentTypeJSON)
 	req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("PUT status = %d body=%s; want 400", w.Code, w.Body.String())
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("PUT status = %d body=%s; want 405", w.Code, w.Body.String())
 	}
-	if body := decodeErrorBody(t, w); body.Error.Code != string(errcat.InvalidWorkspaceRoot) {
-		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.InvalidWorkspaceRoot)
+	if allow := w.Header().Get("Allow"); allow != "GET, PATCH" {
+		t.Fatalf("Allow = %q; want %q", allow, "GET, PATCH")
+	}
+	if body := decodeErrorBody(t, w); body.Error.Code != string(errcat.MethodNotAllowed) {
+		t.Fatalf("error code = %q; want %q", body.Error.Code, errcat.MethodNotAllowed)
 	}
 	if got := recorder.calls.Load(); got != 0 {
-		t.Fatalf("RuntimeConfig calls = %d; want none for invalid roots", got)
+		t.Fatalf("RuntimeConfig calls = %d; want none for PUT", got)
 	}
 }

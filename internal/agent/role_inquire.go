@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -22,27 +22,21 @@ import (
 // RoleInquirer is the single-shot Inquire session.
 const RoleInquirer Role = "inquirer"
 
-var inquirerRoleSpec = RoleSpec{
-	Phase:        feature.PhaseInquire,
-	Role:         RoleInquirer,
-	SkillName:    "inquire",
-	UserTemplate: "inquire.user",
-	OutputRoots: []OutputRootSpec{
+var inquirerRoleSpec = roleSpec{
+	Phase:     feature.PhaseInquire,
+	Role:      RoleInquirer,
+	SkillName: "inquire",
+	OutputRoots: []outputRootSpec{
 		singleShotPhaseDirOutputRoot("Inquire phase artifact directory."),
 	},
-	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("inquire markdown artifact", ValidatorInquiryQuestions),
+	Artifacts: []roleArtifactSpec{
+		phaseMarkdownRoleArtifact("inquire markdown artifact", validateInquiryQuestionsArtifact),
 	},
 	ReadOnlyOutsideRoots: true,
 }
 
-// InquirerRoleSpec returns the RoleSpec-backed inquire role.
-func InquirerRoleSpec() RoleSpec {
-	return CloneRoleSpec(inquirerRoleSpec)
-}
-
-// InquireUserInput is the data passed to inquire.user.tmpl.
-type InquireUserInput struct {
+// inquireUserInput is the data passed to inquire.user.tmpl.
+type inquireUserInput struct {
 	Name         string
 	Description  string
 	ExitCriteria string
@@ -51,9 +45,4 @@ type InquireUserInput struct {
 	Repos        []prompts.RepoView
 
 	Inquireness prompts.GrillMeInquirenessInput
-}
-
-// BuildInquirePrompt renders the inquirer user prompt.
-func BuildInquirePrompt(in InquireUserInput) string {
-	return prompts.InquireUserPrompt(in)
 }

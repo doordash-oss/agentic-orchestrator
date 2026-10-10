@@ -84,7 +84,7 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	// relationship first. Cascade then takes exclusive ownership before
 	// paired config, discard, integration, closure cleanup, or ordinary
 	// session recovery can advance either record.
-	if err := o.ReconcileCascadeDeletes(); err != nil {
+	if err := o.reconcileCascadeDeletes(); err != nil {
 		return nil, fmt.Errorf("reconcile cascade deletes: %w", err)
 	}
 	// Reconcile interrupted paired config updates before integration
@@ -115,7 +115,7 @@ func (o *Orchestrator) ScanRecovery(ctx context.Context) ([]ports.RecoveryItem, 
 	// Reconcile pending promotion journals after integration so a merged
 	// child with an unfinished promotion can be recovered before ordinary
 	// session recovery observes or relaunches sessions.
-	if err := o.ReconcilePromotions(); err != nil {
+	if err := o.reconcilePromotions(); err != nil {
 		return nil, fmt.Errorf("reconcile promotions: %w", err)
 	}
 	items, err := o.deps.Recovery.ScanForRecovery(ctx)
@@ -314,6 +314,8 @@ func recoveryActionString(action ports.RecoveryAction) string {
 //
 // Reconciliation errors follow the existing fail-closed startup ordering so
 // session recovery never acts on an unreconciled transaction.
+// Test-reachable seam: production runs it from startup recovery; e2e
+// recovery tests drive it directly.
 func (o *Orchestrator) ReconcileIntegrationTransactions() error {
 	features, listErr := o.deps.Store.List()
 	var partialIDs []string

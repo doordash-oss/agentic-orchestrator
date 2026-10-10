@@ -16,7 +16,6 @@ package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -39,7 +38,7 @@ func BuildInquirePrompt(f *feature.Feature, skillsDir string, kbInfos ...KBInfo)
 		repos = append(repos, prompts.RepoView{Name: r.Name, Path: path})
 	}
 
-	in := roles.InquireUserInput{
+	in := inquireUserInput{
 		Name:         f.Name,
 		Description:  f.Description,
 		ExitCriteria: f.ExitCriteria,
@@ -49,5 +48,5 @@ func BuildInquirePrompt(f *feature.Feature, skillsDir string, kbInfos ...KBInfo)
 		Inquireness:  prompts.GrillMeInquirenessInput{Level: string(f.Inquireness)},
 	}
 
-	return roles.BuildInquirePrompt(in)
+	return prompts.InquireUserPrompt(in)
 }

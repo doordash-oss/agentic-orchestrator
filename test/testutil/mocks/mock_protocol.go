@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // MockProtocol implements llm.Protocol by replaying a configurable message
@@ -113,7 +114,7 @@ func (p *MockProtocol) RespondToHook(requestID string) error {
 	return nil
 }
 
-func (p *MockProtocol) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+func (p *MockProtocol) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
 	return nil
 }
 

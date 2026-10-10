@@ -117,11 +117,12 @@ type Protocol struct {
 
 	// Control-request bookkeeping. pendingPerms maps a permission request id to
 	// the allow/reject option ids the user's approve/deny decision selects;
-	// pendingQuestionOpts maps a structured-question request id to its answer
-	// label -> optionId map so a chosen answer resolves to the right ACP option.
+	// pendingQuestionOpts maps a structured-question request id to its native
+	// option ids in presented order so a chosen option position resolves to
+	// the right ACP option.
 	// Both are keyed by the string request id surfaced to the session layer.
 	pendingPerms        map[string]permissionOptions
-	pendingQuestionOpts map[string]map[string]string
+	pendingQuestionOpts map[string][]string
 
 	// formatRetryCount tracks reformat-reminder turns sent for a plain-text
 	// question that lacked the required numbered options; synthSeq makes

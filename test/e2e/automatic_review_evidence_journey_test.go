@@ -36,6 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/serverclient"
 )
 
 const (
@@ -115,7 +116,7 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(httpServer.Close)
-	client, err := server.NewClient(server.ClientOptions{BaseURL: httpServer.URL})
+	client, err := serverclient.NewClient(serverclient.ClientOptions{BaseURL: httpServer.URL})
 	if err != nil {
 		t.Fatalf("NewClient() error: %v", err)
 	}
@@ -126,13 +127,13 @@ func TestAutomaticReviewFreshAllowOwningSessionJourney(t *testing.T) {
 	}
 	previewStatusIndex, previewBashIndex := automaticReviewDTOOrder(t, preview.Transcript, wantStatus)
 
-	transcript, err := client.Transcript(t.Context(), automaticReviewJourneySessionID, server.CursorQuery{Limit: 100})
+	transcript, err := client.Transcript(t.Context(), automaticReviewJourneySessionID, serverclient.CursorQuery{Limit: 100})
 	if err != nil {
 		t.Fatalf("Transcript() error: %v", err)
 	}
 	transcriptStatusIndex, transcriptBashIndex := automaticReviewDTOOrder(t, transcript.Messages, wantStatus)
 
-	records, streamErrors := client.SubscribeSessionOutput(t.Context(), automaticReviewJourneySessionID, server.SessionOutputStreamOptions{})
+	records, streamErrors := client.SubscribeSessionOutput(t.Context(), automaticReviewJourneySessionID, serverclient.SessionOutputStreamOptions{})
 	var streamed []server.TranscriptMessage
 	for record := range records {
 		streamed = append(streamed, record.Message)

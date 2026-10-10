@@ -265,10 +265,6 @@ export class RunHistoryService {
       featureId: validateWithSchema(result.feature_id, FeatureIdSchema),
       action: 'rewind',
       result: result.result,
-      ...(result.effective_phase !== undefined && result.effective_phase !== ''
-        ? { phase: result.effective_phase }
-        : {}),
-      sessionIds: [],
       ...(result.source_run_number !== undefined
         ? { sourceRunNumber: result.source_run_number }
         : {}),

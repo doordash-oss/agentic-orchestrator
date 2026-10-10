@@ -222,7 +222,7 @@ func newOriginCheckAcceptanceRuntime(t *testing.T, cfg *config.Config, runtimeDi
 		Features:              store,
 		FeatureStore:          store,
 		Config:                cfg,
-		Mutations:             &target,
+		Mutations:             target,
 	})
 	return store, manager, handler
 }

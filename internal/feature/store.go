@@ -1309,3 +1309,6 @@ func parseRunDirName(name string) (int, bool) {
 	}
 	return n, true
 }
+
+// BaseDirectory returns the store root used for durable feature state.
+func (s *Store) BaseDirectory() string { return s.BaseDir }

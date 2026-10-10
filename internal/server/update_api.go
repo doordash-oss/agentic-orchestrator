@@ -91,7 +91,7 @@ func (h *apiHandler) handleUpdateCheckRoute(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *apiHandler) writeUpdateSnapshot(w http.ResponseWriter, r *http.Request, status int) {
-	snapshot := h.updates.Snapshot()
+	snapshot := h.updates.snapshot()
 	revision := revisionForAny(snapshot)
 	response := UpdateSnapshotResponse{
 		APIVersion: APIVersion,

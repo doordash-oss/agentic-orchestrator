@@ -68,9 +68,9 @@ type FeedChecker interface {
 	LatestStable(ctx context.Context) (selfupdate.ReleaseSelection, error)
 }
 
-// UpdateObserver receives server.update observations. *observe.Observer
+// updateObserver receives server.update observations. *observe.Observer
 // satisfies it once ServerUpdate is installed there.
-type UpdateObserver interface {
+type updateObserver interface {
 	ServerUpdate(from, to, result string)
 }
 
@@ -100,14 +100,14 @@ type UpdateOptions struct {
 	Feed FeedChecker
 	// Stager runs the signed-release candidate pipeline for one pinned
 	// version. Nil means installs cannot stage (refused as unavailable).
-	Stager ReleaseStager
+	Stager releaseStager
 	// Install owns the process-level replacement work (update lock,
 	// transaction begin, final drain/commit/exec). Nil means installs
 	// cannot run.
-	Install InstallLifecycle
+	Install installLifecycle
 	// Admission is the runtime work-admission boundary installs gate on.
 	// Nil means installs cannot run.
-	Admission InstallAdmission
+	Admission installAdmission
 	// stopper performs the authorized interruption of feature and supervisor
 	// work for explicit-stop immediate installs. Nil means such installs
 	// cannot run (refused as unsupported).
@@ -143,22 +143,22 @@ type UpdateOptions struct {
 	// discards.
 	Log func(line string)
 	// Observer receives server.update observations; nil discards.
-	Observer UpdateObserver
+	Observer updateObserver
 }
 
 // updateClock is the deterministic-time seam: Now reads the clock and After
 // returns a channel that fires after the given delay (fake clocks fire it on
 // Advance).
 type updateClock interface {
-	Now() time.Time
-	After(time.Duration) <-chan time.Time
+	now() time.Time
+	after(time.Duration) <-chan time.Time
 }
 
 type realUpdateClock struct{}
 
-func (realUpdateClock) Now() time.Time { return time.Now().UTC() }
+func (realUpdateClock) now() time.Time { return time.Now().UTC() }
 
-func (realUpdateClock) After(d time.Duration) <-chan time.Time {
+func (realUpdateClock) after(d time.Duration) <-chan time.Time {
 	return time.After(d)
 }
 
@@ -377,7 +377,7 @@ func (c *updateCoordinator) run(ctx context.Context) {
 			}
 			continue
 		}
-		if d := next.Sub(c.clock.Now()); d > 0 {
+		if d := next.Sub(c.clock.now()); d > 0 {
 			select {
 			case <-ctx.Done():
 				return
@@ -386,7 +386,7 @@ func (c *updateCoordinator) run(ctx context.Context) {
 			case <-c.wake:
 				c.performCheck(ctx, "explicit")
 				continue
-			case <-c.clock.After(d):
+			case <-c.clock.after(d):
 			}
 		}
 		c.performCheck(ctx, "periodic")
@@ -417,7 +417,7 @@ func (c *updateCoordinator) nextDeadline() (time.Time, bool) {
 func (c *updateCoordinator) retryDeadlineRefusal() *errcat.Error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.state.retryNotBefore == nil || c.clock.Now().After(*c.state.retryNotBefore) {
+	if c.state.retryNotBefore == nil || c.clock.now().After(*c.state.retryNotBefore) {
 		return nil
 	}
 	until := c.state.retryNotBefore.UTC().Format(time.RFC3339)
@@ -456,7 +456,7 @@ func (c *updateCoordinator) performCheck(ctx context.Context, trigger string) {
 		c.mu.Unlock()
 		return
 	}
-	if trigger == "explicit" && c.state.retryNotBefore != nil && c.clock.Now().Before(*c.state.retryNotBefore) {
+	if trigger == "explicit" && c.state.retryNotBefore != nil && c.clock.now().Before(*c.state.retryNotBefore) {
 		// A deadline may have been imposed after the caller validated; an
 		// explicit trigger never bypasses it.
 		c.mu.Unlock()
@@ -538,7 +538,7 @@ func (c *updateCoordinator) fetch(ctx context.Context) (selfupdate.ReleaseSelect
 // last-success timestamp; a success resets the retry floor and backoff and
 // schedules the next periodic check with bounded jitter.
 func (c *updateCoordinator) applyCheckResultLocked(sel selfupdate.ReleaseSelection, err error, lookup selfupdate.SuppressionLookup, lookupErr error) string {
-	now := c.clock.Now()
+	now := c.clock.now()
 	st := &c.state
 	st.lastCheckAt = &now
 
@@ -832,7 +832,7 @@ func (c *updateCoordinator) snapshotLocked() UpdateSnapshot {
 
 // Snapshot returns the current wire snapshot. The activity summary is
 // refreshed outside the mutex first so slow discovery never stalls reads.
-func (c *updateCoordinator) Snapshot() UpdateSnapshot {
+func (c *updateCoordinator) snapshot() UpdateSnapshot {
 	c.refreshActivity()
 	c.mu.Lock()
 	defer c.mu.Unlock()

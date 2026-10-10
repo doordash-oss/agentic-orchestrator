@@ -53,15 +53,15 @@ func (r *uploadMutationRecorder) CreateFeature(req CreateFeatureRequest) (Create
 	return CreateFeatureResponse{APIVersion: APIVersion, FeatureID: "feat-uploaded", Result: "created"}, nil
 }
 
-func (r *uploadMutationRecorder) RefactorFeature(_ string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
+func (r *uploadMutationRecorder) RefactorFeature(_ string, req RefactorFeatureRequest) (ChildLaunchResponse, error) {
 	copied := req
 	r.mu.Lock()
 	r.refactorReq = &copied
 	r.mu.Unlock()
 	if r.refactorErr != nil {
-		return RefactorFeatureResponse{Result: "failed"}, r.refactorErr
+		return ChildLaunchResponse{Result: "failed"}, r.refactorErr
 	}
-	return RefactorFeatureResponse{APIVersion: APIVersion, FeatureID: "refactor-child", ParentID: fixtureFeatureID, Result: "created"}, nil
+	return ChildLaunchResponse{APIVersion: APIVersion, FeatureID: "refactor-child", ParentID: fixtureFeatureID, Result: "created"}, nil
 }
 
 // newUploadTestAPI builds a handler backed by a temp state dir so the upload

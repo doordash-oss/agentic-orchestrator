@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package server
+package serverclient
 
 import (
 	"bytes"
@@ -20,11 +20,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
 const defaultClientTimeout = 10 * time.Second
@@ -50,8 +53,8 @@ type apiError struct {
 	Class       string
 	Title       string
 	Summary     string
-	Remediation *ErrorRemediation
-	Context     *ErrorContext
+	Remediation *server.ErrorRemediation
+	Context     *server.ErrorContext
 	Diagnostics string
 	Method      string
 	Path        string
@@ -107,53 +110,53 @@ func clientTimeout(timeout time.Duration) time.Duration {
 	return timeout
 }
 
-func (c *Client) Transcript(ctx context.Context, sessionID string, query CursorQuery) (TranscriptResponse, error) {
-	var out TranscriptResponse
+func (c *Client) Transcript(ctx context.Context, sessionID string, query CursorQuery) (server.TranscriptResponse, error) {
+	var out server.TranscriptResponse
 	err := c.getJSON(ctx, "/api/v1/sessions/"+pathSegment(sessionID)+"/transcript", transcriptValues(query), &out)
 	return out, err
 }
 
-func (c *Client) LivePreview(ctx context.Context, featureID string) (LivePreviewResponse, error) {
-	var out LivePreviewResponse
+func (c *Client) LivePreview(ctx context.Context, featureID string) (server.LivePreviewResponse, error) {
+	var out server.LivePreviewResponse
 	err := c.getJSON(ctx, "/api/v1/features/"+pathSegment(featureID)+"/live-preview", nil, &out)
 	return out, err
 }
 
-func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error) {
-	var out FeatureConfigUpdateResponse
+func (c *Client) UpdateFeatureConfig(ctx context.Context, featureID string, req server.FeatureConfigMutationRequest) (server.FeatureActionResponse, error) {
+	var out server.FeatureActionResponse
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/features/"+pathSegment(featureID)+"/config", nil, req, &out, true)
 	return out, err
 }
 
-func (c *Client) RefactorFeature(ctx context.Context, featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
-	var out RefactorFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRefactor), nil, req, &out, true)
+func (c *Client) RefactorFeature(ctx context.Context, featureID string, req server.RefactorFeatureRequest) (server.ChildLaunchResponse, error) {
+	var out server.ChildLaunchResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionRefactor)), nil, req, &out, true)
 	return out, err
 }
 
-func (c *Client) ReviewFeedbackFeature(ctx context.Context, featureID string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error) {
-	var out ReviewFeedbackFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionReviewFeedback), nil, req, &out, true)
+func (c *Client) ReviewFeedbackFeature(ctx context.Context, featureID string, req server.ReviewFeedbackFeatureRequest) (server.ReviewFeedbackFeatureResponse, error) {
+	var out server.ReviewFeedbackFeatureResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionReviewFeedback)), nil, req, &out, true)
 	return out, err
 }
 
-func (c *Client) RebaseFeature(ctx context.Context, featureID string) (RebaseFeatureResponse, error) {
-	var out RebaseFeatureResponse
-	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, actionRebase), nil, RebaseFeatureRequest{}, &out, true)
+func (c *Client) RebaseFeature(ctx context.Context, featureID string) (server.ChildLaunchResponse, error) {
+	var out server.ChildLaunchResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionRebase)), nil, map[string]any{}, &out, true)
 	return out, err
 }
 
-func (c *Client) FetchReviewFeedback(ctx context.Context, featureID string) (ReviewFeedbackFetchResponse, error) {
-	var out ReviewFeedbackFetchResponse
-	err := c.doJSON(ctx, http.MethodPost, reviewFeedbackFetchPath(featureID), nil, ReviewFeedbackFetchRequest{}, &out, true)
+func (c *Client) FetchReviewFeedback(ctx context.Context, featureID string) (server.ReviewFeedbackFetchResponse, error) {
+	var out server.ReviewFeedbackFetchResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionReviewFeedback))+"/fetch", nil, server.ReviewFeedbackFetchRequest{}, &out, true)
 	return out, err
 }
 
 // UpdateReviewFeedbackSelection commits a bounded, reference-only selection
 // change against the pending draft and returns the acknowledged draft view.
-func (c *Client) UpdateReviewFeedbackSelection(ctx context.Context, featureID string, req ReviewFeedbackSelectionRequest) (ReviewFeedbackSelectionResponse, error) {
-	var out ReviewFeedbackSelectionResponse
-	err := c.doJSON(ctx, http.MethodPost, reviewFeedbackSelectionPath(featureID), nil, req, &out, true)
+func (c *Client) UpdateReviewFeedbackSelection(ctx context.Context, featureID string, req server.ReviewFeedbackSelectionRequest) (server.ReviewFeedbackSelectionResponse, error) {
+	var out server.ReviewFeedbackSelectionResponse
+	err := c.doJSON(ctx, http.MethodPost, featureActionPath(featureID, string(server.FeatureActionReviewFeedback))+"/selection", nil, req, &out, true)
 	return out, err
 }
 
@@ -184,7 +187,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	if trusted {
-		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
+		req.Header.Set("X-Agentico-Client", "local")
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
@@ -205,7 +208,7 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 
 func decodeAPIError(resp *http.Response, method, path string) error {
 	apiErr := &apiError{Status: resp.StatusCode, Method: method, Path: path}
-	var errResp ErrorResponse
+	var errResp server.ErrorResponse
 	if err := json.NewDecoder(resp.Body).Decode(&errResp); err == nil && errResp.Error.Code != "" {
 		body := errResp.Error
 		apiErr.Code = body.Code
@@ -247,4 +250,17 @@ func featureActionPath(featureID, action string) string {
 
 func pathSegment(s string) string {
 	return url.PathEscape(s)
+}
+
+func isLoopbackBaseURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "http" || u.Host == "" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

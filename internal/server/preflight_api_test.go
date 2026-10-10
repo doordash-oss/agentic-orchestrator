@@ -37,12 +37,12 @@ type preflightMutationTarget struct {
 	cleanupReq             CleanupActionRequest
 }
 
-func (t *preflightMutationTarget) RebaseFeature(featureID string) (RebaseFeatureResponse, error) {
+func (t *preflightMutationTarget) RebaseFeature(featureID string) (ChildLaunchResponse, error) {
 	t.rebaseFeatureID = featureID
 	if t.rebaseFeatureErr != nil {
-		return RebaseFeatureResponse{}, t.rebaseFeatureErr
+		return ChildLaunchResponse{}, t.rebaseFeatureErr
 	}
-	return RebaseFeatureResponse{FeatureID: "rebase-child", ParentID: featureID, Result: "created"}, nil
+	return ChildLaunchResponse{FeatureID: "rebase-child", ParentID: featureID, Result: "created"}, nil
 }
 
 func authedGet(handler http.Handler, path string) *httptest.ResponseRecorder {

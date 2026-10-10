@@ -27,11 +27,11 @@ import (
 // never appears on the projection (the Recovery workspace already renders
 // catalog titles) but keeps a rank so the map is total.
 var ownedErrorScopeRank = map[ErrorScope]int{
-	errorScopeRun:         0,
-	errorScopeSetup:       1,
-	errorScopeRepository:  2,
-	errorScopeTransaction: 3,
-	errorScopeRecovery:    4,
+	ErrorScopeRun:         0,
+	ErrorScopeSetup:       1,
+	ErrorScopeRepository:  2,
+	ErrorScopeTransaction: 3,
+	ErrorScopeRecovery:    4,
 }
 
 // ownedErrorsDTO projects a feature's current non-warning errors onto the
@@ -101,14 +101,14 @@ func appendOwnedRunFailure(entries []OwnedError, f *feature.Feature) []OwnedErro
 	}
 	if task := f.FailedSetupTask(); task != nil && task.Error != nil {
 		return appendOwnedError(entries, ErrorReference{
-			Scope:     errorScopeSetup,
+			Scope:     ErrorScopeSetup,
 			Code:      string(task.Error.Code),
 			FeatureID: f.ID,
 			TaskKey:   task.Key,
 		}, *task.Error)
 	}
 	return appendOwnedError(entries, ErrorReference{
-		Scope:     errorScopeRun,
+		Scope:     ErrorScopeRun,
 		Code:      string(rec.Code),
 		FeatureID: f.ID,
 	}, *rec)
@@ -123,7 +123,7 @@ func appendOwnedRepoErrors(entries []OwnedError, f *feature.Feature) []OwnedErro
 			continue
 		}
 		entries = appendOwnedError(entries, ErrorReference{
-			Scope:      errorScopeRepository,
+			Scope:      ErrorScopeRepository,
 			Code:       string(state.Error.Code),
 			FeatureID:  f.ID,
 			Repository: repo.Name,
@@ -140,7 +140,7 @@ func appendOwnedAttention(entries []OwnedError, child *feature.Feature) []OwnedE
 		return entries
 	}
 	return appendOwnedError(entries, ErrorReference{
-		Scope:     errorScopeTransaction,
+		Scope:     ErrorScopeTransaction,
 		Code:      string(rec.Code),
 		FeatureID: child.ID,
 	}, *rec)

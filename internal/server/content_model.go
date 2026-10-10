@@ -335,9 +335,7 @@ func (h *apiHandler) writeTextFileSlice(w http.ResponseWriter, r *http.Request, 
 		Text:       text,
 		Truncated:  offset+int64(n) < info.Size(),
 	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 func boundedTextFile(path string) bool {
@@ -375,9 +373,7 @@ func (h *apiHandler) handleLivePreview(w http.ResponseWriter, r *http.Request, f
 		}
 		resp.Transcript = transcriptDTOs(sess.MessageLog().LastN(livePreviewTranscriptMessageLimit), 0, sess.WorkDir())
 	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 func (h *apiHandler) sessionForFeature(featureID string) ports.SessionView {

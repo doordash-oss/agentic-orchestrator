@@ -28,12 +28,12 @@ type setupActionMutationTarget struct {
 	setupErr   error
 }
 
-func (t *setupActionMutationTarget) SetupFeature(featureID string) (FeatureSetupResponse, error) {
+func (t *setupActionMutationTarget) RunFeatureLifecycle(featureID string, action FeatureAction, _ GuardedFeatureActionRequest) (FeatureActionResponse, error) {
 	t.setupCalls = append(t.setupCalls, featureID)
 	if t.setupErr != nil {
-		return FeatureSetupResponse{}, t.setupErr
+		return FeatureActionResponse{}, t.setupErr
 	}
-	return FeatureSetupResponse{FeatureID: featureID, Result: "setup_started"}, nil
+	return FeatureActionResponse{FeatureID: featureID, Result: "setup_started"}, nil
 }
 
 func TestFeatureSetupActionRejectsConflicts(t *testing.T) {
@@ -65,11 +65,11 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 
 	settingUp := actionCatalogTestFeature(feature.StatusSettingUpWorktrees, feature.Checkpoints{}, &publishable)
 	settingUp.Run().Setup = &feature.SetupState{Status: feature.SetupStatusRunning}
-	actions := actionCatalogDTOs(settingUp)
-	if got := actionDTOByID(t, actions, actionSetup); !got.Enabled {
+	actions := actionCatalogDTOsWithChildGuard(settingUp, false)
+	if got := actionDTOByID(t, actions, string(FeatureActionSetup)); !got.Enabled {
 		t.Fatalf("setup action = %+v; want enabled while setup is pending", got)
 	}
-	if got := actionDTOByID(t, actions, actionStart); got.Enabled {
+	if got := actionDTOByID(t, actions, string(FeatureActionStart)); got.Enabled {
 		t.Fatalf("start action = %+v; want disabled while setup is pending", got)
 	}
 
@@ -80,8 +80,8 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 		Context:     &errcat.RecordContext{Repositories: []errcat.CodeRepository{{Name: repoNameSelf}}},
 		Diagnostics: "git worktree add failed",
 	}
-	actions = actionCatalogDTOs(failedSetup)
-	if got := actionDTOByID(t, actions, actionSetup); !got.Enabled {
+	actions = actionCatalogDTOsWithChildGuard(failedSetup, false)
+	if got := actionDTOByID(t, actions, string(FeatureActionSetup)); !got.Enabled {
 		t.Fatalf("setup action = %+v; want enabled for failed setup (retry)", got)
 	}
 
@@ -98,8 +98,8 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 		setup := actionCatalogTestFeature(feature.StatusFailed, feature.Checkpoints{}, &publishable)
 		setup.SetRun(&feature.Run{RunNumber: 1, Setup: &feature.SetupState{Status: feature.SetupStatusFailed}})
 		setup.Run().Failure = &errcat.FailureRecord{Code: tc.code, Diagnostics: "raw setup failure"}
-		actions := actionCatalogDTOs(setup)
-		if got := actionDTOByID(t, actions, actionSetup); !got.Enabled {
+		actions := actionCatalogDTOsWithChildGuard(setup, false)
+		if got := actionDTOByID(t, actions, string(FeatureActionSetup)); !got.Enabled {
 			t.Fatalf("%s: setup action = %+v; want enabled for a failed setup with code %s", tc.name, got, tc.code)
 		}
 	}
@@ -107,11 +107,11 @@ func TestActionCatalogSetupAndStartLifecycle(t *testing.T) {
 	// After successful setup the feature is Created: Start is enabled and
 	// setup no longer applies.
 	created := actionCatalogTestFeature(feature.StatusCreated, feature.Checkpoints{}, &publishable)
-	actions = actionCatalogDTOs(created)
-	if got := actionDTOByID(t, actions, actionStart); !got.Enabled {
+	actions = actionCatalogDTOsWithChildGuard(created, false)
+	if got := actionDTOByID(t, actions, string(FeatureActionStart)); !got.Enabled {
 		t.Fatalf("start action = %+v; want enabled once setup completed", got)
 	}
-	setupAction := actionDTOByID(t, actions, actionSetup)
+	setupAction := actionDTOByID(t, actions, string(FeatureActionSetup))
 	if setupAction.Enabled {
 		t.Fatalf("setup action = %+v; want disabled without pending setup", setupAction)
 	}

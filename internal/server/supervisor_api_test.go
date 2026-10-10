@@ -36,7 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
 )
 
-// recordingSupervisor is a SupervisorService double that records calls and
+// recordingSupervisor is a supervisorService double that records calls and
 // returns scripted results.
 type recordingSupervisor struct {
 	mu        sync.Mutex
@@ -224,7 +224,7 @@ func (s *recordingSupervisor) Subscribe(int64, bool, string) (*supervisor.Subscr
 
 func (s *recordingSupervisor) Unsubscribe(*supervisor.Subscription) {}
 
-func newSupervisorTestHandler(svc SupervisorService, admission *workadmission.Coordinator) http.Handler {
+func newSupervisorTestHandler(svc supervisorService, admission *workadmission.Coordinator) http.Handler {
 	return NewHandler(HandlerOptions{AuthToken: testAuthToken, DisableHostValidation: true, Supervisor: svc, Admission: admission})
 }
 
@@ -416,7 +416,7 @@ func TestSupervisorRoutes_MessagesTranscriptInterruptEnd(t *testing.T) {
 
 // newSupervisorErrorReferenceHandler serves the supervisor routes over a
 // feature store holding one run failure an error reference can address.
-func newSupervisorErrorReferenceHandler(t *testing.T, svc SupervisorService) http.Handler {
+func newSupervisorErrorReferenceHandler(t *testing.T, svc supervisorService) http.Handler {
 	t.Helper()
 	store := feature.NewStore(t.TempDir())
 	chatContextSeedRunFailure(t, store)

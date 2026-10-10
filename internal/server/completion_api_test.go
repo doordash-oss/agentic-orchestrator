@@ -32,9 +32,9 @@ type codedPublishConflictTarget struct {
 	err error
 }
 
-func (t *codedPublishConflictTarget) PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
+func (t *codedPublishConflictTarget) PublishFeature(featureID string, req PublishFeatureRequest) (FeatureActionResponse, error) {
 	t.publishReq = req
-	return PublishFeatureResponse{}, t.err
+	return FeatureActionResponse{}, t.err
 }
 
 func (t *preflightMutationTarget) CompletionPreflight(featureID string) (CompletionPreflightResponse, error) {
@@ -56,9 +56,9 @@ func (t *preflightMutationTarget) RepositoryPath(featureID, repoName string) (Re
 	return RepositoryPathResponse{FeatureID: featureID, Repo: repoName, Path: "/tmp/repo-a"}, nil
 }
 
-func (t *preflightMutationTarget) PublishFeature(featureID string, req PublishFeatureRequest) (PublishFeatureResponse, error) {
+func (t *preflightMutationTarget) PublishFeature(featureID string, req PublishFeatureRequest) (FeatureActionResponse, error) {
 	t.publishReq = req
-	return PublishFeatureResponse{FeatureID: featureID, Result: "published"}, nil
+	return FeatureActionResponse{FeatureID: featureID, Result: "published"}, nil
 }
 
 func (t *preflightMutationTarget) CleanupFeature(featureID string, req CleanupActionRequest) (CleanupFeatureResponse, error) {
@@ -121,7 +121,7 @@ func TestPublishActionReturnsCodedRemoteSafetyConflicts(t *testing.T) {
 				DisableHostValidation: true,
 			})
 
-			recorder := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+actionPublish, map[string]any{
+			recorder := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+string(FeatureActionPublish), map[string]any{
 				"repos": []string{"repo-a"},
 			})
 			var body ErrorResponse
@@ -163,7 +163,7 @@ func TestCleanupActionRejectsCycleTarget(t *testing.T) {
 		DisableHostValidation: true,
 	})
 
-	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+actionCleanup, map[string]any{
+	w := postTrustedAuthedJSON(handler, "/api/v1/features/"+fixtureFeatureID+"/actions/"+string(FeatureActionCleanup), map[string]any{
 		"target": "cycles",
 	})
 	if w.Code != http.StatusBadRequest {

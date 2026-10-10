@@ -97,9 +97,7 @@ func (h *apiHandler) handleRunList(w http.ResponseWriter, r *http.Request, featu
 		Total:      total,
 		TotalPages: totalPages,
 	}
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 // handleRunDetail serves GET /api/v1/features/{feature_id}/runs/{run_number}

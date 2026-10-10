@@ -68,9 +68,7 @@ func (h *apiHandler) handleRewindPreview(w http.ResponseWriter, r *http.Request,
 	result := feature.RewindPreviewForFeature(f, sealedRunDir, request, upgrade)
 
 	resp := rewindPreviewResponseFromResult(result)
-	revision := revisionForAny(resp)
-	resp.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, resp)
+	h.writeRevisionedResponse(w, r, resp, func(meta ResponseMeta) any { resp.Meta = meta; return resp })
 }
 
 // rewindPreviewResponseFromResult maps the feature-layer preview result into

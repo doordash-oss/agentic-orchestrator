@@ -44,8 +44,8 @@ type nopMutationTarget struct {
 // StopFeature keeps the nop target safe for the handler-owned
 // install stopper: fixtures without a full mutation surface never panic
 // when an explicit-stop install dispatches through them.
-func (nopMutationTarget) StopFeature(featureID string) (FeatureStopResponse, error) {
-	return FeatureStopResponse{FeatureID: featureID, Result: "stopped"}, nil
+func (nopMutationTarget) RunFeatureLifecycle(featureID string, _ FeatureAction, _ GuardedFeatureActionRequest) (FeatureActionResponse, error) {
+	return FeatureActionResponse{FeatureID: featureID, Result: "stopped"}, nil
 }
 
 func newUpdateAPIFixture(t *testing.T, opts UpdateOptions) *updateAPIFixture {

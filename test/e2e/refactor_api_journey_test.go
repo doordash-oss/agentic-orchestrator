@@ -36,6 +36,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server/mutations"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/serverclient"
 )
 
 // TestRefactorAPIJourney records the primary state-mutating journey:
@@ -138,7 +139,7 @@ func TestRefactorAPIJourney(t *testing.T) {
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)
-	client, err := server.NewClient(server.ClientOptions{BaseURL: srv.URL})
+	client, err := serverclient.NewClient(serverclient.ClientOptions{BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}

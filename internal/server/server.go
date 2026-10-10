@@ -81,33 +81,10 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		// wildcard binds), never the wildcard bind address itself.
 		baseURL = "http://" + net.JoinHostPort(res.AdvertiseHost, strconv.Itoa(tcpAddr.Port))
 	}
-	handler := newAPIHandler(HandlerOptions{
-		Runtime:                     opts.Runtime,
-		LaunchPolicy:                opts.LaunchPolicy,
-		StartedAt:                   startedAt,
-		Owner:                       opts.Owner,
-		AuthToken:                   opts.AuthToken,
-		Name:                        opts.Name,
-		Features:                    opts.Features,
-		FeatureStore:                opts.FeatureStore,
-		Freshness:                   opts.Freshness,
-		Config:                      opts.Config,
-		Registry:                    opts.Registry,
-		Sessions:                    opts.Sessions,
-		Events:                      opts.Events,
-		DomainEvents:                opts.DomainEvents,
-		Mutations:                   opts.Mutations,
-		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
-		InitGitRepository:           opts.InitGitRepository,
-		InitializeGitRepository:     opts.InitializeGitRepository,
-		clones:                      opts.clones,
-		Worktrees:                   opts.Worktrees,
-		Updates:                     opts.Updates,
-		Admission:                   opts.Admission,
-		probeActivity:               opts.probeActivity,
-		Supervisor:                  opts.Supervisor,
-		RuntimePolicy:               policy,
-	})
+	handlerOptions := opts.HandlerOptions
+	handlerOptions.StartedAt = startedAt
+	handlerOptions.RuntimePolicy = policy
+	handler := newAPIHandler(handlerOptions)
 	lifetime := opts.Lifetime
 	if lifetime == nil {
 		lifetime = ctx
@@ -272,7 +249,7 @@ func (s *RuntimeServer) Close(ctx context.Context) error {
 	if s.originChecks != nil {
 		originDone := make(chan struct{})
 		go func() {
-			s.originChecks.Shutdown()
+			s.originChecks.shutdown()
 			close(originDone)
 		}()
 		select {

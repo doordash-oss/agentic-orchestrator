@@ -1752,8 +1752,6 @@ export const FeatureActionResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
   action: FeatureOperationalActionSchema,
   result: z.string().max(500),
-  phase: z.string().max(200).optional(),
-  sessionIds: z.array(z.string().min(1).max(200)).max(100),
   sourceRunNumber: z.number().int().nonnegative().optional(),
   newRunNumber: z.number().int().nonnegative().optional(),
   /** Canonical warning-class errors from the action, diagnostics redacted. */

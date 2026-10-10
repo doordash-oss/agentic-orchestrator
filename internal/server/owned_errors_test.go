@@ -408,9 +408,9 @@ func TestOwnedErrorsClassAndOrderInvariants(t *testing.T) {
 			t.Fatalf("entry class = %q, want blocking or needs_action only", entry.Error.Class)
 		}
 	}
-	if entries[0].Ref.Scope != errorScopeRun ||
-		entries[1].Ref.Scope != errorScopeRepository ||
-		entries[2].Ref.Scope != errorScopeTransaction {
+	if entries[0].Ref.Scope != ErrorScopeRun ||
+		entries[1].Ref.Scope != ErrorScopeRepository ||
+		entries[2].Ref.Scope != ErrorScopeTransaction {
 		t.Fatalf("entry scopes = [%q, %q, %q], want run, then repository, then transaction",
 			entries[0].Ref.Scope, entries[1].Ref.Scope, entries[2].Ref.Scope)
 	}

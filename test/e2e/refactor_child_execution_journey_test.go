@@ -31,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/serverclient"
 )
 
 // TestRefactorChildExecutionAndIntegrationJourney records the primary
@@ -108,7 +109,7 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 	pr := journeyChildPhaseRunner(t, sm, store, stateDir)
 
 	orch := orchestrator.New(orchestrator.Deps{
-		Manager:   mgr,
+		Manager:     mgr,
 		Store:       store,
 		Sessions:    sm,
 		Remote:      failingPRRemoteOps{},
@@ -143,7 +144,7 @@ func TestRefactorChildExecutionAndIntegrationJourney(t *testing.T) {
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)
-	client, err := server.NewClient(server.ClientOptions{BaseURL: srv.URL})
+	client, err := serverclient.NewClient(serverclient.ClientOptions{BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
@@ -293,7 +294,7 @@ func (failingPRRemoteOps) PRState(repoPath, prURL string) (string, error) {
 // through setup, the two configured review gates, scripted plan sessions,
 // stubbed implement/final-review kernels, and integration, returning the
 // child id once the relationship is durably Completed.
-func runRefactorChildLifecycle(t *testing.T, store *feature.Store, baseURL string, client *server.Client, parentID string, manualPublish bool) string {
+func runRefactorChildLifecycle(t *testing.T, store *feature.Store, baseURL string, client *serverclient.Client, parentID string, manualPublish bool) string {
 	t.Helper()
 
 	resp, err := client.RefactorFeature(t.Context(), parentID, server.RefactorFeatureRequest{

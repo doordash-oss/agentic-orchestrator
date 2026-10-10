@@ -43,22 +43,22 @@ const installStopConfirmPoll = 200 * time.Millisecond
 // the same surfaces the REST pause-stop and supervisor end actions use; tests
 // inject deterministic fakes through UpdateOptions.stopper.
 type installStopper interface {
-	// StoppableFeatures lists feature identities matching the enabled
+	// stoppableFeatures lists feature identities matching the enabled
 	// pause-stop projection (running or need-user-input features and active
 	// children), deepest children first so parent/child relationship guards
 	// pass. A listing error means detection failed.
-	StoppableFeatures(ctx context.Context) ([]string, error)
-	// StopFeature interrupts one feature through the guarded mutation,
+	stoppableFeatures(ctx context.Context) ([]string, error)
+	// stopFeature interrupts one feature through the guarded mutation,
 	// preserving the usual interrupted-state and pending-question/permission
 	// cleanup. An error aborts the installation.
-	StopFeature(ctx context.Context, featureID string) error
-	// SupervisorProcess reports whether a supervisor provider process
+	stopFeature(ctx context.Context, featureID string) error
+	// supervisorProcess reports whether a supervisor provider process
 	// exists (any lifecycle other than stopped or failed).
-	SupervisorProcess() bool
-	// EndSupervisor ends the supervisor process, keeping its transcript
+	supervisorProcess() bool
+	// endSupervisor ends the supervisor process, keeping its transcript
 	// and settings; idempotent when no process exists. An error aborts the
 	// installation.
-	EndSupervisor(ctx context.Context) error
+	endSupervisor(ctx context.Context) error
 }
 
 // handlerInstallStopper is the production installStopper: the pause-stop
@@ -68,12 +68,12 @@ type handlerInstallStopper struct {
 	handler *apiHandler
 }
 
-// StoppableFeatures walks the same projection that enables the pause-stop
+// stoppableFeatures walks the same projection that enables the pause-stop
 // action and counts detector activity: running or need-user-input features,
 // skipping children whose relationship is closed. Children are ordered
 // before their parents (deepest first) so stopping them satisfies the
 // parent/child relationship guards.
-func (s handlerInstallStopper) StoppableFeatures(context.Context) ([]string, error) {
+func (s handlerInstallStopper) stoppableFeatures(context.Context) ([]string, error) {
 	h := s.handler
 	if h.features == nil {
 		return nil, nil
@@ -124,18 +124,18 @@ func (s handlerInstallStopper) StoppableFeatures(context.Context) ([]string, err
 	return ids, nil
 }
 
-// StopFeature dispatches the same guarded interruption the REST pause-stop
+// stopFeature dispatches the same guarded interruption the REST pause-stop
 // action performs.
-func (s handlerInstallStopper) StopFeature(_ context.Context, featureID string) error {
+func (s handlerInstallStopper) stopFeature(_ context.Context, featureID string) error {
 	if s.handler.mutations == nil {
 		return fmt.Errorf("no stop surface available for feature %s", featureID)
 	}
-	_, err := s.handler.mutations.StopFeature(featureID)
+	_, err := s.handler.mutations.RunFeatureLifecycle(featureID, FeatureActionPauseStop, GuardedFeatureActionRequest{})
 	return err
 }
 
-// SupervisorProcess reports whether the supervisor has a provider process.
-func (s handlerInstallStopper) SupervisorProcess() bool {
+// supervisorProcess reports whether the supervisor has a provider process.
+func (s handlerInstallStopper) supervisorProcess() bool {
 	if s.handler.supervisor == nil {
 		return false
 	}
@@ -146,9 +146,9 @@ func (s handlerInstallStopper) SupervisorProcess() bool {
 	return true
 }
 
-// EndSupervisor dispatches the same end the REST action performs. While
+// endSupervisor dispatches the same end the REST action performs. While
 // admission is closed the supervisor cannot relaunch underneath it.
-func (s handlerInstallStopper) EndSupervisor(context.Context) error {
+func (s handlerInstallStopper) endSupervisor(context.Context) error {
 	if s.handler.supervisor == nil {
 		return nil
 	}
@@ -169,7 +169,7 @@ const admissionDetectBudget = 5 * time.Second
 // detectAdmissionActivity observes the work state through the admission
 // boundary within the shared detection budget. ok is false when detection
 // failed: uncertainty never reads as zero activity.
-func detectAdmissionActivity(admission InstallAdmission) (activity workadmission.Activity, held int, perCategory map[workadmission.Category]int, ok bool) {
+func detectAdmissionActivity(admission installAdmission) (activity workadmission.Activity, held int, perCategory map[workadmission.Category]int, ok bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), admissionDetectBudget)
 	defer cancel()
 	activity, err := admission.Detect(ctx)
@@ -246,7 +246,7 @@ func blockedActiveWorkOptions(activity workadmission.Activity, held int, perCate
 // categories alike — and failed or incomplete detection. Feature and
 // supervisor activity alone
 // never blocks: the accepted permission authorizes stopping it.
-func (c *updateCoordinator) installStopBlockers(admission InstallAdmission) []errcat.Option {
+func (c *updateCoordinator) installStopBlockers(admission installAdmission) []errcat.Option {
 	activity, held, perCategory, ok := detectAdmissionActivity(admission)
 	if !ok {
 		return detectionFailedBlockers()
@@ -284,7 +284,7 @@ func protectedHeldCategories(perCategory map[workadmission.Category]int) string 
 // stopTimeoutFailure is the shared deadline-expired outcome: the sanitized
 // timeout context plus the remaining blocker snapshot (or detection
 // uncertainty when detection itself fails).
-func (c *updateCoordinator) stopTimeoutFailure(admission InstallAdmission) *installStopFailure {
+func (c *updateCoordinator) stopTimeoutFailure(admission installAdmission) *installStopFailure {
 	return &installStopFailure{
 		result: "install_stop_failed:timeout",
 		opts: append(c.stopBlockersNow(admission),
@@ -297,7 +297,7 @@ func (c *updateCoordinator) stopTimeoutFailure(admission InstallAdmission) *inst
 // detection uncertainty when detection itself fails. The snapshot renders
 // even a quiet observation — the zero counts are the truthful answer to
 // what remains.
-func (c *updateCoordinator) stopBlockersNow(admission InstallAdmission) []errcat.Option {
+func (c *updateCoordinator) stopBlockersNow(admission installAdmission) []errcat.Option {
 	activity, held, _, ok := detectAdmissionActivity(admission)
 	if !ok {
 		return detectionFailedBlockers()
@@ -320,7 +320,7 @@ func (c *updateCoordinator) stopBlockersNow(admission InstallAdmission) []errcat
 // Previously admitted work that becomes visible during stopping is
 // accounted for by dispatching stops for it within the same budget;
 // reservations in categories that cannot be stopped block the install.
-func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admission InstallAdmission, stopper installStopper) *installStopFailure {
+func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admission installAdmission, stopper installStopper) *installStopFailure {
 	budget := c.opts.StopWorkTimeout
 	if budget <= 0 {
 		budget = updateStopWorkBudget
@@ -334,7 +334,7 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 		if err := ctx.Err(); err != nil {
 			return c.stopTimeoutFailure(admission)
 		}
-		ids, err := stopper.StoppableFeatures(ctx)
+		ids, err := stopper.stoppableFeatures(ctx)
 		if err != nil {
 			return &installStopFailure{
 				result: "install_stop_failed:detection",
@@ -360,7 +360,7 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 					}
 				}
 			}
-			if err := stopper.StopFeature(ctx, id); err != nil {
+			if err := stopper.stopFeature(ctx, id); err != nil {
 				return &installStopFailure{
 					result: "install_stop_failed:stop",
 					opts: append(c.stopBlockersNow(admission),
@@ -369,11 +369,11 @@ func (c *updateCoordinator) dispatchAndConfirmStops(op *installOperation, admiss
 			}
 			stoppedFeatures[id] = true
 		}
-		if stopper.SupervisorProcess() && !supervisorStopped {
+		if stopper.supervisorProcess() && !supervisorStopped {
 			if ctx.Err() != nil {
 				return c.stopTimeoutFailure(admission)
 			}
-			if err := stopper.EndSupervisor(ctx); err != nil {
+			if err := stopper.endSupervisor(ctx); err != nil {
 				return &installStopFailure{
 					result: "install_stop_failed:stop",
 					opts: append(c.stopBlockersNow(admission),

@@ -17,8 +17,6 @@ package server
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -349,14 +347,10 @@ func (b *eventBroker) streamResetEventLocked() SSEEvent {
 }
 
 func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := beginSSE(w)
 	if !ok {
-		writeAPIError(w, http.StatusInternalServerError, errcat.InternalError, errcat.WithDiagnostics("streaming unavailable"))
 		return
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 
 	after, epoch, hasCursor := eventCursor(r)
 	ch, replay, reset := h.broker.subscribeAfter(after, epoch)
@@ -370,18 +364,18 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		// "I read as_of_seq=0" cursor — see subscribeAfter/replayAfterLocked,
 		// which now correctly treats after=0 as a real low-water-mark.
 		connected := h.broker.snapshotRequiredEvent(sseEventConnected, Resource{Type: resourceTypeRuntime})
-		if err := writeSSE(w, sseEventConnected, connected); err != nil {
+		if err := writeSSEFrame(w, sseEventConnected, connected.ID, true, connected); err != nil {
 			return
 		}
 		flusher.Flush()
 	case reset != nil:
-		if err := writeSSE(w, reset.Kind, *reset); err != nil {
+		if err := writeSSEFrame(w, reset.Kind, reset.ID, true, *reset); err != nil {
 			return
 		}
 		flusher.Flush()
 	default:
 		for _, evt := range replay {
-			if err := writeSSE(w, evt.Kind, evt); err != nil {
+			if err := writeSSEFrame(w, evt.Kind, evt.ID, true, evt); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -396,7 +390,7 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case evt := <-ch:
-			if err := writeSSE(w, evt.Kind, evt); err != nil {
+			if err := writeSSEFrame(w, evt.Kind, evt.ID, true, evt); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -414,7 +408,7 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 				Resource:         Resource{Type: resourceTypeRuntime},
 				SnapshotRequired: false,
 			}
-			if err := writeSSE(w, sseEventHeartbeat, evt); err != nil {
+			if err := writeSSEFrame(w, sseEventHeartbeat, evt.ID, true, evt); err != nil {
 				return
 			}
 			flusher.Flush()
@@ -423,10 +417,7 @@ func (h *apiHandler) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func eventCursor(r *http.Request) (after uint64, epoch string, hasCursor bool) {
-	raw := r.URL.Query().Get("after")
-	if raw == "" {
-		raw = r.Header.Get("Last-Event-ID")
-	}
+	raw := streamCursor(r, "after")
 	if raw == "" {
 		return 0, r.URL.Query().Get("epoch"), false
 	}
@@ -446,18 +437,6 @@ func heartbeatInterval(r *http.Request) time.Duration {
 		ms = 10
 	}
 	return time.Duration(ms) * time.Millisecond
-}
-
-func writeSSE(w http.ResponseWriter, event string, data SSEEvent) error {
-	payload, err := json.Marshal(data)
-	if err != nil {
-		return err
-	}
-	setStreamWriteDeadline(w)
-	if _, err := fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", data.ID, event, payload); err != nil {
-		return err
-	}
-	return nil
 }
 
 func setStreamWriteDeadline(w http.ResponseWriter) {
@@ -524,11 +503,7 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 			// (a parked transaction) carries the catalog title as the
 			// summary and the canonical code/class identity as the error
 			// object, exactly as failure-carrying feature events do.
-			dto.Summary = ev.CanonicalError.Title
-			dto.Error = &SSEEventError{
-				Code:  string(ev.CanonicalError.Code),
-				Class: SSEEventErrorClass(ev.CanonicalError.Class),
-			}
+			setSSEEventError(&dto, ev.CanonicalError)
 		}
 		return dto
 	}
@@ -578,13 +553,16 @@ func eventDTOFromDomain(ev ports.Event) SSEEvent {
 		// A repository publish failure rides the publish-completed and
 		// repository-status-changed kinds the same way, snapshot-required
 		// semantics unchanged.
-		dto.Summary = ev.CanonicalError.Title
-		dto.Error = &SSEEventError{
-			Code:  string(ev.CanonicalError.Code),
-			Class: SSEEventErrorClass(ev.CanonicalError.Class),
-		}
+		setSSEEventError(&dto, ev.CanonicalError)
 	}
 	return dto
+}
+
+func setSSEEventError(dto *SSEEvent, failure *errcat.Error) {
+	dto.Summary = failure.Title
+	dto.Error = &SSEEventError{
+		Code: string(failure.Code), Class: SSEEventErrorClass(failure.Class),
+	}
 }
 
 func relationshipEventType(eventType ports.EventType) bool {

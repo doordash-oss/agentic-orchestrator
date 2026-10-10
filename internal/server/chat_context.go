@@ -26,18 +26,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
-// Error reference scopes: the durable homes an error reference can point
-// at, shared by the explain-in-chat context resolver and the feature
-// summary's owned-error projection. The zero value means the request carries
-// no reference.
-const (
-	errorScopeRun         = ErrorScope("run")
-	errorScopeTransaction = ErrorScope("transaction")
-	errorScopeRepository  = ErrorScope("repository")
-	errorScopeSetup       = ErrorScope("setup")
-	errorScopeRecovery    = ErrorScope("recovery")
-)
-
 // chatContextAbsent reports whether a decoded request context reference
 // carries nothing at all: the request behaves exactly as one without
 // `context`.
@@ -58,7 +46,7 @@ func validateChatContextReference(ref ErrorReference) string {
 		return "code"
 	}
 	switch ref.Scope {
-	case errorScopeRun:
+	case ErrorScopeRun:
 		if ref.FeatureID == "" {
 			return "feature_id"
 		}
@@ -71,7 +59,7 @@ func validateChatContextReference(ref ErrorReference) string {
 		if ref.SnapshotID != "" || ref.Key != "" {
 			return "snapshot_id"
 		}
-	case errorScopeTransaction:
+	case ErrorScopeTransaction:
 		if ref.FeatureID == "" {
 			return "feature_id"
 		}
@@ -81,7 +69,7 @@ func validateChatContextReference(ref ErrorReference) string {
 		if ref.SnapshotID != "" || ref.Key != "" {
 			return "snapshot_id"
 		}
-	case errorScopeRepository:
+	case ErrorScopeRepository:
 		if ref.FeatureID == "" {
 			return "feature_id"
 		}
@@ -94,7 +82,7 @@ func validateChatContextReference(ref ErrorReference) string {
 		if ref.SnapshotID != "" || ref.Key != "" {
 			return "snapshot_id"
 		}
-	case errorScopeSetup:
+	case ErrorScopeSetup:
 		if ref.FeatureID == "" {
 			return "feature_id"
 		}
@@ -107,7 +95,7 @@ func validateChatContextReference(ref ErrorReference) string {
 		if ref.SnapshotID != "" || ref.Key != "" {
 			return "snapshot_id"
 		}
-	case errorScopeRecovery:
+	case ErrorScopeRecovery:
 		if ref.SnapshotID == "" {
 			return "snapshot_id"
 		}
@@ -195,15 +183,15 @@ func chatContextHomeNotFound(home string) *chatContextRejection {
 // recovery projection does. The bundle never enters an HTTP response body.
 func (h *apiHandler) resolveChatContext(ref ErrorReference) (string, *chatContextRejection) {
 	switch ref.Scope {
-	case errorScopeRun:
+	case ErrorScopeRun:
 		return h.resolveChatContextRun(ref)
-	case errorScopeTransaction:
+	case ErrorScopeTransaction:
 		return h.resolveChatContextTransaction(ref)
-	case errorScopeRepository:
+	case ErrorScopeRepository:
 		return h.resolveChatContextRepository(ref)
-	case errorScopeSetup:
+	case ErrorScopeSetup:
 		return h.resolveChatContextSetup(ref)
-	case errorScopeRecovery:
+	case ErrorScopeRecovery:
 		return h.resolveChatContextRecovery(ref)
 	default:
 		return "", chatContextFeatureInvalid(ref.FeatureID)

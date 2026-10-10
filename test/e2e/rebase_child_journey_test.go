@@ -33,6 +33,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/serverclient"
 )
 
 // rebaseJourneyFixture bundles the shared test infrastructure for rebase
@@ -43,7 +44,7 @@ type rebaseJourneyFixture struct {
 	mgr      *feature.Manager
 	orch     *orchestrator.Orchestrator
 	srv      *httptest.Server
-	client   *server.Client
+	client   *serverclient.Client
 	repoDir  string
 	parentID string
 }
@@ -144,7 +145,7 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 	}
 
 	orch := orchestrator.New(orchestrator.Deps{
-		Manager:   mgr,
+		Manager:     mgr,
 		Store:       store,
 		Sessions:    sm,
 		Remote:      remote,
@@ -179,7 +180,7 @@ func setupRebaseJourneyFixtureWithOpts(t *testing.T, parentID string, opts rebas
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)
-	client, err := server.NewClient(server.ClientOptions{BaseURL: srv.URL})
+	client, err := serverclient.NewClient(serverclient.ClientOptions{BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}

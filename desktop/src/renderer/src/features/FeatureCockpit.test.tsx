@@ -1854,7 +1854,6 @@ describe('FeatureCockpit warnings', () => {
       featureId: FEATURE_ID,
       action: 'rewind',
       result: 'rewound',
-      sessionIds: [],
       sourceRunNumber: 3,
       newRunNumber: 4,
       warnings: [
@@ -2546,7 +2545,6 @@ describe('FeatureCockpit convergence', () => {
       featureId: FEATURE_ID,
       action: 'start',
       result: 'started',
-      sessionIds: [],
     });
     renderCockpit(mock);
     const user = userEvent.setup();
@@ -3185,7 +3183,6 @@ describe('FeatureCockpit Stop', () => {
               featureId: FEATURE_ID,
               action: 'pause-stop',
               result: 'stopped',
-              sessionIds: [],
             });
         }),
     );

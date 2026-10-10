@@ -33,6 +33,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil/serverclient"
 )
 
 // TestReviewFeedbackChildJourney proves the full review-feedback child flow
@@ -108,7 +109,7 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 	t.Cleanup(sm.Shutdown)
 	phaseRunner := journeyChildPhaseRunner(t, sm, store, stateDir)
 	orch := orchestrator.New(orchestrator.Deps{
-		Manager:   mgr,
+		Manager:     mgr,
 		Store:       store,
 		Sessions:    sm,
 		Worktrees:   wm,
@@ -142,9 +143,9 @@ func TestReviewFeedbackChildJourney(t *testing.T) {
 		DisableHostValidation: true,
 	}))
 	t.Cleanup(srv.Close)
-	client, err := server.NewClient(server.ClientOptions{BaseURL: srv.URL})
+	client, err := serverclient.NewClient(serverclient.ClientOptions{BaseURL: srv.URL})
 	if err != nil {
-		t.Fatalf("server.NewClient() error = %v", err)
+		t.Fatalf("serverclient.NewClient() error = %v", err)
 	}
 
 	fetched, err := client.FetchReviewFeedback(t.Context(), parent.ID)

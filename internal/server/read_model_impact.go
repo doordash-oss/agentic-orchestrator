@@ -211,18 +211,9 @@ func (h *apiHandler) cascadeKnowledgeImpactEntries(f *feature.Feature, children 
 	return out
 }
 
-// knowledgeStateDir returns the feature state base directory so the impact
-// preview can verify knowledge resources against durable on-disk state. It is
-// empty when the configured store cannot be located, in which case
-// uncertain knowledge resources are never overstated as present.
+// knowledgeStateDir returns the durable feature state root for impact previews.
 func (h *apiHandler) knowledgeStateDir() string {
-	if s, ok := h.store.(*feature.Store); ok && s != nil && s.BaseDir != "" {
-		return s.BaseDir
-	}
-	if s, ok := h.features.(*feature.Store); ok && s != nil {
-		return s.BaseDir
-	}
-	return ""
+	return h.store.BaseDirectory()
 }
 
 // relationshipHistoryImpactEntries names the closed-child history records the

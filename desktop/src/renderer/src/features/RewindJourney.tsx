@@ -125,7 +125,6 @@ export function RewindJourney(props: RewindJourneyProps) {
           featureId,
           action: 'rewind',
           result: 'rewound',
-          sessionIds: [],
           sourceRunNumber: reconcileSourceRunNumber,
           newRunNumber: feature.activeRun,
         });
@@ -194,7 +193,6 @@ export function RewindJourney(props: RewindJourneyProps) {
             featureId,
             action: 'rewind',
             result: 'rewound',
-            sessionIds: [],
             sourceRunNumber: preview.sourceRunNumber,
             newRunNumber: feature.activeRun,
           });

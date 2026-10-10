@@ -48,14 +48,10 @@ const maxReadinessTextLen = 240
 func (h *apiHandler) handleReadiness(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := h.readinessSnapshot(r.Context(), false)
 	if err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
-	revision := revisionForAny(snapshot)
-	snapshot.Meta = h.responseMeta(revision)
-	h.writeRevisionedJSON(w, r, revision, snapshot)
+	h.writeRevisionedResponse(w, r, snapshot, func(meta ResponseMeta) any { snapshot.Meta = meta; return snapshot })
 }
 
 // handleRuntimeReadiness is the dashboard/attach gate. Its wire shape omits
@@ -78,9 +74,7 @@ func (h *apiHandler) handleRuntimeReadinessRefresh(w http.ResponseWriter, r *htt
 func (h *apiHandler) writeRuntimeReadiness(w http.ResponseWriter, r *http.Request, refresh bool) {
 	ready, err := h.runtimeReadinessSnapshot(r.Context(), refresh)
 	if err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
 	snapshot := RuntimeReadinessResponse{
@@ -113,9 +107,7 @@ func (h *apiHandler) handleReadinessRefreshRoute(w http.ResponseWriter, r *http.
 	}
 	snapshot, err := h.readinessSnapshot(r.Context(), true)
 	if err != nil {
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return
 	}
 	revision := revisionForAny(snapshot)
@@ -138,9 +130,7 @@ func (h *apiHandler) rejectNotReadyForCreation(w http.ResponseWriter, r *http.Re
 		// The creation guard's lazy provider probe was refused by a closed
 		// admission boundary: creation is a work-start request, so the
 		// canonical refusal applies.
-		if !h.writeAdmissionRefusal(w, err) {
-			writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-		}
+		h.writeAdmissionOrInternal(w, err)
 		return true
 	}
 	if snapshot.Ready {

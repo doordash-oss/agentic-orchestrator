@@ -1671,38 +1671,39 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 	boot.supervisor = supervisorCoordinator
 
 	runtimeServer, err := serverruntime.Start(bootCtx, serverruntime.Options{
-		Runtime:      boot.runtime,
-		LaunchPolicy: policy,
-		StartMode:    cliSubcommandServer,
-		Owner:        boot.owner,
-		AuthToken:    authToken,
-		ListenAddr:   listenAddr,
-		Name:         resolvedName,
-		Features:     boot.featureManager.Store,
-		FeatureStore: boot.featureManager.Store,
-		Freshness:    newGitFreshnessProvider(),
-		Config:       boot.cfg,
-		Registry:     boot.registry,
-		Sessions:     boot.sessionManager,
-		Events:       boot.eventCh,
-		DomainEvents: boot.orchestrator.Events(),
-		Mutations: mutations.New(mutations.Deps{
-			Orchestrator:    boot.orchestrator,
-			Sessions:        boot.sessionManager,
-			PermissionCache: boot.permissionCache,
-			Config:          boot.cfg,
-			ConfigPath:      boot.runtime.Config,
-		}),
-
-		PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
-			return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
+		HandlerOptions: serverruntime.HandlerOptions{
+			Runtime:      boot.runtime,
+			LaunchPolicy: policy,
+			Owner:        boot.owner,
+			AuthToken:    authToken,
+			Name:         resolvedName,
+			Features:     boot.featureManager.Store,
+			FeatureStore: boot.featureManager.Store,
+			Freshness:    newGitFreshnessProvider(),
+			Config:       boot.cfg,
+			Registry:     boot.registry,
+			Sessions:     boot.sessionManager,
+			Events:       boot.eventCh,
+			DomainEvents: boot.orchestrator.Events(),
+			Mutations: mutations.New(mutations.Deps{
+				Orchestrator:    boot.orchestrator,
+				Sessions:        boot.sessionManager,
+				PermissionCache: boot.permissionCache,
+				Config:          boot.cfg,
+				ConfigPath:      boot.runtime.Config,
+			}),
+			PersistProviderModelCatalog: func(provider llm.LLMProvider, models []llm.ModelInfo) error {
+				return persistRefreshedProviderModelCatalog(boot.runtime.RuntimeDir, provider, models)
+			},
+			Worktrees:  boot.worktrees,
+			Updates:    wiring.options,
+			Admission:  boot.admission,
+			Supervisor: supervisorCoordinator,
 		},
-		Worktrees:   boot.worktrees,
-		Updates:     wiring.options,
-		Admission:   boot.admission,
+		StartMode:   cliSubcommandServer,
+		ListenAddr:  listenAddr,
 		Lifetime:    ctx,
 		HTTPMetrics: boot.observer,
-		Supervisor:  supervisorCoordinator,
 	})
 	if err != nil {
 		return targetStartupFailure(func(e error) {

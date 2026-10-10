@@ -77,9 +77,7 @@ func (h *apiHandler) handleWorkspaceRepositoryOriginStatusRoute(w http.ResponseW
 		_, refreshing := refresh[key]
 		row, err := h.originStatusRow(r.Context(), key, identity, mode, refreshing)
 		if err != nil {
-			if !h.writeAdmissionRefusal(w, err) {
-				writeAPIError(w, http.StatusInternalServerError, errcat.InternalError)
-			}
+			h.writeAdmissionOrInternal(w, err)
 			return
 		}
 		response.Repositories = append(response.Repositories, row)

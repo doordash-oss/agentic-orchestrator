@@ -63,7 +63,7 @@ All actions use `POST /api/v1/features/{feature_id}/actions/{action}`. Check the
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/testing-contract-waive '{"item_ids":["{item_id}"],"reason":"User waived: no display on this machine."}'`
 - `POST /api/v1/features/{feature_id}/actions/publish` — publish (open or update pull requests). Optional: `repos`, `title`, `body`, `source_revision` from the completion preflight.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/publish '{"source_revision":"{source_revision}"}'`
-- `POST /api/v1/features/{feature_id}/actions/{action}/{subaction}` — run a named sub-action; `{subaction}` is `description` or `fetch`. The publish description sub-action generates a PR title and body. Optional: `repos`.
+- `POST /api/v1/features/{feature_id}/actions/{action}/{subaction}` — run a named sub-action; `{subaction}` is `description`, `fetch`, or `selection`. The publish description sub-action generates a PR title and body. Optional: `repos`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/publish/description '{}'`
 - `POST /api/v1/features/{feature_id}/actions/merge` — merge the published pull requests. Optional: `source_revision`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/merge '{"source_revision":"{source_revision}"}'`

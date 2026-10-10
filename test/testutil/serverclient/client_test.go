@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package server
+package serverclient
 
 import (
 	"context"
@@ -25,14 +25,15 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
-	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
 const (
 	testFeatureConfigPath = "/api/v1/features/feat-1/config"
-	testRuntimeStateDir   = "/runtime/features"
+	fixtureFeatureID      = "feat-1"
+	fixtureSessionID      = "sess-1"
+	testAuthToken         = "test-token"
+	contentTypeJSON       = "application/json"
 )
 
 func TestClientExportsOnlyJourneyUsedMethods(t *testing.T) {
@@ -73,16 +74,16 @@ func TestClientFetchReviewFeedbackReturnsTypedGroups(t *testing.T) {
 		if len(req) != 0 {
 			t.Fatalf("FetchReviewFeedback() request = %v, want empty object", req)
 		}
-		writeJSON(w, http.StatusOK, ReviewFeedbackFetchResponse{
-			APIVersion: APIVersion,
+		writeJSON(w, http.StatusOK, server.ReviewFeedbackFetchResponse{
+			APIVersion: server.APIVersion,
 			Revision:   1,
 			SnapshotID: "snapshot-1",
-			Repos: []ReviewFeedbackRepoComments{{
+			Repos: []server.ReviewFeedbackRepoComments{{
 				Repo:  "api",
 				PrURL: "https://github.com/example/api/pull/1",
-				Comments: []ReviewFeedbackDraftComment{{
+				Comments: []server.ReviewFeedbackDraftComment{{
 					StableRef: "api:issue:11", Selected: true,
-					Repo: "api", ID: 11, Type: ReviewFeedbackDraftCommentType("issue"), Body: "please adjust",
+					Repo: "api", ID: 11, Type: server.ReviewFeedbackDraftCommentType("issue"), Body: "please adjust",
 				}},
 			}},
 		})
@@ -109,17 +110,17 @@ func TestClientRetainedReadAndMutationSemantics(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/v1/features/feat-1/live-preview":
 			sawReadAuth = r.Header.Get("Authorization") == "Bearer test-token"
-			writeJSON(w, http.StatusOK, LivePreviewResponse{
-				APIVersion: APIVersion,
-				Feature:    FeatureSummary{ID: fixtureFeatureID},
+			writeJSON(w, http.StatusOK, server.LivePreviewResponse{
+				APIVersion: server.APIVersion,
+				Feature:    server.FeatureSummary{ID: fixtureFeatureID},
 			})
 		case "POST " + testFeatureConfigPath:
 			sawMutationAuth = r.Header.Get("Authorization") == "Bearer test-token"
-			sawTrustedMutation = r.Header.Get("X-Agentico-Client") == trustedClientHeaderValue
+			sawTrustedMutation = r.Header.Get("X-Agentico-Client") == "local"
 			if got := r.Header.Get("Content-Type"); got != contentTypeJSON {
 				t.Fatalf("Content-Type = %q, want %q", got, contentTypeJSON)
 			}
-			var req FeatureConfigMutationRequest
+			var req server.FeatureConfigMutationRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode feature config request: %v", err)
 			}
@@ -129,8 +130,8 @@ func TestClientRetainedReadAndMutationSemantics(t *testing.T) {
 			if req.AutomaticReviewMode == nil || *req.AutomaticReviewMode != automaticReviewMode {
 				t.Fatalf("automatic review mode = %v, want %q", req.AutomaticReviewMode, automaticReviewMode)
 			}
-			writeJSON(w, http.StatusOK, FeatureConfigUpdateResponse{
-				APIVersion: APIVersion,
+			writeJSON(w, http.StatusOK, server.FeatureActionResponse{
+				APIVersion: server.APIVersion,
 				FeatureID:  fixtureFeatureID,
 				Result:     "updated",
 			})
@@ -152,7 +153,7 @@ func TestClientRetainedReadAndMutationSemantics(t *testing.T) {
 	if preview.Feature.ID != fixtureFeatureID || !sawReadAuth {
 		t.Fatalf("LivePreview() = %+v read_auth=%v, want feat-1 with bearer auth", preview, sawReadAuth)
 	}
-	updated, err := client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{
+	updated, err := client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, server.FeatureConfigMutationRequest{
 		Inquireness:         "high",
 		Pipeline:            feature.PipelineLarge,
 		AutomaticReviewMode: &automaticReviewMode,
@@ -172,16 +173,16 @@ func TestClientRetainedMutationReturnsStructuredAPIError(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != testFeatureConfigPath {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
-		writeJSON(w, http.StatusConflict, ErrorResponse{
-			APIVersion: APIVersion,
-			Error: Error{
-				Class:       ErrorClass(errcat.ClassBlocking),
+		writeJSON(w, http.StatusConflict, server.ErrorResponse{
+			APIVersion: server.APIVersion,
+			Error: server.Error{
+				Class:       server.ErrorClass(errcat.ClassBlocking),
 				Code:        string(errcat.Conflict),
 				Title:       "Conflict",
 				Summary:     "The request conflicts with the current state of the feature.",
 				Diagnostics: "feature is busy",
-				Remediation: &ErrorRemediation{Hint: "Refresh the feature and retry."},
-				Context: &ErrorContext{Repositories: []ErrorRepositoryContext{{
+				Remediation: &server.ErrorRemediation{Hint: "Refresh the feature and retry."},
+				Context: &server.ErrorContext{Repositories: []server.ErrorRepositoryContext{{
 					Name:   "repo-a",
 					Branch: "feature/feat-1",
 				}}},
@@ -194,7 +195,7 @@ func TestClientRetainedMutationReturnsStructuredAPIError(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	_, err = client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, FeatureConfigMutationRequest{})
+	_, err = client.UpdateFeatureConfig(context.Background(), fixtureFeatureID, server.FeatureConfigMutationRequest{})
 	var apiErr *apiError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("UpdateFeatureConfig() error = %v, want APIError", err)
@@ -228,15 +229,15 @@ func TestClientRefactorFeatureReturnsTypedResult(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/actions/refactor" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
-		var req RefactorFeatureRequest
+		var req server.RefactorFeatureRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode refactor request: %v", err)
 		}
 		if req.Name != "Rework auth" || req.Pipeline != feature.PipelineMedium {
 			t.Fatalf("RefactorFeature() request = %+v, want named medium child", req)
 		}
-		writeJSON(w, http.StatusCreated, RefactorFeatureResponse{
-			APIVersion: APIVersion,
+		writeJSON(w, http.StatusCreated, server.ChildLaunchResponse{
+			APIVersion: server.APIVersion,
 			FeatureID:  "child-1",
 			ParentID:   fixtureFeatureID,
 			Result:     "created",
@@ -248,7 +249,7 @@ func TestClientRefactorFeatureReturnsTypedResult(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	result, err := client.RefactorFeature(context.Background(), fixtureFeatureID, RefactorFeatureRequest{
+	result, err := client.RefactorFeature(context.Background(), fixtureFeatureID, server.RefactorFeatureRequest{
 		Name:     "Rework auth",
 		Pipeline: feature.PipelineMedium,
 	})
@@ -268,15 +269,15 @@ func TestClientReviewFeedbackFeatureReturnsTypedResult(t *testing.T) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/features/feat-1/actions/review-feedback" {
 			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
 		}
-		var req ReviewFeedbackFeatureRequest
+		var req server.ReviewFeedbackFeatureRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode review-feedback request: %v", err)
 		}
 		if req.Gate == nil || *req.Gate || req.ExpectedRevision != 7 {
 			t.Fatalf("ReviewFeedbackFeature() request = %+v, want expected revision 7 and explicit false gate", req)
 		}
-		writeJSON(w, http.StatusCreated, ReviewFeedbackFeatureResponse{
-			APIVersion: APIVersion,
+		writeJSON(w, http.StatusCreated, server.ReviewFeedbackFeatureResponse{
+			APIVersion: server.APIVersion,
 			FeatureID:  "child-1",
 			ParentID:   fixtureFeatureID,
 			Result:     "created",
@@ -288,7 +289,7 @@ func TestClientReviewFeedbackFeatureReturnsTypedResult(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	result, err := client.ReviewFeedbackFeature(context.Background(), fixtureFeatureID, ReviewFeedbackFeatureRequest{
+	result, err := client.ReviewFeedbackFeature(context.Background(), fixtureFeatureID, server.ReviewFeedbackFeatureRequest{
 		ExpectedRevision: 7,
 		Gate:             &gate,
 	})
@@ -303,21 +304,24 @@ func TestClientReviewFeedbackFeatureReturnsTypedResult(t *testing.T) {
 func TestClientTranscriptContinuationUsesHandlerOffset(t *testing.T) {
 	t.Parallel()
 
-	messages := []llm.SDKMessage{
-		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "first transcript row"}}}}},
-		{Type: roleAssistant, Assistant: &llm.AssistantMessage{Message: llm.ConversationMsg{Role: roleAssistant, Content: []llm.ContentBlock{{Type: blockTypeText, Text: "second transcript row"}}}}},
-	}
-	handler := NewHandler(HandlerOptions{
-		Sessions: fakeSessionManager{views: []ports.SessionView{&fakeSessionView{
-			MockSessionView: &mocks.MockSessionView{
-				IDVal:        fixtureSessionID,
-				FeatureIDVal: fixtureFeatureID,
-			},
-			messages: messages,
-		}}},
-		DisableHostValidation: true,
-	})
-	srv := httptest.NewServer(handler)
+	texts := []string{"first transcript row", "second transcript row"}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/sessions/"+fixtureSessionID+"/transcript" || r.URL.Query().Get("limit") != "1" {
+			t.Fatalf("unexpected transcript request %s %s", r.Method, r.URL.String())
+		}
+		start := 0
+		if offset := r.URL.Query().Get("offset"); offset != "" {
+			if offset != "1" {
+				t.Fatalf("offset = %q, want 1", offset)
+			}
+			start = 1
+		}
+		writeJSON(w, http.StatusOK, server.TranscriptResponse{
+			APIVersion: server.APIVersion,
+			Cursor:     server.Cursor{Start: start, End: start + 1, Total: len(texts)},
+			Messages:   []server.TranscriptMessage{{Index: start, Role: "assistant", Type: "text", Text: texts[start]}},
+		})
+	}))
 	t.Cleanup(srv.Close)
 	client, err := NewClient(ClientOptions{BaseURL: srv.URL})
 	if err != nil {
@@ -340,13 +344,8 @@ func TestClientTranscriptContinuationUsesHandlerOffset(t *testing.T) {
 	}
 }
 
-// StaticFreshnessProvider is a test-only RepoFreshnessProvider backed by a
-// fixed repo-name-to-freshness map, used by server read-model tests.
-type StaticFreshnessProvider map[string]RepoFreshness
-
-func (p StaticFreshnessProvider) Freshness(_ *feature.Feature, repo feature.FeatureRepo) RepoFreshness {
-	if status, ok := p[repo.Name]; ok {
-		return status
-	}
-	return RepoFreshnessUnknown
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", contentTypeJSON)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }

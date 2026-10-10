@@ -30,12 +30,12 @@ type stateErrorMutationTarget struct {
 	err error
 }
 
-func (t *stateErrorMutationTarget) StartFeature(string) (FeatureStartResponse, error) {
-	return FeatureStartResponse{}, t.err
+func (t *stateErrorMutationTarget) RunFeatureLifecycle(string, FeatureAction, GuardedFeatureActionRequest) (FeatureActionResponse, error) {
+	return FeatureActionResponse{}, t.err
 }
 
-func (t *stateErrorMutationTarget) RestartFeature(string, RestartFeatureRequest) (FeatureRestartResponse, error) {
-	return FeatureRestartResponse{}, t.err
+func (t *stateErrorMutationTarget) RestartFeature(string, RestartFeatureRequest) (FeatureActionResponse, error) {
+	return FeatureActionResponse{}, t.err
 }
 
 // TestLifecycleActionsClassifyStateRejections pins state-based rejections to

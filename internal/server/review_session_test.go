@@ -134,7 +134,7 @@ func TestReviewSessionServiceCreateDoesNotExposeSourcePath(t *testing.T) {
 	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	service := newReviewSessionService(store, nil)
 
-	resp, err := service.Create(f.ID)
+	resp, err := service.create(f.ID)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestReviewSessionServiceCreateUsesFeatureRootDescriptionReviewForRewindToIn
 	}
 	service := newReviewSessionService(store, nil)
 
-	resp, err := service.Create(f.ID)
+	resp, err := service.create(f.ID)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestReviewSessionServiceCreateSuppressesIterateForApprovedPlanAttempt(t *te
 	}
 	service := newReviewSessionService(store, nil)
 
-	resp, err := service.Create(f.ID)
+	resp, err := service.create(f.ID)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestReviewSessionServiceCreateSuppressesIterateForApprovedPlanAttempt(t *te
 func TestReviewSessionServiceCreateRefreshesExistingDraftCanIterate(t *testing.T) {
 	store, f, planPath := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	service := newReviewSessionService(store, nil)
-	initial, err := service.Create(f.ID)
+	initial, err := service.create(f.ID)
 	if err != nil {
 		t.Fatalf("Create initial: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestReviewSessionServiceCreateRefreshesExistingDraftCanIterate(t *testing.T
 		t.Fatalf("write plan attempt meta: %v", err)
 	}
 
-	reopened, err := service.Create(f.ID)
+	reopened, err := service.create(f.ID)
 	if err != nil {
 		t.Fatalf("Create reopened: %v", err)
 	}
@@ -261,12 +261,12 @@ func TestReviewSessionServiceCreateRefreshesExistingDraftCanIterate(t *testing.T
 func TestReviewSessionServiceSaveDraftRejectsStaleRevision(t *testing.T) {
 	store, f, _ := seedReviewSessionFeature(t, feature.StatusPlanNeedsReview, nil, "plan", "# Plan\n")
 	service := newReviewSessionService(store, nil)
-	resp, err := service.Create(f.ID)
+	resp, err := service.create(f.ID)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	updated, err := service.SaveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
+	updated, err := service.saveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
 		BaseRevision: resp.DraftRevision,
 		Text:         "# Edited\n",
 	})
@@ -277,7 +277,7 @@ func TestReviewSessionServiceSaveDraftRejectsStaleRevision(t *testing.T) {
 		t.Fatalf("updated draft = %+v, want new text and revision", updated)
 	}
 
-	_, err = service.SaveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
+	_, err = service.saveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
 		BaseRevision: resp.DraftRevision,
 		Text:         "# Stale\n",
 	})
@@ -292,7 +292,7 @@ func TestReviewSessionServiceSaveDraftSerializesRevisionCheckAndWrite(t *testing
 	locks := newReviewSessionLockSet()
 	service := newReviewSessionService(store, nil, locks)
 	secondService := newReviewSessionService(store, nil, locks)
-	resp, err := service.Create(f.ID)
+	resp, err := service.create(f.ID)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestReviewSessionServiceSaveDraftSerializesRevisionCheckAndWrite(t *testing
 			if i%2 == 1 {
 				writer = secondService
 			}
-			_, err := writer.SaveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
+			_, err := writer.saveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
 				BaseRevision: resp.DraftRevision,
 				Text:         fmt.Sprintf("# Writer %d\n", i),
 			})
@@ -379,11 +379,11 @@ func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 		}
 		return nil
 	})
-	resp, err := service.Create(f.ID)
+	resp, err := service.create(f.ID)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	updated, err := service.SaveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
+	updated, err := service.saveDraft(f.ID, resp.ReviewID, ReviewDraftUpdateRequest{
 		BaseRevision: resp.DraftRevision,
 		Text:         "# Edited\n",
 	})
@@ -391,7 +391,7 @@ func TestReviewSessionServiceDecisionCommitsDraftBeforeDelegate(t *testing.T) {
 		t.Fatalf("SaveDraft: %v", err)
 	}
 
-	decision, err := service.SubmitDecision(f.ID, resp.ReviewID, ReviewSessionDecisionRequest{
+	decision, err := service.submitDecision(f.ID, resp.ReviewID, ReviewSessionDecisionRequest{
 		Decision:     reviewDecisionProceed,
 		BaseRevision: updated.DraftRevision,
 	})

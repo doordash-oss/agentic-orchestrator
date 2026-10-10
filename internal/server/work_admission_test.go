@@ -254,8 +254,8 @@ type admissionClosedStartTarget struct {
 	err error
 }
 
-func (m *admissionClosedStartTarget) StartFeature(string) (FeatureStartResponse, error) {
-	return FeatureStartResponse{}, m.err
+func (m *admissionClosedStartTarget) RunFeatureLifecycle(string, FeatureAction, GuardedFeatureActionRequest) (FeatureActionResponse, error) {
+	return FeatureActionResponse{}, m.err
 }
 
 func TestWorkAdmissionStartFeatureRefusedWhileClosed(t *testing.T) {

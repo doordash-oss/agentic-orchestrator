@@ -854,8 +854,6 @@ export class FeatureService {
         featureId: validateWithSchema(response.feature_id, FeatureIdSchema),
         action: input.action,
         result: response.result,
-        ...(response.phase === undefined || response.phase === '' ? {} : { phase: response.phase }),
-        sessionIds: response.session_ids ?? [],
       };
     } catch (error) {
       // Re-read eligibility after a structured rejection. Keep the original

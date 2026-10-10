@@ -71,8 +71,6 @@ const (
 )
 
 const (
-	dispatchNone = "none"
-
 	toolNameBash            = "Bash"
 	toolNameAskUserQuestion = "AskUserQuestion"
 
@@ -183,7 +181,7 @@ func wireCreationWarnings(warnings []git.BranchProbeWarning) []serverruntime.Err
 	result := make([]serverruntime.Error, 0, len(warnings))
 	for _, warning := range warnings {
 		repositories := []errcat.CodeRepository{{Name: warning.Repository, Branch: warning.Branch}}
-		result = append(result, serverruntime.WireCanonicalError(errcat.New(
+		result = append(result, *serverruntime.WireError(errcat.New(
 			errcat.BranchCollisionProbeUnavailable,
 			errcat.WithRepositories(repositories...),
 			errcat.WithParams(errcat.WarningRepoParams{Repositories: repositories}),
@@ -219,50 +217,61 @@ func createSourceExpectations(sources []serverruntime.RepositorySource) ([]featu
 	return result, nil
 }
 
-// SetupFeature dispatches server-owned durable setup for a freshly created
-// feature — or a retry of a failed setup that reruns only the unfinished
-// tasks — without starting orchestration. On success the feature returns to
-// the startable StatusCreated state; failures are persisted on the feature's
-// setup state and surfaced through setup events, so the HTTP response only
-// acknowledges the dispatch.
-func (t *mutationTarget) SetupFeature(featureID string) (serverruntime.FeatureSetupResponse, error) {
-	if err := t.orch.DispatchSetup(featureID); err != nil {
+// RunFeatureLifecycle adapts the eight flat lifecycle actions to their
+// orchestrator operations. Setup dispatches durable work; its failures are
+// persisted separately and reported through setup events.
+func (t *mutationTarget) RunFeatureLifecycle(featureID string, action serverruntime.FeatureAction, guard serverruntime.GuardedFeatureActionRequest) (serverruntime.FeatureActionResponse, error) {
+	var err error
+	var result string
+	switch action {
+	case serverruntime.FeatureActionSetup:
+		err = t.orch.DispatchSetup(featureID)
 		if errors.Is(err, orchestrator.ErrNoSetupWork) {
-			return serverruntime.FeatureSetupResponse{}, &serverruntime.ActionConflictError{
-				Detail: fmt.Sprintf("feature %q has no pending or failed setup work", featureID),
-			}
+			err = &serverruntime.ActionConflictError{Detail: fmt.Sprintf("feature %q has no pending or failed setup work", featureID)}
 		}
-		return serverruntime.FeatureSetupResponse{}, err
+		result = resultSetupStarted
+	case serverruntime.FeatureActionStart, serverruntime.FeatureActionResume:
+		err = t.orch.StartFeature(featureID)
+		result = resultStarted
+	case serverruntime.FeatureActionPauseStop:
+		err = t.orch.StopFeature(featureID)
+		result = resultStopped
+	case serverruntime.FeatureActionRetry:
+		err = t.orch.RetryFeature(featureID)
+		result = resultRetried
+	case serverruntime.FeatureActionNeedUserInput:
+		err = t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{})
+		result = resultResumed
+	case serverruntime.FeatureActionDiscard:
+		err = t.orch.DiscardChild(featureID)
+		result = resultDiscarded
+	case serverruntime.FeatureActionMerge:
+		err = t.rejectStaleCompletionPreflight(featureID, guard.SourceRevision)
+		if err == nil {
+			err = t.orch.MergeFeatureLocal(featureID)
+		}
+		result = resultMerged
+	case serverruntime.FeatureActionMarkDone:
+		err = t.rejectStaleCompletionPreflight(featureID, guard.SourceRevision)
+		if err == nil {
+			err = t.orch.MarkDone(featureID)
+		}
+		result = resultDone
+	default:
+		return serverruntime.FeatureActionResponse{}, fmt.Errorf("unsupported feature lifecycle action %q", action)
 	}
-	return serverruntime.FeatureSetupResponse{FeatureID: featureID, Result: resultSetupStarted}, nil
-}
-
-func (t *mutationTarget) StartFeature(featureID string) (serverruntime.FeatureStartResponse, error) {
-	if err := t.orch.StartFeature(featureID); err != nil {
-		return serverruntime.FeatureStartResponse{}, err
-	}
-	return serverruntime.FeatureStartResponse{FeatureID: featureID, Result: resultStarted}, nil
-}
-
-func (t *mutationTarget) StopFeature(featureID string) (serverruntime.FeatureStopResponse, error) {
-	if err := t.orch.StopFeature(featureID); err != nil {
-		return serverruntime.FeatureStopResponse{}, err
-	}
-	return serverruntime.FeatureStopResponse{FeatureID: featureID, Result: resultStopped}, nil
-}
-
-func (t *mutationTarget) RestartFeature(featureID string, req serverruntime.RestartFeatureRequest) (serverruntime.FeatureRestartResponse, error) {
-	outcome, err := t.orch.RestartFeature(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
 	if err != nil {
-		return serverruntime.FeatureRestartResponse{}, err
+		return serverruntime.FeatureActionResponse{}, err
 	}
-	resp := serverruntime.FeatureRestartResponse{FeatureID: featureID, Result: resultRestarted, Phase: outcome.Phase.String()}
-	if outcome.Action == orchestrator.RestartDispatchPhase {
-		resp.Dispatch = "phase"
-	} else {
-		resp.Dispatch = dispatchNone
+	return serverruntime.FeatureActionResponse{FeatureID: featureID, Result: result}, nil
+}
+
+func (t *mutationTarget) RestartFeature(featureID string, req serverruntime.RestartFeatureRequest) (serverruntime.FeatureActionResponse, error) {
+	_, err := t.orch.RestartFeature(featureID, req.MaxIterationsDelta, req.MaxPlanIterationsDelta)
+	if err != nil {
+		return serverruntime.FeatureActionResponse{}, err
 	}
-	return resp, nil
+	return serverruntime.FeatureActionResponse{FeatureID: featureID, Result: resultRestarted}, nil
 }
 
 func (t *mutationTarget) ReviewDecision(featureID string, req serverruntime.ReviewDecisionRequest) error {
@@ -276,7 +285,7 @@ func (t *mutationTarget) ReviewDecision(featureID string, req serverruntime.Revi
 	return t.orch.HandleReviewDecision(featureID, decision)
 }
 
-func (t *mutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureConfigUpdateResponse, error) {
+func (t *mutationTarget) UpdateFeatureConfig(featureID string, req serverruntime.FeatureConfigMutationRequest) (serverruntime.FeatureActionResponse, error) {
 	input := orchestrator.UpdateFeatureConfigInput{
 		Models:             req.Models,
 		Effort:             req.Effort,
@@ -288,29 +297,22 @@ func (t *mutationTarget) UpdateFeatureConfig(featureID string, req serverruntime
 	if req.AutomaticReviewMode != nil {
 		mode, err := feature.ParseAutomaticReviewMode(*req.AutomaticReviewMode)
 		if err != nil {
-			return serverruntime.FeatureConfigUpdateResponse{}, err
+			return serverruntime.FeatureActionResponse{}, err
 		}
 		input.AutomaticReviewMode = &mode
 	}
 	f, err := t.orch.UpdateFeatureConfig(featureID, input)
 	if err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
+		return serverruntime.FeatureActionResponse{}, err
 	}
 	pipeline := req.Pipeline
 	if pipeline == "" {
 		pipeline = f.EffectivePipeline()
 	}
 	if err := t.persistPipelinePreferences(featureRepoNames(f), pipeline, f.Models, f.Effort, f.Inquireness, f.Checkpoints, f.IsPublishable()); err != nil {
-		return serverruntime.FeatureConfigUpdateResponse{}, err
+		return serverruntime.FeatureActionResponse{}, err
 	}
-	return serverruntime.FeatureConfigUpdateResponse{FeatureID: featureID, Result: resultUpdated}, nil
-}
-
-func (t *mutationTarget) ResumeNeedUserInput(featureID string) (serverruntime.NeedUserInputResumeResponse, error) {
-	if err := t.orch.ResumeNeedUserInput(featureID, orchestrator.NeedUserInputResume{}); err != nil {
-		return serverruntime.NeedUserInputResumeResponse{}, err
-	}
-	return serverruntime.NeedUserInputResumeResponse{FeatureID: featureID, Result: resultResumed}, nil
+	return serverruntime.FeatureActionResponse{FeatureID: featureID, Result: resultUpdated}, nil
 }
 
 func (t *mutationTarget) WaiveTestingContractItems(featureID string, req serverruntime.TestingContractWaiveRequest) (serverruntime.TestingContractWaiveResponse, error) {
@@ -330,22 +332,22 @@ func (t *mutationTarget) WaiveTestingContractItems(featureID string, req serverr
 	}, nil
 }
 
-func (t *mutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.NeedUserInputDraftResponse, error) {
+func (t *mutationTarget) DraftNeedUserInputAnswers(featureID string, req serverruntime.NeedUserInputDraftRequest) (serverruntime.FeatureActionResponse, error) {
 	gatePath, err := t.orch.PendingNeedUserInputGatePath(featureID)
 	if err != nil {
-		return serverruntime.NeedUserInputDraftResponse{}, err
+		return serverruntime.FeatureActionResponse{}, err
 	}
 	rec, err := agent.ReadNeedUserInputRecord(gatePath)
 	if err != nil {
-		return serverruntime.NeedUserInputDraftResponse{}, fmt.Errorf("read need-user-input gate: %w", err)
+		return serverruntime.FeatureActionResponse{}, fmt.Errorf("read need-user-input gate: %w", err)
 	}
 	if err := applyNeedUserInputDraftAnswers(&rec, req.Answers); err != nil {
-		return serverruntime.NeedUserInputDraftResponse{}, err
+		return serverruntime.FeatureActionResponse{}, err
 	}
 	if err := agent.WriteNeedUserInputRecord(gatePath, rec); err != nil {
-		return serverruntime.NeedUserInputDraftResponse{}, fmt.Errorf("write need-user-input gate: %w", err)
+		return serverruntime.FeatureActionResponse{}, fmt.Errorf("write need-user-input gate: %w", err)
 	}
-	return serverruntime.NeedUserInputDraftResponse{FeatureID: featureID, Result: resultDrafted}, nil
+	return serverruntime.FeatureActionResponse{FeatureID: featureID, Result: resultDrafted}, nil
 }
 
 func (t *mutationTarget) AnswerPermission(req serverruntime.PermissionAnswerRequest) (serverruntime.PermissionAnswerResponse, error) {
@@ -411,14 +413,14 @@ func (t *mutationTarget) AnswerPermission(req serverruntime.PermissionAnswerRequ
 // applies to the next Bash request.
 func (t *mutationTarget) enableAutomaticReview(scope, featureID string) error {
 	switch scope {
-	case serverruntime.AutoApproveScopeWorkspace:
+	case string(serverruntime.PermissionAnswerRequestAutoApproveScopeWorkspace):
 		enabled := true
 		skip := false
 		_, err := t.RuntimeConfig(serverruntime.RuntimeConfigMutationRequest{
 			Defaults: serverruntime.RuntimeDefaultsMutation{AutomaticReviewEnabled: &enabled, DangerouslySkipPermissions: &skip},
 		})
 		return err
-	case serverruntime.AutoApproveScopeFeature:
+	case string(serverruntime.PermissionAnswerRequestAutoApproveScopeFeature):
 		if featureID == "" {
 			return errors.New("this request has no feature; enable auto-approve for the workspace instead")
 		}
@@ -519,9 +521,9 @@ func (t *mutationTarget) ExecuteRecovery(ctx context.Context, items []ports.Reco
 	return serverruntime.RecoveryActionResponse{Result: resultRecovered}, nil
 }
 
-func (t *mutationTarget) PublishFeature(featureID string, req serverruntime.PublishFeatureRequest) (serverruntime.PublishFeatureResponse, error) {
+func (t *mutationTarget) PublishFeature(featureID string, req serverruntime.PublishFeatureRequest) (serverruntime.FeatureActionResponse, error) {
 	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
-		return serverruntime.PublishFeatureResponse{}, err
+		return serverruntime.FeatureActionResponse{}, err
 	}
 	if err := t.orch.PublishWithOptions(featureID, orchestrator.PublishOptions{
 		Repos: req.Repos,
@@ -529,11 +531,11 @@ func (t *mutationTarget) PublishFeature(featureID string, req serverruntime.Publ
 		Body:  req.Body,
 	}); err != nil {
 		if conflict := actionConflictError(err); conflict != nil {
-			return serverruntime.PublishFeatureResponse{}, conflict
+			return serverruntime.FeatureActionResponse{}, conflict
 		}
-		return serverruntime.PublishFeatureResponse{}, err
+		return serverruntime.FeatureActionResponse{}, err
 	}
-	return serverruntime.PublishFeatureResponse{FeatureID: featureID, Result: resultPublished}, nil
+	return serverruntime.FeatureActionResponse{FeatureID: featureID, Result: resultPublished}, nil
 }
 
 func (t *mutationTarget) GeneratePublishDescription(featureID string, req serverruntime.PublishDescriptionRequest) (serverruntime.PublishDescriptionResponse, error) {
@@ -544,16 +546,6 @@ func (t *mutationTarget) GeneratePublishDescription(featureID string, req server
 		return serverruntime.PublishDescriptionResponse{}, err
 	}
 	return serverruntime.PublishDescriptionResponse{FeatureID: featureID, Title: title, Body: body, Result: resultGenerated}, nil
-}
-
-func (t *mutationTarget) MergeFeature(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MergeFeatureResponse, error) {
-	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
-		return serverruntime.MergeFeatureResponse{}, err
-	}
-	if err := t.orch.MergeFeatureLocal(featureID); err != nil {
-		return serverruntime.MergeFeatureResponse{}, err
-	}
-	return serverruntime.MergeFeatureResponse{FeatureID: featureID, Result: resultMerged}, nil
 }
 
 func (t *mutationTarget) RepositoryPath(featureID, repoName string) (serverruntime.RepositoryPathResponse, error) {
@@ -624,7 +616,7 @@ func wireRewindWarnings(warnings []feature.RewindWarning) []serverruntime.Error 
 			}),
 			errcat.WithDiagnostics(diagnostics),
 		)
-		out = append(out, serverruntime.WireCanonicalError(rendered))
+		out = append(out, *serverruntime.WireError(rendered))
 	}
 	return out
 }
@@ -651,15 +643,7 @@ func wireRepositoryDiffFailure(repoName string, failure *orchestrator.Repository
 		errcat.WithParams(errcat.WarningRepoParams{Repositories: repos}),
 		errcat.WithDiagnostics(diagnostics),
 	)
-	wire := serverruntime.WireCanonicalError(rendered)
-	return &wire
-}
-
-func (t *mutationTarget) RetryFeature(featureID string) (serverruntime.RetryFeatureResponse, error) {
-	if err := t.orch.RetryFeature(featureID); err != nil {
-		return serverruntime.RetryFeatureResponse{}, err
-	}
-	return serverruntime.RetryFeatureResponse{FeatureID: featureID, Result: resultRetried}, nil
+	return serverruntime.WireError(rendered)
 }
 
 func (t *mutationTarget) CompletionPreflight(featureID string) (serverruntime.CompletionPreflightResponse, error) {
@@ -683,7 +667,7 @@ func (t *mutationTarget) CompletionPreflight(featureID string) (serverruntime.Co
 			PrURL:                 r.PRURL,
 			Blocker:               r.Blocker,
 			Freshness:             r.Freshness,
-			Error:                 serverruntime.WireRepoError(r.Error),
+			Error:                 serverruntime.WireError(r.Error),
 			BaseBranch:            r.BaseBranch,
 			Branch:                r.Branch,
 			PendingCommits:        r.PendingCommits,
@@ -727,23 +711,23 @@ func (t *mutationTarget) RepositoryDiff(featureID, repoName, filePath string) (s
 	return resp, nil
 }
 
-func (t *mutationTarget) RefactorFeature(featureID string, req serverruntime.RefactorFeatureRequest) (serverruntime.RefactorFeatureResponse, error) {
-	spec, err := serverruntime.RefactorChildSpecFromRequest(req)
+func (t *mutationTarget) RefactorFeature(featureID string, req serverruntime.RefactorFeatureRequest) (serverruntime.ChildLaunchResponse, error) {
+	spec, err := refactorChildSpecFromRequest(req)
 	if err != nil {
-		return serverruntime.RefactorFeatureResponse{}, err
+		return serverruntime.ChildLaunchResponse{}, err
 	}
 	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{Kind: feature.ChildKindRefactor, Refactor: spec})
 	if err != nil {
-		return serverruntime.RefactorFeatureResponse{}, err
+		return serverruntime.ChildLaunchResponse{}, err
 	}
-	return serverruntime.RefactorFeatureResponse{FeatureID: launch.Child.ID, ParentID: featureID, Result: resultCreated}, nil
+	return serverruntime.ChildLaunchResponse{FeatureID: launch.Child.ID, ParentID: featureID, Result: resultCreated}, nil
 }
 
 func (t *mutationTarget) ReviewFeedbackFeature(featureID string, req serverruntime.ReviewFeedbackFeatureRequest) (serverruntime.ReviewFeedbackFeatureResponse, error) {
 	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{
 		Kind:             feature.ChildKindReviewFeedback,
 		ExpectedRevision: int64(req.ExpectedRevision),
-		Gate:             serverruntime.ReviewFeedbackGateFromRequest(req),
+		Gate:             req.Gate,
 	})
 	if err != nil {
 		return serverruntime.ReviewFeedbackFeatureResponse{}, err
@@ -759,22 +743,12 @@ func (t *mutationTarget) ReviewFeedbackFeature(featureID string, req serverrunti
 	}, nil
 }
 
-func (t *mutationTarget) RebaseFeature(featureID string) (serverruntime.RebaseFeatureResponse, error) {
+func (t *mutationTarget) RebaseFeature(featureID string) (serverruntime.ChildLaunchResponse, error) {
 	launch, err := t.orch.LaunchChild(featureID, orchestrator.ChildLaunch{Kind: feature.ChildKindRebase})
 	if err != nil {
-		return serverruntime.RebaseFeatureResponse{}, err
+		return serverruntime.ChildLaunchResponse{}, err
 	}
-	return serverruntime.RebaseFeatureResponse{FeatureID: launch.Child.ID, ParentID: featureID, Result: resultCreated}, nil
-}
-
-func (t *mutationTarget) MarkDone(featureID string, req serverruntime.GuardedFeatureActionRequest) (serverruntime.MarkDoneResponse, error) {
-	if err := t.rejectStaleCompletionPreflight(featureID, req.SourceRevision); err != nil {
-		return serverruntime.MarkDoneResponse{}, err
-	}
-	if err := t.orch.MarkDone(featureID); err != nil {
-		return serverruntime.MarkDoneResponse{}, err
-	}
-	return serverruntime.MarkDoneResponse{FeatureID: featureID, Result: resultDone}, nil
+	return serverruntime.ChildLaunchResponse{FeatureID: launch.Child.ID, ParentID: featureID, Result: resultCreated}, nil
 }
 
 func (t *mutationTarget) CleanupFeature(featureID string, req serverruntime.CleanupActionRequest) (serverruntime.CleanupFeatureResponse, error) {
@@ -814,13 +788,6 @@ func (t *mutationTarget) DeleteFeature(featureID string, req serverruntime.Guard
 		Status:      result.Status,
 		Diagnostics: result.Diagnostics,
 	}, nil
-}
-
-func (t *mutationTarget) DiscardChild(featureID string) (serverruntime.DiscardChildResponse, error) {
-	if err := t.orch.DiscardChild(featureID); err != nil {
-		return serverruntime.DiscardChildResponse{}, err
-	}
-	return serverruntime.DiscardChildResponse{FeatureID: featureID, Result: resultDiscarded}, nil
 }
 
 func (t *mutationTarget) rejectStaleCompletionPreflight(featureID, sourceRevision string) error {
@@ -1124,5 +1091,5 @@ func hasAnyEffortConfig(e config.EffortConfig) bool {
 }
 
 func mergeModelConfig(base, overlay config.ModelConfig) config.ModelConfig {
-	return serverruntime.ApplyModelConfigPatch(base, serverruntime.ModelConfigToPatch(overlay))
+	return serverruntime.ApplyModelConfigPatch(base, modelConfigToPatch(overlay))
 }

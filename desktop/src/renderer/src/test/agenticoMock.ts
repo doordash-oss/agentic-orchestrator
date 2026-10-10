@@ -858,7 +858,7 @@ export function installAgenticoMock(
     createFeature: vi.fn(() => Promise.resolve({ featureId: feature.id })),
     dispatchFeatureSetup: vi.fn(() => Promise.resolve({ result: 'setup_started' })),
     dispatchFeatureAction: vi.fn(({ featureId, action }: FeatureActionRequest) =>
-      Promise.resolve({ featureId, action, result: 'started', sessionIds: [] }),
+      Promise.resolve({ featureId, action, result: 'started' }),
     ),
     getAttention: vi.fn(() => Promise.resolve(overrides.attention ?? { items: [] })),
     answerPermission: vi.fn(() => Promise.resolve({ result: 'submitted' })),

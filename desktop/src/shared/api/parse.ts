@@ -1341,10 +1341,7 @@ export const FeatureActionResponseSchema = z.object({
 
 export type FeatureActionResponse = z.output<typeof FeatureActionResponseSchema>;
 
-export const ServerFeatureOperationalActionResponseSchema = FeatureActionResponseSchema.extend({
-  phase: z.string().optional(),
-  session_ids: z.array(z.string()).max(100).optional(),
-});
+export const ServerFeatureOperationalActionResponseSchema = FeatureActionResponseSchema;
 
 // --- Sessions ---------------------------------------------------------------
 
@@ -1987,10 +1984,10 @@ void _setupSubset;
 type SetupTaskDTO = components['schemas']['SetupTask'];
 const _setupTaskSubset = (value: SetupTaskDTO): ServerSetupTask => value;
 void _setupTaskSubset;
-type CreateFeatureResponseDTO = components['schemas']['CreateFeatureResponse'];
+type CreateFeatureResponseDTO = components['schemas']['FeatureActionResponse'];
 const _createFeatureSubset = (value: CreateFeatureResponseDTO): FeatureActionResponse => value;
 void _createFeatureSubset;
-type FeatureSetupResponseDTO = components['schemas']['FeatureSetupResponse'];
+type FeatureSetupResponseDTO = components['schemas']['FeatureActionResponse'];
 const _featureSetupSubset = (value: FeatureSetupResponseDTO): FeatureActionResponse => value;
 void _featureSetupSubset;
 type SessionListDTO = components['schemas']['SessionListResponse'];
@@ -2042,10 +2039,10 @@ void _recoverySnapshotSubset;
 type RecoveryItemDTO = components['schemas']['RecoveryItem'];
 const _recoveryItemSubset = (value: RecoveryItemDTO): ServerRecoveryItem => value;
 void _recoveryItemSubset;
-type RebaseFeatureDTO = components['schemas']['RebaseFeatureResponse'];
+type RebaseFeatureDTO = components['schemas']['ChildLaunchResponse'];
 const _rebaseFeatureSubset = (value: RebaseFeatureDTO): RebaseFeatureResponse => value;
 void _rebaseFeatureSubset;
-type RefactorFeatureDTO = components['schemas']['RefactorFeatureResponse'];
+type RefactorFeatureDTO = components['schemas']['ChildLaunchResponse'];
 const _refactorFeatureSubset = (value: RefactorFeatureDTO): RefactorFeatureResponse => value;
 void _refactorFeatureSubset;
 type ReviewFeedbackFetchDTO = components['schemas']['ReviewFeedbackFetchResponse'];

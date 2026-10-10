@@ -26,9 +26,15 @@ surfaces are strictly additive: neither the compatibility declaration nor
 the discovery schema version changes for it, so older consumers keep working
 against named servers and newer consumers tolerate name-less servers.
 
-The compatibility declaration on `/api/v1/health` reports schema series 4
-and minimum client series 4 under the `loopback-bearer-v1` runtime policy
-(`network-bearer-v1` for non-loopback listeners). In schema series 4,
+The compatibility declaration on `/api/v1/health` reports schema series 5
+and minimum client series 5 under the `loopback-bearer-v1` runtime policy
+(`network-bearer-v1` for non-loopback listeners). Series 5 merges the
+feature-action and child-launch response schemas, removes the unused action
+union and static rebase operation declaration, drops the never-sent start `phase` and `session_ids` fields and the
+restart `phase`, `dispatch`, and `session_ids` fields (the first two were
+emitted but not consumed), adds the routed `selection` subaction enum value, and
+declares the delete response's existing `retryable` field. The rebase URL
+remains served through the generic action route. In schema series 4,
 ask-user questions carry a required one-based `index`; answers on both
 surfaces (the ask-user answer's `answers` and the need-user-input draft) are
 keyed by that index as a string (`"1"`, `"2"`, ...). Ask-user selections use

@@ -1038,16 +1038,12 @@ describe('FeatureService.dispatchAction', () => {
         api_version: 'v1',
         feature_id: input.featureId,
         result: 'started',
-        phase: 'implement',
-        session_ids: ['session-1'],
       },
     });
     await expect(first).resolves.toStrictEqual({
       featureId: input.featureId,
       action: 'start',
       result: 'started',
-      phase: 'implement',
-      sessionIds: ['session-1'],
     });
     await expect(second).resolves.toStrictEqual(await first);
     expect(request).toHaveBeenCalledWith(`/api/v1/features/${input.featureId}/actions/start`, {
@@ -1080,7 +1076,6 @@ describe('FeatureService.dispatchAction', () => {
       featureId: 'abcd1234ef567890',
       action: 'publish',
       result: 'published',
-      sessionIds: [],
     });
     expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/publish');
     expect(calls[0]?.init).toStrictEqual({
@@ -1287,8 +1282,6 @@ describe('FeatureService.dispatchAction', () => {
       featureId: 'abcd1234ef567890',
       action: 'restart',
       result: 'restarted',
-      phase: 'implement',
-      sessionIds: [],
     });
     expect(calls[0]?.path).toBe('/api/v1/features/abcd1234ef567890/actions/restart');
     expect(calls[0]?.init).toStrictEqual({

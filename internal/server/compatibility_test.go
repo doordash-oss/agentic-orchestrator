@@ -98,13 +98,17 @@ func TestCompatibilityDeclarationFallbackBuildVersion(t *testing.T) {
 // one-based index and keyed answers on both surfaces (ask-user answers and
 // need-user-input drafts) by that index, with the gate question index now
 // required, so a series-3 client and a series-4 server refuse each other.
+// Series 5 shares the flat feature-action and child-launch response shapes,
+// removes the unused action union and static rebase declaration, drops
+// never-consumed start and restart fields, and declares the routed selection
+// subaction and delete retry indicator.
 func TestCompatibilityPins(t *testing.T) {
 	t.Parallel()
-	if CompatibilitySchemaVersion != 4 {
-		t.Fatalf("CompatibilitySchemaVersion = %d; want 4", CompatibilitySchemaVersion)
+	if CompatibilitySchemaVersion != 5 {
+		t.Fatalf("CompatibilitySchemaVersion = %d; want 5", CompatibilitySchemaVersion)
 	}
-	if CompatibilityMinClientSchema != 4 {
-		t.Fatalf("CompatibilityMinClientSchema = %d; want 4", CompatibilityMinClientSchema)
+	if CompatibilityMinClientSchema != 5 {
+		t.Fatalf("CompatibilityMinClientSchema = %d; want 5", CompatibilityMinClientSchema)
 	}
 	if CompatibilityRuntimePolicy != "loopback-bearer-v1" {
 		t.Fatalf("CompatibilityRuntimePolicy = %q; want loopback-bearer-v1", CompatibilityRuntimePolicy)

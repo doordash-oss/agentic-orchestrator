@@ -125,7 +125,7 @@ func TestAutoPolicyCancelledTargetWaitsForNewerRelease(t *testing.T) {
 func TestAutoPolicyHonorsMaintenanceWindow(t *testing.T) {
 	t.Parallel()
 	clock := newFakeUpdateClock()
-	now := clock.Now().Local()
+	now := clock.now().Local()
 	open := now.Add(2 * time.Hour)
 	end := now.Add(4 * time.Hour)
 	opts := autoUpdateOptions()

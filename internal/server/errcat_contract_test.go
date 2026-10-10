@@ -97,6 +97,7 @@ func TestRepresentativeRejectionsCarryCanonicalBodies(t *testing.T) {
 	handler := NewHandler(HandlerOptions{
 		AuthToken:             testAuthToken,
 		Features:              store,
+		FeatureStore:          store,
 		DisableHostValidation: true,
 	})
 

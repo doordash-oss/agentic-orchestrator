@@ -33,7 +33,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
-// fakeInstallAdmission is the deterministic InstallAdmission seam: it can
+// fakeInstallAdmission is the deterministic installAdmission seam: it can
 // park WaitForIdle on a gate, close atomically when quiet, refuse or admit
 // the stopping closure by held category, and report a one-shot busy
 // detection while closed (work that raced in under the update lock).
@@ -364,7 +364,7 @@ func (t *fakeInstallTransaction) setCancelFailures(n int) {
 }
 
 func newInstallFakes() (*fakeReleaseStager, *fakeInstallLifecycle, *fakeInstallAdmission, *fakeInstallTransaction) {
-	stager := &fakeReleaseStager{contract: &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: 4, MinClientSchema: 1}}
+	stager := &fakeReleaseStager{contract: &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: CompatibilitySchemaVersion, MinClientSchema: 1}}
 	tx := &fakeInstallTransaction{id: "tx-install"}
 	lifecycle := &fakeInstallLifecycle{lockAcquired: true, tx: tx}
 	admission := &fakeInstallAdmission{closeQuiet: true}
@@ -387,7 +387,7 @@ func newInstallAPIFixture(t *testing.T, opts UpdateOptions) *installAPIFixture {
 	return newInstallAPIFixtureWithBoundary(t, opts, nil, nil)
 }
 
-func newInstallAPIFixtureWithBoundary(t *testing.T, opts UpdateOptions, boundary *workadmission.Coordinator, features FeatureLister) *installAPIFixture {
+func newInstallAPIFixtureWithBoundary(t *testing.T, opts UpdateOptions, boundary *workadmission.Coordinator, features featureLister) *installAPIFixture {
 	t.Helper()
 	stager, lifecycle, admission, tx := newInstallFakes()
 	feed := &fakeUpdateFeed{selection: selfupdate.ReleaseSelection{Version: "2.0.0", TagName: "v2.0.0"}}
@@ -1013,12 +1013,12 @@ func TestUpdateInstallWorkerTransitionsToScheduled(t *testing.T) {
 
 	// The staged candidate is verified and its contract published while the
 	// operation waits for idle.
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Signature != Verified {
 		t.Fatalf("signature = %q, want verified after staging", snapshot.Signature)
 	}
 	if snapshot.TargetContract == nil || snapshot.TargetContract.APIVersion != "2" ||
-		snapshot.TargetContract.SchemaVersion != 4 || snapshot.TargetContract.MinClientSchema != 1 {
+		snapshot.TargetContract.SchemaVersion != CompatibilitySchemaVersion || snapshot.TargetContract.MinClientSchema != 1 {
 		t.Fatalf("target_contract = %+v, want the stager's verified contract", snapshot.TargetContract)
 	}
 	if snapshot.TargetVersion == nil || *snapshot.TargetVersion != "2.0.0" {
@@ -1105,7 +1105,7 @@ func TestUpdateInstallIdleFlowDrainsAndReplaces(t *testing.T) {
 
 	close(replaceBlock)
 	waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(coordinator) }, "operation never settled")
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusFailed {
 		t.Fatalf("status = %q, want failed after a returned replacement", snapshot.Status)
 	}
@@ -1248,7 +1248,7 @@ func TestUpdateInstallCancelAfterDrainRefused(t *testing.T) {
 	// it settles the truthful failure.
 	close(replaceBlock)
 	waitInstallCond(t, 5*time.Second, func() bool { return installOpCleared(fixture.handler.updates) }, "operation never settled")
-	snapshot := fixture.handler.updates.Snapshot()
+	snapshot := fixture.handler.updates.snapshot()
 	if snapshot.Error == nil || snapshot.Error.Code != string(errcat.UpdateInstallFailed) {
 		t.Fatalf("error = %+v, want update_install_failed after the returned replacement", snapshot.Error)
 	}
@@ -1484,7 +1484,7 @@ func TestUpdateInstallCheckDuringOperationKeepsTargetPinned(t *testing.T) {
 	feed.selection = selfupdate.ReleaseSelection{Version: "3.0.0", TagName: "v3.0.0"}
 	feed.mu.Unlock()
 	coordinator.performCheck(context.Background(), "explicit")
-	snapshot := coordinator.Snapshot()
+	snapshot := coordinator.snapshot()
 	if snapshot.Status != UpdateSnapshotStatusScheduled {
 		t.Fatalf("status = %q, want the operation's scheduled status", snapshot.Status)
 	}
@@ -1559,7 +1559,7 @@ func TestUpdateInstallCancelPublishesInvalidation(t *testing.T) {
 	if _, refusal := c.cancelInstall(context.Background()); refusal != nil {
 		t.Fatal(refusal)
 	}
-	if got := c.Snapshot().Status; got != UpdateSnapshotStatus(updateStatusAvailable) {
+	if got := c.snapshot().Status; got != UpdateSnapshotStatus(updateStatusAvailable) {
 		t.Fatalf("status = %s", got)
 	}
 	if recorder.eventCount() != before+1 {

@@ -654,9 +654,14 @@ describe('Setup task and setup view schemas', () => {
       featureId: 'abcd1234ef567890',
       action: 'rewind',
       result: 'rewound',
-      sessionIds: [],
     };
     expect(FeatureActionResultSchema.safeParse(actionResult).success).toBe(true);
+    expect(
+      FeatureActionResultSchema.safeParse({ ...actionResult, phase: 'implement' }).success,
+    ).toBe(false);
+    expect(FeatureActionResultSchema.safeParse({ ...actionResult, sessionIds: [] }).success).toBe(
+      false,
+    );
     const staleWarnings = FeatureActionResultSchema.safeParse({
       ...actionResult,
       warnings: ['stale string warning'],

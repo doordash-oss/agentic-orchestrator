@@ -73,12 +73,11 @@ func TestStartServerBindsLoopbackAndServesHealth(t *testing.T) {
 		Config:    identity.Config,
 	}
 	srv, err := Start(context.Background(), Options{
-		Runtime:      identity,
-		LaunchPolicy: policy,
-		StartMode:    startModeServer,
-		Owner:        owner,
-		AuthToken:    authToken,
-		Features:     featureListerFunc(nil),
+		HandlerOptions: HandlerOptions{
+			Runtime: identity, LaunchPolicy: policy, Owner: owner,
+			AuthToken: authToken, Features: featureListerFunc(nil),
+		},
+		StartMode: startModeServer,
 	})
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)

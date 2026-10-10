@@ -53,7 +53,7 @@ func (h *apiHandler) handleReviewSessionRoute(w http.ResponseWriter, r *http.Req
 }
 
 func (h *apiHandler) handleReadReviewSession(w http.ResponseWriter, r *http.Request, featureID string) {
-	resp, err := h.reviewSessionService().Read(featureID)
+	resp, err := h.reviewSessionService().read(featureID)
 	if err != nil {
 		writeReviewSessionError(w, err, featureID, "")
 		return
@@ -74,7 +74,7 @@ func (h *apiHandler) handleCreateReviewSession(w http.ResponseWriter, r *http.Re
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
-	resp, err := h.reviewSessionService().Create(featureID)
+	resp, err := h.reviewSessionService().create(featureID)
 	if err != nil {
 		writeReviewSessionError(w, err, featureID, "")
 		return
@@ -95,7 +95,7 @@ func (h *apiHandler) handleSaveReviewDraft(w http.ResponseWriter, r *http.Reques
 	if !decodeMutationJSONLimited(w, r, &req, maxReviewDraftBodyBytes) {
 		return
 	}
-	resp, err := h.reviewSessionService().SaveDraft(featureID, reviewID, req)
+	resp, err := h.reviewSessionService().saveDraft(featureID, reviewID, req)
 	if err != nil {
 		writeReviewSessionError(w, err, featureID, reviewID)
 		return
@@ -116,7 +116,7 @@ func (h *apiHandler) handleValidateReviewDraft(w http.ResponseWriter, r *http.Re
 	if !decodeMutationJSONLimited(w, r, &req, maxReviewDraftBodyBytes) {
 		return
 	}
-	resp, err := h.reviewSessionService().ValidateDraft(featureID, reviewID, req)
+	resp, err := h.reviewSessionService().validateDraft(featureID, reviewID, req)
 	if err != nil {
 		writeReviewSessionError(w, err, featureID, reviewID)
 		return
@@ -137,7 +137,7 @@ func (h *apiHandler) handleSubmitReviewSessionDecision(w http.ResponseWriter, r 
 	if !decodeMutationJSON(w, r, &req) {
 		return
 	}
-	resp, err := h.reviewSessionService().SubmitDecision(featureID, reviewID, req)
+	resp, err := h.reviewSessionService().submitDecision(featureID, reviewID, req)
 	if err != nil {
 		writeReviewSessionError(w, err, featureID, reviewID)
 		return

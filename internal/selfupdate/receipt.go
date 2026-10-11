@@ -26,34 +26,34 @@ import (
 const receiptSchemaVersion = 1
 
 // Outcome is the durable result of a transaction.
-type Outcome string
+type outcome string
 
 const (
-	OutcomePending    Outcome = "pending"
-	OutcomeConfirmed  Outcome = "confirmed"
-	OutcomeRolledBack Outcome = "rolled_back"
+	OutcomePending    outcome = "pending"
+	OutcomeConfirmed  outcome = "confirmed"
+	OutcomeRolledBack outcome = "rolled_back"
 )
 
 // Phase marks how far a transaction progressed. Phase advances only after the
 // corresponding mutation is durable; Outcome is the terminal verdict.
-type Phase string
+type phase string
 
 const (
-	PhaseBackupReady         Phase = "backup-ready"
-	PhaseReplacementComplete Phase = "replacement-complete"
-	PhaseRollbackAttempted   Phase = "rollback-attempted"
+	phaseBackupReady         phase = "backup-ready"
+	phaseReplacementComplete phase = "replacement-complete"
+	phaseRollbackAttempted   phase = "rollback-attempted"
 )
 
 // Resolution is the explicit settlement marker that distinguishes a settled
 // transaction from an actionable pending one while the outcome vocabulary
 // stays pending/confirmed/rolled_back. An abandoned pre-replacement attempt
-// keeps Outcome=pending and carries ResolutionAbandonedPreReplacement: it is
+// keeps Outcome=pending and carries resolutionAbandonedPreReplacement: it is
 // settled (never actionable again) and reports an installation failure.
-type Resolution string
+type resolution string
 
 const (
-	ResolutionNone                    Resolution = ""
-	ResolutionAbandonedPreReplacement Resolution = "abandoned_pre_replacement"
+	resolutionNone                    resolution = ""
+	resolutionAbandonedPreReplacement resolution = "abandoned_pre_replacement"
 )
 
 // RecoveryKind names what a persisted write-ahead recovery attempt intends:
@@ -87,22 +87,22 @@ type Receipt struct {
 	FromVersion    string       `json:"from_version"`
 	ToVersion      string       `json:"to_version"`
 	ExecutablePath string       `json:"executable_path"`
-	ExecutableID   FileIdentity `json:"executable_id"`
+	ExecutableID   fileIdentity `json:"executable_id"`
 	OriginalMode   uint32       `json:"original_mode"`
 	OriginalUID    int          `json:"original_uid"`
 	OriginalGID    int          `json:"original_gid"`
 	OldDigest      string       `json:"old_digest"`
 	NewDigest      string       `json:"new_digest"`
 	BackupPath     string       `json:"backup_path"`
-	BackupID       FileIdentity `json:"backup_id"`
+	BackupID       fileIdentity `json:"backup_id"`
 	StagingPath    string       `json:"staging_path"`
-	StagingID      FileIdentity `json:"staging_id"`
+	StagingID      fileIdentity `json:"staging_id"`
 	Bind           BindEndpoint `json:"bind_endpoint"`
 	StartedAt      time.Time    `json:"started_at"`
 	UpdatedAt      time.Time    `json:"updated_at"`
 	Error          string       `json:"error,omitempty"`
-	Outcome        Outcome      `json:"outcome"`
-	Phase          Phase        `json:"phase"`
+	Outcome        outcome      `json:"outcome"`
+	Phase          phase        `json:"phase"`
 	// RecoveryAttemptID is the write-ahead identity of an in-flight recovery
 	// attempt, persisted before any restoration rename or unchanged-binary
 	// re-exec so an interrupted recovery can be reconciled by identity.
@@ -117,9 +117,9 @@ type Receipt struct {
 	// for a restore attempt; the installed path's identity matching RestoreID
 	// after a crash proves the restoration rename already happened.
 	RestorePath string        `json:"restore_path,omitempty"`
-	RestoreID   *FileIdentity `json:"restore_id,omitempty"`
+	RestoreID   *fileIdentity `json:"restore_id,omitempty"`
 	// Resolution settles an abandoned transaction (see Resolution*).
-	Resolution Resolution `json:"resolution,omitempty"`
+	Resolution resolution `json:"resolution,omitempty"`
 	// ResolvedAt stamps the settlement.
 	ResolvedAt time.Time `json:"resolved_at,omitempty"`
 	// InstallFailed marks that the update attempt failed before the candidate
@@ -131,17 +131,17 @@ type Receipt struct {
 // Settled reports whether the transaction is durably settled and therefore
 // not actionable: confirmed, rolled back, or abandoned through an explicit
 // resolution marker.
-func (r Receipt) Settled() bool {
+func (r Receipt) settled() bool {
 	if r.Outcome != OutcomePending {
 		return true
 	}
-	return r.Resolution != ResolutionNone
+	return r.Resolution != resolutionNone
 }
 
 // ActionablePending reports whether the receipt is a pending, unresolved
 // transaction that some launch must resolve.
-func (r Receipt) ActionablePending() bool {
-	return r.Outcome == OutcomePending && r.Resolution == ResolutionNone
+func (r Receipt) actionablePending() bool {
+	return r.Outcome == OutcomePending && r.Resolution == resolutionNone
 }
 
 // maxErrorMessage bounds the sanitized error persisted in a receipt.
@@ -182,8 +182,8 @@ func writeReceiptAtomic(path string, r Receipt, now time.Time) error {
 	return writeFileAtomic(path, data, true)
 }
 
-// ReadReceipt reads and parses the receipt at path.
-func ReadReceipt(path string) (Receipt, error) {
+// readReceipt reads and parses the receipt at path.
+func readReceipt(path string) (Receipt, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Receipt{}, fmt.Errorf("read receipt: %w", err)

@@ -16,9 +16,12 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -186,7 +189,7 @@ func newTestCoordinator(t *testing.T, opts UpdateOptions) (*updateCoordinator, *
 		opts.CurrentVersion = "1.0.0"
 	}
 	if opts.Eligibility.Install == "" {
-		opts.Eligibility = selfupdate.Eligibility{Supported: true, Install: selfupdate.InstallTarball}
+		opts.Eligibility = selfupdate.Eligibility{Supported: true, Install: "tarball"}
 	}
 	if opts.Policy == "" {
 		opts.Policy = selfupdate.PolicyNotify
@@ -426,9 +429,16 @@ func TestCoordinatorRetryBackoffBoundedAndResetBySuccess(t *testing.T) {
 func TestCoordinatorServerImposedDeadlineIsAFloor(t *testing.T) {
 	t.Parallel()
 	coordinator, clock, feed, _ := newTestCoordinator(t, UpdateOptions{})
-	notBefore := clock.now().Add(2 * time.Hour)
+	// Rebase the fake clock at the real present: the server-imposed retry
+	// deadline the fixture feed client reports is floored at the feed
+	// client's real clock, and the coordinator's fake clock must be able to
+	// advance past it.
+	clock.mu.Lock()
+	clock.current = time.Now().UTC().Truncate(time.Second)
+	clock.mu.Unlock()
+	notBefore := clock.now().Add(2 * time.Hour).Truncate(time.Second)
 	feed.mu.Lock()
-	feed.err = &selfupdate.FeedError{Reason: "rate limited", Retry: true, NotBefore: notBefore}
+	feed.err = retryableFeedError(t, notBefore)
 	feed.mu.Unlock()
 	coordinator.start(context.Background())
 	waitStatus(t, coordinator, updateStatusFailed)
@@ -576,11 +586,12 @@ func TestCoordinatorDurableSuppressionSurvivesChecks(t *testing.T) {
 		Outcome:       selfupdate.OutcomeRolledBack,
 		FromVersion:   "1.0.0",
 		ToVersion:     "2.0.0",
+		UpdatedAt:     time.Now(),
 		Error:         "target failed",
 	}
-	if err := selfupdate.SuppressTarget(binary, selfupdate.SuppressedTarget{
-		Version: "2.0.0", TransactionID: rolledBack.TransactionID, SuppressedAt: time.Now(),
-	}); err != nil {
+	// The rolled-back receipt settles through the exported reconciliation
+	// the recovery path itself calls, which suppresses the exact target.
+	if err := selfupdate.ReconcileSuppression(binary, rolledBack); err != nil {
 		t.Fatal(err)
 	}
 	opts := UpdateOptions{CurrentVersion: "1.0.0", ExecPath: binary}
@@ -634,6 +645,19 @@ func TestCoordinatorDurableSuppressionSurvivesChecks(t *testing.T) {
 	coordinator.shutdown(context.Background())
 }
 
+// updateLeaseDirForTest and updateSuppressionPathForTest build the frozen
+// on-disk self-update lease layout next to the executable: the lease dir and
+// the per-executable suppression store keyed by the canonical path.
+func updateLeaseDirForTest(binary string) string {
+	return filepath.Join(filepath.Dir(binary), ".agentico-selfupdate")
+}
+
+func updateSuppressionPathForTest(binary string) string {
+	sum := sha256.Sum256([]byte(binary))
+	key := hex.EncodeToString(sum[:])[:16]
+	return filepath.Join(updateLeaseDirForTest(binary), "suppression-"+key+".json")
+}
+
 func TestCoordinatorSuppressionStoreUnreadableFailsCheck(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -641,10 +665,10 @@ func TestCoordinatorSuppressionStoreUnreadableFailsCheck(t *testing.T) {
 	if err := writeFileTest(binary, "#!/bin/sh\n", 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(selfupdate.LeaseDir(binary), 0o700); err != nil {
+	if err := os.MkdirAll(updateLeaseDirForTest(binary), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	suppressionPath := selfupdate.SuppressionPath(binary)
+	suppressionPath := updateSuppressionPathForTest(binary)
 	if err := writeFileTest(suppressionPath, "{not json", 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -749,7 +773,7 @@ func TestCoordinatorDisabledAndUnsupportedNeverSchedule(t *testing.T) {
 
 	// Enabled but ineligible: unsupported, no feed traffic.
 	unsupported, _, unsupportedFeed, _ := newTestCoordinator(t, UpdateOptions{
-		Eligibility: selfupdate.Eligibility{Supported: false, Install: selfupdate.InstallHomebrew, Reason: selfupdate.UnsupportedHomebrew, Remediation: "brew"},
+		Eligibility: selfupdate.Eligibility{Supported: false, Install: "homebrew", Reason: "homebrew", Remediation: "brew"},
 	})
 	unsupported.start(context.Background())
 	time.Sleep(50 * time.Millisecond)

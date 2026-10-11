@@ -25,7 +25,7 @@ import (
 type denyAllTestHandler struct{}
 
 func (denyAllTestHandler) CanUseTool(ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return ports.PermissionDecision{Behavior: permission.DecisionDeny, Reason: "all tools denied"}, nil
+	return ports.PermissionDecision{Behavior: "deny", Reason: "all tools denied"}, nil
 }
 
 func TestAutoApproveHandler(t *testing.T) {

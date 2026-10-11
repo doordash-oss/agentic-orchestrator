@@ -57,10 +57,10 @@ var (
 	// ErrInitializeIdentityChanged reports that the repository no longer
 	// matches the server-resolved identity that authorized the operation.
 	ErrInitializeIdentityChanged = errors.New("repository identity changed before initialization")
-	// ErrInitializeProbeFailed reports that repository state could not be
+	// errInitializeProbeFailed reports that repository state could not be
 	// proved (probe failure, timeout or unexpected git output). Callers
 	// must treat it as indeterminate, never as unborn or clean.
-	ErrInitializeProbeFailed = errors.New("repository state could not be proved")
+	errInitializeProbeFailed = errors.New("repository state could not be proved")
 )
 
 // InitializeOutcome reports what the initialize operation did.
@@ -168,21 +168,21 @@ func initializeRepository(ctx context.Context, dir string, expected *RepoIdentit
 	}
 	if afterBranch != branch {
 		return InitializeOutcome{}, fmt.Errorf("%w: branch changed from %q to %q during initialization",
-			ErrInitializeProbeFailed, branch, afterBranch)
+			errInitializeProbeFailed, branch, afterBranch)
 	}
 	afterHead, err := initializeHeadState(ctx, dir)
 	if err != nil {
 		return InitializeOutcome{}, err
 	}
 	if afterHead == "" {
-		return InitializeOutcome{}, fmt.Errorf("%w: HEAD is still unborn after the initial commit", ErrInitializeProbeFailed)
+		return InitializeOutcome{}, fmt.Errorf("%w: HEAD is still unborn after the initial commit", errInitializeProbeFailed)
 	}
 	remotesAfter, err := initializeRemotes(ctx, dir)
 	if err != nil {
 		return InitializeOutcome{}, err
 	}
 	if strings.Join(remotesAfter, "\x00") != strings.Join(remotesBefore, "\x00") {
-		return InitializeOutcome{}, fmt.Errorf("%w: remote configuration changed during initialization", ErrInitializeProbeFailed)
+		return InitializeOutcome{}, fmt.Errorf("%w: remote configuration changed during initialization", errInitializeProbeFailed)
 	}
 	outcome := InitializeOutcome{Branch: branch, Head: afterHead, AlreadyInitialized: !installed}
 	if installed && afterHead != commitSHA {
@@ -190,7 +190,7 @@ func initializeRepository(ctx context.Context, dir string, expected *RepoIdentit
 		// moved HEAD between the compare-and-swap and the verification.
 		// Our commit stands on its branch, but it is not HEAD, so the
 		// outcome is reported truthfully instead of claiming it.
-		return InitializeOutcome{}, fmt.Errorf("%w: HEAD resolves to %q, not the created commit", ErrInitializeProbeFailed, afterHead)
+		return InitializeOutcome{}, fmt.Errorf("%w: HEAD resolves to %q, not the created commit", errInitializeProbeFailed, afterHead)
 	}
 	return outcome, nil
 }
@@ -228,7 +228,7 @@ func initializeHeadState(ctx context.Context, dir string) (string, error) {
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 && strings.TrimSpace(out) == "" {
 		return "", nil
 	}
-	return "", fmt.Errorf("%w: resolve HEAD: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(out, err))
+	return "", fmt.Errorf("%w: resolve HEAD: %s", errInitializeProbeFailed, boundInitializeProbeDetail(out, err))
 }
 
 // initializeBranch reads the symbolic branch verbatim, including
@@ -236,7 +236,7 @@ func initializeHeadState(ctx context.Context, dir string) (string, error) {
 func initializeBranch(ctx context.Context, dir string) (string, error) {
 	out, err := runInitializeGit(ctx, dir, "symbolic-ref", "--short", "HEAD")
 	if err != nil {
-		return "", fmt.Errorf("%w: read branch: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(out, err))
+		return "", fmt.Errorf("%w: read branch: %s", errInitializeProbeFailed, boundInitializeProbeDetail(out, err))
 	}
 	return strings.TrimSpace(out), nil
 }
@@ -255,7 +255,7 @@ func initializeBranchName(ctx context.Context, dir string) (branch string, hasSy
 			// indeterminate and must never be mistaken for this case.
 			return initializeFallbackBranch, false, nil
 		}
-		return "", false, fmt.Errorf("%w: read symbolic branch: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(full, fullErr))
+		return "", false, fmt.Errorf("%w: read symbolic branch: %s", errInitializeProbeFailed, boundInitializeProbeDetail(full, fullErr))
 	}
 	ref := strings.TrimSpace(full)
 	short := strings.TrimPrefix(ref, "refs/heads/")
@@ -297,7 +297,7 @@ func validInitializeBranchName(name string) bool {
 func initializeRemotes(ctx context.Context, dir string) ([]string, error) {
 	out, err := runInitializeGit(ctx, dir, "remote")
 	if err != nil {
-		return nil, fmt.Errorf("%w: read remotes: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(out, err))
+		return nil, fmt.Errorf("%w: read remotes: %s", errInitializeProbeFailed, boundInitializeProbeDetail(out, err))
 	}
 	trimmed := strings.TrimSpace(out)
 	if trimmed == "" {
@@ -313,7 +313,7 @@ func initializeRemotes(ctx context.Context, dir string) ([]string, error) {
 func initializeProveClean(ctx context.Context, dir string) error {
 	out, err := runInitializeGit(ctx, dir, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
-		return fmt.Errorf("%w: inspect repository content: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(out, err))
+		return fmt.Errorf("%w: inspect repository content: %s", errInitializeProbeFailed, boundInitializeProbeDetail(out, err))
 	}
 	if strings.TrimSpace(out) != "" {
 		return ErrInitializeContentPresent
@@ -330,18 +330,18 @@ func initializeProveClean(ctx context.Context, dir string) error {
 func initializeCreateCommit(ctx context.Context, dir, branch string, hasSymbolic bool) (installed bool, commitSHA string, err error) {
 	if !hasSymbolic {
 		if out, err := runInitializeGit(ctx, dir, "symbolic-ref", "HEAD", "refs/heads/"+initializeFallbackBranch); err != nil {
-			return false, "", fmt.Errorf("%w: point HEAD at main: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(out, err))
+			return false, "", fmt.Errorf("%w: point HEAD at main: %s", errInitializeProbeFailed, boundInitializeProbeDetail(out, err))
 		}
 	}
 	ref := "refs/heads/" + branch
 
 	emptyTree, err := runInitializeGit(ctx, dir, "mktree")
 	if err != nil {
-		return false, "", fmt.Errorf("%w: read empty tree: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(emptyTree, err))
+		return false, "", fmt.Errorf("%w: read empty tree: %s", errInitializeProbeFailed, boundInitializeProbeDetail(emptyTree, err))
 	}
 	tree, err := runInitializeGit(ctx, dir, "write-tree")
 	if err != nil {
-		return false, "", fmt.Errorf("%w: read index tree: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(tree, err))
+		return false, "", fmt.Errorf("%w: read index tree: %s", errInitializeProbeFailed, boundInitializeProbeDetail(tree, err))
 	}
 	if strings.TrimSpace(tree) != strings.TrimSpace(emptyTree) {
 		// The cleanliness proof said the index was empty; a non-empty
@@ -354,11 +354,11 @@ func initializeCreateCommit(ctx context.Context, dir, branch string, hasSymbolic
 	// on the command line so hostile global configuration cannot alter
 	// the author or committer.
 	commit, err := runInitializeGit(ctx, dir,
-		"-c", "user.name="+AgenticoName,
+		"-c", "user.name="+agenticoName,
 		"-c", "user.email="+agenticoCommitIdentity(),
 		"commit-tree", strings.TrimSpace(tree), "-m", "Initial commit")
 	if err != nil {
-		return false, "", fmt.Errorf("%w: build initial commit: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(commit, err))
+		return false, "", fmt.Errorf("%w: build initial commit: %s", errInitializeProbeFailed, boundInitializeProbeDetail(commit, err))
 	}
 	commitSHA = strings.TrimSpace(commit)
 
@@ -396,7 +396,7 @@ func initializeCASRef(ctx context.Context, dir, ref, commitSHA string) (bool, er
 		}
 		lockPath, contention := lockContention([]byte(out))
 		if !contention {
-			return false, fmt.Errorf("%w: create branch ref: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(trimmed, err))
+			return false, fmt.Errorf("%w: create branch ref: %s", errInitializeProbeFailed, boundInitializeProbeDetail(trimmed, err))
 		}
 		if lockPath != "" && !removedStaleLock {
 			if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) > gitLockStaleAfter {
@@ -412,10 +412,10 @@ func initializeCASRef(ctx context.Context, dir, ref, commitSHA string) (bool, er
 				if info, statErr := os.Stat(lockPath); statErr == nil {
 					lockAge = time.Since(info.ModTime())
 				}
-				return false, fmt.Errorf("%w: %w", ErrInitializeProbeFailed,
-					&GitLockContentionError{LockPath: lockPath, Age: lockAge})
+				return false, fmt.Errorf("%w: %w", errInitializeProbeFailed,
+					&gitLockContentionError{LockPath: lockPath, Age: lockAge})
 			}
-			return false, fmt.Errorf("%w: branch ref stayed locked: %s", ErrInitializeProbeFailed, boundInitializeProbeDetail(trimmed, err))
+			return false, fmt.Errorf("%w: branch ref stayed locked: %s", errInitializeProbeFailed, boundInitializeProbeDetail(trimmed, err))
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

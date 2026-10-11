@@ -36,7 +36,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
-	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
@@ -1514,7 +1513,7 @@ func fakeGitHubForTail(t *testing.T) *httptest.Server {
 	t.Cleanup(srv.Close)
 	// Not parallel-safe: the fixture routes GitHub through the process
 	// environment for the duration of the test.
-	t.Setenv(github.EnvGitHubAPIBase, srv.URL)
+	t.Setenv("AGENTICO_GITHUB_API_BASE", srv.URL)
 	return srv
 }
 

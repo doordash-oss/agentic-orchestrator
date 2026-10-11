@@ -67,7 +67,7 @@ func TestFastPublishCommitRepresentative(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git log: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), CommitSignatureTrailer) {
+	if !strings.Contains(string(out), commitSignatureTrailer) {
 		t.Errorf("git log -1 --format=%%B = %q, want signature trailer", out)
 	}
 

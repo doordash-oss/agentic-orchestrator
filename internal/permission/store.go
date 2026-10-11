@@ -32,7 +32,7 @@ type Store struct {
 	mu      sync.Mutex
 }
 
-func NewStore(baseDir string) *Store {
+func newStore(baseDir string) *Store {
 	return &Store{BaseDir: baseDir}
 }
 
@@ -122,7 +122,7 @@ func (s *Store) scopePath(scope string) (string, error) {
 // Load reads rules from the scope's JSON file.
 // Returns nil, nil if file doesn't exist.
 // Malformed JSON → logs warning, returns nil, nil.
-func (s *Store) Load(scope string) ([]Rule, error) {
+func (s *Store) load(scope string) ([]rule, error) {
 	path, err := s.scopePath(scope)
 	if err != nil {
 		return nil, err
@@ -142,11 +142,11 @@ func (s *Store) Load(scope string) ([]Rule, error) {
 		log.Printf("warning: corrupt permission file %s: %v", path, err)
 		return nil, nil
 	}
-	// Convert to Rule, setting RepoName from scope (reverse scopeFor mapping).
+	// Convert to rule, setting RepoName from scope (reverse scopeFor mapping).
 	repoName := repoNameForScope(scope)
-	rules := make([]Rule, len(pf.Rules))
+	rules := make([]rule, len(pf.Rules))
 	for i, pr := range pf.Rules {
-		rules[i] = Rule{
+		rules[i] = rule{
 			ToolPattern: pr.ToolPattern,
 			Effect:      pr.Effect,
 			RepoName:    repoName,
@@ -156,7 +156,7 @@ func (s *Store) Load(scope string) ([]Rule, error) {
 }
 
 // Save writes rules atomically using os.CreateTemp + os.Rename pattern.
-func (s *Store) Save(scope string, rules []Rule) error {
+func (s *Store) save(scope string, rules []rule) error {
 	destPath, err := s.scopePath(scope)
 	if err != nil {
 		return err
@@ -206,7 +206,7 @@ func (s *Store) Save(scope string, rules []Rule) error {
 // equal; otherwise RepoName is ignored (callers checking within a single
 // scope file, where every rule already shares the same RepoName, don't need
 // it).
-func ruleExists(rules []Rule, pattern, effect string, repoName ...string) bool {
+func ruleExists(rules []rule, pattern, effect string, repoName ...string) bool {
 	for _, r := range rules {
 		if r.ToolPattern != pattern || r.Effect != effect {
 			continue
@@ -222,13 +222,13 @@ func ruleExists(rules []Rule, pattern, effect string, repoName ...string) bool {
 // EnsureGlobalDefaults ensures every rule in defaultGlobalRules() exists in
 // the on-disk global.json. Missing defaults are appended; user-added rules
 // are preserved. On first run the file is created from scratch.
-func (s *Store) EnsureGlobalDefaults() error {
+func (s *Store) ensureGlobalDefaults() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	defaults := defaultGlobalRules()
 
-	existing, err := s.Load(globalScope)
+	existing, err := s.load(globalScope)
 	if err != nil {
 		return fmt.Errorf("loading global permissions: %w", err)
 	}
@@ -245,7 +245,7 @@ func (s *Store) EnsureGlobalDefaults() error {
 		return nil // nothing new
 	}
 
-	if err := s.Save(globalScope, merged); err != nil {
+	if err := s.save(globalScope, merged); err != nil {
 		return fmt.Errorf("saving global permissions: %w", err)
 	}
 	return nil
@@ -253,11 +253,11 @@ func (s *Store) EnsureGlobalDefaults() error {
 
 // AppendRule loads existing rules, appends a new one (skip if duplicate), saves.
 // Deduplication: match on ToolPattern + Effect within the exact scope.
-func (s *Store) AppendRule(scope string, rule Rule) (bool, error) {
+func (s *Store) appendRule(scope string, rule rule) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	existing, err := s.Load(scope)
+	existing, err := s.load(scope)
 	if err != nil {
 		return false, err
 	}
@@ -265,7 +265,7 @@ func (s *Store) AppendRule(scope string, rule Rule) (bool, error) {
 		return false, nil // already exists
 	}
 	existing = append(existing, rule)
-	if err := s.Save(scope, existing); err != nil {
+	if err := s.save(scope, existing); err != nil {
 		return false, err
 	}
 	return true, nil

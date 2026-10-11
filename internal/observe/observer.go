@@ -34,7 +34,7 @@ import (
 // emission and (when enabled) OTel span management. All methods are safe to
 // call on a nil receiver — this is the NopObserver pattern.
 type Observer struct {
-	emitter          *Emitter
+	emitter          *emitter
 	otel             *otelBridge
 	metrics          *telemetryMetrics
 	outbox           *eventOutbox
@@ -154,7 +154,7 @@ func (o *Observer) FeatureMutated(m feature.Mutation) {
 		if run, ok := extra["run_number"].(int); ok {
 			eventSC = sc.WithRun(run)
 		}
-		_ = o.emit(eventSC, Event{Timestamp: m.At, TraceID: sc.TraceID, SpanID: NewSpanID(), EventType: kind,
+		_ = o.emit(eventSC, Event{Timestamp: m.At, TraceID: sc.TraceID, SpanID: newSpanID(), EventType: kind,
 			Status: status, FeatureID: current.ID, Phase: eventPhase, DurationMs: durationMs, Data: data})
 	}
 	if m.Before == nil && m.After != nil {
@@ -309,7 +309,7 @@ func (o *Observer) collectOutputStatsAsync(sc SpanContext, repos []feature.Mutat
 		if failures == len(repos) {
 			status = "unavailable"
 		}
-		_ = o.emit(sc, Event{Timestamp: time.Now(), TraceID: sc.TraceID, SpanID: NewSpanID(), EventType: "feature.output_stats_collected", FeatureID: sc.FeatureID, Status: status, Data: map[string]any{"milestone": milestone, "files_changed": files, "lines_added": added, "lines_deleted": deleted, "commit_count": commits, "repository_failures": failures}})
+		_ = o.emit(sc, Event{Timestamp: time.Now(), TraceID: sc.TraceID, SpanID: newSpanID(), EventType: "feature.output_stats_collected", FeatureID: sc.FeatureID, Status: status, Data: map[string]any{"milestone": milestone, "files_changed": files, "lines_added": added, "lines_deleted": deleted, "commit_count": commits, "repository_failures": failures}})
 	}()
 }
 
@@ -353,9 +353,9 @@ func copyAnyMap(in map[string]any) map[string]any {
 	return out
 }
 
-// MetricsConfig tunes OTLP metric export. The zero value exports cumulative
+// metricsConfig tunes OTLP metric export. The zero value exports cumulative
 // metrics to the trace endpoint.
-type MetricsConfig struct {
+type metricsConfig struct {
 	Disabled bool
 	// Endpoint overrides the trace endpoint for metrics.
 	Endpoint string
@@ -363,20 +363,20 @@ type MetricsConfig struct {
 	Temporality string
 }
 
-// Option configures optional Observer behavior.
-type Option func(*observerOptions)
+// option configures optional Observer behavior.
+type option func(*observerOptions)
 
 type observerOptions struct {
-	metrics MetricsConfig
+	metrics metricsConfig
 }
 
-// WithMetrics sets the metric export configuration.
-func WithMetrics(cfg MetricsConfig) Option {
+// withMetrics sets the metric export configuration.
+func withMetrics(cfg metricsConfig) option {
 	return func(o *observerOptions) { o.metrics = cfg }
 }
 
 // New creates an Observer. When enabled is false, all methods return immediately.
-func New(enabled bool, stateDir string, otelEnabled bool, otelEndpoint string, otelInsecure bool, otelServiceName string, opts ...Option) *Observer {
+func newObserver(enabled bool, stateDir string, otelEnabled bool, otelEndpoint string, otelInsecure bool, otelServiceName string, opts ...option) *Observer {
 	var options observerOptions
 	for _, opt := range opts {
 		opt(&options)
@@ -399,7 +399,7 @@ func New(enabled bool, stateDir string, otelEnabled bool, otelEndpoint string, o
 		enabled: true, localEnabled: enabled,
 	}
 	if enabled {
-		o.emitter = NewEmitter(stateDir)
+		o.emitter = newEmitter(stateDir)
 	}
 	if otelEnabled {
 		o.outbox = newEventOutbox(stateDir, bridge, metrics, res)
@@ -431,7 +431,7 @@ func (o *Observer) ensureFeatureSpan(sc SpanContext) {
 }
 
 // emit stamps RunNumber onto the event from sc and forwards to the underlying
-// Emitter. Centralises Event population so every typed emit method inherits
+// emitter. Centralises Event population so every typed emit method inherits
 // the run-number propagation without per-site duplication. Enabled / nil-safe
 // behaviour is enforced at the call-site (each typed method short-circuits
 // when o == nil || !o.enabled before reaching this helper).
@@ -444,7 +444,7 @@ func (o *Observer) emit(sc SpanContext, evt Event) error {
 		o.outbox.Enqueue(evt)
 	}
 	if o.localEnabled && o.emitter != nil {
-		return o.emitter.Emit(evt)
+		return o.emitter.emit(evt)
 	}
 	return nil
 }
@@ -1520,7 +1520,7 @@ func (o *Observer) AgentTaskEnded(sc SpanContext, phase, sessionID, taskID, tool
 }
 
 // WriteFeatureSummary produces observe-summary.yaml from feature metadata and events.
-func (o *Observer) WriteFeatureSummary(input FeatureSummaryInput) error {
+func (o *Observer) WriteFeatureSummary(input featureSummaryInput) error {
 	if o == nil || !o.localEnabled {
 		return nil
 	}
@@ -1588,7 +1588,7 @@ func roadmapPhaseRangeLabel(start, end int) string {
 }
 
 // Shutdown flushes any pending state.
-func (o *Observer) Shutdown() error {
+func (o *Observer) shutdown() error {
 	if o == nil || !o.enabled {
 		return nil
 	}
@@ -1656,7 +1656,7 @@ func (o *Observer) Emit(evt Event) error {
 		o.outbox.Enqueue(evt)
 	}
 	if o.localEnabled && o.emitter != nil {
-		return o.emitter.Emit(evt)
+		return o.emitter.emit(evt)
 	}
 	return nil
 }

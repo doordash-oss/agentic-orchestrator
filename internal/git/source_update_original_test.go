@@ -201,10 +201,10 @@ func TestUpdateSourceFromOriginalCheckoutDirtyStatesRefuseAndPreserveBytes(t *te
 		if err != nil {
 			t.Fatalf("%s: update: %v", name, err)
 		}
-		if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonDirtyCheckout {
+		if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonDirtyCheckout {
 			t.Fatalf("%s: result = %q reason = %q; want stale dirty_checkout", name, outcome.Result, outcome.Reason)
 		}
-		hasUpdateBlocker(t, outcome.Blockers, UpdateBlockerDirtyTargetCheckout)
+		hasUpdateBlocker(t, outcome.Blockers, updateBlockerDirtyTargetCheckout)
 		if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
 			t.Fatalf("%s: refs/heads/main = %s; want the displayed tip preserved", name, got)
 		}
@@ -264,10 +264,10 @@ func TestUpdateSourceFromOriginalCheckoutIgnoredCollisionsRefuse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: update: %v", name, err)
 		}
-		if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonIgnoredPathCollision {
+		if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonIgnoredPathCollision {
 			t.Fatalf("%s: result = %q reason = %q; want stale ignored_path_collision", name, outcome.Result, outcome.Reason)
 		}
-		hasUpdateBlocker(t, outcome.Blockers, UpdateBlockerIgnoredPathCollision)
+		hasUpdateBlocker(t, outcome.Blockers, updateBlockerIgnoredPathCollision)
 		if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
 			t.Fatalf("%s: refs/heads/main = %s; want the displayed tip preserved", name, got)
 		}
@@ -328,10 +328,10 @@ func TestUpdateSourceFromOriginalCheckoutOperationInProgressRefuses(t *testing.T
 		if err != nil {
 			t.Fatalf("%s: update: %v", name, err)
 		}
-		if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonCheckoutOperationInProgress {
+		if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonCheckoutOperationInProgress {
 			t.Fatalf("%s: result = %q reason = %q; want stale checkout_operation_in_progress", name, outcome.Result, outcome.Reason)
 		}
-		hasUpdateBlocker(t, outcome.Blockers, UpdateBlockerCheckoutOperationInProgress)
+		hasUpdateBlocker(t, outcome.Blockers, updateBlockerCheckoutOperationInProgress)
 		if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
 			t.Fatalf("%s: refs/heads/main = %s; want the displayed tip preserved", name, got)
 		}
@@ -387,7 +387,7 @@ func TestUpdateSourceFromOriginalCheckoutAheadAndDivergedRefuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonNotFastForward {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonNotFastForward {
 		t.Fatalf("result = %q reason = %q; want stale not_fast_forward", outcome.Result, outcome.Reason)
 	}
 	hasUpdateBlocker(t, outcome.Blockers, UpdateBlockerLocalNotBehind)
@@ -409,7 +409,7 @@ func TestUpdateSourceFromOriginalCheckoutStaleExpectationsRefuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("local tip race: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonLocalTipChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonLocalTipChanged {
 		t.Fatalf("local tip race: result = %q reason = %q; want stale local_tip_changed", outcome.Result, outcome.Reason)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != competing {
@@ -424,7 +424,7 @@ func TestUpdateSourceFromOriginalCheckoutStaleExpectationsRefuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("origin tip race: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonOriginTipChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonOriginTipChanged {
 		t.Fatalf("origin tip race: result = %q reason = %q; want stale origin_tip_changed", outcome.Result, outcome.Reason)
 	}
 
@@ -436,7 +436,7 @@ func TestUpdateSourceFromOriginalCheckoutStaleExpectationsRefuse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("checkout switch: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonCheckoutChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonCheckoutChanged {
 		t.Fatalf("checkout switch: result = %q reason = %q; want stale checkout_changed", outcome.Result, outcome.Reason)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
@@ -457,7 +457,7 @@ func TestUpdateSourceFromOriginalCheckoutMembershipRaceBeforeMutationRefuses(t *
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonCheckoutChanged {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonCheckoutChanged {
 		t.Fatalf("result = %q reason = %q; want stale checkout_changed from the pre-mutation recheck", outcome.Result, outcome.Reason)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
@@ -480,7 +480,7 @@ func TestUpdateSourceFromOriginalCheckoutLocalEditRaceBeforeMutationRefuses(t *t
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonDirtyCheckout {
+	if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonDirtyCheckout {
 		t.Fatalf("result = %q reason = %q; want stale dirty_checkout from the pre-mutation recheck", outcome.Result, outcome.Reason)
 	}
 	if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
@@ -492,12 +492,12 @@ func TestUpdateSourceFromOriginalCheckoutLocalEditRaceBeforeMutationRefuses(t *t
 // the fast-forward itself, so only Git's own working-tree protection can
 // refuse it.
 type racingCheckoutRunner struct {
-	inner SourceUpdateRefRunner
+	inner sourceUpdateRefRunner
 	race  func()
 	once  bool
 }
 
-func (r *racingCheckoutRunner) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+func (r *racingCheckoutRunner) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) branchProbeCommandResult {
 	if !r.once {
 		r.once = true
 		for _, arg := range args {
@@ -525,7 +525,7 @@ func TestUpdateSourceFromOriginalCheckoutBoundaryRaceRefusesWithoutOverwriting(t
 				}
 			}
 			options := SourceUpdateOptions{UpdateRefRunner: &racingCheckoutRunner{
-				inner: ExecSourceUpdateRefRunner{},
+				inner: execSourceUpdateRefRunner{},
 				race: func() {
 					// A local file lands on an incoming path between the final
 					// revalidation and the fast-forward: Git's own boundary refuses
@@ -540,7 +540,7 @@ func TestUpdateSourceFromOriginalCheckoutBoundaryRaceRefusesWithoutOverwriting(t
 			if err != nil {
 				t.Fatalf("update: %v", err)
 			}
-			if outcome.Result != SourceUpdateStale || outcome.Reason != SourceUpdateReasonCheckoutConflict {
+			if outcome.Result != SourceUpdateStale || outcome.Reason != sourceUpdateReasonCheckoutConflict {
 				t.Fatalf("result = %q reason = %q; want stale checkout_conflict", outcome.Result, outcome.Reason)
 			}
 			if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {
@@ -570,7 +570,7 @@ func TestUpdateSourceFromOriginalCheckoutRespectsExistingIndexLocks(t *testing.T
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
 	outcome, err := UpdateSourceFromOrigin(ctx, fx.repo, expected, SourceUpdateOptions{})
-	if err == nil || !errors.Is(err, ErrSourceUpdateUnavailable) {
+	if err == nil || !errors.Is(err, errSourceUpdateUnavailable) {
 		t.Fatalf("err = %v outcome = %#v; want unavailability under lock contention", err, outcome)
 	}
 	if _, statErr := os.Stat(lockPath); statErr != nil {
@@ -585,14 +585,14 @@ func TestUpdateSourceFromOriginalCheckoutRespectsExistingIndexLocks(t *testing.T
 // so the mutation boundary is interrupted and its outcome must stay unknown.
 type hangingMergeRunner struct{}
 
-func (hangingMergeRunner) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+func (hangingMergeRunner) Run(ctx context.Context, repoPath, stdin string, args []string, diagnosticLimit int) branchProbeCommandResult {
 	for _, arg := range args {
 		if arg == "merge" {
 			<-ctx.Done()
-			return BranchProbeCommandResult{ExitCode: -1, Err: ctx.Err(), Diagnostics: "fast-forward interrupted"}
+			return branchProbeCommandResult{ExitCode: -1, Err: ctx.Err(), Diagnostics: "fast-forward interrupted"}
 		}
 	}
-	return ExecSourceUpdateRefRunner{}.Run(ctx, repoPath, stdin, args, diagnosticLimit)
+	return execSourceUpdateRefRunner{}.Run(ctx, repoPath, stdin, args, diagnosticLimit)
 }
 
 func TestUpdateSourceFromOriginalCheckoutDeadlineDuringMergeIsUnknown(t *testing.T) {
@@ -603,7 +603,7 @@ func TestUpdateSourceFromOriginalCheckoutDeadlineDuringMergeIsUnknown(t *testing
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	outcome, err := UpdateSourceFromOrigin(ctx, fx.repo, expected, options)
-	if err == nil || !errors.Is(err, ErrSourceUpdateUnavailable) {
+	if err == nil || !errors.Is(err, errSourceUpdateUnavailable) {
 		t.Fatalf("err = %v outcome = %#v; want unavailability, never a claimed refusal or rollback", err, outcome)
 	}
 }
@@ -611,11 +611,11 @@ func TestUpdateSourceFromOriginalCheckoutDeadlineDuringMergeIsUnknown(t *testing
 func TestUpdateSourceFromOriginalCheckoutInspectionFailuresFailClosed(t *testing.T) {
 	failingCommand := func(match func(args []string) bool) SourceUpdateOptions {
 		return SourceUpdateOptions{OriginCheckOptions: OriginCheckOptions{
-			Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+			Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult {
 				if match(args) {
-					return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "checkout inspection failed"}
+					return branchProbeCommandResult{ExitCode: 128, Diagnostics: "checkout inspection failed"}
 				}
-				return ExecBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
+				return execBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
 			}),
 		}}
 	}
@@ -633,7 +633,7 @@ func TestUpdateSourceFromOriginalCheckoutInspectionFailuresFailClosed(t *testing
 		fx := newOriginalCheckoutFixture(t)
 		expected := fx.originalExpectation(t, LocalSourceModeDefault)
 		outcome, err := UpdateSourceFromOrigin(context.Background(), fx.repo, expected, options)
-		if err == nil || !errors.Is(err, ErrSourceUpdateUnavailable) {
+		if err == nil || !errors.Is(err, errSourceUpdateUnavailable) {
 			t.Fatalf("%s: err = %v outcome = %#v; want unavailability when safety cannot be proved", name, err, outcome)
 		}
 		if got := gitUpdateSHA(t, fx.repo, "refs/heads/main"); got != expected.ExpectedLocalSHA {

@@ -135,7 +135,7 @@ func TestEffortDriftWarnings(t *testing.T) {
 					if w.Code != tc.wantCode {
 						t.Errorf("warning code = %q, want %q", w.Code, tc.wantCode)
 					}
-					if w.Class != ErrorClass(errcat.ClassWarning) {
+					if w.Class != ErrorClassWarning {
 						t.Errorf("warning class = %q, want warning", w.Class)
 					}
 					if w.Remediation != nil && len(w.Remediation.Actions) != 0 {
@@ -218,7 +218,7 @@ func TestEffortDriftWarningsRenderCanonicallyOnListAndDetailRoutes(t *testing.T)
 		if warning.Code != string(errcat.EffortCapabilityDrift) {
 			t.Fatalf("warning code = %q; want %q", warning.Code, errcat.EffortCapabilityDrift)
 		}
-		if warning.Class != ErrorClass(errcat.ClassWarning) {
+		if warning.Class != ErrorClassWarning {
 			t.Fatalf("warning class = %q; want warning", warning.Class)
 		}
 		if warning.Remediation != nil && len(warning.Remediation.Actions) != 0 {

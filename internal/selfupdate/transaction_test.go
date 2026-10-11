@@ -65,7 +65,7 @@ func newTxFixture(t *testing.T) *txFixture {
 
 func assertInstalledIntact(t *testing.T, f *txFixture) {
 	t.Helper()
-	id, err := StatFile(f.installedPath)
+	id, err := statFile(f.installedPath)
 	if err != nil {
 		t.Fatalf("stat installed: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestBeginPreparesDurableBackupAndStaging(t *testing.T) {
 	assertInstalledIntact(t, f)
 
 	receipt := tx.Receipt()
-	if receipt.Outcome != OutcomePending || receipt.Phase != PhaseBackupReady {
+	if receipt.Outcome != OutcomePending || receipt.Phase != phaseBackupReady {
 		t.Fatalf("receipt = %s/%s, want pending/backup-ready", receipt.Outcome, receipt.Phase)
 	}
 	if len(receipt.TransactionID) != 32 {
@@ -106,11 +106,11 @@ func TestBeginPreparesDurableBackupAndStaging(t *testing.T) {
 		t.Fatalf("receipt executable identity = %+v mode %o", receipt.ExecutableID, receipt.OriginalMode)
 	}
 
-	onDisk, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	onDisk, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if onDisk.Outcome != OutcomePending || onDisk.Phase != PhaseBackupReady || onDisk.TransactionID != receipt.TransactionID {
+	if onDisk.Outcome != OutcomePending || onDisk.Phase != phaseBackupReady || onDisk.TransactionID != receipt.TransactionID {
 		t.Fatalf("on-disk receipt = %+v", onDisk)
 	}
 
@@ -125,7 +125,7 @@ func TestBeginPreparesDurableBackupAndStaging(t *testing.T) {
 		t.Fatalf("backup/staging not contained in tx dir: %s %s", receipt.BackupPath, receipt.StagingPath)
 	}
 
-	backupID, err := StatFile(receipt.BackupPath)
+	backupID, err := statFile(receipt.BackupPath)
 	if err != nil {
 		t.Fatalf("stat backup: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestBeginPreparesDurableBackupAndStaging(t *testing.T) {
 		t.Fatalf("backup digest = %s, want installed digest %s", got, f.exec.Digest)
 	}
 
-	stagingID, err := StatFile(receipt.StagingPath)
+	stagingID, err := statFile(receipt.StagingPath)
 	if err != nil {
 		t.Fatalf("stat staging: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestCommitReplacesInstalledAtomically(t *testing.T) {
 		t.Fatalf("Commit: %v", err)
 	}
 
-	installedID, err := StatFile(f.installedPath)
+	installedID, err := statFile(f.installedPath)
 	if err != nil {
 		t.Fatalf("stat installed: %v", err)
 	}
@@ -261,11 +261,11 @@ func TestCommitReplacesInstalledAtomically(t *testing.T) {
 		t.Fatalf("backup must survive until settled cleanup: %v", err)
 	}
 
-	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if receipt.Phase != PhaseReplacementComplete || receipt.Outcome != OutcomePending {
+	if receipt.Phase != phaseReplacementComplete || receipt.Outcome != OutcomePending {
 		t.Fatalf("receipt = %s/%s, want replacement-complete/pending", receipt.Phase, receipt.Outcome)
 	}
 	if !receipt.UpdatedAt.After(receipt.StartedAt) && !receipt.UpdatedAt.Equal(receipt.StartedAt) {
@@ -284,11 +284,11 @@ func TestCommitRenameFailureLeavesInstalledIntact(t *testing.T) {
 		t.Fatal("Commit with failing rename: expected error")
 	}
 	assertInstalledIntact(t, f)
-	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if receipt.Phase != PhaseBackupReady {
+	if receipt.Phase != phaseBackupReady {
 		t.Fatalf("receipt phase = %s, want backup-ready", receipt.Phase)
 	}
 }
@@ -319,11 +319,11 @@ func TestCommitSyncDirFailureAfterRenameIsHonest(t *testing.T) {
 	if got := mustDigest(t, f.installedPath); got != f.candidateDigest {
 		t.Fatalf("installed digest = %s, want replaced with candidate %s", got, f.candidateDigest)
 	}
-	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if receipt.Phase != PhaseBackupReady || receipt.Outcome != OutcomePending {
+	if receipt.Phase != phaseBackupReady || receipt.Outcome != OutcomePending {
 		t.Fatalf("receipt = %s/%s, want backup-ready/pending", receipt.Phase, receipt.Outcome)
 	}
 }
@@ -349,11 +349,11 @@ func TestCommitFailsOnTamperedStaging(t *testing.T) {
 		t.Fatal("Commit accepted tampered staging")
 	}
 	assertInstalledIntact(t, f)
-	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if receipt.Phase != PhaseBackupReady {
+	if receipt.Phase != phaseBackupReady {
 		t.Fatalf("receipt phase = %s, want backup-ready", receipt.Phase)
 	}
 }
@@ -368,11 +368,11 @@ func TestCommitFailsOnExternallyReplacedInstalled(t *testing.T) {
 	if err := tx.Commit(); err == nil {
 		t.Fatal("Commit accepted an externally replaced installed executable")
 	}
-	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if receipt.Phase != PhaseBackupReady {
+	if receipt.Phase != phaseBackupReady {
 		t.Fatalf("receipt phase = %s, want backup-ready", receipt.Phase)
 	}
 	if _, err := os.Stat(receipt.BackupPath); err != nil {
@@ -393,25 +393,25 @@ func TestRecordErrorAndConfirm(t *testing.T) {
 	if err := tx.RecordError("handoff failed; token abc123 rejected", "abc123"); err != nil {
 		t.Fatalf("RecordError: %v", err)
 	}
-	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	if receipt.Error != "handoff failed; token [REDACTED] rejected" {
 		t.Fatalf("receipt error = %q", receipt.Error)
 	}
-	if receipt.Phase != PhaseReplacementComplete || receipt.Outcome != OutcomePending {
+	if receipt.Phase != phaseReplacementComplete || receipt.Outcome != OutcomePending {
 		t.Fatalf("RecordError advanced phase/outcome: %s/%s", receipt.Phase, receipt.Outcome)
 	}
 
 	if err := tx.Confirm(); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
-	receipt, err = ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err = readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
-	if receipt.Outcome != OutcomeConfirmed || receipt.Phase != PhaseReplacementComplete {
+	if receipt.Outcome != OutcomeConfirmed || receipt.Phase != phaseReplacementComplete {
 		t.Fatalf("receipt = %s/%s, want replacement-complete/confirmed", receipt.Phase, receipt.Outcome)
 	}
 }
@@ -457,12 +457,12 @@ func TestConfirmTransactionConfirmsPendingReceiptOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConfirmTransaction: %v", err)
 	}
-	if confirmed.Outcome != OutcomeConfirmed || confirmed.Phase != PhaseReplacementComplete {
+	if confirmed.Outcome != OutcomeConfirmed || confirmed.Phase != phaseReplacementComplete {
 		t.Fatalf("confirmed receipt = %s/%s, want replacement-complete/confirmed", confirmed.Phase, confirmed.Outcome)
 	}
-	onDisk, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	onDisk, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	if onDisk.Outcome != OutcomeConfirmed || onDisk.TransactionID != txID {
 		t.Fatalf("on-disk receipt = %s/%s, want confirmed/%s", onDisk.Outcome, onDisk.TransactionID, txID)
@@ -488,9 +488,9 @@ func TestConfirmTransactionRejectsMismatchedTransaction(t *testing.T) {
 	if _, err := ConfirmTransaction(f.exec.Path, other); err == nil {
 		t.Fatal("ConfirmTransaction with mismatched txID = nil error")
 	}
-	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	if receipt.Outcome != OutcomePending {
 		t.Fatalf("receipt outcome = %s; a rejected confirm must leave it pending", receipt.Outcome)
@@ -533,7 +533,7 @@ func TestCleanupSettledTransactionRemovesTxDirOnlyAndIsIdempotent(t *testing.T) 
 	if _, err := os.Stat(tx.TxDir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("tx dir must be removed, stat error = %v", err)
 	}
-	for _, path := range []string{LeasePath(f.exec.Path), OwnershipRecordPath(f.exec.Path), ReceiptPath(f.exec.Path)} {
+	for _, path := range []string{leasePath(f.exec.Path), ownershipRecordPath(f.exec.Path), ReceiptPath(f.exec.Path)} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("cleanup must never remove %s: %v", path, err)
 		}
@@ -557,9 +557,9 @@ func TestConfirmRequiresReplacementComplete(t *testing.T) {
 	if _, err := ConfirmTransaction(f.exec.Path, tx.Receipt().TransactionID); err == nil {
 		t.Fatal("ConfirmTransaction before Commit = nil error; want phase rejection")
 	}
-	receipt, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	receipt, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	if receipt.Outcome != OutcomePending {
 		t.Fatalf("receipt outcome = %s, want pending", receipt.Outcome)

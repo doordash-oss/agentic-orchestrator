@@ -29,7 +29,7 @@ var setupCodes = []Code{
 }
 
 func TestSetupFailureCodesContract(t *testing.T) {
-	wantBlocks := []Block{BlockRepositories, BlockCommand, BlockSetupTask}
+	wantBlocks := []block{blockRepositories, blockCommand, blockSetupTask}
 	for _, code := range setupCodes {
 		entry, ok := Lookup(code)
 		if !ok {
@@ -41,9 +41,9 @@ func TestSetupFailureCodesContract(t *testing.T) {
 		if len(entry.Actions) != 1 || entry.Actions[0] != "setup" {
 			t.Errorf("%s: actions = %#v; want [setup]", code, entry.Actions)
 		}
-		got := append([]Block(nil), entry.Blocks...)
+		got := append([]block(nil), entry.Blocks...)
 		sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
-		sortedWant := append([]Block(nil), wantBlocks...)
+		sortedWant := append([]block(nil), wantBlocks...)
 		sort.Slice(sortedWant, func(i, j int) bool { return sortedWant[i] < sortedWant[j] })
 		if len(got) != len(sortedWant) {
 			t.Fatalf("%s: blocks = %#v; want exactly %#v", code, entry.Blocks, wantBlocks)
@@ -70,7 +70,7 @@ func TestIsSetupFailureReturnsTrueForExactlyTheSetupCodes(t *testing.T) {
 }
 
 func TestSetupFailureSummariesNameTheOwningTask(t *testing.T) {
-	params := SetupFailureParams{TaskLabel: "Worktree: beta"}
+	params := setupFailureParams{TaskLabel: "Worktree: beta"}
 	want := `Setup task "Worktree: beta" failed.`
 	for _, code := range setupCodes {
 		rendered := New(code, WithParams(params))
@@ -81,7 +81,7 @@ func TestSetupFailureSummariesNameTheOwningTask(t *testing.T) {
 
 	// Without a task label the worktree code names the repository and the
 	// other two fall back to their static summaries.
-	rendered := New(WorktreeSetupFailed, WithParams(SetupFailureParams{Repositories: []string{"beta"}}))
+	rendered := New(WorktreeSetupFailed, WithParams(setupFailureParams{Repositories: []string{"beta"}}))
 	if rendered.Summary != `Setting up the worktree for repository "beta" failed.` {
 		t.Fatalf("worktree repo summary = %q", rendered.Summary)
 	}
@@ -90,7 +90,7 @@ func TestSetupFailureSummariesNameTheOwningTask(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: missing from catalog", code)
 		}
-		rendered := New(code, WithParams(SetupFailureParams{Repositories: []string{"beta"}}))
+		rendered := New(code, WithParams(setupFailureParams{Repositories: []string{"beta"}}))
 		if rendered.Summary != entry.Summary {
 			t.Errorf("%s: no-label summary = %q; want static %q", code, rendered.Summary, entry.Summary)
 		}
@@ -99,12 +99,12 @@ func TestSetupFailureSummariesNameTheOwningTask(t *testing.T) {
 
 func TestNewCarriesAndDropsSetupTaskBlock(t *testing.T) {
 	task := CodeSetupTask{Key: "worktree:beta", Kind: "worktree", Label: "Worktree: beta"}
-	rendered := New(WorktreeSetupFailed, WithSetupTask(task))
+	rendered := New(WorktreeSetupFailed, withSetupTask(task))
 	if rendered.Context == nil || rendered.Context.SetupTask == nil || rendered.Context.SetupTask.Key != "worktree:beta" {
 		t.Fatalf("worktree_setup_failed declares the setup_task block; got %#v", rendered.Context)
 	}
 
-	rendered = New(IterationBudgetExhausted, WithSetupTask(task))
+	rendered = New(IterationBudgetExhausted, withSetupTask(task))
 	if rendered.Context != nil && rendered.Context.SetupTask != nil {
 		t.Fatalf("iteration_budget_exhausted does not declare the setup_task block; got %#v", rendered.Context)
 	}

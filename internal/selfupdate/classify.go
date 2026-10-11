@@ -25,42 +25,42 @@ import (
 
 // InstallKind is the classified installation method of the running
 // executable, as reported by the public update snapshot.
-type InstallKind string
+type installKind string
 
 const (
-	InstallTarball     InstallKind = "tarball"
-	InstallGoInstall   InstallKind = "go_install"
-	InstallHomebrew    InstallKind = "homebrew"
-	InstallAppBundle   InstallKind = "app_bundle"
-	InstallDevelopment InstallKind = "development"
-	InstallUnknown     InstallKind = "unknown"
+	installTarball     installKind = "tarball"
+	installGoInstall   installKind = "go_install"
+	installHomebrew    installKind = "homebrew"
+	installAppBundle   installKind = "app_bundle"
+	installDevelopment installKind = "development"
+	installUnknown     installKind = "unknown"
 )
 
 // UnsupportedReason is the machine-readable remediation code carried by an
 // unsupported update snapshot.
-type UnsupportedReason string
+type unsupportedReason string
 
 const (
-	// UnsupportedBundled: the binary lives inside a desktop app bundle's
+	// unsupportedBundled: the binary lives inside a desktop app bundle's
 	// Electron resources; the desktop package owns its updates.
-	UnsupportedBundled UnsupportedReason = "bundled"
-	// UnsupportedHomebrew: the binary is managed by Homebrew.
-	UnsupportedHomebrew UnsupportedReason = "homebrew"
-	// UnsupportedDevelopmentVersion: dev builds and go-install
+	unsupportedBundled unsupportedReason = "bundled"
+	// unsupportedHomebrew: the binary is managed by Homebrew.
+	unsupportedHomebrew unsupportedReason = "homebrew"
+	// unsupportedDevelopmentVersion: dev builds and go-install
 	// pseudo-versions have no clean comparable current version.
-	UnsupportedDevelopmentVersion UnsupportedReason = "development_version"
-	// UnsupportedPlatform: the GOOS/GOARCH pair is outside the supported
+	unsupportedDevelopmentVersion unsupportedReason = "development_version"
+	// unsupportedPlatform: the GOOS/GOARCH pair is outside the supported
 	// darwin/linux amd64/arm64 set.
-	UnsupportedPlatform UnsupportedReason = "unsupported_platform"
-	// UnsupportedNonReplaceable: ownership or permissions make an in-place
+	unsupportedPlatform unsupportedReason = "unsupported_platform"
+	// unsupportedNonReplaceable: ownership or permissions make an in-place
 	// replacement unsafe.
-	UnsupportedNonReplaceable UnsupportedReason = "non_replaceable"
-	// UnsupportedOwnershipContention: another live runtime holds this
+	unsupportedNonReplaceable unsupportedReason = "non_replaceable"
+	// unsupportedOwnershipContention: another live runtime holds this
 	// binary's update lease (a secondary runtime).
-	UnsupportedOwnershipContention UnsupportedReason = "ownership_contention"
-	// UnsupportedLeaseUnavailable: the binary lease could not be acquired
+	unsupportedOwnershipContention unsupportedReason = "ownership_contention"
+	// unsupportedLeaseUnavailable: the binary lease could not be acquired
 	// for reasons other than contention.
-	UnsupportedLeaseUnavailable UnsupportedReason = "lease_unavailable"
+	unsupportedLeaseUnavailable unsupportedReason = "lease_unavailable"
 )
 
 // Eligibility is the outcome of classifying the running installation for
@@ -70,25 +70,25 @@ const (
 // lease this runtime holds.
 type Eligibility struct {
 	Supported   bool
-	Install     InstallKind
-	Reason      UnsupportedReason
+	Install     installKind
+	Reason      unsupportedReason
 	Remediation string
 }
 
 // LeaseState describes this runtime's relationship to the binary-scoped
 // update lease at classification time.
-type LeaseState int
+type leaseState int
 
 const (
-	// LeaseHeld: this runtime holds the binary lease (acquired, adopted, or
+	// leaseHeld: this runtime holds the binary lease (acquired, adopted, or
 	// retained through recovery).
-	LeaseHeld LeaseState = iota
-	// LeaseContended: another live runtime holds the lease — this process is
+	leaseHeld leaseState = iota
+	// leaseContended: another live runtime holds the lease — this process is
 	// a secondary runtime serving from the same installed binary.
-	LeaseContended
-	// LeaseUnavailable: acquisition failed for reasons other than contention
+	leaseContended
+	// leaseUnavailable: acquisition failed for reasons other than contention
 	// (missing executable identity, filesystem failure).
-	LeaseUnavailable
+	leaseUnavailable
 )
 
 // ClassifyInputs are the resolved signals ClassifyInstallation consumes. All
@@ -120,7 +120,7 @@ type ClassifyInputs struct {
 	// the runtime (required for an atomic rename swap).
 	DirWritable bool
 	// Lease is this runtime's binary-lease state.
-	Lease LeaseState
+	Lease leaseState
 }
 
 // remediation texts for each unsupported reason. Actionable, never exposing
@@ -145,61 +145,61 @@ const (
 // lease failures instead of claiming every missing lease is a secondary
 // runtime.
 func ClassifyInstallation(in ClassifyInputs) Eligibility {
-	unsupported := func(kind InstallKind, reason UnsupportedReason, remediation string) Eligibility {
+	unsupported := func(kind installKind, reason unsupportedReason, remediation string) Eligibility {
 		return Eligibility{Supported: false, Install: kind, Reason: reason, Remediation: remediation}
 	}
 
 	if !in.HasExec {
-		return unsupported(InstallUnknown, UnsupportedLeaseUnavailable, remediationLeaseUnavailable)
+		return unsupported(installUnknown, unsupportedLeaseUnavailable, remediationLeaseUnavailable)
 	}
-	if IsBundledAppResourcePath(in.ExecPath) {
-		return unsupported(InstallAppBundle, UnsupportedBundled, remediationBundled)
+	if isBundledAppResourcePath(in.ExecPath) {
+		return unsupported(installAppBundle, unsupportedBundled, remediationBundled)
 	}
-	if IsHomebrewPath(in.ExecPath) {
-		return unsupported(InstallHomebrew, UnsupportedHomebrew, remediationHomebrew)
+	if isHomebrewPath(in.ExecPath) {
+		return unsupported(installHomebrew, unsupportedHomebrew, remediationHomebrew)
 	}
 
 	// Method split mirrors the legacy CLI classifier: homebrew and bundle
 	// checks already ran above, so what remains is go-install, tarball, or
 	// development.
-	kind := InstallDevelopment
-	if IsRealModuleVersion(in.BuildInfoVersion) || SameDir(in.BinaryDir, in.GoBinDir) {
-		kind = InstallGoInstall
-	} else if IsReleaseVersion(in.InjectedVersion) {
-		kind = InstallTarball
+	kind := installDevelopment
+	if isRealModuleVersion(in.BuildInfoVersion) || sameDir(in.BinaryDir, in.GoBinDir) {
+		kind = installGoInstall
+	} else if isReleaseVersion(in.InjectedVersion) {
+		kind = installTarball
 	}
 
 	// Eligible methods additionally require a clean comparable current
 	// version: a go-install pseudo-version or dev build refuses rather than
 	// risking an unordered comparison.
-	current := CurrentReleaseVersion(in.BuildInfoVersion, in.InjectedVersion)
+	current := currentReleaseVersion(in.BuildInfoVersion, in.InjectedVersion)
 	if current == "" {
-		return unsupported(kind, UnsupportedDevelopmentVersion, remediationDevelopment)
+		return unsupported(kind, unsupportedDevelopmentVersion, remediationDevelopment)
 	}
 	if !supportedPlatform(in.GOOS, in.GOARCH) {
-		return unsupported(kind, UnsupportedPlatform, remediationPlatform)
+		return unsupported(kind, unsupportedPlatform, remediationPlatform)
 	}
 	if !replaceable(in) {
-		return unsupported(kind, UnsupportedNonReplaceable, remediationNonReplaceable)
+		return unsupported(kind, unsupportedNonReplaceable, remediationNonReplaceable)
 	}
 	switch in.Lease {
-	case LeaseHeld:
+	case leaseHeld:
 		return Eligibility{Supported: true, Install: kind}
-	case LeaseContended:
-		return unsupported(kind, UnsupportedOwnershipContention, remediationContention)
+	case leaseContended:
+		return unsupported(kind, unsupportedOwnershipContention, remediationContention)
 	default:
-		return unsupported(kind, UnsupportedLeaseUnavailable, remediationLeaseUnavailable)
+		return unsupported(kind, unsupportedLeaseUnavailable, remediationLeaseUnavailable)
 	}
 }
 
-// CurrentReleaseVersion returns the clean MAJOR.MINOR.PATCH form of the
+// currentReleaseVersion returns the clean MAJOR.MINOR.PATCH form of the
 // running build's version — preferring the injected ldflags release, then the
 // build-info module version — or "" when neither is a clean release. The
 // empty result means the running build has no version updates can be ordered
 // against.
-func CurrentReleaseVersion(buildInfoVersion, injectedVersion string) string {
+func currentReleaseVersion(buildInfoVersion, injectedVersion string) string {
 	for _, v := range []string{injectedVersion, buildInfoVersion} {
-		if IsReleaseVersion(v) {
+		if isReleaseVersion(v) {
 			return NormalizeVersion(v)
 		}
 	}
@@ -237,13 +237,13 @@ func replaceable(in ClassifyInputs) bool {
 	return in.DirWritable
 }
 
-// IsBundledAppResourcePath reports whether a canonical executable path lives
+// isBundledAppResourcePath reports whether a canonical executable path lives
 // inside a desktop app bundle (macOS <Something>.app/Contents/...) or an
 // Electron packaged resources tree (…/resources/bin/<exe> or
 // …/resources/<exe>). The basename must be an agentico executable so an
 // unrelated binary that merely sits in a directory named "resources" is not
 // misclassified.
-func IsBundledAppResourcePath(path string) bool {
+func isBundledAppResourcePath(path string) bool {
 	if path == "" {
 		return false
 	}
@@ -275,14 +275,14 @@ const sepPath = string(os.PathSeparator)
 // LeaseStateFromError maps a binary-lease acquisition outcome to the
 // classification lease state, distinguishing ownership contention (a live
 // secondary runtime) from every other failure.
-func LeaseStateFromError(held bool, acquireErr error) LeaseState {
+func LeaseStateFromError(held bool, acquireErr error) leaseState {
 	if held {
-		return LeaseHeld
+		return leaseHeld
 	}
-	if acquireErr != nil && IsLeaseHeld(acquireErr) {
-		return LeaseContended
+	if acquireErr != nil && isLeaseHeld(acquireErr) {
+		return leaseContended
 	}
-	return LeaseUnavailable
+	return leaseUnavailable
 }
 
 // DirWritable reports whether the runtime's effective uid can write to dir,

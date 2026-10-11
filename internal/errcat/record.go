@@ -59,13 +59,13 @@ func RenderRecord(record FailureRecord) Error {
 // with RenderRecord so both renderings agree.
 func RecordOptions(record FailureRecord) []Option {
 	opts := []Option{}
-	params := RunFailureParams{}
-	integration := IsIntegrationAttention(record.Code)
+	params := runFailureParams{}
+	integration := isIntegrationAttention(record.Code)
 	integrationRepos := []CodeRepository{}
 	setup := IsSetupFailure(record.Code)
-	setupParams := SetupFailureParams{}
-	publish := IsPublishFailure(record.Code)
-	publishParams := PublishRepoParams{}
+	setupParams := setupFailureParams{}
+	publish := isPublishFailure(record.Code)
+	publishParams := publishRepoParams{}
 	if record.Context != nil {
 		if record.Context.Phase != nil {
 			opts = append(opts, WithPhase(*record.Context.Phase))
@@ -85,15 +85,15 @@ func RecordOptions(record FailureRecord) []Option {
 			}
 		}
 		if record.Context.Command != nil {
-			opts = append(opts, WithCommand(*record.Context.Command))
+			opts = append(opts, withCommand(*record.Context.Command))
 		}
 		if record.Context.SetupTask != nil {
-			opts = append(opts, WithSetupTask(*record.Context.SetupTask))
+			opts = append(opts, withSetupTask(*record.Context.SetupTask))
 			setupParams.TaskLabel = record.Context.SetupTask.Label
 		}
 	}
 	setupParams.Repositories = params.Repositories
-	relationshipWarning := IsRelationshipWarning(record.Code)
+	relationshipWarning := isRelationshipWarning(record.Code)
 	switch {
 	case setup:
 		opts = append(opts, WithParams(setupParams))

@@ -71,7 +71,7 @@ func TestObserverPhaseLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		obs := New(true, stateDir, false, "", false, "agentic")
+		obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 		rootSC := SpanContextForFeature(featureID, "", "", "")
 		// Verify derived TraceID is zero-padded to 32 chars
@@ -155,7 +155,7 @@ func TestObserverPhaseLifecycle(t *testing.T) {
 		featureID := "disabled_feature"
 		os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
-		obs := New(false, stateDir, false, "", false, "agentic")
+		obs := newObserver(false, stateDir, false, "", false, "agentic")
 		sc := SpanContextForFeature(featureID, "", "", "")
 		child := sc.Child()
 		obs.PhaseStarted(child, "research")
@@ -175,7 +175,7 @@ func TestObserverPhaseLifecycle(t *testing.T) {
 		obs.PhaseCompleted(sc, "research", time.Second, nil)
 		obs.SessionStarted(sc, "research", "sess1", "claude", "opus", "", "", "")
 		obs.SessionEnded(sc, "research", "sess1", "", SessionUsage{}, time.Second, nil)
-		obs.Shutdown()
+		obs.shutdown()
 	})
 
 	t.Run("phase_failed", func(t *testing.T) {
@@ -183,7 +183,7 @@ func TestObserverPhaseLifecycle(t *testing.T) {
 		featureID := "fail_feature"
 		os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
-		obs := New(true, stateDir, false, "", false, "agentic")
+		obs := newObserver(true, stateDir, false, "", false, "agentic")
 		sc := SpanContextForFeature(featureID, "", "", "").Child()
 
 		obs.PhaseStarted(sc, "implement")
@@ -226,7 +226,7 @@ func TestObserverPhaseLifecycle(t *testing.T) {
 		featureID := "fail_publish_feature"
 		os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
-		obs := New(true, stateDir, false, "", false, "agentic")
+		obs := newObserver(true, stateDir, false, "", false, "agentic")
 		sc := SpanContextForFeature(featureID, "", "", "").Child()
 
 		obs.PhaseStarted(sc, "publish")
@@ -308,7 +308,7 @@ func TestSpanContext(t *testing.T) {
 	t.Run("new_span_id_uniqueness", func(t *testing.T) {
 		ids := make(map[string]bool)
 		for i := 0; i < 100; i++ {
-			id := NewSpanID()
+			id := newSpanID()
 			if len(id) != 16 {
 				t.Errorf("span ID length = %d, want 16", len(id))
 			}
@@ -347,12 +347,12 @@ func TestSessionEndedAcceptsUsage(t *testing.T) {
 		stateDir := t.TempDir()
 		featureID := "session_ended_feat"
 		os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-		obs := New(true, stateDir, false, "", false, "agentic")
+		obs := newObserver(true, stateDir, false, "", false, "agentic")
 		obs.SessionEnded(sc, "research", "sess1", "", usage, time.Second, nil)
 	})
 
 	t.Run("disabled_observer", func(t *testing.T) {
-		obs := New(false, t.TempDir(), false, "", false, "agentic")
+		obs := newObserver(false, t.TempDir(), false, "", false, "agentic")
 		obs.SessionEnded(sc, "research", "sess1", "", usage, time.Second, nil)
 	})
 
@@ -370,12 +370,12 @@ func TestIterationEndedAcceptsUsage(t *testing.T) {
 		stateDir := t.TempDir()
 		featureID := "iter_ended_feat"
 		os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-		obs := New(true, stateDir, false, "", false, "agentic")
+		obs := newObserver(true, stateDir, false, "", false, "agentic")
 		obs.IterationEnded(sc, 1, usage, time.Second, "completed")
 	})
 
 	t.Run("disabled_observer", func(t *testing.T) {
-		obs := New(false, t.TempDir(), false, "", false, "agentic")
+		obs := newObserver(false, t.TempDir(), false, "", false, "agentic")
 		obs.IterationEnded(sc, 1, usage, time.Second, "completed")
 	})
 
@@ -389,7 +389,7 @@ func TestSessionStartedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "session_start_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	featureCtx := SpanContextForFeature(featureID, "", "", "")
 	phaseCtx := featureCtx.Child()
@@ -435,7 +435,7 @@ func TestSessionEndedEmitsEventWithUsage(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "session_end_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child().Child()
 	usage := SessionUsage{
@@ -484,7 +484,7 @@ func TestSessionEndedEmitsErrorOnFailure(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "session_err_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child().Child()
 	obs.SessionEnded(sc, "research", "sess-1", "", SessionUsage{}, time.Second, errors.New("connection lost"))
@@ -506,7 +506,7 @@ func TestIterationStartedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "iter_start_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 	obs.IterationStarted(sc, 3)
@@ -531,7 +531,7 @@ func TestIterationEndedEmitsEventWithUsage(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "iter_end_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 	usage := SessionUsage{TotalCostUSD: 0.10, InputTokens: 2000, OutputTokens: 800}
@@ -563,7 +563,7 @@ func TestContextHandoffTriggeredEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "context_handoff_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 	obs.ContextHandoffTriggered(sc, "implement", "s1", "repo-a", "codex", 2, 81, 80, 211000, 258400, 12000)
@@ -591,7 +591,7 @@ func TestContextLargeOutputEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "context_large_output_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 	exitCode := 0
@@ -618,7 +618,7 @@ func TestReviewStartedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "review_start_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 	obs.ReviewStarted(sc, 2)
@@ -640,7 +640,7 @@ func TestReviewCompletedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "review_end_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 	obs.ReviewCompleted(sc, 2, "APPROVED", 30*time.Second)
@@ -668,7 +668,7 @@ func TestAgentTaskStartedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "task_start_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 	obs.AgentTaskStarted(sc, "Research", "sess-res", "taskX", "toolu_X",
@@ -706,7 +706,7 @@ func TestAgentTaskProgressEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "task_prog_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	featureCtx := SpanContextForFeature(featureID, "", "", "")
 	phaseCtx := featureCtx.Child()
@@ -760,7 +760,7 @@ func TestAgentTaskEndedEmitsEventWithStatus(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "task_end_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").Child()
 
@@ -819,7 +819,7 @@ func TestNilObserverMethodsAreNoOps(t *testing.T) {
 func TestDisabledObserverMethodsAreNoOps(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "disabled_feat"
-	obs := New(false, stateDir, false, "", false, "agentic")
+	obs := newObserver(false, stateDir, false, "", false, "agentic")
 	sc := SpanContext{TraceID: "test", SpanID: "test", FeatureID: featureID}
 	usage := SessionUsage{TotalCostUSD: 1.0}
 
@@ -851,7 +851,7 @@ func TestFeatureRewoundFullOmitRoadmapPhase(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 	sc := SpanContextForFeature(featureID, "", "", "").WithRun(2)
 
 	obs.FeatureRewound(sc, RewindEventInput{
@@ -900,7 +900,7 @@ func TestFeatureRewoundPartialIncludesRoadmapContext(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 	sc := SpanContextForFeature(featureID, "", "", "").WithRun(2)
 
 	obs.FeatureRewound(sc, RewindEventInput{
@@ -946,7 +946,7 @@ func TestValidationStartedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "val_start_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	rootSC := SpanContextForFeature(featureID, "", "", "")
 	childSC := rootSC.Child()
@@ -981,7 +981,7 @@ func TestValidationCompletedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "val_end_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	rootSC := SpanContextForFeature(featureID, "", "", "")
 	childSC := rootSC.Child()
@@ -1016,7 +1016,7 @@ func TestValidatorStartedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "vdator_start_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	rootSC := SpanContextForFeature(featureID, "", "", "")
 	childSC := rootSC.Child()
@@ -1048,7 +1048,7 @@ func TestValidatorCompletedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "vdator_end_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	rootSC := SpanContextForFeature(featureID, "", "", "")
 	childSC := rootSC.Child()
@@ -1090,7 +1090,7 @@ func TestNilObserverLifecycleMethodsAreNoOps(t *testing.T) {
 func TestDisabledObserverLifecycleMethodsAreNoOps(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "disabled_phase4_feat"
-	obs := New(false, stateDir, false, "", false, "agentic")
+	obs := newObserver(false, stateDir, false, "", false, "agentic")
 	sc := SpanContext{TraceID: "test", SpanID: "test", FeatureID: featureID}
 
 	obs.ValidationStarted(sc, "plan", 3)
@@ -1110,7 +1110,7 @@ func TestFeatureStartedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feat_started_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.FeatureStarted(sc, "dark-mode", []string{"frontend", "backend"}, "full")
@@ -1151,7 +1151,7 @@ func TestSetupLifecycleEmitsPrePhaseEventWithDocumentedFields(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 	sc := SpanContextForFeature(featureID, "", "", "").WithRun(3)
 
 	obs.SetupLifecycle(sc, feature.SetupEvent{
@@ -1217,7 +1217,7 @@ func TestSetupFailedLifecycleCarriesCanonicalCodeAndClass(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 	sc := SpanContextForFeature(featureID, "", "", "").WithRun(1)
 
 	obs.SetupLifecycle(sc, feature.SetupEvent{
@@ -1258,7 +1258,7 @@ func TestFeatureCompletedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feat_completed_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.FeatureCompleted(sc, 2.50, 120*time.Second)
@@ -1283,7 +1283,7 @@ func TestFeatureFailedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feat_failed_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.FeatureFailed(sc, "infrastructure_failure", "blocking", "session timed out after 30m")
@@ -1314,7 +1314,7 @@ func TestFeatureInterruptedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feat_interrupted_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.FeatureInterrupted(sc, "implement")
@@ -1336,7 +1336,7 @@ func TestPermissionRequestedEmitsRepoAndIteration(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "perm_req_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 
@@ -1381,7 +1381,7 @@ func TestPermissionResolvedEmitsRepoAndIteration(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "perm_res_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.PermissionResolved(sc, "sess-2", "backend", 5, "Write", "allow")
@@ -1419,7 +1419,7 @@ func TestAutomaticReviewCompletedEmitsTypedBoundedEvent(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 	sc := SpanContextForFeature(featureID, "trace-automatic-review", "", "").WithRun(4).Child()
 	persisted := false
 	obs.AutomaticReviewCompleted(sc, AutomaticReviewEventInput{
@@ -1476,7 +1476,7 @@ func TestAutomaticReviewCompletedNilAndDisabledAreNoOps(t *testing.T) {
 
 	var nilObserver *Observer
 	nilObserver.AutomaticReviewCompleted(SpanContext{}, AutomaticReviewEventInput{})
-	disabled := New(false, t.TempDir(), false, "", false, "agentic")
+	disabled := newObserver(false, t.TempDir(), false, "", false, "agentic")
 	disabled.AutomaticReviewCompleted(SpanContext{}, AutomaticReviewEventInput{})
 }
 
@@ -1488,7 +1488,7 @@ func TestAutomaticReviewUnavailableEmitsBoundedOperatorEvent(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 	sc := SpanContextForFeature(featureID, "trace-automatic-review", "", "").WithRun(2).Child()
 	obs.AutomaticReviewUnavailable(sc, AutomaticReviewUnavailableEventInput{
 		Phase:     "implement",
@@ -1522,7 +1522,7 @@ func TestQuestionAskedEmitsRepoAndIteration(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "q_asked_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.QuestionAsked(sc, "sess-3", "api-service", 2, "Which database to use?")
@@ -1553,7 +1553,7 @@ func TestQuestionAnsweredEmitsRepoAndIteration(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "q_answered_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.QuestionAnswered(sc, "sess-3", "api-service", 2, "Which database to use?", "PostgreSQL")
@@ -1587,7 +1587,7 @@ func TestQuestionAnsweredEmitsAutoPickMetadata(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "q_answered_autopick_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.QuestionAnswered(sc, "sess-3", "api-service", 2, "Which scope?", "Repository-first (Recommended)", QuestionAnsweredMetadata{
@@ -1612,7 +1612,7 @@ func TestRecoveryScannedEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "recovery_scan_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.RecoveryScanned(sc, 10, 7)
@@ -1637,7 +1637,7 @@ func TestRecoveryActionEmitsEvent(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "recovery_action_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "")
 	obs.RecoveryAction(sc, "restart", "implement", true)
@@ -1681,7 +1681,7 @@ func TestNilObserverPermissionMethodsAreNoOps(t *testing.T) {
 func TestDisabledObserverPermissionMethodsAreNoOps(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "disabled_phase5_feat"
-	obs := New(false, stateDir, false, "", false, "agentic")
+	obs := newObserver(false, stateDir, false, "", false, "agentic")
 	sc := SpanContext{TraceID: "test", SpanID: "test", FeatureID: featureID}
 
 	obs.FeatureStarted(sc, "feat", []string{"repo"}, "full")
@@ -1705,7 +1705,7 @@ func TestActivePhaseSpanContextReturnsStoredSpan(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feat-active"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "")
+	obs := newObserver(true, stateDir, false, "", false, "")
 	sc := SpanContextForFeature(featureID, "trace-active", "", "").Child()
 	obs.PhaseStarted(sc, "inquire")
 
@@ -1725,7 +1725,7 @@ func TestActivePhaseSpanContextClearedAfterPhaseCompleted(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "feat-clear"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "")
+	obs := newObserver(true, stateDir, false, "", false, "")
 	sc := SpanContextForFeature(featureID, "trace-clear", "", "").Child()
 	obs.PhaseStarted(sc, "research")
 	obs.PhaseCompleted(sc, "research", 0, nil)
@@ -1750,7 +1750,7 @@ func TestSessionStartedCreatesOTelSpan(t *testing.T) {
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
 	obs := &Observer{
-		emitter: NewEmitter(stateDir),
+		emitter: newEmitter(stateDir),
 		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
@@ -1781,7 +1781,7 @@ func TestIterationStartedCreatesOTelSpan(t *testing.T) {
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
 	obs := &Observer{
-		emitter: NewEmitter(stateDir),
+		emitter: newEmitter(stateDir),
 		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
@@ -1812,7 +1812,7 @@ func TestReviewStartedCreatesOTelSpan(t *testing.T) {
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
 	obs := &Observer{
-		emitter: NewEmitter(stateDir),
+		emitter: newEmitter(stateDir),
 		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
@@ -1843,7 +1843,7 @@ func TestFeatureStartedCreatesOTelSpan(t *testing.T) {
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
 	obs := &Observer{
-		emitter: NewEmitter(stateDir),
+		emitter: newEmitter(stateDir),
 		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
@@ -1874,7 +1874,7 @@ func TestFeatureFailedEndsOTelSpan(t *testing.T) {
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
 	obs := &Observer{
-		emitter: NewEmitter(stateDir),
+		emitter: newEmitter(stateDir),
 		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
@@ -1897,7 +1897,7 @@ func TestFeatureInterruptedEndsOTelSpan(t *testing.T) {
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
 	obs := &Observer{
-		emitter: NewEmitter(stateDir),
+		emitter: newEmitter(stateDir),
 		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
@@ -1920,7 +1920,7 @@ func TestPermissionAddsOTelSpanEvent(t *testing.T) {
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
 
 	obs := &Observer{
-		emitter: NewEmitter(stateDir),
+		emitter: newEmitter(stateDir),
 		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
@@ -1962,7 +1962,7 @@ func TestEmit_IncludesRunNumber(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	const wantRun = 7
 	sc := SpanContextForFeature(featureID, "", "", "").WithRun(wantRun)
@@ -2028,7 +2028,7 @@ func TestEmit_ZeroRunNumber_OmittedInJSONL(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	scZero := SpanContextForFeature(featureID, "", "", "") // RunNumber = 0
 	scThree := scZero.WithRun(3)
@@ -2093,7 +2093,7 @@ func TestObserve_Disabled_StillNoOpForAllEmitters(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(false, stateDir, false, "", false, "agentic")
+	obs := newObserver(false, stateDir, false, "", false, "agentic")
 	sc := SpanContextForFeature(featureID, "", "", "").WithRun(5)
 
 	obs.PhaseStarted(sc, "implement")
@@ -2102,7 +2102,7 @@ func TestObserve_Disabled_StillNoOpForAllEmitters(t *testing.T) {
 	if err := obs.Emit(Event{EventType: "x", FeatureID: featureID, RunNumber: 5}); err != nil {
 		t.Errorf("Emit on disabled observer returned error: %v", err)
 	}
-	if err := obs.WriteFeatureSummary(FeatureSummaryInput{
+	if err := obs.WriteFeatureSummary(featureSummaryInput{
 		FeatureID:  featureID,
 		FeatureDir: filepath.Join(stateDir, featureID),
 		ActiveRun:  5,
@@ -2124,7 +2124,7 @@ func TestObserver_ConfigChanged_WritesEventsJSONL(t *testing.T) {
 	stateDir := t.TempDir()
 	featureID := "cfg_changed_feat"
 	os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
-	obs := New(true, stateDir, false, "", false, "agentic")
+	obs := newObserver(true, stateDir, false, "", false, "agentic")
 
 	sc := SpanContextForFeature(featureID, "", "", "").WithRun(3)
 
@@ -2212,7 +2212,7 @@ func TestObserver_ConfigChanged_NilAndDisabled(t *testing.T) {
 
 	stateDir := t.TempDir()
 	featureID := "cfg_changed_disabled"
-	disabled := New(false, stateDir, false, "", false, "agentic")
+	disabled := newObserver(false, stateDir, false, "", false, "agentic")
 	disabled.ConfigChanged(sc, snap, snap)
 
 	eventsPath := filepath.Join(stateDir, featureID, "events.jsonl")

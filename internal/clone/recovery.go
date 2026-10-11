@@ -35,12 +35,12 @@ import (
 // startup reconciliation owns the durable records and runs before the
 // server serves traffic, so admission cannot be closed yet — if it ever
 // is, reconciliation still runs so records stay truthful.
-func (s *Service) Recover() error {
+func (s *service) Recover() error {
 	res, _ := s.acquirePassReservation()
 	defer res.Release()
 	var errs []error
 	for _, rec := range s.store.all() {
-		if !ActiveStates[rec.State] && rec.State != StateCleanupPending {
+		if !activeStates[rec.State] && rec.State != StateCleanupPending {
 			continue
 		}
 		op := s.op(rec.ID)
@@ -51,7 +51,7 @@ func (s *Service) Recover() error {
 			continue
 		}
 		switch {
-		case ResolvedStates[cur.State]:
+		case resolvedStates[cur.State]:
 			// Already reconciled by a concurrent pass.
 		case cur.State == StateCleanupPending:
 			s.reconcileCleanupPendingLocked(op, &cur)
@@ -67,13 +67,13 @@ func (s *Service) Recover() error {
 // behind when a crash happened between the atomic publication and the
 // wrapper removal. It is best-effort and only ever touches verified owned
 // staging.
-func (s *Service) removeStagingWrapper(cur *Record) {
+func (s *service) removeStagingWrapper(cur *Record) {
 	handle, err := openRootHandle(cur.RootResolved)
 	if err != nil {
 		return
 	}
 	defer handle.Close()
-	if handle.id != (DirIdentity{Device: cur.RootDevice, Inode: cur.RootInode}) {
+	if handle.id != (dirIdentity{Device: cur.RootDevice, Inode: cur.RootInode}) {
 		return
 	}
 	staging := stagingNameForRecord(cur)
@@ -93,11 +93,11 @@ func (s *Service) removeStagingWrapper(cur *Record) {
 
 // reconcileActiveLocked recovers one unfinished attempt (accepted,
 // running, finalizing or cancelling) after a restart or crash. The caller
-// holds the operation lock. Publication evidence is honored first; every
+// holds the operation lock. publication evidence is honored first; every
 // other path terminates a verifiably-owned surviving process, then
 // resolves through verified cleanup.
-func (s *Service) reconcileActiveLocked(op *opState, cur *Record) {
-	if ResolvedStates[cur.State] || cur.State == StateCleanupPending {
+func (s *service) reconcileActiveLocked(op *opState, cur *Record) {
+	if resolvedStates[cur.State] || cur.State == StateCleanupPending {
 		return
 	}
 	// A crash between atomic publication and the success write still
@@ -121,23 +121,23 @@ func (s *Service) reconcileActiveLocked(op *opState, cur *Record) {
 // pendingOutcomeFor maps an interrupted attempt to its terminal outcome,
 // keeping a prior explicit cancellation distinguishable from server
 // interruption.
-func pendingOutcomeFor(cur *Record) State {
+func pendingOutcomeFor(cur *Record) state {
 	if cur.CancelRequested {
-		return StateCancelled
+		return stateCancelled
 	}
-	return StateInterrupted
+	return stateInterrupted
 }
 
 // reconcileCleanupPendingLocked retries the cleanup boundary for one
 // unresolved attempt: process liveness/identity first, then late
 // publication evidence, then root identity and staging ownership. The
 // caller holds the operation lock.
-func (s *Service) reconcileCleanupPendingLocked(op *opState, cur *Record) {
+func (s *service) reconcileCleanupPendingLocked(op *opState, cur *Record) {
 	if cur.State != StateCleanupPending {
 		return
 	}
-	if cur.Process != nil && (IsProcessAlive(cur.Process.Pid) || GroupAlive(cur.Process.Pgid)) {
-		if !VerifyProcessIdentity(cur.Process.Pid, cur.Process.StartIdentity) {
+	if cur.Process != nil && (isProcessAlive(cur.Process.Pid) || groupAlive(cur.Process.Pgid)) {
+		if !verifyProcessIdentity(cur.Process.Pid, cur.Process.StartIdentity) {
 			// PID reuse or unreadable identity: never signal or delete
 			// based on the pid alone.
 			cur.CleanupIssue = "surviving process identity could not be verified"
@@ -167,7 +167,7 @@ func (s *Service) reconcileCleanupPendingLocked(op *opState, cur *Record) {
 	now := s.now().UTC()
 	outcome := cur.PendingOutcome
 	if outcome == "" {
-		outcome = StateFailed
+		outcome = stateFailed
 	}
 	cur.State = outcome
 	cur.PendingOutcome = ""
@@ -190,7 +190,7 @@ func (s *Service) reconcileCleanupPendingLocked(op *opState, cur *Record) {
 
 // toCleanupPendingLocked records an unresolved attempt whose cleanup
 // cannot currently be proved safe, retaining its reservation.
-func (s *Service) toCleanupPendingLocked(cur *Record, outcome State, reason string) {
+func (s *service) toCleanupPendingLocked(cur *Record, outcome state, reason string) {
 	now := s.now().UTC()
 	cur.State = StateCleanupPending
 	cur.PendingOutcome = outcome
@@ -206,7 +206,7 @@ func (s *Service) toCleanupPendingLocked(cur *Record, outcome State, reason stri
 // is re-verified against the record (PID alone is never proof), and never
 // waits unbounded. stopped reports the tree is gone; uncertain means the
 // identity could not be proved and nothing was signaled.
-func (s *Service) terminateRecordedProcess(cur *Record) (stopped, uncertain bool) {
+func (s *service) terminateRecordedProcess(cur *Record) (stopped, uncertain bool) {
 	if cur.Process == nil {
 		return true, false
 	}
@@ -214,16 +214,16 @@ func (s *Service) terminateRecordedProcess(cur *Record) (stopped, uncertain bool
 	if pid <= 0 {
 		return true, false
 	}
-	if !IsProcessAlive(pid) && !GroupAlive(pgid) {
+	if !isProcessAlive(pid) && !groupAlive(pgid) {
 		return true, false
 	}
-	if !VerifyProcessIdentity(pid, cur.Process.StartIdentity) {
+	if !verifyProcessIdentity(pid, cur.Process.StartIdentity) {
 		return false, true
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if !IsProcessAlive(pid) && !GroupAlive(pgid) {
+		if !isProcessAlive(pid) && !groupAlive(pgid) {
 			return true, false
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -231,7 +231,7 @@ func (s *Service) terminateRecordedProcess(cur *Record) (stopped, uncertain bool
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if !IsProcessAlive(pid) && !GroupAlive(pgid) {
+		if !isProcessAlive(pid) && !groupAlive(pgid) {
 			return true, false
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -244,7 +244,7 @@ func (s *Service) terminateRecordedProcess(cur *Record) (stopped, uncertain bool
 // owned staging and persist truthful interrupted outcomes (a prior
 // explicit cancellation stays distinguishable as cancelled). It is
 // bounded by ctx.
-func (s *Service) Shutdown(ctx context.Context) error {
+func (s *service) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	if s.draining {
 		s.mu.Unlock()
@@ -272,7 +272,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 
 	var errs []error
 	for _, rec := range s.store.all() {
-		if !ActiveStates[rec.State] {
+		if !activeStates[rec.State] {
 			continue
 		}
 		op := s.op(rec.ID)
@@ -282,7 +282,7 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			op.mu.Unlock()
 			continue
 		}
-		if ActiveStates[cur.State] {
+		if activeStates[cur.State] {
 			s.reconcileActiveLocked(op, &cur)
 		}
 		op.mu.Unlock()

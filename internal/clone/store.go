@@ -27,10 +27,10 @@ import (
 	"time"
 )
 
-// StoreDirName is the directory (under the runtime state dir) that holds
+// storeDirName is the directory (under the runtime state dir) that holds
 // clone operation records. It is registered as a non-feature directory in
 // the feature store so feature scans skip it.
-const StoreDirName = "clone-operations"
+const storeDirName = "clone-operations"
 
 // ListQuery is one bounded list request. Limit is clamped to
 // [1, MaxListLimit]. AfterToken continues a previous page.
@@ -170,7 +170,7 @@ func (s *store) reservation(destinationPath string) (Record, bool) {
 	defer s.mu.Unlock()
 	var best *Record
 	for _, rec := range s.records {
-		if !UnresolvedStates[rec.State] {
+		if !unresolvedStates[rec.State] {
 			continue
 		}
 		if rec.DestinationPath != destinationPath {
@@ -204,12 +204,12 @@ func (s *store) list(q ListQuery) ListResult {
 	unresolved := make([]*Record, 0)
 	resolved := make([]*Record, 0)
 	for _, rec := range s.records {
-		if recordKind(rec) != KindClone {
+		if recordKind(rec) != kindClone {
 			continue
 		}
-		if UnresolvedStates[rec.State] {
+		if unresolvedStates[rec.State] {
 			unresolved = append(unresolved, rec)
-		} else if ResolvedStates[rec.State] {
+		} else if resolvedStates[rec.State] {
 			resolved = append(resolved, rec)
 		}
 	}
@@ -232,7 +232,7 @@ func (s *store) list(q ListQuery) ListResult {
 		start = len(ordered)
 		for i, rec := range ordered {
 			recGroup := 1
-			if ResolvedStates[rec.State] {
+			if resolvedStates[rec.State] {
 				recGroup = 2
 			}
 			key := rec.UpdatedAt.UnixNano()
@@ -253,7 +253,7 @@ func (s *store) list(q ListQuery) ListResult {
 		last := ordered[start+len(result.Operations)-1]
 		group := 1
 		key := last.UpdatedAt.UnixNano()
-		if ResolvedStates[last.State] {
+		if resolvedStates[last.State] {
 			group = 2
 			key = last.ResolvedAt.UnixNano()
 		}
@@ -304,13 +304,13 @@ func (s *store) prune(now time.Time) []string {
 	defer s.mu.Unlock()
 	var pruned []string
 	for id, rec := range s.records {
-		if !ResolvedStates[rec.State] {
+		if !resolvedStates[rec.State] {
 			continue
 		}
 		if rec.ResolvedAt.IsZero() {
 			continue
 		}
-		if now.Sub(rec.ResolvedAt) < RetentionWindow {
+		if now.Sub(rec.ResolvedAt) < retentionWindow {
 			continue
 		}
 		if err := os.Remove(s.pathLocked(id)); err != nil && !errors.Is(err, os.ErrNotExist) {

@@ -33,7 +33,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
-	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -1274,7 +1273,7 @@ func TestRunImplementationLoop_SuccessIgnoresCleanupFailedSessionStatus(t *testi
 		Repos:         []feature.FeatureRepo{{Name: "agentic", Path: workDir}},
 	}
 	sess := newCleanupFailedAfterSuccessSession()
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	cfg := ImplementConfig{
 		Feature:             f,
@@ -1373,7 +1372,7 @@ func newCrashResumeLoopConfig(t *testing.T, artifactDir, stateDir, workDir, obse
 		ReviewModel:         "review-model",
 		ArtifactDir:         artifactDir,
 		StateDir:            stateDir,
-		Observer:            observe.New(true, observeDir, false, "", false, "agentic"),
+		Observer:            observerFromModule(t, true, observeDir, "agentic"),
 		SkipIterationReview: true,
 	}
 }

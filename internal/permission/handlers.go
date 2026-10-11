@@ -42,12 +42,12 @@ func isReadOnlyTool(name string) bool {
 	return readOnlyToolNames[name]
 }
 
-// DefaultWriteGuardBytes is the byte threshold above which the SessionGuardHandler
+// defaultWriteGuardBytes is the byte threshold above which the SessionGuardHandler
 // denies Claude `Write` tool calls. Large Writes (observed at ~50KB, sometimes
 // smaller) have repeatedly hung the server-side tool call for minutes and then
 // dropped the turn with nothing written to disk. 20KB is a conservative limit
 // that matches the in-prompt directive in internal/agent/phase.go.
-const DefaultWriteGuardBytes = 20_000
+const defaultWriteGuardBytes = 20_000
 
 // SessionGuardHandler denies Claude `Write` tool calls whose `content` payload
 // exceeds MaxWriteBytes, returning an actionable message that nudges the model
@@ -69,7 +69,7 @@ type SessionGuardHandler struct {
 func (h *SessionGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	if requestsCompletionReceiptMutation(req) {
 		return ports.PermissionDecision{
-			Behavior: DecisionDeny,
+			Behavior: decisionDeny,
 			Reason:   "phase_complete is a harness-owned completion receipt; emit the structured root outcome instead",
 		}, nil
 	}
@@ -77,20 +77,20 @@ func (h *SessionGuardHandler) CanUseTool(req ports.ToolPermissionRequest) (ports
 		if req.ToolName == toolNameBash {
 			if subcommand, ok := attemptedHarnessCLISubcommand(extractBashCommand(req.Input)); ok {
 				return ports.PermissionDecision{
-					Behavior: DecisionDeny,
+					Behavior: decisionDeny,
 					Reason:   malformedHarnessCLIReason(subcommand),
 				}, nil
 			}
 		}
 		return ports.PermissionDecision{
-			Behavior: DecisionDeny,
+			Behavior: decisionDeny,
 			Reason:   "testing-contract.yaml is harness-owned and regenerated every iteration; amend the phase plan's verification section instead",
 		}, nil
 	}
 	if h.MaxWriteBytes > 0 && req.ProviderName == providerNameClaude && req.ToolName == toolNameWrite {
 		if n, ok := writeContentSize(req.Input); ok && n > h.MaxWriteBytes {
 			return ports.PermissionDecision{
-				Behavior: DecisionDeny,
+				Behavior: decisionDeny,
 				Reason: fmt.Sprintf(
 					"Write blocked: content payload %d bytes exceeds %d-byte limit. "+
 						"Large Writes have repeatedly hung the Claude tool-call stream and dropped the turn with nothing written. "+
@@ -153,7 +153,7 @@ func writeContentSize(raw string) (int, bool) {
 // agent writes to the harness completion receipt and the harness-owned
 // testing contract; oversized Claude Writes are rejected uniformly as well.
 func Guarded(inner ports.PermissionHandler) ports.PermissionHandler {
-	return &SessionGuardHandler{Inner: inner, MaxWriteBytes: DefaultWriteGuardBytes}
+	return &SessionGuardHandler{Inner: inner, MaxWriteBytes: defaultWriteGuardBytes}
 }
 
 // AutoApproveHandler approves all tool use requests immediately.
@@ -189,7 +189,7 @@ func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.
 	return ports.PermissionDecision{}, nil
 }
 
-// CreateWithinRootsHandler auto-approves a plain, conservatively-flagged
+// createWithinRootsHandler auto-approves a plain, conservatively-flagged
 // `touch <path>...` or `mkdir [-p] <path>...` Bash command when every target
 // path falls within Roots, deferring to Inner for everything else. Both
 // commands can only bring an empty file or directory into existence (or, for
@@ -205,13 +205,13 @@ func (h *AcceptEditsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.
 // Roots here is the only boundary standing between an approval and letting a
 // shell command anywhere on disk through — a touch/mkdir outside it always
 // defers to Inner rather than being approved by default.
-type CreateWithinRootsHandler struct {
+type createWithinRootsHandler struct {
 	Inner ports.PermissionHandler
 	Roots []string
 }
 
 // CanUseTool approves an in-root touch/mkdir; everything else defers to Inner.
-func (h *CreateWithinRootsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+func (h *createWithinRootsHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	if req.ToolName == toolNameBash {
 		if targets, ok := simpleCommandTargets(req.Input, "touch"); ok && allPathsWithinRoots(targets, h.Roots) {
 			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
@@ -293,7 +293,7 @@ func pathWithinRoots(path string, roots []string) bool {
 	return false
 }
 
-// WrapGeneralPhaseHandlerWithSafeCreate wraps h in a CreateWithinRootsHandler
+// WrapGeneralPhaseHandlerWithSafeCreate wraps h in a createWithinRootsHandler
 // when h is one of the general accept-edits handlers permHandlerFor builds
 // (AutoApproveHandler, AcceptEditsHandler, or CachingHandler over one of
 // those — optionally already wrapped in a SessionGuardHandler via Guarded).
@@ -302,18 +302,18 @@ func pathWithinRoots(path string, roots []string) bool {
 // specifically to restrict writes below the general writable-root policy and
 // must not be loosened by this exception.
 func WrapGeneralPhaseHandlerWithSafeCreate(h ports.PermissionHandler, roots []string) ports.PermissionHandler {
-	if len(roots) == 0 || !IsGeneralPhaseHandler(h) {
+	if len(roots) == 0 || !isGeneralPhaseHandler(h) {
 		return h
 	}
-	return &CreateWithinRootsHandler{Inner: h, Roots: roots}
+	return &createWithinRootsHandler{Inner: h, Roots: roots}
 }
 
-// IsGeneralPhaseHandler reports whether h is, optionally through a
+// isGeneralPhaseHandler reports whether h is, optionally through a
 // SessionGuardHandler, one of the handler types permHandlerFor builds. Callers
 // outside the permission package use it to scope behavior that must only
 // attach to the general-phase permission policy (e.g. the automatic Bash-
 // review decorator), never to review-helper or restricted handlers.
-func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
+func isGeneralPhaseHandler(h ports.PermissionHandler) bool {
 	if guard, ok := h.(*SessionGuardHandler); ok {
 		h = guard.Inner
 	}
@@ -330,7 +330,7 @@ func IsGeneralPhaseHandler(h ports.PermissionHandler) bool {
 // the general phase handlers, the supervisor deliberately defers Bash to the
 // same user-facing permission UI and therefore participates in review.
 //
-// Keep this separate from IsGeneralPhaseHandler: the supervisor must not
+// Keep this separate from isGeneralPhaseHandler: the supervisor must not
 // inherit unrelated general-phase exceptions such as safe-create approval.
 func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
 	if guard, ok := h.(*SessionGuardHandler); ok {
@@ -340,7 +340,7 @@ func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
 	case *SupervisorHandler:
 		return true
 	}
-	return IsGeneralPhaseHandler(h)
+	return isGeneralPhaseHandler(h)
 }
 
 // SupervisorHandler is the supervisor conversation's harness-normal policy:
@@ -404,7 +404,7 @@ func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionReques
 			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
 		return ports.PermissionDecision{
-			Behavior: DecisionDeny,
+			Behavior: decisionDeny,
 			Reason:   "bounded helper shell access is limited to read-only inspection commands",
 		}, nil
 
@@ -414,13 +414,13 @@ func (h *BoundedHelperArtifactHandler) CanUseTool(req ports.ToolPermissionReques
 			return ports.PermissionDecision{Behavior: DecisionAllow}, nil
 		}
 		return ports.PermissionDecision{
-			Behavior: DecisionDeny,
+			Behavior: decisionDeny,
 			Reason:   "bounded helper may write only declared artifacts in its helper directory",
 		}, nil
 	}
 
 	return ports.PermissionDecision{
-		Behavior: DecisionDeny,
+		Behavior: decisionDeny,
 		Reason:   "bounded helper may not mutate undeclared files",
 	}, nil
 }

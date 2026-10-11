@@ -73,7 +73,7 @@ func ConflictMarkerFiles(worktreePath string) ([]string, error) {
 			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 				continue
 			}
-			return nil, &ConflictMarkerScanError{WorktreePath: worktreePath, Err: err, Output: string(out)}
+			return nil, &conflictMarkerScanError{WorktreePath: worktreePath, Err: err, Output: string(out)}
 		}
 		for _, file := range parseGrepFiles(string(out)) {
 			matches[file]++
@@ -90,19 +90,19 @@ func ConflictMarkerFiles(worktreePath string) ([]string, error) {
 	return files, nil
 }
 
-// ConflictMarkerScanError records a failure scanning a worktree for conflict
+// conflictMarkerScanError records a failure scanning a worktree for conflict
 // markers. Callers should fail closed on a non-nil scan error.
-type ConflictMarkerScanError struct {
+type conflictMarkerScanError struct {
 	WorktreePath string
 	Err          error
 	Output       string
 }
 
-func (e *ConflictMarkerScanError) Error() string {
+func (e *conflictMarkerScanError) Error() string {
 	return "scanning " + e.WorktreePath + " for conflict markers: " + strings.TrimSpace(e.Output) + ": " + e.Err.Error()
 }
 
-func (e *ConflictMarkerScanError) Unwrap() error {
+func (e *conflictMarkerScanError) Unwrap() error {
 	return e.Err
 }
 

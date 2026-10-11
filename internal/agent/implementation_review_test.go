@@ -445,7 +445,7 @@ func TestRunImplementationReviewAxesUsesLiveRunPostureForFrontendDesign(t *testi
 		ArtifactDir:  artifactDir,
 		StateDir:     stateDir,
 		BuildSession: buildSession,
-		Observer:     observe.New(false, "", false, "", false, "test"),
+		Observer:     observerFromModule(t, false, "", "test"),
 	}
 	status, feedback, err := runImplementationReviewAxes(
 		cfg,
@@ -559,7 +559,7 @@ func TestRunImplementationReviewAxesEmitsEventsAndPersistsStatus(t *testing.T) {
 		ArtifactDir:  artifactDir,
 		StateDir:     stateDir,
 		BuildSession: mockBuildSession("", reviewScript),
-		Observer:     observe.New(true, observeDir, false, "", false, "test"),
+		Observer:     observerFromModule(t, true, observeDir, "test"),
 	}
 	status, feedback, err := runImplementationReviewAxes(
 		cfg,
@@ -691,7 +691,7 @@ func TestRunImplementationReviewAxesPerPhaseGateOmitsAcceptanceClause(t *testing
 		ArtifactDir:  artifactDir,
 		StateDir:     stateDir,
 		BuildSession: buildSession,
-		Observer:     observe.New(false, "", false, "", false, "test"),
+		Observer:     observerFromModule(t, false, "", "test"),
 	}
 	status, feedback, err := runImplementationReviewAxes(
 		cfg,

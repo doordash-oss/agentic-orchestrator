@@ -150,7 +150,7 @@ func TestReconcileStagingScopesToOwnedAbandonedDirs(t *testing.T) {
 	})
 	t.Run("dir without a staging record is untouched", func(t *testing.T) {
 		f, _ := beginRecoveryTx(t, false)
-		orphan := filepath.Join(LeaseDir(f.exec.Path), txDirPrefix+"orphan")
+		orphan := filepath.Join(leaseDir(f.exec.Path), txDirPrefix+"orphan")
 		if err := os.Mkdir(orphan, 0o700); err != nil {
 			t.Fatalf("mkdir orphan: %v", err)
 		}
@@ -171,7 +171,7 @@ func TestReconcileStagingScopesToOwnedAbandonedDirs(t *testing.T) {
 		if err := os.Remove(recordPath); err != nil {
 			t.Fatalf("remove staging record: %v", err)
 		}
-		if err := writeStagingRecord(tx.TxDir(), StagingRecord{
+		if err := writeStagingRecord(tx.TxDir(), stagingRecord{
 			TransactionID:    tx.Receipt().TransactionID,
 			ExecutablePath:   "/elsewhere/bin/agentico",
 			ExecutableDigest: "deadbeef",
@@ -200,7 +200,7 @@ func TestReconcileStagingScopesToOwnedAbandonedDirs(t *testing.T) {
 	})
 	t.Run("unrelated lease dir entries are untouched", func(t *testing.T) {
 		f, tx := beginRecoveryTx(t, false)
-		leaseDir := LeaseDir(f.exec.Path)
+		leaseDir := leaseDir(f.exec.Path)
 		notes := filepath.Join(leaseDir, "notes.txt")
 		if err := os.WriteFile(notes, []byte("x"), 0o600); err != nil {
 			t.Fatalf("write notes: %v", err)
@@ -234,17 +234,17 @@ func TestRecordSettledErrorPreservesSettlement(t *testing.T) {
 	if err := WriteReceiptDurable(ReceiptPath(f.exec.Path), r); err != nil {
 		t.Fatalf("write settled receipt: %v", err)
 	}
-	before, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	before, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 
 	if err := RecordSettledError(f.exec.Path, ReceiptPath(f.exec.Path), before, "  cleanup retry pending: boom  "); err != nil {
 		t.Fatalf("RecordSettledError: %v", err)
 	}
-	after, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	after, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
-		t.Fatalf("ReadReceipt after settled error: %v", err)
+		t.Fatalf("readReceipt after settled error: %v", err)
 	}
 	if after.Error != "cleanup retry pending: boom" {
 		t.Fatalf("recorded error = %q, want sanitized message", after.Error)

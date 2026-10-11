@@ -20,8 +20,8 @@ import (
 	"go.uber.org/fx"
 )
 
-// Params declares fx-injected parameters for the permission module.
-type Params struct {
+// params declares fx-injected parameters for the permission module.
+type params struct {
 	fx.In
 	StateDir string `name:"stateDir"`
 }
@@ -32,16 +32,16 @@ type Params struct {
 // Store and Cache built here. Construction ensures the global defaults file
 // exists before anything tries to read it.
 var Module = fx.Module("permission",
-	fx.Provide(func(p Params) (*Store, error) {
+	fx.Provide(func(p params) (*Store, error) {
 		permDir := filepath.Join(filepath.Dir(p.StateDir), "permissions")
-		store := NewStore(permDir)
-		if err := store.EnsureGlobalDefaults(); err != nil {
+		store := newStore(permDir)
+		if err := store.ensureGlobalDefaults(); err != nil {
 			return nil, err
 		}
 		return store, nil
 	}),
 	fx.Provide(func(s *Store) *Cache {
-		c := NewCache(s)
+		c := newCache(s)
 		c.LoadAndMerge("")
 		return c
 	}),

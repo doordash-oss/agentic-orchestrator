@@ -1129,7 +1129,7 @@ func TestFeatureListEmptyRuntimeAndPartialWarnings(t *testing.T) {
 		t.Fatalf("partial warnings = %+v; want one feature_load_failed warning", body.Warnings)
 	}
 	warning := body.Warnings[0]
-	if warning.Class != ErrorClass(errcat.ClassWarning) {
+	if warning.Class != ErrorClassWarning {
 		t.Fatalf("load warning class = %q; want warning", warning.Class)
 	}
 	if !strings.Contains(warning.Summary, "bad-001") {

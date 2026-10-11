@@ -39,33 +39,33 @@ const (
 	releaseSignatureMaxSize = 64 << 10
 )
 
-// ReleaseTarballName returns the exact expected platform tarball basename
+// releaseTarballName returns the exact expected platform tarball basename
 // for one release version and GOOS/GOARCH pair.
-func ReleaseTarballName(version, goos, goarch string) string {
+func releaseTarballName(version, goos, goarch string) string {
 	return fmt.Sprintf("agentic-orchestrator_%s_%s_%s.tar.gz", version, goos, goarch)
 }
 
-// ReleaseAsset identifies one release asset by its exact basename and its
+// releaseAsset identifies one release asset by its exact basename and its
 // download destination.
-type ReleaseAsset struct {
+type releaseAsset struct {
 	Name string
 	URL  string
 }
 
-// ResolvedRelease is the selected release with its exact asset identities
+// resolvedRelease is the selected release with its exact asset identities
 // retained for verification. It is a snapshot: later feed checks can never
 // silently change it.
-type ResolvedRelease struct {
+type resolvedRelease struct {
 	Version    string
 	TagName    string
 	ReleaseURL string
-	Tarball    ReleaseAsset
-	Manifest   ReleaseAsset
-	Signature  ReleaseAsset
+	Tarball    releaseAsset
+	Manifest   releaseAsset
+	Signature  releaseAsset
 	// Envelope is the optional advertised release envelope
 	// (desktop-release.json). Absence is allowed; when it is advertised it
 	// must verify before anything trusts its contents.
-	Envelope *ReleaseAsset
+	Envelope *releaseAsset
 }
 
 // ServerContract is the typed server compatibility contract optionally
@@ -76,36 +76,36 @@ type ServerContract struct {
 	MinClientSchema int `json:"min_client_schema"`
 }
 
-// EnvelopeArtifact is one artifact entry of the release envelope inventory.
-type EnvelopeArtifact struct {
+// envelopeArtifact is one artifact entry of the release envelope inventory.
+type envelopeArtifact struct {
 	Name   string
 	SHA256 string
 	Size   int64
 }
 
-// ReleaseEnvelope is the parsed release envelope: the desktop release
+// releaseEnvelope is the parsed release envelope: the desktop release
 // manifest format with an optional typed server_contract extension.
-type ReleaseEnvelope struct {
+type releaseEnvelope struct {
 	SchemaVersion  int
 	Tag            string
 	Version        string
 	Commit         string
-	Artifacts      []EnvelopeArtifact
+	Artifacts      []envelopeArtifact
 	ServerContract *ServerContract
 }
 
-// VerifiedRelease carries the authenticated identity of one resolved
+// verifiedRelease carries the authenticated identity of one resolved
 // release: the manifest signature was verified over the exact manifest
 // bytes, the selected tarball digest is bound through the signed manifest,
 // and an advertised envelope — when present — was digest-verified through
 // the same manifest and parsed strictly before its contract was exposed.
 // The retained provenance is immutable and is reverified at the commit
 // boundary.
-type VerifiedRelease struct {
-	resolved          ResolvedRelease
+type verifiedRelease struct {
+	resolved          resolvedRelease
 	tarballDigest     string
 	envelopeDigest    string
-	envelope          *ReleaseEnvelope
+	envelope          *releaseEnvelope
 	serverContract    *ServerContract
 	manifestBytes     []byte
 	manifestSignature string
@@ -116,30 +116,30 @@ type VerifiedRelease struct {
 }
 
 // Resolved returns the release and asset identities the verification bound.
-func (v VerifiedRelease) Resolved() ResolvedRelease { return v.resolved }
+func (v verifiedRelease) Resolved() resolvedRelease { return v.resolved }
 
 // TarballDigest returns the signed manifest digest for the platform tarball.
-func (v VerifiedRelease) TarballDigest() string { return v.tarballDigest }
+func (v verifiedRelease) signedTarballDigest() string { return v.tarballDigest }
 
 // EnvelopeDigest returns the signed manifest digest for the advertised
 // envelope, or "" when none was advertised.
-func (v VerifiedRelease) EnvelopeDigest() string { return v.envelopeDigest }
+func (v verifiedRelease) EnvelopeDigest() string { return v.envelopeDigest }
 
 // Envelope returns the parsed verified envelope, or nil when none was
 // advertised.
-func (v VerifiedRelease) Envelope() *ReleaseEnvelope { return v.envelope }
+func (v verifiedRelease) Envelope() *releaseEnvelope { return v.envelope }
 
 // ServerContract returns the verified server contract, or nil when the
 // verified envelope carried none. Absence is allowed.
-func (v VerifiedRelease) ServerContract() *ServerContract { return v.serverContract }
+func (v verifiedRelease) ServerContract() *ServerContract { return v.serverContract }
 
 // ManifestBytes returns the exact signed checksum-manifest bytes retained
 // for commit-time reverification.
-func (v VerifiedRelease) ManifestBytes() []byte { return v.manifestBytes }
+func (v verifiedRelease) ManifestBytes() []byte { return v.manifestBytes }
 
 // ManifestSignature returns the retained detached-signature text for
 // commit-time reverification.
-func (v VerifiedRelease) ManifestSignature() string { return v.manifestSignature }
+func (v verifiedRelease) ManifestSignature() string { return v.manifestSignature }
 
 // ResolveLatestRelease resolves the greatest stable release and its exact
 // asset identities for one platform: the platform tarball, the checksum
@@ -148,15 +148,15 @@ func (v VerifiedRelease) ManifestSignature() string { return v.manifestSignature
 // asset identities, basename aliases, and missing required assets are
 // rejected. This resolution is metadata-only: nothing is downloaded or
 // staged here.
-func (c *FeedClient) ResolveLatestRelease(ctx context.Context, goos, goarch string) (ResolvedRelease, error) {
+func (c *FeedClient) ResolveLatestRelease(ctx context.Context, goos, goarch string) (resolvedRelease, error) {
 	rel, parts, err := c.latestStableRelease(ctx)
 	if err != nil {
-		return ResolvedRelease{}, err
+		return resolvedRelease{}, err
 	}
 	version := fmt.Sprintf("%d.%d.%d", parts[0], parts[1], parts[2])
 	resolved, err := selectReleaseAssets(rel, version, goos, goarch)
 	if err != nil {
-		return ResolvedRelease{}, err
+		return resolvedRelease{}, err
 	}
 	resolved.ReleaseURL = strings.TrimSpace(rel.HTMLURL)
 	return resolved, nil
@@ -166,14 +166,14 @@ func (c *FeedClient) ResolveLatestRelease(ctx context.Context, goos, goarch stri
 // version and its exact asset identities: the install pipeline stages the
 // version an accepted request pinned, never whatever is latest when staging
 // begins. A pinned target that no longer exists on the feed fails.
-func (c *FeedClient) ResolveReleaseVersion(ctx context.Context, version, goos, goarch string) (ResolvedRelease, error) {
+func (c *FeedClient) ResolveReleaseVersion(ctx context.Context, version, goos, goarch string) (resolvedRelease, error) {
 	rel, _, err := c.releaseByVersion(ctx, version)
 	if err != nil {
-		return ResolvedRelease{}, err
+		return resolvedRelease{}, err
 	}
 	resolved, err := selectReleaseAssets(rel, version, goos, goarch)
 	if err != nil {
-		return ResolvedRelease{}, err
+		return resolvedRelease{}, err
 	}
 	resolved.ReleaseURL = strings.TrimSpace(rel.HTMLURL)
 	return resolved, nil
@@ -183,14 +183,14 @@ func (c *FeedClient) ResolveReleaseVersion(ctx context.Context, version, goos, g
 // release. Any asset whose normalized name equals an expected name without
 // being byte-identical to it is a basename alias and is rejected; required
 // assets must be present with a usable download destination.
-func selectReleaseAssets(rel *feedRelease, version, goos, goarch string) (ResolvedRelease, error) {
+func selectReleaseAssets(rel *feedRelease, version, goos, goarch string) (resolvedRelease, error) {
 	tag := strings.TrimSpace(deref(rel.TagName))
-	resolved := ResolvedRelease{
+	resolved := resolvedRelease{
 		Version: version,
 		TagName: tag,
 	}
-	expected := map[string]*ReleaseAsset{
-		ReleaseTarballName(version, goos, goarch): &resolved.Tarball,
+	expected := map[string]*releaseAsset{
+		releaseTarballName(version, goos, goarch): &resolved.Tarball,
 		checksumManifestName:                      &resolved.Manifest,
 		checksumSignatureName:                     &resolved.Signature,
 		releaseEnvelopeName:                       nil, // optional
@@ -210,45 +210,45 @@ func selectReleaseAssets(rel *feedRelease, version, goos, goarch string) (Resolv
 		// basename: padded, cased, or otherwise normalized lookalikes are
 		// basename aliases and are rejected.
 		if asset.Name != want {
-			return ResolvedRelease{}, &FeedError{
+			return resolvedRelease{}, &feedError{
 				Reason: fmt.Sprintf("release %s carries asset name alias %q for expected %q", tag, asset.Name, want),
 			}
 		}
 		target := expected[want]
 		if target == nil {
 			if resolved.Envelope != nil {
-				return ResolvedRelease{}, &FeedError{Reason: fmt.Sprintf("ambiguous duplicate envelope asset on release %s", tag)}
+				return resolvedRelease{}, &feedError{Reason: fmt.Sprintf("ambiguous duplicate envelope asset on release %s", tag)}
 			}
-			resolved.Envelope = &ReleaseAsset{Name: name, URL: strings.TrimSpace(asset.BrowserDownloadURL)}
+			resolved.Envelope = &releaseAsset{Name: name, URL: strings.TrimSpace(asset.BrowserDownloadURL)}
 			continue
 		}
 		if target.Name != "" {
-			return ResolvedRelease{}, &FeedError{Reason: fmt.Sprintf("ambiguous duplicate asset %q on release %s", name, tag)}
+			return resolvedRelease{}, &feedError{Reason: fmt.Sprintf("ambiguous duplicate asset %q on release %s", name, tag)}
 		}
-		*target = ReleaseAsset{Name: name, URL: strings.TrimSpace(asset.BrowserDownloadURL)}
+		*target = releaseAsset{Name: name, URL: strings.TrimSpace(asset.BrowserDownloadURL)}
 	}
 	for _, required := range []struct {
-		asset ReleaseAsset
+		asset releaseAsset
 		name  string
 		label string
 	}{
-		{resolved.Tarball, ReleaseTarballName(version, goos, goarch), "platform tarball"},
+		{resolved.Tarball, releaseTarballName(version, goos, goarch), "platform tarball"},
 		{resolved.Manifest, checksumManifestName, "checksum manifest"},
 		{resolved.Signature, checksumSignatureName, "checksum signature"},
 	} {
 		if required.asset.Name == "" {
-			return ResolvedRelease{}, &FeedError{
+			return resolvedRelease{}, &feedError{
 				Reason: fmt.Sprintf("release %s is missing the required %s asset %q", tag, required.label, required.name),
 			}
 		}
 		if required.asset.URL == "" {
-			return ResolvedRelease{}, &FeedError{
+			return resolvedRelease{}, &feedError{
 				Reason: fmt.Sprintf("release asset %q on %s carries no download destination", required.asset.Name, tag),
 			}
 		}
 	}
 	if resolved.Envelope != nil && resolved.Envelope.URL == "" {
-		return ResolvedRelease{}, &FeedError{
+		return resolvedRelease{}, &feedError{
 			Reason: fmt.Sprintf("release asset %q on %s carries no download destination", releaseEnvelopeName, tag),
 		}
 	}
@@ -265,28 +265,28 @@ func selectReleaseAssets(rel *feedRelease, version, goos, goarch string) (Resolv
 // server contract succeeds with no contract; a fetch failure, missing
 // manifest coverage, a bad digest, a malformed envelope, a target mismatch,
 // or a malformed advertised contract rejects staging before any probe.
-func (c *FeedClient) VerifyResolvedRelease(ctx context.Context, resolved ResolvedRelease) (VerifiedRelease, error) {
+func (c *FeedClient) VerifyResolvedRelease(ctx context.Context, resolved resolvedRelease) (verifiedRelease, error) {
 	key, err := c.releaseTrustRoot()
 	if err != nil {
-		return VerifiedRelease{}, err
+		return verifiedRelease{}, err
 	}
 	manifestBytes, err := c.fetchBounded(ctx, resolved.Manifest.URL, feedMaxMetadataSize)
 	if err != nil {
-		return VerifiedRelease{}, fmt.Errorf("fetching checksum manifest %q: %w", resolved.Manifest.Name, err)
+		return verifiedRelease{}, fmt.Errorf("fetching checksum manifest %q: %w", resolved.Manifest.Name, err)
 	}
 	signatureBytes, err := c.fetchBounded(ctx, resolved.Signature.URL, releaseSignatureMaxSize)
 	if err != nil {
-		return VerifiedRelease{}, fmt.Errorf("fetching checksum signature %q: %w", resolved.Signature.Name, err)
+		return verifiedRelease{}, fmt.Errorf("fetching checksum signature %q: %w", resolved.Signature.Name, err)
 	}
 	signatureText := string(signatureBytes)
-	if err := VerifyReleaseSignature(manifestBytes, signatureText, key); err != nil {
-		return VerifiedRelease{}, fmt.Errorf("checksum manifest %q signature: %w", resolved.Manifest.Name, err)
+	if err := verifyReleaseSignature(manifestBytes, signatureText, key); err != nil {
+		return verifiedRelease{}, fmt.Errorf("checksum manifest %q signature: %w", resolved.Manifest.Name, err)
 	}
 	entries, err := parseChecksumManifest(manifestBytes)
 	if err != nil {
-		return VerifiedRelease{}, err
+		return verifiedRelease{}, err
 	}
-	verified := VerifiedRelease{
+	verified := verifiedRelease{
 		resolved:          resolved,
 		manifestBytes:     manifestBytes,
 		manifestSignature: signatureText,
@@ -294,7 +294,7 @@ func (c *FeedClient) VerifyResolvedRelease(ctx context.Context, resolved Resolve
 	}
 	digest, ok := entries[resolved.Tarball.Name]
 	if !ok {
-		return VerifiedRelease{}, fmt.Errorf("signed checksum manifest carries no entry for %q", resolved.Tarball.Name)
+		return verifiedRelease{}, fmt.Errorf("signed checksum manifest carries no entry for %q", resolved.Tarball.Name)
 	}
 	verified.tarballDigest = digest
 
@@ -304,22 +304,22 @@ func (c *FeedClient) VerifyResolvedRelease(ctx context.Context, resolved Resolve
 	}
 	envelopeDigest, ok := entries[resolved.Envelope.Name]
 	if !ok {
-		return VerifiedRelease{}, fmt.Errorf("advertised envelope %q has no signed manifest coverage", resolved.Envelope.Name)
+		return verifiedRelease{}, fmt.Errorf("advertised envelope %q has no signed manifest coverage", resolved.Envelope.Name)
 	}
 	envelopeBytes, err := c.fetchBounded(ctx, resolved.Envelope.URL, feedMaxMetadataSize)
 	if err != nil {
-		return VerifiedRelease{}, fmt.Errorf("fetching release envelope %q: %w", resolved.Envelope.Name, err)
+		return verifiedRelease{}, fmt.Errorf("fetching release envelope %q: %w", resolved.Envelope.Name, err)
 	}
 	actual := sha256.Sum256(envelopeBytes)
 	if hex.EncodeToString(actual[:]) != envelopeDigest {
-		return VerifiedRelease{}, fmt.Errorf("release envelope %q digest does not match the signed manifest", resolved.Envelope.Name)
+		return verifiedRelease{}, fmt.Errorf("release envelope %q digest does not match the signed manifest", resolved.Envelope.Name)
 	}
 	envelope, err := parseReleaseEnvelope(envelopeBytes)
 	if err != nil {
-		return VerifiedRelease{}, fmt.Errorf("release envelope %q: %w", resolved.Envelope.Name, err)
+		return verifiedRelease{}, fmt.Errorf("release envelope %q: %w", resolved.Envelope.Name, err)
 	}
 	if envelope.Tag != resolved.TagName || envelope.Version != resolved.Version {
-		return VerifiedRelease{}, fmt.Errorf(
+		return verifiedRelease{}, fmt.Errorf(
 			"release envelope target mismatch: envelope tag %q version %q vs release tag %q version %q",
 			envelope.Tag, envelope.Version, resolved.TagName, resolved.Version)
 	}
@@ -335,9 +335,9 @@ func (c *FeedClient) VerifyResolvedRelease(ctx context.Context, resolved Resolve
 // because a fixture client can only target its one loopback origin.
 func (c *FeedClient) releaseTrustRoot() (ed25519.PublicKey, error) {
 	if c.fixture {
-		return FixtureReleasePublicKey()
+		return fixtureReleasePublicKey()
 	}
-	return ProductionReleasePublicKey()
+	return productionReleasePublicKey()
 }
 
 var (
@@ -408,7 +408,7 @@ type rawServerContract struct {
 // typed server_contract with positive integer fields. The artifact inventory
 // is validated for shape only — the desktop-only inventory never includes a
 // headless tarball, and this parser must not require one.
-func parseReleaseEnvelope(data []byte) (*ReleaseEnvelope, error) {
+func parseReleaseEnvelope(data []byte) (*releaseEnvelope, error) {
 	dec := json.NewDecoder(strings.NewReader(string(data)))
 	dec.DisallowUnknownFields()
 	var raw rawReleaseEnvelope
@@ -436,7 +436,7 @@ func parseReleaseEnvelope(data []byte) (*ReleaseEnvelope, error) {
 	if len(raw.Artifacts) == 0 {
 		return nil, errors.New("envelope carries no artifacts")
 	}
-	envelope := &ReleaseEnvelope{
+	envelope := &releaseEnvelope{
 		SchemaVersion: *raw.SchemaVersion,
 		Tag:           *raw.Tag,
 		Version:       *raw.Version,
@@ -453,7 +453,7 @@ func parseReleaseEnvelope(data []byte) (*ReleaseEnvelope, error) {
 		if art.Size == nil || *art.Size <= 0 || *art.Size > int64(^uint32(0)) {
 			return nil, fmt.Errorf("envelope artifact %q carries an invalid size", *art.Name)
 		}
-		envelope.Artifacts = append(envelope.Artifacts, EnvelopeArtifact{
+		envelope.Artifacts = append(envelope.Artifacts, envelopeArtifact{
 			Name:   *art.Name,
 			SHA256: *art.SHA256,
 			Size:   *art.Size,

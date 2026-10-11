@@ -86,9 +86,9 @@ var relationshipWarningCodes = map[Code]bool{
 	ReviewFeedbackTailIncomplete: true,
 }
 
-// IsRelationshipWarning reports whether code is one of the relationship
+// isRelationshipWarning reports whether code is one of the relationship
 // warning codes a transaction journal entry can store.
-func IsRelationshipWarning(code Code) bool {
+func isRelationshipWarning(code Code) bool {
 	return relationshipWarningCodes[code]
 }
 

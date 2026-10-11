@@ -21,7 +21,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -37,7 +36,7 @@ func TestRoadmapPlanningLoopEmitsEvents(t *testing.T) {
 
 	observeDir := t.TempDir()
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	workDir := filepath.Join(stateDir, "work")
@@ -138,7 +137,7 @@ func TestPhasePlanningLoopEmitsEvents(t *testing.T) {
 
 	observeDir := t.TempDir()
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	workDir := filepath.Join(stateDir, "work")

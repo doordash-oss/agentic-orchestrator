@@ -360,7 +360,7 @@ func TestOriginCheckCoordinatorCoalescesIdenticalRequests(t *testing.T) {
 	coordinator.executor = func(ctx context.Context, repoPath string, plan git.OriginCheckPlan) originAttemptOutcome {
 		calls.Add(1)
 		<-release
-		return comparisonOutcome(git.OriginCheckUpToDate)
+		return comparisonOutcome("up_to_date")
 	}
 
 	_, _, done1, _ := coordinator.ensure(identity, plan, repo, false)
@@ -389,14 +389,14 @@ func TestOriginCheckCoordinatorRefreshStartsNewAttempt(t *testing.T) {
 	coordinator.executor = func(ctx context.Context, repoPath string, plan git.OriginCheckPlan) originAttemptOutcome {
 		calls.Add(1)
 		if calls.Load() == 1 {
-			return comparisonOutcome(git.OriginCheckUpToDate)
+			return comparisonOutcome("up_to_date")
 		}
 		return comparisonOutcome(git.OriginCheckBehind)
 	}
 
 	_, _, firstDone, _ := coordinator.ensure(identity, plan, repo, false)
 	waitOriginAttempt(t, firstDone)
-	if completed, ok, _, _ := coordinator.ensure(identity, plan, repo, false); !ok || completed.comparison.Status != git.OriginCheckUpToDate {
+	if completed, ok, _, _ := coordinator.ensure(identity, plan, repo, false); !ok || completed.comparison.Status != "up_to_date" {
 		t.Fatalf("cached result = %#v; want the first comparison", completed)
 	}
 
@@ -445,7 +445,7 @@ func TestOriginCheckCoordinatorCapsConcurrencyAtFour(t *testing.T) {
 		mu.Lock()
 		active--
 		mu.Unlock()
-		return comparisonOutcome(git.OriginCheckUpToDate)
+		return comparisonOutcome("up_to_date")
 	}
 
 	dones := make([]<-chan struct{}, 0, len(repos))
@@ -510,7 +510,7 @@ func TestOriginCheckCoordinatorDeadlineExpiresWhileQueued(t *testing.T) {
 	coordinator.executor = func(ctx context.Context, repoPath string, plan git.OriginCheckPlan) originAttemptOutcome {
 		entered <- struct{}{}
 		<-release
-		return comparisonOutcome(git.OriginCheckUpToDate)
+		return comparisonOutcome("up_to_date")
 	}
 	for _, repo := range blockers {
 		coordinator.ensure(repo.identity, repo.plan, repo.path, false)
@@ -650,7 +650,7 @@ func TestOriginCheckCoordinatorSerializesLinkedWorktrees(t *testing.T) {
 		mu.Lock()
 		active--
 		mu.Unlock()
-		return comparisonOutcome(git.OriginCheckUpToDate)
+		return comparisonOutcome("up_to_date")
 	}
 
 	_, _, doneMain, _ := coordinator.ensure(identity, plan, repo, false)

@@ -194,7 +194,7 @@ func TestRebaseActionErrorFamilyCarriesRepositoryContext(t *testing.T) {
 			name:       "already up to date",
 			err:        &feature.RebaseAlreadyUpToDateError{Targets: []feature.RebaseRepoTarget{{Repo: "web", Target: "main", Ref: "origin/main", Publishable: true}}},
 			wantCode:   errcat.RebaseAlreadyUpToDate,
-			wantClass:  errcat.ClassWarning,
+			wantClass:  "warning",
 			wantRepo:   "web",
 			wantTarget: "main",
 		},

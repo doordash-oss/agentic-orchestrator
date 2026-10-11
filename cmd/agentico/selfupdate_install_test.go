@@ -30,11 +30,7 @@ import (
 func newProductionInstallTransactionFixture(t *testing.T, seams selfupdate.FileOps) *productionInstallTransaction {
 	t.Helper()
 	dir := t.TempDir()
-	path := writeHooksTestExecutable(t, dir, "agentico", "installed-v1")
-	exec, err := selfupdate.CaptureExecutableAt(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	exec := captureFixtureExecutable(t, dir)
 	candidate := writeHooksTestExecutable(t, dir, "candidate", "candidate-v2")
 	digest, err := selfupdate.DigestFile(candidate)
 	if err != nil {
@@ -156,7 +152,10 @@ func TestProductionInstallRecoveryReleasesGuardedLock(t *testing.T) {
 // abandoned receipt again or requiring the deleted backup bytes.
 func TestProductionInstallCancelRetriesPartialCleanup(t *testing.T) {
 	tx := newProductionInstallTransactionFixture(t, selfupdate.FileOps{})
-	unexpected := filepath.Join(tx.tx.TxDir(), "retained-entry")
+	// The transaction dir's frozen on-disk location: next to the receipt,
+	// named tx-<transaction id>.
+	txDir := filepath.Join(filepath.Dir(selfupdate.ReceiptPath(tx.run.boot.selfUpdateExec.Path)), "tx-"+tx.tx.Receipt().TransactionID)
+	unexpected := filepath.Join(txDir, "retained-entry")
 	if err := os.WriteFile(unexpected, []byte("keep"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +185,7 @@ func TestProductionInstallCancelRetriesPartialCleanup(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatal("retry rewrote settled receipt")
 	}
-	if _, err := os.Stat(tx.tx.TxDir()); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(txDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("transaction dir remains: %v", err)
 	}
 }

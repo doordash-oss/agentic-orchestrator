@@ -42,7 +42,7 @@ func TestBuildCrossReferenceSection(t *testing.T) {
 				{RepoName: "repo-b", Branch: "branch-b", PRURL: "https://github.com/org/repo-b/pull/43"},
 			},
 			contains: []string{
-				CrossRefSectionHeader,
+				crossRefSectionHeader,
 				"repo-a",
 				"repo-b",
 				"[#42]",
@@ -139,7 +139,7 @@ func TestBuildCrossReferenceSection(t *testing.T) {
 }
 
 func TestInjectCrossReferenceSection(t *testing.T) {
-	section := CrossRefSectionHeader + "\n\nsection content"
+	section := crossRefSectionHeader + "\n\nsection content"
 
 	tests := []struct {
 		name    string
@@ -160,20 +160,20 @@ func TestInjectCrossReferenceSection(t *testing.T) {
 		},
 		{
 			name:    "body with signature",
-			body:    "content" + PRSignature,
+			body:    "content" + pRSignature,
 			section: section,
 			check: func(t *testing.T, result string) {
 				t.Helper()
-				sigIdx := strings.Index(result, PRSignature)
-				sectionIdx := strings.Index(result, CrossRefSectionHeader)
+				sigIdx := strings.Index(result, pRSignature)
+				sectionIdx := strings.Index(result, crossRefSectionHeader)
 				if sigIdx < 0 {
-					t.Fatal("PRSignature not found in result")
+					t.Fatal("pRSignature not found in result")
 				}
 				if sectionIdx < 0 {
-					t.Fatal("CrossRefSectionHeader not found in result")
+					t.Fatal("crossRefSectionHeader not found in result")
 				}
 				if sectionIdx >= sigIdx {
-					t.Errorf("section should appear before PRSignature: section at %d, signature at %d", sectionIdx, sigIdx)
+					t.Errorf("section should appear before pRSignature: section at %d, signature at %d", sectionIdx, sigIdx)
 				}
 			},
 		},
@@ -191,8 +191,8 @@ func TestInjectCrossReferenceSection(t *testing.T) {
 		},
 		{
 			name:    "body already has cross-ref",
-			body:    "content\n\n" + CrossRefSectionHeader + "\n\nold table\n",
-			section: CrossRefSectionHeader + "\n\nnew table",
+			body:    "content\n\n" + crossRefSectionHeader + "\n\nold table\n",
+			section: crossRefSectionHeader + "\n\nnew table",
 			check: func(t *testing.T, result string) {
 				t.Helper()
 				if strings.Contains(result, "old table") {
@@ -205,7 +205,7 @@ func TestInjectCrossReferenceSection(t *testing.T) {
 		},
 		{
 			name:    "idempotent",
-			body:    "content" + PRSignature,
+			body:    "content" + pRSignature,
 			section: section,
 			check: func(t *testing.T, result string) {
 				t.Helper()
@@ -238,26 +238,26 @@ func TestRemoveCrossReferenceSection(t *testing.T) {
 		},
 		{
 			name:     "section at end",
-			body:     "content\n\n" + CrossRefSectionHeader + "\n\n|table|",
+			body:     "content\n\n" + crossRefSectionHeader + "\n\n|table|",
 			expected: "content\n\n",
 		},
 		{
 			name:     "section before signature",
-			body:     "content\n\n" + CrossRefSectionHeader + "\n\n|table|" + PRSignature,
-			expected: "content" + PRSignature,
+			body:     "content\n\n" + crossRefSectionHeader + "\n\n|table|" + pRSignature,
+			expected: "content" + pRSignature,
 		},
 		{
 			name:     "section between sections",
-			body:     "## Summary\n\ncontent\n\n" + CrossRefSectionHeader + "\n\n|table|\n\n## Test Plan",
+			body:     "## Summary\n\ncontent\n\n" + crossRefSectionHeader + "\n\n|table|\n\n## Test Plan",
 			expected: "## Summary\n\ncontent\n\n## Test Plan",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := RemoveCrossReferenceSection(tt.body)
+			got := removeCrossReferenceSection(tt.body)
 			if got != tt.expected {
-				t.Errorf("RemoveCrossReferenceSection():\n  got:  %q\n  want: %q", got, tt.expected)
+				t.Errorf("removeCrossReferenceSection():\n  got:  %q\n  want: %q", got, tt.expected)
 			}
 		})
 	}

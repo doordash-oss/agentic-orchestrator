@@ -29,11 +29,11 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"go.uber.org/fx"
 )
 
 func TestDecoratorEmitsOneAutomaticReviewEventWithStatusFailure(t *testing.T) {
@@ -42,7 +42,7 @@ func TestDecoratorEmitsOneAutomaticReviewEventWithStatusFailure(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	observer := observe.New(true, stateDir, false, "", false, "agentic")
+	observer := observerFromModule(t, true, stateDir, "agentic")
 	d := &autoReviewPermissionDecorator{
 		inner:    deferHandler{},
 		reviewer: autoreview.Reviewer{Provider: fakeAllowProvider(t), Model: "haiku[200K]"},
@@ -111,7 +111,7 @@ func TestDecoratorCancellationBeforeSideEffectsEmitsCanceledWithoutStatus(t *tes
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	observer := observe.New(true, stateDir, false, "", false, "agentic")
+	observer := observerFromModule(t, true, stateDir, "agentic")
 	ctx, cancel := context.WithCancel(context.Background())
 	var statusCalls atomic.Int32
 	d := &autoReviewPermissionDecorator{
@@ -178,7 +178,7 @@ type deferHandler struct{}
 type denyAllHandler struct{}
 
 func (denyAllHandler) CanUseTool(ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return ports.PermissionDecision{Behavior: permission.DecisionDeny, Reason: "all tools denied"}, nil
+	return ports.PermissionDecision{Behavior: "deny", Reason: "all tools denied"}, nil
 }
 
 func (deferHandler) CanUseTool(ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
@@ -360,7 +360,8 @@ func TestDecoratorUnreviewableCommandsReachNeitherPath(t *testing.T) {
 	}
 
 	for _, command := range []string{
-		strings.Repeat("x", permission.GuardrailMaxCommandLen+1),
+		// one byte over the frozen 4096-byte guardrail command limit
+		strings.Repeat("x", 4097),
 		"go test \xff",
 	} {
 		got, err := d.CanUseTool(bashReq(command))
@@ -379,7 +380,7 @@ func TestDecoratorFastPathPersistsAndEmitsDistinctApproval(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	observer := observe.New(true, stateDir, false, "", false, "agentic")
+	observer := observerFromModule(t, true, stateDir, "agentic")
 	var statuses []string
 	d := &autoReviewPermissionDecorator{
 		inner:    deferHandler{},
@@ -783,7 +784,7 @@ func TestDecoratorCircuitBreakerEmitsOneFinalOperatorEvent(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	observer := observe.New(true, stateDir, false, "", false, "agentic")
+	observer := observerFromModule(t, true, stateDir, "agentic")
 	var calls atomic.Int32
 	d := &autoReviewPermissionDecorator{
 		inner:    deferHandler{},
@@ -1285,9 +1286,27 @@ func TestDecoratorStateIsSessionOwned(t *testing.T) {
 	}
 }
 
+// permissionCacheFromModule builds the production permission cache through
+// the fx module with an isolated state dir, returning the cache and its
+// permissions directory.
+func permissionCacheFromModule(t *testing.T) (*permission.Cache, string) {
+	t.Helper()
+	tmp := t.TempDir()
+	var cache *permission.Cache
+	app := fx.New(
+		fx.Supply(fx.Annotate(filepath.Join(tmp, "state"), fx.ResultTags(`name:"stateDir"`))),
+		permission.Module,
+		fx.Populate(&cache),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build permission cache: %v", err)
+	}
+	return cache, filepath.Join(tmp, "permissions")
+}
+
 func TestDecoratorMemoizationDoesNotMutatePermissionState(t *testing.T) {
-	permissionDir := filepath.Join(t.TempDir(), "permissions")
-	cache := permission.NewCache(permission.NewStore(permissionDir))
+	cache, permissionDir := permissionCacheFromModule(t)
 	inner := permission.Guarded(&permission.CachingHandler{
 		Inner:    &permission.AcceptEditsHandler{},
 		Cache:    cache,
@@ -1307,13 +1326,16 @@ func TestDecoratorMemoizationDoesNotMutatePermissionState(t *testing.T) {
 			t.Fatalf("memoized allow = %+v, %v; want allow", got, err)
 		}
 	}
-	if rules := cache.Rules(); len(rules) != 0 {
-		t.Fatalf("process-global permission rules = %v, want none", rules)
-	}
-	if entries, err := os.ReadDir(permissionDir); err == nil && len(entries) != 0 {
-		t.Fatalf("durable permission entries = %v, want none", entries)
-	} else if err != nil && !os.IsNotExist(err) {
+	entries, err := os.ReadDir(permissionDir)
+	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("read permission dir: %v", err)
+	}
+	// The module seeds global.json during construction; no other durable
+	// entry may appear, so a mutated cache would have persisted a rule file.
+	for _, e := range entries {
+		if e.Name() != "global.json" {
+			t.Fatalf("durable permission entries = %v, want only the module-seeded global.json", entries)
+		}
 	}
 }
 
@@ -1366,7 +1388,8 @@ func TestDecoratorUnavailableReviewerKeepsUnreviewableCommandsSilent(t *testing.
 	}
 
 	for _, command := range []string{
-		strings.Repeat("x", permission.GuardrailMaxCommandLen+1),
+		// one byte over the frozen 4096-byte guardrail command limit
+		strings.Repeat("x", 4097),
 		"go test \xff",
 	} {
 		got, err := d.CanUseTool(bashReq(command))
@@ -1505,7 +1528,7 @@ func TestBuildSessionSurfacesEnabledWithoutReviewer(t *testing.T) {
 	pr.Config = &config.Config{Defaults: config.DefaultsConfig{AutomaticReviewEnabled: true}}
 	pr.Registry = llm.NewRegistry()
 	pr.Registry.Register(noIsolatedReviewFakeProvider{FakeClaudeProvider: testutil.FakeClaudeProvider{}})
-	pr.Observer = observe.New(true, stateDir, false, "", false, "agentic")
+	pr.Observer = observerFromModule(t, true, stateDir, "agentic")
 
 	_, _, sessOpts, err := pr.BuildSession(BuildSessionOpts{
 		Model:       "haiku[200K]",
@@ -2411,7 +2434,7 @@ func TestSkipPermissionsBypassesDenialsButKeepsStructuralGuard(t *testing.T) {
 	for _, tc := range []struct{ tool, input, want string }{
 		{"Bash", `{"command":"rm -rf /tmp/example"}`, permission.DecisionAllow},
 		{"mcp__external__write", `{}`, permission.DecisionAllow},
-		{"Write", `{"file_path":"/tmp/phase_complete","content":"done"}`, permission.DecisionDeny},
+		{"Write", `{"file_path":"/tmp/phase_complete","content":"done"}`, "deny"},
 	} {
 		decision, err := handler.CanUseTool(ports.ToolPermissionRequest{ToolName: tc.tool, Input: tc.input})
 		if err != nil || decision.Behavior != tc.want {

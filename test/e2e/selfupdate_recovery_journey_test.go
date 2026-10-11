@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
 	"time"
 
@@ -103,13 +104,28 @@ func (f *recoveryKillFixture) relaunch(extra ...string) *driverProcess {
 	return f.j.launch(args...)
 }
 
+// statIdentityForTest captures the inode-level identity fields of a file
+// the way the selfupdate package's own stat helper does; non-stat platforms
+// yield zero values.
+func statIdentityForTest(t *testing.T, path string) (dev, ino uint64) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return uint64(st.Dev), uint64(st.Ino)
+	}
+	return 0, 0
+}
+
 // requireAbandonedService asserts the relaunch resolved an interrupted
 // pre-replacement attempt as an installation failure and kept serving the
 // unchanged build.
 func (f *recoveryKillFixture) requireAbandonedService(t *testing.T, p *driverProcess) {
 	t.Helper()
-	r := f.j.waitReceiptResolution(selfupdate.ResolutionAbandonedPreReplacement, 45*time.Second)
-	if r.Outcome != selfupdate.OutcomePending || r.Phase != selfupdate.PhaseBackupReady {
+	r := f.j.waitReceiptResolution("abandoned_pre_replacement", 45*time.Second)
+	if r.Outcome != selfupdate.OutcomePending || r.Phase != "backup-ready" {
 		t.Fatalf("receipt = %q/%q; want pending/backup-ready", r.Outcome, r.Phase)
 	}
 	if !r.InstallFailed {
@@ -171,8 +187,8 @@ func TestSelfUpdateRecoveryInterruptions(t *testing.T) {
 			f.requireAbandonedService(t, p)
 
 			// The abandoned transaction's recognized objects are cleaned.
-			r := f.j.waitReceiptResolution(selfupdate.ResolutionAbandonedPreReplacement, 5*time.Second)
-			f.j.waitPathGone(filepath.Join(selfupdate.LeaseDir(f.j.installPath), "tx-"+r.TransactionID), "transaction dir", 10*time.Second)
+			r := f.j.waitReceiptResolution("abandoned_pre_replacement", 5*time.Second)
+			f.j.waitPathGone(filepath.Join(selfupdateLeaseDir(f.j.installPath), "tx-"+r.TransactionID), "transaction dir", 10*time.Second)
 		})
 	}
 
@@ -231,13 +247,9 @@ func TestSelfUpdateRecoveryInterruptions(t *testing.T) {
 					t.Fatalf("interrupted receipt lacks restore metadata: %q %v", r.RestorePath, r.RestoreID)
 				}
 			}
-			var installedBefore selfupdate.FileIdentity
+			var devBefore, inoBefore uint64
 			if barrier == "restore-rename" {
-				id, err := selfupdate.StatFile(f.j.installPath)
-				if err != nil {
-					t.Fatalf("stat installed before final relaunch: %v", err)
-				}
-				installedBefore = id
+				devBefore, inoBefore = statIdentityForTest(t, f.j.installPath)
 				if got := f.j.installDigest(); got != f.j.bins.lowerDigest {
 					t.Fatalf("installed digest after restore rename = %s; want restored lower bytes", got)
 				}
@@ -250,11 +262,8 @@ func TestSelfUpdateRecoveryInterruptions(t *testing.T) {
 			f.requireRestoredService(t, p)
 			if barrier == "restore-rename" {
 				// Finish-rollback never touches the already-restalled bytes.
-				id, err := selfupdate.StatFile(f.j.installPath)
-				if err != nil {
-					t.Fatalf("stat installed after finish: %v", err)
-				}
-				if id.Dev != installedBefore.Dev || id.Ino != installedBefore.Ino {
+				devAfter, inoAfter := statIdentityForTest(t, f.j.installPath)
+				if devAfter != devBefore || inoAfter != inoBefore {
 					t.Fatal("finish-rollback replaced the already-restored installed bytes")
 				}
 			}
@@ -332,7 +341,7 @@ func TestSelfUpdateRecoverySecondFailure(t *testing.T) {
 			t.Fatalf("process exited 0 despite the failed restore:\n%s", p.stderrTail())
 		}
 		r := f.j.waitReceipt(10 * time.Second)
-		if !r.ActionablePending() {
+		if !(r.Outcome == selfupdate.OutcomePending && r.Resolution == "") {
 			t.Fatalf("receipt = %q/%q; want actionable pending after the failed restore", r.Outcome, r.Phase)
 		}
 		if r.RecoveryAttemptID == "" || r.RestorePath == "" {
@@ -362,8 +371,8 @@ func TestSelfUpdateCleanupRetry(t *testing.T) {
 
 	// The update confirms and keeps serving; only the cleanup fails.
 	f.j.waitHealthy(p, f.baseURL, selfupdateVersionHigher, 30*time.Second)
-	r := f.j.waitReceiptOutcome(selfupdate.OutcomeConfirmed, 30*time.Second)
-	txDir := filepath.Join(selfupdate.LeaseDir(f.j.installPath), "tx-"+r.TransactionID)
+	r := f.j.waitReceiptOutcome(string(selfupdate.OutcomeConfirmed), 30*time.Second)
+	txDir := filepath.Join(selfupdateLeaseDir(f.j.installPath), "tx-"+r.TransactionID)
 	if _, err := os.Stat(txDir); err != nil {
 		t.Fatalf("failed cleanup must retain the transaction dir: %v", err)
 	}
@@ -377,11 +386,11 @@ func TestSelfUpdateCleanupRetry(t *testing.T) {
 	relaunch := f.relaunch()
 	f.j.waitHealthy(relaunch, f.baseURL, selfupdateVersionHigher, 30*time.Second)
 	f.j.waitPathGone(txDir, "transaction dir", 15*time.Second)
-	after, err := selfupdate.ReadReceipt(f.j.receiptPath())
+	after, err := readSelfupdateReceipt(f.j.receiptPath())
 	if err != nil {
 		t.Fatalf("re-read receipt: %v", err)
 	}
-	if after.Outcome != selfupdate.OutcomeConfirmed || after.Phase != selfupdate.PhaseReplacementComplete {
+	if after.Outcome != selfupdate.OutcomeConfirmed || after.Phase != "replacement-complete" {
 		t.Fatalf("receipt after cleanup retry = %q/%q; want confirmed/replacement-complete", after.Outcome, after.Phase)
 	}
 	if code := relaunch.terminate(); code != 0 {

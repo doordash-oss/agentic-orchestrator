@@ -140,7 +140,7 @@ func TestCreatePublishesFeatureReadyRepository(t *testing.T) {
 			t.Errorf("staging residue visible in root: %s", e.Name())
 		}
 	}
-	// Publication changed discovery: the workspace hook fired.
+	// publication changed discovery: the workspace hook fired.
 	if fx.hooks.workspaceEvents() == 0 {
 		t.Error("workspace hook never fired after publication")
 	}
@@ -245,7 +245,7 @@ func TestCreateSharesDestinationReservationWithClone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if snapshot.State == StateRunning {
+		if snapshot.State == stateRunning {
 			break
 		}
 		time.Sleep(2 * time.Millisecond)
@@ -286,7 +286,7 @@ func waitForCreateRunning(t *testing.T, fx *serviceFixture, destination string) 
 	for {
 		found := false
 		for _, rec := range fx.storeForTest().all() {
-			if recordKind(&rec) == KindCreate && rec.Destination == destination && ActiveStates[rec.State] {
+			if recordKind(&rec) == KindCreate && rec.Destination == destination && activeStates[rec.State] {
 				found = true
 			}
 		}
@@ -320,11 +320,11 @@ func TestCreateFailureCleansOwnedStagingAndReleasesReservation(t *testing.T) {
 	}
 
 	rec := fx.create("create-fail", "doomed")
-	if rec.State != StateFailed {
+	if rec.State != stateFailed {
 		t.Fatalf("final state = %s, want failed", rec.State)
 	}
-	if rec.Error == nil || rec.Error.Code != FailureExecution {
-		t.Errorf("failure error = %+v, want %s", rec.Error, FailureExecution)
+	if rec.Error == nil || rec.Error.Code != failureExecution {
+		t.Errorf("failure error = %+v, want %s", rec.Error, failureExecution)
 	}
 	if _, err := os.Lstat(filepath.Join(fx.root, stagingNameFor(KindCreate, rec.ID))); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("owned staging survived a failed create: %v", err)
@@ -346,7 +346,7 @@ func TestCreateNeverTouchesDataItDoesNotOwn(t *testing.T) {
 		return errors.New("scripted create failure")
 	}
 	rec := fx.create("create-uncertain", "doomed")
-	if rec.State != StateFailed {
+	if rec.State != stateFailed {
 		t.Fatalf("state = %s, want failed", rec.State)
 	}
 	// The failed attempt cleaned its own staging. A foreign directory
@@ -363,7 +363,7 @@ func TestCreateNeverTouchesDataItDoesNotOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.State != StateFailed {
+	if after.State != stateFailed {
 		t.Errorf("cleanup retry reclassified a resolved record to %s", after.State)
 	}
 	if _, err := os.Lstat(filepath.Join(foreign, "not-yours")); err != nil {
@@ -556,12 +556,12 @@ func TestCreateRecoversInterruptedAttemptAtStartup(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stagingPath, stagingWorkDir), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	handle, _, err := OpenRootDir(fx.root)
+	handle, _, err := openRootDir(fx.root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer handle.Close()
-	_, idty, err := OpenRootDir(fx.root)
+	_, idty, err := openRootDir(fx.root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -584,7 +584,7 @@ func TestCreateRecoversInterruptedAttemptAtStartup(t *testing.T) {
 		RootDevice: idty.Device, RootInode: idty.Inode,
 		Destination: "crashed", DestinationPath: filepath.Join(fx.root, "crashed"),
 		StagingPath: stagingPath, OwnershipNonce: nonce,
-		State: StateRunning, Stage: StagePreparing,
+		State: stateRunning, Stage: stagePreparing,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := fx.svc.save(&crashed); err != nil {
@@ -604,7 +604,7 @@ func TestCreateRecoversInterruptedAttemptAtStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final.State != StateInterrupted {
+	if final.State != stateInterrupted {
 		t.Fatalf("recovered state = %s, want interrupted", final.State)
 	}
 	if _, err := os.Lstat(stagingPath); !errors.Is(err, os.ErrNotExist) {
@@ -624,7 +624,7 @@ func TestCreateRecoversInterruptedAttemptAtStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("crashed-key replay: %v", err)
 	}
-	if replay.ID != crashed.ID || replay.State != StateInterrupted {
+	if replay.ID != crashed.ID || replay.State != stateInterrupted {
 		t.Errorf("crashed-key replay = %s/%s, want %s/interrupted", replay.ID, replay.State, crashed.ID)
 	}
 	if got := gitOut(t, filepath.Join(fx.root, "crashed"), "rev-list", "--count", "HEAD"); got != "1" {

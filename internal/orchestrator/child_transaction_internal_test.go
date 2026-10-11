@@ -180,6 +180,14 @@ func (fx *multiRepoTransactionFixture) refSHA(repoIdx int, ref string) string {
 	return txGit(fx.t, fx.repoDirs[repoIdx], "rev-parse", ref)
 }
 
+// updateRefCASViaGit advances ref from oldSHA to newSHA through plain git's
+// expected-old-value update-ref, the same compare-and-swap the ref-CAS entry
+// point performs, so the fixture sets up its refs without internal git names.
+func updateRefCASViaGit(t *testing.T, dir, ref, oldSHA, newSHA string) {
+	t.Helper()
+	txGit(t, dir, "update-ref", ref, newSHA, oldSHA)
+}
+
 func txGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -573,9 +581,7 @@ func TestTransactionParentDriftExemptsPriorCandidate(t *testing.T) {
 	// CAS and worktree sync but before durable apply progress).
 	entry := &journal.Entries[0]
 	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[0], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-		t.Fatalf("manual apply repo 0: %v", err)
-	}
+	updateRefCASViaGit(t, fx.repoDirs[0], ref, entry.ExpectedRefSHA, entry.CandidateSHA)
 	txGit(t, fx.repoDirs[0], "reset", "--hard", entry.CandidateSHA)
 
 	if err := o.RunChildIntegration(fx.child.ID); err != nil {
@@ -771,9 +777,7 @@ func TestTransactionStartupReconciliationApplied(t *testing.T) {
 	for i := range journal.Entries {
 		entry := &journal.Entries[i]
 		ref := "refs/heads/" + entry.ParentBranch
-		if err := git.UpdateRefCAS(fx.repoDirs[i], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-			t.Fatalf("manual apply repo %d: %v", i, err)
-		}
+		updateRefCASViaGit(t, fx.repoDirs[i], ref, entry.ExpectedRefSHA, entry.CandidateSHA)
 	}
 
 	// Simulate startup reconciliation.

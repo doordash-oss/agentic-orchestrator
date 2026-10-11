@@ -38,14 +38,14 @@ func stubGit(t *testing.T, body string) {
 		t.Fatalf("write git stub: %v", err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	prev, prevCleanliness := ProbeTimeout, CleanlinessProbeTimeout
+	prev, prevCleanliness := probeTimeout, cleanlinessProbeTimeout
 	// Generous enough to absorb the first exec of a freshly written script
 	// (a few hundred ms on macOS) while still far below the hangs it bounds.
-	ProbeTimeout = time.Second
-	CleanlinessProbeTimeout = time.Second
+	probeTimeout = time.Second
+	cleanlinessProbeTimeout = time.Second
 	t.Cleanup(func() {
-		ProbeTimeout = prev
-		CleanlinessProbeTimeout = prevCleanliness
+		probeTimeout = prev
+		cleanlinessProbeTimeout = prevCleanliness
 	})
 }
 
@@ -71,11 +71,11 @@ func TestRepoFreshnessStatusTimeoutIsUnknown(t *testing.T) {
 	got := RepoFreshness(repo)
 	elapsed := time.Since(start)
 
-	if got != FreshnessUnknown {
-		t.Errorf("RepoFreshness() = %q, want %q", got, FreshnessUnknown)
+	if got != freshnessUnknown {
+		t.Errorf("RepoFreshness() = %q, want %q", got, freshnessUnknown)
 	}
 	if elapsed > 5*time.Second {
-		t.Errorf("RepoFreshness() took %v; want bounded by ProbeTimeout", elapsed)
+		t.Errorf("RepoFreshness() took %v; want bounded by probeTimeout", elapsed)
 	}
 }
 
@@ -102,8 +102,8 @@ func TestRepoFreshnessUpstreamTimeoutIsUnknownNotLocalOnly(t *testing.T) {
 	repo, _ := testutil.InitPublishReadyGitRepo(t)
 	stubGit(t, hangingGitAfter(t, "rev-parse"))
 
-	if got := RepoFreshness(repo); got != FreshnessUnknown {
-		t.Errorf("RepoFreshness() = %q, want %q", got, FreshnessUnknown)
+	if got := RepoFreshness(repo); got != freshnessUnknown {
+		t.Errorf("RepoFreshness() = %q, want %q", got, freshnessUnknown)
 	}
 }
 
@@ -111,8 +111,8 @@ func TestRepoFreshnessRevListTimeoutIsUnknown(t *testing.T) {
 	repo, _ := testutil.InitPublishReadyGitRepo(t)
 	stubGit(t, hangingGitAfter(t, "rev-list"))
 
-	if got := RepoFreshness(repo); got != FreshnessUnknown {
-		t.Errorf("RepoFreshness() = %q, want %q", got, FreshnessUnknown)
+	if got := RepoFreshness(repo); got != freshnessUnknown {
+		t.Errorf("RepoFreshness() = %q, want %q", got, freshnessUnknown)
 	}
 }
 
@@ -132,7 +132,7 @@ func TestInspectCleanlinessTimeoutIsNotClean(t *testing.T) {
 		t.Fatalf("InspectCleanliness() report = %+v, want nil on timeout", report)
 	}
 	if elapsed > 5*time.Second {
-		t.Errorf("InspectCleanliness() took %v; want bounded by ProbeTimeout", elapsed)
+		t.Errorf("InspectCleanliness() took %v; want bounded by probeTimeout", elapsed)
 	}
 }
 
@@ -144,9 +144,9 @@ func TestProbeTimeoutKillsProcessGroup(t *testing.T) {
 	// bound, so the group kill lands before the stub ever records its
 	// descendant. A wider bound still exercises the timeout's process-group
 	// reap while giving the stub real time to start and write the pid file.
-	wider := ProbeTimeout
-	ProbeTimeout = 10 * time.Second
-	t.Cleanup(func() { ProbeTimeout = wider })
+	wider := probeTimeout
+	probeTimeout = 10 * time.Second
+	t.Cleanup(func() { probeTimeout = wider })
 
 	if _, timedOut, err := runProbe("status"); !timedOut {
 		t.Fatalf("runProbe() timedOut = false, err = %v; want timeout", err)
@@ -201,12 +201,12 @@ func TestRunProbeFastPathReturnsOutput(t *testing.T) {
 // cleanliness bound must stay well clear of that observed runtime.
 func TestCleanlinessProbeTimeoutExceedsCheapProbeBound(t *testing.T) {
 	const observedSlowScan = 5 * time.Second
-	if CleanlinessProbeTimeout <= observedSlowScan {
-		t.Fatalf("CleanlinessProbeTimeout = %v; want headroom over the %v observed on a large worktree",
-			CleanlinessProbeTimeout, observedSlowScan)
+	if cleanlinessProbeTimeout <= observedSlowScan {
+		t.Fatalf("cleanlinessProbeTimeout = %v; want headroom over the %v observed on a large worktree",
+			cleanlinessProbeTimeout, observedSlowScan)
 	}
-	if CleanlinessProbeTimeout <= ProbeTimeout {
-		t.Fatalf("CleanlinessProbeTimeout = %v; want more than the cheap-probe bound %v",
-			CleanlinessProbeTimeout, ProbeTimeout)
+	if cleanlinessProbeTimeout <= probeTimeout {
+		t.Fatalf("cleanlinessProbeTimeout = %v; want more than the cheap-probe bound %v",
+			cleanlinessProbeTimeout, probeTimeout)
 	}
 }

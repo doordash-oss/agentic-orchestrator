@@ -32,9 +32,9 @@ func isolateAuthEnv(t *testing.T) {
 func TestForHostWithoutCredentialsReturnsTypedError(t *testing.T) {
 	isolateAuthEnv(t)
 	_, err := ForHost("github.com")
-	var noCreds *NoCredentialsError
+	var noCreds *noCredentialsError
 	if !errors.As(err, &noCreds) || noCreds.Host != "github.com" {
-		t.Fatalf("ForHost() error = %v; want NoCredentialsError for github.com", err)
+		t.Fatalf("ForHost() error = %v; want noCredentialsError for github.com", err)
 	}
 	want := "no GitHub credentials for github.com: set GH_TOKEN or run 'gh auth login'"
 	if err.Error() != want {
@@ -70,7 +70,7 @@ func TestForHostDefaultsEmptyHostToGitHubCom(t *testing.T) {
 
 func TestForHostEnvAPIBaseBypassesCredentialsAndBuildsFreshClients(t *testing.T) {
 	isolateAuthEnv(t)
-	t.Setenv(EnvGitHubAPIBase, "http://127.0.0.1:1")
+	t.Setenv(envGitHubAPIBase, "http://127.0.0.1:1")
 	c1, err := ForHost("github.com")
 	if err != nil {
 		t.Fatalf("ForHost() with env override error = %v", err)

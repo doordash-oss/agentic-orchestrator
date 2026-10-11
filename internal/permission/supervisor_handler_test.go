@@ -50,8 +50,8 @@ func TestSupervisorHandler_ParticipatesInReviewWithoutGeneralPhaseExceptions(t *
 	if !IsAutomaticReviewHandler(h) {
 		t.Fatal("IsAutomaticReviewHandler(SupervisorHandler) = false, want true")
 	}
-	if IsGeneralPhaseHandler(h) {
-		t.Fatal("IsGeneralPhaseHandler(SupervisorHandler) = true, want false")
+	if isGeneralPhaseHandler(h) {
+		t.Fatal("isGeneralPhaseHandler(SupervisorHandler) = true, want false")
 	}
 	if wrapped := WrapGeneralPhaseHandlerWithSafeCreate(h, []string{t.TempDir()}); wrapped != h {
 		t.Fatal("safe-create wrapper must leave the supervisor handler unwrapped")
@@ -176,7 +176,7 @@ func TestFeatureWorkerRecogniserDoesNotSanctionAPI(t *testing.T) {
 		Input:        `{"command":` + strconv.Quote(`"$AGENTICO_BIN" api POST /api/v1/features /work/testing-contract.yaml`) + `}`,
 		ProviderName: providerNameClaude,
 	})
-	if err != nil || got.Behavior != DecisionDeny || !strings.Contains(got.Reason, "testing-contract.yaml is harness-owned") {
+	if err != nil || got.Behavior != decisionDeny || !strings.Contains(got.Reason, "testing-contract.yaml is harness-owned") {
 		t.Fatalf("guarded general handler on api = %+v, %v; want the generic harness-owned deny", got, err)
 	}
 	// And a general phase handler never auto-allows a bare helper call.

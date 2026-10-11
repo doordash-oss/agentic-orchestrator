@@ -19,8 +19,8 @@ package permission
 //
 // The list is intentionally read-only: it includes inspection-oriented shell
 // commands and excludes mutating, build, test, and write-capable operations.
-func defaultGlobalRules() []Rule {
-	return []Rule{
+func defaultGlobalRules() []rule {
+	return []rule{
 		{ToolPattern: patternBashLS, Effect: DecisionAllow},
 		{ToolPattern: "Bash(pwd *)", Effect: DecisionAllow},
 		{ToolPattern: "Bash(cat *)", Effect: DecisionAllow},

@@ -25,23 +25,23 @@ import (
 	"strings"
 )
 
-// RewritePushErrorKind identifies a safety refusal while replacing a remote
+// rewritePushErrorKind identifies a safety refusal while replacing a remote
 // branch after its local history was rewritten.
-type RewritePushErrorKind string
+type rewritePushErrorKind string
 
 const (
 	// RewritePushRemoteDiverged means the inspected remote contains work that
 	// cannot be proven redundant with the rewritten local history.
-	RewritePushRemoteDiverged RewritePushErrorKind = "remote_diverged"
+	RewritePushRemoteDiverged rewritePushErrorKind = "remote_diverged"
 	// RewritePushRemoteChanged means the remote moved after inspection and the
 	// explicit lease correctly rejected the push.
-	RewritePushRemoteChanged RewritePushErrorKind = "remote_changed"
+	RewritePushRemoteChanged rewritePushErrorKind = "remote_changed"
 )
 
 // RewritePushError reports a safety refusal without exposing raw Git output.
 // Err retains bounded command or classification detail for errors.Is/As.
 type RewritePushError struct {
-	Kind              RewritePushErrorKind
+	Kind              rewritePushErrorKind
 	Branch            string
 	RemoteOnlyCommits int
 	Err               error

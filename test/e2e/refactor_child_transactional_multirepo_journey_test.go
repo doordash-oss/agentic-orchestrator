@@ -178,14 +178,11 @@ func (fx *multiRepoE2EFixture) manualPrepare(t *testing.T) *feature.TransactionJ
 		parentRepo := parent.Repos[i]
 		childHead := multiRepoGit(t, childRepo.WorktreePath, "rev-parse", "HEAD")
 		parentTip := multiRepoGit(t, parentRepo.Path, "rev-parse", "refs/heads/feature/parent")
-		result, err := git.CreateMergeCandidate(parentRepo.Path, parentTip, childHead, "test merge")
-		if err != nil {
-			t.Fatalf("create merge candidate repo %d: %v", i, err)
-		}
+		candidateSHA := createMergeCandidateViaGit(t, parentRepo.Path, parentTip, childHead, "test merge")
 		journal.Entries = append(journal.Entries, feature.RepoTransactionEntry{
 			Repo: childRepo.Name, ParentBranch: parentRepo.Branch,
 			ParentAnchorSHA: parentTip, ExpectedRefSHA: parentTip,
-			ChildHeadSHA: childHead, CandidateSHA: result.CandidateSHA,
+			ChildHeadSHA: childHead, CandidateSHA: candidateSHA,
 			PrepState: feature.RepoPrepPrepared,
 		})
 	}
@@ -198,9 +195,7 @@ func (fx *multiRepoE2EFixture) manualPrepare(t *testing.T) *feature.TransactionJ
 func (fx *multiRepoE2EFixture) manualApplyRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
 	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-		t.Fatalf("manual apply repo %d: %v", idx, err)
-	}
+	updateRefCASViaGit(t, fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA)
 	multiRepoGit(t, fx.repoDirs[idx], "checkout", "feature/parent")
 	multiRepoGit(t, fx.repoDirs[idx], "reset", "--hard", entry.CandidateSHA)
 }
@@ -211,9 +206,7 @@ func (fx *multiRepoE2EFixture) manualApplyRef(t *testing.T, idx int, entry *feat
 func (fx *multiRepoE2EFixture) manualApplyRefNoSync(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
 	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA); err != nil {
-		t.Fatalf("manual apply no sync repo %d: %v", idx, err)
-	}
+	updateRefCASViaGit(t, fx.repoDirs[idx], ref, entry.ExpectedRefSHA, entry.CandidateSHA)
 }
 
 // manualRollbackRef moves a repo's parent ref back to the anchor SHA without
@@ -222,9 +215,37 @@ func (fx *multiRepoE2EFixture) manualApplyRefNoSync(t *testing.T, idx int, entry
 func (fx *multiRepoE2EFixture) manualRollbackRef(t *testing.T, idx int, entry *feature.RepoTransactionEntry) {
 	t.Helper()
 	ref := "refs/heads/" + entry.ParentBranch
-	if err := git.UpdateRefCAS(fx.repoDirs[idx], ref, entry.CandidateSHA, entry.ParentAnchorSHA); err != nil {
-		t.Fatalf("manual rollback repo %d: %v", idx, err)
+	updateRefCASViaGit(t, fx.repoDirs[idx], ref, entry.CandidateSHA, entry.ParentAnchorSHA)
+}
+
+// createMergeCandidateViaGit builds the two-parent candidate merge commit
+// through plain git commands in a disposable detached worktree, mirroring the
+// merge-candidate entry point's contract, and returns the candidate SHA.
+func createMergeCandidateViaGit(t *testing.T, repoPath, parentTip, childHead, message string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	tmpWorktree := filepath.Join(tmpDir, "wt")
+	multiRepoGit(t, repoPath, "worktree", "add", "--detach", tmpWorktree, parentTip)
+	t.Cleanup(func() {
+		cleanup := exec.Command("git", "-C", repoPath, "worktree", "remove", "--force", tmpWorktree)
+		cleanup.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+		_ = cleanup.Run()
+	})
+	multiRepoGit(t, tmpWorktree, "merge", "--no-ff", "-m", message, childHead)
+	candidateSHA := multiRepoGit(t, tmpWorktree, "rev-parse", "HEAD")
+	parents := multiRepoGit(t, tmpWorktree, "rev-list", "--parents", "-n", "1", "HEAD")
+	if len(strings.Fields(parents)) != 3 {
+		t.Fatalf("merge candidate has %d parents, want 2: %s", len(strings.Fields(parents))-1, parents)
 	}
+	return candidateSHA
+}
+
+// updateRefCASViaGit advances ref from oldSHA to newSHA through plain git's
+// expected-old-value update-ref, the same compare-and-swap the ref-CAS entry
+// point performs.
+func updateRefCASViaGit(t *testing.T, dir, ref, oldSHA, newSHA string) {
+	t.Helper()
+	multiRepoGit(t, dir, "update-ref", ref, newSHA, oldSHA)
 }
 
 func multiRepoGit(t *testing.T, dir string, args ...string) string {
@@ -681,10 +702,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 		// Prepare the first repo's candidate only.
 		childHead0 := multiRepoGit(t, child.Repos[0].WorktreePath, "rev-parse", "HEAD")
 		parentTip0 := multiRepoGit(t, parent.Repos[0].Path, "rev-parse", "refs/heads/feature/parent")
-		result0, err := git.CreateMergeCandidate(parent.Repos[0].Path, parentTip0, childHead0, "merge 0")
-		if err != nil {
-			t.Fatalf("create merge candidate repo 0: %v", err)
-		}
+		candidateSHA0 := createMergeCandidateViaGit(t, parent.Repos[0].Path, parentTip0, childHead0, "merge 0")
 		childHead1 := multiRepoGit(t, child.Repos[1].WorktreePath, "rev-parse", "HEAD")
 		parentTip1 := multiRepoGit(t, parent.Repos[1].Path, "rev-parse", "refs/heads/feature/parent")
 
@@ -694,7 +712,7 @@ func TestRefactorChildTransactionalMultiRepoCrashCutPointConvergence(t *testing.
 				{
 					Repo: child.Repos[0].Name, ParentBranch: parent.Repos[0].Branch,
 					ParentAnchorSHA: parentTip0, ExpectedRefSHA: parentTip0,
-					ChildHeadSHA: childHead0, CandidateSHA: result0.CandidateSHA,
+					ChildHeadSHA: childHead0, CandidateSHA: candidateSHA0,
 					PrepState: feature.RepoPrepPrepared,
 				},
 				{

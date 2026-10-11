@@ -27,47 +27,47 @@ import (
 // syscallStat aliases the platform stat structure for link-count checks.
 type syscallStat = syscall.Stat_t
 
-// RecoveryAction is the mandatory recovery decision for one launch.
-type RecoveryAction string
+// recoveryAction is the mandatory recovery decision for one launch.
+type recoveryAction string
 
 const (
 	// RecoveryActionNone: no transaction, or a durably settled one. Ordinary
 	// startup proceeds, including serving without update ownership.
-	RecoveryActionNone RecoveryAction = "none"
+	RecoveryActionNone recoveryAction = "none"
 	// RecoveryActionAbandon: the original identity and bytes are still
 	// installed and no restoration is recorded — the attempt provably never
 	// replaced the executable. Settle as an installation failure, clean only
 	// validated owned objects, and continue on the unchanged build.
-	RecoveryActionAbandon RecoveryAction = "abandon"
+	RecoveryActionAbandon recoveryAction = "abandon"
 	// RecoveryActionRestore: the candidate bytes are installed. Restore the
 	// verified previous bytes and re-exec the installed path.
-	RecoveryActionRestore RecoveryAction = "restore"
+	RecoveryActionRestore recoveryAction = "restore"
 	// RecoveryActionFinishRollback: a prior restore attempt's rename already
 	// landed (installed identity matches the recorded RestoreID); only the
 	// rolled_back bookkeeping remains, then the installed path is executed.
-	RecoveryActionFinishRollback RecoveryAction = "finish-rollback"
+	RecoveryActionFinishRollback recoveryAction = "finish-rollback"
 )
 
 // RecoveryPlan is the validated decision for one launch, made before any
 // bootstrap step and before any mutation.
 type RecoveryPlan struct {
-	Action      RecoveryAction
+	Action      recoveryAction
 	Receipt     Receipt
 	ReceiptPath string
 }
 
-// UnsafeRecoveryError reports an unsafe pending recovery record. The launch
+// unsafeRecoveryError reports an unsafe pending recovery record. The launch
 // must refuse nonzero with this sanitized diagnostic, preserve every
 // recovery input, and never follow record-supplied paths, repair
 // permissions, or overwrite an externally replaced executable.
-type UnsafeRecoveryError struct {
+type unsafeRecoveryError struct {
 	Diagnostic string
 }
 
-func (e *UnsafeRecoveryError) Error() string { return e.Diagnostic }
+func (e *unsafeRecoveryError) Error() string { return e.Diagnostic }
 
 func refuse(format string, args ...interface{}) error {
-	return &UnsafeRecoveryError{Diagnostic: fmt.Sprintf(format, args...)}
+	return &unsafeRecoveryError{Diagnostic: fmt.Sprintf(format, args...)}
 }
 
 // validateReceiptSemantics checks the supported schema and the legal
@@ -83,27 +83,27 @@ func validateReceiptSemantics(r Receipt) error {
 	}
 	switch r.Outcome {
 	case OutcomeConfirmed:
-		if r.Phase != PhaseReplacementComplete {
+		if r.Phase != phaseReplacementComplete {
 			return refuse("confirmed receipt carries illegal phase %q", r.Phase)
 		}
-		if r.Resolution != ResolutionNone {
+		if r.Resolution != resolutionNone {
 			return refuse("confirmed receipt carries illegal resolution %q", r.Resolution)
 		}
 	case OutcomeRolledBack:
-		if r.Phase != PhaseRollbackAttempted {
+		if r.Phase != phaseRollbackAttempted {
 			return refuse("rolled-back receipt carries illegal phase %q", r.Phase)
 		}
 	case OutcomePending:
 		switch r.Phase {
-		case PhaseBackupReady, PhaseReplacementComplete:
+		case phaseBackupReady, phaseReplacementComplete:
 		default:
 			return refuse("pending receipt carries illegal phase %q", r.Phase)
 		}
 	default:
 		return refuse("receipt carries unsupported outcome %q", r.Outcome)
 	}
-	if r.Phase == PhaseRollbackAttempted && r.Outcome != OutcomeRolledBack {
-		return refuse("phase %q requires outcome %q", PhaseRollbackAttempted, OutcomeRolledBack)
+	if r.Phase == phaseRollbackAttempted && r.Outcome != OutcomeRolledBack {
+		return refuse("phase %q requires outcome %q", phaseRollbackAttempted, OutcomeRolledBack)
 	}
 	if r.OldDigest == "" || r.NewDigest == "" || r.OldDigest == r.NewDigest {
 		return refuse("receipt digests are missing or identical")
@@ -192,16 +192,16 @@ func splitPathComponents(path string) []string {
 // and owner-only storage. Nothing is repaired and no record-supplied path is
 // followed; every mismatch refuses.
 func validateRecoveryStorage(execPath string, r Receipt) error {
-	if err := validateNoSymlinkComponents(LeaseDir(execPath)); err != nil {
+	if err := validateNoSymlinkComponents(leaseDir(execPath)); err != nil {
 		return err
 	}
-	if err := validateOwnerOnlyDirectory(LeaseDir(execPath), 0o700); err != nil {
+	if err := validateOwnerOnlyDirectory(leaseDir(execPath), 0o700); err != nil {
 		return err
 	}
 	if err := validateOwnerOnlyRegularFile(ReceiptPath(execPath), 0o600, false); err != nil {
 		return err
 	}
-	txDir := filepath.Join(LeaseDir(execPath), txDirPrefix+r.TransactionID)
+	txDir := filepath.Join(leaseDir(execPath), txDirPrefix+r.TransactionID)
 	if r.BackupPath != filepath.Join(txDir, backupName) {
 		return refuse("receipt backup path %s is outside the transaction dir %s", r.BackupPath, txDir)
 	}
@@ -258,7 +258,7 @@ func InspectRecovery(exec Executable, runtimeDir string) (RecoveryPlan, error) {
 	if err := validateReceiptSemantics(r); err != nil {
 		return RecoveryPlan{}, err
 	}
-	if r.Settled() {
+	if r.settled() {
 		return RecoveryPlan{Action: RecoveryActionNone, Receipt: r, ReceiptPath: ReceiptPath(exec.Path)}, nil
 	}
 
@@ -272,7 +272,7 @@ func InspectRecovery(exec Executable, runtimeDir string) (RecoveryPlan, error) {
 		return RecoveryPlan{}, err
 	}
 
-	installedID, err := StatFile(exec.Path)
+	installedID, err := statFile(exec.Path)
 	if err != nil {
 		return RecoveryPlan{}, refuse("stat installed executable %s: %v", exec.Path, err)
 	}
@@ -286,17 +286,17 @@ func InspectRecovery(exec Executable, runtimeDir string) (RecoveryPlan, error) {
 		switch r.RecoveryKind {
 		case RecoveryKindRestore:
 			switch {
-			case r.RestoreID != nil && installedID.SameFile(*r.RestoreID) && digest == r.OldDigest:
+			case r.RestoreID != nil && installedID.sameFile(*r.RestoreID) && digest == r.OldDigest:
 				plan.Action = RecoveryActionFinishRollback
 				return plan, nil
-			case digest == r.NewDigest && installedID.SameFile(r.StagingID):
+			case digest == r.NewDigest && installedID.sameFile(r.StagingID):
 				plan.Action = RecoveryActionRestore
 				return plan, validateBackupForRestore(exec.Path, r)
 			default:
 				return RecoveryPlan{}, refuse("installed executable %s matches neither the interrupted restore copy nor the recorded candidate", exec.Path)
 			}
 		case RecoveryKindRestart:
-			if installedID.SameFile(r.ExecutableID) && digest == r.OldDigest {
+			if installedID.sameFile(r.ExecutableID) && digest == r.OldDigest {
 				plan.Action = RecoveryActionAbandon
 				return plan, nil
 			}
@@ -307,12 +307,12 @@ func InspectRecovery(exec Executable, runtimeDir string) (RecoveryPlan, error) {
 	}
 
 	switch r.Phase {
-	case PhaseBackupReady:
+	case phaseBackupReady:
 		switch {
-		case installedID.SameFile(r.ExecutableID) && digest == r.OldDigest:
+		case installedID.sameFile(r.ExecutableID) && digest == r.OldDigest:
 			plan.Action = RecoveryActionAbandon
 			return plan, nil
-		case digest == r.NewDigest && installedID.SameFile(r.StagingID):
+		case digest == r.NewDigest && installedID.sameFile(r.StagingID):
 			// The rename landed but the receipt never advanced (crash inside
 			// Commit): candidate bytes installed still require restoration.
 			plan.Action = RecoveryActionRestore
@@ -320,8 +320,8 @@ func InspectRecovery(exec Executable, runtimeDir string) (RecoveryPlan, error) {
 		default:
 			return RecoveryPlan{}, refuse("installed executable %s matches neither the original nor the staged candidate identity", exec.Path)
 		}
-	case PhaseReplacementComplete:
-		if digest == r.NewDigest && installedID.SameFile(r.StagingID) {
+	case phaseReplacementComplete:
+		if digest == r.NewDigest && installedID.sameFile(r.StagingID) {
 			plan.Action = RecoveryActionRestore
 			return plan, validateBackupForRestore(exec.Path, r)
 		}
@@ -341,16 +341,16 @@ func InspectRecovery(exec Executable, runtimeDir string) (RecoveryPlan, error) {
 // lstatOwnedRegular resolves path without following symlinks and requires a
 // singly linked regular file: the no-follow contract every restore source
 // shares.
-func lstatOwnedRegular(path string) (FileIdentity, error) {
+func lstatOwnedRegular(path string) (fileIdentity, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
-		return FileIdentity{}, err
+		return fileIdentity{}, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return FileIdentity{}, fmt.Errorf("%s is not a regular file", path)
+		return fileIdentity{}, fmt.Errorf("%s is not a regular file", path)
 	}
 	if st, ok := info.Sys().(*syscallStat); ok && st.Nlink != 1 {
-		return FileIdentity{}, fmt.Errorf("%s has %d hard links", path, st.Nlink)
+		return fileIdentity{}, fmt.Errorf("%s has %d hard links", path, st.Nlink)
 	}
 	return identityFromInfo(info), nil
 }
@@ -367,7 +367,7 @@ func validateBackupForRestore(execPath string, r Receipt) error {
 		return refuse("rollback backup %s is not a regular file", r.BackupPath)
 	}
 	id := identityFromInfo(info)
-	if !id.SameFile(r.BackupID) {
+	if !id.sameFile(r.BackupID) {
 		return refuse("rollback backup %s does not match the recorded identity", r.BackupPath)
 	}
 	if id.Mode != 0o600 {
@@ -416,7 +416,7 @@ func reacquireDecision(exec Executable, plan RecoveryPlan) (Receipt, error) {
 		}
 		return Receipt{}, err
 	}
-	if r.TransactionID != plan.Receipt.TransactionID || !r.ActionablePending() {
+	if r.TransactionID != plan.Receipt.TransactionID || !r.actionablePending() {
 		return Receipt{}, refuse("transaction %s changed state before recovery mutation", plan.Receipt.TransactionID)
 	}
 	if err := validateReceiptSemantics(r); err != nil {
@@ -453,11 +453,11 @@ func ResolveAbandoned(exec Executable, lease *Lease, plan RecoveryPlan, reason s
 	if err != nil {
 		return Receipt{}, err
 	}
-	installedID, err := StatFile(exec.Path)
+	installedID, err := statFile(exec.Path)
 	if err != nil {
 		return Receipt{}, refuse("stat installed executable %s: %v", exec.Path, err)
 	}
-	if !installedID.SameFile(r.ExecutableID) {
+	if !installedID.sameFile(r.ExecutableID) {
 		return Receipt{}, refuse("installed executable %s changed identity before abandonment", exec.Path)
 	}
 	digest, err := DigestFile(exec.Path)
@@ -466,7 +466,7 @@ func ResolveAbandoned(exec Executable, lease *Lease, plan RecoveryPlan, reason s
 	}
 
 	now := seams.now()
-	r.Resolution = ResolutionAbandonedPreReplacement
+	r.Resolution = resolutionAbandonedPreReplacement
 	r.InstallFailed = true
 	r.ResolvedAt = now
 	r.UpdatedAt = now
@@ -499,7 +499,7 @@ func RestorePrevious(exec Executable, lease *Lease, plan RecoveryPlan, reason st
 		return Receipt{}, err
 	}
 
-	installedID, err := StatFile(exec.Path)
+	installedID, err := statFile(exec.Path)
 	if err != nil {
 		return Receipt{}, refuse("stat installed executable %s: %v", exec.Path, err)
 	}
@@ -508,9 +508,9 @@ func RestorePrevious(exec Executable, lease *Lease, plan RecoveryPlan, reason st
 		return Receipt{}, refuse("digest installed executable %s: %v", exec.Path, err)
 	}
 
-	restoreAlreadyLanded := r.RestoreID != nil && installedID.SameFile(*r.RestoreID) && digest == r.OldDigest
+	restoreAlreadyLanded := r.RestoreID != nil && installedID.sameFile(*r.RestoreID) && digest == r.OldDigest
 	if !restoreAlreadyLanded {
-		candidateInstalled := digest == r.NewDigest && installedID.SameFile(r.StagingID)
+		candidateInstalled := digest == r.NewDigest && installedID.sameFile(r.StagingID)
 		if !candidateInstalled {
 			return Receipt{}, refuse("installed executable %s no longer matches the recorded candidate identity", exec.Path)
 		}
@@ -519,7 +519,7 @@ func RestorePrevious(exec Executable, lease *Lease, plan RecoveryPlan, reason st
 		}
 	}
 
-	txDir := filepath.Join(LeaseDir(exec.Path), txDirPrefix+r.TransactionID)
+	txDir := filepath.Join(leaseDir(exec.Path), txDirPrefix+r.TransactionID)
 
 	reuseRestore := false
 	if restoreAlreadyLanded {
@@ -528,7 +528,7 @@ func RestorePrevious(exec Executable, lease *Lease, plan RecoveryPlan, reason st
 		// A prior attempt prepared a restore copy before dying: reuse it only
 		// when it is still the exact recorded, digest-verified object.
 		if id, err := lstatOwnedRegular(r.RestorePath); err == nil &&
-			id.SameFile(*r.RestoreID) {
+			id.sameFile(*r.RestoreID) {
 			if d, derr := DigestFile(r.RestorePath); derr == nil && d == r.OldDigest {
 				reuseRestore = true
 			}
@@ -537,7 +537,7 @@ func RestorePrevious(exec Executable, lease *Lease, plan RecoveryPlan, reason st
 
 	attemptID := r.RecoveryAttemptID
 	restorePath := r.RestorePath
-	var restoreID FileIdentity
+	var restoreID fileIdentity
 	if reuseRestore {
 		if restoreAlreadyLanded {
 			// The rename already happened; only the rolled_back bookkeeping
@@ -617,7 +617,7 @@ func RestorePrevious(exec Executable, lease *Lease, plan RecoveryPlan, reason st
 func completeRollback(exec Executable, plan RecoveryPlan, r Receipt, reason string, seams FileOps) (Receipt, error) {
 	now := seams.now()
 	r.Outcome = OutcomeRolledBack
-	r.Phase = PhaseRollbackAttempted
+	r.Phase = phaseRollbackAttempted
 	r.Error = SanitizeError(reason)
 	r.UpdatedAt = now
 	if err := seams.writeReceipt(ReceiptPath(exec.Path), r); err != nil {
@@ -626,7 +626,7 @@ func completeRollback(exec Executable, plan RecoveryPlan, r Receipt, reason stri
 	// Best-effort: rolled_back is already durable; a failed suppression
 	// write must never erase it, and ReconcileSuppression re-writes it on the
 	// next launch of any build that understands it.
-	_ = SuppressTarget(exec.Path, SuppressedTarget{
+	_ = suppressTarget(exec.Path, suppressedTarget{
 		Version:       r.ToVersion,
 		Digest:        r.NewDigest,
 		TransactionID: r.TransactionID,
@@ -647,18 +647,18 @@ func MarkRecoveryRestart(exec Executable, lease *Lease, plan RecoveryPlan, reaso
 	if err != nil {
 		return Receipt{}, err
 	}
-	installedID, err := StatFile(exec.Path)
+	installedID, err := statFile(exec.Path)
 	if err != nil {
 		return Receipt{}, refuse("stat installed executable %s: %v", exec.Path, err)
 	}
-	if !installedID.SameFile(r.ExecutableID) {
+	if !installedID.sameFile(r.ExecutableID) {
 		return Receipt{}, refuse("installed executable %s changed identity before restart", exec.Path)
 	}
 	digest, err := DigestFile(exec.Path)
 	if err != nil || digest != r.OldDigest {
 		return Receipt{}, refuse("installed executable %s bytes changed before restart", exec.Path)
 	}
-	if r.Phase != PhaseBackupReady {
+	if r.Phase != phaseBackupReady {
 		return Receipt{}, refuse("restart attempt requires a backup-ready receipt, not %q", r.Phase)
 	}
 	now := seams.now()

@@ -30,7 +30,7 @@ func newTestStore(t *testing.T, dir string, now func() time.Time) *store {
 	return st
 }
 
-func testRecord(id, key, dest string, state State) *Record {
+func testRecord(id, key, dest string, state state) *Record {
 	now := time.Now().UTC()
 	return &Record{
 		ID: id, IdempotencyKey: key, InputFingerprint: "fp-" + key,
@@ -44,7 +44,7 @@ func TestStoreSaveGetAndRestart(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	st := newTestStore(t, dir, time.Now)
-	rec := testRecord("clone-1", "key-1", "/root/widget", StateRunning)
+	rec := testRecord("clone-1", "key-1", "/root/widget", stateRunning)
 	rec.ResolvedAt = time.Time{}
 	if err := st.save(rec); err != nil {
 		t.Fatalf("save: %v", err)
@@ -56,7 +56,7 @@ func TestStoreSaveGetAndRestart(t *testing.T) {
 	// The record is durable: a new store over the same dir sees it.
 	st2 := newTestStore(t, dir, time.Now)
 	got, ok = st2.get("clone-1")
-	if !ok || got.State != StateRunning {
+	if !ok || got.State != stateRunning {
 		t.Fatalf("restart lost record: %v %v", got, ok)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "clone-1.json")); err != nil {
@@ -96,7 +96,7 @@ func TestStoreReservationOnlyForUnresolved(t *testing.T) {
 	t.Parallel()
 	st := newTestStore(t, t.TempDir(), time.Now)
 	dest := "/root/widget"
-	running := testRecord("clone-1", "key-1", dest, StateRunning)
+	running := testRecord("clone-1", "key-1", dest, stateRunning)
 	running.ResolvedAt = time.Time{}
 	if err := st.save(running); err != nil {
 		t.Fatal(err)
@@ -120,7 +120,7 @@ func TestStoreReservationOnlyForUnresolved(t *testing.T) {
 	}
 	holders := map[string]bool{}
 	for _, rec := range st.all() {
-		if UnresolvedStates[rec.State] && rec.DestinationPath == dest {
+		if unresolvedStates[rec.State] && rec.DestinationPath == dest {
 			holders[rec.ID] = true
 		}
 	}
@@ -146,7 +146,7 @@ func TestStoreListOrdersUnresolvedFirstAndPaginates(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	states := []State{StateRunning, StateFinalizing, StateCleanupPending}
+	states := []state{stateRunning, stateFinalizing, StateCleanupPending}
 	ids := []string{"clone-run", "clone-fin", "clone-pend"}
 	for i, id := range ids {
 		rec := testRecord(id, "k-"+id, "/r/"+id, states[i])
@@ -164,7 +164,7 @@ func TestStoreListOrdersUnresolvedFirstAndPaginates(t *testing.T) {
 		t.Fatalf("page size = %d, want 5", len(page.Operations))
 	}
 	for i, rec := range page.Operations[:3] {
-		if !UnresolvedStates[rec.State] {
+		if !unresolvedStates[rec.State] {
 			t.Errorf("page item %d (%s, %s) is not unresolved", i, rec.ID, rec.State)
 		}
 	}
@@ -221,11 +221,11 @@ func TestStorePruneHonorsRetentionWindow(t *testing.T) {
 
 	young := testRecord("clone-young", "k-young", "/r/young", StateSucceeded)
 	young.ResolvedAt = base.Add(6 * 24 * time.Hour) // six days before "now"
-	old := testRecord("clone-old", "k-old", "/r/old", StateFailed)
+	old := testRecord("clone-old", "k-old", "/r/old", stateFailed)
 	old.ResolvedAt = base // exactly seven days before "now"
-	ancient := testRecord("clone-ancient", "k-ancient", "/r/ancient", StateInterrupted)
+	ancient := testRecord("clone-ancient", "k-ancient", "/r/ancient", stateInterrupted)
 	ancient.ResolvedAt = base.Add(-24 * time.Hour) // eight days before "now"
-	running := testRecord("clone-run", "k-run", "/r/run", StateRunning)
+	running := testRecord("clone-run", "k-run", "/r/run", stateRunning)
 	running.ResolvedAt = time.Time{}
 	pending := testRecord("clone-pend", "k-pend", "/r/pend", StateCleanupPending)
 	pending.ResolvedAt = time.Time{}

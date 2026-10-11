@@ -22,10 +22,10 @@ import (
 	"unicode/utf8"
 )
 
-// GuardrailMaxCommandLen is the maximum byte length of a command the guardrail
+// guardrailMaxCommandLen is the maximum byte length of a command the guardrail
 // will attempt to classify. Longer commands defer to the human prompt without
 // attempting to classify a truncated prefix.
-const GuardrailMaxCommandLen = 4096
+const guardrailMaxCommandLen = 4096
 
 const (
 	automaticReviewStatusPrefix         = "Auto-approved Bash: "
@@ -36,14 +36,14 @@ const (
 
 // ReviewableBashCommand reports whether a command is well-formed enough to put
 // in a reviewer prompt: valid UTF-8, non-blank, and within
-// GuardrailMaxCommandLen. It makes no safety claim. The length limit is a
+// guardrailMaxCommandLen. It makes no safety claim. The length limit is a
 // practical prompt-cost ceiling; over-length commands defer to a human rather
 // than being judged from a truncated prefix.
 func ReviewableBashCommand(command string) bool {
 	if !utf8.ValidString(command) {
 		return false
 	}
-	if len(command) > GuardrailMaxCommandLen {
+	if len(command) > guardrailMaxCommandLen {
 		return false
 	}
 	if strings.TrimSpace(command) == "" {

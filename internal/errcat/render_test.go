@@ -148,7 +148,7 @@ func TestFprintRendersContextBlocksAsKeyValuesBetweenHintAndDetail(t *testing.T)
 	// catalog code declares all four today, and the renderer must render
 	// whatever blocks a rendered error carries.
 	e := New(ParentWorktreesDirty, WithDiagnostics("raw failure text"))
-	e.Context = &Context{
+	e.Context = &context{
 		Repositories: []CodeRepository{
 			{Name: "web", Branch: "main", DirtyFiles: []string{"a.go", "b.go"}},
 			{Name: "api", ConflictFiles: []string{"go.mod"}, MergeHEAD: "abc123"},
@@ -285,7 +285,7 @@ func TestCLICodeClassesAndTemplates(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: missing from catalog", code)
 		}
-		if entry.Class != ClassWarning {
+		if entry.Class != classWarning {
 			t.Errorf("%s: class = %q; want warning", code, entry.Class)
 		}
 		if entry.Remediation == "" {

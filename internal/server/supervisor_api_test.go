@@ -684,7 +684,13 @@ func TestUpdateIdleInstallProceedsPastWaitingSupervisor(t *testing.T) {
 				svc.mu.Lock()
 				svc.lifecycle = supervisor.LifecycleIdle
 				svc.mu.Unlock()
-				boundary.NotifyChanged()
+				// Wake the idle waiter through the public operation that
+				// signals activity change: a reservation settling.
+				if r, err := boundary.Acquire(workadmission.CategoryRepository); err != nil {
+					t.Fatalf("Acquire() error = %v", err)
+				} else {
+					r.Release()
+				}
 			}
 			waitInstallCond(t, 5*time.Second, func() bool { return lifecycle.beginCallsN() >= 1 }, "the idle install never began")
 			if !boundary.Closed() {

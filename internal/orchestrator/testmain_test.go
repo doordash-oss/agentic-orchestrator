@@ -17,13 +17,11 @@ package orchestrator_test
 import (
 	"os"
 	"testing"
-
-	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
 func TestMain(m *testing.M) {
 	// Default-deny: tests must never reach the real GitHub API; fixtures stack on top of this default.
-	_ = os.Setenv(github.EnvGitHubAPIBase, "http://127.0.0.1:1")
+	_ = os.Setenv("AGENTICO_GITHUB_API_BASE", "http://127.0.0.1:1")
 	code := m.Run()
 	os.Exit(code)
 }

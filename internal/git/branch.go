@@ -32,18 +32,18 @@ const (
 	defaultBranchProbeDiagnosticLimit = 4 << 10
 )
 
-// BranchProbeState distinguishes a proved result from an unavailable remote.
-type BranchProbeState string
+// branchProbeState distinguishes a proved result from an unavailable remote.
+type branchProbeState string
 
 const (
-	BranchProbeAbsent      BranchProbeState = "absent"
-	BranchProbeCollision   BranchProbeState = "collision"
-	BranchProbeUnavailable BranchProbeState = "unavailable"
+	branchProbeAbsent      branchProbeState = "absent"
+	BranchProbeCollision   branchProbeState = "collision"
+	branchProbeUnavailable branchProbeState = "unavailable"
 )
 
-// BranchProbeResult is the bounded result of probing one branch name.
-type BranchProbeResult struct {
-	State       BranchProbeState
+// branchProbeResult is the bounded result of probing one branch name.
+type branchProbeResult struct {
+	State       branchProbeState
 	Diagnostics string
 }
 
@@ -62,10 +62,10 @@ type BranchProbeWarning struct {
 	Diagnostics string
 }
 
-// BranchCandidateResult reports whether a candidate is usable. Unavailable
+// branchCandidateResult reports whether a candidate is usable. Unavailable
 // means locally unique and usable, with warnings describing unknown origins.
-type BranchCandidateResult struct {
-	State    BranchProbeState
+type branchCandidateResult struct {
+	State    branchProbeState
 	Warnings []BranchProbeWarning
 }
 
@@ -74,59 +74,59 @@ type BranchCandidateResult struct {
 type BranchProbeOptions struct {
 	OperationTimeout time.Duration
 	DiagnosticLimit  int
-	Runner           BranchProbeRunner
+	Runner           branchProbeRunner
 }
 
-// BranchProbeRunner is the process boundary used by branch probes.
-type BranchProbeRunner interface {
-	Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult
+// branchProbeRunner is the process boundary used by branch probes.
+type branchProbeRunner interface {
+	Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult
 }
 
-// BranchProbeCommandResult is a completed and reaped command result.
-type BranchProbeCommandResult struct {
+// branchProbeCommandResult is a completed and reaped command result.
+type branchProbeCommandResult struct {
 	Stdout      string
 	Diagnostics string
 	ExitCode    int
 	Err         error
 }
 
-// ExecBranchProbeRunner runs the production argument-vector probe. Executable
+// execBranchProbeRunner runs the production argument-vector probe. Executable
 // defaults to git and is injectable for deterministic process-lifecycle tests.
-type ExecBranchProbeRunner struct {
+type execBranchProbeRunner struct {
 	Executable string
 	// afterStart is a test synchronization hook invoked after the process is
 	// running and before Wait. Production callers leave it nil.
 	afterStart func()
 }
 
-// ProbeRemoteBranch checks the exact origin branch without fetching. Exit code
+// probeRemoteBranch checks the exact origin branch without fetching. Exit code
 // 2 from git ls-remote --exit-code proves absence; all other failures are
 // unavailable rather than evidence of absence.
-func ProbeRemoteBranch(ctx context.Context, repoPath, branch string, options BranchProbeOptions) BranchProbeResult {
+func probeRemoteBranch(ctx context.Context, repoPath, branch string, options BranchProbeOptions) branchProbeResult {
 	result := runBranchProbe(ctx, repoPath, []string{"ls-remote", "--exit-code", "--heads", "origin", "refs/heads/" + branch}, options)
 	switch result.ExitCode {
 	case 0:
 		if strings.TrimSpace(result.Stdout) != "" {
-			return BranchProbeResult{State: BranchProbeCollision}
+			return branchProbeResult{State: BranchProbeCollision}
 		}
 	case 2:
-		return BranchProbeResult{State: BranchProbeAbsent}
+		return branchProbeResult{State: branchProbeAbsent}
 	}
-	return BranchProbeResult{State: BranchProbeUnavailable, Diagnostics: nonemptyBranchProbeDiagnostic(result.Diagnostics)}
+	return branchProbeResult{State: branchProbeUnavailable, Diagnostics: nonemptyBranchProbeDiagnostic(result.Diagnostics)}
 }
 
 // ProbeBranchCandidate checks every local branch before contacting any origin.
 // Local probe failures fail closed because local uniqueness must be proved.
-func ProbeBranchCandidate(ctx context.Context, repos []BranchProbeRepository, branch string, options BranchProbeOptions) (BranchCandidateResult, error) {
+func ProbeBranchCandidate(ctx context.Context, repos []BranchProbeRepository, branch string, options BranchProbeOptions) (branchCandidateResult, error) {
 	for _, repo := range repos {
 		result := runBranchProbe(ctx, repo.Path, []string{"show-ref", "--verify", "--quiet", "refs/heads/" + branch}, options)
 		switch result.ExitCode {
 		case 0:
-			return BranchCandidateResult{State: BranchProbeCollision}, nil
+			return branchCandidateResult{State: BranchProbeCollision}, nil
 		case 1:
 			// Git show-ref uses 1 for a missing exact ref.
 		default:
-			return BranchCandidateResult{}, fmt.Errorf("checking local branch in repo %q: %s", repo.Name, nonemptyBranchProbeDiagnostic(result.Diagnostics))
+			return branchCandidateResult{}, fmt.Errorf("checking local branch in repo %q: %s", repo.Name, nonemptyBranchProbeDiagnostic(result.Diagnostics))
 		}
 	}
 
@@ -135,18 +135,18 @@ func ProbeBranchCandidate(ctx context.Context, repos []BranchProbeRepository, br
 		if !repo.ProbeOrigin {
 			continue
 		}
-		result := ProbeRemoteBranch(ctx, repo.Path, branch, options)
+		result := probeRemoteBranch(ctx, repo.Path, branch, options)
 		switch result.State {
 		case BranchProbeCollision:
-			return BranchCandidateResult{State: BranchProbeCollision}, nil
-		case BranchProbeUnavailable:
+			return branchCandidateResult{State: BranchProbeCollision}, nil
+		case branchProbeUnavailable:
 			warnings = append(warnings, BranchProbeWarning{Repository: repo.Name, Branch: branch, Diagnostics: result.Diagnostics})
 		}
 	}
 	if len(warnings) > 0 {
-		return BranchCandidateResult{State: BranchProbeUnavailable, Warnings: warnings}, nil
+		return branchCandidateResult{State: branchProbeUnavailable, Warnings: warnings}, nil
 	}
-	return BranchCandidateResult{State: BranchProbeAbsent}, nil
+	return branchCandidateResult{State: branchProbeAbsent}, nil
 }
 
 func nonemptyBranchProbeDiagnostic(value string) string {
@@ -156,7 +156,7 @@ func nonemptyBranchProbeDiagnostic(value string) string {
 	return value
 }
 
-func runBranchProbe(ctx context.Context, repoPath string, args []string, options BranchProbeOptions) BranchProbeCommandResult {
+func runBranchProbe(ctx context.Context, repoPath string, args []string, options BranchProbeOptions) branchProbeCommandResult {
 	timeout := options.OperationTimeout
 	if timeout <= 0 {
 		timeout = defaultBranchProbeTimeout
@@ -167,10 +167,10 @@ func runBranchProbe(ctx context.Context, repoPath string, args []string, options
 	}
 	runner := options.Runner
 	if runner == nil {
-		runner = ExecBranchProbeRunner{}
+		runner = execBranchProbeRunner{}
 	}
 	if err := ctx.Err(); err != nil {
-		return BranchProbeCommandResult{ExitCode: -1, Err: err, Diagnostics: sanitizeBranchProbeDiagnostics("branch availability probe timed out", limit)}
+		return branchProbeCommandResult{ExitCode: -1, Err: err, Diagnostics: sanitizeBranchProbeDiagnostics("branch availability probe timed out", limit)}
 	}
 	opCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -186,7 +186,7 @@ func runBranchProbe(ctx context.Context, repoPath string, args []string, options
 	return result
 }
 
-func (r ExecBranchProbeRunner) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+func (r execBranchProbeRunner) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult {
 	gitArgs := append([]string{"-C", repoPath}, args...)
 	executable := r.Executable
 	if executable == "" {
@@ -228,7 +228,7 @@ func (r ExecBranchProbeRunner) Run(ctx context.Context, repoPath string, args []
 	if diagnostics == "" && err != nil {
 		diagnostics = err.Error()
 	}
-	return BranchProbeCommandResult{Stdout: stdout.String(), Diagnostics: diagnostics, ExitCode: exitCode, Err: err}
+	return branchProbeCommandResult{Stdout: stdout.String(), Diagnostics: diagnostics, ExitCode: exitCode, Err: err}
 }
 
 type limitedDrainWriter struct {

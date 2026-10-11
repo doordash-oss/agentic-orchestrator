@@ -88,20 +88,20 @@ func (l lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-func runObserver(t *testing.T, endpoint string, cfg MetricsConfig, hold time.Duration) {
+func runObserver(t *testing.T, endpoint string, cfg metricsConfig, hold time.Duration) {
 	t.Helper()
 	stateDir := filepath.Join(t.TempDir(), "features")
 	if err := os.MkdirAll(filepath.Join(stateDir, "f1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(false, stateDir, true, endpoint, true, "metrics-test", WithMetrics(cfg))
+	obs := newObserver(false, stateDir, true, endpoint, true, "metrics-test", withMetrics(cfg))
 	for i := 0; i < 2; i++ {
 		if err := obs.Emit(Event{Timestamp: time.Now(), EventType: "validation.completed", FeatureID: "f1", Status: "passed", DurationMs: 125}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	time.Sleep(hold)
-	if err := obs.Shutdown(); err != nil {
+	if err := obs.shutdown(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -117,7 +117,7 @@ func TestMetricsExportConfiguration(t *testing.T) {
 		logs := captureOTelLogs(t)
 		t.Setenv("OTEL_METRIC_EXPORT_INTERVAL", "10")
 		traces, endpoint := startCollector(t, false)
-		runObserver(t, endpoint, MetricsConfig{}, 150*time.Millisecond)
+		runObserver(t, endpoint, metricsConfig{}, 150*time.Millisecond)
 		if spans, _ := traces.counts(); spans == 0 {
 			t.Fatal("trace export stopped working")
 		}
@@ -133,7 +133,7 @@ func TestMetricsExportConfiguration(t *testing.T) {
 	t.Run("opt-out exports traces only", func(t *testing.T) {
 		logs := captureOTelLogs(t)
 		collector, endpoint := startCollector(t, true)
-		runObserver(t, endpoint, MetricsConfig{Disabled: true}, 0)
+		runObserver(t, endpoint, metricsConfig{Disabled: true}, 0)
 		spans, metrics := collector.counts()
 		if spans == 0 || metrics != 0 {
 			t.Fatalf("spans=%d metrics=%d, want spans and no metrics", spans, metrics)
@@ -147,7 +147,7 @@ func TestMetricsExportConfiguration(t *testing.T) {
 		captureOTelLogs(t)
 		traces, traceEndpoint := startCollector(t, false)
 		metricsCollector, metricsEndpoint := startCollector(t, true)
-		runObserver(t, traceEndpoint, MetricsConfig{Endpoint: metricsEndpoint}, 0)
+		runObserver(t, traceEndpoint, metricsConfig{Endpoint: metricsEndpoint}, 0)
 		if spans, _ := traces.counts(); spans == 0 {
 			t.Fatal("no spans at the trace endpoint")
 		}
@@ -166,7 +166,7 @@ func TestMetricsExportConfiguration(t *testing.T) {
 		t.Run("counter temporality "+tt.temporality, func(t *testing.T) {
 			captureOTelLogs(t)
 			collector, endpoint := startCollector(t, true)
-			runObserver(t, endpoint, MetricsConfig{Temporality: tt.temporality}, 0)
+			runObserver(t, endpoint, metricsConfig{Temporality: tt.temporality}, 0)
 			collector.mu.Lock()
 			defer collector.mu.Unlock()
 			found := false

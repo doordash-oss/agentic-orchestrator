@@ -229,12 +229,12 @@ func TestFetchRefspecCoversBranch(t *testing.T) {
 			for _, spec := range tt.refspecs {
 				runFreshnessGit(t, repo, "config", "--add", "remote.origin.fetch", spec)
 			}
-			got, err := FetchRefspecCoversBranch(repo, tt.branch)
+			got, err := fetchRefspecCoversBranch(repo, tt.branch)
 			if err != nil {
-				t.Fatalf("FetchRefspecCoversBranch() error = %v", err)
+				t.Fatalf("fetchRefspecCoversBranch() error = %v", err)
 			}
 			if got != tt.want {
-				t.Fatalf("FetchRefspecCoversBranch(%q) = %v, want %v for %v", tt.branch, got, tt.want, tt.refspecs)
+				t.Fatalf("fetchRefspecCoversBranch(%q) = %v, want %v for %v", tt.branch, got, tt.want, tt.refspecs)
 			}
 		})
 	}

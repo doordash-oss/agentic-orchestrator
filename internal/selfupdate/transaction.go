@@ -105,17 +105,17 @@ type Transaction struct {
 }
 
 // stageCopy persists a fresh copy and its directory entry before recording identity.
-func (s FileOps) stageCopy(dst, src string, mode uint32) (FileIdentity, error) {
+func (s FileOps) stageCopy(dst, src string, mode uint32) (fileIdentity, error) {
 	if err := s.copy(dst, src, mode); err != nil {
-		return FileIdentity{}, err
+		return fileIdentity{}, err
 	}
 	if err := s.syncFile(dst); err != nil {
-		return FileIdentity{}, err
+		return fileIdentity{}, err
 	}
 	if err := s.syncDir(filepath.Dir(dst)); err != nil {
-		return FileIdentity{}, err
+		return fileIdentity{}, err
 	}
-	return StatFile(dst)
+	return statFile(dst)
 }
 
 func restoreInstalledModeAndOwner(path string, r Receipt) error {
@@ -189,11 +189,11 @@ func SyncDir(path string) error {
 	return nil
 }
 
-// VerifyCandidate validates a locally built candidate before any
+// verifyCandidate validates a locally built candidate before any
 // installed-path mutation: a regular file (not a symlink) owned by the
 // current effective user, executable, non-empty, with exactly the expected
 // sha256 digest. This is a local-build check, not release verification.
-func VerifyCandidate(path, digest string) error {
+func verifyCandidate(path, digest string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return fmt.Errorf("lstat candidate: %w", err)
@@ -241,14 +241,14 @@ func Begin(exec Executable, opts BeginOptions, seams FileOps) (*Transaction, err
 	if opts.CandidateDigest == "" {
 		return nil, errors.New("candidate digest is empty")
 	}
-	matches, err := exec.PathStillMatches()
+	matches, err := exec.pathStillMatches()
 	if err != nil {
 		return nil, err
 	}
 	if !matches {
 		return nil, fmt.Errorf("installed executable %s no longer matches captured identity", exec.Path)
 	}
-	if err := VerifyCandidate(opts.CandidatePath, opts.CandidateDigest); err != nil {
+	if err := verifyCandidate(opts.CandidatePath, opts.CandidateDigest); err != nil {
 		return nil, err
 	}
 	t := &Transaction{exec: exec, opts: opts, seams: seams}
@@ -259,14 +259,14 @@ func Begin(exec Executable, opts BeginOptions, seams FileOps) (*Transaction, err
 	if err != nil {
 		return nil, err
 	}
-	t.txDir = filepath.Join(LeaseDir(exec.Path), txDirPrefix+txID)
+	t.txDir = filepath.Join(leaseDir(exec.Path), txDirPrefix+txID)
 	if err := os.Mkdir(t.txDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create transaction dir: %w", err)
 	}
 	if err := os.Chmod(t.txDir, 0o700); err != nil {
 		return nil, fmt.Errorf("repair transaction dir permissions: %w", err)
 	}
-	if err := t.seams.syncDir(LeaseDir(exec.Path)); err != nil {
+	if err := t.seams.syncDir(leaseDir(exec.Path)); err != nil {
 		return nil, err
 	}
 	// Durable staging ownership precedes every staged byte and the install
@@ -275,7 +275,7 @@ func Begin(exec Executable, opts BeginOptions, seams FileOps) (*Transaction, err
 	// abandoned staging once its transaction is settled or gone. The stamp
 	// is captured once so the staging record and the receipt share it.
 	startedAt := t.seams.now()
-	if err := writeStagingRecord(t.txDir, StagingRecord{
+	if err := writeStagingRecord(t.txDir, stagingRecord{
 		TransactionID:    txID,
 		ExecutablePath:   exec.Path,
 		ExecutableDigest: exec.Digest,
@@ -321,7 +321,7 @@ func Begin(exec Executable, opts BeginOptions, seams FileOps) (*Transaction, err
 		StartedAt:      startedAt,
 		UpdatedAt:      startedAt,
 		Outcome:        OutcomePending,
-		Phase:          PhaseBackupReady,
+		Phase:          phaseBackupReady,
 	}
 	if err := t.seams.writeReceipt(ReceiptPath(t.exec.Path), t.receipt); err != nil {
 		return nil, err
@@ -341,12 +341,12 @@ func (t *Transaction) TxDir() string {
 
 // VerifyInstalledUnchanged asserts the installed path still carries the
 // original inode and bytes recorded at Begin.
-func (t *Transaction) VerifyInstalledUnchanged() error {
-	id, err := StatFile(t.exec.Path)
+func (t *Transaction) verifyInstalledUnchanged() error {
+	id, err := statFile(t.exec.Path)
 	if err != nil {
 		return err
 	}
-	if !id.SameFile(t.receipt.ExecutableID) {
+	if !id.sameFile(t.receipt.ExecutableID) {
 		return fmt.Errorf("installed executable %s identity changed since transaction start", t.exec.Path)
 	}
 	digest, err := DigestFile(t.exec.Path)
@@ -369,7 +369,7 @@ func (t *Transaction) VerifyInstalledUnchanged() error {
 // suppression, and link safety on the staging path — immediately before the
 // rename, without refetching or re-probing.
 func (t *Transaction) Commit() error {
-	if err := t.VerifyInstalledUnchanged(); err != nil {
+	if err := t.verifyInstalledUnchanged(); err != nil {
 		return err
 	}
 	if t.releaseProvenance != nil {
@@ -383,11 +383,11 @@ func (t *Transaction) Commit() error {
 			return fmt.Errorf("commit-boundary target %q does not match the verified release %q", t.receipt.ToVersion, t.releaseProvenance.candidate.release.Resolved().Version)
 		}
 	}
-	stagingID, err := StatFile(t.receipt.StagingPath)
+	stagingID, err := statFile(t.receipt.StagingPath)
 	if err != nil {
 		return err
 	}
-	if !stagingID.SameFile(t.receipt.StagingID) {
+	if !stagingID.sameFile(t.receipt.StagingID) {
 		return fmt.Errorf("staged candidate %s changed since preparation", t.receipt.StagingPath)
 	}
 	if filepath.Dir(t.receipt.StagingPath) != t.txDir {
@@ -419,7 +419,7 @@ func (t *Transaction) Commit() error {
 		return err
 	}
 
-	t.receipt.Phase = PhaseReplacementComplete
+	t.receipt.Phase = phaseReplacementComplete
 	t.receipt.UpdatedAt = t.seams.now()
 	return t.seams.writeReceipt(ReceiptPath(t.exec.Path), t.receipt)
 }
@@ -436,7 +436,7 @@ func (t *Transaction) RecordError(errMsg string, secrets ...string) error {
 // Confirm marks the transaction confirmed. Callers must only confirm after
 // the replacement image has fully started and published its presence.
 func (t *Transaction) Confirm() error {
-	if t.receipt.Phase != PhaseReplacementComplete {
+	if t.receipt.Phase != phaseReplacementComplete {
 		return fmt.Errorf("cannot confirm transaction in phase %q", t.receipt.Phase)
 	}
 	t.receipt.Outcome = OutcomeConfirmed
@@ -482,10 +482,10 @@ func ConfirmTransaction(execPath, txID string) (Receipt, error) {
 	if r.TransactionID != txID {
 		return Receipt{}, fmt.Errorf("latest receipt transaction %q does not match %q", r.TransactionID, txID)
 	}
-	if !r.ActionablePending() {
+	if !r.actionablePending() {
 		return Receipt{}, fmt.Errorf("receipt outcome %q (resolution %q) is not actionable pending", r.Outcome, r.Resolution)
 	}
-	if r.Phase != PhaseReplacementComplete {
+	if r.Phase != phaseReplacementComplete {
 		return Receipt{}, fmt.Errorf("receipt phase %q is not replacement-complete", r.Phase)
 	}
 	r.Outcome = OutcomeConfirmed

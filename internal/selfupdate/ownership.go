@@ -59,10 +59,10 @@ type OwnershipRecord struct {
 	TransactionID    string    `json:"transaction_id,omitempty"`
 }
 
-// LeaseDir returns the lease directory for a canonical executable path. It
+// leaseDir returns the lease directory for a canonical executable path. It
 // lives next to the installed binary so its identity is the executable path,
 // which stays stable across inode replacement.
-func LeaseDir(execPath string) string {
+func leaseDir(execPath string) string {
 	return filepath.Join(filepath.Dir(execPath), leaseDirName)
 }
 
@@ -74,18 +74,18 @@ func leaseKey(execPath string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-// LeasePath returns the flock file path for the executable. The file is
+// leasePath returns the flock file path for the executable. The file is
 // owner-only (0600) and is never unlinked: unlinking would allow a racing
 // process to lock a fresh inode and double-own updates.
-func LeasePath(execPath string) string {
-	return filepath.Join(LeaseDir(execPath), "lease-"+leaseKey(execPath)+".lock")
+func leasePath(execPath string) string {
+	return filepath.Join(leaseDir(execPath), "lease-"+leaseKey(execPath)+".lock")
 }
 
-// OwnershipRecordPath returns the owner-only record path for the executable.
+// ownershipRecordPath returns the owner-only record path for the executable.
 // Like the lease file, it is never unlinked and is overwritten by each new
 // owner.
-func OwnershipRecordPath(execPath string) string {
-	return filepath.Join(LeaseDir(execPath), "owner-"+leaseKey(execPath)+".json")
+func ownershipRecordPath(execPath string) string {
+	return filepath.Join(leaseDir(execPath), "owner-"+leaseKey(execPath)+".json")
 }
 
 // ReceiptPath returns the stable latest-transaction receipt path for the
@@ -94,7 +94,7 @@ func OwnershipRecordPath(execPath string) string {
 // each other's transaction authority; the lease, ownership record, and
 // receipt all key identically.
 func ReceiptPath(execPath string) string {
-	return filepath.Join(LeaseDir(execPath), "receipt-"+leaseKey(execPath)+".json")
+	return filepath.Join(leaseDir(execPath), "receipt-"+leaseKey(execPath)+".json")
 }
 
 // ReadLatestReceipt reads the receipt keyed to this executable. An existing
@@ -107,7 +107,7 @@ func ReadLatestReceipt(execPath string) (Receipt, bool, error) {
 		}
 		return Receipt{}, false, refuse("inspect receipt path %s: %v", path, err)
 	}
-	r, err := ReadReceipt(path)
+	r, err := readReceipt(path)
 	if err != nil {
 		return Receipt{}, false, refuse("latest receipt at %s is unreadable: %v", path, err)
 	}
@@ -126,7 +126,7 @@ func IsTxDirPath(path string) bool {
 // ensureLeaseDir creates the lease directory owner-only and self-heals its
 // permissions on every call, mirroring the registry publish pattern.
 func ensureLeaseDir(execPath string) error {
-	dir := LeaseDir(execPath)
+	dir := leaseDir(execPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create lease dir: %w", err)
 	}
@@ -136,20 +136,20 @@ func ensureLeaseDir(execPath string) error {
 	return nil
 }
 
-// LeaseHeldError reports that another open file description holds the
+// leaseHeldError reports that another open file description holds the
 // binary-scoped lease. Record carries the best-effort current ownership
 // record; it is the zero value when none could be read.
-type LeaseHeldError struct {
+type leaseHeldError struct {
 	Record OwnershipRecord
 }
 
-func (e *LeaseHeldError) Error() string {
+func (e *leaseHeldError) Error() string {
 	return fmt.Sprintf("selfupdate lease for %s held by pid %d", e.Record.ExecutablePath, e.Record.PID)
 }
 
-// IsLeaseHeld reports whether err (or anything it wraps) is lease contention.
-func IsLeaseHeld(err error) bool {
-	var held *LeaseHeldError
+// isLeaseHeld reports whether err (or anything it wraps) is lease contention.
+func isLeaseHeld(err error) bool {
+	var held *leaseHeldError
 	return errors.As(err, &held)
 }
 
@@ -168,7 +168,7 @@ type Lease struct {
 }
 
 // AcquireLease takes the binary-scoped lease for exec. On contention it
-// returns a *LeaseHeldError carrying the record readable from disk (zero
+// returns a *leaseHeldError carrying the record readable from disk (zero
 // record when unreadable); it never steals ownership from a live holder.
 func AcquireLease(exec Executable, rec OwnershipRecord) (*Lease, error) {
 	if err := ensureLeaseDir(exec.Path); err != nil {
@@ -179,9 +179,9 @@ func AcquireLease(exec Executable, rec OwnershipRecord) (*Lease, error) {
 		rec.ExecutablePath = exec.Path
 	}
 
-	path := LeasePath(exec.Path)
+	path := leasePath(exec.Path)
 	// O_CLOEXEC is load-bearing: the lease fd stays close-on-exec until the
-	// final handoff window clears it explicitly via ClearCLOEXEC.
+	// final handoff window clears it explicitly via clearCLOEXEC.
 	fd, err := unix.Open(path, unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lease file: %w", err)
@@ -189,8 +189,8 @@ func AcquireLease(exec Executable, rec OwnershipRecord) (*Lease, error) {
 	if err := unix.Flock(fd, unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = unix.Close(fd)
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			record, _ := ReadOwnershipRecord(exec.Path)
-			return nil, &LeaseHeldError{Record: record}
+			record, _ := readOwnershipRecord(exec.Path)
+			return nil, &leaseHeldError{Record: record}
 		}
 		return nil, fmt.Errorf("acquire lease: %w", err)
 	}
@@ -243,13 +243,13 @@ func (l *Lease) Close() error {
 	return errors.Join(errUnlock, errClose)
 }
 
-// AdoptLease wraps an already-open, already-flocked lease descriptor (an fd
+// adoptLease wraps an already-open, already-flocked lease descriptor (an fd
 // inherited through exec) into a Lease without re-locking or unlocking: the
 // open file description carries the held lock across the exec boundary. The
 // updated record is written atomically; the caller has already validated the
 // descriptor. Exactly one owner must close the descriptor: across a real
 // exec the pre-exec owner no longer exists, so the adopted Lease is it.
-func AdoptLease(fd int, rec OwnershipRecord) (*Lease, error) {
+func adoptLease(fd int, rec OwnershipRecord) (*Lease, error) {
 	if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil {
 		return nil, fmt.Errorf("adopt lease fd %d is not open: %w", fd, err)
 	}
@@ -257,14 +257,14 @@ func AdoptLease(fd int, rec OwnershipRecord) (*Lease, error) {
 	if err := writeOwnershipRecord(rec.ExecutablePath, rec); err != nil {
 		return nil, err
 	}
-	path := LeasePath(rec.ExecutablePath)
+	path := leasePath(rec.ExecutablePath)
 	return &Lease{fd: fd, record: rec, path: path}, nil
 }
 
-// ReadOwnershipRecord reads and parses the ownership record for the
+// readOwnershipRecord reads and parses the ownership record for the
 // executable.
-func ReadOwnershipRecord(execPath string) (OwnershipRecord, error) {
-	data, err := os.ReadFile(OwnershipRecordPath(execPath))
+func readOwnershipRecord(execPath string) (OwnershipRecord, error) {
+	data, err := os.ReadFile(ownershipRecordPath(execPath))
 	if err != nil {
 		return OwnershipRecord{}, fmt.Errorf("read ownership record: %w", err)
 	}
@@ -305,11 +305,11 @@ func writeOwnershipRecord(execPath string, rec OwnershipRecord) error {
 		return fmt.Errorf("marshal ownership record: %w", err)
 	}
 	data = append(data, '\n')
-	return writeFileAtomic(OwnershipRecordPath(execPath), data, false)
+	return writeFileAtomic(ownershipRecordPath(execPath), data, false)
 }
 
-// ErrRuntimeUpdateLockHeld reports contention on the per-runtime update lock.
-var ErrRuntimeUpdateLockHeld = errors.New("runtime update lock held")
+// errRuntimeUpdateLockHeld reports contention on the per-runtime update lock.
+var errRuntimeUpdateLockHeld = errors.New("runtime update lock held")
 
 // RuntimeUpdateLock serializes update transactions within one runtime dir.
 // It is a separate layer from the instance lock and the binary lease: the
@@ -319,26 +319,26 @@ type RuntimeUpdateLock struct {
 	file *os.File
 }
 
-// RuntimeUpdateLockPath returns the per-runtime update lock path. The file
+// runtimeUpdateLockPath returns the per-runtime update lock path. The file
 // is owner-only (0600) and never unlinked.
-func RuntimeUpdateLockPath(runtimeDir string) string {
+func runtimeUpdateLockPath(runtimeDir string) string {
 	return filepath.Join(runtimeDir, updateLockSuffix)
 }
 
 // AcquireRuntimeUpdateLock takes the per-runtime update lock without
-// blocking. Contention returns an error wrapping ErrRuntimeUpdateLockHeld.
+// blocking. Contention returns an error wrapping errRuntimeUpdateLockHeld.
 func AcquireRuntimeUpdateLock(runtimeDir string) (*RuntimeUpdateLock, error) {
 	if err := os.MkdirAll(runtimeDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create runtime dir: %w", err)
 	}
-	f, err := os.OpenFile(RuntimeUpdateLockPath(runtimeDir), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(runtimeUpdateLockPath(runtimeDir), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open runtime update lock: %w", err)
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = f.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return nil, fmt.Errorf("%w: %s", ErrRuntimeUpdateLockHeld, RuntimeUpdateLockPath(runtimeDir))
+			return nil, fmt.Errorf("%w: %s", errRuntimeUpdateLockHeld, runtimeUpdateLockPath(runtimeDir))
 		}
 		return nil, fmt.Errorf("acquire runtime update lock: %w", err)
 	}
@@ -366,7 +366,7 @@ func (l *RuntimeUpdateLock) Close() error {
 // proves nothing here: the flock is the liveness authority.
 func LiveHandoff(execPath string) (bool, Receipt, error) {
 	receipt, found := readReceiptForLiveHandoff(execPath)
-	f, err := os.OpenFile(LeasePath(execPath), os.O_RDWR, 0o600)
+	f, err := os.OpenFile(leasePath(execPath), os.O_RDWR, 0o600)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return false, receipt, nil
@@ -376,7 +376,7 @@ func LiveHandoff(execPath string) (bool, Receipt, error) {
 	defer f.Close()
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EAGAIN) {
-			return found && receipt.ActionablePending(), receipt, nil
+			return found && receipt.actionablePending(), receipt, nil
 		}
 		return false, receipt, fmt.Errorf("probe lease: %w", err)
 	}

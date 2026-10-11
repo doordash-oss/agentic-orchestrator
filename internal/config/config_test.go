@@ -168,7 +168,7 @@ func TestLoadOrCreate(t *testing.T) {
 		t.Fatal("expected file to not exist")
 	}
 
-	cfg, err := LoadOrCreate(path)
+	cfg, err := loadOrCreate(path)
 	if err != nil {
 		t.Fatalf("load or create: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestLoadOrCreate(t *testing.T) {
 	}
 
 	// Load again - should return same config
-	cfg2, err := LoadOrCreate(path)
+	cfg2, err := loadOrCreate(path)
 	if err != nil {
 		t.Fatalf("second load or create: %v", err)
 	}
@@ -888,7 +888,7 @@ func TestLoadOrCreateWithStatus_NewConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
-	cfg, isNew, err := LoadOrCreateWithStatus(path)
+	cfg, isNew, err := loadOrCreateWithStatus(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -916,7 +916,7 @@ func TestLoadOrCreateWithStatus_ExistingConfig(t *testing.T) {
 		t.Fatalf("failed to save initial config: %v", err)
 	}
 
-	cfg, isNew, err := LoadOrCreateWithStatus(path)
+	cfg, isNew, err := loadOrCreateWithStatus(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1791,9 +1791,9 @@ func TestObservabilityConfig(t *testing.T) {
 		tmpDir := t.TempDir()
 		cfgPath := filepath.Join(tmpDir, "subdir", "config.yaml")
 
-		cfg, isNew, err := LoadOrCreateWithStatus(cfgPath)
+		cfg, isNew, err := loadOrCreateWithStatus(cfgPath)
 		if err != nil {
-			t.Fatalf("LoadOrCreateWithStatus failed: %v", err)
+			t.Fatalf("loadOrCreateWithStatus failed: %v", err)
 		}
 		if !isNew {
 			t.Error("expected isNew == true")
@@ -1822,35 +1822,35 @@ func TestObservabilityConfig(t *testing.T) {
 func TestProviderCLI_OverrideAndFallback(t *testing.T) {
 	tests := []struct {
 		name      string
-		providers map[string]ProviderConfig
+		providers map[string]providerConfig
 		key       string
 		fallback  string
 		want      string
 	}{
 		{
 			name:      "override set returns override",
-			providers: map[string]ProviderConfig{"claude": {CLI: "fcc-claude"}},
+			providers: map[string]providerConfig{"claude": {CLI: "fcc-claude"}},
 			key:       "claude",
 			fallback:  "claude",
 			want:      "fcc-claude",
 		},
 		{
 			name:      "empty CLI returns fallback",
-			providers: map[string]ProviderConfig{"claude": {CLI: ""}},
+			providers: map[string]providerConfig{"claude": {CLI: ""}},
 			key:       "claude",
 			fallback:  "claude",
 			want:      "claude",
 		},
 		{
 			name:      "whitespace CLI returns fallback",
-			providers: map[string]ProviderConfig{"claude": {CLI: "   "}},
+			providers: map[string]providerConfig{"claude": {CLI: "   "}},
 			key:       "claude",
 			fallback:  "claude",
 			want:      "claude",
 		},
 		{
 			name:      "key absent returns fallback",
-			providers: map[string]ProviderConfig{"codex": {CLI: "my-codex"}},
+			providers: map[string]providerConfig{"codex": {CLI: "my-codex"}},
 			key:       "claude",
 			fallback:  "claude",
 			want:      "claude",
@@ -1879,7 +1879,7 @@ func TestProvidersRoundTrip(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 
 	original := NewDefault()
-	original.Providers = map[string]ProviderConfig{"claude": {CLI: "fcc-claude"}}
+	original.Providers = map[string]providerConfig{"claude": {CLI: "fcc-claude"}}
 	if err := Save(path, original); err != nil {
 		t.Fatalf("save: %v", err)
 	}

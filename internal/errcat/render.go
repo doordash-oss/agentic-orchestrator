@@ -24,7 +24,7 @@ import (
 // line. An unknown class renders as a blocking error.
 func classPrefix(class Class) string {
 	switch class {
-	case ClassWarning:
+	case classWarning:
 		return "warning"
 	case ClassNeedsAction:
 		return "needs-action"

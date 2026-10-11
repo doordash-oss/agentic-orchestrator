@@ -49,7 +49,7 @@ var auditRedactionPatterns = []struct {
 
 var rememberAuditMu sync.Mutex
 
-type RememberAuditEvent struct {
+type rememberAuditEvent struct {
 	Time         time.Time `json:"time"`
 	SessionID    string    `json:"session_id,omitempty"`
 	RequestID    string    `json:"request_id,omitempty"`
@@ -65,7 +65,7 @@ type RememberAuditEvent struct {
 	Answered     bool      `json:"answered"`
 }
 
-type AuditAppendResult struct {
+type auditAppendResult struct {
 	Path string
 }
 
@@ -77,9 +77,9 @@ func NewAuditSink(baseDir string) *AuditSink {
 	return &AuditSink{baseDir: baseDir}
 }
 
-func (s *AuditSink) Append(event RememberAuditEvent) (AuditAppendResult, error) {
+func (s *AuditSink) append(event rememberAuditEvent) (auditAppendResult, error) {
 	if s == nil || s.baseDir == "" {
-		return AuditAppendResult{}, nil
+		return auditAppendResult{}, nil
 	}
 	rememberAuditMu.Lock()
 	defer rememberAuditMu.Unlock()
@@ -91,33 +91,33 @@ func (s *AuditSink) Append(event RememberAuditEvent) (AuditAppendResult, error) 
 	event.Error = sanitizeAuditField(event.Error)
 	event.InputSummary = sanitizeAuditInputSummary(event.InputSummary, maxAuditInputSummary)
 	if err := os.MkdirAll(s.baseDir, 0o700); err != nil {
-		return AuditAppendResult{}, fmt.Errorf("creating permission audit dir: %w", err)
+		return auditAppendResult{}, fmt.Errorf("creating permission audit dir: %w", err)
 	}
 	if err := os.Chmod(s.baseDir, 0o700); err != nil {
-		return AuditAppendResult{}, fmt.Errorf("chmod permission audit dir: %w", err)
+		return auditAppendResult{}, fmt.Errorf("chmod permission audit dir: %w", err)
 	}
 	path := filepath.Join(s.baseDir, rememberAuditFile)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return AuditAppendResult{}, fmt.Errorf("opening permission audit log: %w", err)
+		return auditAppendResult{}, fmt.Errorf("opening permission audit log: %w", err)
 	}
 	if err := f.Chmod(0o600); err != nil {
 		_ = f.Close()
-		return AuditAppendResult{}, fmt.Errorf("chmod permission audit log: %w", err)
+		return auditAppendResult{}, fmt.Errorf("chmod permission audit log: %w", err)
 	}
 	data, err := json.Marshal(event)
 	if err != nil {
 		_ = f.Close()
-		return AuditAppendResult{}, fmt.Errorf("marshaling permission audit event: %w", err)
+		return auditAppendResult{}, fmt.Errorf("marshaling permission audit event: %w", err)
 	}
 	if _, err := f.Write(append(data, '\n')); err != nil {
 		_ = f.Close()
-		return AuditAppendResult{}, fmt.Errorf("writing permission audit event: %w", err)
+		return auditAppendResult{}, fmt.Errorf("writing permission audit event: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		return AuditAppendResult{}, fmt.Errorf("closing permission audit log: %w", err)
+		return auditAppendResult{}, fmt.Errorf("closing permission audit log: %w", err)
 	}
-	return AuditAppendResult{Path: path}, nil
+	return auditAppendResult{Path: path}, nil
 }
 
 func sanitizeAuditInputSummary(s string, limit int) string {

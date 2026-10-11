@@ -41,7 +41,7 @@ func TestObserverWritesJSONLAndOTelConsistently(t *testing.T) {
 		spans:   make(map[string]activeSpan),
 	}
 	obs := &Observer{
-		emitter:      NewEmitter(tmpDir),
+		emitter:      newEmitter(tmpDir),
 		otel:         bridge,
 		enabled:      true,
 		localEnabled: true,
@@ -57,7 +57,7 @@ func TestObserverWritesJSONLAndOTelConsistently(t *testing.T) {
 	// Emit a realistic lifecycle sequence.
 	obs.PhaseStarted(phaseSC, "implement")
 	obs.PhaseCompleted(phaseSC, "implement", 2*time.Second, nil)
-	obs.Shutdown()
+	obs.shutdown()
 
 	// --- Assert JSONL side ---
 	eventsPath := filepath.Join(tmpDir, featureID, "events.jsonl")

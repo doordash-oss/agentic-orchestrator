@@ -15,7 +15,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -233,7 +232,7 @@ func TestWorkspaceRepositoryUpdateSourceDirtyOriginalCheckoutRefusesWithFreshSta
 	}
 	blocked := false
 	for _, blocker := range resp.Status.UpdateBlockers {
-		if blocker == RepositoryOriginStatusUpdateBlockers(git.UpdateBlockerDirtyTargetCheckout) {
+		if blocker == RepositoryOriginStatusUpdateBlockers("dirty_target_checkout") {
 			blocked = true
 		}
 	}
@@ -356,15 +355,9 @@ func TestWorkspaceRepositoryUpdateSourceDeadlineExpiryIsUnavailable(t *testing.T
 	repo, bare := updateSourceFixture(t, fx, "deadline")
 	body := fx.updateSourceBody(repo, bare)
 	fx.api.updateSourceDeadline = 400 * time.Millisecond
-	fx.api.updateSourceOptions = git.SourceUpdateOptions{OriginCheckOptions: git.OriginCheckOptions{
-		Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
-			if len(args) > 0 && args[0] == "ls-remote" {
-				<-ctx.Done()
-				return git.BranchProbeCommandResult{ExitCode: -1, Err: ctx.Err(), Diagnostics: "hanging origin probe"}
-			}
-			return git.ExecBranchProbeRunner{}.Run(ctx, repoPath, args, diagnosticLimit)
-		}),
-	}}
+	// A dead origin: the first origin-bound probe never answers, so the
+	// bounded attempt deadline expires with the displayed tip preserved.
+	fx.gitIn(repo, "remote", "set-url", "origin", "http://192.0.2.1/dead-"+filepath.Base(repo)+".git")
 
 	w, _ := fx.updateSource(body)
 	if w.Code != http.StatusServiceUnavailable {

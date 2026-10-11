@@ -118,8 +118,8 @@ func sampleCloneRecord() clone.Record {
 		RootPath:        "/roots/main",
 		Destination:     "widget",
 		DestinationPath: "/roots/main/widget",
-		State:           clone.StateAccepted,
-		Stage:           clone.StagePreparing,
+		State:           "accepted",
+		Stage:           "preparing",
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
@@ -281,7 +281,11 @@ func TestWorkspaceCloneSnapshotRoute(t *testing.T) {
 	t.Parallel()
 	rec := sampleCloneRecord()
 	rec.State = clone.StateSucceeded
-	rec.Published = &clone.Publication{RepoKey: "widget", Path: "/roots/main/widget", HasHead: true, PublishedAt: time.Now().UTC()}
+	// Build the publication through the frozen wire record format the store
+	// persists; the publication type itself is internal to the clone package.
+	if err := json.Unmarshal([]byte(`{"published":{"repo_key":"widget","path":"/roots/main/widget","has_head":true,"published_at":"2026-09-04T12:00:01Z"}}`), &rec); err != nil {
+		t.Fatalf("decode published record: %v", err)
+	}
 	svc := &fakeCloneService{snapshotRec: rec}
 	handler := newCloneHandler(t, svc)
 	w := authedGet(handler, apiPathWorkspaceClone+"/clone-0123456789abcdef")
@@ -313,7 +317,7 @@ func TestWorkspaceCloneSnapshotRoute(t *testing.T) {
 func TestWorkspaceCloneOperationMutations(t *testing.T) {
 	t.Parallel()
 	cancelling := sampleCloneRecord()
-	cancelling.State = clone.StateCancelling
+	cancelling.State = "cancelling"
 	cancelling.CancelRequested = true
 	svc := &fakeCloneService{cancelRec: cancelling}
 	handler := newCloneHandler(t, svc)
@@ -336,7 +340,7 @@ func TestWorkspaceCloneOperationMutations(t *testing.T) {
 	}
 
 	cleanupRec := sampleCloneRecord()
-	cleanupRec.State = clone.StateFailed
+	cleanupRec.State = "failed"
 	svc2 := &fakeCloneService{cleanupRec: cleanupRec}
 	handler2 := newCloneHandler(t, svc2)
 	w = postTrustedAuthedJSON(handler2, apiPathWorkspaceClone+"/clone-0123456789abcdef/cleanup", map[string]any{})
@@ -397,8 +401,12 @@ func TestCloneOperationDTOHidesInternalState(t *testing.T) {
 	t.Parallel()
 	rec := sampleCloneRecord()
 	rec.State = clone.StateCleanupPending
-	rec.PendingOutcome = clone.StateFailed
-	rec.Error = &clone.OpError{Code: clone.FailureExecution, Diagnostics: "boom"}
+	rec.PendingOutcome = "failed"
+	// Build the error block through the frozen wire record format the store
+	// persists; the op-error type itself is internal to the clone package.
+	if err := json.Unmarshal([]byte(`{"error":{"code":"clone_execution_failed","diagnostics":"boom"}}`), &rec); err != nil {
+		t.Fatalf("decode errored record: %v", err)
+	}
 	rec.CleanupIssue = "staging ownership could not be verified"
 	dto := cloneOperationDTO(rec)
 	if dto.State != CloneOperationStateCleanupPending || dto.PendingOutcome != "failed" {

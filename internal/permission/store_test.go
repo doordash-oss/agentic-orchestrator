@@ -23,17 +23,17 @@ import (
 
 func TestStore_SaveAndLoad(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	rules := []Rule{
+	rules := []rule{
 		{ToolPattern: patternBashGoTest, Effect: DecisionAllow, RepoName: testMyRepo},
-		{ToolPattern: patternBashRm, Effect: DecisionDeny, RepoName: testMyRepo},
+		{ToolPattern: patternBashRm, Effect: decisionDeny, RepoName: testMyRepo},
 	}
-	if err := s.Save(testMyRepo, rules); err != nil {
+	if err := s.save(testMyRepo, rules); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestStore_SaveAndLoad(t *testing.T) {
 	if loaded[0].ToolPattern != patternBashGoTest || loaded[0].Effect != DecisionAllow {
 		t.Errorf("rule 0: got %+v", loaded[0])
 	}
-	if loaded[1].ToolPattern != patternBashRm || loaded[1].Effect != DecisionDeny {
+	if loaded[1].ToolPattern != patternBashRm || loaded[1].Effect != decisionDeny {
 		t.Errorf("rule 1: got %+v", loaded[1])
 	}
 	// RepoName inferred from scope
@@ -55,16 +55,16 @@ func TestStore_SaveAndLoad(t *testing.T) {
 
 func TestStore_SaveAndLoad_GlobalScope(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	rules := []Rule{
+	rules := []rule{
 		{ToolPattern: patternBashEcho, Effect: DecisionAllow},
 	}
-	if err := s.Save(globalScope, rules); err != nil {
+	if err := s.save(globalScope, rules); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
-	loaded, err := s.Load(globalScope)
+	loaded, err := s.load(globalScope)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -79,9 +79,9 @@ func TestStore_SaveAndLoad_GlobalScope(t *testing.T) {
 
 func TestStore_Load_FileNotExists(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	loaded, err := s.Load("nonexistent")
+	loaded, err := s.load("nonexistent")
 	if err != nil {
 		t.Fatalf("Load: %v (expected nil, nil)", err)
 	}
@@ -92,7 +92,7 @@ func TestStore_Load_FileNotExists(t *testing.T) {
 
 func TestStore_Load_CorruptedJSON(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	// Write garbage to the file
 	path := filepath.Join(dir, "corrupt.json")
@@ -100,7 +100,7 @@ func TestStore_Load_CorruptedJSON(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	loaded, err := s.Load("corrupt")
+	loaded, err := s.load("corrupt")
 	if err != nil {
 		t.Fatalf("Load: %v (expected nil, nil for corrupt)", err)
 	}
@@ -111,7 +111,7 @@ func TestStore_Load_CorruptedJSON(t *testing.T) {
 
 func TestStore_Load_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	// Write empty bytes
 	path := filepath.Join(dir, "empty.json")
@@ -119,7 +119,7 @@ func TestStore_Load_EmptyFile(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	loaded, err := s.Load("empty")
+	loaded, err := s.load("empty")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -130,19 +130,19 @@ func TestStore_Load_EmptyFile(t *testing.T) {
 
 func TestStore_AppendRule(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	r1 := Rule{ToolPattern: patternBashGoTest, Effect: DecisionAllow}
-	r2 := Rule{ToolPattern: "Bash(go build *)", Effect: DecisionAllow}
+	r1 := rule{ToolPattern: patternBashGoTest, Effect: DecisionAllow}
+	r2 := rule{ToolPattern: "Bash(go build *)", Effect: DecisionAllow}
 
-	inserted, err := s.AppendRule(testMyRepo, r1)
+	inserted, err := s.appendRule(testMyRepo, r1)
 	if err != nil {
 		t.Fatalf("AppendRule 1: %v", err)
 	}
 	if !inserted {
 		t.Fatal("AppendRule 1 inserted = false, want true")
 	}
-	inserted, err = s.AppendRule(testMyRepo, r2)
+	inserted, err = s.appendRule(testMyRepo, r2)
 	if err != nil {
 		t.Fatalf("AppendRule 2: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestStore_AppendRule(t *testing.T) {
 		t.Fatal("AppendRule 2 inserted = false, want true")
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -161,18 +161,18 @@ func TestStore_AppendRule(t *testing.T) {
 
 func TestStore_AppendRule_Deduplicates(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	r := Rule{ToolPattern: patternBashGoTest, Effect: DecisionAllow}
+	r := rule{ToolPattern: patternBashGoTest, Effect: DecisionAllow}
 
-	inserted, err := s.AppendRule(testMyRepo, r)
+	inserted, err := s.appendRule(testMyRepo, r)
 	if err != nil {
 		t.Fatalf("AppendRule 1: %v", err)
 	}
 	if !inserted {
 		t.Fatal("AppendRule 1 inserted = false, want true")
 	}
-	inserted, err = s.AppendRule(testMyRepo, r)
+	inserted, err = s.appendRule(testMyRepo, r)
 	if err != nil {
 		t.Fatalf("AppendRule 2: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestStore_AppendRule_Deduplicates(t *testing.T) {
 		t.Fatal("AppendRule 2 inserted = true, want false for duplicate")
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -191,12 +191,12 @@ func TestStore_AppendRule_Deduplicates(t *testing.T) {
 
 func TestStore_AtomicWrite(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	rules := []Rule{
+	rules := []rule{
 		{ToolPattern: patternBashEcho, Effect: DecisionAllow},
 	}
-	if err := s.Save("test-scope", rules); err != nil {
+	if err := s.save("test-scope", rules); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -257,15 +257,15 @@ func TestStoreRejectsUnsafeRawScopeFilenames(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	s := NewStore(dir)
-	rule := Rule{ToolPattern: patternBashGoTest, Effect: DecisionAllow}
-	if err := s.Save("../outside", []Rule{rule}); err == nil {
+	s := newStore(dir)
+	seed := rule{ToolPattern: patternBashGoTest, Effect: DecisionAllow}
+	if err := s.save("../outside", []rule{seed}); err == nil {
 		t.Fatal("Save(unsafe scope) error = nil, want error")
 	}
-	if _, err := s.Load("../outside"); err == nil {
+	if _, err := s.load("../outside"); err == nil {
 		t.Fatal("Load(unsafe scope) error = nil, want error")
 	}
-	if _, err := s.AppendRule("../outside", rule); err == nil {
+	if _, err := s.appendRule("../outside", seed); err == nil {
 		t.Fatal("AppendRule(unsafe scope) error = nil, want error")
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "outside.json")); !os.IsNotExist(err) {
@@ -277,10 +277,10 @@ func TestCacheRememberAllowPatternEncodesUnsafeScopeInsidePermissionsDir(t *test
 	t.Parallel()
 
 	dir := t.TempDir()
-	store := NewStore(dir)
-	cache := NewCache(store)
+	store := newStore(dir)
+	cache := newCache(store)
 	repoName := "../outside"
-	result, err := cache.RememberAllowPattern(patternBashGoTest, repoName)
+	result, err := cache.rememberAllowPattern(patternBashGoTest, repoName)
 	if err != nil {
 		t.Fatalf("RememberAllowPattern() error = %v", err)
 	}
@@ -294,7 +294,7 @@ func TestCacheRememberAllowPatternEncodesUnsafeScopeInsidePermissionsDir(t *test
 	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "outside.json")); !os.IsNotExist(err) {
 		t.Fatalf("outside stat error = %v, want no escaped write", err)
 	}
-	loaded, err := store.Load(scope)
+	loaded, err := store.load(scope)
 	if err != nil {
 		t.Fatalf("Load(encoded scope) error = %v", err)
 	}
@@ -336,7 +336,7 @@ func TestNormalizePattern(t *testing.T) {
 
 func TestImportRepoSettings_AllowAndDeny(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	repoDir := t.TempDir()
 	claudeDir := filepath.Join(repoDir, ".claude")
@@ -352,7 +352,7 @@ func TestImportRepoSettings_AllowAndDeny(t *testing.T) {
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -367,7 +367,7 @@ func TestImportRepoSettings_AllowAndDeny(t *testing.T) {
 		if r.ToolPattern == "Bash(go *)" && r.Effect == DecisionAllow {
 			foundAllow = true
 		}
-		if r.ToolPattern == patternBashRm && r.Effect == DecisionDeny {
+		if r.ToolPattern == patternBashRm && r.Effect == decisionDeny {
 			foundDeny = true
 		}
 	}
@@ -381,7 +381,7 @@ func TestImportRepoSettings_AllowAndDeny(t *testing.T) {
 
 func TestImportRepoSettings_LocalSettings(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	repoDir := t.TempDir()
 	claudeDir := filepath.Join(repoDir, ".claude")
@@ -405,7 +405,7 @@ func TestImportRepoSettings_LocalSettings(t *testing.T) {
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestImportRepoSettings_LocalSettings(t *testing.T) {
 
 func TestImportRepoSettings_NoSettingsFile(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	repoDir := t.TempDir() // no .claude/ directory
 
@@ -424,7 +424,7 @@ func TestImportRepoSettings_NoSettingsFile(t *testing.T) {
 		t.Fatalf("ImportRepoSettings: %v (expected no error for missing files)", err)
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestImportRepoSettings_NoSettingsFile(t *testing.T) {
 
 func TestImportRepoSettings_CorruptedSettingsJSON(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	repoDir := t.TempDir()
 	claudeDir := filepath.Join(repoDir, ".claude")
@@ -450,7 +450,7 @@ func TestImportRepoSettings_CorruptedSettingsJSON(t *testing.T) {
 		t.Fatalf("ImportRepoSettings: %v (expected no error for corrupt file)", err)
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -461,11 +461,11 @@ func TestImportRepoSettings_CorruptedSettingsJSON(t *testing.T) {
 
 func TestImportRepoSettings_MergesWithExisting(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	// Pre-populate with an existing rule
-	existing := Rule{ToolPattern: "Bash(make *)", Effect: DecisionAllow}
-	if inserted, err := s.AppendRule(testMyRepo, existing); err != nil {
+	existing := rule{ToolPattern: "Bash(make *)", Effect: DecisionAllow}
+	if inserted, err := s.appendRule(testMyRepo, existing); err != nil {
 		t.Fatalf("AppendRule: %v", err)
 	} else if !inserted {
 		t.Fatal("AppendRule inserted = false, want true")
@@ -486,7 +486,7 @@ func TestImportRepoSettings_MergesWithExisting(t *testing.T) {
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestImportRepoSettings_MergesWithExisting(t *testing.T) {
 
 func TestImportRepoSettings_Idempotent(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	repoDir := t.TempDir()
 	claudeDir := filepath.Join(repoDir, ".claude")
@@ -517,7 +517,7 @@ func TestImportRepoSettings_Idempotent(t *testing.T) {
 		t.Fatalf("ImportRepoSettings 2: %v", err)
 	}
 
-	loaded, err := s.Load(testMyRepo)
+	loaded, err := s.load(testMyRepo)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -532,7 +532,7 @@ func TestImportRepoSettings_Idempotent(t *testing.T) {
 
 func TestRepoNamedGlobal_NoCollision(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	// 1. ImportRepoSettings for a repo literally named "global"
 	repoDir := t.TempDir()
@@ -549,7 +549,7 @@ func TestRepoNamedGlobal_NoCollision(t *testing.T) {
 	}
 
 	// The imported rule must land in "_repo_global.json", NOT "global.json" (the real global scope)
-	repoRules, err := s.Load(scopeFor("global"))
+	repoRules, err := s.load(scopeFor("global"))
 	if err != nil {
 		t.Fatalf("Load repo 'global': %v", err)
 	}
@@ -561,7 +561,7 @@ func TestRepoNamedGlobal_NoCollision(t *testing.T) {
 	}
 
 	// The real global scope file (global.json) must be empty/nonexistent
-	globalRules, err := s.Load(globalScope)
+	globalRules, err := s.load(globalScope)
 	if err != nil {
 		t.Fatalf("Load global scope: %v", err)
 	}
@@ -570,17 +570,17 @@ func TestRepoNamedGlobal_NoCollision(t *testing.T) {
 	}
 
 	// 2. RememberAllow for repo "global" must persist to "_repo_global.json", not "global.json"
-	c := NewCache(s)
+	c := newCache(s)
 	c.RememberAllow(toolNameBash, testNpmTestCoverage, "global")
 
-	repoRules2, err := s.Load(scopeFor("global"))
+	repoRules2, err := s.load(scopeFor("global"))
 	if err != nil {
 		t.Fatalf("Load repo 'global' after RememberAllow: %v", err)
 	}
 	if len(repoRules2) != 2 {
 		t.Fatalf("expected 2 rules in repo 'global', got %d", len(repoRules2))
 	}
-	globalRules2, err := s.Load(globalScope)
+	globalRules2, err := s.load(globalScope)
 	if err != nil {
 		t.Fatalf("Load global scope after RememberAllow: %v", err)
 	}
@@ -590,14 +590,14 @@ func TestRepoNamedGlobal_NoCollision(t *testing.T) {
 
 	// 3. RememberAllow for the real global scope ("") must NOT appear in repo "global"
 	c.RememberAllow(toolNameBash, "echo hello", "") // global scope
-	globalRules3, err := s.Load(globalScope)
+	globalRules3, err := s.load(globalScope)
 	if err != nil {
 		t.Fatalf("Load global scope after global RememberAllow: %v", err)
 	}
 	if len(globalRules3) != 1 {
 		t.Fatalf("expected 1 rule in real global scope, got %d", len(globalRules3))
 	}
-	repoRules3, err := s.Load(scopeFor("global"))
+	repoRules3, err := s.load(scopeFor("global"))
 	if err != nil {
 		t.Fatalf("Load repo 'global' after global RememberAllow: %v", err)
 	}
@@ -606,7 +606,7 @@ func TestRepoNamedGlobal_NoCollision(t *testing.T) {
 	}
 
 	// 4. LoadAndMerge for repo "global" must load repo rules + real global rules
-	c2 := NewCache(s)
+	c2 := newCache(s)
 	c2.LoadAndMerge("global")
 	cached := c2.Rules()
 	// Should have: 2 from repo "global" + 1 from real global scope = 3
@@ -615,19 +615,19 @@ func TestRepoNamedGlobal_NoCollision(t *testing.T) {
 	}
 
 	// 5. Check: repo "global" rule must NOT auto-apply to unrelated repos
-	_, found := c2.Check(toolNameBash, "make build", "other-repo")
+	_, found := c2.check(toolNameBash, "make build", "other-repo")
 	if found {
 		t.Error("repo 'global' rule should NOT match 'other-repo' — scope collision detected")
 	}
 
 	// But it should match repo "global" itself
-	rule, found := c2.Check(toolNameBash, "make build", "global")
+	rule, found := c2.check(toolNameBash, "make build", "global")
 	if !found || rule.Effect != DecisionAllow {
 		t.Errorf("repo 'global' rule should match repo 'global', found=%v rule=%+v", found, rule)
 	}
 
 	// Real global rule (echo hello) should match any repo
-	rule, found = c2.Check(toolNameBash, "echo hello", "other-repo")
+	rule, found = c2.check(toolNameBash, "echo hello", "other-repo")
 	if !found || rule.Effect != DecisionAllow {
 		t.Errorf("real global rule should match any repo, found=%v rule=%+v", found, rule)
 	}
@@ -639,7 +639,7 @@ func TestRepoNamedGlobal_NoCollision(t *testing.T) {
 // ~/.agentic-workflow/permissions/global.json as the canonical global file.
 func TestPreexistingGlobalJSON_HonoredAfterRestart(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	// 1. Simulate a preexisting global.json (created by hand or a prior version)
 	globalJSON := `{"rules": [{"tool_pattern": "Bash(echo *)", "effect": "allow"}]}`
@@ -648,7 +648,7 @@ func TestPreexistingGlobalJSON_HonoredAfterRestart(t *testing.T) {
 	}
 
 	// 2. Create a cache, call LoadAndMerge("") to load global rules
-	c := NewCache(s)
+	c := newCache(s)
 	c.LoadAndMerge("")
 
 	// 3. The preexisting global rule must be loaded into the cache
@@ -667,7 +667,7 @@ func TestPreexistingGlobalJSON_HonoredAfterRestart(t *testing.T) {
 	}
 
 	// 4. Simulate "restart": new cache, same store — global rules must survive
-	c2 := NewCache(s)
+	c2 := newCache(s)
 	c2.LoadAndMerge("")
 	cached2 := c2.Rules()
 	if len(cached2) != 1 {
@@ -679,7 +679,7 @@ func TestPreexistingGlobalJSON_HonoredAfterRestart(t *testing.T) {
 
 	// 5. Adding a new global rule via RememberAllow must also go to global.json
 	c2.RememberAllow(toolNameBash, testLsLa, "")
-	globalRules, err := s.Load(globalScope)
+	globalRules, err := s.load(globalScope)
 	if err != nil {
 		t.Fatalf("Load global scope: %v", err)
 	}
@@ -690,9 +690,9 @@ func TestPreexistingGlobalJSON_HonoredAfterRestart(t *testing.T) {
 
 func TestStore_EnsureGlobalDefaults_CreatesCuratedGlobalJSON(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	if err := s.EnsureGlobalDefaults(); err != nil {
+	if err := s.ensureGlobalDefaults(); err != nil {
 		t.Fatalf("EnsureGlobalDefaults: %v", err)
 	}
 
@@ -701,7 +701,7 @@ func TestStore_EnsureGlobalDefaults_CreatesCuratedGlobalJSON(t *testing.T) {
 		t.Fatalf("Stat(global.json): %v", err)
 	}
 
-	globalRules, err := s.Load(globalScope)
+	globalRules, err := s.load(globalScope)
 	if err != nil {
 		t.Fatalf("Load(global): %v", err)
 	}
@@ -715,7 +715,7 @@ func TestStore_EnsureGlobalDefaults_CreatesCuratedGlobalJSON(t *testing.T) {
 		}
 	}
 
-	cache := NewCache(s)
+	cache := newCache(s)
 	cache.LoadAndMerge("")
 
 	cachedRules := cache.Rules()
@@ -723,9 +723,9 @@ func TestStore_EnsureGlobalDefaults_CreatesCuratedGlobalJSON(t *testing.T) {
 		t.Fatalf("len(cachedRules) = %d, want %d", len(cachedRules), len(want))
 	}
 
-	rule, found := cache.Check(toolNameBash, testJSONLsLa, "any-repo")
+	rule, found := cache.check(toolNameBash, testJSONLsLa, "any-repo")
 	if !found {
-		t.Fatal("cache.Check(ls -la) found = false, want true")
+		t.Fatal("cache.check(ls -la) found = false, want true")
 	}
 	if rule.Effect != DecisionAllow {
 		t.Errorf("rule.Effect = %q, want %q", rule.Effect, DecisionAllow)
@@ -734,19 +734,19 @@ func TestStore_EnsureGlobalDefaults_CreatesCuratedGlobalJSON(t *testing.T) {
 
 func TestStore_EnsureGlobalDefaults_MergesIntoExistingGlobalJSON(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	// Pre-populate with a single user-added rule.
-	userRule := Rule{ToolPattern: patternBashEcho, Effect: DecisionAllow}
-	if err := s.Save(globalScope, []Rule{userRule}); err != nil {
+	userRule := rule{ToolPattern: patternBashEcho, Effect: DecisionAllow}
+	if err := s.save(globalScope, []rule{userRule}); err != nil {
 		t.Fatalf("Save(global): %v", err)
 	}
 
-	if err := s.EnsureGlobalDefaults(); err != nil {
+	if err := s.ensureGlobalDefaults(); err != nil {
 		t.Fatalf("EnsureGlobalDefaults: %v", err)
 	}
 
-	rules, err := s.Load(globalScope)
+	rules, err := s.load(globalScope)
 	if err != nil {
 		t.Fatalf("Load(global): %v", err)
 	}
@@ -762,12 +762,12 @@ func TestStore_EnsureGlobalDefaults_MergesIntoExistingGlobalJSON(t *testing.T) {
 		t.Errorf("rules[0].ToolPattern = %q, want %q", rules[0].ToolPattern, patternBashEcho)
 	}
 
-	cache := NewCache(s)
+	cache := newCache(s)
 	cache.LoadAndMerge("")
 	// Verify a default rule is now accessible via the cache.
-	rule, found := cache.Check(toolNameBash, `{"command":"find /tmp -name foo"}`, "any-repo")
+	rule, found := cache.check(toolNameBash, `{"command":"find /tmp -name foo"}`, "any-repo")
 	if !found {
-		t.Fatal("cache.Check(find) found = false, want true")
+		t.Fatal("cache.check(find) found = false, want true")
 	}
 	if rule.Effect != DecisionAllow {
 		t.Errorf("rule.Effect = %q, want %q", rule.Effect, DecisionAllow)
@@ -776,17 +776,17 @@ func TestStore_EnsureGlobalDefaults_MergesIntoExistingGlobalJSON(t *testing.T) {
 
 func TestStore_EnsureGlobalDefaults_IsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	if err := s.EnsureGlobalDefaults(); err != nil {
+	if err := s.ensureGlobalDefaults(); err != nil {
 		t.Fatalf("EnsureGlobalDefaults(first): %v", err)
 	}
 
-	if err := s.EnsureGlobalDefaults(); err != nil {
+	if err := s.ensureGlobalDefaults(); err != nil {
 		t.Fatalf("EnsureGlobalDefaults(second): %v", err)
 	}
 
-	rules, err := s.Load(globalScope)
+	rules, err := s.load(globalScope)
 	if err != nil {
 		t.Fatalf("Load(global): %v", err)
 	}

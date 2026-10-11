@@ -17,32 +17,32 @@ package git
 import "strings"
 
 const (
-	// AgenticURL is the public repository URL for attribution.
-	AgenticURL = "https://github.com/doordash-oss/agentic-orchestrator"
+	// agenticURL is the public repository URL for attribution.
+	agenticURL = "https://github.com/doordash-oss/agentic-orchestrator"
 
-	// AgenticoCommitEmail is the noreply address Agentico co-authors
+	// agenticoCommitEmail is the noreply address Agentico co-authors
 	// programmatic commits under. GitHub matches co-author trailers to
 	// profiles by email; a noreply address keeps attribution without
 	// implying a human mailbox.
-	AgenticoCommitEmail = "noreply@doordash-oss.github.com"
+	agenticoCommitEmail = "noreply@doordash-oss.github.com"
 
-	// AgenticoName is the display name for Agentico's commit attribution.
-	AgenticoName = "Agentico"
+	// agenticoName is the display name for Agentico's commit attribution.
+	agenticoName = "Agentico"
 
-	// CommitSignatureTrailer is appended to programmatic commit messages as
+	// commitSignatureTrailer is appended to programmatic commit messages as
 	// a git trailer. Uses the Co-authored-by convention so GitHub renders
 	// Agentico as a co-author on commits and pull requests.
-	CommitSignatureTrailer = "Co-authored-by: " + AgenticoName + " <" + AgenticoCommitEmail + ">"
+	commitSignatureTrailer = "Co-authored-by: " + agenticoName + " <" + agenticoCommitEmail + ">"
 
-	// PRSignature is the markdown signature appended to PR bodies and comments.
-	PRSignature = "\n\n---\n\n*Generated with [agentic orchestrator](" + AgenticURL + ")*"
+	// pRSignature is the markdown signature appended to PR bodies and comments.
+	pRSignature = "\n\n---\n\n*Generated with [agentic orchestrator](" + agenticURL + ")*"
 )
 
-// InjectPRSignature appends the agentic orchestrator signature to a PR body or comment.
+// injectPRSignature appends the agentic orchestrator signature to a PR body or comment.
 // Idempotent — skips if the signature is already present.
-func InjectPRSignature(body string) string {
-	if strings.Contains(body, PRSignature) {
+func injectPRSignature(body string) string {
+	if strings.Contains(body, pRSignature) {
 		return body
 	}
-	return body + PRSignature
+	return body + pRSignature
 }

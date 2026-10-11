@@ -28,23 +28,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm/claude"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
-	"go.uber.org/fx"
 )
 
 func claudeCatalogProvider(t *testing.T, binary string) *claude.Provider {
 	t.Helper()
-	cfg := config.NewDefault()
-	cfg.Providers = map[string]config.ProviderConfig{"claude": {CLI: binary}}
-	registry := llm.NewRegistry()
-	app := fx.New(fx.Supply(cfg, registry), claude.Module, fx.NopLogger)
-	if err := app.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return registry.ByName("claude").(*claude.Provider)
+	return claude.NewProvider(binary)
 }
 
 func TestClaudeCatalogProcess(t *testing.T) {

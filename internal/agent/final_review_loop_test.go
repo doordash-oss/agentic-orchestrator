@@ -28,7 +28,6 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
-	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -903,7 +902,7 @@ func TestRunFeatureFinalReviewLoop_FinalGateRunsAxesAndAggregates(t *testing.T) 
 		BuildSession:   bs,
 		SkillsDir:      filepath.Join(env.stateDir, "skills"),
 		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
-		Observer:       observe.New(true, observeDir, false, "", false, "test"),
+		Observer:       observerFromModule(t, true, observeDir, "test"),
 	}
 
 	result, err := runFeatureFinalReviewLoop(cfg, sm)
@@ -1023,7 +1022,7 @@ func TestRunFeatureFinalReviewLoop_QAAxisUsesLiveRunPosture(t *testing.T) {
 		BuildSession:   bs,
 		SkillsDir:      filepath.Join(env.stateDir, "skills"),
 		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
-		Observer:       observe.New(false, "", false, "", false, "test"),
+		Observer:       observerFromModule(t, false, "", "test"),
 	}, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)
@@ -1110,7 +1109,7 @@ func TestRunFeatureFinalReviewLoop_FrontendDesignAxisUsesLiveRunPosture(t *testi
 		BuildSession:   bs,
 		SkillsDir:      filepath.Join(env.stateDir, "skills"),
 		GuidelinesDir:  filepath.Join(env.stateDir, "guidelines"),
-		Observer:       observe.New(false, "", false, "", false, "test"),
+		Observer:       observerFromModule(t, false, "", "test"),
 	}, sm)
 	if err != nil {
 		t.Fatalf("RunFeatureFinalReviewLoop() error = %v", err)

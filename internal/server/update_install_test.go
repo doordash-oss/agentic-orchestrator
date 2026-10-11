@@ -562,8 +562,8 @@ func TestUpdateInstallPostRefusedUnsupportedInstall(t *testing.T) {
 	opts := eligibleUpdateOptions()
 	opts.Eligibility = selfupdate.Eligibility{
 		Supported:   false,
-		Install:     selfupdate.InstallAppBundle,
-		Reason:      selfupdate.UnsupportedBundled,
+		Install:     "app_bundle",
+		Reason:      "bundled",
 		Remediation: "install a standalone binary",
 	}
 	fixture := newInstallAPIFixture(t, opts)
@@ -678,9 +678,17 @@ func TestUpdateInstallPostTargetRefusals(t *testing.T) {
 		if err := writeFileTest(binary, "#!/bin/sh\n", 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := selfupdate.SuppressTarget(binary, selfupdate.SuppressedTarget{
-			Version: "2.0.0", TransactionID: strings.Repeat("a", 32), SuppressedAt: time.Now(),
-		}); err != nil {
+		// A rolled-back receipt settles through the exported reconciliation
+		// the recovery path itself calls, which suppresses the exact target.
+		rolledBack := selfupdate.Receipt{
+			TransactionID: strings.Repeat("a", 32),
+			Outcome:       selfupdate.OutcomeRolledBack,
+			FromVersion:   "1.0.0",
+			ToVersion:     "2.0.0",
+			UpdatedAt:     time.Now(),
+			Error:         "target failed",
+		}
+		if err := selfupdate.ReconcileSuppression(binary, rolledBack); err != nil {
 			t.Fatal(err)
 		}
 		opts := eligibleUpdateOptions()

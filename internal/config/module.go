@@ -16,15 +16,15 @@ package config
 
 import "go.uber.org/fx"
 
-// Params holds fx-injected parameters for config loading.
-type Params struct {
+// params holds fx-injected parameters for config loading.
+type params struct {
 	fx.In
 	Path string `name:"configPath"`
 }
 
 // Module provides Config via fx.
 var Module = fx.Module("config",
-	fx.Provide(func(p Params) (*Config, error) {
-		return LoadOrCreate(p.Path)
+	fx.Provide(func(p params) (*Config, error) {
+		return loadOrCreate(p.Path)
 	}),
 )

@@ -20,9 +20,9 @@ import (
 	"strings"
 )
 
-// ParseRemoteURL extracts host, owner, and repository name from a git
+// parseRemoteURL extracts host, owner, and repository name from a git
 // remote URL in https, ssh://, or scp-like (git@host:owner/repo) form.
-func ParseRemoteURL(remote string) (host, owner, repo string, err error) {
+func parseRemoteURL(remote string) (host, owner, repo string, err error) {
 	remote = strings.TrimSuffix(strings.TrimSpace(remote), ".git")
 	if strings.HasPrefix(remote, "http://") || strings.HasPrefix(remote, "https://") || strings.HasPrefix(remote, "ssh://") {
 		u, parseErr := url.Parse(remote)
@@ -55,5 +55,5 @@ func originRepo(repoPath string) (host, owner, repo string, err error) {
 	if err != nil {
 		return "", "", "", fmt.Errorf("reading origin remote: %w", err)
 	}
-	return ParseRemoteURL(strings.TrimSpace(string(out)))
+	return parseRemoteURL(strings.TrimSpace(string(out)))
 }

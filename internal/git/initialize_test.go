@@ -250,8 +250,8 @@ func TestInitializeBranchProbeFailureDoesNotFallBackToMain(t *testing.T) {
 	cancel()
 
 	branch, hasSymbolic, err := initializeBranchName(ctx, repo)
-	if !errors.Is(err, ErrInitializeProbeFailed) {
-		t.Fatalf("initializeBranchName() error = %v; want ErrInitializeProbeFailed", err)
+	if !errors.Is(err, errInitializeProbeFailed) {
+		t.Fatalf("initializeBranchName() error = %v; want errInitializeProbeFailed", err)
 	}
 	if branch != "" || hasSymbolic {
 		t.Fatalf("initializeBranchName() = (%q, %v); want zero values on probe failure", branch, hasSymbolic)
@@ -410,12 +410,12 @@ func TestInitializeRespectsFreshGitLocks(t *testing.T) {
 	defer func() { initializeRefLockRetryWindow = original }()
 
 	_, err := initializeRepo(context.Background(), repo)
-	if !errors.Is(err, ErrInitializeProbeFailed) {
-		t.Fatalf("err = %v, want ErrInitializeProbeFailed", err)
+	if !errors.Is(err, errInitializeProbeFailed) {
+		t.Fatalf("err = %v, want errInitializeProbeFailed", err)
 	}
-	var lockErr *GitLockContentionError
+	var lockErr *gitLockContentionError
 	if !errors.As(err, &lockErr) {
-		t.Fatalf("err = %v, want GitLockContentionError inside", err)
+		t.Fatalf("err = %v, want gitLockContentionError inside", err)
 	}
 	// The fresh lock is never removed by the initializer.
 	if _, statErr := os.Stat(lockPath); statErr != nil {
@@ -472,8 +472,8 @@ func TestInitializeFailsClosedWhenDeadlineExpires(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, err := initializeRepo(ctx, repo)
-	if !errors.Is(err, ErrInitializeProbeFailed) {
-		t.Fatalf("err = %v, want ErrInitializeProbeFailed", err)
+	if !errors.Is(err, errInitializeProbeFailed) {
+		t.Fatalf("err = %v, want errInitializeProbeFailed", err)
 	}
 	if HasHead(repo) {
 		t.Fatal("timed-out attempt created a commit")

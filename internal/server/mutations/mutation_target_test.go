@@ -41,7 +41,67 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"go.uber.org/fx"
 )
+
+// newPermissionCacheFromModule builds the production permission cache
+// through the fx module with an isolated state dir, returning the cache and
+// its permissions directory.
+func newPermissionCacheFromModule(t *testing.T) (*permission.Cache, string) {
+	t.Helper()
+	tmp := t.TempDir()
+	var cache *permission.Cache
+	app := fx.New(
+		fx.Supply(fx.Annotate(filepath.Join(tmp, "state"), fx.ResultTags(`name:"stateDir"`))),
+		permission.Module,
+		fx.Populate(&cache),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build permission cache: %v", err)
+	}
+	return cache, filepath.Join(tmp, "permissions")
+}
+
+// assertRememberedRule reads the frozen on-disk permission scope file and
+// fails unless it carries the remembered allow pattern.
+func assertRememberedRule(t *testing.T, permDir, repoName, pattern string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(permDir, repoName+".json"))
+	if err != nil {
+		t.Fatalf("read permission scope file for %s: %v", repoName, err)
+	}
+	var persisted struct {
+		Rules []struct {
+			ToolPattern string `json:"tool_pattern"`
+			Effect      string `json:"effect"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("decode permission scope file for %s: %v", repoName, err)
+	}
+	for _, r := range persisted.Rules {
+		if r.ToolPattern == pattern && r.Effect == "allow" {
+			return
+		}
+	}
+	t.Fatalf("remembered rule %q missing for %s in %s", pattern, repoName, permDir)
+}
+
+// seedRememberedRule writes the frozen on-disk permission scope file carrying
+// one remembered allow pattern, so the cache treats the rule as a duplicate.
+func seedRememberedRule(t *testing.T, permDir, repoName, pattern string) {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{
+		"rules": []map[string]any{{"tool_pattern": pattern, "effect": "allow"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal seeded rule: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(permDir, repoName+".json"), data, 0o644); err != nil {
+		t.Fatalf("seed remembered rule for %s: %v", repoName, err)
+	}
+}
 
 // Test-fixture literals reused across several cases in this file.
 const (
@@ -183,8 +243,7 @@ func TestServerMutationTargetAnswerPermissionRejectsLegacyAllow(t *testing.T) {
 
 func TestServerMutationTargetAnswerPermissionAllowRememberPersistsBeforeAnswer(t *testing.T) {
 	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
-	permDir := t.TempDir()
-	cache := permission.NewCache(permission.NewStore(permDir))
+	cache, permDir := newPermissionCacheFromModule(t)
 	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
 	sess.StatusVal = ports.SessionWaitingPermission
 	sess.PermCacheScopeVal = testRepoAName
@@ -198,9 +257,7 @@ func TestServerMutationTargetAnswerPermissionAllowRememberPersistsBeforeAnswer(t
 		},
 	}}
 	sess.onRespondControl = func() error {
-		if _, ok := cache.Check(toolNameBash, string(input), testRepoAName); !ok {
-			t.Fatal("rule was not persisted before answering")
-		}
+		assertRememberedRule(t, permDir, testRepoAName, rememberPatternBashGoTest)
 		return nil
 	}
 	sessions := &mutationTargetSessionManager{sessions: []ports.SessionView{sess}}
@@ -230,9 +287,7 @@ func TestServerMutationTargetAnswerPermissionAllowRememberPersistsBeforeAnswer(t
 	if result.Decision != decisionAllowRemember || result.Result != resultAnswered {
 		t.Fatalf("AnswerPermission() result = %+v, want remembered answer", result)
 	}
-	if _, ok := cache.Check(toolNameBash, string(input), testRepoAName); !ok {
-		t.Fatal("remembered rule missing after answer")
-	}
+	assertRememberedRule(t, permDir, testRepoAName, rememberPatternBashGoTest)
 	auditRaw, err := os.ReadFile(filepath.Join(permDir, "remember-audit.jsonl"))
 	if err != nil {
 		t.Fatalf("read audit log: %v", err)
@@ -244,11 +299,18 @@ func TestServerMutationTargetAnswerPermissionAllowRememberPersistsBeforeAnswer(t
 
 func TestServerMutationTargetAnswerPermissionAllowRememberPersistenceFailureDoesNotAnswer(t *testing.T) {
 	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
-	permDir := filepath.Join(t.TempDir(), "permissions")
-	if err := os.WriteFile(permDir, []byte("not a dir"), 0o600); err != nil {
-		t.Fatalf("write blocking permission path: %v", err)
+	cache, permDir := newPermissionCacheFromModule(t)
+	// The module seeded global.json during construction; making the
+	// permissions dir read-only now lets reads succeed while rule
+	// persistence fails, which is the failure this test pins.
+	if err := os.Chmod(permDir, 0o500); err != nil {
+		t.Fatalf("chmod permissions dir read-only: %v", err)
 	}
-	cache := permission.NewCache(permission.NewStore(permDir))
+	t.Cleanup(func() {
+		if err := os.Chmod(permDir, 0o700); err != nil {
+			t.Errorf("restore permissions dir mode: %v", err)
+		}
+	})
 	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
 	sess.StatusVal = ports.SessionWaitingPermission
 	sess.pending = []*llm.ControlRequestMessage{{
@@ -285,11 +347,8 @@ func TestServerMutationTargetAnswerPermissionAllowRememberPersistenceFailureDoes
 
 func TestServerMutationTargetAnswerPermissionAllowRememberDuplicateReturnsAlreadyExisted(t *testing.T) {
 	input := json.RawMessage(`{"command":"go test ./cmd/agentico"}`)
-	permDir := t.TempDir()
-	cache := permission.NewCache(permission.NewStore(permDir))
-	if _, err := cache.RememberAllowPattern(rememberPatternBashGoTest, testRepoAName); err != nil {
-		t.Fatalf("seed remembered rule: %v", err)
-	}
+	cache, permDir := newPermissionCacheFromModule(t)
+	seedRememberedRule(t, permDir, testRepoAName, rememberPatternBashGoTest)
 	sess := newMutationTargetSessionView(testSessionPermissionID, testFeaturePermissionID, feature.PhaseImplement)
 	sess.StatusVal = ports.SessionWaitingPermission
 	sess.pending = []*llm.ControlRequestMessage{{

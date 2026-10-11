@@ -31,7 +31,7 @@ func TestProbeCacheCollapsesConcurrentColdReads(t *testing.T) {
 	var calls atomic.Int64
 	release := make(chan struct{})
 	entered := make(chan struct{}, 1)
-	cache := NewProbeCache(0, 0, func(key string) string {
+	cache := newProbeCache(0, 0, func(key string) string {
 		calls.Add(1)
 		entered <- struct{}{}
 		<-release
@@ -68,7 +68,7 @@ func TestProbeCacheServesEntryWithoutProbing(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int64
-	cache := NewProbeCache(time.Minute, 0, func(string) string {
+	cache := newProbeCache(time.Minute, 0, func(string) string {
 		calls.Add(1)
 		return "in sync"
 	})
@@ -94,7 +94,7 @@ func TestProbeCacheServesStaleWhileRevalidating(t *testing.T) {
 	refreshed := make(chan string, 2)
 	blocked := make(chan struct{})
 	var probes atomic.Int64
-	cache := NewProbeCache(time.Minute, 0, func(string) string {
+	cache := newProbeCache(time.Minute, 0, func(string) string {
 		if probes.Add(1) == 2 {
 			<-blocked
 		}
@@ -130,7 +130,7 @@ func TestProbeCacheServesStaleWhileRevalidating(t *testing.T) {
 func TestProbeCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	t.Parallel()
 
-	cache := NewProbeCache(time.Minute, 2, func(key string) string { return key })
+	cache := newProbeCache(time.Minute, 2, func(key string) string { return key })
 	cache.Get("a")
 	cache.Get("b")
 	cache.Get("a") // keeps "a" hot so "b" is the eviction victim
@@ -173,8 +173,8 @@ func TestCleanlinessCacheNeverReportsIndeterminateAsClean(t *testing.T) {
 			if name == "timeout" && !errors.Is(err, ErrProbeTimeout) {
 				t.Fatalf("InspectCleanliness error = %v, want the probe timeout preserved", err)
 			}
-			if name == "nil report" && !errors.Is(err, ErrCleanlinessUnknown) {
-				t.Fatalf("InspectCleanliness error = %v, want ErrCleanlinessUnknown", err)
+			if name == "nil report" && !errors.Is(err, errCleanlinessUnknown) {
+				t.Fatalf("InspectCleanliness error = %v, want errCleanlinessUnknown", err)
 			}
 		})
 	}
@@ -190,7 +190,7 @@ func TestCleanlinessCacheServesEntryWithoutProbing(t *testing.T) {
 	}
 	cache := NewCleanlinessCache(inspector)
 	for i := 0; i < 4; i++ {
-		report, err := cache.InspectCleanliness("/tmp/worktree", DefaultCleanlinessPathLimit)
+		report, err := cache.InspectCleanliness("/tmp/worktree", defaultCleanlinessPathLimit)
 		if err != nil {
 			t.Fatalf("InspectCleanliness error = %v", err)
 		}
@@ -253,7 +253,7 @@ func TestFreshnessCacheServesEntryWithoutProbing(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("probe ran %d times across 3 reads, want 1", got)
 	}
-	if got := cache.Freshness(""); got != FreshnessUnknown {
+	if got := cache.Freshness(""); got != freshnessUnknown {
 		t.Fatalf("empty worktree freshness = %q, want unknown", got)
 	}
 }
@@ -272,7 +272,7 @@ func TestCachedProbesYieldToWorktreeMutation(t *testing.T) {
 	if got := inspector.calls.Load(); got != 0 {
 		t.Fatalf("inspector ran %d times while mutation lock held, want 0", got)
 	}
-	if got := RepoFreshness(path); got != FreshnessUnknown {
+	if got := RepoFreshness(path); got != freshnessUnknown {
 		t.Fatalf("busy RepoFreshness() = %q, want unknown", got)
 	}
 

@@ -105,9 +105,9 @@ func TestResetToCommitPreservesFreshIndexLockAndReturnsTypedError(t *testing.T) 
 	})
 
 	err := NewWorktreeManager(t.TempDir()).ResetToCommit(repo, anchor)
-	var lockErr *GitLockContentionError
+	var lockErr *gitLockContentionError
 	if !errors.As(err, &lockErr) {
-		t.Fatalf("ResetToCommit() error = %v, want *GitLockContentionError", err)
+		t.Fatalf("ResetToCommit() error = %v, want *gitLockContentionError", err)
 	}
 	wantInfo, wantErr := os.Stat(lockPath)
 	gotInfo, gotErr := os.Stat(lockErr.LockPath)
@@ -406,7 +406,7 @@ func TestCommitAll(t *testing.T) {
 	if err != nil {
 		t.Fatalf("git log: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), CommitSignatureTrailer) {
+	if !strings.Contains(string(out), commitSignatureTrailer) {
 		t.Errorf("git log -1 --format=%%B = %q, want signature trailer", out)
 	}
 

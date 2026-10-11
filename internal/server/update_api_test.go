@@ -86,7 +86,7 @@ func eligibleUpdateOptions() UpdateOptions {
 		Policy:         selfupdate.PolicyNotify,
 		Settings:       selfupdate.StartupSettings{Policy: selfupdate.PolicyNotify, Channel: "stable", CheckInterval: 6 * time.Hour, Strategy: "quiesce"},
 		CurrentVersion: "1.0.0",
-		Eligibility:    selfupdate.Eligibility{Supported: true, Install: selfupdate.InstallTarball},
+		Eligibility:    selfupdate.Eligibility{Supported: true, Install: "tarball"},
 	}
 }
 
@@ -236,8 +236,8 @@ func TestPostUpdateCheckRefusedUnsupportedInstall(t *testing.T) {
 	opts := eligibleUpdateOptions()
 	opts.Eligibility = selfupdate.Eligibility{
 		Supported:   false,
-		Install:     selfupdate.InstallAppBundle,
-		Reason:      selfupdate.UnsupportedBundled,
+		Install:     "app_bundle",
+		Reason:      "bundled",
 		Remediation: "install a standalone binary",
 	}
 	fixture := newUpdateAPIFixture(t, opts)
@@ -349,12 +349,39 @@ func TestPostUpdateCheckMutationValidation(t *testing.T) {
 
 func ioNopCloser(r *bytes.Reader) io.ReadCloser { return io.NopCloser(r) }
 
+// retryableFeedError drives one server-imposed retry deadline through the
+// exported fixture feed client: a loopback fixture server answers every
+// feed request with 429 and an exact HTTP-date Retry-After, and the feed
+// client converts it into the retryable feed error the coordinator parses.
+func retryableFeedError(t *testing.T, notBefore time.Time) error {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", notBefore.Format(http.TimeFormat))
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+	client, err := selfupdate.NewFixtureFeedClient(srv.URL, "agentico")
+	if err != nil {
+		t.Fatalf("fixture feed client: %v", err)
+	}
+	_, feedErr := client.LatestStable(context.Background())
+	if feedErr == nil {
+		t.Fatal("fixture feed check: want a retryable feed error")
+	}
+	if _, ok := selfupdate.IsFeedRetryError(feedErr); !ok {
+		t.Fatalf("fixture feed error = %v; want a retryable feed error", feedErr)
+	}
+	return feedErr
+}
+
 func TestPostUpdateCheckRefusedDuringRetryDeadline(t *testing.T) {
 	t.Parallel()
 	opts := eligibleUpdateOptions()
 	fixture := newUpdateAPIFixture(t, opts)
-	notBefore := time.Now().UTC().Add(time.Hour)
-	feedErr := &selfupdate.FeedError{Reason: "feed rate limited", Retry: true, NotBefore: notBefore}
+	// A server-imposed retry deadline arrives through the exported fixture
+	// feed client as a 429 carrying an exact HTTP-date Retry-After.
+	notBefore := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	feedErr := retryableFeedError(t, notBefore)
 	fixture.feed.err = feedErr
 
 	// Drive one failed check through the coordinator directly, then stop

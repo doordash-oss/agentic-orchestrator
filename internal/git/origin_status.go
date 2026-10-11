@@ -34,26 +34,26 @@ type OriginCheckStatus string
 const (
 	// OriginCheckChecking reports an attempt in flight.
 	OriginCheckChecking OriginCheckStatus = "checking"
-	// OriginCheckUpToDate reports local == freshly fetched origin.
-	OriginCheckUpToDate OriginCheckStatus = "up_to_date"
+	// originCheckUpToDate reports local == freshly fetched origin.
+	originCheckUpToDate OriginCheckStatus = "up_to_date"
 	// OriginCheckBehind reports the origin branch has commits the local
 	// source lacks.
 	OriginCheckBehind OriginCheckStatus = "behind"
-	// OriginCheckAhead reports the local source has commits origin lacks.
-	OriginCheckAhead OriginCheckStatus = "ahead"
-	// OriginCheckDiverged reports both sides have unique commits.
-	OriginCheckDiverged OriginCheckStatus = "diverged"
-	// OriginCheckNoOrigin reports no origin remote is configured.
-	OriginCheckNoOrigin OriginCheckStatus = "no_origin"
+	// originCheckAhead reports the local source has commits origin lacks.
+	originCheckAhead OriginCheckStatus = "ahead"
+	// originCheckDiverged reports both sides have unique commits.
+	originCheckDiverged OriginCheckStatus = "diverged"
+	// originCheckNoOrigin reports no origin remote is configured.
+	originCheckNoOrigin OriginCheckStatus = "no_origin"
 	// OriginCheckRemoteBranchMissing reports the mapped origin branch was
 	// proved absent by the current attempt.
 	OriginCheckRemoteBranchMissing OriginCheckStatus = "remote_branch_missing"
-	// OriginCheckOtherUpstream reports the selected branch explicitly tracks
+	// originCheckOtherUpstream reports the selected branch explicitly tracks
 	// an upstream other than origin (including local upstream tracking).
-	OriginCheckOtherUpstream OriginCheckStatus = "other_upstream"
-	// OriginCheckDetached reports a detached local source; there is no branch
+	originCheckOtherUpstream OriginCheckStatus = "other_upstream"
+	// originCheckDetached reports a detached local source; there is no branch
 	// to track and no fetch is attempted.
-	OriginCheckDetached OriginCheckStatus = "detached"
+	originCheckDetached OriginCheckStatus = "detached"
 	// OriginCheckLocalBaseMissing reports the selected local source is
 	// missing or unborn; no remote-only fallback exists.
 	OriginCheckLocalBaseMissing OriginCheckStatus = "local_base_missing"
@@ -63,12 +63,12 @@ const (
 	OriginCheckUnknown OriginCheckStatus = "unknown"
 )
 
-// OriginMapping is the resolved origin tracking for one selected branch. The
+// originMapping is the resolved origin tracking for one selected branch. The
 // mapping comes from the branch's configured upstream (exact remote branch,
 // including differently named branches) or, without upstream configuration,
 // the same-name origin fallback. A configured mapping is preserved even when
 // its cached remote-tracking ref is absent.
-type OriginMapping struct {
+type originMapping struct {
 	Branch string
 }
 
@@ -94,27 +94,27 @@ const (
 	// behind origin (ahead, diverged, or up to date), so no plain update is
 	// defined.
 	UpdateBlockerLocalNotBehind UpdateBlocker = "local_not_behind"
-	// UpdateBlockerDirtyTargetCheckout reports the checkout holding the
+	// updateBlockerDirtyTargetCheckout reports the checkout holding the
 	// selected branch has uncommitted changes, including untracked files.
-	UpdateBlockerDirtyTargetCheckout UpdateBlocker = "dirty_target_checkout"
-	// UpdateBlockerGitOperationInProgress reports a Git mutation guarded by
+	updateBlockerDirtyTargetCheckout UpdateBlocker = "dirty_target_checkout"
+	// updateBlockerGitOperationInProgress reports a Git mutation guarded by
 	// Agentico's common-directory boundary is running for the repository.
-	UpdateBlockerGitOperationInProgress UpdateBlocker = "git_operation_in_progress"
-	// UpdateBlockerBranchCheckedOutInWorktree reports the selected branch is
+	updateBlockerGitOperationInProgress UpdateBlocker = "git_operation_in_progress"
+	// updateBlockerBranchCheckedOutInWorktree reports the selected branch is
 	// checked out in a linked worktree.
-	UpdateBlockerBranchCheckedOutInWorktree UpdateBlocker = "branch_checked_out_in_worktree"
-	// UpdateBlockerCheckoutOperationInProgress reports a merge, rebase,
+	updateBlockerBranchCheckedOutInWorktree UpdateBlocker = "branch_checked_out_in_worktree"
+	// updateBlockerCheckoutOperationInProgress reports a merge, rebase,
 	// cherry-pick, or revert — including a sequence between commits — is in
 	// progress in the original checkout holding the selected branch.
-	UpdateBlockerCheckoutOperationInProgress UpdateBlocker = "checkout_operation_in_progress"
-	// UpdateBlockerIgnoredPathCollision reports an incoming tracked path of
+	updateBlockerCheckoutOperationInProgress UpdateBlocker = "checkout_operation_in_progress"
+	// updateBlockerIgnoredPathCollision reports an incoming tracked path of
 	// the fast-forward would overwrite ignored files or directories in the
 	// original checkout holding the selected branch.
-	UpdateBlockerIgnoredPathCollision UpdateBlocker = "ignored_path_collision"
-	// UpdateBlockerCheckoutUninspectable reports the checkout's safety state
+	updateBlockerIgnoredPathCollision UpdateBlocker = "ignored_path_collision"
+	// updateBlockerCheckoutUninspectable reports the checkout's safety state
 	// could not be inspected; an inspection failure is ineligible, never
 	// evidence of safety.
-	UpdateBlockerCheckoutUninspectable UpdateBlocker = "checkout_uninspectable"
+	updateBlockerCheckoutUninspectable UpdateBlocker = "checkout_uninspectable"
 	// UpdateBlockerComparisonUnavailable reports no fresh comparison exists
 	// to base an update decision on.
 	UpdateBlockerComparisonUnavailable UpdateBlocker = "comparison_unavailable"
@@ -137,7 +137,7 @@ type OriginCheckOptions struct {
 	DiagnosticLimit int
 	// Runner is the process boundary. nil uses the production
 	// argument-vector runner with non-interactive environment.
-	Runner BranchProbeRunner
+	Runner branchProbeRunner
 	// Now reports the comparison time. nil uses time.Now.
 	Now func() time.Time
 }
@@ -156,11 +156,11 @@ func (o OriginCheckOptions) diagnosticLimit() int {
 	return defaultBranchProbeDiagnosticLimit
 }
 
-func (o OriginCheckOptions) runner() BranchProbeRunner {
+func (o OriginCheckOptions) runner() branchProbeRunner {
 	if o.Runner != nil {
 		return o.Runner
 	}
-	return ExecBranchProbeRunner{}
+	return execBranchProbeRunner{}
 }
 
 func (o OriginCheckOptions) now() time.Time {
@@ -176,25 +176,25 @@ func (o OriginCheckOptions) now() time.Time {
 type OriginCheckPlan struct {
 	Source      LocalSource
 	Status      OriginCheckStatus
-	Mapping     *OriginMapping
+	Mapping     *originMapping
 	Diagnostics string
 }
 
-// FetchOriginState distinguishes a proved fetch outcome from an unavailable
+// fetchOriginState distinguishes a proved fetch outcome from an unavailable
 // attempt. Absent means the current attempt proved the remote branch missing;
 // every other failure is Unavailable, never evidence of absence.
-type FetchOriginState string
+type fetchOriginState string
 
 const (
-	FetchOriginFetched     FetchOriginState = "fetched"
-	FetchOriginAbsent      FetchOriginState = "absent"
-	FetchOriginUnavailable FetchOriginState = "unavailable"
+	fetchOriginFetched     fetchOriginState = "fetched"
+	FetchOriginAbsent      fetchOriginState = "absent"
+	FetchOriginUnavailable fetchOriginState = "unavailable"
 )
 
-// FetchOriginBranchResult is the bounded outcome of fetching the mapped
+// fetchOriginBranchResult is the bounded outcome of fetching the mapped
 // origin branch.
-type FetchOriginBranchResult struct {
-	State       FetchOriginState
+type fetchOriginBranchResult struct {
+	State       fetchOriginState
 	SHA         string
 	Diagnostics string
 }
@@ -213,7 +213,7 @@ func PlanOriginCheck(ctx context.Context, repoPath string, mode LocalSourceMode,
 	}
 	plan := OriginCheckPlan{Source: source}
 	if source.Kind == LocalSourceDetached {
-		plan.Status = OriginCheckDetached
+		plan.Status = originCheckDetached
 		return plan
 	}
 	mapping, status, diagnostics := resolveOriginMapping(ctx, repoPath, source.Branch, options)
@@ -227,7 +227,7 @@ func PlanOriginCheck(ctx context.Context, repoPath string, mode LocalSourceMode,
 // non-origin remote (including local "." tracking) is other-upstream; no
 // upstream permits only the same-name origin fallback; malformed or
 // unsupported mappings fail safely as unknown.
-func resolveOriginMapping(ctx context.Context, repoPath, branch string, options OriginCheckOptions) (*OriginMapping, OriginCheckStatus, string) {
+func resolveOriginMapping(ctx context.Context, repoPath, branch string, options OriginCheckOptions) (*originMapping, OriginCheckStatus, string) {
 	remote, remoteErr := originConfigValue(ctx, repoPath, branch, "remote", options)
 	if remoteErr != nil {
 		return nil, OriginCheckUnknown, remoteErr.Error()
@@ -239,21 +239,21 @@ func resolveOriginMapping(ctx context.Context, repoPath, branch string, options 
 	switch {
 	case remote != "":
 		if remote != "origin" {
-			return nil, OriginCheckOtherUpstream, ""
+			return nil, originCheckOtherUpstream, ""
 		}
 		remoteBranch, ok := strings.CutPrefix(merge, "refs/heads/")
 		if !ok || !validRemoteBranchName(remoteBranch) {
 			return nil, OriginCheckUnknown, fmt.Sprintf("branch %q has an unsupported origin merge configuration", branch)
 		}
-		return &OriginMapping{Branch: remoteBranch}, "", ""
+		return &originMapping{Branch: remoteBranch}, "", ""
 	default:
 		if !originRemoteConfigured(ctx, repoPath, options) {
-			return nil, OriginCheckNoOrigin, ""
+			return nil, originCheckNoOrigin, ""
 		}
 		if !validRemoteBranchName(branch) {
 			return nil, OriginCheckUnknown, fmt.Sprintf("branch %q is not a usable origin branch name", branch)
 		}
-		return &OriginMapping{Branch: branch}, "", ""
+		return &originMapping{Branch: branch}, "", ""
 	}
 }
 
@@ -293,37 +293,37 @@ func originRemoteConfigured(ctx context.Context, repoPath string, options Origin
 // submodule recursion cannot broaden the operation or target local branches.
 // The returned SHA comes from the remote-tracking ref this fetch wrote, never
 // from a cached ref or FETCH_HEAD.
-func FetchOriginBranch(ctx context.Context, repoPath string, mapping OriginMapping, options OriginCheckOptions) FetchOriginBranchResult {
+func FetchOriginBranch(ctx context.Context, repoPath string, mapping originMapping, options OriginCheckOptions) fetchOriginBranchResult {
 	if !validRemoteBranchName(mapping.Branch) {
-		return FetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: "mapped origin branch name is not usable"}
+		return fetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: "mapped origin branch name is not usable"}
 	}
 	fullRef := "refs/heads/" + mapping.Branch
 	probe := runOriginCommand(ctx, repoPath, []string{"ls-remote", "--exit-code", "--heads", "origin", fullRef}, 0, options)
 	switch probe.ExitCode {
 	case 2:
-		return FetchOriginBranchResult{State: FetchOriginAbsent}
+		return fetchOriginBranchResult{State: FetchOriginAbsent}
 	case 0:
 		if strings.TrimSpace(probe.Stdout) == "" {
-			return FetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: "origin branch existence probe returned no result"}
+			return fetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: "origin branch existence probe returned no result"}
 		}
 	default:
-		return FetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: nonemptyBranchProbeDiagnostic(probe.Diagnostics)}
+		return fetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: nonemptyBranchProbeDiagnostic(probe.Diagnostics)}
 	}
 	refspec := originFetchRefspecPrefix + mapping.Branch + ":refs/remotes/origin/" + mapping.Branch
 	fetch := runOriginCommand(ctx, repoPath, []string{"fetch", "--no-tags", "--refmap=", "--recurse-submodules=no", "origin", refspec}, 0, options)
 	if fetch.ExitCode != 0 {
-		return FetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: nonemptyBranchProbeDiagnostic(fetch.Diagnostics)}
+		return fetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: nonemptyBranchProbeDiagnostic(fetch.Diagnostics)}
 	}
 	sha := runOriginCommand(ctx, repoPath, []string{"rev-parse", "--verify", "--quiet", "refs/remotes/origin/" + mapping.Branch + "^{commit}"}, options.commandTimeout(), options)
 	if sha.ExitCode != 0 || !validFullCommit(strings.TrimSpace(sha.Stdout)) {
-		return FetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: "fetched origin branch did not resolve to a commit"}
+		return fetchOriginBranchResult{State: FetchOriginUnavailable, Diagnostics: "fetched origin branch did not resolve to a commit"}
 	}
-	return FetchOriginBranchResult{State: FetchOriginFetched, SHA: strings.TrimSpace(sha.Stdout)}
+	return fetchOriginBranchResult{State: fetchOriginFetched, SHA: strings.TrimSpace(sha.Stdout)}
 }
 
 // CompareOriginSource compares the recorded local SHA with the freshly
 // fetched SHA. The comparison is evidence about exactly those SHAs.
-func CompareOriginSource(ctx context.Context, repoPath string, localSHA, fetchedSHA string, mapping OriginMapping, options OriginCheckOptions) (OriginComparison, error) {
+func CompareOriginSource(ctx context.Context, repoPath string, localSHA, fetchedSHA string, mapping originMapping, options OriginCheckOptions) (OriginComparison, error) {
 	comparison := OriginComparison{
 		LocalSHA:     localSHA,
 		FetchedSHA:   fetchedSHA,
@@ -331,7 +331,7 @@ func CompareOriginSource(ctx context.Context, repoPath string, localSHA, fetched
 		CheckedAt:    options.now(),
 	}
 	if localSHA == fetchedSHA {
-		comparison.Status = OriginCheckUpToDate
+		comparison.Status = originCheckUpToDate
 		return comparison, nil
 	}
 	result := runOriginCommand(ctx, repoPath, []string{"rev-list", "--left-right", "--count", localSHA + "..." + fetchedSHA}, options.commandTimeout(), options)
@@ -351,13 +351,13 @@ func CompareOriginSource(ctx context.Context, repoPath string, localSHA, fetched
 	comparison.BehindCount = behind
 	switch {
 	case ahead == 0 && behind == 0:
-		comparison.Status = OriginCheckUpToDate
+		comparison.Status = originCheckUpToDate
 	case ahead > 0 && behind == 0:
-		comparison.Status = OriginCheckAhead
+		comparison.Status = originCheckAhead
 	case ahead == 0 && behind > 0:
 		comparison.Status = OriginCheckBehind
 	default:
-		comparison.Status = OriginCheckDiverged
+		comparison.Status = originCheckDiverged
 	}
 	return comparison, nil
 }
@@ -377,14 +377,14 @@ func CompareOriginSource(ctx context.Context, repoPath string, localSHA, fetched
 func ProbeUpdateEligibility(ctx context.Context, repoPath, branch string, comparison *OriginComparison, options OriginCheckOptions) (bool, []UpdateBlocker) {
 	blockers := make([]UpdateBlocker, 0, 2)
 	if worktreeMutationInProgress(repoPath) {
-		blockers = append(blockers, UpdateBlockerGitOperationInProgress)
+		blockers = append(blockers, updateBlockerGitOperationInProgress)
 	}
 	holder, found, err := branchCheckoutHolder(ctx, repoPath, branch, options)
 	if err != nil {
-		blockers = append(blockers, UpdateBlockerCheckoutUninspectable)
+		blockers = append(blockers, updateBlockerCheckoutUninspectable)
 	} else if found {
 		if !sameCheckoutPath(holder, repoPath) {
-			blockers = append(blockers, UpdateBlockerBranchCheckedOutInWorktree)
+			blockers = append(blockers, updateBlockerBranchCheckedOutInWorktree)
 		} else {
 			blockers = append(blockers, originalCheckoutSafetyBlockers(ctx, repoPath, holder, comparison, options)...)
 		}
@@ -402,25 +402,25 @@ func originalCheckoutSafetyBlockers(ctx context.Context, repoPath, holder string
 	var blockers []UpdateBlocker
 	operation, err := checkoutOperationInProgress(ctx, holder, options)
 	if err != nil {
-		return append(blockers, UpdateBlockerCheckoutUninspectable)
+		return append(blockers, updateBlockerCheckoutUninspectable)
 	}
 	if operation {
-		blockers = append(blockers, UpdateBlockerCheckoutOperationInProgress)
+		blockers = append(blockers, updateBlockerCheckoutOperationInProgress)
 	}
 	clean, err := checkoutStatusClean(ctx, holder, true, options)
 	if err != nil {
-		return append(blockers, UpdateBlockerCheckoutUninspectable)
+		return append(blockers, updateBlockerCheckoutUninspectable)
 	}
 	if !clean {
-		blockers = append(blockers, UpdateBlockerDirtyTargetCheckout)
+		blockers = append(blockers, updateBlockerDirtyTargetCheckout)
 	}
 	if comparison != nil && comparison.Status == OriginCheckBehind && validFullCommit(comparison.LocalSHA) && validFullCommit(comparison.FetchedSHA) {
 		collision, err := checkoutIgnoredPathCollision(ctx, holder, comparison.LocalSHA, comparison.FetchedSHA, options)
 		if err != nil {
-			return append(blockers, UpdateBlockerCheckoutUninspectable)
+			return append(blockers, updateBlockerCheckoutUninspectable)
 		}
 		if collision {
-			blockers = append(blockers, UpdateBlockerIgnoredPathCollision)
+			blockers = append(blockers, updateBlockerIgnoredPathCollision)
 		}
 	}
 	return blockers
@@ -463,13 +463,13 @@ func sameCheckoutPath(a, b string) bool {
 // runOriginCommand runs one bounded git command for origin checks. A zero
 // timeout runs the command under the ambient context only, which callers use
 // for network commands whose bound is the whole-attempt deadline.
-func runOriginCommand(ctx context.Context, repoPath string, args []string, timeout time.Duration, options OriginCheckOptions) BranchProbeCommandResult {
+func runOriginCommand(ctx context.Context, repoPath string, args []string, timeout time.Duration, options OriginCheckOptions) branchProbeCommandResult {
 	limit := options.diagnosticLimit()
 	if err := ctx.Err(); err != nil {
-		return BranchProbeCommandResult{ExitCode: -1, Err: err, Diagnostics: "origin check command aborted before start"}
+		return branchProbeCommandResult{ExitCode: -1, Err: err, Diagnostics: "origin check command aborted before start"}
 	}
 	runner := options.runner()
-	var result BranchProbeCommandResult
+	var result branchProbeCommandResult
 	if timeout > 0 {
 		opCtx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()

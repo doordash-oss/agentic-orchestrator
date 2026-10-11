@@ -25,21 +25,21 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/github"
 )
 
-// PullRebaseOutcome categorises the result of a PullRebase operation.
-type PullRebaseOutcome int
+// pullRebaseOutcome categorises the result of a PullRebase operation.
+type pullRebaseOutcome int
 
 const (
-	// PullRebaseSuccess means the rebase succeeded or was a no-op.
-	PullRebaseSuccess PullRebaseOutcome = iota
+	// pullRebaseSuccess means the rebase succeeded or was a no-op.
+	pullRebaseSuccess pullRebaseOutcome = iota
 	// PullRebaseConflict means the rebase encountered merge conflicts and was aborted.
 	PullRebaseConflict
 	// PullRebaseFailure means a non-conflict failure occurred.
 	PullRebaseFailure
 )
 
-// PullRebaseResult is the outcome and error from a PullRebase operation.
-type PullRebaseResult struct {
-	Outcome PullRebaseOutcome
+// pullRebaseResult is the outcome and error from a PullRebase operation.
+type pullRebaseResult struct {
+	Outcome pullRebaseOutcome
 	Err     error
 }
 
@@ -53,16 +53,16 @@ type PullRebaseResult struct {
 //   - Success: remote branch absent (first publish), already up-to-date, or rebase succeeded
 //   - Conflict: rebase had conflicts; rebase aborted, worktree left clean
 //   - Failure: network/auth/fetch error or other non-conflict failure
-func PullRebase(worktreePath, branch string) PullRebaseResult {
+func PullRebase(worktreePath, branch string) pullRebaseResult {
 	// 1. ls-remote exit code 2 proves the remote branch is absent.
 	probeCmd := exec.Command("git", "-C", worktreePath, "ls-remote", "--exit-code", "--heads", "origin", "refs/heads/"+branch)
 	if out, err := probeCmd.CombinedOutput(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && exitErr.ExitCode() == 2 {
 			// Remote branch doesn't exist (first publish) — no-op
-			return PullRebaseResult{Outcome: PullRebaseSuccess}
+			return pullRebaseResult{Outcome: pullRebaseSuccess}
 		}
-		return PullRebaseResult{
+		return pullRebaseResult{
 			Outcome: PullRebaseFailure,
 			Err:     fmt.Errorf("fetch failed: probing origin/%s: %s: %w", branch, strings.TrimSpace(string(out)), err),
 		}
@@ -73,7 +73,7 @@ func PullRebase(worktreePath, branch string) PullRebaseResult {
 	refspec := "+refs/heads/" + branch + ":refs/remotes/" + target
 	fetchCmd := exec.Command("git", "-C", worktreePath, "fetch", "--no-tags", "origin", refspec)
 	if out, err := fetchCmd.CombinedOutput(); err != nil {
-		return PullRebaseResult{
+		return pullRebaseResult{
 			Outcome: PullRebaseFailure,
 			Err:     fmt.Errorf("fetch failed: %s: %w", strings.TrimSpace(string(out)), err),
 		}
@@ -97,18 +97,18 @@ func PullRebase(worktreePath, branch string) PullRebaseResult {
 		_ = abortCmd.Run()
 
 		if isConflict {
-			return PullRebaseResult{
+			return pullRebaseResult{
 				Outcome: PullRebaseConflict,
 				Err:     fmt.Errorf("pull-rebase conflict: %s", strings.TrimSpace(string(out))),
 			}
 		}
-		return PullRebaseResult{
+		return pullRebaseResult{
 			Outcome: PullRebaseFailure,
 			Err:     fmt.Errorf("rebase failed: %s: %w", strings.TrimSpace(string(out)), err),
 		}
 	}
 
-	return PullRebaseResult{Outcome: PullRebaseSuccess}
+	return pullRebaseResult{Outcome: pullRebaseSuccess}
 }
 
 // resolveGitDir returns the .git directory for a worktree path.
@@ -155,7 +155,7 @@ func listConflictFiles(worktreePath string) []string {
 // PRBaseBranch returns the base branch of an open PR via the GitHub API.
 // prURL should be a full GitHub PR URL. Returns empty string on any error.
 func PRBaseBranch(_ string, prURL string) string {
-	owner, repo, number, err := ParsePRURL(prURL)
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return ""
 	}

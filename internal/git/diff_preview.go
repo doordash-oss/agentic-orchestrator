@@ -23,8 +23,8 @@ import (
 	"strings"
 )
 
-// DiffPreview is a compact, file-scoped preview of a working tree change.
-type DiffPreview struct {
+// diffPreview is a compact, file-scoped preview of a working tree change.
+type diffPreview struct {
 	Path         string
 	OldPath      string
 	Operation    string // add, update, delete, rename
@@ -46,7 +46,7 @@ type statusEntry struct {
 // that would be published or merged if the branch were pushed and opened as
 // a PR against the base. Untracked files appear as additions. The base
 // branch is resolved via resolveBase when empty.
-func BranchDiffPreviews(worktreePath, baseBranch string) ([]DiffPreview, error) {
+func BranchDiffPreviews(worktreePath, baseBranch string) ([]diffPreview, error) {
 	base := resolveBase(worktreePath, baseBranch)
 	entries, err := branchDiffEntries(worktreePath, base)
 	if err != nil {
@@ -56,7 +56,7 @@ func BranchDiffPreviews(worktreePath, baseBranch string) ([]DiffPreview, error) 
 		return nil, nil
 	}
 
-	previews := make([]DiffPreview, 0, len(entries))
+	previews := make([]diffPreview, 0, len(entries))
 	for _, entry := range entries {
 		patch, err := branchEntryPatch(worktreePath, base, entry)
 		if err != nil {
@@ -66,7 +66,7 @@ func BranchDiffPreviews(worktreePath, baseBranch string) ([]DiffPreview, error) 
 			continue
 		}
 		added, removed := countPatchLineChanges(patch)
-		preview := DiffPreview{
+		preview := diffPreview{
 			Path:         entry.path,
 			OldPath:      entry.oldPath,
 			Operation:    entry.operation,
@@ -217,7 +217,7 @@ func countPatchLineChanges(patch string) (added, removed int) {
 // SingleFileDiffPreview returns a compact diff preview for a single file
 // compared to the base branch. The relPath must be relative to the worktree
 // root. Returns (nil, nil) if the file has no changes vs base.
-func SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*DiffPreview, error) {
+func SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*diffPreview, error) {
 	base := resolveBase(worktreePath, baseBranch)
 	entry, err := singleFileBranchStatus(worktreePath, base, relPath)
 	if err != nil {
@@ -238,7 +238,7 @@ func SingleFileDiffPreview(worktreePath, baseBranch, relPath string) (*DiffPrevi
 	if compact == "" {
 		return nil, nil
 	}
-	return &DiffPreview{
+	return &diffPreview{
 		Path:         entry.path,
 		OldPath:      entry.oldPath,
 		Operation:    entry.operation,

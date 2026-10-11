@@ -23,7 +23,7 @@ import (
 )
 
 func TestInferThenMatch_Integration(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 	inner := &mockHandler{behavior: ""}
 
 	handler := &CachingHandler{
@@ -88,7 +88,7 @@ func TestInferThenMatch_Integration(t *testing.T) {
 // using the real runtime JSON payload shape ({"command":"..."}) that the
 // Claude CLI wire protocol sends through session.go and attach.go.
 func TestInferThenMatch_JSONPayload_Integration(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 	handler := &CachingHandler{
 		Inner:    &mockHandler{behavior: ""},
 		Cache:    cache,
@@ -149,7 +149,7 @@ func TestInferThenMatch_JSONPayload_Integration(t *testing.T) {
 }
 
 func TestCachingHandler_Integration(t *testing.T) {
-	cache := NewCache(nil)
+	cache := newCache(nil)
 
 	// Inner handler always defers (empty behavior).
 	inner := &mockHandler{behavior: ""}
@@ -224,7 +224,7 @@ func TestCachingHandler_Integration(t *testing.T) {
 
 func TestPersistence_EndToEnd(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	// 1. Create a temp repo with settings
 	repoDir := t.TempDir()
@@ -243,7 +243,7 @@ func TestPersistence_EndToEnd(t *testing.T) {
 	}
 
 	// 3. Create cache and load
-	cache := NewCache(s)
+	cache := newCache(s)
 	cache.LoadAndMerge(testMyRepo)
 
 	// 4. Verify imported rule auto-approves
@@ -268,7 +268,7 @@ func TestPersistence_EndToEnd(t *testing.T) {
 	cache.RememberAllow(toolNameBash, testNpmTest, testMyRepo)
 
 	// 6. Simulate restart: new cache, same store
-	cache2 := NewCache(s)
+	cache2 := newCache(s)
 	cache2.LoadAndMerge(testMyRepo)
 
 	// 7. Verify testNpmTest survived the "restart"
@@ -305,13 +305,13 @@ func TestPersistence_EndToEnd(t *testing.T) {
 
 func TestBootstrapDefaults_AvailableToCachingHandlerOnFirstLoad(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
-	if err := s.EnsureGlobalDefaults(); err != nil {
+	if err := s.ensureGlobalDefaults(); err != nil {
 		t.Fatalf("EnsureGlobalDefaults: %v", err)
 	}
 
-	cache := NewCache(s)
+	cache := newCache(s)
 	cache.LoadAndMerge(testMyRepo)
 
 	handler := &CachingHandler{
@@ -347,7 +347,7 @@ func TestBootstrapDefaults_AvailableToCachingHandlerOnFirstLoad(t *testing.T) {
 
 func TestImport_AvailableToFirstSession(t *testing.T) {
 	dir := t.TempDir()
-	s := NewStore(dir)
+	s := newStore(dir)
 
 	// Set up a temp repo with settings
 	repoDir := t.TempDir()
@@ -364,7 +364,7 @@ func TestImport_AvailableToFirstSession(t *testing.T) {
 	if err := ImportRepoSettings(repoDir, testMyRepo, s); err != nil {
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}
-	cache := NewCache(s)
+	cache := newCache(s)
 	cache.LoadAndMerge(testMyRepo)
 
 	// Immediately create a handler (mirrors permHandlerFor)
@@ -403,9 +403,9 @@ func TestImport_AvailableToFirstSession(t *testing.T) {
 
 func TestGlobalSeededRules_CoexistWithRepoImportsAndRememberedApprovals_AfterRestart(t *testing.T) {
 	dir := t.TempDir()
-	store := NewStore(dir)
+	store := newStore(dir)
 
-	if err := store.EnsureGlobalDefaults(); err != nil {
+	if err := store.ensureGlobalDefaults(); err != nil {
 		t.Fatalf("EnsureGlobalDefaults: %v", err)
 	}
 
@@ -422,7 +422,7 @@ func TestGlobalSeededRules_CoexistWithRepoImportsAndRememberedApprovals_AfterRes
 		t.Fatalf("ImportRepoSettings: %v", err)
 	}
 
-	cache := NewCache(store)
+	cache := newCache(store)
 	cache.LoadAndMerge(testMyRepo)
 	cache.RememberAllow(toolNameBash, testJSONNpmTestCoverage, testMyRepo)
 
@@ -444,7 +444,7 @@ func TestGlobalSeededRules_CoexistWithRepoImportsAndRememberedApprovals_AfterRes
 	assertDecisionBehavior(t, otherRepoHandler, testGoTestDotDotDot, "")
 	assertDecisionBehavior(t, otherRepoHandler, `{"command":"npm test src/"}`, "")
 
-	cacheAfterRestart := NewCache(store)
+	cacheAfterRestart := newCache(store)
 	cacheAfterRestart.LoadAndMerge(testMyRepo)
 
 	repoHandlerAfterRestart := &CachingHandler{

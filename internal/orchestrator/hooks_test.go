@@ -16,6 +16,7 @@ package orchestrator_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -30,6 +32,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"go.uber.org/fx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -66,10 +69,34 @@ func writeClaudeSettings(t *testing.T, repoPath string, allow []string) {
 	}
 }
 
-// newTestObserver returns an enabled observer rooted at dir. The emitter writes
-// JSONL to dir/<featureID>/events.jsonl.
-func newTestObserver(dir string) *observe.Observer {
-	return observe.New(true, dir, false, "", false, "")
+// newTestObserver returns an enabled observer rooted at dir, built through
+// the fx module (the production construction path). The emitter writes JSONL
+// to dir/<featureID>/events.jsonl. The returned stop function runs the
+// module's shutdown lifecycle once.
+func newTestObserver(t *testing.T, dir string) (*observe.Observer, func()) {
+	t.Helper()
+	cfg := config.NewDefault()
+	var obs *observe.Observer
+	app := fx.New(
+		fx.Supply(cfg, fx.Annotate(dir, fx.ResultTags(`name:"stateDir"`))),
+		observe.Module,
+		fx.Populate(&obs),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build observer: %v", err)
+	}
+	var stopped bool
+	stop := func() {
+		if !stopped {
+			stopped = true
+			if err := app.Stop(context.Background()); err != nil {
+				t.Errorf("stop observer: %v", err)
+			}
+		}
+	}
+	t.Cleanup(stop)
+	return obs, stop
 }
 
 // readEvents returns all JSONL events from the given path. The file may not
@@ -113,10 +140,41 @@ func containsEventType(events []map[string]any, t string) bool {
 // T12. OnFeatureCreated fires permission import for each repo.
 // ---------------------------------------------------------------------------
 
+// assertImportedRules decodes the frozen on-disk permission scope file
+// (<scope>.json with a rules array) and requires at least minRules rules.
+func assertImportedRules(t *testing.T, path string, minRules int) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read permission scope file %s: %v", path, err)
+	}
+	var persisted struct {
+		Rules []struct {
+			ToolPattern string `json:"tool_pattern"`
+			Effect      string `json:"effect"`
+		} `json:"rules"`
+	}
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("decode permission scope file %s: %v", path, err)
+	}
+	if len(persisted.Rules) < minRules {
+		t.Errorf("%s: expected at least %d imported rules, got %d", path, minRules, len(persisted.Rules))
+	}
+}
+
 func TestBuildHooks_OnFeatureCreated_FiresPermissionImport(t *testing.T) {
 	tmp := t.TempDir()
-	storeDir := filepath.Join(tmp, "perm-store")
-	store := permission.NewStore(storeDir)
+	var store *permission.Store
+	app := fx.New(
+		fx.Supply(fx.Annotate(filepath.Join(tmp, "state"), fx.ResultTags(`name:"stateDir"`))),
+		permission.Module,
+		fx.Populate(&store),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build permission store: %v", err)
+	}
+	permStoreDir := filepath.Join(tmp, "permissions")
 
 	repo1 := filepath.Join(tmp, "repo1")
 	repo2 := filepath.Join(tmp, "repo2")
@@ -137,20 +195,8 @@ func TestBuildHooks_OnFeatureCreated_FiresPermissionImport(t *testing.T) {
 	}
 	h.OnFeatureCreated(f)
 
-	r1, err := store.Load("repo1")
-	if err != nil {
-		t.Fatalf("Load repo1 rules: %v", err)
-	}
-	r2, err := store.Load("repo2")
-	if err != nil {
-		t.Fatalf("Load repo2 rules: %v", err)
-	}
-	if len(r1) == 0 {
-		t.Errorf("expected at least one rule imported for repo1, got 0")
-	}
-	if len(r2) == 0 {
-		t.Errorf("expected at least one rule imported for repo2, got 0")
-	}
+	assertImportedRules(t, filepath.Join(permStoreDir, "repo1.json"), 1)
+	assertImportedRules(t, filepath.Join(permStoreDir, "repo2.json"), 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -159,8 +205,8 @@ func TestBuildHooks_OnFeatureCreated_FiresPermissionImport(t *testing.T) {
 
 func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 	tmp := t.TempDir()
-	obs := newTestObserver(tmp)
-	defer obs.Shutdown()
+	obs, stop := newTestObserver(t, tmp)
+	defer stop()
 
 	if err := os.MkdirAll(filepath.Join(tmp, "f1"), 0o755); err != nil {
 		t.Fatalf("mkdir feature dir: %v", err)
@@ -183,7 +229,7 @@ func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 
 	// Force the emitter to flush by shutting the observer down. The defer
 	// above will call it again but Shutdown is idempotent.
-	obs.Shutdown()
+	stop()
 	events := readEvents(t, filepath.Join(tmp, "f1", "events.jsonl"))
 	if !containsEventType(events, "feature.started") {
 		t.Errorf("expected feature.started event, got events: %+v", events)
@@ -196,8 +242,8 @@ func TestBuildHooks_OnFeatureStarted_FiresObserver(t *testing.T) {
 
 func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 	tmp := t.TempDir()
-	obs := newTestObserver(tmp)
-	defer obs.Shutdown()
+	obs, stop := newTestObserver(t, tmp)
+	defer stop()
 
 	if err := os.MkdirAll(filepath.Join(tmp, "f2"), 0o755); err != nil {
 		t.Fatalf("mkdir feature dir: %v", err)
@@ -265,7 +311,7 @@ func TestBuildHooks_PopulatedHooksEmit(t *testing.T) {
 	}
 
 	// Flush and check events.
-	obs.Shutdown()
+	stop()
 	events := readEvents(t, filepath.Join(tmp, "f2", "events.jsonl"))
 	for _, tc := range cases {
 		if !containsEventType(events, tc.wantEvType) {
@@ -325,8 +371,8 @@ func TestBuildHooks_AllFieldsPopulated_AndNilSafe(t *testing.T) {
 // to events.jsonl with the before/after snapshots.
 func TestBuildHooks_OnFeatureConfigChanged_FiresObserver(t *testing.T) {
 	tmp := t.TempDir()
-	obs := newTestObserver(tmp)
-	defer obs.Shutdown()
+	obs, stop := newTestObserver(t, tmp)
+	defer stop()
 
 	if err := os.MkdirAll(filepath.Join(tmp, "f1"), 0o755); err != nil {
 		t.Fatalf("mkdir feature dir: %v", err)
@@ -346,7 +392,7 @@ func TestBuildHooks_OnFeatureConfigChanged_FiresObserver(t *testing.T) {
 	after := feature.ConfigSnapshot{Inquireness: feature.InquirenessHigh}
 	h.OnFeatureConfigChanged("f1", before, after)
 
-	obs.Shutdown()
+	stop()
 	events := readEvents(t, filepath.Join(tmp, "f1", "events.jsonl"))
 	if !containsEventType(events, "feature.config_changed") {
 		t.Errorf("expected feature.config_changed event, got events: %+v", events)
@@ -359,7 +405,7 @@ func TestBuildHooks_OnFeatureRewound_FiresObserver(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tmp, featureID), 0o755); err != nil {
 		t.Fatalf("mkdir feature dir: %v", err)
 	}
-	obs := newTestObserver(tmp)
+	obs, _ := newTestObserver(t, tmp)
 	fs := newHookStore(t, &feature.Feature{
 		ID:                 featureID,
 		Name:               "rewind hook",
@@ -401,15 +447,25 @@ func TestBuildHooks_OnFeatureRewound_FiresObserver(t *testing.T) {
 // failure record into the summary input: a failed feature's
 // observe-summary.yaml carries the record's catalog code and class, while a
 // healthy feature's summary leaves both empty.
+// featureSummaryMirror decodes the frozen observe-summary.yaml feature block
+// (observe's summary artifact shape) for assertions in this package's tests.
+type featureSummaryMirror struct {
+	Feature struct {
+		ID         string `yaml:"id"`
+		ErrorCode  string `yaml:"error_code,omitempty"`
+		ErrorClass string `yaml:"error_class,omitempty"`
+	} `yaml:"feature"`
+}
+
 func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *testing.T) {
-	writeSummary := func(t *testing.T, f *feature.Feature) observe.SummaryArtifact {
+	writeSummary := func(t *testing.T, f *feature.Feature) featureSummaryMirror {
 		t.Helper()
 		tmp := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(tmp, f.ID), 0o755); err != nil {
 			t.Fatalf("mkdir feature dir: %v", err)
 		}
-		obs := newTestObserver(tmp)
-		defer obs.Shutdown()
+		obs, stop := newTestObserver(t, tmp)
+		defer stop()
 
 		fs := newHookStore(t, f)
 
@@ -418,13 +474,13 @@ func TestBuildHooks_OnFeatureSummaryNeeded_BuildsInputFromRunFailureRecord(t *te
 			t.Fatal("OnFeatureSummaryNeeded hook is nil")
 		}
 		h.OnFeatureSummaryNeeded(f.ID, f)
-		obs.Shutdown()
+		stop()
 
 		data, err := os.ReadFile(filepath.Join(tmp, f.ID, "observe-summary.yaml"))
 		if err != nil {
 			t.Fatalf("read observe-summary.yaml: %v", err)
 		}
-		var summary observe.SummaryArtifact
+		var summary featureSummaryMirror
 		if err := yaml.Unmarshal(data, &summary); err != nil {
 			t.Fatalf("unmarshal observe-summary.yaml: %v\n%s", err, data)
 		}

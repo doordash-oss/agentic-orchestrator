@@ -135,7 +135,7 @@ func TestContextReadTracker_EmitsProviderFileRead(t *testing.T) {
 	}
 
 	guidelinesDir := filepath.Join(stateDir, "guidelines")
-	obs := observe.New(true, stateDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, stateDir, "agentic")
 	sc := observe.SpanContextForFeature(featureID, "", "", "").Child()
 	tracker := &contextReadTracker{
 		KBBaseDir:     filepath.Join(stateDir, "knowledge-base"),
@@ -181,7 +181,7 @@ func TestSubagentProgressTracker_ForwardsProgress(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, featureID), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	obs := observe.New(true, stateDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, stateDir, "agentic")
 	sc := observe.SpanContextForFeature(featureID, "", "", "").Child()
 
 	tracker := &subagentProgressTracker{

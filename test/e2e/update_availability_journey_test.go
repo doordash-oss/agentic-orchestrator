@@ -31,7 +31,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/selfupdate"
 	"github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
@@ -242,7 +241,7 @@ func openUpdateEventStream(t *testing.T, baseURL, token string, timeout time.Dur
 // unchanged executable.
 func assertNoInstallSideEffects(t *testing.T, j *selfupdateJourney, wantDigest string) {
 	t.Helper()
-	entries, err := os.ReadDir(selfupdate.LeaseDir(j.installPath))
+	entries, err := os.ReadDir(selfupdateLeaseDir(j.installPath))
 	if err != nil {
 		t.Fatalf("read lease dir: %v", err)
 	}

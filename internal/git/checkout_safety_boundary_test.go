@@ -24,19 +24,19 @@ import (
 	"testing"
 )
 
-// branchProbeRunnerFunc adapts a function to the BranchProbeRunner process
+// branchProbeRunnerFunc adapts a function to the branchProbeRunner process
 // boundary for deterministic tests.
-type branchProbeRunnerFunc func(context.Context, string, []string, int) BranchProbeCommandResult
+type branchProbeRunnerFunc func(context.Context, string, []string, int) branchProbeCommandResult
 
-func (f branchProbeRunnerFunc) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+func (f branchProbeRunnerFunc) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult {
 	return f(ctx, repoPath, args, diagnosticLimit)
 }
 
 // staticZRunner returns a fixed stdout for every command, standing in for
 // what the limited drain writer captured from a real git process.
 func staticZRunner(stdout string) branchProbeRunnerFunc {
-	return func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
-		return BranchProbeCommandResult{Stdout: stdout, ExitCode: 0}
+	return func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) branchProbeCommandResult {
+		return branchProbeCommandResult{Stdout: stdout, ExitCode: 0}
 	}
 }
 
@@ -157,8 +157,8 @@ func TestUpdateSourceFromOriginalCheckoutIgnoredListingBoundaryOverflowRefuses(t
 	if err == nil {
 		t.Fatalf("update outcome = %+v; want an error when ignored-path inspection overflows", outcome)
 	}
-	if !errors.Is(err, ErrSourceUpdateUnavailable) {
-		t.Fatalf("err = %v; want ErrSourceUpdateUnavailable", err)
+	if !errors.Is(err, errSourceUpdateUnavailable) {
+		t.Fatalf("err = %v; want errSourceUpdateUnavailable", err)
 	}
 	if outcome.Result == SourceUpdateUpdated {
 		t.Fatal("update must not proceed when inspection is truncated")

@@ -307,7 +307,7 @@ func TestRelationshipProjectionCarriesNoAttentionItemStrings(t *testing.T) {
 		if warning["code"] != string(errcat.ChildCleanupIncomplete) {
 			t.Fatalf("active_child warning code = %#v, want %s", warning["code"], errcat.ChildCleanupIncomplete)
 		}
-		if warning["class"] != string(errcat.ClassWarning) {
+		if warning["class"] != "warning" {
 			t.Fatalf("active_child warning class = %#v, want warning", warning["class"])
 		}
 		if !strings.Contains(warning["summary"].(string), repoNameSelf) {

@@ -36,8 +36,8 @@ func TestRemoteUpToDateGuards(t *testing.T) {
 	}
 
 	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("PullRebase() outcome = %d, want %d (err: %v)", result.Outcome, PullRebaseSuccess, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Errorf("PullRebase() outcome = %d, want %d (err: %v)", result.Outcome, pullRebaseSuccess, result.Err)
 	}
 	if result.Err != nil {
 		t.Errorf("PullRebase() error = %v, want nil", result.Err)
@@ -172,8 +172,8 @@ func TestPullRebase_BehindRemote(t *testing.T) {
 
 	// PullRebase should succeed
 	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Errorf("expected pullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
 	}
 
 	// Verify both commits are present
@@ -217,8 +217,8 @@ func TestPullRebase_SingleBranchClone(t *testing.T) {
 	testutil.CommitFile(t, repo, "local-change.txt", "local work\n", "local commit")
 
 	result := PullRebase(repo, "feature/test")
-	if result.Outcome != PullRebaseSuccess {
-		t.Fatalf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Fatalf("expected pullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
 	}
 	out, _ := exec.Command("git", "-C", repo, "log", "--oneline").Output()
 	if !strings.Contains(string(out), "remote commit") {
@@ -286,8 +286,8 @@ func TestPullRebase_RemoteBranchAbsent(t *testing.T) {
 
 	// PullRebase should succeed (no-op, remote branch doesn't exist)
 	result := PullRebase(repo, "feature/new-feature")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Errorf("expected pullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
 	}
 	if result.Err != nil {
 		t.Errorf("expected nil error, got %v", result.Err)
@@ -336,8 +336,8 @@ func TestPullRebase_FirstPublishNoRemoteBranch(t *testing.T) {
 	countBefore := len(strings.Split(strings.TrimSpace(string(out)), "\n"))
 
 	result := PullRebase(repo, "feature/first-publish")
-	if result.Outcome != PullRebaseSuccess {
-		t.Errorf("expected PullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
+	if result.Outcome != pullRebaseSuccess {
+		t.Errorf("expected pullRebaseSuccess, got %d (err: %v)", result.Outcome, result.Err)
 	}
 
 	// Verify local commits are untouched

@@ -16,21 +16,21 @@ package observe
 
 import "time"
 
-// SummaryArtifact is the top-level YAML document written to observe-summary.yaml.
-type SummaryArtifact struct {
-	Feature    FeatureSummaryBlock     `yaml:"feature"`
+// summaryArtifact is the top-level YAML document written to observe-summary.yaml.
+type summaryArtifact struct {
+	Feature    featureSummaryBlock     `yaml:"feature"`
 	ActiveRun  int                     `yaml:"active_run,omitempty"`
-	Totals     SummaryTotals           `yaml:"totals"`
-	Phases     map[string]PhaseSummary `yaml:"phases,omitempty"`
-	Repos      map[string]RepoSummary  `yaml:"repos,omitempty"`
-	SealedRuns []SealedRunSummary      `yaml:"sealed_runs,omitempty"`
+	Totals     summaryTotals           `yaml:"totals"`
+	Phases     map[string]phaseSummary `yaml:"phases,omitempty"`
+	Repos      map[string]repoSummary  `yaml:"repos,omitempty"`
+	SealedRuns []sealedRunSummary      `yaml:"sealed_runs,omitempty"`
 }
 
-// SealedRunSummary describes one sealed run of a feature. Emitted in
+// sealedRunSummary describes one sealed run of a feature. Emitted in
 // observe-summary.yaml under the sealed_runs block, in run_number order.
 // Populated by readSealedRuns by scanning <featureDir>/runs/run-*/run.yaml
 // and filtering entries where sealed_at is set.
-type SealedRunSummary struct {
+type sealedRunSummary struct {
 	RunNumber          int       `yaml:"run_number"`
 	SealedAt           time.Time `yaml:"sealed_at"`
 	SealReason         string    `yaml:"seal_reason,omitempty"`
@@ -40,7 +40,7 @@ type SealedRunSummary struct {
 	CostUSD            float64   `yaml:"cost_usd,omitempty"`
 }
 
-type FeatureSummaryBlock struct {
+type featureSummaryBlock struct {
 	ID         string `yaml:"id"`
 	Name       string `yaml:"name"`
 	Status     string `yaml:"status"`
@@ -48,7 +48,7 @@ type FeatureSummaryBlock struct {
 	ErrorClass string `yaml:"error_class,omitempty"`
 }
 
-type SummaryTotals struct {
+type summaryTotals struct {
 	DurationMS       int64   `yaml:"duration_ms"`
 	CostUSD          float64 `yaml:"cost_usd"`
 	InputTokens      int64   `yaml:"input_tokens,omitempty"`
@@ -59,7 +59,7 @@ type SummaryTotals struct {
 	Reviews          int     `yaml:"reviews,omitempty"`
 }
 
-type PhaseSummary struct {
+type phaseSummary struct {
 	DurationMS   int64   `yaml:"duration_ms,omitempty"`
 	CostUSD      float64 `yaml:"cost_usd,omitempty"`
 	InputTokens  int64   `yaml:"input_tokens,omitempty"`
@@ -68,7 +68,7 @@ type PhaseSummary struct {
 	Reviews      int     `yaml:"reviews,omitempty"`
 }
 
-type RepoSummary struct {
+type repoSummary struct {
 	Status       string  `yaml:"status,omitempty"`
 	PRURL        string  `yaml:"pr_url,omitempty"`
 	CostUSD      float64 `yaml:"cost_usd,omitempty"`

@@ -20,21 +20,21 @@ import (
 	"strings"
 )
 
-// MergeIntoOutcome categorises the result of a MergeInto operation.
-type MergeIntoOutcome int
+// mergeIntoOutcome categorises the result of a MergeInto operation.
+type mergeIntoOutcome int
 
 const (
 	// MergeIntoSuccess means the merge completed (or ref was already merged).
-	MergeIntoSuccess MergeIntoOutcome = iota
+	MergeIntoSuccess mergeIntoOutcome = iota
 	// MergeIntoConflict means conflicts remain in the worktree.
 	MergeIntoConflict
-	// MergeIntoFailed means a non-conflict failure occurred and the merge was aborted.
-	MergeIntoFailed
+	// mergeIntoFailed means a non-conflict failure occurred and the merge was aborted.
+	mergeIntoFailed
 )
 
-// MergeIntoResult is the outcome, conflict files, and error from MergeInto.
-type MergeIntoResult struct {
-	Outcome       MergeIntoOutcome
+// mergeIntoResult is the outcome, conflict files, and error from MergeInto.
+type mergeIntoResult struct {
+	Outcome       mergeIntoOutcome
 	ConflictFiles []string
 	Err           error
 }
@@ -45,27 +45,27 @@ type MergeIntoResult struct {
 // can resolve them and commit. Re-entry while a merge is already in progress
 // returns Conflict again; a ref already reachable from HEAD returns Success
 // without a new commit.
-func MergeInto(worktreePath, ref, message string) MergeIntoResult {
+func MergeInto(worktreePath, ref, message string) mergeIntoResult {
 	if MergeInProgress(worktreePath) {
-		return MergeIntoResult{
+		return mergeIntoResult{
 			Outcome:       MergeIntoConflict,
 			ConflictFiles: listConflictFiles(worktreePath),
 			Err:           fmt.Errorf("merge already in progress in %s", worktreePath),
 		}
 	}
 	if IsAncestor(worktreePath, ref, "HEAD") {
-		return MergeIntoResult{Outcome: MergeIntoSuccess}
+		return mergeIntoResult{Outcome: MergeIntoSuccess}
 	}
 
 	args := append([]string{"-C", worktreePath}, identityFallbackArgs(worktreePath)...)
 	args = append(args, "merge", "--no-ff", "-m", message, ref)
 	out, err := exec.Command("git", args...).CombinedOutput()
 	if err == nil {
-		return MergeIntoResult{Outcome: MergeIntoSuccess}
+		return mergeIntoResult{Outcome: MergeIntoSuccess}
 	}
 
 	if MergeInProgress(worktreePath) {
-		return MergeIntoResult{
+		return mergeIntoResult{
 			Outcome:       MergeIntoConflict,
 			ConflictFiles: listConflictFiles(worktreePath),
 			Err:           fmt.Errorf("merge conflicts: %s", strings.TrimSpace(string(out))),
@@ -73,8 +73,8 @@ func MergeInto(worktreePath, ref, message string) MergeIntoResult {
 	}
 
 	_ = abortMerge(worktreePath)
-	return MergeIntoResult{
-		Outcome: MergeIntoFailed,
+	return mergeIntoResult{
+		Outcome: mergeIntoFailed,
 		Err:     fmt.Errorf("merge failed: %s: %w", strings.TrimSpace(string(out)), err),
 	}
 }

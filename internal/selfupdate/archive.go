@@ -34,17 +34,14 @@ import (
 // archive can never spend resources beyond these bounds before it is
 // rejected.
 const (
-	ArchiveMaxEntries       = 128
-	ArchiveMaxExpandedBytes = 256 << 20
-	ExecutableEntryName     = "agentico"
+	executableEntryName = "agentico"
 )
 
-// Test seams over the archive limits: the exported constants stay fixed
-// documentation while tests shrink the working copies to exercise the
-// boundary checks cheaply.
+// Archive limits. Tests shrink the working copies to exercise the boundary
+// checks cheaply.
 var (
-	archiveMaxEntries       = int64(ArchiveMaxEntries)
-	archiveMaxExpandedBytes = int64(ArchiveMaxExpandedBytes)
+	archiveMaxEntries       = int64(128)
+	archiveMaxExpandedBytes = int64(256 << 20)
 )
 
 // errArchiveExpanded is the sentinel surfaced when actual decompressed
@@ -74,12 +71,12 @@ func (b *budgetedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// ExtractExecutable streams the tar.gz release archive at archivePath and
+// extractExecutable streams the tar.gz release archive at archivePath and
 // writes its single accepted executable entry to destPath, returning the
 // sha256 hex digest of the extracted bytes. Every safety rule is enforced
 // before, during, and after streaming: any rejection removes a partially
 // written destPath and never touches a file this call did not create.
-func ExtractExecutable(archivePath, destPath string) (string, error) {
+func extractArchiveExecutable(archivePath, destPath string) (string, error) {
 	var created bool
 	digest, err := extractExecutable(archivePath, destPath, &created)
 	if err != nil {
@@ -154,7 +151,7 @@ func extractExecutable(archivePath, destPath string, created *bool) (string, err
 			}
 			continue
 		}
-		if name != ExecutableEntryName {
+		if name != executableEntryName {
 			return "", fmt.Errorf("unexpected executable entry %q", name)
 		}
 		if seenExecutable {

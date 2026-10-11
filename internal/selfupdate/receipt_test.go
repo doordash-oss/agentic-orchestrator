@@ -34,7 +34,7 @@ func sampleReceipt(now time.Time) Receipt {
 		FromVersion:    "1.0.0",
 		ToVersion:      "2.0.0",
 		ExecutablePath: "/runtime/bin/agentico",
-		ExecutableID: FileIdentity{
+		ExecutableID: fileIdentity{
 			Dev: 1, Ino: 2, Mode: 0o755, UID: 501, GID: 20, Size: 128,
 		},
 		OriginalMode: 0o755,
@@ -43,9 +43,9 @@ func sampleReceipt(now time.Time) Receipt {
 		OldDigest:    "aaaa",
 		NewDigest:    "bbbb",
 		BackupPath:   "/runtime/bin/.agentico-selfupdate/tx-x/backup",
-		BackupID:     FileIdentity{Dev: 1, Ino: 3, Mode: 0o600, UID: 501, GID: 20, Size: 128},
+		BackupID:     fileIdentity{Dev: 1, Ino: 3, Mode: 0o600, UID: 501, GID: 20, Size: 128},
 		StagingPath:  "/runtime/bin/.agentico-selfupdate/tx-x/staged",
-		StagingID:    FileIdentity{Dev: 1, Ino: 4, Mode: 0o755, UID: 501, GID: 20, Size: 256},
+		StagingID:    fileIdentity{Dev: 1, Ino: 4, Mode: 0o755, UID: 501, GID: 20, Size: 256},
 		Bind: BindEndpoint{
 			Host:         "127.0.0.1",
 			Port:         54321,
@@ -57,7 +57,7 @@ func sampleReceipt(now time.Time) Receipt {
 		UpdatedAt: now,
 		Error:     "",
 		Outcome:   OutcomePending,
-		Phase:     PhaseBackupReady,
+		Phase:     phaseBackupReady,
 	}
 }
 
@@ -103,9 +103,9 @@ func TestWriteReceiptAtomicRoundTrip(t *testing.T) {
 	if err := writeReceiptAtomic(path, r, now); err != nil {
 		t.Fatalf("writeReceiptAtomic: %v", err)
 	}
-	got, err := ReadReceipt(path)
+	got, err := readReceipt(path)
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	assertReceiptEqual(t, got, r)
 
@@ -123,16 +123,16 @@ func TestWriteReceiptAtomicRoundTrip(t *testing.T) {
 
 	// Phase/outcome updates overwrite in place and still leave one file.
 	updated := r
-	updated.Phase = PhaseReplacementComplete
+	updated.Phase = phaseReplacementComplete
 	updated.Outcome = OutcomeConfirmed
 	if err := writeReceiptAtomic(path, updated, now); err != nil {
 		t.Fatalf("writeReceiptAtomic update: %v", err)
 	}
-	got, err = ReadReceipt(path)
+	got, err = readReceipt(path)
 	if err != nil {
-		t.Fatalf("ReadReceipt update: %v", err)
+		t.Fatalf("readReceipt update: %v", err)
 	}
-	if got.Phase != PhaseReplacementComplete || got.Outcome != OutcomeConfirmed {
+	if got.Phase != phaseReplacementComplete || got.Outcome != OutcomeConfirmed {
 		t.Fatalf("updated receipt = %s/%s, want replacement-complete/confirmed", got.Phase, got.Outcome)
 	}
 	entries, err = os.ReadDir(dir)
@@ -142,8 +142,8 @@ func TestWriteReceiptAtomicRoundTrip(t *testing.T) {
 }
 
 func TestReadReceiptMissing(t *testing.T) {
-	if _, err := ReadReceipt(filepath.Join(t.TempDir(), "missing.json")); err == nil {
-		t.Fatal("ReadReceipt on missing file: expected error")
+	if _, err := readReceipt(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Fatal("readReceipt on missing file: expected error")
 	}
 }
 
@@ -156,9 +156,9 @@ func TestOutcomeAndPhaseConstantStrings(t *testing.T) {
 		{string(OutcomePending), "pending"},
 		{string(OutcomeConfirmed), "confirmed"},
 		{string(OutcomeRolledBack), "rolled_back"},
-		{string(PhaseBackupReady), "backup-ready"},
-		{string(PhaseReplacementComplete), "replacement-complete"},
-		{string(PhaseRollbackAttempted), "rollback-attempted"},
+		{string(phaseBackupReady), "backup-ready"},
+		{string(phaseReplacementComplete), "replacement-complete"},
+		{string(phaseRollbackAttempted), "rollback-attempted"},
 	}
 	for _, tc := range tests {
 		if tc.got != tc.want {
@@ -203,18 +203,18 @@ func TestWriteReceiptDurableRecoveryFieldsRoundTrip(t *testing.T) {
 	r.RecoveryAttemptBy = 4242
 	r.RecoveryStartedAt = now.Add(-time.Minute)
 	r.RestorePath = "/runtime/bin/.agentico-selfupdate/tx-x/restore-abc"
-	restoreID := FileIdentity{Dev: 9, Ino: 10, Mode: 0o755, UID: 501, GID: 20, Size: 128}
+	restoreID := fileIdentity{Dev: 9, Ino: 10, Mode: 0o755, UID: 501, GID: 20, Size: 128}
 	r.RestoreID = &restoreID
-	r.Resolution = ResolutionAbandonedPreReplacement
+	r.Resolution = resolutionAbandonedPreReplacement
 	r.ResolvedAt = now
 	r.InstallFailed = true
 
 	if err := WriteReceiptDurable(path, r); err != nil {
 		t.Fatalf("WriteReceiptDurable: %v", err)
 	}
-	got, err := ReadReceipt(path)
+	got, err := readReceipt(path)
 	if err != nil {
-		t.Fatalf("ReadReceipt: %v", err)
+		t.Fatalf("readReceipt: %v", err)
 	}
 	assertReceiptEqual(t, got, r)
 	if got.RecoveryAttemptID != r.RecoveryAttemptID || got.RecoveryKind != r.RecoveryKind || got.RecoveryAttemptBy != r.RecoveryAttemptBy {
@@ -229,7 +229,7 @@ func TestWriteReceiptDurableRecoveryFieldsRoundTrip(t *testing.T) {
 	if got.Resolution != r.Resolution || got.InstallFailed != r.InstallFailed {
 		t.Fatalf("settlement round trip: %q %v", got.Resolution, got.InstallFailed)
 	}
-	if !got.Settled() || got.ActionablePending() {
+	if !got.settled() || got.actionablePending() {
 		t.Fatalf("pending+resolution receipt must be settled and not actionable")
 	}
 }
@@ -243,7 +243,7 @@ func TestReceiptSettledAndActionablePendingMatrix(t *testing.T) {
 		actionable bool
 	}{
 		{"pending unresolved", func(r *Receipt) {}, false, true},
-		{"pending abandoned", func(r *Receipt) { r.Resolution = ResolutionAbandonedPreReplacement }, true, false},
+		{"pending abandoned", func(r *Receipt) { r.Resolution = resolutionAbandonedPreReplacement }, true, false},
 		{"confirmed", func(r *Receipt) { r.Outcome = OutcomeConfirmed }, true, false},
 		{"rolled back", func(r *Receipt) { r.Outcome = OutcomeRolledBack }, true, false},
 	}
@@ -253,11 +253,11 @@ func TestReceiptSettledAndActionablePendingMatrix(t *testing.T) {
 			t.Parallel()
 			r := sampleReceipt(now)
 			tc.mutate(&r)
-			if r.Settled() != tc.settled {
-				t.Fatalf("Settled() = %v, want %v", r.Settled(), tc.settled)
+			if r.settled() != tc.settled {
+				t.Fatalf("Settled() = %v, want %v", r.settled(), tc.settled)
 			}
-			if r.ActionablePending() != tc.actionable {
-				t.Fatalf("ActionablePending() = %v, want %v", r.ActionablePending(), tc.actionable)
+			if r.actionablePending() != tc.actionable {
+				t.Fatalf("ActionablePending() = %v, want %v", r.actionablePending(), tc.actionable)
 			}
 		})
 	}

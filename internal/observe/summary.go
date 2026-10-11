@@ -28,9 +28,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// FeatureSummaryInput carries all data needed to produce observe-summary.yaml.
+// featureSummaryInput carries all data needed to produce observe-summary.yaml.
 // Kept in the observe package so it does not depend on the feature package.
-type FeatureSummaryInput struct {
+type featureSummaryInput struct {
 	FeatureID           string
 	FeatureDir          string
 	Name                string
@@ -53,7 +53,7 @@ type RepoSummaryInput struct {
 }
 
 // BuildFeatureSummaryInput is a convenience adapter that populates a
-// FeatureSummaryInput from individual parameters. errorCode and errorClass
+// featureSummaryInput from individual parameters. errorCode and errorClass
 // are the run's canonical failure code and class; both are empty for a
 // healthy feature.
 func BuildFeatureSummaryInput(
@@ -63,8 +63,8 @@ func BuildFeatureSummaryInput(
 	phaseCosts map[string]float64,
 	repoStates map[string]RepoSummaryInput,
 	activeRun int,
-) FeatureSummaryInput {
-	return FeatureSummaryInput{
+) featureSummaryInput {
+	return featureSummaryInput{
 		FeatureID:           featureID,
 		FeatureDir:          featureDir,
 		Name:                name,
@@ -88,10 +88,10 @@ func BuildFeatureSummaryInput(
 // consumes only the input + on-disk state. A crash between the event scan and
 // the rename leaves observe-summary.yaml unchanged; the next call rebuilds it
 // from the same inputs. No in-memory mutation persists between calls.
-func writeFeatureSummaryImpl(input FeatureSummaryInput) error {
-	// 1. Build fallback skeleton from FeatureSummaryInput.
-	summary := SummaryArtifact{
-		Feature: FeatureSummaryBlock{
+func writeFeatureSummaryImpl(input featureSummaryInput) error {
+	// 1. Build fallback skeleton from featureSummaryInput.
+	summary := summaryArtifact{
+		Feature: featureSummaryBlock{
 			ID:         input.FeatureID,
 			Name:       input.Name,
 			Status:     input.Status,
@@ -102,7 +102,7 @@ func writeFeatureSummaryImpl(input FeatureSummaryInput) error {
 	}
 
 	// Populate per-phase durations and costs from metadata maps.
-	phases := make(map[string]PhaseSummary)
+	phases := make(map[string]phaseSummary)
 	for key, dur := range input.PhaseTimings {
 		k := normalizePhaseKey(key)
 		ps := phases[k]
@@ -129,9 +129,9 @@ func writeFeatureSummaryImpl(input FeatureSummaryInput) error {
 	summary.Totals.CostUSD = totalCostUSD
 
 	// Populate repos from RepoStates.
-	repos := make(map[string]RepoSummary)
+	repos := make(map[string]repoSummary)
 	for name, rs := range input.RepoStates {
-		repos[name] = RepoSummary{
+		repos[name] = repoSummary{
 			Status: rs.Status,
 			PRURL:  rs.PRURL,
 		}
@@ -222,16 +222,16 @@ func filterEventsByActiveRun(events []Event, activeRun int) []Event {
 // sealed_at, seal_reason, rewind_target, rewind_roadmap_phase,
 // phase_timings, phase_costs) so adding or renaming other Run fields never
 // forces a summary-side update.
-func readSealedRuns(featureDir string) ([]SealedRunSummary, error) {
+func readSealedRuns(featureDir string) ([]sealedRunSummary, error) {
 	runsDir := filepath.Join(featureDir, "runs")
 	entries, err := os.ReadDir(runsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []SealedRunSummary{}, nil
+			return []sealedRunSummary{}, nil
 		}
 		return nil, fmt.Errorf("reading runs dir: %w", err)
 	}
-	out := make([]SealedRunSummary, 0, len(entries))
+	out := make([]sealedRunSummary, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -252,7 +252,7 @@ func readSealedRuns(featureDir string) ([]SealedRunSummary, error) {
 		if r.SealedAt == nil {
 			continue // active or committing run — not a sealed record
 		}
-		entry := SealedRunSummary{
+		entry := sealedRunSummary{
 			RunNumber:  n,
 			SealedAt:   *r.SealedAt,
 			SealReason: r.SealReason,
@@ -361,7 +361,7 @@ func readSummaryEvents(path string) ([]Event, error) {
 
 // aggregateSummaryFromEvents enriches the summary skeleton with token counts,
 // iteration/review counts, and repo status updates from the event stream.
-func aggregateSummaryFromEvents(summary *SummaryArtifact, phases map[string]PhaseSummary, repos map[string]RepoSummary, events []Event) {
+func aggregateSummaryFromEvents(summary *summaryArtifact, phases map[string]phaseSummary, repos map[string]repoSummary, events []Event) {
 	for _, evt := range events {
 		switch evt.EventType {
 		case "session.ended":

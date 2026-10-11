@@ -39,17 +39,39 @@ func writeHooksTestExecutable(t *testing.T, dir, name, content string) string {
 	return path
 }
 
+// captureFixtureExecutable captures an installed-copy executable through the
+// exported capture path the runtime uses: the fixture hard-links the running
+// binary's inode into dir, so the captured identity (canonical path, inode
+// identity, digest) describes the linked installed copy without touching
+// the running binary itself.
+func captureFixtureExecutable(t *testing.T, dir string) selfupdate.Executable {
+	t.Helper()
+	runtimeExec, err := selfupdate.CaptureExecutable()
+	if err != nil {
+		t.Fatalf("capture running executable: %v", err)
+	}
+	installed := filepath.Join(dir, "agentico")
+	if err := os.Link(runtimeExec.Path, installed); err != nil {
+		t.Fatalf("link installed copy into fixture: %v", err)
+	}
+	canonical, err := filepath.EvalSymlinks(installed)
+	if err != nil {
+		t.Fatalf("canonicalize installed copy: %v", err)
+	}
+	digest, err := selfupdate.DigestFile(canonical)
+	if err != nil {
+		t.Fatalf("digest installed copy: %v", err)
+	}
+	return selfupdate.Executable{Path: canonical, ID: runtimeExec.ID, Digest: digest}
+}
+
 // TestCheckLiveHandoffScenarios exercises the launch gate end to end against
 // a real installed-copy fixture: a live handoff (held lease plus pending
 // receipt) rejects a competing launch, while a free lease or a confirmed
 // receipt lets it through.
 func TestCheckLiveHandoffScenarios(t *testing.T) {
 	dir := t.TempDir()
-	installedPath := writeHooksTestExecutable(t, dir, "agentico", "installed-v1")
-	exec, err := selfupdate.CaptureExecutableAt(installedPath)
-	if err != nil {
-		t.Fatalf("capture installed executable: %v", err)
-	}
+	exec := captureFixtureExecutable(t, dir)
 	candidatePath := writeHooksTestExecutable(t, dir, "candidate", "candidate-v2")
 	candidateDigest, err := selfupdate.DigestFile(candidatePath)
 	if err != nil {
@@ -119,7 +141,7 @@ func TestCheckLiveHandoffScenarios(t *testing.T) {
 		_ = lease.Close()
 		t.Fatalf("rejected transaction = %q; want %q", held.receipt.TransactionID, txid)
 	}
-	if !strings.Contains(held.Error(), txid) || !strings.Contains(held.Error(), string(selfupdate.PhaseBackupReady)) {
+	if !strings.Contains(held.Error(), txid) || !strings.Contains(held.Error(), "backup-ready") {
 		_ = lease.Close()
 		t.Fatalf("liveHandoffError message = %q; want transaction %q and phase named", held.Error(), txid)
 	}

@@ -405,7 +405,7 @@ func remoteMergeFixture(t *testing.T, uniqueResolution bool) (repo, bare, branch
 func assertRewritePushError(
 	t *testing.T,
 	err error,
-	wantKind RewritePushErrorKind,
+	wantKind rewritePushErrorKind,
 	wantBranch string,
 	wantRemoteOnly int,
 ) {

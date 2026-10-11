@@ -22,8 +22,8 @@ import (
 	"strings"
 )
 
-// ClaudeSettings is the structure of a Claude CLI settings file.
-type ClaudeSettings struct {
+// claudeSettings is the structure of a Claude CLI settings file.
+type claudeSettings struct {
 	Permissions struct {
 		Allow []string `json:"allow"`
 		Deny  []string `json:"deny"`
@@ -41,13 +41,13 @@ func ImportRepoSettings(repoPath, repoName string, store *Store) error {
 	scope := scopeFor(repoName)
 
 	// Load existing rules from disk for deduplication
-	existing, err := store.Load(scope)
+	existing, err := store.load(scope)
 	if err != nil {
 		return err
 	}
 
 	// Collect new rules from both settings files
-	var newRules []Rule
+	var newRules []rule
 	for _, filename := range []string{"settings.json", "settings.local.json"} {
 		path := filepath.Join(repoPath, ".claude", filename)
 		rules, err := readSettingsFile(path, repoName)
@@ -63,7 +63,7 @@ func ImportRepoSettings(repoPath, repoName string, store *Store) error {
 	}
 
 	// Merge: add new rules that don't already exist
-	merged := make([]Rule, len(existing))
+	merged := make([]rule, len(existing))
 	copy(merged, existing)
 	for _, nr := range newRules {
 		if !ruleExists(merged, nr.ToolPattern, nr.Effect) {
@@ -73,13 +73,13 @@ func ImportRepoSettings(repoPath, repoName string, store *Store) error {
 
 	// Only save if we actually added something
 	if len(merged) > len(existing) {
-		return store.Save(scope, merged)
+		return store.save(scope, merged)
 	}
 	return nil
 }
 
 // readSettingsFile reads a single Claude settings file and returns permission rules.
-func readSettingsFile(path, repoName string) ([]Rule, error) {
+func readSettingsFile(path, repoName string) ([]rule, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -88,23 +88,23 @@ func readSettingsFile(path, repoName string) ([]Rule, error) {
 		return nil, err
 	}
 
-	var settings ClaudeSettings
+	var settings claudeSettings
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return nil, err
 	}
 
-	var rules []Rule
+	var rules []rule
 	for _, pattern := range settings.Permissions.Allow {
-		rules = append(rules, Rule{
+		rules = append(rules, rule{
 			ToolPattern: normalizePattern(pattern),
 			Effect:      DecisionAllow,
 			RepoName:    repoName,
 		})
 	}
 	for _, pattern := range settings.Permissions.Deny {
-		rules = append(rules, Rule{
+		rules = append(rules, rule{
 			ToolPattern: normalizePattern(pattern),
-			Effect:      DecisionDeny,
+			Effect:      decisionDeny,
 			RepoName:    repoName,
 		})
 	}

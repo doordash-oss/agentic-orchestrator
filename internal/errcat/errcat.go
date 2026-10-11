@@ -31,14 +31,14 @@ const (
 	// ClassNeedsAction marks fix-then-retry preconditions: the request is
 	// parked until the user acts.
 	ClassNeedsAction Class = "needs_action"
-	// ClassWarning marks benign no-op rejections.
-	ClassWarning Class = "warning"
+	// classWarning marks benign no-op rejections.
+	classWarning Class = "warning"
 )
 
 // Valid reports whether c is a known class value.
 func (c Class) Valid() bool {
 	switch c {
-	case ClassBlocking, ClassNeedsAction, ClassWarning:
+	case ClassBlocking, ClassNeedsAction, classWarning:
 		return true
 	default:
 		return false
@@ -87,14 +87,14 @@ type CodeSetupTask struct {
 }
 
 // Remediation is the catalog-authored next step for an error code.
-type Remediation struct {
+type remediation struct {
 	Hint    string   `json:"hint,omitempty"`
 	Actions []string `json:"actions,omitempty"`
 }
 
 // Context carries the typed context blocks attached to a rendered error.
 // Only blocks declared by the code's catalog entry survive rendering.
-type Context struct {
+type context struct {
 	Repositories []CodeRepository `json:"repositories,omitempty"`
 	Phase        *CodePhase       `json:"phase,omitempty"`
 	Command      *CodeCommand     `json:"command,omitempty"`
@@ -109,19 +109,19 @@ type Error struct {
 	Class       Class        `json:"class"`
 	Title       string       `json:"title"`
 	Summary     string       `json:"summary"`
-	Remediation *Remediation `json:"remediation,omitempty"`
-	Context     *Context     `json:"context,omitempty"`
+	Remediation *remediation `json:"remediation,omitempty"`
+	Context     *context     `json:"context,omitempty"`
 	Diagnostics string       `json:"diagnostics,omitempty"`
 }
 
-// Block names a context block kind a code may populate.
-type Block string
+// block names a context block kind a code may populate.
+type block string
 
 const (
-	BlockRepositories Block = "repositories"
-	BlockPhase        Block = "phase"
-	BlockCommand      Block = "command"
-	BlockSetupTask    Block = "setup_task"
+	blockRepositories block = "repositories"
+	blockPhase        block = "phase"
+	blockCommand      block = "command"
+	blockSetupTask    block = "setup_task"
 )
 
 // Params is a marker interface implemented by the small per-code parameter
@@ -133,7 +133,7 @@ type Params interface {
 }
 
 // Entry is one catalog entry: the authored contract for a code.
-type Entry struct {
+type entry struct {
 	// Class is the authored severity class.
 	Class Class
 	// Title is the authored, always-nonempty title (no trailing period,
@@ -149,7 +149,7 @@ type Entry struct {
 	Actions []string
 	// Blocks are the context blocks this code may populate. Blocks the
 	// caller attaches that the entry does not declare are dropped.
-	Blocks []Block
+	Blocks []block
 
 	summaryParams func(Params) string
 	// remediationParams renders a params-specific remediation hint; ""
@@ -158,7 +158,7 @@ type Entry struct {
 }
 
 // Lookup returns the catalog entry for code.
-func Lookup(code Code) (Entry, bool) {
+func Lookup(code Code) (entry, bool) {
 	entry, ok := catalog[code]
 	return entry, ok
 }
@@ -210,14 +210,14 @@ func WithPhase(phase CodePhase) Option {
 	return func(c *config) { c.phase = &phase }
 }
 
-// WithCommand attaches command context.
-func WithCommand(command CodeCommand) Option {
+// withCommand attaches command context.
+func withCommand(command CodeCommand) Option {
 	return func(c *config) { c.command = &command }
 }
 
-// WithSetupTask attaches the setup-task context block naming the task that
+// withSetupTask attaches the setup-task context block naming the task that
 // owns a setup failure.
-func WithSetupTask(task CodeSetupTask) Option {
+func withSetupTask(task CodeSetupTask) Option {
 	return func(c *config) { c.setupTask = &task }
 }
 
@@ -255,7 +255,7 @@ func New(code Code, opts ...Option) Error {
 		Diagnostics: cfg.diagnostics,
 	}
 	if entry.Remediation != "" || len(entry.Actions) > 0 {
-		rendered.Remediation = &Remediation{Hint: entry.Remediation, Actions: entry.Actions}
+		rendered.Remediation = &remediation{Hint: entry.Remediation, Actions: entry.Actions}
 	}
 	if entry.remediationParams != nil && cfg.remediationHint == "" {
 		if hint := strings.TrimSpace(entry.remediationParams(cfg.params)); hint != "" {
@@ -264,26 +264,26 @@ func New(code Code, opts ...Option) Error {
 	}
 	if cfg.remediationHint != "" {
 		if rendered.Remediation == nil {
-			rendered.Remediation = &Remediation{Hint: cfg.remediationHint}
+			rendered.Remediation = &remediation{Hint: cfg.remediationHint}
 		} else {
 			rendered.Remediation.Hint = cfg.remediationHint
 		}
 	}
-	declared := make(map[Block]bool, len(entry.Blocks))
+	declared := make(map[block]bool, len(entry.Blocks))
 	for _, block := range entry.Blocks {
 		declared[block] = true
 	}
-	var ctx Context
-	if declared[BlockRepositories] && len(cfg.repositories) > 0 {
+	var ctx context
+	if declared[blockRepositories] && len(cfg.repositories) > 0 {
 		ctx.Repositories = cfg.repositories
 	}
-	if declared[BlockPhase] && cfg.phase != nil {
+	if declared[blockPhase] && cfg.phase != nil {
 		ctx.Phase = cfg.phase
 	}
-	if declared[BlockCommand] && cfg.command != nil {
+	if declared[blockCommand] && cfg.command != nil {
 		ctx.Command = cfg.command
 	}
-	if declared[BlockSetupTask] && cfg.setupTask != nil {
+	if declared[blockSetupTask] && cfg.setupTask != nil {
 		ctx.SetupTask = cfg.setupTask
 	}
 	if ctx.Repositories != nil || ctx.Phase != nil || ctx.Command != nil || ctx.SetupTask != nil {

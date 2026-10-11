@@ -48,7 +48,7 @@ func cloneHeld(t *testing.T, coord *workadmission.Coordinator) int {
 
 // Admission releases after publishing the terminal record, under the operation
 // lock. Wait for that critical section before asserting the settled reservation.
-func waitForAdmissionSettlement(fx *serviceFixture, id string, state State) {
+func waitForAdmissionSettlement(fx *serviceFixture, id string, state state) {
 	fx.t.Helper()
 	fx.waitForState(id, state)
 	op := fx.svc.op(id)
@@ -60,7 +60,7 @@ func TestAdmissionReservationHeldFromStartUntilTerminalSettle(t *testing.T) {
 	t.Parallel()
 	spawnGate := make(chan struct{})
 	fx, coord := admitFixture(t, succeedScript)
-	fx.runner.setOnStart(func(spec RunSpec) { <-spawnGate })
+	fx.runner.setOnStart(func(spec runSpec) { <-spawnGate })
 
 	rec := fx.start("key-admit")
 	if n := cloneHeld(t, coord); n != 1 {
@@ -77,7 +77,7 @@ func TestAdmissionReservationReleasesOnFailedSettle(t *testing.T) {
 	t.Parallel()
 	fx, coord := admitFixture(t, failAuthScript)
 	rec := fx.start("key-admit-fail")
-	waitForAdmissionSettlement(fx, rec.ID, StateFailed)
+	waitForAdmissionSettlement(fx, rec.ID, stateFailed)
 	if n := cloneHeld(t, coord); n != 0 {
 		t.Fatalf("held = %d after failed settle, want 0", n)
 	}
@@ -87,7 +87,7 @@ func TestAdmissionHeldThroughCleanupPendingUntilReconciliationResolves(t *testin
 	t.Parallel()
 	fx, coord := admitFixture(t, hangScript)
 	rec := fx.start("key-admit-pending")
-	fx.waitForState(rec.ID, StateRunning)
+	fx.waitForState(rec.ID, stateRunning)
 
 	// A root that stops being clone-eligible makes owned cleanup unprovable
 	// deterministically: the attempt must stay cleanup-pending.
@@ -98,7 +98,7 @@ func TestAdmissionHeldThroughCleanupPendingUntilReconciliationResolves(t *testin
 		t.Fatal(err)
 	}
 	pending := fx.waitForState(rec.ID, StateCleanupPending)
-	if pending.PendingOutcome != StateCancelled {
+	if pending.PendingOutcome != stateCancelled {
 		t.Fatalf("pending outcome = %s, want cancelled", pending.PendingOutcome)
 	}
 	if n := cloneHeld(t, coord); n != 1 {
@@ -129,7 +129,7 @@ func TestAdmissionHeldThroughCleanupPendingUntilReconciliationResolves(t *testin
 	if err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
-	if resolved.State != StateCancelled {
+	if resolved.State != stateCancelled {
 		t.Fatalf("resolved state = %s, want cancelled", resolved.State)
 	}
 	if n := cloneHeld(t, coord); n != 0 {
@@ -234,7 +234,7 @@ func TestAdmissionReplayDoesNotLeakOrDoubleHold(t *testing.T) {
 	// operation already owns its one reservation.
 	fxLive, coordLive := admitFixture(t, hangScript)
 	live := fxLive.start("key-live")
-	fxLive.waitForState(live.ID, StateRunning)
+	fxLive.waitForState(live.ID, stateRunning)
 	replayedLive, err := fxLive.svc.Start(context.Background(), fxLive.startInput("key-live"))
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +248,7 @@ func TestAdmissionReplayDoesNotLeakOrDoubleHold(t *testing.T) {
 	if _, err := fxLive.svc.Cancel(live.ID); err != nil {
 		t.Fatal(err)
 	}
-	fxLive.waitForState(live.ID, StateCancelled)
+	fxLive.waitForState(live.ID, stateCancelled)
 	if n := cloneHeld(t, coordLive); n != 0 {
 		t.Fatalf("held = %d after live settle, want 0", n)
 	}
@@ -321,9 +321,9 @@ func TestRecoverRunsWhenAdmissionClosedAndSweepWaits(t *testing.T) {
 	fx := newCrashFixture(t)
 	coord := workadmission.New(workadmission.Options{})
 	fx.svc.opts.Admission = coord
-	running := fx.craftRecord(t, "clone-adm-run", "k-adm-run", "widget", StateRunning, nil, false)
-	stale := fx.craftRecord(t, "clone-adm-old", "k-adm-old", "stale", StateFailed, nil, false)
-	stale.ResolvedAt = time.Now().UTC().Add(-(RetentionWindow + time.Hour))
+	running := fx.craftRecord(t, "clone-adm-run", "k-adm-run", "widget", stateRunning, nil, false)
+	stale := fx.craftRecord(t, "clone-adm-old", "k-adm-old", "stale", stateFailed, nil, false)
+	stale.ResolvedAt = time.Now().UTC().Add(-(retentionWindow + time.Hour))
 	if err := fx.svc.save(&stale); err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestRecoverRunsWhenAdmissionClosedAndSweepWaits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final.State != StateInterrupted {
+	if final.State != stateInterrupted {
 		t.Fatalf("recovered state = %s, want interrupted", final.State)
 	}
 	if got := fx.svc.ActiveWork(); got != 0 {
@@ -377,14 +377,14 @@ func TestActiveWorkCountsActiveAndCleanupPendingNotTerminal(t *testing.T) {
 		t.Fatalf("ActiveWork = %d on an idle service, want 0", got)
 	}
 	rec := fx.start("key-count")
-	fx.waitForState(rec.ID, StateRunning)
+	fx.waitForState(rec.ID, stateRunning)
 	if got := fx.svc.ActiveWork(); got != 1 {
 		t.Fatalf("ActiveWork = %d while running, want 1", got)
 	}
 	if _, err := fx.svc.Cancel(rec.ID); err != nil {
 		t.Fatal(err)
 	}
-	fx.waitForState(rec.ID, StateCancelled)
+	fx.waitForState(rec.ID, stateCancelled)
 	// The terminal record is retained in the store yet never counts.
 	if got := fx.svc.ActiveWork(); got != 0 {
 		t.Fatalf("ActiveWork = %d after terminal settle, want 0", got)

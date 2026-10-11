@@ -428,7 +428,7 @@ func TestFeedRedirectCap(t *testing.T) {
 func TestProductionFeedClientIgnoresEndpointOverrides(t *testing.T) {
 	t.Setenv("GITHUB_API_URL", "https://evil.example.com")
 	client := NewProductionFeedClient("", nil)
-	if client.baseURL != ProductionFeedBaseURL {
+	if client.baseURL != productionFeedBaseURL {
 		t.Fatalf("base URL = %q, want the fixed production feed", client.baseURL)
 	}
 	if client.slug != ProductionFeedSlug {

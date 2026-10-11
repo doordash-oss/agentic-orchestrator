@@ -96,7 +96,7 @@ const (
 const (
 	RootNotWritable     Code = "root_not_writable"
 	RootIsRepository    Code = "root_is_repository"
-	NoCloneEligibleRoot Code = "no_clone_eligible_root"
+	noCloneEligibleRoot Code = "no_clone_eligible_root"
 )
 
 // Clone operation codes cover the Settings clone lifecycle: start
@@ -114,13 +114,13 @@ const (
 	CloneHistoryUnavailable     Code = "clone_history_unavailable"
 	CloneNotRetryable           Code = "clone_not_retryable"
 	CloneUnavailable            Code = "clone_unavailable"
-	CloneTimeout                Code = "clone_timeout"
-	CloneAuthenticationFailed   Code = "clone_authentication_failed"
-	CloneTrustFailed            Code = "clone_trust_failed"
-	ClonePromptUnsupported      Code = "clone_prompt_unsupported"
-	ClonePublicationUnsupported Code = "clone_publication_unsupported"
-	CloneDestinationConflict    Code = "clone_destination_conflict"
-	CloneExecutionFailed        Code = "clone_execution_failed"
+	cloneTimeout                Code = "clone_timeout"
+	cloneAuthenticationFailed   Code = "clone_authentication_failed"
+	cloneTrustFailed            Code = "clone_trust_failed"
+	clonePromptUnsupported      Code = "clone_prompt_unsupported"
+	clonePublicationUnsupported Code = "clone_publication_unsupported"
+	cloneDestinationConflict    Code = "clone_destination_conflict"
+	cloneExecutionFailed        Code = "clone_execution_failed"
 	CloneCleanupPending         Code = "clone_cleanup_pending"
 )
 
@@ -188,7 +188,7 @@ const (
 // Update-availability codes for the release-availability REST surface: the
 // explicit-check refusals under the off policy and ineligible installations.
 const (
-	UpdateDisabled           Code = "update_disabled"
+	updateDisabled           Code = "update_disabled"
 	UpdateUnsupportedInstall Code = "update_unsupported_install"
 )
 
@@ -223,22 +223,22 @@ const (
 	IterationBudgetExhausted Code = "iteration_budget_exhausted"
 	SafetyRailTripped        Code = "safety_rail_tripped"
 	SessionCrashed           Code = "session_crashed"
-	ArtifactMissing          Code = "artifact_missing"
+	artifactMissing          Code = "artifact_missing"
 	InfrastructureFailure    Code = "infrastructure_failure"
 	WorktreeSetupFailed      Code = "worktree_setup_failed"
 )
 
-// RunFailureParams carries the phase name, iteration, and repository names a
+// runFailureParams carries the phase name, iteration, and repository names a
 // terminal run-failure summary interpolates. RenderRecord derives them from
 // a stored record's context blocks; the static summary applies when the
 // record carries none of them.
-type RunFailureParams struct {
+type runFailureParams struct {
 	Phase        string
 	Iteration    int
 	Repositories []string
 }
 
-func (RunFailureParams) params() {}
+func (runFailureParams) params() {}
 
 // displayPhaseName turns a stored phase name ("implement", "final_review")
 // into summary text ("Implement", "Final review").
@@ -254,7 +254,7 @@ func displayPhaseName(name string) string {
 // "The <Phase> phase <verb phrase> at iteration <n> in repositories: a, b."
 // With neither phase nor repositories known it returns "" so the entry's
 // static summary applies.
-func runPhaseSummary(params RunFailureParams, verbPhrase string) string {
+func runPhaseSummary(params runFailureParams, verbPhrase string) string {
 	var prefix string
 	switch {
 	case params.Phase != "":
@@ -354,13 +354,13 @@ type UpdateUnsupportedInstallParams struct {
 
 func (UpdateUnsupportedInstallParams) params() {}
 
-// UpdateRetryDeadlineParams carries the human-readable retry hint for a
+// updateRetryDeadlineParams carries the human-readable retry hint for a
 // refused manual check inside a server-imposed retry deadline.
-type UpdateRetryDeadlineParams struct {
+type updateRetryDeadlineParams struct {
 	RetryAfter string
 }
 
-func (UpdateRetryDeadlineParams) params() {}
+func (updateRetryDeadlineParams) params() {}
 
 // UpdateInProgressParams carries the retry hint for a refused request while
 // one accepted update operation owns the install machinery.
@@ -444,14 +444,14 @@ type ProviderIssueParams struct {
 
 func (ProviderIssueParams) params() {}
 
-// CloneDestinationParams names the destination a clone request referred
+// cloneDestinationParams names the destination a clone request referred
 // to. It never carries the remote (which may have been rejected for
 // carrying credentials).
-type CloneDestinationParams struct {
+type cloneDestinationParams struct {
 	Destination string
 }
 
-func (CloneDestinationParams) params() {}
+func (cloneDestinationParams) params() {}
 
 func joinQuoted(values []string) string {
 	quoted := make([]string, len(values))
@@ -468,7 +468,7 @@ func commitWord(count int) string {
 	return "commits"
 }
 
-var catalog = map[Code]Entry{
+var catalog = map[Code]entry{
 	// --- Generic codes -----------------------------------------------------
 	BadRequest: {
 		Class:       ClassBlocking,
@@ -537,28 +537,28 @@ var catalog = map[Code]Entry{
 	Conflict: {
 		Class:       ClassBlocking,
 		Title:       "Conflict",
-		Blocks:      []Block{BlockRepositories},
+		Blocks:      []block{blockRepositories},
 		Summary:     "The request conflicts with the current state of the feature.",
 		Remediation: "Refresh the feature and retry.",
 	},
 	LocalSourceStale: {
 		Class:       ClassNeedsAction,
 		Title:       "Local source changed",
-		Blocks:      []Block{BlockRepositories},
+		Blocks:      []block{blockRepositories},
 		Summary:     "A selected local repository source changed after it was reviewed.",
 		Remediation: "Review the refreshed local source, then submit the feature again.",
 	},
 	LocalBaseMissing: {
 		Class:       ClassNeedsAction,
 		Title:       "Local source missing",
-		Blocks:      []Block{BlockRepositories},
+		Blocks:      []block{blockRepositories},
 		Summary:     "A selected repository's local source is missing or has no commits.",
 		Remediation: "Restore the branch or commit locally, or deselect the repository before continuing.",
 	},
 	PublishRemoteDiverged: {
 		Class:  ClassNeedsAction,
 		Title:  "Pull-request branch diverged",
-		Blocks: []Block{BlockRepositories},
+		Blocks: []block{blockRepositories},
 		summaryParams: func(p Params) string {
 			return publishDivergedSummary(p)
 		},
@@ -569,7 +569,7 @@ var catalog = map[Code]Entry{
 	PublishRemoteChanged: {
 		Class:  ClassNeedsAction,
 		Title:  "Pull-request branch changed",
-		Blocks: []Block{BlockRepositories},
+		Blocks: []block{blockRepositories},
 		summaryParams: func(p Params) string {
 			return publishChangedSummary(p)
 		},
@@ -632,7 +632,7 @@ var catalog = map[Code]Entry{
 		Summary:     "This workspace root is itself a git repository and cannot be used as a clone destination.",
 		Remediation: "Choose a different root or configure a parent directory as a workspace root.",
 	},
-	NoCloneEligibleRoot: {
+	noCloneEligibleRoot: {
 		Class:       ClassBlocking,
 		Title:       "No clone-eligible root",
 		Summary:     "No configured workspace root is suitable for cloning.",
@@ -708,43 +708,43 @@ var catalog = map[Code]Entry{
 		Remediation: "Wait for the server to finish shutting down, then reconnect and retry.",
 	},
 	// Terminal failure outcomes carried on authoritative snapshots.
-	CloneTimeout: {
+	cloneTimeout: {
 		Class:       ClassBlocking,
 		Title:       "Clone timed out",
 		Summary:     "The clone exceeded its bounded execution time.",
 		Remediation: "Retry the clone; large repositories may need a faster network or mirror.",
 	},
-	CloneAuthenticationFailed: {
+	cloneAuthenticationFailed: {
 		Class:       ClassNeedsAction,
 		Title:       "Clone authentication failed",
 		Summary:     "The remote rejected the server's credentials.",
 		Remediation: "Set up access for the server (credential helper, SSH agent or deploy key) on the owning server, then retry.",
 	},
-	CloneTrustFailed: {
+	cloneTrustFailed: {
 		Class:       ClassNeedsAction,
 		Title:       "Clone trust check failed",
 		Summary:     "The server could not establish trust with the remote host.",
 		Remediation: "Add the host to the server's known_hosts configuration, then retry.",
 	},
-	ClonePromptUnsupported: {
+	clonePromptUnsupported: {
 		Class:       ClassNeedsAction,
 		Title:       "Clone needs unsupported interaction",
 		Summary:     "The remote required an interactive prompt the server cannot answer.",
 		Remediation: "Configure non-interactive credentials on the server, then retry.",
 	},
-	ClonePublicationUnsupported: {
+	clonePublicationUnsupported: {
 		Class:       ClassNeedsAction,
 		Title:       "Publication unsupported",
 		Summary:     "The destination filesystem cannot atomically publish without replacement.",
 		Remediation: "Ask the server administrator to use a filesystem that supports atomic no-replace rename, then retry.",
 	},
-	CloneDestinationConflict: {
+	cloneDestinationConflict: {
 		Class:       ClassBlocking,
 		Title:       "Destination was taken during the clone",
 		Summary:     "Another actor created the destination while the clone was running.",
 		Remediation: "The other data was preserved; choose a different destination and retry.",
 	},
-	CloneExecutionFailed: {
+	cloneExecutionFailed: {
 		Class:       ClassBlocking,
 		Title:       "Clone failed",
 		Summary:     "The clone command failed on the server.",
@@ -806,7 +806,7 @@ var catalog = map[Code]Entry{
 	PublishRebaseConflict: {
 		Class:   ClassNeedsAction,
 		Title:   "Pull-rebase conflict",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "The pull rebase onto the target branch conflicted.",
 		summaryParams: func(p Params) string {
 			return publishRebaseConflictSummary(p)
@@ -817,7 +817,7 @@ var catalog = map[Code]Entry{
 	PublishPullRequestClosed: {
 		Class:   ClassNeedsAction,
 		Title:   "Pull request closed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "The pull request is closed or merged and cannot receive new commits.",
 		summaryParams: func(p Params) string {
 			return publishPullRequestClosedSummary(p)
@@ -828,7 +828,7 @@ var catalog = map[Code]Entry{
 	PublishPullRequestFailed: {
 		Class:   ClassNeedsAction,
 		Title:   "Pull-request creation failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Creating the pull request failed.",
 		summaryParams: func(p Params) string {
 			return publishPullRequestFailedSummary(p)
@@ -839,7 +839,7 @@ var catalog = map[Code]Entry{
 	PublishDescriptionFailed: {
 		Class:   ClassNeedsAction,
 		Title:   "Description generation failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Generating the pull-request description failed.",
 		summaryParams: func(p Params) string {
 			return publishDescriptionFailedSummary(p)
@@ -850,7 +850,7 @@ var catalog = map[Code]Entry{
 	PublishPushFailed: {
 		Class:   ClassNeedsAction,
 		Title:   "Repository publish failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Publishing the repository failed.",
 		summaryParams: func(p Params) string {
 			return publishPushFailedSummary(p)
@@ -930,7 +930,7 @@ var catalog = map[Code]Entry{
 		Class:       ClassNeedsAction,
 		Title:       "Parent worktrees are dirty",
 		Summary:     "The parent feature's worktrees have uncommitted changes.",
-		Blocks:      []Block{BlockRepositories},
+		Blocks:      []block{blockRepositories},
 		Remediation: "Commit or stash the listed changes in each repository, then retry.",
 	},
 	ChildExecutionBlocked: {
@@ -942,21 +942,21 @@ var catalog = map[Code]Entry{
 		Class:       ClassBlocking,
 		Title:       "Rebase target unresolved",
 		Summary:     "The rebase target branch could not be resolved.",
-		Blocks:      []Block{BlockRepositories},
+		Blocks:      []block{blockRepositories},
 		Remediation: "Check that the target branch exists on the remote, then retry.",
 	},
 	RebaseFetchFailed: {
 		Class:       ClassBlocking,
 		Title:       "Fetch failed",
 		Summary:     "Fetching the latest state from the remote failed.",
-		Blocks:      []Block{BlockRepositories},
+		Blocks:      []block{blockRepositories},
 		Remediation: "Check the repository's remote access, then retry.",
 	},
 	RebaseAlreadyUpToDate: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Already up to date",
 		Summary: "The feature is already up to date with its rebase targets.",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 	},
 
 	// --- Review-feedback codes ------------------------------------------------
@@ -1008,7 +1008,7 @@ var catalog = map[Code]Entry{
 	ReviewFeedbackFetchFailed: {
 		Class:       ClassBlocking,
 		Title:       "Fetch failed",
-		Blocks:      []Block{BlockRepositories},
+		Blocks:      []block{blockRepositories},
 		Summary:     "Fetching review feedback from the remote failed.",
 		Remediation: "Check remote access and retry the fetch.",
 	},
@@ -1207,8 +1207,8 @@ var catalog = map[Code]Entry{
 		},
 		Remediation: "Correct the flagged setting in --updates, AGENTICO_UPDATES, or the server.updates config section, then relaunch.",
 	},
-	UpdateDisabled: {
-		Class:       ClassWarning,
+	updateDisabled: {
+		Class:       classWarning,
 		Title:       "Update checks disabled",
 		Summary:     "Update checks are disabled by this runtime's startup policy.",
 		Remediation: "Relaunch the server with --updates=notify (or without the desktop's --updates=off flag) to enable metadata-only checks.",
@@ -1258,7 +1258,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Let the reported work finish, then request the install again.",
 	},
 	UpdateDownloadFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Update download failed",
 		Summary: "Downloading the approved release failed before anything was installed.",
 		summaryParams: func(p Params) string {
@@ -1267,7 +1267,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Request a new install to retry the download.",
 	},
 	UpdateSignatureFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Update verification failed",
 		Summary: "The release signature or digest verification failed before anything was installed.",
 		summaryParams: func(p Params) string {
@@ -1276,7 +1276,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Request a new install after the release is republished correctly.",
 	},
 	UpdateInstallFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Update install failed",
 		Summary: "Installing the approved release failed and the previous build is still installed.",
 		summaryParams: func(p Params) string {
@@ -1343,7 +1343,7 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Protocol violation",
 		Summary: "The phase's output artifacts violate the agentico contract.",
-		Blocks:  []Block{BlockPhase, BlockRepositories},
+		Blocks:  []block{blockPhase, blockRepositories},
 		summaryParams: func(p Params) string {
 			switch params := p.(type) {
 			case ViolationParams:
@@ -1351,7 +1351,7 @@ var catalog = map[Code]Entry{
 					return ""
 				}
 				return fmt.Sprintf("The %s check found %d %s.", params.Check, params.Count, violationWord(params.Count))
-			case RunFailureParams:
+			case runFailureParams:
 				if params.Phase == "" {
 					return ""
 				}
@@ -1368,9 +1368,9 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Iteration budget exhausted",
 		Summary: "The phase exhausted its iteration budget without converging.",
-		Blocks:  []Block{BlockPhase, BlockRepositories},
+		Blocks:  []block{blockPhase, blockRepositories},
 		summaryParams: func(p Params) string {
-			params, ok := p.(RunFailureParams)
+			params, ok := p.(runFailureParams)
 			if !ok {
 				return ""
 			}
@@ -1383,9 +1383,9 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Safety rail tripped",
 		Summary: "The phase was stopped by a safety rail.",
-		Blocks:  []Block{BlockPhase, BlockRepositories},
+		Blocks:  []block{blockPhase, blockRepositories},
 		summaryParams: func(p Params) string {
-			params, ok := p.(RunFailureParams)
+			params, ok := p.(runFailureParams)
 			if !ok {
 				return ""
 			}
@@ -1398,9 +1398,9 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Session crashed",
 		Summary: "The phase lost its agent session.",
-		Blocks:  []Block{BlockPhase, BlockRepositories, BlockCommand},
+		Blocks:  []block{blockPhase, blockRepositories, blockCommand},
 		summaryParams: func(p Params) string {
-			params, ok := p.(RunFailureParams)
+			params, ok := p.(runFailureParams)
 			if !ok {
 				return ""
 			}
@@ -1409,13 +1409,13 @@ var catalog = map[Code]Entry{
 		Remediation: "Restart the phase; the session log has the crash details.",
 		Actions:     []string{"restart"},
 	},
-	ArtifactMissing: {
+	artifactMissing: {
 		Class:   ClassBlocking,
 		Title:   "Artifact missing",
 		Summary: "The phase did not produce a required artifact.",
-		Blocks:  []Block{BlockPhase, BlockRepositories},
+		Blocks:  []block{blockPhase, blockRepositories},
 		summaryParams: func(p Params) string {
-			params, ok := p.(RunFailureParams)
+			params, ok := p.(runFailureParams)
 			if !ok {
 				return ""
 			}
@@ -1428,9 +1428,9 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Infrastructure failure",
 		Summary: "The phase failed on an infrastructure error.",
-		Blocks:  []Block{BlockPhase, BlockRepositories, BlockCommand},
+		Blocks:  []block{blockPhase, blockRepositories, blockCommand},
 		summaryParams: func(p Params) string {
-			params, ok := p.(RunFailureParams)
+			params, ok := p.(runFailureParams)
 			if !ok {
 				return ""
 			}
@@ -1443,15 +1443,15 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Worktree setup failed",
 		Summary: "Setting up the feature's worktrees failed.",
-		Blocks:  []Block{BlockRepositories, BlockCommand, BlockSetupTask},
+		Blocks:  []block{blockRepositories, blockCommand, blockSetupTask},
 		summaryParams: func(p Params) string {
 			if summary := setupTaskLabelSummary(p); summary != "" {
 				return summary
 			}
 			switch params := p.(type) {
-			case SetupFailureParams:
+			case setupFailureParams:
 				return worktreeSetupRepoSummary(params.Repositories)
-			case RunFailureParams:
+			case runFailureParams:
 				return worktreeSetupRepoSummary(params.Repositories)
 			}
 			return ""
@@ -1463,7 +1463,7 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Asset copy failed",
 		Summary: "Copying an image or attachment for the feature's setup failed.",
-		Blocks:  []Block{BlockRepositories, BlockCommand, BlockSetupTask},
+		Blocks:  []block{blockRepositories, blockCommand, blockSetupTask},
 		summaryParams: func(p Params) string {
 			return setupTaskLabelSummary(p)
 		},
@@ -1474,7 +1474,7 @@ var catalog = map[Code]Entry{
 		Class:   ClassBlocking,
 		Title:   "Setup interrupted",
 		Summary: "The feature's setup was interrupted before it finished.",
-		Blocks:  []Block{BlockRepositories, BlockCommand, BlockSetupTask},
+		Blocks:  []block{blockRepositories, blockCommand, blockSetupTask},
 		summaryParams: func(p Params) string {
 			return setupTaskLabelSummary(p)
 		},
@@ -1484,7 +1484,7 @@ var catalog = map[Code]Entry{
 
 	// --- CLI degradation warning codes -------------------------------------------
 	ProviderUnavailable: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Provider unavailable",
 		Summary: "A provider is unavailable; Agentico is starting without it.",
 		summaryParams: func(p Params) string {
@@ -1503,7 +1503,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Install and authenticate a provider CLI, then restart the runtime or refresh readiness.",
 	},
 	ProviderVersionCheckFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Provider version check failed",
 		Summary: "A provider CLI version could not be verified.",
 		summaryParams: func(p Params) string {
@@ -1516,7 +1516,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Reinstall or update the provider CLI if the check keeps failing.",
 	},
 	ModelCatalogDegraded: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Model catalog degraded",
 		Summary: "A provider model catalog could not be refreshed; a fallback is in use.",
 		summaryParams: func(p Params) string {
@@ -1529,31 +1529,31 @@ var catalog = map[Code]Entry{
 		Remediation: "Check the provider CLI and network, then restart or run with --refresh-models.",
 	},
 	AssetsReconcileFailed: {
-		Class:       ClassWarning,
+		Class:       classWarning,
 		Title:       "Asset reconcile failed",
 		Summary:     "Embedded skills or guidelines could not be reconciled to the runtime directory.",
 		Remediation: "Check permissions under the runtime directory and restart.",
 	},
 	GithubCredentialsMissing: {
-		Class:       ClassWarning,
+		Class:       classWarning,
 		Title:       "GitHub credentials missing",
 		Summary:     "No GitHub credentials were found; PR publishing and review-comment sync need them.",
 		Remediation: "Set GH_TOKEN or install GitHub CLI (https://cli.github.com/) and run 'gh auth login'.",
 	},
 	StartupMaintenanceFailed: {
-		Class:       ClassWarning,
+		Class:       classWarning,
 		Title:       "Startup maintenance failed",
 		Summary:     "A background startup task failed; the runtime continues.",
 		Remediation: "Retry the launch if attachment or registry behavior looks wrong.",
 	},
 	ShutdownIncomplete: {
-		Class:       ClassWarning,
+		Class:       classWarning,
 		Title:       "Shutdown incomplete",
 		Summary:     "The runtime shut down with pending close errors.",
 		Remediation: "The exit status is unaffected; check the runtime directory before restarting.",
 	},
 	UpdateRolledBack: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Update rolled back",
 		Summary: "The update to a new version failed and the previous version was restored; the runtime continues on the restored build.",
 		summaryParams: func(p Params) string {
@@ -1576,9 +1576,9 @@ var catalog = map[Code]Entry{
 	// One code per distinct remediation, all warning class with no action
 	// references: a warning never blocks progress and never gates a lane.
 	BranchCollisionProbeUnavailable: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Remote branch check unavailable",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "The feature branch could not be checked against an origin; creation continued from the accepted local source.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "The feature branch for %s could not be checked against its origin; creation continued from the accepted local source.")
@@ -1586,7 +1586,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Verify the remote branch is available before publishing; this warning does not mean the local source is up to date.",
 	},
 	EffortCapabilityDrift: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Effort not supported by model",
 		Summary: "A configured effort is not supported by its model; Auto is in use until the configuration is updated.",
 		summaryParams: func(p Params) string {
@@ -1595,7 +1595,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Update the effort setting or choose a model that supports it.",
 	},
 	FeatureLoadFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Feature could not be loaded",
 		Summary: "A feature could not be loaded from the store.",
 		summaryParams: func(p Params) string {
@@ -1604,9 +1604,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Fix or remove the feature's files, then refresh the list.",
 	},
 	ChildCleanupIncomplete: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Cleanup incomplete",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Cleaning up after the pass did not finish.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "Cleanup for %s did not finish.")
@@ -1614,9 +1614,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Retry the pass's integration or discard it to finish cleanup.",
 	},
 	ReviewFeedbackTailIncomplete: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Review feedback tail incomplete",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Finishing the review feedback tail did not complete.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "The review-feedback tail for %s did not finish.")
@@ -1624,9 +1624,9 @@ var catalog = map[Code]Entry{
 		Remediation: "The tail retries on the next server start or when the pass is integrated again; each failure is listed in the details.",
 	},
 	RewindPullRequestCloseFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Pull request close failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Closing a pull request failed during the rewind.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "Closing the pull request for %s failed during the rewind.")
@@ -1634,9 +1634,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Close the pull request on the remote if it is still open.",
 	},
 	RewindBackupBranchFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Backup branch failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Creating a backup branch failed during the rewind.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "Creating the backup branch for %s failed during the rewind.")
@@ -1644,9 +1644,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Create the backup branch yourself if you need the pre-rewind state.",
 	},
 	RewindWorktreeResetFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Worktree reset failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Resetting a worktree failed during the rewind.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "Resetting the worktree for %s failed during the rewind.")
@@ -1654,9 +1654,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Check the worktree's state; the rewind may be partially applied.",
 	},
 	RepositoryWorktreeUnavailable: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Worktree unavailable",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A repository's worktree is not available for inspection.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "The worktree for %s is not available.")
@@ -1664,9 +1664,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Retry once the worktree is back in place.",
 	},
 	RepositoryDiffFailed: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Diff failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Computing a repository's diff failed.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "Computing the diff for %s failed.")
@@ -1674,9 +1674,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Retry the diff; the git error is in the details.",
 	},
 	OriginCheckUnavailable: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Origin check unavailable",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A selected repository's local source could not be compared with its origin.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "The local source for %s could not be compared with its origin.")
@@ -1684,9 +1684,9 @@ var catalog = map[Code]Entry{
 		Remediation: "Retry the origin check or continue from the local source; this warning does not mean the local source is up to date.",
 	},
 	OriginBranchMissing: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Origin branch missing",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A selected repository's mapped origin branch no longer exists on the remote.",
 		summaryParams: func(p Params) string {
 			return warningRepoSummary(p, "The mapped origin branch for %s no longer exists on the remote.")
@@ -1701,7 +1701,7 @@ var catalog = map[Code]Entry{
 	OrphanSessionLive: {
 		Class:   ClassNeedsAction,
 		Title:   "Orphaned session running",
-		Blocks:  []Block{BlockPhase, BlockRepositories},
+		Blocks:  []block{blockPhase, blockRepositories},
 		Summary: "An agent session is still running outside Agentico's supervision.",
 		summaryParams: func(p Params) string {
 			return orphanSessionSummary(p, "is still running outside Agentico's supervision")
@@ -1712,7 +1712,7 @@ var catalog = map[Code]Entry{
 	OrphanSessionStale: {
 		Class:   ClassNeedsAction,
 		Title:   "Orphaned session state",
-		Blocks:  []Block{BlockPhase, BlockRepositories},
+		Blocks:  []block{blockPhase, blockRepositories},
 		Summary: "An agent session left recovery state behind with no process running.",
 		summaryParams: func(p Params) string {
 			return orphanSessionSummary(p, "left recovery state behind with no process running")
@@ -1744,7 +1744,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Choose a harness and model, then send the message again.",
 	},
 	TurnActive: {
-		Class:       ClassWarning,
+		Class:       classWarning,
 		Title:       "Supervisor is busy",
 		Summary:     "The supervisor is still working on the previous message.",
 		Remediation: "Wait for the current turn to finish, then send the message again.",
@@ -1757,7 +1757,7 @@ var catalog = map[Code]Entry{
 	},
 	ChangePending:         {Class: ClassNeedsAction, Title: "Settings change pending", Summary: "Another settings change is waiting to apply.", Remediation: "Cancel the pending change before choosing another setting."},
 	StaleGeneration:       {Class: ClassNeedsAction, Title: "Supervisor state changed", Summary: "The supervisor generation changed before the settings request arrived.", Remediation: "Refresh the supervisor state and try again."},
-	PendingChangeNotFound: {Class: ClassWarning, Title: "Pending change not found", Summary: "That settings change is no longer pending.", Remediation: "Refresh the supervisor state."},
+	PendingChangeNotFound: {Class: classWarning, Title: "Pending change not found", Summary: "That settings change is no longer pending.", Remediation: "Refresh the supervisor state."},
 	ClientMessageConflict: {
 		Class:       ClassBlocking,
 		Title:       "Message id already used",
@@ -1765,7 +1765,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Send the message again with a new message id.",
 	},
 	CursorOutOfRange: {
-		Class:       ClassWarning,
+		Class:       classWarning,
 		Title:       "Transcript position out of range",
 		Summary:     "The requested transcript position is past the end of the conversation.",
 		Remediation: "Reload the newest page of the conversation.",
@@ -1792,7 +1792,7 @@ var catalog = map[Code]Entry{
 		Remediation: "Reopen the card and try again.",
 	},
 	ChatContextNotFound: {
-		Class:   ClassWarning,
+		Class:   classWarning,
 		Title:   "Referenced error no longer present",
 		Summary: "The error referenced by this question is no longer present.",
 		summaryParams: func(p Params) string {
@@ -1809,7 +1809,7 @@ var catalog = map[Code]Entry{
 	IntegrationMergeConflict: {
 		Class:   ClassNeedsAction,
 		Title:   "Integration merge conflict",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "The integration merge conflicted with the parent's current state.",
 		summaryParams: func(p Params) string {
 			return integrationMergeConflictSummary(p)
@@ -1820,7 +1820,7 @@ var catalog = map[Code]Entry{
 	IntegrationParentDirty: {
 		Class:   ClassNeedsAction,
 		Title:   "Parent worktree is dirty",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A parent worktree has uncommitted changes.",
 		summaryParams: func(p Params) string {
 			return integrationParentDirtySummary(p)
@@ -1831,7 +1831,7 @@ var catalog = map[Code]Entry{
 	IntegrationParentRefDrift: {
 		Class:   ClassNeedsAction,
 		Title:   "Parent branch moved",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A parent branch moved since the pass started.",
 		summaryParams: func(p Params) string {
 			return integrationParentRefDriftSummary(p)
@@ -1842,7 +1842,7 @@ var catalog = map[Code]Entry{
 	IntegrationRefRace: {
 		Class:   ClassNeedsAction,
 		Title:   "Parent ref moved during integration",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A parent ref moved while the pass was integrating.",
 		summaryParams: func(p Params) string {
 			return integrationRefRaceSummary(p)
@@ -1853,7 +1853,7 @@ var catalog = map[Code]Entry{
 	IntegrationParentBranchMismatch: {
 		Class:   ClassNeedsAction,
 		Title:   "Parent branch mismatch",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A repository is not on the parent branch this pass expects.",
 		summaryParams: func(p Params) string {
 			return integrationParentBranchMismatchSummary(p)
@@ -1864,7 +1864,7 @@ var catalog = map[Code]Entry{
 	IntegrationRepositoryMissing: {
 		Class:   ClassNeedsAction,
 		Title:   "Repository missing",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A repository is missing from the workspace.",
 		summaryParams: func(p Params) string {
 			return integrationRepositoryMissingSummary(p)
@@ -1875,7 +1875,7 @@ var catalog = map[Code]Entry{
 	IntegrationWorktreeSyncFailed: {
 		Class:   ClassNeedsAction,
 		Title:   "Worktree sync failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A worktree could not be synced after the pass applied.",
 		summaryParams: func(p Params) string {
 			return integrationWorktreeSyncFailedSummary(p)
@@ -1886,7 +1886,7 @@ var catalog = map[Code]Entry{
 	IntegrationRolledBack: {
 		Class:   ClassNeedsAction,
 		Title:   "Integration rolled back",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "The pass was rolled back after its apply failed.",
 		summaryParams: func(p Params) string {
 			return integrationRolledBackSummary(p)
@@ -1897,7 +1897,7 @@ var catalog = map[Code]Entry{
 	IntegrationCandidateFailed: {
 		Class:   ClassNeedsAction,
 		Title:   "Integration preparation failed",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "Preparing a merge candidate failed.",
 		summaryParams: func(p Params) string {
 			return integrationCandidateFailedSummary(p)
@@ -1908,7 +1908,7 @@ var catalog = map[Code]Entry{
 	RebaseGateTargetMissing: {
 		Class:   ClassNeedsAction,
 		Title:   "Rebase target missing",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "The rebase pass's creation-time target is missing.",
 		summaryParams: func(p Params) string {
 			return rebaseGateTargetMissingSummary(p)
@@ -1919,7 +1919,7 @@ var catalog = map[Code]Entry{
 	RebaseGateNotAncestor: {
 		Class:   ClassNeedsAction,
 		Title:   "Pass branch diverged from target",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A pass branch is no longer an ancestor of its rebase target.",
 		summaryParams: func(p Params) string {
 			return rebaseGateNotAncestorSummary(p)
@@ -1930,7 +1930,7 @@ var catalog = map[Code]Entry{
 	RebaseGateMergeInProgress: {
 		Class:   ClassNeedsAction,
 		Title:   "Merge in progress",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A repository has a merge in progress.",
 		summaryParams: func(p Params) string {
 			return rebaseGateMergeInProgressSummary(p)
@@ -1941,7 +1941,7 @@ var catalog = map[Code]Entry{
 	RebaseGateConflictMarkers: {
 		Class:   ClassNeedsAction,
 		Title:   "Unresolved conflict markers",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A repository carries unresolved conflict markers.",
 		summaryParams: func(p Params) string {
 			return rebaseGateConflictMarkersSummary(p)
@@ -1952,7 +1952,7 @@ var catalog = map[Code]Entry{
 	RebaseGatePassthroughModified: {
 		Class:   ClassNeedsAction,
 		Title:   "Pass-through worktree modified",
-		Blocks:  []Block{BlockRepositories},
+		Blocks:  []block{blockRepositories},
 		Summary: "A pass-through worktree has local modifications.",
 		summaryParams: func(p Params) string {
 			return rebaseGatePassthroughModifiedSummary(p)

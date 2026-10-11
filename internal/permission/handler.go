@@ -36,7 +36,7 @@ func (h *CachingHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.Perm
 		return decision, nil
 	}
 	// Inner handler deferred — check the cache.
-	rule, found := h.Cache.Check(req.ToolName, req.Input, h.RepoName)
+	rule, found := h.Cache.check(req.ToolName, req.Input, h.RepoName)
 	if !found {
 		return ports.PermissionDecision{}, nil // defer to desktop app
 	}

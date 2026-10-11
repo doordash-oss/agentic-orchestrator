@@ -83,11 +83,11 @@ func TestOTelOnlyExportsWideEventsAndMetricsWithoutLocalJSONL(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(stateDir, "f1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	obs := New(false, stateDir, true, lis.Addr().String(), true, "fleet-test")
+	obs := newObserver(false, stateDir, true, lis.Addr().String(), true, "fleet-test")
 	if err := obs.Emit(Event{Timestamp: time.Unix(1700000000, 0), TraceID: "00000000000000000000000000000001", EventType: "validation.completed", FeatureID: "f1", Status: "passed", DurationMs: 125}); err != nil {
 		t.Fatal(err)
 	}
-	if err := obs.Shutdown(); err != nil {
+	if err := obs.shutdown(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(stateDir, "f1", "events.jsonl")); !os.IsNotExist(err) {
@@ -346,7 +346,7 @@ func TestFeatureMilestonesSurviveRestartAndMeasureEachRun(t *testing.T) {
 	start := time.Now().Add(-time.Minute)
 	f := &feature.Feature{ID: "f1", Name: "test", Created: start.Add(-24 * time.Hour), Status: feature.StatusImplementing, ActiveRun: 1, RunCount: 1, SchemaVersion: feature.SchemaVersionCurrent}
 	f.SetRun(&feature.Run{RunNumber: 1, StartedAt: &start})
-	store.SetMutationObserver(&Observer{enabled: true, localEnabled: true, emitter: NewEmitter(dir)})
+	store.SetMutationObserver(&Observer{enabled: true, localEnabled: true, emitter: newEmitter(dir)})
 	if err := store.Save(f); err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +360,7 @@ func TestFeatureMilestonesSurviveRestartAndMeasureEachRun(t *testing.T) {
 	setStatus(feature.StatusPublished)
 	// Restart both the store and observer; no in-memory deduplication survives.
 	store = feature.NewStore(dir)
-	store.SetMutationObserver(&Observer{enabled: true, localEnabled: true, emitter: NewEmitter(dir)})
+	store.SetMutationObserver(&Observer{enabled: true, localEnabled: true, emitter: newEmitter(dir)})
 	setStatus(feature.StatusImplementing)
 	setStatus(feature.StatusCodeReady)
 	setStatus(feature.StatusDone)

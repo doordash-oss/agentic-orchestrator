@@ -31,6 +31,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil/mocks"
+	"go.uber.org/fx"
 )
 
 // Claude-backed sessions may outlive the mock CLI itself while the session
@@ -664,9 +665,15 @@ func TestRunResearch_GlobalBashRulesAutoApproveAcrossProviders(t *testing.T) {
 			tt.writeMockCLI(t, mockBinDir, artifactDir)
 			t.Setenv("PATH", mockBinDir+":"+os.Getenv("PATH"))
 
-			store := permission.NewStore(permDir)
-			if err := store.EnsureGlobalDefaults(); err != nil {
-				t.Fatalf("EnsureGlobalDefaults: %v", err)
+			var permCache *permission.Cache
+			permApp := fx.New(
+				fx.Supply(fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`))),
+				permission.Module,
+				fx.Populate(&permCache),
+				fx.NopLogger,
+			)
+			if err := permApp.Err(); err != nil {
+				t.Fatalf("build permission cache: %v", err)
 			}
 
 			reg := llm.NewRegistry()
@@ -681,7 +688,7 @@ func TestRunResearch_GlobalBashRulesAutoApproveAcrossProviders(t *testing.T) {
 				SessionManager:  sm,
 				StateDir:        stateDir,
 				Registry:        reg,
-				PermissionCache: permission.NewCache(store),
+				PermissionCache: permCache,
 			}
 
 			f := newResearchFeature(t, workDir)

@@ -29,7 +29,7 @@ import (
 // clone would, so repository identity resolution has something true to bind.
 func realRepoScript(h *fakeHandle) {
 	if err := os.MkdirAll(h.spec.Staging, 0o755); err != nil {
-		h.finish(RunResult{ExitCode: 128, OutputTail: err.Error()})
+		h.finish(runResult{ExitCode: 128, OutputTail: err.Error()})
 		return
 	}
 	failed := false
@@ -43,7 +43,7 @@ func realRepoScript(h *fakeHandle) {
 			"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.com")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			failed = true
-			h.finish(RunResult{ExitCode: 128, OutputTail: string(out)})
+			h.finish(runResult{ExitCode: 128, OutputTail: string(out)})
 		}
 	}
 	run("init", "-b", "main")
@@ -54,7 +54,7 @@ func realRepoScript(h *fakeHandle) {
 		return
 	}
 	h.emitLine("Receiving objects: 100% (3/3), done.")
-	h.finish(RunResult{ExitCode: 0})
+	h.finish(runResult{ExitCode: 0})
 }
 
 func newIdentityFixture(t *testing.T) *serviceFixture {
@@ -169,7 +169,7 @@ func TestStagedPublicationIdentityPinsStagedGitDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	work := filepath.Join(root, stagingNameFor(KindClone, "clone-x"), stagingWorkDir)
+	work := filepath.Join(root, stagingNameFor(kindClone, "clone-x"), stagingWorkDir)
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestStagedPublicationIdentityPinsStagedGitDirectory(t *testing.T) {
 	}
 	dest := filepath.Join(root, "widget")
 	rec := Record{
-		StagingPath:     filepath.Join(root, stagingNameFor(KindClone, "clone-x")),
+		StagingPath:     filepath.Join(root, stagingNameFor(kindClone, "clone-x")),
 		DestinationPath: dest,
 	}
 

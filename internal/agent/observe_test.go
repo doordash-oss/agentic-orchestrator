@@ -28,7 +28,29 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
+	"go.uber.org/fx"
 )
+
+// observerFromModule builds the observer through the fx module with the
+// given observability settings (events flag, OTel off, service name) and
+// state dir, mirroring the production construction path.
+func observerFromModule(t *testing.T, events bool, stateDir, serviceName string) *observe.Observer {
+	t.Helper()
+	cfg := config.NewDefault()
+	cfg.Observability.Events = events
+	cfg.Observability.OTelServiceName = serviceName
+	var obs *observe.Observer
+	app := fx.New(
+		fx.Supply(cfg, fx.Annotate(stateDir, fx.ResultTags(`name:"stateDir"`))),
+		observe.Module,
+		fx.Populate(&obs),
+		fx.NopLogger,
+	)
+	if err := app.Err(); err != nil {
+		t.Fatalf("build observer: %v", err)
+	}
+	return obs
+}
 
 type contextReadTrackerTestSession struct {
 	onToolAllowed func(string, json.RawMessage)
@@ -109,7 +131,7 @@ func TestContextReadTrackerEmitsProviderReportedGuidelineRead(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(observeDir, featureID), 0o755); err != nil {
 		t.Fatalf("mkdir feature observe dir: %v", err)
 	}
-	obs := observe.New(true, observeDir, false, "", false, "agentic-test")
+	obs := observerFromModule(t, true, observeDir, "agentic-test")
 	guidelinesDir := filepath.Join(t.TempDir(), "guidelines")
 	sess := &contextReadTrackerTestSession{}
 	sc := observe.SpanContextForFeature(featureID, "trace-1", "feature", "span-1").Child()
@@ -165,7 +187,7 @@ func TestImplementLoopEmitsFullEventSequence(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-impl-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	// Create feature state directory
 	stateDir := t.TempDir()
@@ -373,7 +395,7 @@ func TestRunInquireEmitsPhaseAndSessionEvents(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-inquire-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
@@ -488,7 +510,7 @@ func TestRunResearchEmitsPhaseAndSessionEvents(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-research-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
@@ -608,7 +630,7 @@ func TestRunKBForRepoEmitsEventsWithRepoName(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-kb-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	// stateDir must be structured so KBStateDir resolves correctly:
 	// KBStateDir(stateDir, repoName) = filepath.Dir(stateDir) + "/knowledge-base/" + repoName
@@ -750,7 +772,7 @@ func TestImplementLoopMultiIterationEmitsUniqueSpans(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-multi-iter-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)
@@ -916,7 +938,7 @@ func TestImplementLoopFailurePathEmitsPhaseCompleted(t *testing.T) {
 	observeDir := t.TempDir()
 	featureID := "test-observe-failure-001"
 	os.MkdirAll(filepath.Join(observeDir, featureID), 0755)
-	obs := observe.New(true, observeDir, false, "", false, "agentic")
+	obs := observerFromModule(t, true, observeDir, "agentic")
 
 	stateDir := t.TempDir()
 	store := feature.NewStore(stateDir)

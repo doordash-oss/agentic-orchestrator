@@ -25,7 +25,7 @@ import (
 // the state could not be determined, and the accompanying error says why.
 // Callers must treat the indeterminate answer as "unknown", never as "closed".
 func PRState(_ string, prURL string) (string, error) {
-	owner, repo, number, err := ParsePRURL(prURL)
+	owner, repo, number, err := parsePRURL(prURL)
 	if err != nil {
 		return "", err
 	}
@@ -38,10 +38,10 @@ func PRState(_ string, prURL string) (string, error) {
 		return "", err
 	}
 	if info.Merged {
-		return PRStateMerged, nil
+		return pRStateMerged, nil
 	}
 	if strings.EqualFold(info.State, "closed") {
-		return PRStateClosed, nil
+		return pRStateClosed, nil
 	}
 	if strings.EqualFold(info.State, "open") {
 		return PRStateOpen, nil
@@ -52,6 +52,6 @@ func PRState(_ string, prURL string) (string, error) {
 // Pull-request states PRState can report.
 const (
 	PRStateOpen   = "open"
-	PRStateClosed = "closed"
-	PRStateMerged = "merged"
+	pRStateClosed = "closed"
+	pRStateMerged = "merged"
 )

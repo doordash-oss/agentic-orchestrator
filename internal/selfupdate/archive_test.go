@@ -116,7 +116,7 @@ func TestArchiveExtractsOnlyExecutable(t *testing.T) {
 	dir := t.TempDir()
 	archivePath, destPath := writeArchive(t, dir, buildTarGz(t, defaultArchiveEntries()))
 
-	digest, err := ExtractExecutable(archivePath, destPath)
+	digest, err := extractArchiveExecutable(archivePath, destPath)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestArchivePreservesEntryMode(t *testing.T) {
 	dir := t.TempDir()
 	entries := []tarEntry{regEntry("agentico", 0o711, wantExecutableBytes())}
 	archivePath, destPath := writeArchive(t, dir, buildTarGz(t, entries))
-	if _, err := ExtractExecutable(archivePath, destPath); err != nil {
+	if _, err := extractArchiveExecutable(archivePath, destPath); err != nil {
 		t.Fatalf("extract: %v", err)
 	}
 	info, err := os.Stat(destPath)
@@ -263,7 +263,7 @@ func TestArchiveRejections(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			archivePath, destPath := writeArchive(t, dir, buildTarGz(t, tc.entries))
-			_, err := ExtractExecutable(archivePath, destPath)
+			_, err := extractArchiveExecutable(archivePath, destPath)
 			if err == nil {
 				t.Fatalf("expected rejection (%s)", tc.want)
 			}
@@ -285,7 +285,7 @@ func TestArchiveEntryLimit(t *testing.T) {
 	}
 	dir := t.TempDir()
 	archivePath, destPath := writeArchive(t, dir, buildTarGz(t, entries))
-	if _, err := ExtractExecutable(archivePath, destPath); err != nil {
+	if _, err := extractArchiveExecutable(archivePath, destPath); err != nil {
 		t.Fatalf("archive at the entry limit must extract: %v", err)
 	}
 
@@ -293,7 +293,7 @@ func TestArchiveEntryLimit(t *testing.T) {
 	entries = append(entries, regEntry("one-too-many.txt", 0o644, []byte("x")))
 	dir = t.TempDir()
 	archivePath, destPath = writeArchive(t, dir, buildTarGz(t, entries))
-	_, err := ExtractExecutable(archivePath, destPath)
+	_, err := extractArchiveExecutable(archivePath, destPath)
 	if err == nil || !strings.Contains(err.Error(), "entry limit") {
 		t.Fatalf("expected entry-limit rejection, got %v", err)
 	}
@@ -313,7 +313,7 @@ func TestArchiveExpandedBudget(t *testing.T) {
 	}
 	dir := t.TempDir()
 	archivePath, destPath := writeArchive(t, dir, buildTarGz(t, entries))
-	_, err := ExtractExecutable(archivePath, destPath)
+	_, err := extractArchiveExecutable(archivePath, destPath)
 	if err == nil || !strings.Contains(err.Error(), "declares more than") {
 		t.Fatalf("expected declared-size rejection, got %v", err)
 	}
@@ -330,7 +330,7 @@ func TestArchiveExpandedBudget(t *testing.T) {
 	}
 	dir = t.TempDir()
 	archivePath, destPath = writeArchive(t, dir, buildTarGz(t, entries))
-	_, err = ExtractExecutable(archivePath, destPath)
+	_, err = extractArchiveExecutable(archivePath, destPath)
 	if err == nil || !isExpandedBudgetRejection(err) {
 		t.Fatalf("expected expanded-budget rejection, got %v", err)
 	}
@@ -353,7 +353,7 @@ func TestArchiveDiscardedBytesCountTowardBudget(t *testing.T) {
 	}
 	dir := t.TempDir()
 	archivePath, destPath := writeArchive(t, dir, buildTarGz(t, entries))
-	_, err := ExtractExecutable(archivePath, destPath)
+	_, err := extractArchiveExecutable(archivePath, destPath)
 	if err == nil || !isExpandedBudgetRejection(err) {
 		t.Fatalf("expected discarded-bytes budget rejection, got %v", err)
 	}
@@ -385,7 +385,7 @@ func TestArchiveTruncatedArchiveRejected(t *testing.T) {
 	// Cut the gzip stream in half: decoding must fail as malformed.
 	dir := t.TempDir()
 	archivePath, destPath := writeArchive(t, dir, data[:len(data)/2])
-	_, err := ExtractExecutable(archivePath, destPath)
+	_, err := extractArchiveExecutable(archivePath, destPath)
 	if err == nil || !strings.Contains(err.Error(), "malformed release archive") {
 		t.Fatalf("expected malformed rejection, got %v", err)
 	}
@@ -399,7 +399,7 @@ func TestArchiveTrailingDataRejected(t *testing.T) {
 	tampered := append(append([]byte{}, data...), []byte("trailing garbage")...)
 	dir := t.TempDir()
 	archivePath, destPath := writeArchive(t, dir, tampered)
-	_, err := ExtractExecutable(archivePath, destPath)
+	_, err := extractArchiveExecutable(archivePath, destPath)
 	if err == nil || !strings.Contains(err.Error(), "trailing data") {
 		t.Fatalf("expected trailing-data rejection, got %v", err)
 	}
@@ -414,7 +414,7 @@ func TestArchiveRefusesExistingDestination(t *testing.T) {
 	if err := os.WriteFile(destPath, []byte("precious"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ExtractExecutable(archivePath, destPath)
+	_, err := extractArchiveExecutable(archivePath, destPath)
 	if err == nil {
 		t.Fatal("expected refusal when the destination already exists")
 	}
@@ -439,7 +439,7 @@ func TestArchivePartialExtractionCleanedUp(t *testing.T) {
 	}
 	dir := t.TempDir()
 	archivePath, destPath := writeArchive(t, dir, buildTarGz(t, entries))
-	_, err := ExtractExecutable(archivePath, destPath)
+	_, err := extractArchiveExecutable(archivePath, destPath)
 	if err == nil || !isExpandedBudgetRejection(err) {
 		t.Fatalf("expected budget rejection after partial extraction, got %v", err)
 	}
@@ -459,7 +459,7 @@ func TestArchiveExecutableAfterDiscards(t *testing.T) {
 	}
 	dir := t.TempDir()
 	archivePath, destPath := writeArchive(t, dir, buildTarGz(t, entries))
-	digest, err := ExtractExecutable(archivePath, destPath)
+	digest, err := extractArchiveExecutable(archivePath, destPath)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}

@@ -35,8 +35,8 @@ const (
 	patternBashGitDiff = "Bash(git diff *)"
 )
 
-// Rule represents a cached permission rule.
-type Rule struct {
+// rule represents a cached permission rule.
+type rule struct {
 	ToolPattern string // e.g. "Bash(npm test *)", "Bash", "Edit(/path/to/file)"
 	Effect      string // "allow" or "deny"
 	RepoName    string // scope: "" = global, otherwise per-repo
@@ -50,7 +50,7 @@ type Rule struct {
 //
 // For Bash tools the toolInput may be a raw JSON object (e.g. {"command":"ls"});
 // the command field is extracted automatically before matching.
-func (r Rule) Match(toolName, toolInput string) bool {
+func (r rule) match(toolName, toolInput string) bool {
 	openParen := strings.Index(r.ToolPattern, "(")
 	if openParen < 0 {
 		// Tool-name-only: match if tool names are equal

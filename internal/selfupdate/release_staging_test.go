@@ -39,8 +39,8 @@ type stagedReleaseFixture struct {
 	exec     Executable
 	server   *releaseFixtureServer
 	client   *FeedClient
-	release  VerifiedRelease
-	resolved ResolvedRelease
+	release  verifiedRelease
+	resolved resolvedRelease
 	tarball  []byte
 }
 
@@ -77,7 +77,7 @@ func newStagedReleaseFixture(t *testing.T, version string) *stagedReleaseFixture
 func eligibleStageOpts(current string) StageReleaseOptions {
 	return StageReleaseOptions{
 		CurrentVersion: current,
-		Eligibility:    Eligibility{Supported: true, Install: InstallTarball},
+		Eligibility:    Eligibility{Supported: true, Install: installTarball},
 	}
 }
 
@@ -88,7 +88,7 @@ func TestStageVerifiedReleaseHappyPath(t *testing.T) {
 		t.Fatalf("stage: %v", err)
 	}
 	// Staging lives on the executable's filesystem inside the lease dir.
-	leaseDir := LeaseDir(f.exec.Path)
+	leaseDir := leaseDir(f.exec.Path)
 	if !strings.HasPrefix(staged.TxDir(), leaseDir+string(filepath.Separator)) {
 		t.Fatalf("staging dir %s is not inside the lease dir %s", staged.TxDir(), leaseDir)
 	}
@@ -169,7 +169,7 @@ func TestStageVerifiedReleaseRejectsUnsafeArchive(t *testing.T) {
 
 func assertNoStagingResidue(t *testing.T, execPath string) {
 	t.Helper()
-	entries, err := os.ReadDir(LeaseDir(execPath))
+	entries, err := os.ReadDir(leaseDir(execPath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +217,7 @@ func TestStageVerifiedReleaseDeceptiveContentLength(t *testing.T) {
 	// is streamed, even when the real body is small.
 	f.server.mu.Lock()
 	f.server.assets["/assets/"+f.resolved.Tarball.Name] = []byte("tiny body")
-	f.server.assetHeaders = map[string]string{"Content-Length": fmt.Sprintf("%d", ArchiveMaxCompressedBytes+1)}
+	f.server.assetHeaders = map[string]string{"Content-Length": fmt.Sprintf("%d", archiveMaxCompressedBytes+1)}
 	f.server.mu.Unlock()
 	_, err := f.client.StageVerifiedRelease(context.Background(), f.exec, f.release, eligibleStageOpts("2.0.0"))
 	if err == nil || !strings.Contains(err.Error(), "declares more than") {
@@ -227,7 +227,7 @@ func TestStageVerifiedReleaseDeceptiveContentLength(t *testing.T) {
 }
 
 func TestStageVerifiedReleaseInactivityBound(t *testing.T) {
-	restore := shrinkDownloadBounds(t, ArchiveMaxCompressedBytes, 400*time.Millisecond, 10*time.Minute)
+	restore := shrinkDownloadBounds(t, archiveMaxCompressedBytes, 400*time.Millisecond, 10*time.Minute)
 	defer restore()
 	// Serve the tarball in two chunks with a long stall between them: the
 	// inactivity watchdog must abort the download.
@@ -270,7 +270,7 @@ var testStallBody = func() []byte {
 }()
 
 func TestStageVerifiedReleaseTotalDeadline(t *testing.T) {
-	restore := shrinkDownloadBounds(t, ArchiveMaxCompressedBytes, 10*time.Minute, 500*time.Millisecond)
+	restore := shrinkDownloadBounds(t, archiveMaxCompressedBytes, 10*time.Minute, 500*time.Millisecond)
 	defer restore()
 	// An endless trickle of progress never trips the inactivity bound; only
 	// the total deadline stops it.
@@ -340,21 +340,21 @@ func TestValidateReleaseTargetGates(t *testing.T) {
 		{"non-increasing", eligibleStageOpts("2.1.0"), "not newer"},
 		{"decreasing", eligibleStageOpts("9.9.9"), "not newer"},
 		{"unordered current", eligibleStageOpts("dev"), "not orderable"},
-		{"unsupported install", StageReleaseOptions{CurrentVersion: "2.0.0", Eligibility: Eligibility{Supported: false, Reason: UnsupportedHomebrew}}, "unsupported"},
+		{"unsupported install", StageReleaseOptions{CurrentVersion: "2.0.0", Eligibility: Eligibility{Supported: false, Reason: unsupportedHomebrew}}, "unsupported"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateReleaseTarget(f.exec, f.release, tc.opts)
+			err := validateReleaseTarget(f.exec, f.release, tc.opts)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("expected %q rejection, got %v", tc.want, err)
 			}
 		})
 	}
 	// A suppressed exact target is refused, and newer targets stay eligible.
-	if err := SuppressTarget(f.exec.Path, SuppressedTarget{Version: "2.1.0", TransactionID: strings.Repeat("a", 32)}); err != nil {
+	if err := suppressTarget(f.exec.Path, suppressedTarget{Version: "2.1.0", TransactionID: strings.Repeat("a", 32)}); err != nil {
 		t.Fatal(err)
 	}
-	err := ValidateReleaseTarget(f.exec, f.release, eligibleStageOpts("2.0.0"))
+	err := validateReleaseTarget(f.exec, f.release, eligibleStageOpts("2.0.0"))
 	if err == nil || !strings.Contains(err.Error(), "suppressed") {
 		t.Fatalf("expected suppression rejection, got %v", err)
 	}
@@ -362,7 +362,7 @@ func TestValidateReleaseTargetGates(t *testing.T) {
 
 func TestStageVerifiedReleaseRefusesSuppressedTarget(t *testing.T) {
 	f := newStagedReleaseFixture(t, "2.1.0")
-	if err := SuppressTarget(f.exec.Path, SuppressedTarget{Version: "2.1.0", TransactionID: strings.Repeat("b", 32)}); err != nil {
+	if err := suppressTarget(f.exec.Path, suppressedTarget{Version: "2.1.0", TransactionID: strings.Repeat("b", 32)}); err != nil {
 		t.Fatal(err)
 	}
 	_, err := f.client.StageVerifiedRelease(context.Background(), f.exec, f.release, eligibleStageOpts("2.0.0"))
@@ -461,12 +461,12 @@ func TestAdmitStagedReleaseRequiresMatchingProbe(t *testing.T) {
 		t.Fatalf("stage: %v", err)
 	}
 	// Wrong probe version refuses admission.
-	wrongVersion := ProbeResult{Version: "9.9.9", Banner: "agentico v9.9.9", ExecutableDigest: staged.CandidateDigest()}
+	wrongVersion := probeResult{Version: "9.9.9", Banner: "agentico v9.9.9", ExecutableDigest: staged.CandidateDigest()}
 	if _, err := AdmitStagedRelease(staged, wrongVersion); err == nil || !strings.Contains(err.Error(), "release target") {
 		t.Fatalf("expected probe-version refusal, got %v", err)
 	}
 	// Digest mismatch refuses admission.
-	wrongDigest := ProbeResult{Version: "2.1.0", Banner: "agentico v2.1.0", ExecutableDigest: strings.Repeat("0", 64)}
+	wrongDigest := probeResult{Version: "2.1.0", Banner: "agentico v2.1.0", ExecutableDigest: strings.Repeat("0", 64)}
 	if _, err := AdmitStagedRelease(staged, wrongDigest); err == nil || !strings.Contains(err.Error(), "staged candidate digest") {
 		t.Fatalf("expected digest refusal, got %v", err)
 	}
@@ -482,7 +482,7 @@ func TestAdmitStagedReleaseRequiresMatchingProbe(t *testing.T) {
 	if cand.ExecutablePath() != staged.CandidatePath() || cand.ExecutableDigest() != staged.CandidateDigest() {
 		t.Fatal("admitted candidate does not bind the staged executable")
 	}
-	if cand.Release().TarballDigest() != f.release.TarballDigest() {
+	if cand.Release().signedTarballDigest() != f.release.signedTarballDigest() {
 		t.Fatal("admitted candidate lost release provenance")
 	}
 }
@@ -589,7 +589,7 @@ func TestBeginVerifiedReleaseCommitBoundary(t *testing.T) {
 	}
 	// The receipt stays truthful and actionable: pending, backup-ready.
 	r := tx.Receipt()
-	if r.Outcome != OutcomePending || r.Phase != PhaseBackupReady {
+	if r.Outcome != OutcomePending || r.Phase != phaseBackupReady {
 		t.Fatalf("refused commit left receipt %s/%s", r.Outcome, r.Phase)
 	}
 }
@@ -626,16 +626,16 @@ func TestBeginVerifiedReleaseCommitsVerifiedCandidate(t *testing.T) {
 	if mode := statMode(t, f.exec.Path); mode != 0o755 {
 		t.Fatalf("installed mode = %o, want 755", mode)
 	}
-	r, err := ReadReceipt(ReceiptPath(f.exec.Path))
+	r, err := readReceipt(ReceiptPath(f.exec.Path))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Outcome != OutcomePending || r.Phase != PhaseReplacementComplete {
+	if r.Outcome != OutcomePending || r.Phase != phaseReplacementComplete {
 		t.Fatalf("receipt = %s/%s", r.Outcome, r.Phase)
 	}
 }
 
-func leaseDirPath(exec Executable) string { return LeaseDir(exec.Path) }
+func leaseDirPath(exec Executable) string { return leaseDir(exec.Path) }
 
 func statMode(t *testing.T, path string) uint32 {
 	t.Helper()

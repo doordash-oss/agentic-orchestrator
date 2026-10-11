@@ -34,17 +34,17 @@ type Config struct {
 	Repos           map[string]RepoConfig     `yaml:"repos"`
 	WorkspaceRoots  []string                  `yaml:"workspace_roots,omitempty"`
 	DiscoveredRepos map[string]RepoConfig     `yaml:"-"` // in-memory only, never persisted
-	Notifications   NotificationConfig        `yaml:"notifications,omitempty"`
-	Observability   ObservabilityConfig       `yaml:"observability,omitempty"`
-	Providers       map[string]ProviderConfig `yaml:"providers,omitempty"`
+	Notifications   notificationConfig        `yaml:"notifications,omitempty"`
+	Observability   observabilityConfig       `yaml:"observability,omitempty"`
+	Providers       map[string]providerConfig `yaml:"providers,omitempty"`
 	// Server holds startup-only settings for the headless server. They are
 	// read at launch and intentionally not part of the runtime-config REST
 	// surface.
-	Server ServerConfig `yaml:"server,omitempty"`
+	Server serverConfig `yaml:"server,omitempty"`
 }
 
-// ServerConfig holds headless-server settings applied once at startup.
-type ServerConfig struct {
+// serverConfig holds headless-server settings applied once at startup.
+type serverConfig struct {
 	// Name overrides the server display name. Precedence is
 	// --name > server.name > the persisted generated name.
 	Name string `yaml:"name,omitempty"`
@@ -53,11 +53,11 @@ type ServerConfig struct {
 	// intentionally never appear on the runtime-config REST surface.
 	Updates ServerUpdatesConfig `yaml:"updates,omitempty"`
 	// Capabilities controls built-in verification capability probes.
-	Capabilities ServerCapabilitiesConfig `yaml:"capabilities,omitempty"`
+	Capabilities serverCapabilitiesConfig `yaml:"capabilities,omitempty"`
 }
 
-// ServerCapabilitiesConfig holds server.capabilities startup settings.
-type ServerCapabilitiesConfig struct {
+// serverCapabilitiesConfig holds server.capabilities startup settings.
+type serverCapabilitiesConfig struct {
 	// BrowserState is "allow" or "deny" for the authenticated-browser
 	// capability. Empty defaults to allow on loopback servers and deny on
 	// servers exposed to the network, where a signed-in session must never
@@ -77,10 +77,10 @@ type ServerUpdatesConfig struct {
 	Window        string `yaml:"window,omitempty"`
 }
 
-// ProviderConfig holds per-provider overrides. CLI overrides the executable
+// providerConfig holds per-provider overrides. CLI overrides the executable
 // name (or path) Agentico invokes for that provider; when empty, the provider's
 // built-in default binary name is used.
-type ProviderConfig struct {
+type providerConfig struct {
 	CLI string `yaml:"cli,omitempty"`
 }
 
@@ -95,8 +95,8 @@ func (c *Config) ProviderCLI(name, fallback string) string {
 	return fallback
 }
 
-// ObservabilityConfig controls JSONL event emission and OTel export.
-type ObservabilityConfig struct {
+// observabilityConfig controls JSONL event emission and OTel export.
+type observabilityConfig struct {
 	Events          bool   `yaml:"events"`
 	OTelEnabled     bool   `yaml:"otel_enabled,omitempty"`
 	OTelEndpoint    string `yaml:"otel_endpoint,omitempty"`
@@ -113,14 +113,14 @@ type ObservabilityConfig struct {
 
 // UnmarshalYAML defaults Events to true so that configs which include an
 // observability section but omit events still get event recording.
-func (o *ObservabilityConfig) UnmarshalYAML(value *yaml.Node) error {
+func (o *observabilityConfig) UnmarshalYAML(value *yaml.Node) error {
 	o.Events = true
 	o.parsed = true
-	type plain ObservabilityConfig
+	type plain observabilityConfig
 	return value.Decode((*plain)(o))
 }
 
-type NotificationConfig struct {
+type notificationConfig struct {
 	// MuteFeatureInput suppresses notifications when an agent is waiting for
 	// manual feature input. Other notification types are unaffected.
 	MuteFeatureInput bool `yaml:"mute_feature_input,omitempty"`
@@ -200,9 +200,9 @@ type EffortConfig struct {
 	KBBuild        string `yaml:"kb_build,omitempty" json:"kb_build,omitempty"`
 }
 
-// Role is one model-and-effort role, keyed by the role string the provider
+// role is one model-and-effort role, keyed by the role string the provider
 // layer uses. Model and Effort return the role's field on the given struct.
-type Role struct {
+type role struct {
 	Name   string
 	Model  func(*ModelConfig) *string
 	Effort func(*EffortConfig) *string
@@ -211,7 +211,7 @@ type Role struct {
 // Roles lists every model-and-effort role in ModelConfig field order. The
 // "chat" role uses the Utilities fields. AutomaticReview is not a role here:
 // it has no effort field and is never defaulted.
-var Roles = []Role{
+var Roles = []role{
 	{"inquiry", func(m *ModelConfig) *string { return &m.Inquiry }, func(e *EffortConfig) *string { return &e.Inquiry }},
 	{"research", func(m *ModelConfig) *string { return &m.Research }, func(e *EffortConfig) *string { return &e.Research }},
 	{"planning", func(m *ModelConfig) *string { return &m.Planning }, func(e *EffortConfig) *string { return &e.Planning }},
@@ -222,13 +222,13 @@ var Roles = []Role{
 }
 
 // RoleNamed returns the role with the given name and whether it exists.
-func RoleNamed(name string) (Role, bool) {
+func RoleNamed(name string) (role, bool) {
 	for _, r := range Roles {
 		if r.Name == name {
 			return r, true
 		}
 	}
-	return Role{}, false
+	return role{}, false
 }
 
 // Checkpoints controls which phase transitions pause for human review in the config defaults.
@@ -315,10 +315,10 @@ func Save(path string, cfg *Config) error {
 	return nil
 }
 
-// LoadOrCreateWithStatus works like LoadOrCreate but also reports whether
+// loadOrCreateWithStatus works like loadOrCreate but also reports whether
 // the config file was newly created. This enables callers to detect
 // first-run scenarios.
-func LoadOrCreateWithStatus(path string) (cfg *Config, isNew bool, err error) {
+func loadOrCreateWithStatus(path string) (cfg *Config, isNew bool, err error) {
 	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
 		cfg = NewDefault()
 		if err = Save(path, cfg); err != nil {
@@ -330,9 +330,9 @@ func LoadOrCreateWithStatus(path string) (cfg *Config, isNew bool, err error) {
 	return cfg, false, err
 }
 
-// LoadOrCreate loads an existing config or creates a default one.
-func LoadOrCreate(path string) (*Config, error) {
-	cfg, _, err := LoadOrCreateWithStatus(path)
+// loadOrCreate loads an existing config or creates a default one.
+func loadOrCreate(path string) (*Config, error) {
+	cfg, _, err := loadOrCreateWithStatus(path)
 	return cfg, err
 }
 
@@ -457,7 +457,7 @@ func fillEmptyModels(m *ModelConfig, defaults ModelConfig) {
 	}
 }
 
-// PreferenceForPipeline resolves the effective remembered preferences for a
+// preferenceForPipeline resolves the effective remembered preferences for a
 // pipeline profile. Missing remembered fields fall back to the global defaults.
 func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference {
 	pref := PipelinePreference{

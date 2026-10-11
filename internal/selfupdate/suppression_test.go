@@ -26,8 +26,8 @@ const testTxID = "0123456789abcdef0123456789abcdef"
 func TestSuppressTargetRecordsAndLooksUpExactVersion(t *testing.T) {
 	exec := installExecutable(t, "v1")
 	first := time.Now().Add(-time.Hour).UTC()
-	if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "2.0.0", Digest: "dd", TransactionID: testTxID, SuppressedAt: first}); err != nil {
-		t.Fatalf("SuppressTarget: %v", err)
+	if err := suppressTarget(exec.Path, suppressedTarget{Version: "2.0.0", Digest: "dd", TransactionID: testTxID, SuppressedAt: first}); err != nil {
+		t.Fatalf("suppressTarget: %v", err)
 	}
 	lookup, err := LookupSuppression(exec.Path, "2.0.0")
 	if err != nil || !lookup.Suppressed {
@@ -41,8 +41,8 @@ func TestSuppressTargetRecordsAndLooksUpExactVersion(t *testing.T) {
 		t.Fatalf("LookupSuppression(2.0.1) = (%v, %v), want not suppressed: only exact versions match", other.Suppressed, err)
 	}
 
-	if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "2.0.0", Digest: "ee", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
-		t.Fatalf("re-SuppressTarget: %v", err)
+	if err := suppressTarget(exec.Path, suppressedTarget{Version: "2.0.0", Digest: "ee", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
+		t.Fatalf("re-suppressTarget: %v", err)
 	}
 	lookup, err = LookupSuppression(exec.Path, "2.0.0")
 	if err != nil || !lookup.Suppressed {
@@ -52,24 +52,24 @@ func TestSuppressTargetRecordsAndLooksUpExactVersion(t *testing.T) {
 		t.Fatalf("re-suppression replaced the earliest decision: %s, want %s", lookup.Target.SuppressedAt, first)
 	}
 
-	if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "3.0.0", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
-		t.Fatalf("SuppressTarget second version: %v", err)
+	if err := suppressTarget(exec.Path, suppressedTarget{Version: "3.0.0", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
+		t.Fatalf("suppressTarget second version: %v", err)
 	}
-	state, err := ReadSuppressionState(exec.Path)
+	state, err := readSuppressionState(exec.Path)
 	if err != nil {
-		t.Fatalf("ReadSuppressionState: %v", err)
+		t.Fatalf("readSuppressionState: %v", err)
 	}
 	versions := state.Targets
 	if len(versions) != 2 || versions[0].Version != "2.0.0" || versions[1].Version != "3.0.0" {
 		t.Fatalf("suppressed versions = %+v, want [2.0.0 3.0.0] oldest first", versions)
 	}
 
-	for _, bad := range []SuppressedTarget{
+	for _, bad := range []suppressedTarget{
 		{Version: "", TransactionID: testTxID},
 		{Version: "2.0.0", TransactionID: "short"},
 	} {
-		if err := SuppressTarget(exec.Path, bad); err == nil {
-			t.Fatalf("SuppressTarget(%+v) = nil error, want malformed-target rejection", bad)
+		if err := suppressTarget(exec.Path, bad); err == nil {
+			t.Fatalf("suppressTarget(%+v) = nil error, want malformed-target rejection", bad)
 		}
 	}
 }
@@ -77,10 +77,10 @@ func TestSuppressTargetRecordsAndLooksUpExactVersion(t *testing.T) {
 func TestSuppressionSurvivesRestartAndReceiptOverwrite(t *testing.T) {
 	exec := installExecutable(t, "v1")
 	at := time.Now().UTC()
-	if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "2.0.0", Digest: "dd", TransactionID: testTxID, SuppressedAt: at}); err != nil {
-		t.Fatalf("SuppressTarget: %v", err)
+	if err := suppressTarget(exec.Path, suppressedTarget{Version: "2.0.0", Digest: "dd", TransactionID: testTxID, SuppressedAt: at}); err != nil {
+		t.Fatalf("suppressTarget: %v", err)
 	}
-	before, err := os.ReadFile(SuppressionPath(exec.Path))
+	before, err := os.ReadFile(suppressionPath(exec.Path))
 	if err != nil {
 		t.Fatalf("read suppression store: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestSuppressionSurvivesRestartAndReceiptOverwrite(t *testing.T) {
 	if err := WriteReceiptDurable(ReceiptPath(exec.Path), sampleReceipt(time.Now())); err != nil {
 		t.Fatalf("write unrelated receipt: %v", err)
 	}
-	after, err := os.ReadFile(SuppressionPath(exec.Path))
+	after, err := os.ReadFile(suppressionPath(exec.Path))
 	if err != nil {
 		t.Fatalf("re-read suppression store: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestSuppressionSurvivesRestartAndReceiptOverwrite(t *testing.T) {
 func TestReconcileSuppression(t *testing.T) {
 	rolledBack := sampleReceipt(time.Now())
 	rolledBack.Outcome = OutcomeRolledBack
-	rolledBack.Phase = PhaseRollbackAttempted
+	rolledBack.Phase = phaseRollbackAttempted
 	rolledBack.ToVersion = "2.0.0"
 
 	t.Run("rolled back receipt re-asserts", func(t *testing.T) {
@@ -128,10 +128,10 @@ func TestReconcileSuppression(t *testing.T) {
 	})
 	t.Run("unsafe store surfaces never silently empty", func(t *testing.T) {
 		exec := installExecutable(t, "v3")
-		if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "9.9.9", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
-			t.Fatalf("SuppressTarget: %v", err)
+		if err := suppressTarget(exec.Path, suppressedTarget{Version: "9.9.9", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
+			t.Fatalf("suppressTarget: %v", err)
 		}
-		if err := os.Chmod(SuppressionPath(exec.Path), 0o644); err != nil {
+		if err := os.Chmod(suppressionPath(exec.Path), 0o644); err != nil {
 			t.Fatalf("chmod suppression store: %v", err)
 		}
 		if err := ReconcileSuppression(exec.Path, rolledBack); err == nil {
@@ -146,9 +146,9 @@ func TestReconcileSuppression(t *testing.T) {
 func TestReadSuppressionStateValidatesStore(t *testing.T) {
 	t.Run("missing store is empty", func(t *testing.T) {
 		exec := installExecutable(t, "v1")
-		st, err := ReadSuppressionState(exec.Path)
+		st, err := readSuppressionState(exec.Path)
 		if err != nil {
-			t.Fatalf("ReadSuppressionState: %v", err)
+			t.Fatalf("readSuppressionState: %v", err)
 		}
 		if st.SchemaVersion != suppressionSchemaVersion || len(st.Targets) != 0 {
 			t.Fatalf("missing store state = %+v, want empty schema-1", st)
@@ -156,14 +156,14 @@ func TestReadSuppressionStateValidatesStore(t *testing.T) {
 	})
 	t.Run("wrong mode", func(t *testing.T) {
 		exec := installExecutable(t, "v1")
-		if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "2.0.0", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
-			t.Fatalf("SuppressTarget: %v", err)
+		if err := suppressTarget(exec.Path, suppressedTarget{Version: "2.0.0", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
+			t.Fatalf("suppressTarget: %v", err)
 		}
-		if err := os.Chmod(SuppressionPath(exec.Path), 0o644); err != nil {
+		if err := os.Chmod(suppressionPath(exec.Path), 0o644); err != nil {
 			t.Fatalf("chmod: %v", err)
 		}
-		if _, err := ReadSuppressionState(exec.Path); err == nil {
-			t.Fatal("ReadSuppressionState on 0644 store = nil error")
+		if _, err := readSuppressionState(exec.Path); err == nil {
+			t.Fatal("readSuppressionState on 0644 store = nil error")
 		}
 	})
 	t.Run("symlink", func(t *testing.T) {
@@ -172,11 +172,11 @@ func TestReadSuppressionStateValidatesStore(t *testing.T) {
 			t.Fatalf("ensureLeaseDir: %v", err)
 		}
 		target := writeExecutableFile(t, t.TempDir(), "elsewhere", 0o600, []byte("x"))
-		if err := os.Symlink(target, SuppressionPath(exec.Path)); err != nil {
+		if err := os.Symlink(target, suppressionPath(exec.Path)); err != nil {
 			t.Fatalf("symlink suppression store: %v", err)
 		}
-		if _, err := ReadSuppressionState(exec.Path); err == nil {
-			t.Fatal("ReadSuppressionState on symlinked store = nil error")
+		if _, err := readSuppressionState(exec.Path); err == nil {
+			t.Fatal("readSuppressionState on symlinked store = nil error")
 		}
 	})
 	t.Run("bad schema", func(t *testing.T) {
@@ -184,11 +184,11 @@ func TestReadSuppressionStateValidatesStore(t *testing.T) {
 		if err := ensureLeaseDir(exec.Path); err != nil {
 			t.Fatalf("ensureLeaseDir: %v", err)
 		}
-		if err := os.WriteFile(SuppressionPath(exec.Path), []byte(`{"schema_version":2,"targets":[]}`), 0o600); err != nil {
+		if err := os.WriteFile(suppressionPath(exec.Path), []byte(`{"schema_version":2,"targets":[]}`), 0o600); err != nil {
 			t.Fatalf("write bad-schema store: %v", err)
 		}
-		if _, err := ReadSuppressionState(exec.Path); err == nil {
-			t.Fatal("ReadSuppressionState on schema-2 store = nil error")
+		if _, err := readSuppressionState(exec.Path); err == nil {
+			t.Fatal("readSuppressionState on schema-2 store = nil error")
 		}
 	})
 	t.Run("corrupt json", func(t *testing.T) {
@@ -196,33 +196,33 @@ func TestReadSuppressionStateValidatesStore(t *testing.T) {
 		if err := ensureLeaseDir(exec.Path); err != nil {
 			t.Fatalf("ensureLeaseDir: %v", err)
 		}
-		if err := os.WriteFile(SuppressionPath(exec.Path), []byte("{not json"), 0o600); err != nil {
+		if err := os.WriteFile(suppressionPath(exec.Path), []byte("{not json"), 0o600); err != nil {
 			t.Fatalf("write corrupt store: %v", err)
 		}
-		if _, err := ReadSuppressionState(exec.Path); err == nil {
-			t.Fatal("ReadSuppressionState on corrupt store = nil error")
+		if _, err := readSuppressionState(exec.Path); err == nil {
+			t.Fatal("readSuppressionState on corrupt store = nil error")
 		}
 	})
 	t.Run("owned by another uid", func(t *testing.T) {
 		exec := installExecutable(t, "v1")
-		if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "2.0.0", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
-			t.Fatalf("SuppressTarget: %v", err)
+		if err := suppressTarget(exec.Path, suppressedTarget{Version: "2.0.0", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
+			t.Fatalf("suppressTarget: %v", err)
 		}
-		if err := os.Chown(SuppressionPath(exec.Path), os.Geteuid()+1, -1); err != nil {
+		if err := os.Chown(suppressionPath(exec.Path), os.Geteuid()+1, -1); err != nil {
 			t.Skipf("cannot hand the store to another uid as euid %d: %v", os.Geteuid(), err)
 		}
-		if _, err := ReadSuppressionState(exec.Path); err == nil {
-			t.Fatal("ReadSuppressionState on another uid's store = nil error")
+		if _, err := readSuppressionState(exec.Path); err == nil {
+			t.Fatal("readSuppressionState on another uid's store = nil error")
 		}
 	})
 }
 
 func TestSuppressionStoreCarriesOnlyStructuralFields(t *testing.T) {
 	exec := installExecutable(t, "v1")
-	if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "2.0.0", Digest: "dd", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
-		t.Fatalf("SuppressTarget: %v", err)
+	if err := suppressTarget(exec.Path, suppressedTarget{Version: "2.0.0", Digest: "dd", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
+		t.Fatalf("suppressTarget: %v", err)
 	}
-	data, err := os.ReadFile(SuppressionPath(exec.Path))
+	data, err := os.ReadFile(suppressionPath(exec.Path))
 	if err != nil {
 		t.Fatalf("read suppression store: %v", err)
 	}

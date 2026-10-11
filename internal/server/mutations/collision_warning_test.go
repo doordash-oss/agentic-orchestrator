@@ -15,8 +15,6 @@
 package mutations
 
 import (
-	"context"
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,39 +22,23 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	gitpkg "github.com/doordash-oss/agentic-orchestrator/internal/git"
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
-
-// branchProbeRunnerFunc adapts a function to the git branch-probe runner
-// interface for deterministic collision-warning tests.
-type branchProbeRunnerFunc func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) gitpkg.BranchProbeCommandResult
-
-func (f branchProbeRunnerFunc) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) gitpkg.BranchProbeCommandResult {
-	return f(ctx, repoPath, args, diagnosticLimit)
-}
 
 func TestServerMutationTargetCreateFeatureReturnsUnavailableBranchProbeWarning(t *testing.T) {
 	runtimeDir := t.TempDir()
 	repoPath := filepath.Join(runtimeDir, testRepoAName)
 	initMutationGitRepo(t, repoPath)
+	// The origin points at a nonexistent local path, so the real branch
+	// probe classifies the origin as unavailable through real repository
+	// state (the local candidate check stays clean because no generated
+	// candidate exists yet).
 	mutationGitOutput(t, repoPath, "remote", "add", "origin", filepath.Join(runtimeDir, "offline.git"))
 
 	cfg := config.NewDefault()
 	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	manager.BranchProbeOptions.Runner = branchProbeRunnerFunc(
-		func(_ context.Context, _ string, args []string, _ int) gitpkg.BranchProbeCommandResult {
-			if len(args) > 0 && args[0] == "show-ref" {
-				return gitpkg.BranchProbeCommandResult{ExitCode: 1}
-			}
-			return gitpkg.BranchProbeCommandResult{
-				ExitCode: 128, Diagnostics: "fatal: https://user:secret@example.invalid/repo unavailable\x1b[31m",
-				Err: errors.New("exit status 128"),
-			}
-		},
-	)
 	target := newRESTCreateFeatureTarget(store, manager, cfg, filepath.Join(runtimeDir, "config.yaml"))
 
 	response, err := target.CreateFeature(serverruntime.CreateFeatureRequest{

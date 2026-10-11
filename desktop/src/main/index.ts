@@ -1021,7 +1021,11 @@ if (!hasSingleInstanceLock) {
           // socket. An app-owned runtime is stopped first: the server closes
           // its side, every stream ends with EOF, and the abort afterwards
           // finds nothing in flight. Only a runtime this app does not own
-          // still has its streams cut while live.
+          // still has its streams cut while live. The ordering narrows the
+          // window without closing it: the server's final bytes can still
+          // land on a socket destroyed in the same poll pass, and faults.ts
+          // tolerates that one Node-internal signature instead of recording
+          // it as a crash.
           const ownsRuntime = gateway.getState().ownership === 'app-owned';
           if (ownsRuntime) {
             quitLog('stopping app-owned runtime');

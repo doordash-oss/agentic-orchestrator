@@ -51,10 +51,58 @@ export interface FaultHandlers {
 
 export const FAULT_LOG_PREFIX = '[agentico-main]';
 
+/**
+ * Prefix for the one uncaught exception that is tolerated rather than
+ * recorded (see `isSocketTeardownRace`). Deliberately not a continuation of
+ * FAULT_LOG_PREFIX: the E2E harness fails a journey on any line that starts
+ * with the fault prefix.
+ */
+export const TOLERATED_LOG_PREFIX = '[agentico-main-tolerated]';
+
+/**
+ * Node's TCP read callback throws when bytes land on a socket that
+ * JavaScript destroyed earlier in the same libuv poll pass: the read reports
+ * a positive byte count on a destroyed stream, and `onStreamRead` hands that
+ * count to `ErrnoException`, which only accepts a negative errno. The error
+ * is thrown from inside libuv, so no application catch can see it, and it has
+ * no consequence: the socket is already gone. The main process hits it while
+ * the app-owned runtime is being stopped with event streams still connected.
+ *
+ * The match is deliberately narrow: the exact code and message, and a stack
+ * made only of Node-internal frames with `getSystemErrorName` on top. A real
+ * ERR_OUT_OF_RANGE thrown by a data handler also has `onStreamRead` beneath
+ * it, but carries an application frame, and still counts as a fault.
+ */
+export function isSocketTeardownRace(fault: unknown): boolean {
+  if (!(fault instanceof RangeError)) {
+    return false;
+  }
+  if ((fault as { code?: unknown }).code !== 'ERR_OUT_OF_RANGE') {
+    return false;
+  }
+  if (!fault.message.startsWith('The value of "err" is out of range.')) {
+    return false;
+  }
+  const frames = (fault.stack ?? '').split('\n').filter((line) => /^\s+at /.test(line));
+  const top = frames[0];
+  if (top === undefined || !top.includes('getSystemErrorName')) {
+    return false;
+  }
+  return (
+    frames.some((frame) => frame.includes('ErrnoException')) &&
+    frames.some((frame) => frame.includes('onStreamRead')) &&
+    frames.every((frame) => frame.includes('(node:'))
+  );
+}
+
 export function installMainProcessFaultHandlers(deps: FaultHandlerDeps): FaultHandlers {
   let recorder: FaultRecorder | null = null;
   const handle = (category: 'uncaught exception' | 'unhandled rejection', fault: unknown): void => {
     const detail = describeFault(fault);
+    if (category === 'uncaught exception' && isSocketTeardownRace(fault)) {
+      deps.log(`${TOLERATED_LOG_PREFIX} socket teardown race: ${detail}`);
+      return;
+    }
     deps.log(`${FAULT_LOG_PREFIX} ${category}: ${detail}`);
     try {
       recorder?.recordCrash({ processRole: 'main', category, context: detail });

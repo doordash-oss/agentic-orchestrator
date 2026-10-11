@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -442,5 +443,87 @@ func TestResponseWriteFailureRestoresPendingRequest(t *testing.T) {
 				t.Fatal("failed completion response lost pending state")
 			}
 		})
+	}
+}
+
+// askThenEndTurn asks one structured question and then completes the root
+// turn, the shape Codex produces when the model sends a final message while
+// its ask_user call is still outstanding.
+func askThenEndTurn(t *testing.T, p *Protocol, id int) json.RawMessage {
+	t.Helper()
+	messages, err := p.ParseLine(dynamicRequest(t, id, "ask_user", validQuestion, "thread-1"))
+	if err != nil || len(messages) != 1 || messages[0].ControlRequest == nil {
+		t.Fatalf("request messages=%+v err=%v", messages, err)
+	}
+	if _, err := p.ParseLine([]byte(`{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","status":"completed"}}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if !p.pendingQuestions[strconv.Itoa(id)].TurnEnded {
+		t.Fatal("question was not marked as outliving its turn")
+	}
+	return messages[0].ControlRequest.Request.Input
+}
+
+func TestAnswerAfterTurnEndedStartsFollowUpTurn(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{StructuredCompletion: true})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+	input := askThenEndTurn(t, p, 61)
+	buf.Reset()
+	if err := p.RespondToAskUser("61", resolveAnswers(t, input, map[string]string{"1": "Source"})); err != nil {
+		t.Fatal(err)
+	}
+	var req struct {
+		Method string
+		ID     int
+		Params struct {
+			ThreadID string
+			Input    []struct{ Type, Text string }
+		}
+	}
+	if err := json.Unmarshal(buf.Bytes(), &req); err != nil {
+		t.Fatalf("wire=%s: %v", buf.Bytes(), err)
+	}
+	if req.Method != "turn/start" || req.ID == 61 || req.Params.ThreadID != "thread-1" || len(req.Params.Input) != 1 {
+		t.Fatalf("answer to an ended turn did not open a follow-up turn: %s", buf.Bytes())
+	}
+	text := req.Params.Input[0].Text
+	if req.Params.Input[0].Type != "text" || !strings.Contains(text, "Which scope?") || !strings.Contains(text, "Answer: Source") {
+		t.Fatalf("follow-up turn lost the question or answer: %q", text)
+	}
+	if _, ok := p.pendingQuestions["61"]; ok {
+		t.Fatal("delivered answer left the question pending")
+	}
+	if !p.turnActive {
+		t.Fatal("follow-up turn did not mark the turn active")
+	}
+}
+
+func TestAnswerAfterTurnEndedWriteFailureKeepsQuestionPending(t *testing.T) {
+	p := NewProtocol(llm.ProtocolOpts{StructuredCompletion: true})
+	p.SetStdin(&bytes.Buffer{})
+	p.SetThreadIDForTest("thread-1")
+	input := askThenEndTurn(t, p, 62)
+	p.SetStdin(&responseBoundaryWriter{err: errors.New("broken pipe")})
+	if err := p.RespondToAskUser("62", resolveAnswers(t, input, map[string]string{"1": "Source"})); err == nil {
+		t.Fatal("write error ignored")
+	}
+	pending, ok := p.pendingQuestions["62"]
+	if !ok || !pending.TurnEnded {
+		t.Fatalf("failed follow-up lost pending state: %+v", pending)
+	}
+}
+
+func TestQuestionOutlivingItsTurnDoesNotBlockTheNextOne(t *testing.T) {
+	var buf bytes.Buffer
+	p := NewProtocol(llm.ProtocolOpts{StructuredCompletion: true})
+	p.SetStdin(&buf)
+	p.SetThreadIDForTest("thread-1")
+	askThenEndTurn(t, p, 63)
+	buf.Reset()
+	messages, err := p.ParseLine(dynamicRequest(t, 64, "ask_user", validQuestion, "thread-1"))
+	if err != nil || len(messages) != 1 || messages[0].ControlRequest == nil || strings.Contains(buf.String(), "pending question") {
+		t.Fatalf("orphaned question blocked a new one: %+v %s %v", messages, buf.Bytes(), err)
 	}
 }

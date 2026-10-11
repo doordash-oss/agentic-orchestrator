@@ -785,7 +785,7 @@ export function isRequestTimeout(err: unknown): boolean {
 }
 
 /** Catalog-authored fallbacks used to classify arbitrary caught exceptions. */
-export type FallbackCode =
+type FallbackCode =
   | 'E_INTERNAL'
   | 'E_GATEWAY'
   | 'E_RECOVERY_DELAY'

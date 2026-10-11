@@ -48,9 +48,9 @@ import {
 import { defined } from '../shared/defined';
 
 /** The authenticated transport surface the gateway provides. */
-export type SetupTransport = ServerTransport;
+type SetupTransport = ServerTransport;
 
-export interface SetupDialogs {
+interface SetupDialogs {
   /** Native directory picker; resolves null when the user cancels. */
   pickDirectory(): Promise<string | null>;
 }
@@ -284,9 +284,7 @@ export function toReadinessSnapshot(server: ReadinessResponse): ReadinessSnapsho
 }
 
 /** Legacy combined responses may include repository issues: they do not gate runtime setup. */
-export function toRuntimeReadinessSnapshot(
-  server: RuntimeReadinessResponse,
-): RuntimeReadinessSnapshot {
+function toRuntimeReadinessSnapshot(server: RuntimeReadinessResponse): RuntimeReadinessSnapshot {
   return {
     ready: server.ready,
     ...defined('probedAt', server.probed_at),

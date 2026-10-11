@@ -12,15 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !unix
+package errcat
 
-package main
+import "sort"
 
-import "io/fs"
-
-// fileOwnerIDs reports no ownership information on non-unix platforms, where the
-// binary swap falls back to default ownership. The release matrix is unix-only;
-// this keeps the package buildable for any GOOS without a Windows-specific path.
-func fileOwnerIDs(_ fs.FileInfo) (uid, gid int, ok bool) {
-	return 0, 0, false
+// CatalogCodes exposes every catalog code, sorted, to the package's tests and
+// to the external test package's catalog-wide checks.
+func CatalogCodes() []Code {
+	codes := make([]Code, 0, len(catalog))
+	for code := range catalog {
+		codes = append(codes, code)
+	}
+	sort.Slice(codes, func(i, j int) bool { return codes[i] < codes[j] })
+	return codes
 }

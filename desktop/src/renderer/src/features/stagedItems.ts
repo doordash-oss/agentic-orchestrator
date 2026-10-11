@@ -32,7 +32,7 @@ import type {
   StagedUpload,
 } from '../../../shared/ipc';
 
-export type UploadItemState = 'uploading' | 'ready' | 'failed';
+type UploadItemState = 'uploading' | 'ready' | 'failed';
 
 export interface ComposerUploadItem {
   /** Renderer-local chip identity; survives state flips across retries. */
@@ -56,7 +56,7 @@ export const STAGED_ON_OTHER_SERVER = 'Staged on another server';
 export const STAGED_ITEMS_BLOCK_SUBMIT =
   'Remove attachments that are uploading, failed, or staged on another server to submit.';
 
-export function basenameOf(filePath: string): string {
+function basenameOf(filePath: string): string {
   return filePath.split(/[\\/]/).at(-1) ?? filePath;
 }
 

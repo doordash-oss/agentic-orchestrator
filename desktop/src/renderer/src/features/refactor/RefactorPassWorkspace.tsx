@@ -81,7 +81,7 @@ type ChildState = LoadState<{ phase: 'loaded'; child: FeatureSnapshot }>;
  * attention result) or a rejected server action carried as the parsed error
  * for the canonical error surface.
  */
-export type PassNotice = { kind: 'info'; text: string } | { kind: 'error'; error: CanonicalError };
+type PassNotice = { kind: 'info'; text: string } | { kind: 'error'; error: CanonicalError };
 
 export interface RefactorPassController {
   view: RelationshipChildView | undefined;
@@ -252,7 +252,7 @@ export function useRefactorPass(
   };
 }
 
-export interface RefactorPassWorkspaceProps {
+interface RefactorPassWorkspaceProps {
   parent: FeatureSnapshot;
   pass: RefactorPassController;
   /** Whether retained live pass effects may fetch or subscribe. */

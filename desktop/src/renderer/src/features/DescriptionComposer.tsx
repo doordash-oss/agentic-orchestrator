@@ -124,7 +124,7 @@ export function runComposerSlashCommand(
   return true;
 }
 
-export interface DescriptionComposerProps {
+interface DescriptionComposerProps {
   id: string;
   label: string;
   placeholder: string;

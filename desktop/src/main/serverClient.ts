@@ -257,7 +257,7 @@ export class SessionService {
   }
 }
 
-export type ParsedSessionOutput =
+type ParsedSessionOutput =
   | { type: 'record'; sessionId: string; index: number; message: TranscriptMessage }
   | { type: 'done'; sessionId: string; nextIndex: number };
 

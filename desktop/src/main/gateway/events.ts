@@ -152,7 +152,7 @@ export function ingestEvent(
 }
 
 /** The narrow surface the supervisor needs from the runtime gateway. */
-export interface EventStreamSource {
+interface EventStreamSource {
   openEventStream(options: { afterSeq?: number; epoch?: string }): Promise<SseStream>;
 }
 

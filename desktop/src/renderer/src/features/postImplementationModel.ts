@@ -35,7 +35,7 @@ export type AftercareActionId =
 /** Aftercare modal ids for launcher modals (refactor, review-feedback). */
 export type AftercareModalId = 'refactor' | 'review-feedback';
 
-export type PostImplementationMode = { kind: 'regular' } | { kind: 'aftercare' };
+type PostImplementationMode = { kind: 'regular' } | { kind: 'aftercare' };
 
 export interface AftercareAction {
   id: AftercareActionId;

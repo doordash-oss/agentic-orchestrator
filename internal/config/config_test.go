@@ -695,13 +695,13 @@ func TestKBBuildYAMLPresent(t *testing.T) {
 
 func TestApplyProviderDefaults_FillsEmptyFields(t *testing.T) {
 	cfg := &Config{}
-	defaults := map[string]string{
-		"research":       "claude:opus",
-		"planning":       "claude:opus",
-		"implementation": "claude:opus",
-		"review":         "codex:codex",
-		"chat":           "claude:sonnet",
-		"kb_build":       "claude:opus",
+	defaults := ModelConfig{
+		Research:       "claude:opus",
+		Planning:       "claude:opus",
+		Implementation: "claude:opus",
+		Review:         "codex:codex",
+		Utilities:      "claude:sonnet",
+		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -732,13 +732,13 @@ func TestApplyProviderDefaults_PreservesUserSetValues(t *testing.T) {
 	cfg.Defaults.Models.Utilities = "opus"
 	cfg.Defaults.Models.KBBuild = "sonnet"
 
-	defaults := map[string]string{
-		"research":       "claude:opus",
-		"planning":       "claude:opus",
-		"implementation": "claude:opus",
-		"review":         "codex:codex",
-		"chat":           "claude:sonnet",
-		"kb_build":       "claude:opus",
+	defaults := ModelConfig{
+		Research:       "claude:opus",
+		Planning:       "claude:opus",
+		Implementation: "claude:opus",
+		Review:         "codex:codex",
+		Utilities:      "claude:sonnet",
+		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -761,13 +761,13 @@ func TestApplyProviderDefaults_PreservesUserSetValues(t *testing.T) {
 func TestApplyProviderDefaults_SingleProvider_BareNames(t *testing.T) {
 	cfg := &Config{}
 	// Single-provider scenario: bare names without provider prefix.
-	defaults := map[string]string{
-		"research":       "opus",
-		"planning":       "opus",
-		"implementation": "opus",
-		"review":         "opus",
-		"chat":           "sonnet",
-		"kb_build":       "opus",
+	defaults := ModelConfig{
+		Research:       "opus",
+		Planning:       "opus",
+		Implementation: "opus",
+		Review:         "opus",
+		Utilities:      "sonnet",
+		KBBuild:        "opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -782,13 +782,13 @@ func TestApplyProviderDefaults_SingleProvider_BareNames(t *testing.T) {
 func TestApplyProviderDefaults_MultiProvider_PrefixedNames(t *testing.T) {
 	cfg := &Config{}
 	// Multi-provider scenario: provider:model format.
-	defaults := map[string]string{
-		"research":       "claude:opus",
-		"planning":       "claude:opus",
-		"implementation": "claude:opus",
-		"review":         "codex:codex",
-		"chat":           "claude:sonnet",
-		"kb_build":       "claude:opus",
+	defaults := ModelConfig{
+		Research:       "claude:opus",
+		Planning:       "claude:opus",
+		Implementation: "claude:opus",
+		Review:         "codex:codex",
+		Utilities:      "claude:sonnet",
+		KBBuild:        "claude:opus",
 	}
 	ApplyProviderDefaults(cfg, defaults)
 
@@ -803,26 +803,83 @@ func TestApplyProviderDefaults_MultiProvider_PrefixedNames(t *testing.T) {
 	}
 }
 
-func TestApplyProviderDefaults_NilDefaults(t *testing.T) {
-	cfg := &Config{}
-	cfg.Defaults.Models.Research = "opus"
-	// Should not panic with nil defaults.
-	ApplyProviderDefaults(cfg, nil)
-	if cfg.Defaults.Models.Research != "opus" {
-		t.Errorf("Research = %q, want opus (unchanged)", cfg.Defaults.Models.Research)
-	}
-}
-
 func TestApplyProviderDefaults_EmptyDefaults(t *testing.T) {
 	cfg := &Config{}
 	cfg.Defaults.Models.Research = "opus"
-	// Empty map: no changes.
-	ApplyProviderDefaults(cfg, map[string]string{})
+	// Empty defaults: no changes.
+	if ApplyProviderDefaults(cfg, ModelConfig{}) {
+		t.Error("expected changed=false for empty defaults")
+	}
 	if cfg.Defaults.Models.Research != "opus" {
 		t.Errorf("Research = %q, want opus (unchanged)", cfg.Defaults.Models.Research)
 	}
 	if cfg.Defaults.Models.Planning != "" {
 		t.Errorf("Planning = %q, want empty (no default available)", cfg.Defaults.Models.Planning)
+	}
+}
+
+func TestApplyProviderDefaults_FillsEmptyConfigInquiryDefault(t *testing.T) {
+	cfg := &Config{}
+	defaults := ModelConfig{
+		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
+		Review: "gpt-5.4", Utilities: "sonnet", KBBuild: "opus",
+	}
+	if !ApplyProviderDefaults(cfg, defaults) {
+		t.Error("expected changed=true when filling empty config")
+	}
+	if cfg.Defaults.Models.Inquiry != "sonnet" {
+		t.Errorf("expected Inquiry='sonnet', got %q", cfg.Defaults.Models.Inquiry)
+	}
+	if cfg.Defaults.Models.Research != "opus" {
+		t.Errorf("expected Research='opus', got %q", cfg.Defaults.Models.Research)
+	}
+	if cfg.Defaults.Models.Review != "gpt-5.4" {
+		t.Errorf("expected Review='gpt-5.4', got %q", cfg.Defaults.Models.Review)
+	}
+}
+
+func TestApplyProviderDefaults_InquiryFallsBackToResearchDefault(t *testing.T) {
+	cfg := &Config{}
+	ApplyProviderDefaults(cfg, ModelConfig{Research: "opus"})
+	if cfg.Defaults.Models.Inquiry != "opus" {
+		t.Errorf("Inquiry = %q, want research default opus", cfg.Defaults.Models.Inquiry)
+	}
+}
+
+func TestApplyProviderDefaults_ReportsChangeWhenOtherFieldsFilled(t *testing.T) {
+	cfg := &Config{}
+	cfg.Defaults.Models.Inquiry = "haiku"
+	cfg.Defaults.Models.Research = "haiku"
+	defaults := ModelConfig{
+		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
+		Review: "gpt-5.4", Utilities: "sonnet", KBBuild: "opus",
+	}
+	if !ApplyProviderDefaults(cfg, defaults) {
+		t.Error("expected changed=true since other fields were empty")
+	}
+	if cfg.Defaults.Models.Inquiry != "haiku" {
+		t.Errorf("expected Inquiry='haiku' preserved, got %q", cfg.Defaults.Models.Inquiry)
+	}
+	if cfg.Defaults.Models.Research != "haiku" {
+		t.Errorf("expected Research='haiku' preserved, got %q", cfg.Defaults.Models.Research)
+	}
+	if cfg.Defaults.Models.Planning != "opus" {
+		t.Errorf("expected Planning='opus' filled, got %q", cfg.Defaults.Models.Planning)
+	}
+}
+
+func TestApplyProviderDefaults_NoChange(t *testing.T) {
+	cfg := &Config{}
+	cfg.Defaults.Models = ModelConfig{
+		Inquiry: "z", Research: "a", Planning: "b", Implementation: "c",
+		Review: "d", Utilities: "e", KBBuild: "f",
+	}
+	defaults := ModelConfig{
+		Inquiry: "sonnet", Research: "opus", Planning: "opus", Implementation: "opus",
+		Review: "codex", Utilities: "sonnet", KBBuild: "opus",
+	}
+	if ApplyProviderDefaults(cfg, defaults) {
+		t.Error("expected changed=false when all fields already set")
 	}
 }
 

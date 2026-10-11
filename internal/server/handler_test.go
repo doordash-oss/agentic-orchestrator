@@ -314,7 +314,7 @@ func TestSnapshotResponsesExposeAsOfSequence(t *testing.T) {
 	handler.broker.publish(SSEEvent{Kind: testEventKindFeatureState, Resource: Resource{Type: entityFeature, ID: fixtureFeatureID}})
 
 	w := httptest.NewRecorder()
-	handler.routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/features", nil))
 
 	resp := w.Result()
 	defer resp.Body.Close()

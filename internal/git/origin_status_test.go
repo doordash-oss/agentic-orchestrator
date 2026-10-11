@@ -221,7 +221,7 @@ func TestFetchOriginBranchUnavailableFailures(t *testing.T) {
 	t.Run("ls-remote failure is unavailable with sanitized diagnostics", func(t *testing.T) {
 		t.Parallel()
 		repo := testutil.InitGitRepo(t)
-		runner := BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) BranchProbeCommandResult {
+		runner := branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "ls-remote" {
 				return BranchProbeCommandResult{
 					ExitCode:    128,
@@ -246,7 +246,7 @@ func TestFetchOriginBranchUnavailableFailures(t *testing.T) {
 	t.Run("fetch failure after proved existence is unavailable", func(t *testing.T) {
 		t.Parallel()
 		repo, _ := originFixture(t)
-		runner := BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) BranchProbeCommandResult {
+		runner := branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "fetch" {
 				return BranchProbeCommandResult{ExitCode: 128, Err: errors.New("exit status 128"), Diagnostics: "fatal: the remote end hung up unexpectedly"}
 			}
@@ -467,7 +467,7 @@ func TestProbeUpdateEligibility(t *testing.T) {
 
 	t.Run("uninspectable checkout is blocked, never assumed safe", func(t *testing.T) {
 		repo := testutil.InitGitRepo(t)
-		options := OriginCheckOptions{Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+		options := OriginCheckOptions{Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "status" {
 				return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "status failed"}
 			}

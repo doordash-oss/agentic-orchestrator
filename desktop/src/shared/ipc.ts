@@ -208,7 +208,6 @@ const ConnectionAuthenticatingStateSchema = z.strictObject({
  * `runtimeDir`; remote entries must not.
  */
 const ServerKindSchema = z.enum(['local', 'remote']);
-export type ServerKind = z.output<typeof ServerKindSchema>;
 
 /**
  * Connected: always names who owns the server, never carries an error, and
@@ -540,8 +539,6 @@ const ConfigurationReadinessSchema = z.strictObject({
   valid: z.boolean(),
   issue: ReadinessIssueSchema.optional(),
 });
-
-export type ConfigurationReadiness = z.output<typeof ConfigurationReadinessSchema>;
 
 const WorkspaceRootStateSchema = z.strictObject({
   path: z.string(),
@@ -1105,7 +1102,6 @@ const ClonePublicationSchema = z.strictObject({
   publishedAt: z.string(),
   identity: RepositoryIdentitySchema.optional(),
 });
-export type ClonePublication = z.output<typeof ClonePublicationSchema>;
 
 const CloneOperationSchema = z.strictObject({
   id: z.string(),
@@ -1393,7 +1389,6 @@ const AutomaticReviewStateSchema = z.strictObject({
   enabled: z.boolean(),
   source: z.enum(['global', 'feature']),
 });
-export type AutomaticReviewState = z.output<typeof AutomaticReviewStateSchema>;
 
 const ReviewFeedbackCommentViewSchema = z.strictObject({
   repo: z.string().min(1).max(200),
@@ -1647,7 +1642,6 @@ export const RepositoryDiffFileSchema = z.strictObject({
   binary: z.boolean().optional(),
   fingerprint: z.string().max(128).optional(),
 });
-export type RepositoryDiffFile = z.output<typeof RepositoryDiffFileSchema>;
 
 export const RepositoryDiffResultSchema = z.strictObject({
   featureId: FeatureIdSchema,
@@ -2111,7 +2105,6 @@ export const SUPERVISOR_CONTEXT_LABEL = 'Supervisor';
  * conversation's own agent, `child` one of its sub-agents.
  */
 const RequestOriginSchema = z.enum(['root', 'child']);
-export type RequestOrigin = z.output<typeof RequestOriginSchema>;
 /** The tag renderer surfaces show on a request a sub-agent raised. */
 export const SUBAGENT_ORIGIN_LABEL = 'Sub-agent';
 const AttentionOptionSchema = z.strictObject({
@@ -2704,12 +2697,9 @@ const SupervisorLifecycleSchema = z.enum([
 ]);
 export type SupervisorLifecycle = z.output<typeof SupervisorLifecycleSchema>;
 const SupervisorStartingStepSchema = z.enum(['rebuilding', 'launching', 'handshake']);
-export type SupervisorStartingStep = z.output<typeof SupervisorStartingStepSchema>;
 const SupervisorTurnOutcomeSchema = z.enum(['none', 'completed', 'interrupted', 'failed']);
-export type SupervisorTurnOutcome = z.output<typeof SupervisorTurnOutcomeSchema>;
 /** Who cut the most recent turn; meaningful when the outcome is `interrupted`. */
 const SupervisorInterruptedBySchema = z.enum(['none', 'user', 'shutdown']);
-export type SupervisorInterruptedBy = z.output<typeof SupervisorInterruptedBySchema>;
 
 /** Permission mode asked for versus the one the running harness reported. */
 const SupervisorPermissionModeSchema = z.strictObject({
@@ -2718,7 +2708,6 @@ const SupervisorPermissionModeSchema = z.strictObject({
   effective: z.string().max(100),
   restrictedByPolicy: z.boolean(),
 });
-export type SupervisorPermissionMode = z.output<typeof SupervisorPermissionModeSchema>;
 
 /** Committed harness choice; empty harness or model means unset, empty effort the harness default. */
 const SupervisorSettingsSchema = z.strictObject({
@@ -2734,7 +2723,6 @@ const SupervisorPendingChangeSchema = z.strictObject({
   target: SupervisorSettingsSchema,
   requestedAt: z.string().max(100),
 });
-export type SupervisorPendingChange = z.output<typeof SupervisorPendingChangeSchema>;
 
 /**
  * One pending supervisor permission or question, in exactly the attention
@@ -2820,9 +2808,7 @@ const SupervisorRecordKindSchema = z.enum([
   'note',
   'checkpoint',
 ]);
-export type SupervisorRecordKind = z.output<typeof SupervisorRecordKindSchema>;
 const SupervisorRecordVisibilitySchema = z.enum(['content', 'model_only', 'display_only']);
-export type SupervisorRecordVisibility = z.output<typeof SupervisorRecordVisibilitySchema>;
 
 /** The request or verdict carried by `permission` and `question` records. */
 export const SupervisorRequestVerdictSchema = z.strictObject({
@@ -2887,7 +2873,6 @@ const SupervisorAttachmentSchema = z.strictObject({
   name: z.string().max(1024),
   size: z.number().int().nonnegative(),
 });
-export type SupervisorAttachment = z.output<typeof SupervisorAttachmentSchema>;
 
 /** One committed transcript record; its `messages` rows carry `index = seq`. */
 export const SupervisorRecordSchema = z.strictObject({
@@ -3045,7 +3030,6 @@ const SupervisorDeltaSchema = z.strictObject({
   chunkIndex: z.number().int().nonnegative(),
   text: BoundedTextSchema,
 });
-export type SupervisorDelta = z.output<typeof SupervisorDeltaSchema>;
 
 const SupervisorEventEnvelopeShape = {
   conversationId: SupervisorIdentifierSchema,
@@ -3306,7 +3290,6 @@ const OriginComparisonSchema = z.strictObject({
   behindCount: z.number().int().min(0),
   checkedAt: z.string().min(1),
 });
-export type OriginComparison = z.output<typeof OriginComparisonSchema>;
 
 const RepositoryOriginStatusSnapshotSchema = z.strictObject({
   repoKey: z.string().min(1),
@@ -3451,9 +3434,6 @@ const RepositorySourceReconcileCheckoutSchema = z.strictObject({
     .regex(/^[0-9a-f]{40,64}$/)
     .optional(),
 });
-export type RepositorySourceReconcileCheckout = z.output<
-  typeof RepositorySourceReconcileCheckoutSchema
->;
 
 export const RepositorySourceReconcileResultSchema = z.strictObject({
   outcome: z.enum([

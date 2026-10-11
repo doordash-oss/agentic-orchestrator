@@ -323,15 +323,3 @@ func (s *store) prune(now time.Time) []string {
 	}
 	return pruned
 }
-
-// remove drops a record from memory and disk. It is only used by prune and
-// tests; reservations and repositories are never removed this way in
-// production flows.
-func (s *store) remove(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := os.Stat(s.pathLocked(id)); err == nil {
-		_ = os.Remove(s.pathLocked(id))
-	}
-	delete(s.records, id)
-}

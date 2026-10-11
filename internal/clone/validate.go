@@ -282,27 +282,3 @@ func ValidateIdempotencyKey(key string) error {
 	}
 	return nil
 }
-
-// SuggestDestination derives a default folder name from a validated remote:
-// the last path segment with a terminal ".git" stripped. It never fabricates
-// uniqueness; the server still rejects existing destinations.
-func SuggestDestination(raw string) string {
-	trimmed := strings.TrimRight(strings.TrimSpace(raw), "/")
-	if i := strings.IndexAny(trimmed, "?#"); i >= 0 {
-		trimmed = trimmed[:i]
-	}
-	if segs := strings.Split(trimmed, "/"); len(segs) > 0 {
-		trimmed = segs[len(segs)-1]
-	}
-	if at := strings.Index(trimmed, ":"); at >= 0 {
-		trimmed = trimmed[at+1:]
-		if segs := strings.Split(trimmed, "/"); len(segs) > 0 {
-			trimmed = segs[len(segs)-1]
-		}
-	}
-	trimmed = strings.TrimSuffix(trimmed, ".git")
-	if len(trimmed) > MaxDestinationLength {
-		trimmed = trimmed[:MaxDestinationLength]
-	}
-	return trimmed
-}

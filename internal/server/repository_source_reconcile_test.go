@@ -77,6 +77,14 @@ func (f sourceUpdateRefRunnerFunc) Run(ctx context.Context, repoPath, stdin stri
 	return f(ctx, repoPath, stdin, args, diagnosticLimit)
 }
 
+// branchProbeRunnerFunc adapts a function to the git branch-probe runner
+// interface for deterministic origin-check tests.
+type branchProbeRunnerFunc func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult
+
+func (f branchProbeRunnerFunc) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
+	return f(ctx, repoPath, args, diagnosticLimit)
+}
+
 // reconcileResult carries one asynchronous settlement call's recorder and
 // decoded response together so the test reads each exactly once.
 type reconcileResult struct {
@@ -358,7 +366,7 @@ func TestWorkspaceRepositoryReconcileSourceUpdateResponseLossAfterCASProvesTarge
 			}
 			return result
 		}),
-		OriginCheckOptions: git.OriginCheckOptions{Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
+		OriginCheckOptions: git.OriginCheckOptions{Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
 			if casDone.Load() && len(args) > 0 && args[0] == "rev-parse" {
 				return git.BranchProbeCommandResult{ExitCode: -1, Err: errors.New("connection lost"), Diagnostics: "connection lost while verifying the ref update"}
 			}
@@ -460,7 +468,7 @@ func newSequencingFixture(t *testing.T) (*initializeFixture, *sequencingCreateTa
 	cfg.WorkspaceRoots = []string{root}
 	target := &sequencingCreateTarget{called: make(chan struct{})}
 	api := newAPIHandler(HandlerOptions{Config: cfg, Mutations: target, DisableHostValidation: true})
-	fx := &initializeFixture{t: t, api: api, handler: api.routes(), root: root, cfg: cfg}
+	fx := &initializeFixture{t: t, api: api, handler: api, root: root, cfg: cfg}
 	return fx, target
 }
 

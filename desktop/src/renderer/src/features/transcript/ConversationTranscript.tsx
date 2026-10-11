@@ -223,7 +223,7 @@ function subagentTally(agents: SubagentActivity[]): string {
   return cancelled > 0 ? `${cancelled} of ${agents.length} cancelled` : 'all finished';
 }
 
-export function SubagentGroupCard({ agents }: { agents: SubagentActivity[] }) {
+function SubagentGroupCard({ agents }: { agents: SubagentActivity[] }) {
   const live = agents.some((agent) => agent.state === 'running');
   return (
     <article
@@ -265,7 +265,7 @@ export function SubagentGroupCard({ agents }: { agents: SubagentActivity[] }) {
   );
 }
 
-export interface ConversationTranscriptProps {
+interface ConversationTranscriptProps {
   items: ConversationItem[];
   /** True while the active agent is still working (drives the live spinner). */
   waiting: boolean;
@@ -310,7 +310,7 @@ interface PrependAnchor {
  * that come and go are never chosen as the anchor. Returns the capture
  * function for the scroll handler.
  */
-export function usePrependAnchor(
+function usePrependAnchor(
   scrollRef: RefObject<HTMLElement | null>,
   rowsStartRef: RefObject<HTMLElement | null>,
   firstKey: string | undefined,

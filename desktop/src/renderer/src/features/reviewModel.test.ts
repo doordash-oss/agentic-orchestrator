@@ -16,7 +16,7 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 import type { SessionSummary } from '../../../shared/ipc';
-import { orderedReviewStatuses, orderRunSessions, selectInitialRunSession } from './reviewModel';
+import { orderedReviewStatuses, orderRunSessions } from './reviewModel';
 
 const base: SessionSummary = {
   id: 'base',
@@ -46,14 +46,5 @@ describe('reviewModel', () => {
         ([name]) => name,
       ),
     ).toEqual(['Craft', 'QA', 'Design']);
-  });
-
-  it('focuses a running axis instead of an earlier failed axis', () => {
-    const sessions = orderRunSessions([
-      { ...base, id: 'design', label: 'Design' },
-      { ...base, id: 'func', label: 'Functionality/Evidence', status: 'running' },
-    ]);
-
-    expect(selectInitialRunSession(sessions)?.id).toBe('func');
   });
 });

@@ -19,13 +19,7 @@ import type { RunMetrics } from './CurrentRunInspection';
 import { RepositoryInstrument } from './RepositoryInstrument';
 import { displayStatusLabel, formatDuration } from './featureView';
 
-export function IdentityFacts({
-  snapshot,
-  branch,
-}: {
-  snapshot: FeatureSnapshot;
-  branch: string | null;
-}) {
+function IdentityFacts({ snapshot, branch }: { snapshot: FeatureSnapshot; branch: string | null }) {
   return (
     <dl className="cockpit__facts">
       <div className="cockpit__fact">

@@ -28,6 +28,14 @@ import (
 	serverruntime "github.com/doordash-oss/agentic-orchestrator/internal/server"
 )
 
+// branchProbeRunnerFunc adapts a function to the git branch-probe runner
+// interface for deterministic collision-warning tests.
+type branchProbeRunnerFunc func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) gitpkg.BranchProbeCommandResult
+
+func (f branchProbeRunnerFunc) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) gitpkg.BranchProbeCommandResult {
+	return f(ctx, repoPath, args, diagnosticLimit)
+}
+
 func TestServerMutationTargetCreateFeatureReturnsUnavailableBranchProbeWarning(t *testing.T) {
 	runtimeDir := t.TempDir()
 	repoPath := filepath.Join(runtimeDir, testRepoAName)
@@ -38,7 +46,7 @@ func TestServerMutationTargetCreateFeatureReturnsUnavailableBranchProbeWarning(t
 	cfg.Repos[testRepoAName] = config.RepoConfig{Path: repoPath}
 	store := feature.NewStore(filepath.Join(runtimeDir, "features"))
 	manager := feature.NewManager(store, cfg)
-	manager.BranchProbeOptions.Runner = gitpkg.BranchProbeRunnerFunc(
+	manager.BranchProbeOptions.Runner = branchProbeRunnerFunc(
 		func(_ context.Context, _ string, args []string, _ int) gitpkg.BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "show-ref" {
 				return gitpkg.BranchProbeCommandResult{ExitCode: 1}

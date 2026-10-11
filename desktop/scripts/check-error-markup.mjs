@@ -27,7 +27,7 @@ import { join } from 'node:path';
  * classes that survived the migration on purpose (loading notices, quiet
  * state strips, per-row item state) are not listed.
  */
-export const BANNED_CLASS_FAMILIES = [
+const BANNED_CLASS_FAMILIES = [
   // Connection shell / readiness gate
   'shell-card__error',
   'shell-card__diagnostics',
@@ -78,7 +78,7 @@ export const BANNED_CLASS_FAMILIES = [
 ];
 
 /** Deleted identifiers that must not reappear anywhere under desktop/src. */
-export const BANNED_IDENTIFIERS = [
+const BANNED_IDENTIFIERS = [
   'SafeErrorException',
   'SafeErrorSchema',
   'toSafeError',

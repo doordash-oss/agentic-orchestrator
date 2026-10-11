@@ -357,7 +357,7 @@ func TestWorkspaceRepositoryUpdateSourceDeadlineExpiryIsUnavailable(t *testing.T
 	body := fx.updateSourceBody(repo, bare)
 	fx.api.updateSourceDeadline = 400 * time.Millisecond
 	fx.api.updateSourceOptions = git.SourceUpdateOptions{OriginCheckOptions: git.OriginCheckOptions{
-		Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
+		Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "ls-remote" {
 				<-ctx.Done()
 				return git.BranchProbeCommandResult{ExitCode: -1, Err: ctx.Err(), Diagnostics: "hanging origin probe"}

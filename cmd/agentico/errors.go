@@ -31,31 +31,12 @@ func renderError(w io.Writer, code errcat.Code, opts ...errcat.Option) {
 	_ = errcat.Fprint(w, errcat.New(code, opts...))
 }
 
-// startupWarning is one structured startup degradation: a catalog warning
-// code, optional summary params, and raw diagnostics. Helpers that used to
-// return pre-formatted `Warning:` strings return these instead, and the CLI
-// renders them — only the catalog authors text.
-type startupWarning struct {
-	code        errcat.Code
-	params      errcat.Params
-	diagnostics string
-}
-
-func (s startupWarning) render(w io.Writer) {
-	var opts []errcat.Option
-	if s.params != nil {
-		opts = append(opts, errcat.WithParams(s.params))
-	}
-	if s.diagnostics != "" {
-		opts = append(opts, errcat.WithDiagnostics(s.diagnostics))
-	}
-	renderError(w, s.code, opts...)
-}
-
-// renderStartupWarnings renders each warning in order.
-func renderStartupWarnings(w io.Writer, warnings []startupWarning) {
-	for _, s := range warnings {
-		s.render(w)
+// renderStartupWarnings renders each startup notice in order. Helpers that
+// used to return pre-formatted `Warning:` strings build canonical errors
+// instead, so only the catalog authors text.
+func renderStartupWarnings(w io.Writer, warnings []errcat.Error) {
+	for _, e := range warnings {
+		_ = errcat.Fprint(w, e)
 	}
 }
 

@@ -158,11 +158,7 @@ func safeRecoveryKey(key string) bool {
 	return true
 }
 
-const (
-	recoveryActionKill = "kill"
-	// recoveryActionSkip preserves the legacy spelling solely for fail-closed rejection tests.
-	recoveryActionSkip = "skip"
-)
+const recoveryActionKill = "kill"
 
 func recoveryItemDTO(item ports.RecoveryItem) RecoveryItem {
 	dto := RecoveryItem{

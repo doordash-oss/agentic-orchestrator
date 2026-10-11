@@ -80,7 +80,7 @@ function formatBytes(bytes: number): string {
  */
 type PreviewView = 'conversation' | 'trace' | 'files';
 
-export interface CurrentRunInspectionProps {
+interface CurrentRunInspectionProps {
   featureId: string;
   runNumber: number;
   /** Whether retained work for this inspection may fetch or subscribe. */
@@ -179,7 +179,7 @@ function artifactSortKey(id: string): [number, number, string] {
   }
 }
 
-export function orderRunArtifacts(artifacts: readonly RunArtifact[]): RunArtifact[] {
+function orderRunArtifacts(artifacts: readonly RunArtifact[]): RunArtifact[] {
   return [...artifacts].sort((a, b) => {
     const left = artifactSortKey(a.id);
     const right = artifactSortKey(b.id);
@@ -224,7 +224,7 @@ interface LogChannel {
  * hundreds of `phase-06/verification-events/*` entries collapse into one
  * countable channel the reader can triage before drilling in.
  */
-export function groupLogsByChannel(logs: readonly RunLogView[]): LogChannel[] {
+function groupLogsByChannel(logs: readonly RunLogView[]): LogChannel[] {
   const buckets = new Map<string, RunLogView[]>();
   for (const log of logs) {
     const slash = log.path.lastIndexOf('/');

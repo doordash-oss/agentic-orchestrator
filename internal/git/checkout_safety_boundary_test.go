@@ -24,9 +24,17 @@ import (
 	"testing"
 )
 
+// branchProbeRunnerFunc adapts a function to the BranchProbeRunner process
+// boundary for deterministic tests.
+type branchProbeRunnerFunc func(context.Context, string, []string, int) BranchProbeCommandResult
+
+func (f branchProbeRunnerFunc) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+	return f(ctx, repoPath, args, diagnosticLimit)
+}
+
 // staticZRunner returns a fixed stdout for every command, standing in for
 // what the limited drain writer captured from a real git process.
-func staticZRunner(stdout string) BranchProbeRunnerFunc {
+func staticZRunner(stdout string) branchProbeRunnerFunc {
 	return func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
 		return BranchProbeCommandResult{Stdout: stdout, ExitCode: 0}
 	}

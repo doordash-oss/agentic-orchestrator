@@ -28,7 +28,7 @@ import { ReviewFeedbackDiff, needsExpansion } from './ReviewFeedbackDiff';
 import { ReviewFeedbackMarkdown } from './ReviewFeedbackMarkdown';
 import type { ReviewFeedbackDraftCommentView } from './reviewFeedbackDraftApi';
 
-export interface ReviewFeedbackCardProps {
+interface ReviewFeedbackCardProps {
   comment: ReviewFeedbackDraftCommentView;
   /** Visible selection: committed value with the pending overlay applied. */
   checked: boolean;

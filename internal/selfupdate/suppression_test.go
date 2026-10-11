@@ -55,10 +55,11 @@ func TestSuppressTargetRecordsAndLooksUpExactVersion(t *testing.T) {
 	if err := SuppressTarget(exec.Path, SuppressedTarget{Version: "3.0.0", TransactionID: testTxID, SuppressedAt: time.Now()}); err != nil {
 		t.Fatalf("SuppressTarget second version: %v", err)
 	}
-	versions, err := SuppressedVersions(exec.Path)
+	state, err := ReadSuppressionState(exec.Path)
 	if err != nil {
-		t.Fatalf("SuppressedVersions: %v", err)
+		t.Fatalf("ReadSuppressionState: %v", err)
 	}
+	versions := state.Targets
 	if len(versions) != 2 || versions[0].Version != "2.0.0" || versions[1].Version != "3.0.0" {
 		t.Fatalf("suppressed versions = %+v, want [2.0.0 3.0.0] oldest first", versions)
 	}

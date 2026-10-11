@@ -594,7 +594,7 @@ func TestUpdateSourceFromOriginDeadlineExpiresDuringFetch(t *testing.T) {
 	fx := newUpdateFixture(t)
 	expected := fx.expectation(t)
 	options := SourceUpdateOptions{OriginCheckOptions: OriginCheckOptions{
-		Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+		Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "ls-remote" {
 				<-ctx.Done()
 				return BranchProbeCommandResult{ExitCode: -1, Err: ctx.Err(), Diagnostics: "hanging origin probe"}
@@ -632,7 +632,7 @@ func TestUpdateSourceFromOriginFailedMembershipProbeFailsClosed(t *testing.T) {
 	fx := newUpdateFixture(t)
 	expected := fx.expectation(t)
 	options := SourceUpdateOptions{OriginCheckOptions: OriginCheckOptions{
-		Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+		Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
 			if len(args) >= 2 && args[0] == "worktree" && args[1] == "list" {
 				return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "worktree inspection failed"}
 			}

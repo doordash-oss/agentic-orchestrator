@@ -20,7 +20,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"image"
+	"image/color"
+	"image/png"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -41,10 +43,18 @@ import (
 
 // warningText renders one structured startup warning exactly as stderr sees
 // it, for substring assertions.
-func warningText(w startupWarning) string {
+func warningText(w errcat.Error) string {
 	var buf bytes.Buffer
-	w.render(&buf)
+	_ = errcat.Fprint(&buf, w)
 	return buf.String()
+}
+
+func failingServerLauncher(t *testing.T) serverLauncher {
+	t.Helper()
+	return func(string, string, bool, []string, bool, string, string, string) int {
+		t.Fatal("server seam invoked on a non-server launch path")
+		return 1
+	}
 }
 
 // Test-fixture literals reused across several cases in this file.
@@ -199,8 +209,8 @@ func TestDiscoverProviderCatalogsSetsCatalogAndWarnsOnFailure(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want one warning", warnings)
 	}
-	if warnings[0].code != errcat.ModelCatalogDegraded {
-		t.Fatalf("warning code = %q, want model_catalog_degraded", warnings[0].code)
+	if warnings[0].Code != errcat.ModelCatalogDegraded {
+		t.Fatalf("warning code = %q, want model_catalog_degraded", warnings[0].Code)
 	}
 	text := warningText(warnings[0])
 	if !strings.Contains(text, "failure") || !strings.Contains(text, "catalog unavailable") {
@@ -259,7 +269,7 @@ func TestDiscoverProviderCatalogsRunsProvidersConcurrently(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	done := make(chan []startupWarning, 1)
+	done := make(chan []errcat.Error, 1)
 	go func() {
 		done <- discoverProviderCatalogs(ctx, []llm.LLMProvider{first, second}, "", nil, false)
 	}()
@@ -666,7 +676,7 @@ func TestDiscoverProviderCatalogs_RejectsUnparseableVersionWithoutLeak(t *testin
 	if len(warnings) != 1 {
 		t.Fatalf("warnings = %v, want exactly one unrecognized-version warning", warnings)
 	}
-	assertDiagnosticClean(t, "startup warning", warnings[0].diagnostics)
+	assertDiagnosticClean(t, "startup warning", warnings[0].Diagnostics)
 	assertNoCacheLeak(t, cacheRoot)
 }
 
@@ -928,7 +938,6 @@ func TestRunArgsLaunchesDesktopByDefault(t *testing.T) {
 			serverLaunched = true
 			return 0
 		},
-		failingUpdater(t),
 	)
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)
@@ -952,7 +961,6 @@ func TestRunArgsDesktopFailureRendersDesktopLaunchFailed(t *testing.T) {
 		&stderr,
 		func() error { return errors.New("application is not registered") },
 		failingServerLauncher(t),
-		failingUpdater(t),
 	)
 	if code != 1 {
 		t.Errorf("runArgs() code = %d, want 1", code)
@@ -990,7 +998,6 @@ func TestRunArgsPassesRetainedLaunchFlags(t *testing.T) {
 			gotProviders = enabledProviders
 			return 0
 		},
-		failingUpdater(t),
 	)
 	if code != 0 {
 		t.Errorf("runArgs() code = %d, want 0", code)
@@ -1026,7 +1033,6 @@ func TestRunArgsPassesRefreshModelsToLauncher(t *testing.T) {
 			gotRefresh = refreshModels
 			return 0
 		},
-		failingUpdater(t),
 	)
 	if code != 0 {
 		t.Fatalf("runArgs() code = %d; stderr = %q", code, stderr.String())
@@ -1055,7 +1061,7 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	var launchedServer, updateCalled bool
+	var launchedServer bool
 	code := runArgs(
 		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, phaseNameReview, cliFlagRole, string(agent.RoleImplementationReviewCraft), cliFlagDir, iterDir},
 		&stdout,
@@ -1064,16 +1070,12 @@ func TestRunArgsValidateArtifactsCatchesMalformedReviewFeedback(t *testing.T) {
 			launchedServer = true
 			return 0
 		},
-		func(bool, io.Writer, io.Writer) int {
-			updateCalled = true
-			return 0
-		},
 	)
 	if code != 1 {
 		t.Fatalf("runArgs() code = %d, want validation failure 1", code)
 	}
-	if launchedServer || updateCalled {
-		t.Fatalf("validate-artifacts launched unrelated path: server=%v update=%v", launchedServer, updateCalled)
+	if launchedServer {
+		t.Fatalf("validate-artifacts launched unrelated path: server=%v", launchedServer)
 	}
 	got := stderr.String()
 	lines := strings.Split(strings.TrimSuffix(got, "\n"), "\n")
@@ -1104,7 +1106,6 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 		&stdout,
 		&stderr,
 		failingServerLauncher(t),
-		failingUpdater(t),
 	)
 	if code != 0 {
 		t.Fatalf("runArgs() code = %d; stderr = %q", code, stderr.String())
@@ -1117,66 +1118,137 @@ func TestRunArgsValidateArtifactsAcceptsValidArtifacts(t *testing.T) {
 	}
 }
 
-func TestRunArgsVerifyEvidencePassesAndFails(t *testing.T) {
-	contractPath := filepath.Join(t.TempDir(), "testing-contract.yaml")
+// TestRunArgsValidateArtifactsImplementerRejectsDuplicateCaptures pins the
+// folded evidence preflight: the implementer branch of validate-artifacts
+// fails on two byte-identical passed agent-owned captures with the same
+// reason text the standalone evidence preflight produced, and passes when
+// the captures differ.
+func TestRunArgsValidateArtifactsImplementerRejectsDuplicateCaptures(t *testing.T) {
+	dir := t.TempDir()
+	phaseDir := filepath.Join(dir, "phase-01")
+	artifactDir := filepath.Join(phaseDir, "implement")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	writeImplementerProgress(t, filepath.Join(artifactDir, "progress.md"))
+
 	contract := agent.CompileTestingContract(strings.Join([]string{
-		"## Success Criteria",
-		"### Behavioral Evidence",
-		"- [ ] Attach the workflow transcript.",
-	}, "\n"), filepath.Join(t.TempDir(), "plan.md"), "collapsed")
-	if err := agent.WriteTestingContract(contractPath, contract); err != nil {
+		"### Visual Evidence",
+		"- [ ] Capture the settings light theme [size: 1x1]",
+		"- [ ] Capture the settings dark theme [size: 1x1]",
+	}, "\n"), filepath.Join(phaseDir, "plan.md"), "collapsed")
+	if err := agent.WriteTestingContract(filepath.Join(phaseDir, "testing-contract.yaml"), contract); err != nil {
 		t.Fatalf("write contract: %v", err)
 	}
-
+	var paths []string
+	for _, item := range contract.Items {
+		if rel := strings.TrimSpace(item.ExpectedEvidence.Path); rel != "" {
+			paths = append(paths, rel)
+		}
+	}
+	if len(paths) != 2 {
+		t.Fatalf("compiled contract visual paths = %v, want two", paths)
+	}
+	writeCapture := func(iterDir string, fill color.RGBA) {
+		t.Helper()
+		for _, rel := range paths {
+			writeTestPNGFile(t, filepath.Join(iterDir, filepath.FromSlash(rel)), 1, 1, fill)
+		}
+	}
 	run := func(iterDir string) (int, string, string) {
 		var stdout, stderr bytes.Buffer
 		code := runArgs(
-			[]string{cliSubcommandVerifyEvidence, cliFlagContract, contractPath, cliFlagDir, iterDir},
+			[]string{cliSubcommandValidateArtifacts, cliFlagPhase, "implement", cliFlagRole, "implementer", cliFlagDir, iterDir},
 			&stdout, &stderr,
-			failingServerLauncher(t), failingUpdater(t),
+			failingServerLauncher(t),
 		)
 		return code, stdout.String(), stderr.String()
 	}
 
-	t.Run("missing evidence fails", func(t *testing.T) {
-		code, stdout, stderr := run(t.TempDir())
+	t.Run("byte-identical captures fail", func(t *testing.T) {
+		dupIter := filepath.Join(artifactDir, "iteration-dup")
+		if err := os.MkdirAll(dupIter, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeCapture(dupIter, color.RGBA{G: 99, A: 255})
+		code, stdout, stderr := run(dupIter)
 		if code != 1 {
-			t.Fatalf("code = %d, want 1 for missing evidence; stderr=%q", code, stderr)
+			t.Fatalf("code = %d, want 1 for duplicate captures; stdout=%q stderr=%q", code, stdout, stderr)
 		}
 		if stdout != "" {
 			t.Fatalf("stdout = %q, want empty on failure", stdout)
 		}
-		if !strings.HasPrefix(stderr, "error[protocol_violation]: Protocol violation\n") {
-			t.Fatalf("stderr = %q, want the protocol violation heading", stderr)
-		}
-		if !strings.Contains(stderr, "The evidence contract check found") {
-			t.Fatalf("stderr = %q, want a summary naming the check and count", stderr)
+		if !strings.Contains(stderr, "these captures are byte-identical, so they cannot each depict their own contracted surface — recapture each distinctly") {
+			t.Fatalf("stderr = %q, want the duplicate-capture reason text", stderr)
 		}
 	})
 
-	t.Run("present evidence passes", func(t *testing.T) {
-		iterDir := t.TempDir()
-		for _, item := range contract.Items {
-			rel := strings.TrimSpace(item.ExpectedEvidence.Path)
-			if rel == "" {
-				continue
-			}
-			full := filepath.Join(iterDir, filepath.FromSlash(rel))
-			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(full, []byte("journey transcript\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
+	t.Run("distinct captures pass", func(t *testing.T) {
+		distinctIter := filepath.Join(artifactDir, "iteration-distinct")
+		if err := os.MkdirAll(distinctIter, 0o755); err != nil {
+			t.Fatal(err)
 		}
-		code, stdout, stderr := run(iterDir)
+		writeTestPNGFile(t, filepath.Join(distinctIter, filepath.FromSlash(paths[0])), 1, 1, color.RGBA{R: 10, A: 255})
+		writeTestPNGFile(t, filepath.Join(distinctIter, filepath.FromSlash(paths[1])), 1, 1, color.RGBA{B: 200, A: 255})
+		code, stdout, stderr := run(distinctIter)
 		if code != 0 {
 			t.Fatalf("code = %d, want 0; stderr=%q", code, stderr)
 		}
-		if !strings.Contains(stdout, "evidence OK") {
-			t.Fatalf("stdout = %q, want confirmation", stdout)
+		if !strings.Contains(stdout, "artifacts OK") {
+			t.Fatalf("stdout = %q, want OK confirmation", stdout)
 		}
 	})
+}
+
+func writeImplementerProgress(t *testing.T, path string) {
+	t.Helper()
+	body := `# Iteration Progress
+
+## Iteration Handoff
+
+### Completed this iteration
+- registry test
+
+### Remaining from the plan
+- none
+
+### Where I stopped
+- complete
+
+### Gotchas / blockers / in-flight decisions
+- none
+
+## Deferrals
+
+` + "```" + `yaml
+deferrals: []
+closed_deferrals: []
+` + "```" + `
+
+## Iteration State
+
+SUCCESS
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write progress: %v", err)
+	}
+}
+
+func writeTestPNGFile(t *testing.T, path string, w, h int, c color.Color) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	img.Set(0, 0, c)
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestParseLaunchArgsServerSurface(t *testing.T) {
@@ -1238,11 +1310,10 @@ func TestRunArgsDispatchesServerToSeam(t *testing.T) {
 				t.Errorf("enabledProviders = %v; want [codex]", enabledProviders)
 			}
 			if refreshModels {
-				t.Error("refreshModels = true; want false")
+				t.Error("refreshModels = true, want false")
 			}
 			return 9
 		},
-		failingUpdater(t),
 	)
 	if !launchedServer {
 		t.Fatal("server launcher was not invoked")
@@ -1727,7 +1798,7 @@ func TestCheckRequiredProviders_AllDetected(t *testing.T) {
 	r.Register(&stubProvider{name: providerNameClaude, models: []string{modelNameOpus}, hasCLI: true, installHint: installHintClaude})
 	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: true, installHint: installHintCodex})
 
-	detected, warnings, notices, filtered, err := checkRequiredProviders(context.Background(), r)
+	detected, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1736,9 +1807,6 @@ func TestCheckRequiredProviders_AllDetected(t *testing.T) {
 	}
 	if filtered {
 		t.Fatal("filtered = true, want false")
-	}
-	if len(warnings) != 0 {
-		t.Errorf("expected no warnings, got %v", warnings)
 	}
 	if len(detected) != 2 {
 		t.Errorf("expected 2 detected providers, got %d", len(detected))
@@ -1750,15 +1818,12 @@ func TestCheckRequiredProviders_OneDetected(t *testing.T) {
 	r.Register(&stubProvider{name: providerNameClaude, models: []string{modelNameOpus}, hasCLI: true, installHint: installHintClaude})
 	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: false, installHint: installHintCodex})
 
-	detected, warnings, notices, filtered, err := checkRequiredProviders(context.Background(), r)
+	detected, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !filtered {
 		t.Fatal("filtered = false, want true when a registered provider is unavailable")
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("expected no immediate warnings, got %d: %v", len(warnings), warnings)
 	}
 	if len(notices) != 1 {
 		t.Fatalf("expected 1 startup notice, got %d: %v", len(notices), notices)
@@ -1848,7 +1913,7 @@ func TestCheckRequiredProviders_NoneDetected(t *testing.T) {
 	r.Register(&stubProvider{name: providerNameClaude, models: []string{modelNameOpus}, hasCLI: false, installHint: installHintClaude})
 	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: false, installHint: installHintCodex})
 
-	_, _, _, _, err := checkRequiredProviders(context.Background(), r)
+	_, _, _, err := checkRequiredProviders(context.Background(), r)
 	if err == nil {
 		t.Fatal("expected error when no providers detected")
 	}
@@ -1863,7 +1928,7 @@ func TestCheckRequiredProviders_UnreadyProviderWarnsAndFiltersRegistry(t *testin
 		Remedy: "run 'codex login'",
 	}, hasReadiness: true})
 
-	detected, warnings, notices, filtered, err := checkRequiredProviders(context.Background(), r)
+	detected, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1872,9 +1937,6 @@ func TestCheckRequiredProviders_UnreadyProviderWarnsAndFiltersRegistry(t *testin
 	}
 	if len(detected) != 1 || detected[0].Name() != providerNameClaude {
 		t.Fatalf("detected = %v, want only claude", providerNames(detected))
-	}
-	if len(warnings) != 0 {
-		t.Fatalf("warnings = %v, want no immediate warnings", warnings)
 	}
 	if len(notices) != 1 {
 		t.Fatalf("notices = %v, want codex startup notice", notices)
@@ -1900,7 +1962,7 @@ func TestCheckRequiredProviders_NoneReadyReportsProviderSpecificFix(t *testing.T
 	}, hasReadiness: true})
 	r.Register(&stubProvider{name: providerNameCodex, models: []string{testModelGPT54}, hasCLI: false, installHint: installHintCodex})
 
-	_, _, _, filtered, err := checkRequiredProviders(context.Background(), r)
+	_, _, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err == nil {
 		t.Fatal("expected error when no providers are ready")
 	}
@@ -1932,11 +1994,10 @@ func providerNames(providers []llm.LLMProvider) []string {
 
 func TestShowProviderStartupNoticesRendersStructuredWarnings(t *testing.T) {
 	var out bytes.Buffer
-	showProviderStartupNotices(&out, []startupWarning{{
-		code:        errcat.ProviderUnavailable,
-		params:      errcat.ProviderUnavailableParams{Provider: providerNameCodex},
-		diagnostics: "Provider codex is not configured: not logged in. Starting with claude only.",
-	}}, 0)
+	showProviderStartupNotices(&out, []errcat.Error{errcat.New(errcat.ProviderUnavailable,
+		errcat.WithParams(errcat.ProviderUnavailableParams{Provider: providerNameCodex}),
+		errcat.WithDiagnostics("Provider codex is not configured: not logged in. Starting with claude only."),
+	)}, 0)
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
 	if len(lines) < 4 {
 		t.Fatalf("startup notice output = %q, want a full warning block", out.String())

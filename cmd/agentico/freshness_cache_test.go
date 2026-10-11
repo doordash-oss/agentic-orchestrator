@@ -25,7 +25,7 @@ import (
 func TestGitFreshnessProviderCachesProbes(t *testing.T) {
 	var mu sync.Mutex
 	calls := 0
-	p := newGitFreshnessProviderWithProbe(func(string) string {
+	p := newGitFreshnessProvider(func(string) string {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -46,7 +46,7 @@ func TestGitFreshnessProviderCachesProbes(t *testing.T) {
 }
 
 func TestGitFreshnessProviderCachesPerWorktree(t *testing.T) {
-	p := newGitFreshnessProviderWithProbe(func(path string) string {
+	p := newGitFreshnessProvider(func(path string) string {
 		if path == "/tmp/api" {
 			return "in sync"
 		}
@@ -61,7 +61,7 @@ func TestGitFreshnessProviderCachesPerWorktree(t *testing.T) {
 }
 
 func TestGitFreshnessProviderMapsUnknownProbeResult(t *testing.T) {
-	p := newGitFreshnessProviderWithProbe(func(string) string { return "unknown" })
+	p := newGitFreshnessProvider(func(string) string { return "unknown" })
 	repo := feature.FeatureRepo{Name: "api", WorktreePath: "/tmp/api"}
 	if got := p.Freshness(nil, repo); got != serverruntime.RepoFreshnessUnknown {
 		t.Fatalf("freshness = %q, want unknown", got)

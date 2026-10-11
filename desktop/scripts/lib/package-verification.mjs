@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 import { unpackedExecutablePath } from './package-layout.mjs';
@@ -127,11 +126,6 @@ function thinMachOCpuType(buffer, offset) {
 function readU64(buffer, offset, littleEndian) {
   const value = littleEndian ? buffer.readBigUInt64LE(offset) : buffer.readBigUInt64BE(offset);
   return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : Number.MAX_SAFE_INTEGER + 1;
-}
-
-/** Calculate the exact ASAR header digest used by the macOS package verifier. */
-export function macAsarIntegrityHash(headerString) {
-  return createHash('sha256').update(headerString).digest('hex');
 }
 
 /** Return a precise target mismatch, or null when executable evidence is sufficient. */

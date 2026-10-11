@@ -27,7 +27,7 @@ import path from 'node:path';
 
 // --- Renderer lockdown -------------------------------------------------------
 
-export interface MainWindowWebPreferences {
+interface MainWindowWebPreferences {
   preload: string;
   sandbox: true;
   contextIsolation: true;
@@ -248,7 +248,7 @@ interface SessionLike {
   };
 }
 
-export interface SecurityWiring {
+interface SecurityWiring {
   app: AppLike;
   session: SessionLike;
   /** Origins app documents may live on (dev server origin and/or 'file://'). */

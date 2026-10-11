@@ -43,7 +43,7 @@ export interface CreateRepositoryStartInput {
   consent: true;
 }
 
-export const CREATE_CONSENT_COPY =
+const CREATE_CONSENT_COPY =
   "Create makes one empty initial commit on the main branch using Agentico's identity, with no origin remote and no push.";
 
 /**

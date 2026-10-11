@@ -42,40 +42,13 @@ func (e *NoCredentialsError) Error() string {
 	return fmt.Sprintf("no GitHub credentials for %s: set GH_TOKEN or run 'gh auth login'", e.Host)
 }
 
-type testOverride struct {
-	target *url.URL
-	token  string
-}
-
 var (
-	mu       sync.Mutex
-	cache    = map[string]*Client{}
-	override *testOverride
+	mu    sync.Mutex
+	cache = map[string]*Client{}
 )
 
-// OverrideForTest routes every subsequent client at the given base URL
-// with the given token, bypassing credential resolution and the cache.
-// The returned func undoes the override.
-func OverrideForTest(baseURL, token string) (restore func()) {
-	target, err := url.Parse(baseURL)
-	if err != nil {
-		panic(fmt.Sprintf("OverrideForTest: bad base URL %q: %v", baseURL, err))
-	}
-	mu.Lock()
-	prev := override
-	override = &testOverride{target: target, token: token}
-	cache = map[string]*Client{}
-	mu.Unlock()
-	return func() {
-		mu.Lock()
-		override = prev
-		cache = map[string]*Client{}
-		mu.Unlock()
-	}
-}
-
 // rewriteTransport redirects every request to a fixed scheme+host,
-// preserving path and query. Used only by test overrides.
+// preserving path and query. Used only by the EnvGitHubAPIBase route.
 type rewriteTransport struct{ target *url.URL }
 
 func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -88,40 +61,30 @@ func (t rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // every GitHub API request to the given base URL with a dummy token,
 // bypassing credential resolution. This is the seam packaged e2e
 // journeys use to serve fixture responses from a local HTTP server
-// without needing real gh credentials or a gh binary on PATH.
+// without needing real gh credentials or a gh binary on PATH, and the
+// seam test mains set to a dead address so no test reaches real GitHub.
 const EnvGitHubAPIBase = "AGENTICO_GITHUB_API_BASE"
 
 // ForHost returns a client for the given GitHub host ("" means
-// github.com). Clients are cached per host.
+// github.com). Credentialed clients are cached per host; when
+// EnvGitHubAPIBase is set every call builds a fresh client routed at it, so
+// a per-test fixture URL takes effect immediately.
 func ForHost(host string) (*Client, error) {
 	if host == "" {
 		host = "github.com"
-	}
-	mu.Lock()
-	ov := override
-	mu.Unlock()
-	if ov != nil {
-		return newClient(host, ov.token, rewriteTransport{target: ov.target})
-	}
-	mu.Lock()
-	cached, ok := cache[host]
-	mu.Unlock()
-	if ok {
-		return cached, nil
 	}
 	if base := os.Getenv(EnvGitHubAPIBase); base != "" {
 		target, err := url.Parse(base)
 		if err != nil {
 			return nil, fmt.Errorf("%s: bad URL %q: %w", EnvGitHubAPIBase, base, err)
 		}
-		client, err := newClient(host, "e2e-test-token", rewriteTransport{target: target})
-		if err != nil {
-			return nil, err
-		}
-		mu.Lock()
-		cache[host] = client
-		mu.Unlock()
-		return client, nil
+		return newClient(host, "e2e-test-token", rewriteTransport{target: target})
+	}
+	mu.Lock()
+	cached, ok := cache[host]
+	mu.Unlock()
+	if ok {
+		return cached, nil
 	}
 	token, _ := auth.TokenForHost(host)
 	if token == "" {

@@ -46,7 +46,7 @@ import {
 } from './cloneViews';
 import type { CloneAssociation } from './creationDrafts';
 
-export interface PickerCloneDialogProps {
+interface PickerCloneDialogProps {
   connection: ConnectionState;
   workspaceRoots: readonly WorkspaceRootState[];
   association: CloneAssociation | null;

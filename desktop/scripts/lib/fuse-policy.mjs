@@ -16,7 +16,7 @@ limitations under the License.
 
 import { FuseV1Options } from '@electron/fuses';
 
-export const FUSE_WIRE_VALUES = Object.freeze({
+const FUSE_WIRE_VALUES = Object.freeze({
   enabled: 49,
   disabled: 48,
 });
@@ -82,10 +82,6 @@ export const PRODUCTION_FUSE_POLICY = Object.freeze([
     expectedWireValue: FUSE_WIRE_VALUES.disabled,
   }),
 ]);
-
-export function expectedElectronBuilderFuses() {
-  return Object.fromEntries(PRODUCTION_FUSE_POLICY.map((fuse) => [fuse.configKey, fuse.expected]));
-}
 
 export function parseElectronBuilderFuses(configText) {
   const fuses = {};

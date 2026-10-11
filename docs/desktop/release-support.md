@@ -270,9 +270,6 @@ When Idle` never interrupts workflows or the supervisor implicitly. `Stop Work a
 Install Now` requires a separate confirmation.
 - DEB installs do not self-replace. Settings shows verified package-manager
   guidance and the trusted release page instead.
-- `agentico update` is non-mutating. It opens desktop Settings > Updates when
-  the registered app is available, otherwise it prints install-method guidance.
-  `agentico update --check` only reads stable release metadata.
 
 ## Diagnostics
 

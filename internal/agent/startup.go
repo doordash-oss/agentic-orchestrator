@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/cli/go-gh/v2/pkg/auth"
-	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -69,17 +68,4 @@ func checkRequiredTools(lookPath func(string) (string, error)) (hard, soft []Too
 		})
 	}
 	return hard, soft
-}
-
-// ApplyStartupDefaults converts a PhaseRole→string default map to the format
-// expected by config.ApplyProviderDefaults and applies it. Returns true if
-// any config fields were changed (useful for deciding whether to save).
-func ApplyStartupDefaults(cfg *config.Config, defaultModels map[string]string) bool {
-	// Snapshot model fields before
-	before := cfg.Defaults.Models
-
-	config.ApplyProviderDefaults(cfg, defaultModels)
-
-	// Compare after
-	return cfg.Defaults.Models != before
 }

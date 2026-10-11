@@ -104,7 +104,7 @@ function plural(value: number, unit: string): string {
   return `${value} ${unit}${value === 1 ? '' : 's'} ago`;
 }
 
-export interface NeedUserInputModalProps {
+interface NeedUserInputModalProps {
   item: AttentionGate;
   busy: boolean;
   drafts: AttentionDrafts;

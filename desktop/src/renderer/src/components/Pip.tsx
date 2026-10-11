@@ -21,7 +21,7 @@ limitations under the License.
  * label per stop — a row is compact enough that only the fill position
  * (done/active/upcoming) reads at a glance.
  */
-export interface PipRailProps {
+interface PipRailProps {
   /** Total pipeline stops. */
   stageCount: number;
   /** -1 = not started; index of the current stop otherwise. */

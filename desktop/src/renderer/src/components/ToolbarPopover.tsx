@@ -28,7 +28,7 @@ limitations under the License.
 import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 import { defined } from '../../../shared/defined';
 
-export interface ToolbarPopoverProps {
+interface ToolbarPopoverProps {
   open: boolean;
   /** Accessible name for the surface, and the handle tests address it by. */
   label: string;

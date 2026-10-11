@@ -363,7 +363,7 @@ function migrateSettingsV2ToV3(v2: SettingsV2): SettingsV3 {
   };
 }
 
-export interface SettingsStoreOptions {
+interface SettingsStoreOptions {
   warn?: (message: string) => void;
 }
 

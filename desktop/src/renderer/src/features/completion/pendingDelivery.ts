@@ -27,7 +27,7 @@ import { defined } from '../../../../shared/defined';
 export const UNPUBLISHED_CHANGES = 'unpublished_changes';
 export const UNMERGED_CHANGES = 'unmerged_changes';
 
-export interface PendingDeliveryRepo {
+interface PendingDeliveryRepo {
   repo: string;
   commits: number;
   dirty: boolean;

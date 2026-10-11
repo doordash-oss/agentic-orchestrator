@@ -66,7 +66,7 @@ func TestIsPublishFailureReturnsTrueForExactlyThePublishCodes(t *testing.T) {
 	for _, code := range allPublishFailureCodes {
 		want[code] = true
 	}
-	for _, code := range Codes() {
+	for _, code := range CatalogCodes() {
 		if got := IsPublishFailure(code); got != want[code] {
 			t.Errorf("IsPublishFailure(%s) = %v; want %v", code, got, want[code])
 		}

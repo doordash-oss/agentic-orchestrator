@@ -68,24 +68,7 @@ func TestForHostDefaultsEmptyHostToGitHubCom(t *testing.T) {
 	}
 }
 
-func TestOverrideForTestBypassesCacheAndRestores(t *testing.T) {
-	isolateAuthEnv(t)
-	restore := OverrideForTest("http://127.0.0.1:1", "test-token")
-	c1, err := ForHost("github.com")
-	if err != nil {
-		t.Fatalf("ForHost() with override error = %v", err)
-	}
-	c2, _ := ForHost("github.com")
-	if c1 == c2 {
-		t.Fatal("override clients must not be cached")
-	}
-	restore()
-	if _, err := ForHost("github.com"); err == nil {
-		t.Fatal("after restore, credential resolution should apply again")
-	}
-}
-
-func TestForHostEnvAPIBaseBypassesCredentialsAndCaches(t *testing.T) {
+func TestForHostEnvAPIBaseBypassesCredentialsAndBuildsFreshClients(t *testing.T) {
 	isolateAuthEnv(t)
 	t.Setenv(EnvGitHubAPIBase, "http://127.0.0.1:1")
 	c1, err := ForHost("github.com")
@@ -96,7 +79,7 @@ func TestForHostEnvAPIBaseBypassesCredentialsAndCaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ForHost() second call error = %v", err)
 	}
-	if c1 != c2 {
-		t.Fatal("env-override clients should be cached per host")
+	if c1 == c2 {
+		t.Fatal("env-override clients must not be cached, so a per-test fixture URL takes effect")
 	}
 }

@@ -60,7 +60,7 @@ import {
 import { definedNonEmpty } from '../../../../shared/defined';
 const STEPS = ['What', 'Pipeline', 'Review'] as const;
 
-export interface RefactorLauncherProps {
+interface RefactorLauncherProps {
   featureId: string;
   snapshot: FeatureSnapshot;
   onCancel(): void;

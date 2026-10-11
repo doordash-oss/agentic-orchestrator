@@ -19,14 +19,14 @@ limitations under the License.
  * inputs are the strict renderer-facing views; nothing here talks to the
  * preload API or stores state.
  */
-import type { FeatureSnapshot, FeatureSetupView, OwnedError } from '../../../shared/ipc';
+import type { FeatureSnapshot, OwnedError } from '../../../shared/ipc';
 import { ERROR_CLASS_LABELS } from '../../../shared/ipc';
 import type { ErrorSurfaceAction } from '../components/ErrorSurface';
 
-export type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
-export type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
+type DashboardBucket = 'intervention' | 'active' | 'startable' | 'inactive';
+type DashboardTone = 'danger' | 'attention' | 'active' | 'ready' | 'quiet';
 
-export interface DashboardState {
+interface DashboardState {
   bucket: DashboardBucket;
   label: string;
   tone: DashboardTone;
@@ -282,10 +282,6 @@ export function isRunAtRest(status: string): boolean {
   return status === 'CodeReady' || status === 'Published' || status === 'Done';
 }
 
-export function spineTone(snapshot: FeatureSnapshot): 'progress' | 'error' {
-  return snapshot.setup?.status === 'failed' || snapshot.status === 'Failed' ? 'error' : 'progress';
-}
-
 /**
  * Human run duration: seconds under a minute, "Mm SSs" under an hour, then
  * "Hh MMm". Negative or fractional inputs are floored to whole seconds.
@@ -301,25 +297,6 @@ export function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
   return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
-}
-
-/** Elapsed time for the queue card; null when there is no run time to show yet. */
-export function formatElapsed(snapshot: FeatureSnapshot): string | null {
-  const total = snapshot.timing?.totalSeconds ?? 0;
-  if (total <= 0) return null;
-  return formatDuration(total);
-}
-
-export interface SetupProgress {
-  done: number;
-  total: number;
-}
-
-export function setupProgress(setup: FeatureSetupView): SetupProgress {
-  return {
-    done: setup.tasks.filter((task) => task.status === 'done').length,
-    total: setup.tasks.length,
-  };
 }
 
 /**
@@ -405,7 +382,7 @@ export function featureBranch(snapshot: FeatureSnapshot): string | null {
   return null;
 }
 
-export type CreationErrorField = 'name' | 'repos' | 'form';
+type CreationErrorField = 'name' | 'repos' | 'form';
 
 /**
  * Routes a structured server rejection to the control that owns it. The

@@ -49,7 +49,7 @@ func newCrashFixture(t *testing.T) *crashFixture {
 // it, and returns it.
 func (fx *crashFixture) craftRecord(t *testing.T, id, key, dest string, state State, process *ProcessInfo, cancelRequested bool) Record {
 	t.Helper()
-	stagingRel := stagingName(id)
+	stagingRel := stagingNameFor(KindClone, id)
 	stagingPath := filepath.Join(fx.root, stagingRel)
 	if err := os.MkdirAll(stagingPath, 0o700); err != nil {
 		t.Fatal(err)
@@ -304,7 +304,7 @@ func TestRecoverRootSwapKeepsChangedOwnershipUntouched(t *testing.T) {
 		t.Fatalf("state = %s, want cleanup-pending after root identity change", final.State)
 	}
 	// The moved real root (with our staging inside) was never touched.
-	if _, err := os.Lstat(filepath.Join(moved, stagingName(rec.ID))); err != nil {
+	if _, err := os.Lstat(filepath.Join(moved, stagingNameFor(KindClone, rec.ID))); err != nil {
 		t.Errorf("changed-ownership staging deleted: %v", err)
 	}
 }

@@ -538,19 +538,18 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 			}
 			dirs := append([]string{runDir}, cfg.AdditionalDirs...)
 			implBuildOpts := BuildSessionOpts{
-				Model:                          sessionConfig.Model,
-				Prompt:                         prompt,
-				SystemPrompt:                   implProtocol,
-				AdditionalDirs:                 dirs,
-				AgentNames:                     []string{},
-				PIDDir:                         cfg.StateDir,
-				PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, permRepoName),
-				RepoName:                       cfg.RepoName,
-				WorkDir:                        cfg.WorkDir,
-				EffortLevel:                    cfg.EffortLevel,
-				Phase:                          feature.PhaseImplement,
-				SystemPromptHasUsefulResources: true,
-				CompletionProtocol:             true,
+				Model:              sessionConfig.Model,
+				Prompt:             prompt,
+				SystemPrompt:       implProtocol,
+				AdditionalDirs:     dirs,
+				AgentNames:         []string{},
+				PIDDir:             cfg.StateDir,
+				PermHandler:        permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, permRepoName),
+				RepoName:           cfg.RepoName,
+				WorkDir:            cfg.WorkDir,
+				EffortLevel:        cfg.EffortLevel,
+				Phase:              feature.PhaseImplement,
+				CompletionProtocol: true,
 			}
 			if sessionConfig.EffectiveEffort != "" {
 				implBuildOpts.EffortLevel = sessionConfig.EffectiveEffort

@@ -112,7 +112,7 @@ import { fencedServerRequest, type ServerIdentitySource } from './serverFence';
 import { defined, definedNonEmpty } from '../shared/defined';
 
 /** The authenticated transport surface the gateway provides. */
-export type FeatureTransport = ServerTransport;
+type FeatureTransport = ServerTransport;
 
 export interface FeatureServiceDeps {
   transport: FeatureTransport;

@@ -200,80 +200,35 @@ type EffortConfig struct {
 	KBBuild        string `yaml:"kb_build,omitempty" json:"kb_build,omitempty"`
 }
 
-// EffortConfigFieldByName returns the effort value for the named role. The
-// field name must match a ModelConfig field name (Inquiry, Research, Planning,
-// Implementation, Review, Utilities, KBBuild). Returns "" for unrecognized
-// names, which is treated as Auto by the resolver.
-func EffortConfigFieldByName(e EffortConfig, field string) string {
-	switch field {
-	case "Inquiry":
-		return e.Inquiry
-	case "Research":
-		return e.Research
-	case "Planning":
-		return e.Planning
-	case "Implementation":
-		return e.Implementation
-	case "Review":
-		return e.Review
-	case "Utilities":
-		return e.Utilities
-	case "KBBuild":
-		return e.KBBuild
-	}
-	return ""
+// Role is one model-and-effort role, keyed by the role string the provider
+// layer uses. Model and Effort return the role's field on the given struct.
+type Role struct {
+	Name   string
+	Model  func(*ModelConfig) *string
+	Effort func(*EffortConfig) *string
 }
 
-// SetEffortConfigFieldByName sets the effort value for the named role on the
-// given EffortConfig pointer. The field name must match a ModelConfig field
-// name. Unrecognized names are silently ignored.
-func SetEffortConfigFieldByName(e *EffortConfig, field, value string) {
-	switch field {
-	case "Inquiry":
-		e.Inquiry = value
-	case "Research":
-		e.Research = value
-	case "Planning":
-		e.Planning = value
-	case "Implementation":
-		e.Implementation = value
-	case "Review":
-		e.Review = value
-	case "Utilities":
-		e.Utilities = value
-	case "KBBuild":
-		e.KBBuild = value
-	}
+// Roles lists every model-and-effort role in ModelConfig field order. The
+// "chat" role uses the Utilities fields. AutomaticReview is not a role here:
+// it has no effort field and is never defaulted.
+var Roles = []Role{
+	{"inquiry", func(m *ModelConfig) *string { return &m.Inquiry }, func(e *EffortConfig) *string { return &e.Inquiry }},
+	{"research", func(m *ModelConfig) *string { return &m.Research }, func(e *EffortConfig) *string { return &e.Research }},
+	{"planning", func(m *ModelConfig) *string { return &m.Planning }, func(e *EffortConfig) *string { return &e.Planning }},
+	{"implementation", func(m *ModelConfig) *string { return &m.Implementation }, func(e *EffortConfig) *string { return &e.Implementation }},
+	{"review", func(m *ModelConfig) *string { return &m.Review }, func(e *EffortConfig) *string { return &e.Review }},
+	{"chat", func(m *ModelConfig) *string { return &m.Utilities }, func(e *EffortConfig) *string { return &e.Utilities }},
+	{"kb_build", func(m *ModelConfig) *string { return &m.KBBuild }, func(e *EffortConfig) *string { return &e.KBBuild }},
 }
 
-// ModelConfigFieldByName returns the model value for the named role from
-// ModelConfig. The field name must match a ModelConfig field name.
-func ModelConfigFieldByName(m ModelConfig, field string) string {
-	switch field {
-	case "Inquiry":
-		return m.Inquiry
-	case "Research":
-		return m.Research
-	case "Planning":
-		return m.Planning
-	case "Implementation":
-		return m.Implementation
-	case "Review":
-		return m.Review
-	case "Utilities":
-		return m.Utilities
-	case "KBBuild":
-		return m.KBBuild
+// RoleNamed returns the role with the given name and whether it exists.
+func RoleNamed(name string) (Role, bool) {
+	for _, r := range Roles {
+		if r.Name == name {
+			return r, true
+		}
 	}
-	return ""
-}
-
-// AllEffortRoles returns the canonical ordered list of role field names that
-// have both a model and an effort field. The order matches ModelConfig field
-// order. Utilities is included; callers that must omit it (e.g. the feature
-// overlay) filter it out.
-func AllEffortRoles() []string {
-	return []string{"Inquiry", "Research", "Planning", "Implementation", "Review", "Utilities", "KBBuild"}
+	return Role{}, false
 }
 
 // Checkpoints controls which phase transitions pause for human review in the config defaults.
@@ -383,31 +338,10 @@ func LoadOrCreate(path string) (*Config, error) {
 
 func applyDefaults(cfg *Config) {
 	d := NewDefault()
-	if cfg.Defaults.Models.Inquiry == "" {
-		if cfg.Defaults.Models.Research != "" {
-			cfg.Defaults.Models.Inquiry = cfg.Defaults.Models.Research
-		} else {
-			cfg.Defaults.Models.Inquiry = d.Defaults.Models.Inquiry
-		}
+	if m := &cfg.Defaults.Models; m.Inquiry == "" && m.Research != "" {
+		m.Inquiry = m.Research
 	}
-	if cfg.Defaults.Models.Research == "" {
-		cfg.Defaults.Models.Research = d.Defaults.Models.Research
-	}
-	if cfg.Defaults.Models.Planning == "" {
-		cfg.Defaults.Models.Planning = d.Defaults.Models.Planning
-	}
-	if cfg.Defaults.Models.Implementation == "" {
-		cfg.Defaults.Models.Implementation = d.Defaults.Models.Implementation
-	}
-	if cfg.Defaults.Models.Review == "" {
-		cfg.Defaults.Models.Review = d.Defaults.Models.Review
-	}
-	if cfg.Defaults.Models.Utilities == "" {
-		cfg.Defaults.Models.Utilities = d.Defaults.Models.Utilities
-	}
-	if cfg.Defaults.Models.KBBuild == "" {
-		cfg.Defaults.Models.KBBuild = d.Defaults.Models.KBBuild
-	}
+	fillEmptyModels(&cfg.Defaults.Models, d.Defaults.Models)
 	if cfg.Defaults.MaxIterations == 0 {
 		cfg.Defaults.MaxIterations = d.Defaults.MaxIterations
 	}
@@ -501,38 +435,25 @@ func AllRepos(cfg *Config) map[string]RepoConfig {
 	return merged
 }
 
-// ApplyProviderDefaults fills empty model config fields with defaults computed
-// from detected providers in the registry. User-set values are never overwritten.
-// The defaults map is keyed by PhaseRole string values (e.g. "research", "planning").
-// Startup derives this map from registry.CatalogDefaultModels before applying it here.
-func ApplyProviderDefaults(cfg *Config, defaults map[string]string) {
-	if defaults == nil {
-		return
+// ApplyProviderDefaults fills empty model config fields with the catalog
+// defaults computed from detected providers (registry.CatalogDefaultModels).
+// User-set values are never overwritten; an empty inquiry default falls back to
+// the research default. Returns true when any model field changed.
+func ApplyProviderDefaults(cfg *Config, defaults ModelConfig) bool {
+	before := cfg.Defaults.Models
+	if defaults.Inquiry == "" {
+		defaults.Inquiry = defaults.Research
 	}
-	m := &cfg.Defaults.Models
-	if m.Inquiry == "" {
-		m.Inquiry = defaults["inquiry"]
-		if m.Inquiry == "" {
-			m.Inquiry = defaults["research"]
+	fillEmptyModels(&cfg.Defaults.Models, defaults)
+	return cfg.Defaults.Models != before
+}
+
+// fillEmptyModels copies each role's model from defaults into m when unset.
+func fillEmptyModels(m *ModelConfig, defaults ModelConfig) {
+	for _, r := range Roles {
+		if p := r.Model(m); *p == "" {
+			*p = *r.Model(&defaults)
 		}
-	}
-	if m.Research == "" {
-		m.Research = defaults["research"]
-	}
-	if m.Planning == "" {
-		m.Planning = defaults["planning"]
-	}
-	if m.Implementation == "" {
-		m.Implementation = defaults["implementation"]
-	}
-	if m.Review == "" {
-		m.Review = defaults["review"]
-	}
-	if m.Utilities == "" {
-		m.Utilities = defaults["chat"]
-	}
-	if m.KBBuild == "" {
-		m.KBBuild = defaults["kb_build"]
 	}
 }
 
@@ -563,51 +484,19 @@ func (d DefaultsConfig) PreferenceForPipeline(profile string) PipelinePreference
 // the other base values. Used by the server mutation target and pipeline
 // preference resolution.
 func OverlayEffortConfig(base, override EffortConfig) EffortConfig {
-	if override.Inquiry != "" {
-		base.Inquiry = override.Inquiry
-	}
-	if override.Research != "" {
-		base.Research = override.Research
-	}
-	if override.Planning != "" {
-		base.Planning = override.Planning
-	}
-	if override.Implementation != "" {
-		base.Implementation = override.Implementation
-	}
-	if override.Review != "" {
-		base.Review = override.Review
-	}
-	if override.Utilities != "" {
-		base.Utilities = override.Utilities
-	}
-	if override.KBBuild != "" {
-		base.KBBuild = override.KBBuild
+	for _, r := range Roles {
+		if v := *r.Effort(&override); v != "" {
+			*r.Effort(&base) = v
+		}
 	}
 	return base
 }
 
 func overlayModelConfig(base, override ModelConfig) ModelConfig {
-	if override.Inquiry != "" {
-		base.Inquiry = override.Inquiry
-	}
-	if override.Research != "" {
-		base.Research = override.Research
-	}
-	if override.Planning != "" {
-		base.Planning = override.Planning
-	}
-	if override.Implementation != "" {
-		base.Implementation = override.Implementation
-	}
-	if override.Review != "" {
-		base.Review = override.Review
-	}
-	if override.Utilities != "" {
-		base.Utilities = override.Utilities
-	}
-	if override.KBBuild != "" {
-		base.KBBuild = override.KBBuild
+	for _, r := range Roles {
+		if v := *r.Model(&override); v != "" {
+			*r.Model(&base) = v
+		}
 	}
 	if override.AutomaticReview != "" {
 		base.AutomaticReview = override.AutomaticReview
@@ -620,9 +509,7 @@ func overlayModelConfig(base, override ModelConfig) ModelConfig {
 // and live model availability are resolved after discovery.
 func validateModelRecommendations(preferences map[string][]string) error {
 	for role, models := range preferences {
-		switch role {
-		case "inquiry", "research", "planning", "implementation", "review", "chat", "kb_build":
-		default:
+		if _, ok := RoleNamed(role); !ok {
 			return fmt.Errorf("model_recommendations: unknown phase %q", role)
 		}
 		for _, model := range models {

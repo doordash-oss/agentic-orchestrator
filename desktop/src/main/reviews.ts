@@ -53,11 +53,10 @@ const ReviewDecisionRequestSchema = z.strictObject({
   decision: z.enum(['proceed', 'iterate']),
 });
 
-export type ReviewOpenRequest = z.output<typeof ReviewOpenRequestSchema>;
 export type ReviewSaveRequest = z.output<typeof ReviewSaveRequestSchema>;
 export type ReviewValidateRequest = z.output<typeof ReviewValidateRequestSchema>;
 export type ReviewDecisionRequest = z.output<typeof ReviewDecisionRequestSchema>;
-export type ReviewMutationResult<T> = { type: 'saved'; session: T } | { type: 'conflict' };
+type ReviewMutationResult<T> = { type: 'saved'; session: T } | { type: 'conflict' };
 
 /** Main-process-only adapter for the revisioned review-session REST contract. */
 export class ReviewService {

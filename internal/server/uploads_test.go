@@ -79,7 +79,7 @@ func newUploadTestAPI(t *testing.T, target MutationTarget, withAuth bool) (*apiH
 		opts.AuthToken = testAuthToken
 	}
 	api := newAPIHandler(opts)
-	return api, api.routes(), stateDir
+	return api, api, stateDir
 }
 
 func postUpload(handler http.Handler, target string, body []byte, mutate func(*http.Request)) *httptest.ResponseRecorder {

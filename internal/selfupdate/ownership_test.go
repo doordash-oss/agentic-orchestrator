@@ -109,7 +109,7 @@ func TestAcquireLeaseOverwritesStaleRecord(t *testing.T) {
 	stale.PID = 1 << 22
 	stale.ExecutableDigest = "deadbeef"
 	stale.ExecutableIno = 0
-	if ProcessAlive(stale.PID) {
+	if err := unix.Kill(stale.PID, 0); err == nil || errors.Is(err, unix.EPERM) {
 		t.Fatalf("fixture pid %d unexpectedly alive", stale.PID)
 	}
 	if err := writeOwnershipRecord(exec.Path, stale); err != nil {
@@ -197,11 +197,7 @@ func TestLeaseFDIsCLOEXECByDefault(t *testing.T) {
 		t.Fatalf("AcquireLease: %v", err)
 	}
 	t.Cleanup(func() { _ = lease.Close() })
-	ok, err := IsCLOEXEC(lease.FD())
-	if err != nil {
-		t.Fatalf("IsCLOEXEC: %v", err)
-	}
-	if !ok {
+	if !fdIsCLOEXEC(t, lease.FD()) {
 		t.Fatal("lease fd must be close-on-exec by default")
 	}
 	if lease.Path() != LeasePath(exec.Path) {
@@ -296,7 +292,7 @@ func TestRuntimeUpdateLockContentionAndPersistence(t *testing.T) {
 	t.Cleanup(func() { _ = first.Close() })
 
 	_, err = AcquireRuntimeUpdateLock(runtimeDir)
-	if err == nil || !IsRuntimeUpdateLockHeld(err) {
+	if err == nil || !errors.Is(err, ErrRuntimeUpdateLockHeld) {
 		t.Fatalf("second AcquireRuntimeUpdateLock error = %v, want ErrRuntimeUpdateLockHeld", err)
 	}
 
@@ -414,27 +410,6 @@ func TestLiveHandoffScenarios(t *testing.T) {
 			t.Fatalf("LiveHandoff = (%v, %v), want (false, nil) for unparseable receipt", live, err)
 		}
 	})
-}
-
-func TestProcessAlive(t *testing.T) {
-	if !ProcessAlive(os.Getpid()) {
-		t.Fatal("ProcessAlive(current pid) = false, want true")
-	}
-	if !ProcessAlive(1) {
-		t.Fatal("ProcessAlive(1) = false, want true")
-	}
-	if ProcessAlive(-1) {
-		t.Fatal("ProcessAlive(-1) = true, want false")
-	}
-
-	// A reaped child is definitively dead.
-	cmd := exec.Command(os.Args[0], "-test.run=^$")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("helper run: %v", err)
-	}
-	if ProcessAlive(cmd.Process.Pid) {
-		t.Fatalf("ProcessAlive(reaped pid %d) = true, want false", cmd.Process.Pid)
-	}
 }
 
 func TestReadLatestReceipt(t *testing.T) {

@@ -53,7 +53,7 @@ const CONFIG_BASENAME = 'config.yaml';
  */
 export const MAX_PROBE_RESPONSE_BYTES = 1024 * 1024;
 
-export interface RuntimeGatewayWiringOptions {
+interface RuntimeGatewayWiringOptions {
   /** Reads the persisted runtime selection (a runtime parent directory). */
   getRuntimeSelection(): string | null;
   /** Reads the persisted known-servers prefs (bounded list + last-used pointer). */
@@ -72,7 +72,7 @@ export interface RuntimeGatewayWiringOptions {
   warn?: (line: string) => void;
 }
 
-export interface WiredRuntimeGateway {
+interface WiredRuntimeGateway {
   gateway: RuntimeGateway;
   /** Local redacted diagnostics (child stdio + gateway notes). */
   logBuffer: RedactedLogBuffer;

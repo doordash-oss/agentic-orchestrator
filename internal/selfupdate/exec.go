@@ -100,15 +100,6 @@ func SetCLOEXEC(fd int) error {
 	return nil
 }
 
-// IsCLOEXEC reports the close-on-exec state of fd.
-func IsCLOEXEC(fd int) (bool, error) {
-	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
-	if err != nil {
-		return false, fmt.Errorf("inspect fd %d flags: %w", fd, err)
-	}
-	return flags&unix.FD_CLOEXEC != 0, nil
-}
-
 // ExecFunc is the exec seam, replaceable in tests.
 type ExecFunc func(path string, argv, env []string) error
 

@@ -32,7 +32,6 @@ func TestRunArgsVersionPrintsVersionLine(t *testing.T) {
 			&stdout,
 			&stderr,
 			failingServerLauncher(t),
-			failingUpdater(t),
 		)
 		if code != 0 {
 			t.Fatalf("runArgs(%s) code = %d, want 0", flag, code)

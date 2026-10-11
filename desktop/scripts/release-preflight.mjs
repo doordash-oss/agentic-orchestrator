@@ -73,7 +73,7 @@ function imageNotFound(error) {
   );
 }
 
-export function ensurePinnedImage({ image, cwd, execute = executeDocker }) {
+function ensurePinnedImage({ image, cwd, execute = executeDocker }) {
   try {
     execute('docker', ['image', 'inspect', image], cwd);
   } catch (error) {

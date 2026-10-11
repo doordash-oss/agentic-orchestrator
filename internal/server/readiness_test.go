@@ -657,7 +657,7 @@ func TestReadinessRefreshReprobesAndUnblocksFeatureCreation(t *testing.T) {
 		Mutations:             target,
 		DisableHostValidation: true,
 	})
-	handler := apiHandler.routes()
+	handler := apiHandler
 
 	if snapshot := getReadinessSnapshot(t, handler); snapshot.Ready {
 		t.Fatal("initial snapshot.Ready = true; want false before authentication")

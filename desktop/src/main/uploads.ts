@@ -37,7 +37,7 @@ import type { HttpResult } from './gateway/runtimeGateway';
 import { mapServerError } from './serverClient';
 
 /** The authenticated binary-post surface the gateway provides. */
-export interface UploadTransport {
+interface UploadTransport {
   apiUpload(path: string, body: Uint8Array): Promise<HttpResult>;
 }
 

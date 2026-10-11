@@ -2162,7 +2162,10 @@ func safeAskUserQuestions(sess ports.SessionView, req *llm.ControlRequestMessage
 		return nil
 	}
 	if askUserBundleNeedsConfidence(bundle) && sess != nil && sess.MessageLog() != nil {
-		bundle = recoverAskUserConfidence(bundle, sess.MessageLog())
+		// A miss keeps the bundle the control request carried.
+		bundle, _ = askuser.RecoverConfidence(bundle, sess.MessageLog().ToolUseBlocks(), func(block llm.ContentBlock) (string, []byte) {
+			return block.Name, block.Input
+		})
 	}
 	return askUserQuestionDTOs(bundle.Display(askuser.Limits{
 		Question:    askUserQuestionDisplayLimit,
@@ -2204,26 +2207,6 @@ func askUserBundleNeedsConfidence(bundle askuser.Bundle) bool {
 		}
 	}
 	return false
-}
-
-// recoverAskUserConfidence merges option confidence from the newest assistant
-// AskUserQuestion tool-use block whose auto-pick signature matches bundle.
-func recoverAskUserConfidence(bundle askuser.Bundle, log ports.MessageLog) askuser.Bundle {
-	blocks := log.ToolUseBlocks()
-	for i := len(blocks) - 1; i >= 0; i-- {
-		block := blocks[i]
-		if block.Name != toolNameAskUserQuestion || len(block.Input) == 0 {
-			continue
-		}
-		source, err := askuser.Parse(block.Input)
-		if err != nil {
-			continue
-		}
-		if merged, ok := bundle.MergeConfidence(source); ok {
-			return merged
-		}
-	}
-	return bundle
 }
 
 func SafeDisplayText(s string, limit int) string {

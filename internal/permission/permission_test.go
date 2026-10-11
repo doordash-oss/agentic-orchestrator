@@ -226,7 +226,7 @@ func TestWrapGeneralPhaseHandlerWithSafeCreate_LeavesNarrowerHandlersUnwrapped(t
 		"BoundedHelperArtifactHandler":        &BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}},
 		"BoundedHelperArtifactHandlerGuarded": Guarded(&BoundedHelperArtifactHandler{AllowedPaths: []string{artifact}}),
 		"SupervisorHandler":                   &SupervisorHandler{},
-		"ReadOnlyHandler":                     &ReadOnlyHandler{},
+		"UnknownHandler":                      &mockHandler{behavior: DecisionDeny},
 	} {
 		t.Run(name, func(t *testing.T) {
 			wrapped := WrapGeneralPhaseHandlerWithSafeCreate(inner, []string{root})
@@ -253,8 +253,8 @@ func TestIsAutomaticReviewHandler_IncludesSupervisorWithoutBroadeningGeneralPoli
 	if IsGeneralPhaseHandler(&SupervisorHandler{}) {
 		t.Fatal("IsGeneralPhaseHandler(SupervisorHandler) = true, want false")
 	}
-	if IsAutomaticReviewHandler(&ReadOnlyHandler{}) {
-		t.Fatal("IsAutomaticReviewHandler(ReadOnlyHandler) = true, want false")
+	if IsAutomaticReviewHandler(&mockHandler{behavior: DecisionDeny}) {
+		t.Fatal("IsAutomaticReviewHandler(unknown handler) = true, want false")
 	}
 }
 
@@ -1492,15 +1492,15 @@ func TestSessionGuardHandler_AllowsBareHarnessCLIAgainstContract(t *testing.T) {
 	contract := filepath.Join(t.TempDir(), testingContractFilename)
 	handler := Guarded(&AutoApproveHandler{})
 	for _, cmd := range []string{
-		`"$AGENTICO_BIN" verify-evidence --contract "` + contract + `" --dir /tmp/iter`,
+		`"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir /tmp/iter`,
 		`"$AGENTICO_BIN" report-blocker --contract "` + contract + `" --dir /tmp/iter --items visual_1,manual_2 --capability authenticated-browser(slack.com) --reason "no signed-in session"`,
-		`/usr/local/bin/agentico capability-probe authenticated-browser(slack.com)`,
+		`/usr/local/bin/agentico validate-artifacts --phase implement --role implementer --dir /tmp/iter`,
 	} {
 		requirePermissionAllowed(t, handler, toolNameBash, `{"command":`+strconv.Quote(cmd)+`}`)
 	}
 	for _, cmd := range []string{
 		`"$AGENTICO_BIN" report-blocker --contract ` + contract + ` --dir /tmp/iter; echo x > ` + contract,
-		`"$AGENTICO_BIN" verify-evidence --contract ` + contract + ` && sed -i s/waived// ` + contract,
+		`"$AGENTICO_BIN" report-blocker --contract ` + contract + ` && sed -i s/waived// ` + contract,
 		`"$AGENTICO_BIN" server --contract ` + contract,
 		`cp "$AGENTICO_BIN" ` + contract,
 		`"$AGENTICO_BIN" report-blocker --contract $(echo ` + contract + `)`,
@@ -1535,9 +1535,9 @@ func TestSessionGuardHandler_ExplainsMalformedHarnessCLIDenial(t *testing.T) {
 			wantReasonPart: "agentico report-blocker must be invoked as a single bare command",
 		},
 		{
-			name:           "verify-evidence piped",
-			command:        `"$AGENTICO_BIN" verify-evidence --contract /work/testing-contract.yaml --dir /work/iter|tail`,
-			wantReasonPart: "agentico verify-evidence must be invoked as a single bare command",
+			name:           "validate-artifacts piped",
+			command:        `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir /work/iter|tail /work/testing-contract.yaml`,
+			wantReasonPart: "agentico validate-artifacts must be invoked as a single bare command",
 		},
 		{
 			name:        "well-formed bare call",

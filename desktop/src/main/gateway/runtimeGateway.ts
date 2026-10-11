@@ -90,7 +90,7 @@ export interface HttpResult {
 }
 
 /** Mutating verbs allowed against the connected runtime's REST API. */
-export type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 
 export interface ApiRequestInit {
   method?: ApiMethod;

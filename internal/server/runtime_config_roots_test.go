@@ -50,7 +50,7 @@ func newRuntimeConfigHandler(t *testing.T, recorder *runtimeConfigRecorder) http
 		Mutations:             recorder,
 		DisableHostValidation: true,
 	})
-	return api.routes()
+	return api
 }
 
 func patchTrustedJSON(handler http.Handler, path string, body any) *httptest.ResponseRecorder {

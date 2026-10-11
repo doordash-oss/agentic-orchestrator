@@ -55,14 +55,14 @@ import { defined, definedNonEmpty } from '../shared/defined';
  * rows, so this matches the SSE line bound rather than the tiny global
  * invalidation bound.
  */
-export const MAX_SUPERVISOR_EVENT_BYTES = 1024 * 1024;
+const MAX_SUPERVISOR_EVENT_BYTES = 1024 * 1024;
 
 /** The narrow surface the runner needs from the runtime gateway. */
-export interface SupervisorStreamSource {
+interface SupervisorStreamSource {
   openSupervisorEventStream(options: { afterSeq?: number; epoch?: string }): Promise<SseStream>;
 }
 
-export interface SupervisorStreamDeps {
+interface SupervisorStreamDeps {
   source: SupervisorStreamSource;
   sleep(ms: number): Promise<void>;
   /** Redacted local diagnostics sink. */
@@ -72,7 +72,7 @@ export interface SupervisorStreamDeps {
   backoff?: { initialMs: number; maxMs: number };
 }
 
-export type SupervisorCursor = SseCursor;
+type SupervisorCursor = SseCursor;
 
 /**
  * Parses one SSE block into the wire event, or null (dropped) when the

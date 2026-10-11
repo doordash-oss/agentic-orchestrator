@@ -1546,20 +1546,14 @@ func (s *Session) mergeAskUserToolUseConfidence(controlInput json.RawMessage) (a
 	if err != nil {
 		return askuser.Bundle{}, false
 	}
-	signature := control.Signature()
-	blocks := s.messageLog.ToolUseBlocks()
-	for i := len(blocks) - 1; i >= 0; i-- {
-		block := blocks[i]
-		if block.Name != "AskUserQuestion" || len(block.Input) == 0 {
-			continue
-		}
-		toolUse, err := askuser.Parse(block.Input)
-		if err != nil || toolUse.Signature() != signature {
-			continue
-		}
-		return control.MergeConfidence(toolUse)
+	merged, ok := askuser.RecoverConfidence(control, s.messageLog.ToolUseBlocks(), func(block llm.ContentBlock) (string, []byte) {
+		return block.Name, block.Input
+	})
+	if !ok {
+		// A miss reports no match: the caller keeps its first decision.
+		return askuser.Bundle{}, false
 	}
-	return askuser.Bundle{}, false
+	return merged, true
 }
 
 // respondToControlViaProtocol sends a control response through the session's protocol.

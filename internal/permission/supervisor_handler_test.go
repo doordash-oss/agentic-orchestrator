@@ -130,7 +130,7 @@ func TestSupervisorHandler_DefersOtherBashWithoutHelperReason(t *testing.T) {
 	t.Parallel()
 	for _, command := range []string{
 		`"$AGENTICO_BIN" validate-artifacts --phase review --role final_reviewer --dir /tmp/iteration-01`,
-		`"$AGENTICO_BIN" verify-evidence --contract /work/testing-contract.yaml --dir /work/iter`,
+		`"$AGENTICO_BIN" report-blocker --contract /work/testing-contract.yaml --dir /work/iter`,
 		`"$AGENTICO_BIN" server`,
 		`"$OTHER_BIN" api GET /api/v1/features`,
 		`curl -s http://127.0.0.1:7777/api/v1/features`,

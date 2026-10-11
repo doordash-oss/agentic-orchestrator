@@ -22,11 +22,10 @@ Your system prompt lists the paths for this server:
 
 The helper locates the discovery file in this order:
 
-1. the `--runtime-dir <dir>` flag, when given;
-2. the `AGENTICO_RUNTIME_DIR` environment variable, which the server sets for this conversation;
-3. the default runtime directory, `~/.agentic-orchestrator/`.
+1. the `AGENTICO_RUNTIME_DIR` environment variable, which the server sets for this conversation;
+2. the default runtime directory, `~/.agentic-orchestrator/`.
 
-Do not pass `--runtime-dir` in normal use: the environment variable already points at this server, and pointing the helper anywhere else would operate a different server. The helper checks that the discovery file is a regular file owned by you with no group or other permissions before trusting it.
+The environment variable already points at this server; there is no flag for pointing the helper at any other runtime directory. The helper checks that the discovery file is a regular file owned by you with no group or other permissions before trusting it.
 
 When a call fails before reaching the server, the error is printed on stderr:
 

@@ -31,7 +31,7 @@ import { defined } from '../../../shared/defined';
 
 export type QuestionsAttentionItem = Extract<AttentionItem, { kind: 'questions' }>;
 
-export function questionsComplete(item: QuestionsAttentionItem, drafts: AttentionDrafts): boolean {
+function questionsComplete(item: QuestionsAttentionItem, drafts: AttentionDrafts): boolean {
   const questionDraft = drafts.questions[`${item.kind}:${item.id}`] ?? {};
   return item.questions.every((question) => questionAnswer(questionDraft[question.index]) !== '');
 }

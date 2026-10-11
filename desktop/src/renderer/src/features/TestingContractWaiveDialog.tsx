@@ -21,7 +21,7 @@ import { useModalDismiss } from '../components/useModalDismiss';
 import { parseIpcError } from '../wizard/ipcError';
 import { ResultBox, useCompletionAction, type ActionResult } from './completion/completionShared';
 
-export interface TestingContractWaiveDialogProps {
+interface TestingContractWaiveDialogProps {
   featureId: string;
   onClose(): void;
   onWaived(): Promise<void> | void;

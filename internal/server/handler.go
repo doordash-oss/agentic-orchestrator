@@ -39,11 +39,18 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 )
 
+// NewHandler builds the API handler the runtime server serves. The returned
+// value is the concrete handler, which serves through the mux it builds once
+// at construction.
 func NewHandler(opts HandlerOptions) http.Handler {
-	return newAPIHandler(opts).routes()
+	return newAPIHandler(opts)
 }
 
 type apiHandler struct {
+	// mux is the routing tree built once at construction; ServeHTTP serves
+	// through it.
+	mux http.Handler
+
 	runtime   RuntimeIdentity
 	policy    LaunchPolicy
 	startedAt time.Time
@@ -242,7 +249,13 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 			handler.clones = svc
 		}
 	}
+	handler.mux = handler.routes()
 	return handler
+}
+
+// ServeHTTP serves r through the mux built at construction.
+func (h *apiHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
 }
 
 // topLevelRoute is one top-level mux registration. topLevelServerRoutes is

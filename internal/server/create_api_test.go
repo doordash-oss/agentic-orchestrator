@@ -96,7 +96,7 @@ func newCreateServerFixtureGated(t *testing.T, gated bool) *createServerFixture 
 		clones:                svc,
 	})
 	apiRef = fx.api
-	fx.handler = fx.api.routes()
+	fx.handler = fx.api
 	return fx
 }
 

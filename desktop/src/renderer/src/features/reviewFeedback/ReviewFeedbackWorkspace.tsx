@@ -90,7 +90,7 @@ import { defined } from '../../../../shared/defined';
  */
 const ZERO_LAUNCHABLE_CODE = 'review_feedback_zero_launchable_selection';
 
-export interface ReviewFeedbackWorkspaceProps {
+interface ReviewFeedbackWorkspaceProps {
   featureId: string;
   snapshot: FeatureSnapshot;
   onBack(): void;

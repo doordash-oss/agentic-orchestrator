@@ -611,7 +611,7 @@ func TestUpdateSourceFromOriginalCheckoutDeadlineDuringMergeIsUnknown(t *testing
 func TestUpdateSourceFromOriginalCheckoutInspectionFailuresFailClosed(t *testing.T) {
 	failingCommand := func(match func(args []string) bool) SourceUpdateOptions {
 		return SourceUpdateOptions{OriginCheckOptions: OriginCheckOptions{
-			Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+			Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
 				if match(args) {
 					return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "checkout inspection failed"}
 				}

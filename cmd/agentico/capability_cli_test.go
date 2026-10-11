@@ -24,16 +24,9 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 )
 
-func TestParseLaunchArgsCapabilitySubcommands(t *testing.T) {
+func TestParseLaunchArgsReportBlocker(t *testing.T) {
 	t.Parallel()
-	opts, err := parseLaunchArgs([]string{cliSubcommandCapabilityProbe, "authenticated-browser(slack.com)"})
-	if err != nil || opts.mode != launchModeCapabilityProbe || opts.capabilityProbe.name != "authenticated-browser(slack.com)" {
-		t.Fatalf("capability-probe parse = %+v, %v", opts.capabilityProbe, err)
-	}
-	if _, err := parseLaunchArgs([]string{cliSubcommandCapabilityProbe}); err == nil {
-		t.Fatal("capability-probe without a name accepted")
-	}
-	opts, err = parseLaunchArgs([]string{cliSubcommandReportBlocker, cliFlagContract, "c.yaml", cliFlagDir, "iter",
+	opts, err := parseLaunchArgs([]string{cliSubcommandReportBlocker, cliFlagContract, "c.yaml", cliFlagDir, "iter",
 		"--items", "visual_1, visual_2,", "--capability", "authenticated-browser(slack.com)", "--reason", "no session"})
 	if err != nil || opts.mode != launchModeReportBlocker {
 		t.Fatalf("report-blocker parse error = %v", err)
@@ -43,20 +36,6 @@ func TestParseLaunchArgsCapabilitySubcommands(t *testing.T) {
 	}
 	if _, err := parseLaunchArgs([]string{cliSubcommandReportBlocker, cliFlagContract, "c.yaml", cliFlagDir, "iter", "--capability", "x", "--reason", "r"}); err == nil || !strings.Contains(err.Error(), "--items") {
 		t.Fatalf("report-blocker without items error = %v", err)
-	}
-}
-
-func TestRunArgsCapabilityProbeReportsVerdict(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	code := runArgs([]string{cliSubcommandCapabilityProbe, "network(127.0.0.1:1)"}, &stdout, &stderr, failingServerLauncher(t), failingUpdater(t))
-	if code != 1 || !strings.Contains(stderr.String(), "unavailable") {
-		t.Fatalf("closed port probe: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	stdout.Reset()
-	stderr.Reset()
-	code = runArgs([]string{cliSubcommandCapabilityProbe, "okta-session"}, &stdout, &stderr, failingServerLauncher(t), failingUpdater(t))
-	if code != 1 || !strings.Contains(stderr.String(), "unknown built-in capability") {
-		t.Fatalf("unknown capability: code=%d stderr=%q", code, stderr.String())
 	}
 }
 
@@ -77,7 +56,7 @@ func TestRunArgsReportBlockerWritesAgentGate(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runArgs([]string{cliSubcommandReportBlocker, cliFlagContract, contractPath, cliFlagDir, iterDir,
 		"--items", itemID, "--capability", "authenticated-browser(slack.com)", "--reason", "Builder requires a signed-in workspace session"},
-		&stdout, &stderr, failingServerLauncher(t), failingUpdater(t))
+		&stdout, &stderr, failingServerLauncher(t))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr = %q", code, stderr.String())
 	}
@@ -99,7 +78,7 @@ func TestRunArgsReportBlockerWritesAgentGate(t *testing.T) {
 	stderr.Reset()
 	code = runArgs([]string{cliSubcommandReportBlocker, cliFlagContract, contractPath, cliFlagDir, iterDir,
 		"--items", "visual_nope", "--capability", "display", "--reason", "r"},
-		&stdout, &stderr, failingServerLauncher(t), failingUpdater(t))
+		&stdout, &stderr, failingServerLauncher(t))
 	if code != 1 || !strings.Contains(stderr.String(), "unknown contract item") {
 		t.Fatalf("unknown item: code=%d stderr=%q", code, stderr.String())
 	}

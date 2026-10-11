@@ -61,7 +61,7 @@ export type StaleHandling = 'launch' | 'error';
 export type AttachOutcome = 'attached' | 'blocked' | 'launch';
 
 /** Connection identity a successful profile hands back to the gateway. */
-export interface AttachedConnection {
+interface AttachedConnection {
   baseUrl: string;
   serverKey: string;
   connectedKind: 'local' | 'remote';
@@ -104,7 +104,7 @@ export interface AttachHost {
   markReady(): void;
 }
 
-export type HealthProbeResult =
+type HealthProbeResult =
   | { kind: 'healthy'; probe: ProbeHealth }
   | { kind: 'unreachable' }
   | { kind: 'bad-status' }

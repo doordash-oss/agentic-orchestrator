@@ -101,7 +101,7 @@ export function classifyLane(snapshot: FeatureSnapshot): Lane {
 }
 
 /** One lane's worth of features, ordered newest-first within the lane. */
-export type LaneGroups = Record<Lane, FeatureSnapshot[]>;
+type LaneGroups = Record<Lane, FeatureSnapshot[]>;
 
 function emptyLaneGroups(): LaneGroups {
   return { failed: [], waiting: [], running: [], 'at-rest': [], published: [], done: [] };
@@ -120,31 +120,6 @@ export function classifyFeaturesByLane(snapshots: readonly FeatureSnapshot[]): L
     groups[classifyLane(snapshot)].push(snapshot);
   }
   return groups;
-}
-
-export type LaneCounts = Record<Lane, number>;
-
-/**
- * Per-lane counts, derived from the same classification as the groupings.
- * This is the raw per-snapshot classification only — it does not apply the
- * `classifyFeaturesByLaneWithAttention` post-pass below, so a consumer that
- * needs counts consistent with the rendered sidebar (which also surfaces
- * pending-attention features under "Waiting on you") must
- * apply that same re-bucketing rather than reading these counts directly.
- */
-export function laneCounts(snapshots: readonly FeatureSnapshot[]): LaneCounts {
-  const counts: LaneCounts = {
-    failed: 0,
-    waiting: 0,
-    running: 0,
-    'at-rest': 0,
-    published: 0,
-    done: 0,
-  };
-  for (const snapshot of snapshots) {
-    counts[classifyLane(snapshot)] += 1;
-  }
-  return counts;
 }
 
 /**

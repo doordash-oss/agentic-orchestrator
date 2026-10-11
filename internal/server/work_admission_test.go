@@ -277,7 +277,7 @@ func TestWorkAdmissionStartFeatureRefusedWhileClosed(t *testing.T) {
 		req := authorizedUpdateRequest(http.MethodPost, "/api/v1/features/feature-1/actions/start", []byte(`{}`))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
-		handler.routes().ServeHTTP(w, req)
+		handler.ServeHTTP(w, req)
 		return w
 	}
 

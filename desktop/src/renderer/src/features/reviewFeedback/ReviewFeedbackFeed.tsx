@@ -36,7 +36,7 @@ export interface FeedSection {
   comments: ReviewFeedbackDraftCommentView[];
 }
 
-export interface ReviewFeedbackFeedProps {
+interface ReviewFeedbackFeedProps {
   sections: FeedSection[];
   filters: ReviewFeedbackFilters;
   activeFilters: boolean;

@@ -20,7 +20,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 )
@@ -106,62 +105,6 @@ func TestFormatNoCLIMessage_SingleProvider(t *testing.T) {
 	}
 }
 
-// --- ApplyStartupDefaults tests ---
-
-func TestApplyStartupDefaults_FillsEmptyConfig(t *testing.T) {
-	cfg := &config.Config{}
-	defaults := map[string]string{
-		"inquiry":        "sonnet",
-		"research":       "opus",
-		"planning":       "opus",
-		"implementation": "opus",
-		"review":         "gpt-5.4",
-		"chat":           "sonnet",
-		"kb_build":       "opus",
-	}
-	changed := ApplyStartupDefaults(cfg, defaults)
-	if !changed {
-		t.Error("expected changed=true when filling empty config")
-	}
-	if cfg.Defaults.Models.Inquiry != "sonnet" {
-		t.Errorf("expected Inquiry='sonnet', got %q", cfg.Defaults.Models.Inquiry)
-	}
-	if cfg.Defaults.Models.Research != "opus" {
-		t.Errorf("expected Research='opus', got %q", cfg.Defaults.Models.Research)
-	}
-	if cfg.Defaults.Models.Review != "gpt-5.4" {
-		t.Errorf("expected Review='gpt-5.4', got %q", cfg.Defaults.Models.Review)
-	}
-}
-
-func TestApplyStartupDefaults_PreservesUserValues(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Defaults.Models.Inquiry = "haiku"
-	cfg.Defaults.Models.Research = "haiku"
-	defaults := map[string]string{
-		"inquiry":        "sonnet",
-		"research":       "opus",
-		"planning":       "opus",
-		"implementation": "opus",
-		"review":         "gpt-5.4",
-		"chat":           "sonnet",
-		"kb_build":       "opus",
-	}
-	changed := ApplyStartupDefaults(cfg, defaults)
-	if !changed {
-		t.Error("expected changed=true since other fields were empty")
-	}
-	if cfg.Defaults.Models.Inquiry != "haiku" {
-		t.Errorf("expected Inquiry='haiku' preserved, got %q", cfg.Defaults.Models.Inquiry)
-	}
-	if cfg.Defaults.Models.Research != "haiku" {
-		t.Errorf("expected Research='haiku' preserved, got %q", cfg.Defaults.Models.Research)
-	}
-	if cfg.Defaults.Models.Planning != "opus" {
-		t.Errorf("expected Planning='opus' filled, got %q", cfg.Defaults.Models.Planning)
-	}
-}
-
 // --- CheckRequiredTools tests ---
 
 func TestCheckRequiredTools_GitPresent(t *testing.T) {
@@ -198,30 +141,5 @@ func TestCheckRequiredToolsMissingGitIsStructured(t *testing.T) {
 				t.Errorf("issue %q carries a pre-formatted prefix: %q", issue.Code, text)
 			}
 		}
-	}
-}
-
-func TestApplyStartupDefaults_NoChange(t *testing.T) {
-	cfg := &config.Config{}
-	cfg.Defaults.Models.Inquiry = "z"
-	cfg.Defaults.Models.Research = "a"
-	cfg.Defaults.Models.Planning = "b"
-	cfg.Defaults.Models.Implementation = "c"
-	cfg.Defaults.Models.Review = "d"
-	cfg.Defaults.Models.Utilities = "e"
-	cfg.Defaults.Models.KBBuild = "f"
-
-	defaults := map[string]string{
-		"inquiry":        "sonnet",
-		"research":       "opus",
-		"planning":       "opus",
-		"implementation": "opus",
-		"review":         "codex",
-		"chat":           "sonnet",
-		"kb_build":       "opus",
-	}
-	changed := ApplyStartupDefaults(cfg, defaults)
-	if changed {
-		t.Error("expected changed=false when all fields already set")
 	}
 }

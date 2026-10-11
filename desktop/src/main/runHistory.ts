@@ -65,7 +65,7 @@ import {
 } from './serverClient';
 import { defined } from '../shared/defined';
 
-export type RunHistoryTransport = ServerTransport;
+type RunHistoryTransport = ServerTransport;
 
 export class RunHistoryService {
   constructor(private readonly transport: RunHistoryTransport) {}

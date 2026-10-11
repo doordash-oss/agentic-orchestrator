@@ -515,7 +515,7 @@ func TestEventsConnectedSurvivesRingEvictionForCursorlessClient(t *testing.T) {
 		h.broker.publish(SSEEvent{Kind: sseEventLifecycleUpdated, Resource: Resource{Type: resourceTypeRuntime}})
 	}
 
-	srv := httptest.NewServer(h.routes())
+	srv := httptest.NewServer(h)
 	defer srv.Close()
 
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/v1/events?heartbeat_ms=10", nil)

@@ -666,18 +666,17 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 	additionalDirs = append(additionalDirs, guidelineAdditionalDirs(cfg.GuidelinesDir)...)
 
 	command, env, sessOpts, buildErr := cfg.BuildSession(BuildSessionOpts{
-		Model:                          cfg.Model,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     []string{},
-		PIDDir:                         s.stateDir,
-		PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
-		WorkDir:                        s.workspace.Cwd,
-		EffortLevel:                    cfg.ImplEffectiveEffort,
-		Phase:                          feature.PhaseReview,
-		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
+		Model:              cfg.Model,
+		Prompt:             prompt,
+		SystemPrompt:       systemPrompt,
+		AdditionalDirs:     additionalDirs,
+		AgentNames:         []string{},
+		PIDDir:             s.stateDir,
+		PermHandler:        permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, ""),
+		WorkDir:            s.workspace.Cwd,
+		EffortLevel:        cfg.ImplEffectiveEffort,
+		Phase:              feature.PhaseReview,
+		CompletionProtocol: true,
 	})
 	if buildErr != nil {
 		return "", fmt.Errorf("building feature fix agent session: %w", buildErr)

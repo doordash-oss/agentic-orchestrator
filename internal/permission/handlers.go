@@ -343,29 +343,6 @@ func IsAutomaticReviewHandler(h ports.PermissionHandler) bool {
 	return IsGeneralPhaseHandler(h)
 }
 
-// ReadOnlyHandler auto-approves read-only tools and Agent spawning, but
-// hard-denies all file modification tools.
-type ReadOnlyHandler struct{}
-
-// CanUseTool approves reads; denies all writes.
-func (h *ReadOnlyHandler) CanUseTool(req ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	if isReadOnlyTool(req.ToolName) {
-		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
-	}
-	switch req.ToolName {
-	// Agent spawning — auto-approve (subagents are sandboxed)
-	case "Agent":
-		return ports.PermissionDecision{Behavior: DecisionAllow}, nil
-
-	// File modification tools — hard deny
-	case toolNameEdit, toolNameWrite, toolNameNotebookEdit:
-		return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
-	}
-
-	// Everything else (Bash, etc.) — hard deny for safety
-	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "chat is read-only"}, nil
-}
-
 // SupervisorHandler is the supervisor conversation's harness-normal policy:
 // read-only inspection and web tools run without a prompt, as does a Bash
 // command that is exactly one bare `agentico api` helper call (the supervisor's
@@ -728,21 +705,11 @@ func gitReadOnlyBranchAllowed(fields []string) bool {
 	return true
 }
 
-// DenyAllHandler denies all tool use requests.
-type DenyAllHandler struct{}
-
-// CanUseTool always returns deny.
-func (h *DenyAllHandler) CanUseTool(_ ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
-	return ports.PermissionDecision{Behavior: DecisionDeny, Reason: "all tools denied"}, nil
-}
-
 // harnessCLISubcommands are the agentico subcommands an implementer session
 // may run against the harness-owned contract path.
 var harnessCLISubcommands = map[string]bool{
-	"verify-evidence":    true,
 	"validate-artifacts": true,
 	"report-blocker":     true,
-	"capability-probe":   true,
 }
 
 // supervisorHelperSubcommands are the agentico subcommands the supervisor
@@ -838,9 +805,16 @@ func attemptedAgenticoSubcommand(command string, subcommands map[string]bool) (s
 // refused, so the agent retries with the sanctioned shape instead of
 // concluding the subcommand is forbidden outright.
 func malformedHarnessCLIReason(subcommand string) string {
+	shape := fmt.Sprintf(
+		"absolute paths for --contract and --dir "+
+			"(e.g. \"$AGENTICO_BIN\" %s --contract /abs/path/testing-contract.yaml --dir /abs/path/implement/iteration-NN ...)",
+		subcommand)
+	if subcommand == "validate-artifacts" {
+		shape = "absolute paths for --dir " +
+			"(e.g. \"$AGENTICO_BIN\" validate-artifacts --phase implement --role implementer --dir /abs/path/implement/iteration-NN)"
+	}
 	return fmt.Sprintf(
 		"agentico %s must be invoked as a single bare command: no cd, &&, ;, pipes, redirects or command substitution, "+
-			"no shell variables in arguments, absolute paths for --contract and --dir "+
-			"(e.g. \"$AGENTICO_BIN\" %s --contract /abs/path/testing-contract.yaml --dir /abs/path/implement/iteration-NN ...)",
-		subcommand, subcommand)
+			"no shell variables in arguments, %s",
+		subcommand, shape)
 }

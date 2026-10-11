@@ -18,8 +18,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  PRODUCTION_FUSE_POLICY,
   auditElectronBuilderFuseConfig,
-  expectedElectronBuilderFuses,
   parseElectronBuilderFuses,
 } from '../../scripts/lib/fuse-policy.mjs';
 import {
@@ -74,7 +74,9 @@ describe('mainWindowWebPreferences', () => {
 describe('production Electron fuses', () => {
   it('keeps hardened fuse settings in electron-builder config', () => {
     const config = readFileSync(path.join(process.cwd(), 'electron-builder.yml'), 'utf8');
-    expect(parseElectronBuilderFuses(config)).toEqual(expectedElectronBuilderFuses());
+    expect(parseElectronBuilderFuses(config)).toEqual(
+      Object.fromEntries(PRODUCTION_FUSE_POLICY.map((fuse) => [fuse.configKey, fuse.expected])),
+    );
     expect(auditElectronBuilderFuseConfig(config)).toEqual([]);
   });
 });

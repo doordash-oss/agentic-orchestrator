@@ -303,7 +303,7 @@ function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-export interface CreateFeatureFormProps {
+interface CreateFeatureFormProps {
   onCreated(created: {
     featureId: string;
     name: string;

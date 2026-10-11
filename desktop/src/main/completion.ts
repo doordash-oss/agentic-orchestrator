@@ -50,13 +50,13 @@ import {
 import { alwaysLocal, type LocalitySource } from './locality';
 import { defined } from '../shared/defined';
 
-export interface RevealPathOutcome {
+interface RevealPathOutcome {
   ok: boolean;
   /** Server-reported absolute path; present when it can be copied (remote). */
   path?: string;
 }
 
-export interface CompletionServiceDeps {
+interface CompletionServiceDeps {
   transport: ServerTransport;
   /**
    * Gateway-owned locality of the active connection. While remote, the

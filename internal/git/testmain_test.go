@@ -25,9 +25,8 @@ import (
 func TestMain(m *testing.M) {
 	restoreGitEnv := testutil.IsolateGitEnv()
 	// Default-deny: tests must never reach the real GitHub API; fixtures stack on top of this default.
-	restoreGitHub := github.OverrideForTest("http://127.0.0.1:1", "test-dead")
+	_ = os.Setenv(github.EnvGitHubAPIBase, "http://127.0.0.1:1")
 	code := m.Run()
-	restoreGitHub()
 	restoreGitEnv()
 	os.Exit(code)
 }

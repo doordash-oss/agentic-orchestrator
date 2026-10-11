@@ -172,20 +172,3 @@ func TestValidateIdempotencyKey(t *testing.T) {
 		t.Error("key with control accepted")
 	}
 }
-
-func TestSuggestDestination(t *testing.T) {
-	t.Parallel()
-	cases := map[string]string{
-		"https://github.com/acme/widget.git":        "widget",
-		"https://github.com/acme/widget":            "widget",
-		"https://github.com/acme/widget/":           "widget",
-		"git@github.com:acme/widget.git":            "widget",
-		"ssh://git@github.com:2222/acme/widget.git": "widget",
-		"gh:acme/deep/nested/widget.git":            "widget",
-	}
-	for remote, want := range cases {
-		if got := SuggestDestination(remote); got != want {
-			t.Errorf("SuggestDestination(%q) = %q, want %q", remote, got, want)
-		}
-	}
-}

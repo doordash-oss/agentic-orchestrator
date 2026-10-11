@@ -32,7 +32,7 @@ import {
 } from './aftercareReceipt';
 import type { AftercareEvidence } from './useAftercareEvidence';
 
-export interface AftercareShippedProps {
+interface AftercareShippedProps {
   snapshot: FeatureSnapshot;
   run: RunDetailView | null;
   preflight: CompletionPreflightResult | null;

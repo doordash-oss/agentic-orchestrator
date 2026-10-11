@@ -23,7 +23,7 @@ import { buildCanonicalError, CanonicalErrorException } from './errors';
 /** The API major version this build of the desktop app speaks. */
 export const SUPPORTED_API_VERSION = 'v1';
 
-export function isCompatibleApiVersion(version: string): boolean {
+function isCompatibleApiVersion(version: string): boolean {
   return version === SUPPORTED_API_VERSION || version.startsWith(`${SUPPORTED_API_VERSION}.`);
 }
 

@@ -128,7 +128,7 @@ func TestCheckRequiredProviders_OpenCodeUnreadyFallsBackToReadyProvider(t *testi
 		Remedy: "Run 'opencode auth login'",
 	}})
 
-	detected, _, notices, filtered, err := checkRequiredProviders(context.Background(), r)
+	detected, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestCheckRequiredProviders_OpenCodeOnlyUnreadyFails(t *testing.T) {
 		Remedy: "Run 'opencode auth login'",
 	}})
 
-	_, _, _, filtered, err := checkRequiredProviders(context.Background(), r)
+	_, _, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err == nil {
 		t.Fatal("expected no-ready-provider error when opencode is the only selected provider and unready")
 	}
@@ -188,7 +188,7 @@ func TestCheckRequiredProviders_OpenCodeTooOldFallsBackToReadyProvider(t *testin
 		version: "1.17.8", minVersion: [3]int{1, 17, 9}, enforceMinVersion: true,
 	})
 
-	detected, _, notices, filtered, err := checkRequiredProviders(context.Background(), r)
+	detected, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestCheckRequiredProviders_OpenCodeOnlyTooOldFails(t *testing.T) {
 		version: "1.17.8", minVersion: [3]int{1, 17, 9}, enforceMinVersion: true,
 	})
 
-	_, _, _, filtered, err := checkRequiredProviders(context.Background(), r)
+	_, _, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err == nil {
 		t.Fatal("expected no-ready-provider error when opencode is the only selected provider and too old")
 	}
@@ -251,7 +251,7 @@ func TestCheckRequiredProviders_OpenCodeReadyAtMinVersionIncluded(t *testing.T) 
 		version: "1.17.9", minVersion: [3]int{1, 17, 9}, enforceMinVersion: true,
 	})
 
-	detected, _, notices, filtered, err := checkRequiredProviders(context.Background(), r)
+	detected, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestCheckRequiredProviders_OpenCodeMissingFallsBack(t *testing.T) {
 	r.Register(&stubProvider{name: "claude", models: []string{modelNameOpus}, hasCLI: true, hasReadiness: true, readiness: llm.ProviderReadiness{Ready: true}})
 	r.Register(&stubProvider{name: providerNameOpencode, hasCLI: false, installHint: installHintOpencode})
 
-	detected, _, notices, filtered, err := checkRequiredProviders(context.Background(), r)
+	detected, notices, filtered, err := checkRequiredProviders(context.Background(), r)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

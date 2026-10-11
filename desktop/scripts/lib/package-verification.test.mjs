@@ -22,7 +22,6 @@ import {
   debArchitectureError,
   executableArchitectureError,
   inspectExecutableArchitecture,
-  macAsarIntegrityHash,
   packageIdentityTargetError,
   shouldRequireUnpackedApp,
 } from './package-verification.mjs';
@@ -224,13 +223,7 @@ describe('inspectExecutableArchitecture', () => {
   });
 });
 
-describe('macAsarIntegrityHash', () => {
-  it('uses the ASAR header digest consumed by the macOS verifier', () => {
-    expect(macAsarIntegrityHash('serialized asar header')).toBe(
-      'aeb9edfcc3a2bf243be47e6ef3de0afd243552920b8cb017123f217b65800039',
-    );
-  });
-
+describe('macOS ASAR integrity verifier', () => {
   it('keeps the production macOS verifier on the createHash path', () => {
     const verifier = readFileSync(new URL('../verify-package.mjs', import.meta.url), 'utf8');
     expect(verifier).toContain("import { createHash } from 'node:crypto';");

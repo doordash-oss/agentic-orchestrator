@@ -21,7 +21,6 @@ import type {
   SupervisorLifecycle,
   SupervisorRecord,
   SupervisorState,
-  SupervisorTurnOutcome,
 } from '../../shared/ipc';
 import { AttentionNotificationCoordinator, type NotificationHandle } from '../notifications';
 import {
@@ -29,6 +28,8 @@ import {
   SUPERVISOR_TURN_SETTLE_MS,
   SupervisorNotificationCoordinator,
 } from '../supervisorNotifications';
+
+type SupervisorTurnOutcome = SupervisorState['lastTurnOutcome'];
 
 const ENVELOPE = { conversationId: 'conv-1', generation: 1, streamEpoch: 'epoch-1' };
 

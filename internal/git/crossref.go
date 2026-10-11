@@ -94,40 +94,6 @@ func InjectCrossReferenceSection(body, section string) string {
 	return section
 }
 
-// ExtractCrossReferenceSection extracts the cross-reference section from a PR body.
-// Returns the section including the header, trimmed of trailing whitespace.
-// Returns empty string if no cross-reference section is found.
-func ExtractCrossReferenceSection(body string) string {
-	idx := strings.Index(body, CrossRefSectionHeader)
-	if idx < 0 {
-		return ""
-	}
-
-	sectionStart := idx
-	rest := body[sectionStart:]
-
-	// Find the end boundary: next "## " header, PRSignature, or end of body.
-	endIdx := len(rest)
-
-	// Look for next markdown H2 header after the current one.
-	afterHeader := rest[len(CrossRefSectionHeader):]
-	nextH2 := strings.Index(afterHeader, "\n## ")
-	if nextH2 >= 0 {
-		candidate := len(CrossRefSectionHeader) + nextH2
-		if candidate < endIdx {
-			endIdx = candidate
-		}
-	}
-
-	// Look for PRSignature boundary.
-	sigIdx := strings.Index(rest, PRSignature)
-	if sigIdx >= 0 && sigIdx < endIdx {
-		endIdx = sigIdx
-	}
-
-	return strings.TrimRight(rest[:endIdx], " \t\n\r")
-}
-
 // RemoveCrossReferenceSection removes the cross-reference section from a PR body.
 // Cleans up extra whitespace left behind.
 func RemoveCrossReferenceSection(body string) string {
@@ -139,7 +105,8 @@ func RemoveCrossReferenceSection(body string) string {
 	sectionStart := idx
 	rest := body[sectionStart:]
 
-	// Find the end boundary (same logic as ExtractCrossReferenceSection).
+	// Find the end boundary: the next "## " header, PRSignature, or the end
+	// of the body.
 	endIdx := len(rest)
 
 	afterHeader := rest[len(CrossRefSectionHeader):]

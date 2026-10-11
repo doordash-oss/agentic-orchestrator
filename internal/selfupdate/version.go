@@ -27,12 +27,6 @@ func NormalizeVersion(v string) string {
 	return strings.TrimPrefix(strings.TrimSpace(v), "v")
 }
 
-// SameVersion reports whether two version strings are equal after
-// normalization. A "dev" current never equals a release tag.
-func SameVersion(a, b string) bool {
-	return NormalizeVersion(a) == NormalizeVersion(b)
-}
-
 // IsRealModuleVersion reports whether a build-info Main.Version is a genuine
 // module version. The Go toolchain only sets Main.Version to a tag or a
 // pseudo-version when the binary was installed from the module proxy; local

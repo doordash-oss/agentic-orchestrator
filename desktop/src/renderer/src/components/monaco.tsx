@@ -17,7 +17,7 @@ limitations under the License.
 import { useEffect, useRef, useState } from 'react';
 import type * as Monaco from 'monaco-editor';
 
-export type ThemeMode = 'light' | 'dark';
+type ThemeMode = 'light' | 'dark';
 
 const MONACO_LIGHT_THEME = 'vs';
 const MONACO_DARK_THEME = 'vs-dark';

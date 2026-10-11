@@ -1098,7 +1098,12 @@ func TestOrchestrator_Publish_ManualCodeReadyCreatesAbsentRemoteBranch(t *testin
 	repoPath, bareRemote := testutil.InitPublishReadyGitRepo(t)
 	testutil.CreateBranch(t, repoPath, branch)
 	testutil.CommitFile(t, repoPath, "first.txt", "first\n", "first publish")
-	if git.BranchExistsOnRemote(repoPath, branch) {
+	// The bare origin is probed with a plain git command: the remote branch
+	// must start absent so the first publish creates it.
+	remoteBranchExists := func(branch string) bool {
+		return exec.Command("git", "--git-dir", bareRemote, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch).Run() == nil
+	}
+	if remoteBranchExists(branch) {
 		t.Fatalf("remote branch %s exists before first publish", branch)
 	}
 
@@ -1128,7 +1133,7 @@ func TestOrchestrator_Publish_ManualCodeReadyCreatesAbsentRemoteBranch(t *testin
 	}); err != nil {
 		t.Fatalf("PublishWithOptions() error = %v", err)
 	}
-	if !git.BranchExistsOnRemote(repoPath, branch) {
+	if !remoteBranchExists(branch) {
 		t.Fatalf("remote branch %s does not exist after first publish", branch)
 	}
 

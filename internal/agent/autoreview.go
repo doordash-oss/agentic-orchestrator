@@ -57,7 +57,7 @@ const (
 // ALLOW is the only new model decision; DEFER and every failure return the same
 // empty human-deferral decision. The decorator never denies and sits outside
 // the CachingHandler, so its allows create no remembered permission rule. The
-// hidden reviewer is launched via autoreview.Classify (not BuildSession), so it
+// hidden reviewer is launched via autoreview.ClassifyDetailed (not BuildSession), so it
 // is never decorated and cannot recurse.
 type autoReviewPermissionDecorator struct {
 	reviewMu         sync.Mutex

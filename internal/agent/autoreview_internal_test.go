@@ -173,6 +173,14 @@ type stubHandler struct {
 
 type deferHandler struct{}
 
+// denyAllHandler denies every tool request, standing in for the strictest
+// inner policy a decorator can wrap.
+type denyAllHandler struct{}
+
+func (denyAllHandler) CanUseTool(ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
+	return ports.PermissionDecision{Behavior: permission.DecisionDeny, Reason: "all tools denied"}, nil
+}
+
 func (deferHandler) CanUseTool(ports.ToolPermissionRequest) (ports.PermissionDecision, error) {
 	return ports.PermissionDecision{}, nil
 }
@@ -2399,7 +2407,7 @@ func TestSkipPermissionsWithoutInnerHandler(t *testing.T) {
 }
 
 func TestSkipPermissionsBypassesDenialsButKeepsStructuralGuard(t *testing.T) {
-	handler := &skipPermissionsDecorator{inner: &permission.DenyAllHandler{}, skip: func() bool { return true }}
+	handler := &skipPermissionsDecorator{inner: denyAllHandler{}, skip: func() bool { return true }}
 	for _, tc := range []struct{ tool, input, want string }{
 		{"Bash", `{"command":"rm -rf /tmp/example"}`, permission.DecisionAllow},
 		{"mcp__external__write", `{}`, permission.DecisionAllow},

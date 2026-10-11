@@ -62,7 +62,7 @@ func TestIsSetupFailureReturnsTrueForExactlyTheSetupCodes(t *testing.T) {
 		SetupAssetCopyFailed: true,
 		SetupInterrupted:     true,
 	}
-	for _, code := range Codes() {
+	for _, code := range CatalogCodes() {
 		if got := IsSetupFailure(code); got != want[code] {
 			t.Errorf("IsSetupFailure(%s) = %v; want %v", code, got, want[code])
 		}

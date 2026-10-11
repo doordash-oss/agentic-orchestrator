@@ -691,12 +691,12 @@ func requireNoSuppression(t *testing.T, j *selfupdateJourney, target string) {
 	} else if lookup.Suppressed {
 		t.Fatalf("version %s is suppressed; an installation failure must never suppress its target", target)
 	}
-	targets, err := selfupdate.SuppressedVersions(j.installPath)
+	state, err := selfupdate.ReadSuppressionState(j.installPath)
 	if err != nil {
 		t.Fatalf("read suppression store: %v", err)
 	}
-	if len(targets) != 0 {
-		t.Fatalf("suppression store = %+v; want empty", targets)
+	if len(state.Targets) != 0 {
+		t.Fatalf("suppression store = %+v; want empty", state.Targets)
 	}
 }
 

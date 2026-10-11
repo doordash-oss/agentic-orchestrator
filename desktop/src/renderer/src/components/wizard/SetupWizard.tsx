@@ -44,7 +44,7 @@ const STEP_LABELS: Record<WizardStepId, string> = {
   ready: 'Ready',
 };
 
-export interface SetupWizardProps {
+interface SetupWizardProps {
   snapshot: RuntimeReadinessSnapshot;
   /** Receives every fresh authoritative snapshot produced by an action. */
   onSnapshot(next: RuntimeReadinessSnapshot): void;

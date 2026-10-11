@@ -45,7 +45,6 @@ const (
 // apiOptions is one parsed `agentico api` invocation.
 type apiOptions struct {
 	help       bool
-	runtimeDir string
 	method     string
 	path       string
 	body       string
@@ -85,7 +84,7 @@ func parseAPIArgs(opts launchOptions, args []string) (launchOptions, error) {
 		}
 		name, value, hasValue := strings.Cut(arg, "=")
 		switch name {
-		case "--runtime-dir", "--timeout", "--after":
+		case "--timeout", "--after":
 		default:
 			return opts, fmt.Errorf("unknown api flag: %s", arg)
 		}
@@ -97,11 +96,6 @@ func parseAPIArgs(opts launchOptions, args []string) (launchOptions, error) {
 			value = args[i]
 		}
 		switch name {
-		case "--runtime-dir":
-			if strings.TrimSpace(value) == "" {
-				return opts, fmt.Errorf("--runtime-dir requires a value")
-			}
-			api.runtimeDir = value
 		case "--timeout":
 			d, err := time.ParseDuration(value)
 			if err != nil || d <= 0 {
@@ -172,12 +166,9 @@ func isAPIStreamPath(path string) bool {
 }
 
 // resolveAPIRuntimeDir picks the runtime directory whose discovery file the
-// helper trusts: the flag, then the variable the supervisor launch exports,
-// then the default home runtime directory.
-func resolveAPIRuntimeDir(flag string) string {
-	if flag != "" {
-		return flag
-	}
+// helper trusts: the variable the supervisor launch exports, then the default
+// home runtime directory.
+func resolveAPIRuntimeDir() string {
 	if env := strings.TrimSpace(os.Getenv(agent.RuntimeDirEnv)); env != "" {
 		return env
 	}
@@ -194,7 +185,7 @@ func runAPI(opts apiOptions, stdout, stderr io.Writer) int {
 		printAPIUsage(stdout)
 		return 0
 	}
-	runtimeDir := resolveAPIRuntimeDir(opts.runtimeDir)
+	runtimeDir := resolveAPIRuntimeDir()
 	dirParams := errcat.WithParams(errcat.RuntimeDirParams{RuntimeDir: runtimeDir})
 	rec, err := serverruntime.ReadTrustedDiscovery(runtimeDir)
 	if err != nil {
@@ -316,7 +307,7 @@ func copySSEData(ctx context.Context, body io.Reader, stdout, stderr io.Writer, 
 }
 
 func printAPIUsage(w io.Writer) {
-	_, _ = fmt.Fprintf(w, `Usage: agentico api [--runtime-dir <dir>] [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path>[?query] [json]
+	_, _ = fmt.Fprintf(w, `Usage: agentico api [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path>[?query] [json]
 
 Performs one authenticated REST call against this machine's Agentico server.
 The helper reads the server's owner-only discovery file, adds the bearer
@@ -328,11 +319,12 @@ token, so shell callers never handle the credential.
   json                    Optional request body; must be valid JSON; not allowed on GET
 
 Flags (before or after the positionals; '--' ends flag parsing):
-  --runtime-dir <dir>     Runtime directory holding the discovery file. Default:
-                          $%s, else ~/.agentic-orchestrator
   --timeout <duration>    Request timeout (default 30s). Required for stream paths,
                           where it bounds how long events are printed
   --after <cursor>        Stream paths only: resume after this event cursor
+
+The runtime directory holding the discovery file resolves from $%s, else
+~/.agentic-orchestrator.
 
 Output: a 2xx response body is written to stdout verbatim (exit 0); any other
 status writes the server's error envelope to stdout (exit 1). Discovery or

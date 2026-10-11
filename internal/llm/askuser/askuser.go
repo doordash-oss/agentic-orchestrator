@@ -204,6 +204,32 @@ func (b Bundle) MergeConfidence(source Bundle) (Bundle, bool) {
 	return out, true
 }
 
+// toolName is the tool whose input carries the ask-user envelope.
+const toolName = "AskUserQuestion"
+
+// RecoverConfidence merges option confidence into bundle from the session's
+// tool-use blocks. It walks blocks newest first, parses each AskUserQuestion
+// input through toolUse (which projects a block to its tool name and input)
+// and merges confidence from the first bundle whose signature matches. It
+// returns the merged bundle and true on a match, or bundle unchanged and false
+// when no block matches; each caller keeps its own miss semantics.
+func RecoverConfidence[B any](bundle Bundle, blocks []B, toolUse func(B) (name string, input []byte)) (Bundle, bool) {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		name, input := toolUse(blocks[i])
+		if name != toolName || len(input) == 0 {
+			continue
+		}
+		source, err := Parse(input)
+		if err != nil {
+			continue
+		}
+		if merged, ok := bundle.MergeConfidence(source); ok {
+			return merged, true
+		}
+	}
+	return bundle, false
+}
+
 // Display returns a copy of b with every field trimmed and, when longer than
 // its limit, byte-truncated with a "..." suffix.
 func (b Bundle) Display(limits Limits) Bundle {

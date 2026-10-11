@@ -1512,8 +1512,9 @@ func fakeGitHubForTail(t *testing.T) *httptest.Server {
 		_, _ = w.Write([]byte(`{}`))
 	}))
 	t.Cleanup(srv.Close)
-	restore := github.OverrideForTest(srv.URL, "test-token")
-	t.Cleanup(restore)
+	// Not parallel-safe: the fixture routes GitHub through the process
+	// environment for the duration of the test.
+	t.Setenv(github.EnvGitHubAPIBase, srv.URL)
 	return srv
 }
 

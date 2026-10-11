@@ -33,7 +33,7 @@ import type {
   RevealPathResult,
 } from '../../../../shared/ipc';
 
-export interface ChangesSurfaceProps {
+interface ChangesSurfaceProps {
   featureId: string;
   preflight: CompletionPreflightResult | null;
   loading: boolean;

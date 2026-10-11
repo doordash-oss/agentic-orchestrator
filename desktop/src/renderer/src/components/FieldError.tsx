@@ -31,7 +31,7 @@ limitations under the License.
  *   />
  *   <FieldError id={errorId} message={message} />
  */
-export interface FieldErrorProps {
+interface FieldErrorProps {
   /** The id the host input references via `aria-describedby`. */
   id: string;
   /** The validation message; nothing renders while it is empty. */

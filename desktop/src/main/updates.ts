@@ -81,7 +81,7 @@ export interface VerifiedUpdatePackage {
   targetVersion: string;
 }
 
-export interface UpdateCoordinatorOptions {
+interface UpdateCoordinatorOptions {
   currentVersion: string;
   isPackaged: boolean;
   platform?: NodeJS.Platform;

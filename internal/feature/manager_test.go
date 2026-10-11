@@ -1540,6 +1540,14 @@ func TestManagerCreateNoSuffixWhenNoUpstreamConflict(t *testing.T) {
 	}
 }
 
+// branchProbeRunnerFunc adapts a function to the git.BranchProbeRunner
+// process boundary for deterministic branch-collision tests.
+type branchProbeRunnerFunc func(context.Context, string, []string, int) git.BranchProbeCommandResult
+
+func (f branchProbeRunnerFunc) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) git.BranchProbeCommandResult {
+	return f(ctx, repoPath, args, diagnosticLimit)
+}
+
 func TestManagerCreateKeepsLocallyUniqueBranchWhenOriginProbeIsUnavailable(t *testing.T) {
 	t.Parallel()
 	// The unreachable origin must stay nonblocking in both source modes while
@@ -1566,7 +1574,7 @@ func TestManagerCreateKeepsLocallyUniqueBranchWhenOriginProbeIsUnavailable(t *te
 			cfg.Repos["repo-a"] = config.RepoConfig{Path: repoDir}
 			mgr := feature.NewManager(store, cfg)
 			mgr.Worktrees = mocks.NewMockWorktreeOps()
-			mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: git.BranchProbeRunnerFunc(func(_ context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
+			mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: branchProbeRunnerFunc(func(_ context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
 				if len(args) > 0 && args[0] == "show-ref" {
 					return git.BranchProbeCommandResult{ExitCode: 1}
 				}
@@ -1618,7 +1626,7 @@ func TestManagerCreateSelectsSuffixedCandidateWhenOriginConfirmsCollision(t *tes
 	mgr.PRs = mocks.NewMockPRCloser()
 	mgr.BranchProbeOptions = git.BranchProbeOptions{
 		OperationTimeout: 10 * time.Second,
-		Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) git.BranchProbeCommandResult {
+		Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, limit int) git.BranchProbeCommandResult {
 			if len(args) > 0 && args[0] == "ls-remote" && !planted {
 				planted = true
 				branch := strings.TrimPrefix(args[len(args)-1], "refs/heads/")
@@ -1658,7 +1666,7 @@ func TestManagerCreateBoundsBranchProbesAcrossRepositories(t *testing.T) {
 	mgr := feature.NewManager(feature.NewStore(t.TempDir()), cfg)
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	mgr.BranchProbeBudget = 40 * time.Millisecond
-	mgr.BranchProbeOptions = git.BranchProbeOptions{OperationTimeout: time.Second, Runner: git.BranchProbeRunnerFunc(func(ctx context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
+	mgr.BranchProbeOptions = git.BranchProbeOptions{OperationTimeout: time.Second, Runner: branchProbeRunnerFunc(func(ctx context.Context, _ string, args []string, _ int) git.BranchProbeCommandResult {
 		if len(args) > 0 && args[0] == "show-ref" {
 			return git.BranchProbeCommandResult{ExitCode: 1}
 		}
@@ -1687,7 +1695,7 @@ func TestManagerCreateFailsAfterFiniteBranchCandidateExhaustion(t *testing.T) {
 	mgr := feature.NewManager(feature.NewStore(t.TempDir()), cfg)
 	mgr.Worktrees = mocks.NewMockWorktreeOps()
 	var calls int
-	mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: git.BranchProbeRunnerFunc(func(_ context.Context, _ string, _ []string, _ int) git.BranchProbeCommandResult {
+	mgr.BranchProbeOptions = git.BranchProbeOptions{Runner: branchProbeRunnerFunc(func(_ context.Context, _ string, _ []string, _ int) git.BranchProbeCommandResult {
 		calls++
 		return git.BranchProbeCommandResult{ExitCode: 0}
 	})}

@@ -67,7 +67,7 @@ func TestRunBoundedHelper_SuccessWithoutPhaseComplete(t *testing.T) {
 		WorkDir:       workDir,
 		Timeout:       2 * time.Second,
 		EffortLevel:   llm.EffortMedium,
-		PermHandler:   &permission.ReadOnlyHandler{},
+		PermHandler:   &permission.BoundedHelperArtifactHandler{},
 		RequireOutput: true,
 	})
 	if err != nil {
@@ -170,7 +170,7 @@ func TestRunBoundedHelperRecordsIndividualSessionCost(t *testing.T) {
 		RepoName:      "repo-a",
 		Timeout:       2 * time.Second,
 		EffortLevel:   llm.EffortMedium,
-		PermHandler:   &permission.ReadOnlyHandler{},
+		PermHandler:   &permission.BoundedHelperArtifactHandler{},
 	})
 	if err != nil {
 		t.Fatalf("RunBoundedHelper() error = %v", err)
@@ -222,7 +222,7 @@ func TestRunBoundedHelper_FailsOnPendingAskUserQuestion(t *testing.T) {
 		WorkDir:      workDir,
 		Timeout:      2 * time.Second,
 		EffortLevel:  llm.EffortMedium,
-		PermHandler:  &permission.ReadOnlyHandler{},
+		PermHandler:  &permission.BoundedHelperArtifactHandler{},
 	})
 	if err == nil {
 		t.Fatal("RunBoundedHelper() error = nil, want AskUserQuestion failure")
@@ -300,7 +300,7 @@ func TestRunBoundedHelper_FailsOnEmptyRequiredOutput(t *testing.T) {
 		WorkDir:       workDir,
 		Timeout:       2 * time.Second,
 		EffortLevel:   llm.EffortMedium,
-		PermHandler:   &permission.ReadOnlyHandler{},
+		PermHandler:   &permission.BoundedHelperArtifactHandler{},
 		RequireOutput: true,
 	})
 	if err == nil {

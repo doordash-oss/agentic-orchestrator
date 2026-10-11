@@ -42,7 +42,7 @@ import type { ApiRequestInit } from './gateway/runtimeGateway';
 import { serverRequest, type ServerTransport } from './serverClient';
 import { defined, definedNonEmpty } from '../shared/defined';
 
-export type RecoveryTransport = ServerTransport;
+type RecoveryTransport = ServerTransport;
 
 export class RecoveryService {
   constructor(private readonly transport: RecoveryTransport) {}

@@ -17,26 +17,42 @@ stdout '--dangerously-skip-permissions'
 stdout '--version, -v'
 stdout '~/.agentic-orchestrator/config.yaml'
 stdout '~/.agentic-orchestrator/features'
-stdout 'agentico update \[--check\|-n\]'
-stdout '--check'
 ! stderr .
 
 exec agentico --version
 stdout 'agentico v'
 ! stderr .
 
-# Malformed `update` invocations reject at parse time (no network seam runs).
-! exec agentico update --bogus
-stderr 'unknown flag: --bogus'
+# The removed `update` subcommand rejects as an unknown command, and its
+# former --check / -n flags reject as unknown flags everywhere.
+! exec agentico update
+stderr 'unknown command: update'
 ! stdout .
 
-! exec agentico update extra
-stderr 'unexpected argument: extra'
+! exec agentico update --check
+stderr 'unknown command: update'
 ! stdout .
 
-# --check is recognized only after `update`; bare it is an unknown flag.
+! exec agentico update -n
+stderr 'unknown command: update'
+! stdout .
+
 ! exec agentico --check
 stderr 'unknown flag: --check'
+! stdout .
+
+! exec agentico -n
+stderr 'unknown flag: -n'
+! stdout .
+
+# The removed `capability-probe` and `verify-evidence` subcommands reject as
+# unknown commands through the same path.
+! exec agentico capability-probe display
+stderr 'unknown command: capability-probe'
+! stdout .
+
+! exec agentico verify-evidence --contract $WORK/testing-contract.yaml --dir $WORK/iter
+stderr 'unknown command: verify-evidence'
 ! stdout .
 
 # Every other bare word still rejects as an unknown command.

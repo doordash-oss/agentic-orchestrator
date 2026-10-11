@@ -68,7 +68,7 @@ type PhaseField =
     };
 
 /** Display order and catalogue-role mapping for the per-phase model rows. */
-export const PHASE_FIELDS: ReadonlyArray<PhaseField> = [
+const PHASE_FIELDS: ReadonlyArray<PhaseField> = [
   { key: 'inquiry', label: 'Clarify', role: 'inquiry', hint: 'Planning questions and intake' },
   { key: 'research', label: 'Research', role: 'research', hint: 'Codebase and context research' },
   { key: 'planning', label: 'Planning', role: 'planning', hint: 'Roadmaps and phase plans' },
@@ -197,7 +197,7 @@ interface ModelPickerProps {
   onChange(value: string): void;
 }
 
-export function ModelPicker({ field, value, defaultModel, catalogue, onChange }: ModelPickerProps) {
+function ModelPicker({ field, value, defaultModel, catalogue, onChange }: ModelPickerProps) {
   const groups = useMemo(() => {
     if (catalogue === null) return [];
     const eligibleByProvider = catalogue.phaseProviderModels[field.role] ?? {};
@@ -297,7 +297,7 @@ export function ModelPicker({ field, value, defaultModel, catalogue, onChange }:
  * compact pickers trail as one unit — beside the copy when they fit, or
  * wrapped together onto their own trailing line, never split apart.
  */
-export function PhaseRow({
+function PhaseRow({
   field,
   hint,
   children,

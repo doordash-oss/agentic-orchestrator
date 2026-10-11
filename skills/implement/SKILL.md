@@ -48,17 +48,16 @@ For every testing-contract item with `owner: agent`, write the file named by `ex
 - `visual_artifact`: the actual image at the specified `screenshots/` path.
 - `behavioral_artifact`: one actual trace, recording, or interaction log covering the contract's consolidated primary-journey checklist at the specified `behaviors/` path.
 
-Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs authorization, hardware, or an environment this session lacks, run `"$AGENTICO_BIN" report-blocker --contract "{testing_contract_path}" --dir "{iteration_dir}" --items <id,id,...> --capability <name> --reason <text>` with the affected contract item ids, then end the iteration with `RETRY`; the harness pauses on the user gate, which owns waivers and substitutions. Run it (and `verify-evidence`) as a single bare command with absolute literal paths — no `cd`, `&&`, `;`, pipes, redirects, command substitution, or shell variables in arguments — or the permission guard refuses it. A row with `allow_substitution: true` accepts a faithful, labelled substitute. Never create placeholder evidence.
+Do not write evidence for `owner: harness` items. Do not invent statuses, counts, transcripts, or waiver claims. If required evidence needs authorization, hardware, or an environment this session lacks, run `"$AGENTICO_BIN" report-blocker --contract "{testing_contract_path}" --dir "{iteration_dir}" --items <id,id,...> --capability <name> --reason <text>` with the affected contract item ids, then end the iteration with `RETRY`; the harness pauses on the user gate, which owns waivers and substitutions. Run it as a single bare command with absolute literal paths — no `cd`, `&&`, `;`, pipes, redirects, command substitution, or shell variables in arguments — or the permission guard refuses it. A row with `allow_substitution: true` accepts a faithful, labelled substitute. Never create placeholder evidence.
 
 ## Handoff
 
 At iteration end:
 
 1. Write all required agent-owned evidence files.
-2. When a testing contract exists, run `"$AGENTICO_BIN" verify-evidence --contract "{testing_contract_path}" --dir "{iteration_dir}"`; fix every reported gap (missing, malformed, mis-sized, or byte-identical duplicate captures) before continuing. This runs the same file-backed checks the post-handoff integrity gate applies — clearing it here avoids losing a whole iteration to a gap you can fix now.
-3. Write `{phase_dir}/progress.md`.
-4. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix reported handoff defects.
-5. Finish the root response with exactly one structured outcome tag from the system prompt. The harness writes `phase_complete` after validation.
+2. Write `{phase_dir}/progress.md`.
+3. Run `"$AGENTICO_BIN" validate-artifacts --phase implement --role implementer --dir "{iteration_dir}"`; fix every reported handoff defect — including evidence gaps: missing, malformed, mis-sized, or byte-identical duplicate captures. This runs the same file-backed checks the post-handoff integrity gate applies — clearing them here avoids losing a whole iteration to a gap you can fix now.
+4. Finish the root response with exactly one structured outcome tag from the system prompt. The harness writes `phase_complete` after validation.
 
 Use this `progress.md` shape:
 

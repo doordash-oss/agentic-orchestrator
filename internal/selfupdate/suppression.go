@@ -147,18 +147,6 @@ func LookupSuppression(execPath, version string) (SuppressionLookup, error) {
 	return SuppressionLookup{}, nil
 }
 
-// SuppressedVersions lists every suppressed exact version, oldest first.
-// This is the package contract the later update-check coordinator consumes:
-// a suppressed version stays ineligible for automatic selection and manual
-// requests alike, and a metadata-check success can never clear it.
-func SuppressedVersions(execPath string) ([]SuppressedTarget, error) {
-	st, err := ReadSuppressionState(execPath)
-	if err != nil {
-		return nil, err
-	}
-	return st.Targets, nil
-}
-
 // ReconcileSuppression re-asserts the durable suppression for a rolled-back
 // receipt: the outcome already happened, so a failed best-effort suppression
 // write at rollback time must never erase it, and the next launch repairs

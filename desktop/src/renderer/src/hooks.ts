@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 import { useCallback, useEffect, useRef, useState, type DependencyList } from 'react';
-import type { ConnectionState, ServerKind, ThemeInfo, ThemePreference } from '../../shared/ipc';
+import type { ConnectionState, ThemeInfo, ThemePreference } from '../../shared/ipc';
 import type { CanonicalError } from '../../shared/ipc';
 import type { ErrorSurfaceLocalAction } from './components/ErrorSurface';
 import { parseIpcError } from './wizard/ipcError';
@@ -138,18 +138,7 @@ export function useConnectionState(): ConnectionState {
   return state;
 }
 
-/**
- * The locality of the ready connection, or `null` while connecting or on a
- * terminal failure. `null` degrades to the local behavior: only an
- * authoritative `remote` gates local-only affordances. Reacts live to
- * server switches through the pushed connection updates.
- */
-export function useConnectionKind(): ServerKind | null {
-  const state = useConnectionState();
-  return state.status === 'ready' ? state.kind : null;
-}
-
-export interface ThemeState {
+interface ThemeState {
   preference: ThemePreference;
   resolved: 'light' | 'dark';
   setPreference: (preference: ThemePreference) => void;

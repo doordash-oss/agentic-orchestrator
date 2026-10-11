@@ -51,14 +51,14 @@ var zeroParams = []Params{
 }
 
 func TestCatalogEntriesAreValid(t *testing.T) {
-	codes := Codes()
+	codes := CatalogCodes()
 	if len(codes) < 50 {
 		t.Fatalf("catalog has %d codes; the seeded server inventory needs at least 50", len(codes))
 	}
 	for _, code := range codes {
 		entry, ok := Lookup(code)
 		if !ok {
-			t.Fatalf("%s: listed by Codes but missing from catalog", code)
+			t.Fatalf("%s: listed by CatalogCodes but missing from catalog", code)
 		}
 		if !entry.Class.Valid() {
 			t.Errorf("%s: invalid class %q", code, entry.Class)
@@ -91,7 +91,7 @@ func TestCatalogEntriesAreValid(t *testing.T) {
 }
 
 func TestEveryCodeRendersWithZeroValueParameters(t *testing.T) {
-	for _, code := range Codes() {
+	for _, code := range CatalogCodes() {
 		rendered := New(code)
 		if rendered.Title == "" || rendered.Summary == "" {
 			t.Errorf("%s: zero-option render has empty title or summary", code)

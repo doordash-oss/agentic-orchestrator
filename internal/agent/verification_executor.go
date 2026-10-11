@@ -34,6 +34,7 @@ import (
 	_ "image/png"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"gopkg.in/yaml.v3"
 )
@@ -583,18 +584,34 @@ func validateRequiredAgentOwnedEvidence(contract *TestingContract, iterationDir 
 	return violations
 }
 
-// PreflightAgentEvidence is the read-only, in-session equivalent of the
-// file-backed checks the report-integrity gate runs during completion commit. It
-// lets the implementer confirm — before signaling SUCCESS — that every
-// required agent-owned capture is present, well-formed, correctly sized, and
-// not a byte-identical copy of another contracted row. Catching those here
-// costs seconds; catching them at the post-handoff gate costs a whole
+// PreflightDuplicateEvidenceCaptures is the read-only duplicate-digest pass
+// of the former standalone evidence preflight, kept for the implementer
+// branch of the artifact preflight (`validate-artifacts --phase implement
+// --role implementer`): it resolves the testing contract beside the
+// iteration directory and rejects two or more passed agent-owned captures
+// that share one SHA-256 — catching a copy-pasted capture here costs
+// seconds; catching it at the post-handoff integrity gate costs a whole
 // iteration (a fresh session plus a consecutive-failure increment).
-func PreflightAgentEvidence(contract *TestingContract, iterationDir string) []ProtocolViolation {
-	if contract == nil {
-		return nil
+func PreflightDuplicateEvidenceCaptures(iterationDir string) ([]ProtocolViolation, error) {
+	contractPath := ""
+	for _, candidate := range implementerTestingContractPathCandidates(iterationDir) {
+		if _, err := os.Stat(candidate); err == nil {
+			contractPath = candidate
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("checking testing contract for duplicate-capture preflight: %w", err)
+		}
 	}
-	violations := validateRequiredAgentOwnedEvidence(contract, iterationDir)
+	if strings.TrimSpace(contractPath) == "" {
+		return nil, nil
+	}
+	contract, err := ReadTestingContract(contractPath)
+	if err != nil {
+		return nil, fmt.Errorf("reading testing contract for duplicate-capture preflight: %w", err)
+	}
+	if contract == nil {
+		return nil, nil
+	}
 	digestRows := make(map[string][]string)
 	for _, item := range contract.Items {
 		if item.Owner != testingContractOwnerAgent || !item.Policy.Required || IsTestingContractItemWaived(item) {
@@ -613,6 +630,7 @@ func PreflightAgentEvidence(contract *TestingContract, iterationDir string) []Pr
 		}
 		digestRows[result.EvidenceData.Sha256] = append(digestRows[result.EvidenceData.Sha256], name)
 	}
+	var violations []ProtocolViolation
 	for _, names := range digestRows {
 		if len(names) < 2 {
 			continue
@@ -623,7 +641,7 @@ func PreflightAgentEvidence(contract *TestingContract, iterationDir string) []Pr
 			Reason:   "these captures are byte-identical, so they cannot each depict their own contracted surface — recapture each distinctly",
 		})
 	}
-	return violations
+	return violations, nil
 }
 
 func evidencePathUnderIteration(iterationDir, rel string) (string, error) {
@@ -892,7 +910,7 @@ func preflightVerificationShell(ctx context.Context, runner ports.CommandRunner,
 	if !errors.As(err, &exitCoder) {
 		return "", fmt.Errorf("shell syntax checker failed to start: %w", err)
 	}
-	detail := strings.TrimSpace(redactVerificationOutput(stderr.String()))
+	detail := permission.RedactTelemetryText(stderr.String())
 	if detail == "" {
 		detail = err.Error()
 	}
@@ -931,7 +949,7 @@ func captureVerificationCommand(ctx context.Context, runner ports.CommandRunner,
 	}
 	run := capturedVerificationRun{
 		record: verificationRunRecord{ItemID: itemID, Kind: kind, Command: command, Cwd: cwd, StartedAt: started, Duration: time.Since(started).String(), ExitCode: exitCode, Sandboxed: sandboxed},
-		stdout: redactVerificationOutput(stdout.String()), stderr: redactVerificationOutput(stderr.String()),
+		stdout: permission.RedactTelemetryText(stdout.String()), stderr: permission.RedactTelemetryText(stderr.String()),
 	}
 	return run, err
 }
@@ -998,18 +1016,6 @@ func verificationWritableRoots(workRoots ...string) []string {
 		}
 	}
 	return roots
-}
-
-var verificationSecretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)\S+`),
-	regexp.MustCompile(`(?i)((?:api[_-]?key|token|password|secret)\s*[:=]\s*)\S+`),
-}
-
-func redactVerificationOutput(value string) string {
-	for _, pattern := range verificationSecretPatterns {
-		value = pattern.ReplaceAllString(value, `${1}[REDACTED]`)
-	}
-	return value
 }
 
 func commandExitCode(err error) int {

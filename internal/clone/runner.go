@@ -370,11 +370,4 @@ func VerifyProcessIdentity(pid int, recorded string) bool {
 	return processStartIdentity(pid) == recorded
 }
 
-// redactRemoteForRecord prepares the remote for durable storage. The
-// validator has already rejected password- and token-bearing remotes, so
-// this is defense in depth.
-func redactRemoteForRecord(remote string) string {
-	return RedactDiagnostics(remote)
-}
-
 var _ = bytes.MinRead

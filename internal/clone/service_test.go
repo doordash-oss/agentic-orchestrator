@@ -43,7 +43,7 @@ func TestStartAcceptsDurablyBeforeSpawn(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(fx.stateDir, StoreDirName, rec.ID+".json")); err != nil {
 		t.Fatalf("accepted record not durable before spawn: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(fx.root, stagingName(rec.ID))); err != nil {
+	if _, err := os.Lstat(filepath.Join(fx.root, stagingNameFor(KindClone, rec.ID))); err != nil {
 		t.Fatalf("staging not created before spawn: %v", err)
 	}
 	close(spawnGate)

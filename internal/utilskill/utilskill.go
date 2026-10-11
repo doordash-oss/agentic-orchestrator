@@ -101,14 +101,3 @@ func All() []string {
 	sort.Strings(names)
 	return names
 }
-
-// Registry returns a snapshot of the registry in the skill -> []phases form.
-func Registry() map[string][]feature.Phase {
-	cp := make(map[string][]feature.Phase, len(registry))
-	for k, e := range registry {
-		phases := make([]feature.Phase, len(e.phases))
-		copy(phases, e.phases)
-		cp[k] = phases
-	}
-	return cp
-}

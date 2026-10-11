@@ -67,7 +67,7 @@ import { defined } from '../shared/defined';
 /** The server's `client_message_id` syntax; a minted key that fails it is never sent. */
 const CLIENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 
-export interface SupervisorServiceDeps {
+interface SupervisorServiceDeps {
   transport: ServerTransport;
   /** Connected-server identity for request fencing. */
   identity?: ServerIdentitySource;
@@ -86,7 +86,7 @@ export interface SupervisorServiceDeps {
  * shape. The server rejects unknown fields and empty-string keys, so only the
  * fields the reference actually carries cross the wire.
  */
-export function toWireErrorReference(reference: ErrorReference): Record<string, string> {
+function toWireErrorReference(reference: ErrorReference): Record<string, string> {
   return {
     scope: reference.scope,
     code: reference.code,

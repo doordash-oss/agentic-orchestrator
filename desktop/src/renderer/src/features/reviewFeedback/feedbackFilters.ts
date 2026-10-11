@@ -42,7 +42,7 @@ export const EMPTY_FILTERS: ReviewFeedbackFilters = { authors: [], types: [], pa
  * split their targets into batches no larger than this so no request can
  * approach the shared mutation limit through comment content.
  */
-export const SELECTION_BATCH_BOUND = 512;
+const SELECTION_BATCH_BOUND = 512;
 
 export function filtersActive(filters: ReviewFeedbackFilters): boolean {
   return filters.authors.length > 0 || filters.types.length > 0 || filters.path.trim() !== '';
@@ -59,7 +59,7 @@ export function scopeGroups(
 /** Type facet values in their stable labelled order. */
 const TYPE_ORDER = Object.keys(COMMENT_TYPE_LABEL) as ReviewFeedbackDraftCommentView['type'][];
 
-export interface FacetOptions {
+interface FacetOptions {
   authors: string[];
   types: ReviewFeedbackDraftCommentView['type'][];
 }

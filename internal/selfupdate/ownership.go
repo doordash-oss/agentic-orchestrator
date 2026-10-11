@@ -291,17 +291,6 @@ func ValidateOwnershipRecord(rec OwnershipRecord, exec Executable, runtimeDir st
 	return nil
 }
 
-// ProcessAlive reports whether pid refers to a live process. Signal 0 is a
-// pure existence/permission probe; EPERM means the process exists but is
-// owned by another user.
-func ProcessAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := unix.Kill(pid, 0)
-	return err == nil || errors.Is(err, unix.EPERM)
-}
-
 // writeOwnershipRecord atomically writes rec with owner-only permissions
 // (pid-suffixed O_EXCL tmp, rename, chmod repair). It deliberately skips the
 // durability syncs: the record is diagnostic and the flock is the authority,
@@ -321,12 +310,6 @@ func writeOwnershipRecord(execPath string, rec OwnershipRecord) error {
 
 // ErrRuntimeUpdateLockHeld reports contention on the per-runtime update lock.
 var ErrRuntimeUpdateLockHeld = errors.New("runtime update lock held")
-
-// IsRuntimeUpdateLockHeld reports whether err (or anything it wraps) is
-// runtime update lock contention.
-func IsRuntimeUpdateLockHeld(err error) bool {
-	return errors.Is(err, ErrRuntimeUpdateLockHeld)
-}
 
 // RuntimeUpdateLock serializes update transactions within one runtime dir.
 // It is a separate layer from the instance lock and the binary lease: the

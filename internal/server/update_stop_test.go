@@ -251,7 +251,7 @@ func TestUpdateInstallStopPermissionRequestRefusals(t *testing.T) {
 	})
 	post := func(handler *apiHandler, body string) (*http.Response, ErrorResponse) {
 		w := httptest.NewRecorder()
-		handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(body)))
+		handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(body)))
 		resp := w.Result()
 		defer resp.Body.Close()
 		var errBody ErrorResponse
@@ -978,7 +978,7 @@ func TestPromptRepliesRefusedDuringClosedAdmission(t *testing.T) {
 		req := authorizedUpdateRequest(http.MethodPost, path, []byte(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Agentico-Client", trustedClientHeaderValue)
-		handler.routes().ServeHTTP(w, req)
+		handler.ServeHTTP(w, req)
 		resp := w.Result()
 		resp.Body.Close()
 		return resp

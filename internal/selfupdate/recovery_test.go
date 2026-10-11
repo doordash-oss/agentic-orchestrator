@@ -70,7 +70,8 @@ func requireRefusal(t *testing.T, err error) {
 	if err == nil {
 		t.Fatal("expected unsafe-record refusal, got nil error")
 	}
-	if !IsUnsafeRecovery(err) {
+	var unsafe *UnsafeRecoveryError
+	if !errors.As(err, &unsafe) {
 		t.Fatalf("error = %v, want *UnsafeRecoveryError", err)
 	}
 }
@@ -772,9 +773,9 @@ func TestRecoveryMutationsRequireHeldLease(t *testing.T) {
 		},
 	}
 	for name, call := range mutations {
-		if err := call(); !IsUnsafeRecovery(err) {
-			t.Fatalf("%s without a held lease = %v, want refusal", name, err)
-		}
+		t.Run(name, func(t *testing.T) {
+			requireRefusal(t, call())
+		})
 	}
 }
 

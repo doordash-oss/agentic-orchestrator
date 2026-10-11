@@ -44,7 +44,7 @@ export function verificationSymbol(state: string): string {
   return symbols[verificationTone(state)];
 }
 
-export interface VerificationCounts {
+interface VerificationCounts {
   total: number;
   /** Items with a terminal verdict (not running or pending). */
   done: number;

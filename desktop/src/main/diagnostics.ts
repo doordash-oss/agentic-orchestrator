@@ -32,7 +32,7 @@ import type {
 } from '../shared/ipc';
 import { defined } from '../shared/defined';
 
-export const DIAGNOSTICS_RETENTION = Object.freeze({
+const DIAGNOSTICS_RETENTION = Object.freeze({
   maxBytes: 25 * 1024 * 1024,
   maxAgeDays: 7,
   maxCrashRecords: 10,
@@ -44,7 +44,7 @@ const MAX_ENTRY_COUNT = 200;
 const MAX_MESSAGE_CHARS = 700;
 const MAX_DETAIL_CHARS = 1200;
 
-export interface DiagnosticsServiceOptions {
+interface DiagnosticsServiceOptions {
   userDataDir: string;
   now?: () => Date;
   platform?: NodeJS.Platform;

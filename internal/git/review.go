@@ -246,13 +246,3 @@ func ResolveReviewThread(_ string, threadNodeID string) error {
 	}
 	return client.ResolveReviewThread(threadNodeID)
 }
-
-// LatestCommitSHA returns the short SHA of HEAD in the given directory.
-func LatestCommitSHA(worktreePath string) (string, error) {
-	cmd := readGitCmd(worktreePath, "rev-parse", "--short", "HEAD")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("getting HEAD SHA: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	return strings.TrimSpace(string(out)), nil
-}

@@ -47,7 +47,7 @@ const CLONE_BASE = '/api/v1/workspace/repositories/clone';
 const CLONE_LIST_LIMIT = 200;
 const OPERATION_ID_PATTERN = /^[a-z0-9-]{1,64}$/;
 
-export interface CloneServiceDeps {
+interface CloneServiceDeps {
   transport: ServerTransport;
   /** Captures the current server identity for request fencing. */
   identity?: ServerIdentitySource;
@@ -152,7 +152,7 @@ function assertOperationId(operationId: string): void {
 }
 
 /** Maps the snake_case server DTO onto the renderer-facing camelCase shape. */
-export function toCloneOperation(dto: CloneOperationDTO): CloneOperation {
+function toCloneOperation(dto: CloneOperationDTO): CloneOperation {
   const operation: CloneOperation = {
     id: dto.id,
     state: dto.state,

@@ -296,7 +296,7 @@ func TestDecodeRecoveryActionsRejectsLegacySkip(t *testing.T) {
 		RepoName: "repo-a",
 	}
 	key := ports.RecoveryActionKey(fixtureFeatureID, "repo-a")
-	if _, err := decodeRecoveryActions([]ports.RecoveryItem{item}, map[string]string{key: recoveryActionSkip}); err == nil {
+	if _, err := decodeRecoveryActions([]ports.RecoveryItem{item}, map[string]string{key: "skip"}); err == nil {
 		t.Fatal("decode legacy skip action succeeded; want fail-closed rejection")
 	}
 }

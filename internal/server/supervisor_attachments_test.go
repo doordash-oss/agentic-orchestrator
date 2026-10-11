@@ -95,7 +95,7 @@ func newAttachmentFixture(t *testing.T) *attachmentFixture {
 		DisableHostValidation: true,
 		Supervisor:            svc,
 	})
-	return &attachmentFixture{t: t, stateDir: stateDir, dir: svc.dir, svc: svc, handler: api.routes()}
+	return &attachmentFixture{t: t, stateDir: stateDir, dir: svc.dir, svc: svc, handler: api}
 }
 
 func (f *attachmentFixture) stage(kind, name string, body []byte) string {

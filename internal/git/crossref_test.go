@@ -263,39 +263,6 @@ func TestRemoveCrossReferenceSection(t *testing.T) {
 	}
 }
 
-func TestExtractCrossReferenceSection(t *testing.T) {
-	tests := []struct {
-		name     string
-		body     string
-		expected string
-	}{
-		{
-			name:     "no section",
-			body:     "just content",
-			expected: "",
-		},
-		{
-			name:     "section at end",
-			body:     "content\n\n" + CrossRefSectionHeader + "\n\nsome table",
-			expected: CrossRefSectionHeader + "\n\nsome table",
-		},
-		{
-			name:     "section before other heading",
-			body:     CrossRefSectionHeader + "\n\ntable\n\n## Other",
-			expected: CrossRefSectionHeader + "\n\ntable",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ExtractCrossReferenceSection(tt.body)
-			if got != tt.expected {
-				t.Errorf("ExtractCrossReferenceSection():\n  got:  %q\n  want: %q", got, tt.expected)
-			}
-		})
-	}
-}
-
 func TestGetPRBodyAndUpdatePRBodyUseAPI(t *testing.T) {
 	fake := testutil.InstallFakeGitHubAPI(t)
 	var patchedBody string

@@ -65,7 +65,7 @@ func newInitializeFixture(t *testing.T) *initializeFixture {
 		Mutations:             &createFeatureRecorder{},
 		DisableHostValidation: true,
 	})
-	fx.handler = fx.api.routes()
+	fx.handler = fx.api
 	return fx
 }
 

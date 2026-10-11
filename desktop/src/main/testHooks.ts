@@ -106,7 +106,7 @@ export function resolveTestPackagedResourcesDir(
   return real;
 }
 
-export interface TestOutputFileDeps {
+interface TestOutputFileDeps {
   realpath(candidate: string): string;
   dirname(candidate: string): string;
   tmpdir(): string;

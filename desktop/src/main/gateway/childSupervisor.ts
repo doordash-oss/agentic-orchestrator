@@ -31,7 +31,7 @@ import type { ResolveResult } from './resources';
 import type { ChildExit } from './serverProcess';
 import type { SelectedRuntime, ServerChildLike } from './runtimeGateway';
 
-export interface ChildSupervisorTimeouts {
+interface ChildSupervisorTimeouts {
   /** Grace period for stopping the app-owned child before SIGKILL. */
   shutdownGraceMs: number;
   /** Initial delay before automatically relaunching an app-owned crash. */

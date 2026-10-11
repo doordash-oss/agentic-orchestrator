@@ -22,14 +22,7 @@ export interface ProductionFusePolicy {
   expectedWireValue: number;
 }
 
-export const FUSE_WIRE_VALUES: Readonly<{
-  enabled: number;
-  disabled: number;
-}>;
-
 export const PRODUCTION_FUSE_POLICY: readonly ProductionFusePolicy[];
-
-export function expectedElectronBuilderFuses(): Record<string, boolean>;
 
 export function parseElectronBuilderFuses(configText: string): Record<string, boolean>;
 

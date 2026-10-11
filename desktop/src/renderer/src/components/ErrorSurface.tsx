@@ -62,7 +62,7 @@ export type ErrorSurfaceLocalAction =
       onAction?: never;
     };
 
-export interface ErrorSurfaceProps {
+interface ErrorSurfaceProps {
   error: CanonicalError;
   variant?: 'full' | 'compact';
   /** Expand the underlying cause when the summary alone cannot explain the failure. */

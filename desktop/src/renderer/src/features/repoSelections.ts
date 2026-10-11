@@ -40,7 +40,7 @@ export interface RepoSelection {
  * selections keep their last known key for display and must be reselected or
  * removed before the draft can continue.
  */
-export type ReconciledSelection =
+type ReconciledSelection =
   | { status: 'selected'; key: string; identity: RepositoryIdentity }
   | { status: 'unresolved'; key: string };
 

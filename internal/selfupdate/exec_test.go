@@ -21,7 +21,20 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
+
+// fdIsCLOEXEC reads the close-on-exec state directly, mirroring the
+// production F_SETFD calls under test.
+func fdIsCLOEXEC(t *testing.T, fd int) bool {
+	t.Helper()
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+	if err != nil {
+		t.Fatalf("inspect fd %d flags: %v", fd, err)
+	}
+	return flags&unix.FD_CLOEXEC != 0
+}
 
 func TestHandoffEncodeParseRoundTrip(t *testing.T) {
 	t.Parallel()
@@ -93,21 +106,20 @@ func TestCLOEXECToggle(t *testing.T) {
 	defer f.Close()
 	fd := int(f.Fd())
 
-	ok, err := IsCLOEXEC(fd)
-	if err != nil || !ok {
-		t.Fatalf("IsCLOEXEC(default) = (%v, %v), want (true, nil)", ok, err)
+	if !fdIsCLOEXEC(t, fd) {
+		t.Fatal("fd must be close-on-exec by default")
 	}
 	if err := ClearCLOEXEC(fd); err != nil {
 		t.Fatalf("ClearCLOEXEC: %v", err)
 	}
-	if ok, _ := IsCLOEXEC(fd); ok {
-		t.Fatal("IsCLOEXEC after ClearCLOEXEC = true, want false")
+	if fdIsCLOEXEC(t, fd) {
+		t.Fatal("fd still close-on-exec after ClearCLOEXEC")
 	}
 	if err := SetCLOEXEC(fd); err != nil {
 		t.Fatalf("SetCLOEXEC: %v", err)
 	}
-	if ok, _ := IsCLOEXEC(fd); !ok {
-		t.Fatal("IsCLOEXEC after SetCLOEXEC = false, want true")
+	if !fdIsCLOEXEC(t, fd) {
+		t.Fatal("fd not close-on-exec after SetCLOEXEC")
 	}
 
 	closed, err := os.Create(filepath.Join(t.TempDir(), "closed"))
@@ -118,8 +130,8 @@ func TestCLOEXECToggle(t *testing.T) {
 	if err := closed.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if _, err := IsCLOEXEC(closedFD); err == nil {
-		t.Fatal("IsCLOEXEC on closed fd: expected error")
+	if _, err := unix.FcntlInt(uintptr(closedFD), unix.F_GETFD, 0); err == nil {
+		t.Fatal("F_GETFD on closed fd: expected error")
 	}
 }
 
@@ -147,9 +159,8 @@ func TestExecReplaceErrorRestoresCLOEXEC(t *testing.T) {
 	if !errors.Is(err, execErr) {
 		t.Fatalf("ExecReplace error = %v, want %v", err, execErr)
 	}
-	ok, cerr := IsCLOEXEC(fd)
-	if cerr != nil || !ok {
-		t.Fatalf("IsCLOEXEC after failed exec = (%v, %v), want (true, nil)", ok, cerr)
+	if !fdIsCLOEXEC(t, fd) {
+		t.Fatalf("fd not close-on-exec after failed exec")
 	}
 	if gotPath != "/installed" {
 		t.Fatalf("exec path = %q", gotPath)
@@ -239,8 +250,8 @@ func TestAdoptHandoffHappyPath(t *testing.T) {
 	// object must not close it again.
 	defer func() { _ = adopted.Close() }()
 
-	if ok, err := IsCLOEXEC(adopted.FD()); err != nil || !ok {
-		t.Fatalf("IsCLOEXEC after adoption = (%v, %v), want (true, nil)", ok, err)
+	if !fdIsCLOEXEC(t, adopted.FD()) {
+		t.Fatal("adopted lease fd must be close-on-exec after adoption")
 	}
 	if receipt.TransactionID != h.metadata.TransactionID ||
 		receipt.Phase != PhaseReplacementComplete ||

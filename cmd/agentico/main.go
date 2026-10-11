@@ -81,8 +81,6 @@ const (
 
 	cliSubcommandServer            = "server"
 	cliSubcommandValidateArtifacts = "validate-artifacts"
-	cliSubcommandVerifyEvidence    = "verify-evidence"
-	cliSubcommandCapabilityProbe   = "capability-probe"
 	cliSubcommandReportBlocker     = "report-blocker"
 	cliFlagDir                     = "--dir"
 	cliFlagPhase                   = "--phase"
@@ -101,10 +99,7 @@ const (
 	launchModeServer
 	launchModeHelp
 	launchModeVersion
-	launchModeUpdate
 	launchModeValidateArtifacts
-	launchModeVerifyEvidence
-	launchModeCapabilityProbe
 	launchModeReportBlocker
 	launchModeAPI
 )
@@ -122,30 +117,14 @@ type launchOptions struct {
 	updatesPolicy     string
 	mode              launchMode
 	validateArtifacts validateArtifactsOptions
-	verifyEvidence    verifyEvidenceOptions
-	capabilityProbe   capabilityProbeOptions
 	reportBlocker     reportBlockerOptions
 	api               apiOptions
-	// updateCheck is set when update mode was selected with --check / -n,
-	// requesting a check-only run that never attempts to install.
-	updateCheck bool
 }
 
 type validateArtifactsOptions struct {
 	phase string
 	role  string
 	dir   string
-}
-
-type verifyEvidenceOptions struct {
-	contract string
-	dir      string
-}
-
-// capabilityProbeOptions names one built-in capability, e.g.
-// "authenticated-browser(slack.com)", to probe from the current environment.
-type capabilityProbeOptions struct {
-	name string
 }
 
 // reportBlockerOptions describes an implementer escalation: contract items
@@ -159,12 +138,6 @@ type reportBlockerOptions struct {
 }
 
 type serverLauncher func(configPath, stateDir string, dangerouslySkipPerms bool, enabledProviders []string, refreshModels bool, listenAddr, serverName, updatesPolicy string) int
-
-// updater is the injectable update seam. Production
-// wiring passes the real updater, tests pass a fake. It returns the process
-// exit code the router propagates verbatim. The update path deliberately never
-// acquires the instance lock, starts the fx container, or reconciles assets.
-type updater func(checkOnly bool, stdout, stderr io.Writer) int
 
 func defaultLaunchOptions() launchOptions {
 	parent := pickRuntimeParent()
@@ -204,16 +177,16 @@ func resolveRegistryParent() string {
 }
 
 func run() {
-	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runServer, runUpdate))
+	os.Exit(runArgs(os.Args[1:], os.Stdout, os.Stderr, runServer))
 }
 
-func runArgs(args []string, stdout, stderr io.Writer, launchServer serverLauncher, update updater) int {
-	return runArgsWithDesktop(args, stdout, stderr, openRegisteredDesktop, launchServer, update)
+func runArgs(args []string, stdout, stderr io.Writer, launchServer serverLauncher) int {
+	return runArgsWithDesktop(args, stdout, stderr, openRegisteredDesktop, launchServer)
 }
 
 type desktopLauncher func() error
 
-func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop desktopLauncher, launchServer serverLauncher, update updater) int {
+func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop desktopLauncher, launchServer serverLauncher) int {
 	opts, err := parseLaunchArgs(args)
 	if err != nil {
 		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: err.Error()}))
@@ -226,18 +199,8 @@ func runArgsWithDesktop(args []string, stdout, stderr io.Writer, launchDesktop d
 	case launchModeVersion:
 		fmt.Fprintln(stdout, buildinfo.VersionLine())
 		return 0
-	case launchModeUpdate:
-		// Dispatch through the updater seam ahead of the desktop app branch, early
-		// returning its exit code — exactly as help/version early-return.
-		// The update path never reaches the desktop app launcher below, so it takes
-		// no instance lock, builds no fx container, and reconciles no assets.
-		return update(opts.updateCheck, stdout, stderr)
 	case launchModeValidateArtifacts:
 		return runValidateArtifacts(opts.validateArtifacts, stdout, stderr)
-	case launchModeVerifyEvidence:
-		return runVerifyEvidence(opts.verifyEvidence, stdout, stderr)
-	case launchModeCapabilityProbe:
-		return runCapabilityProbe(opts.capabilityProbe, stdout, stderr)
 	case launchModeReportBlocker:
 		return runReportBlocker(opts.reportBlocker, stdout, stderr)
 	case launchModeAPI:
@@ -325,25 +288,9 @@ func parseLaunchArgs(args []string) (launchOptions, error) {
 		}
 	}
 	serverOnlyFlag := ""
-	// `update` is a standalone subcommand recognized only as the first
-	// argument. Its sub-flags (--check / -n) are valid only in this context;
-	// elsewhere they fall through to the launch-flag loop and reject as
-	// unknown flags, and every other bare word still rejects as an unknown
-	// command.
-	if len(args) > 0 && args[0] == "update" {
-		return parseUpdateArgs(opts, args[1:])
-	}
 	if len(args) > 0 && args[0] == cliSubcommandValidateArtifacts {
 		opts.mode = launchModeValidateArtifacts
 		return parseValidateArtifactsArgs(opts, args[1:])
-	}
-	if len(args) > 0 && args[0] == cliSubcommandVerifyEvidence {
-		opts.mode = launchModeVerifyEvidence
-		return parseVerifyEvidenceArgs(opts, args[1:])
-	}
-	if len(args) > 0 && args[0] == cliSubcommandCapabilityProbe {
-		opts.mode = launchModeCapabilityProbe
-		return parseCapabilityProbeArgs(opts, args[1:])
 	}
 	if len(args) > 0 && args[0] == cliSubcommandReportBlocker {
 		opts.mode = launchModeReportBlocker
@@ -467,184 +414,83 @@ func isServerOnlyLaunchFlag(flag string) bool {
 	}
 }
 
+// parseSubcommandFlags reads the `--flag value` pairs of a subcommand into the
+// destinations named by flags. It reports help when --help or -h appears.
+func parseSubcommandFlags(command string, args []string, flags map[string]*string) (help bool, err error) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--help" || arg == "-h" {
+			return true, nil
+		}
+		dst, ok := flags[arg]
+		if !ok {
+			if strings.HasPrefix(arg, "-") {
+				return false, fmt.Errorf("unknown %s flag: %s", command, arg)
+			}
+			return false, fmt.Errorf("unknown %s argument: %s", command, arg)
+		}
+		if i+1 >= len(args) {
+			return false, fmt.Errorf("%s requires a value", arg)
+		}
+		i++
+		*dst = args[i]
+	}
+	return false, nil
+}
+
+// requireSubcommandFlags checks the required flags in order, so the first
+// missing one is the one reported.
+func requireSubcommandFlags(command string, required []string, flags map[string]*string) error {
+	for _, flag := range required {
+		if strings.TrimSpace(*flags[flag]) == "" {
+			return fmt.Errorf("%s requires %s", command, flag)
+		}
+	}
+	return nil
+}
+
 func parseValidateArtifactsArgs(opts launchOptions, args []string) (launchOptions, error) {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case cliFlagPhase:
-			if i+1 >= len(args) {
-				return opts, fmt.Errorf("--phase requires a value")
-			}
-			i++
-			opts.validateArtifacts.phase = args[i]
-		case cliFlagRole:
-			if i+1 >= len(args) {
-				return opts, fmt.Errorf("--role requires a value")
-			}
-			i++
-			opts.validateArtifacts.role = args[i]
-		case cliFlagDir:
-			if i+1 >= len(args) {
-				return opts, fmt.Errorf("--dir requires a value")
-			}
-			i++
-			opts.validateArtifacts.dir = args[i]
-		case "--help", "-h":
+	flags := map[string]*string{
+		cliFlagPhase: &opts.validateArtifacts.phase,
+		cliFlagRole:  &opts.validateArtifacts.role,
+		cliFlagDir:   &opts.validateArtifacts.dir,
+	}
+	if help, err := parseSubcommandFlags(cliSubcommandValidateArtifacts, args, flags); help || err != nil {
+		if help {
 			opts.mode = launchModeHelp
-			return opts, nil
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return opts, fmt.Errorf("unknown validate-artifacts flag: %s", arg)
-			}
-			return opts, fmt.Errorf("unknown validate-artifacts argument: %s", arg)
 		}
+		return opts, err
 	}
-	if strings.TrimSpace(opts.validateArtifacts.phase) == "" {
-		return opts, fmt.Errorf("validate-artifacts requires --phase")
-	}
-	if strings.TrimSpace(opts.validateArtifacts.role) == "" {
-		return opts, fmt.Errorf("validate-artifacts requires --role")
-	}
-	if strings.TrimSpace(opts.validateArtifacts.dir) == "" {
-		return opts, fmt.Errorf("validate-artifacts requires --dir")
-	}
-	return opts, nil
-}
-
-func parseVerifyEvidenceArgs(opts launchOptions, args []string) (launchOptions, error) {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch arg {
-		case cliFlagContract:
-			if i+1 >= len(args) {
-				return opts, fmt.Errorf("--contract requires a value")
-			}
-			i++
-			opts.verifyEvidence.contract = args[i]
-		case cliFlagDir:
-			if i+1 >= len(args) {
-				return opts, fmt.Errorf("--dir requires a value")
-			}
-			i++
-			opts.verifyEvidence.dir = args[i]
-		case "--help", "-h":
-			opts.mode = launchModeHelp
-			return opts, nil
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return opts, fmt.Errorf("unknown verify-evidence flag: %s", arg)
-			}
-			return opts, fmt.Errorf("unknown verify-evidence argument: %s", arg)
-		}
-	}
-	if strings.TrimSpace(opts.verifyEvidence.contract) == "" {
-		return opts, fmt.Errorf("verify-evidence requires --contract")
-	}
-	if strings.TrimSpace(opts.verifyEvidence.dir) == "" {
-		return opts, fmt.Errorf("verify-evidence requires --dir")
-	}
-	return opts, nil
-}
-
-func parseCapabilityProbeArgs(opts launchOptions, args []string) (launchOptions, error) {
-	for _, arg := range args {
-		switch arg {
-		case "--help", "-h":
-			opts.mode = launchModeHelp
-			return opts, nil
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return opts, fmt.Errorf("unknown capability-probe flag: %s", arg)
-			}
-			if opts.capabilityProbe.name != "" {
-				return opts, fmt.Errorf("capability-probe accepts exactly one capability name")
-			}
-			opts.capabilityProbe.name = arg
-		}
-	}
-	if strings.TrimSpace(opts.capabilityProbe.name) == "" {
-		return opts, fmt.Errorf("capability-probe requires a capability name, e.g. authenticated-browser(slack.com)")
-	}
-	return opts, nil
+	return opts, requireSubcommandFlags(cliSubcommandValidateArtifacts, []string{cliFlagPhase, cliFlagRole, cliFlagDir}, flags)
 }
 
 func parseReportBlockerArgs(opts launchOptions, args []string) (launchOptions, error) {
-	value := func(i *int, flag string) (string, error) {
-		if *i+1 >= len(args) {
-			return "", fmt.Errorf("%s requires a value", flag)
-		}
-		*i++
-		return args[*i], nil
+	var items string
+	flags := map[string]*string{
+		cliFlagContract: &opts.reportBlocker.contract,
+		cliFlagDir:      &opts.reportBlocker.dir,
+		"--items":       &items,
+		"--capability":  &opts.reportBlocker.capability,
+		"--reason":      &opts.reportBlocker.reason,
 	}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		var err error
-		switch arg {
-		case cliFlagContract:
-			opts.reportBlocker.contract, err = value(&i, arg)
-		case cliFlagDir:
-			opts.reportBlocker.dir, err = value(&i, arg)
-		case "--items":
-			var raw string
-			if raw, err = value(&i, arg); err == nil {
-				for _, id := range strings.Split(raw, ",") {
-					if id = strings.TrimSpace(id); id != "" {
-						opts.reportBlocker.items = append(opts.reportBlocker.items, id)
-					}
-				}
-			}
-		case "--capability":
-			opts.reportBlocker.capability, err = value(&i, arg)
-		case "--reason":
-			opts.reportBlocker.reason, err = value(&i, arg)
-		case "--help", "-h":
+	if help, err := parseSubcommandFlags(cliSubcommandReportBlocker, args, flags); help || err != nil {
+		if help {
 			opts.mode = launchModeHelp
-			return opts, nil
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return opts, fmt.Errorf("unknown report-blocker flag: %s", arg)
-			}
-			return opts, fmt.Errorf("unknown report-blocker argument: %s", arg)
 		}
-		if err != nil {
-			return opts, err
-		}
+		return opts, err
 	}
-	for flag, v := range map[string]string{cliFlagContract: opts.reportBlocker.contract, cliFlagDir: opts.reportBlocker.dir, "--capability": opts.reportBlocker.capability, "--reason": opts.reportBlocker.reason} {
-		if strings.TrimSpace(v) == "" {
-			return opts, fmt.Errorf("report-blocker requires %s", flag)
+	if err := requireSubcommandFlags(cliSubcommandReportBlocker, []string{cliFlagContract, cliFlagDir, "--capability", "--reason"}, flags); err != nil {
+		return opts, err
+	}
+	for _, id := range strings.Split(items, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			opts.reportBlocker.items = append(opts.reportBlocker.items, id)
 		}
 	}
 	if len(opts.reportBlocker.items) == 0 {
 		return opts, fmt.Errorf("report-blocker requires --items <id,id,...>")
 	}
 	return opts, nil
-}
-
-// runCapabilityProbe runs one built-in capability probe from the current
-// environment and prints its verdict. Exit 0 means available. Agents and
-// operators use it to see exactly what the harness will check.
-func runCapabilityProbe(opts capabilityProbeOptions, stdout, stderr io.Writer) int {
-	name, arg, ok := agent.ParseCapabilityName(opts.name)
-	if !ok {
-		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: fmt.Sprintf("capability %q is not name or name(argument)", opts.name)}))
-		return 1
-	}
-	if err := agent.ValidateRegistryCapability(name, arg); err != nil {
-		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: err.Error()}))
-		return 1
-	}
-	policy := agent.CapabilityPolicy{RuntimeDir: resolveRegistryParent(), AllowBrowserState: true}
-	result := agent.RunRegistryCapabilityProbe(agent.WithCapabilityPolicy(context.Background(), policy), name, arg)
-	if !result.Available {
-		fmt.Fprintf(stderr, "capability %s unavailable: %s\n", opts.name, result.Reason)
-		return 1
-	}
-	fmt.Fprintf(stdout, "capability %s available\n", opts.name)
-	for _, kv := range result.Env {
-		fmt.Fprintln(stdout, kv)
-	}
-	return 0
 }
 
 // runReportBlocker writes the implementer's capability-blocker gate into the
@@ -672,57 +518,27 @@ func runReportBlocker(opts reportBlockerOptions, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// runVerifyEvidence is the in-session self-check the implementer runs before
-// declaring semantic success: it reads the testing contract and confirms every required
-// agent-owned capture is present, well-formed, correctly sized, and not a
-// byte-identical duplicate of another row — the same file-backed checks the
-// post-handoff report-integrity gate applies, surfaced early so a missing or
-// duplicated capture costs seconds here instead of a whole failed iteration.
-func runVerifyEvidence(opts verifyEvidenceOptions, stdout, stderr io.Writer) int {
-	contract, err := agent.ReadTestingContract(opts.contract)
-	if err != nil {
-		renderError(stderr, errcat.ContractInputUnreadable,
-			errcat.WithDiagnostics(fmt.Sprintf("reading testing contract: %v", err)))
-		return 1
-	}
-	violations := agent.PreflightAgentEvidence(contract, opts.dir)
-	if len(violations) > 0 {
-		renderProtocolViolations(stderr, "evidence contract", violations)
-		return 1
-	}
-	fmt.Fprintln(stdout, "evidence OK")
-	return 0
-}
-
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, `Agentic Orchestrator
 
 Usage: agentico
        agentico server [flags]
-       agentico update [--check|-n]
        agentico validate-artifacts --phase <phase> --role <role> --dir <iteration_dir>
-       agentico verify-evidence --contract </abs/path/testing-contract.yaml> --dir </abs/path/iteration_dir>
-       agentico capability-probe <name[(argument)]>
        agentico report-blocker --contract </abs/path/testing-contract.yaml> --dir </abs/path/iteration_dir> \
                                --items <id,id,...> --capability <name> --reason <text>
-       agentico api [--runtime-dir <dir>] [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path> [json]
+       agentico api [--timeout <duration>] [--after <cursor>] METHOD /api/v1/<path> [json]
 
 Starts or focuses the installed Agentico desktop app. Use the explicit 'server'
 subcommand to start the foreground loopback HTTP server for headless automation.
-Run 'agentico update' to open the desktop Updates panel when Agentico is
-registered, or print package-manager guidance otherwise. Run
-'agentico update --check' (alias -n) for a read-only stable-version check.
 Run 'agentico validate-artifacts' from agent sessions before declaring an outcome
-to parse and validate role output artifacts without starting the server.
-Run 'agentico verify-evidence' from implementer sessions before declaring an outcome
-to confirm required agent-owned captures are present, correctly sized, and not
-duplicates — catching gaps before the post-handoff integrity gate does.
-Run 'agentico capability-probe' to check one built-in capability (for example
-authenticated-browser(slack.com), display, docker, network(host)) the way the
-harness will. Run 'agentico report-blocker' from implementer sessions when
+to parse and validate role output artifacts without starting the server; the
+implementer branch also confirms required agent-owned captures are present,
+correctly sized, and not duplicates — catching gaps before the post-handoff
+integrity gate does.
+Run 'agentico report-blocker' from implementer sessions when
 required evidence needs a capability the environment lacks; it records the
 blocked rows for the user's decision instead of an unanswerable chat question.
-Agent sessions must run verify-evidence and report-blocker as one bare command
+Agent sessions must run report-blocker as one bare command
 with absolute literal paths (no cd, &&, ;, pipes, redirects, or shell variables);
 the permission guard refuses any other shape that references the contract.
 Run 'agentico api' on the server machine to make one authenticated REST call
@@ -748,7 +564,6 @@ Server flags (use with 'agentico server'):
                                     stops work. Precedence: this flag, then AGENTICO_UPDATES,
                                     then server.updates.policy in config.yaml.
   --dangerously-skip-permissions   Skip all permission prompts (use with caution)
-  --check, -n                      With 'update': check for a newer release without installing
 Global flags:
   --help, -h                       Show this help
   --version, -v                    Show version`)
@@ -760,11 +575,25 @@ func runValidateArtifacts(opts validateArtifactsOptions, stdout, stderr io.Write
 		renderError(stderr, errcat.InvalidUsage, errcat.WithParams(errcat.UsageParams{Reason: err.Error()}))
 		return 1
 	}
-	out, violations, err := agent.ValidateArtifactsPreflight(phase, agent.Role(strings.TrimSpace(opts.role)), opts.dir)
+	role := agent.Role(strings.TrimSpace(opts.role))
+	out, violations, err := agent.ValidateArtifactsPreflight(phase, role, opts.dir)
 	if err != nil {
 		renderError(stderr, errcat.ContractInputUnreadable,
 			errcat.WithDiagnostics(fmt.Sprintf("validating artifacts: %v", err)))
 		return 1
+	}
+	// The implementer branch folds the evidence preflight's duplicate-digest
+	// pass in beside ValidateArtifactsPreflight's required-evidence checks:
+	// two or more passed agent-owned captures sharing one SHA-256 reject here,
+	// seconds before the post-handoff report-integrity gate would catch them.
+	if phase == feature.PhaseImplement && role == agent.Role("implementer") {
+		digestViolations, digestErr := agent.PreflightDuplicateEvidenceCaptures(opts.dir)
+		if digestErr != nil {
+			renderError(stderr, errcat.ContractInputUnreadable,
+				errcat.WithDiagnostics(fmt.Sprintf("validating artifacts: %v", digestErr)))
+			return 1
+		}
+		violations = append(violations, digestViolations...)
 	}
 	if !out.OK || len(violations) > 0 {
 		renderProtocolViolations(stderr, "artifact contract", violations)
@@ -784,11 +613,10 @@ type providerReadinessIssue struct {
 }
 
 // checkRequiredProviders uses the registry to verify provider CLIs are
-// available and ready. Returns (ready providers, warnings, startup notices,
+// available and ready. Returns (ready providers, startup notices,
 // availabilityFiltered, error): errors when no provider is ready.
-func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.LLMProvider, []startupWarning, []startupWarning, bool, error) {
+func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.LLMProvider, []errcat.Error, bool, error) {
 	all := registry.All()
-	var warnings []startupWarning
 	var missing []llm.LLMProvider
 	var detected []llm.LLMProvider
 	for _, p := range all {
@@ -799,7 +627,7 @@ func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.
 		missing = append(missing, p)
 	}
 	if len(detected) == 0 {
-		return nil, nil, nil, true, fmt.Errorf("%s", agent.FormatNoCLIMessage(all))
+		return nil, nil, true, fmt.Errorf("%s", agent.FormatNoCLIMessage(all))
 	}
 
 	var ready []llm.LLMProvider
@@ -813,11 +641,11 @@ func checkRequiredProviders(ctx context.Context, registry *llm.Registry) ([]llm.
 		unready = append(unready, providerReadinessIssue{provider: p, status: status})
 	}
 	if len(ready) == 0 {
-		return nil, nil, nil, true, fmt.Errorf("%s", formatNoReadyProviderMessage(all, unready))
+		return nil, nil, true, fmt.Errorf("%s", formatNoReadyProviderMessage(all, unready))
 	}
 	startupNotices := formatProviderStartupNotices(ready, missing, unready)
 	registry.RestrictToProviders(ready)
-	return ready, warnings, startupNotices, len(ready) < len(all), nil
+	return ready, startupNotices, len(ready) < len(all), nil
 }
 
 func checkProviderReadiness(ctx context.Context, p llm.LLMProvider) llm.ProviderReadiness {
@@ -873,28 +701,26 @@ func formatReadinessProblem(status llm.ProviderReadiness) string {
 }
 
 // formatProviderStartupNotices builds the delayed startup notices about
-// missing or unready providers as structured warnings: the catalog authors
+// missing or unready providers as canonical errors: the catalog authors
 // the summary for the provider, and the original notice text rides along as
 // diagnostics.
-func formatProviderStartupNotices(ready []llm.LLMProvider, missing []llm.LLMProvider, unready []providerReadinessIssue) []startupWarning {
+func formatProviderStartupNotices(ready []llm.LLMProvider, missing []llm.LLMProvider, unready []providerReadinessIssue) []errcat.Error {
 	if len(ready) == 0 || (len(missing) == 0 && len(unready) == 0) {
 		return nil
 	}
 	readyText := formatProviderNameList(ready)
-	var notices []startupWarning
+	var notices []errcat.Error
 	for _, p := range missing {
-		notices = append(notices, startupWarning{
-			code:        errcat.ProviderUnavailable,
-			params:      errcat.ProviderUnavailableParams{Provider: p.Name()},
-			diagnostics: fmt.Sprintf("Provider %s CLI was not found. Install with: %s. Starting with %s only.", p.Name(), p.InstallHint(), readyText),
-		})
+		notices = append(notices, errcat.New(errcat.ProviderUnavailable,
+			errcat.WithParams(errcat.ProviderUnavailableParams{Provider: p.Name()}),
+			errcat.WithDiagnostics(fmt.Sprintf("Provider %s CLI was not found. Install with: %s. Starting with %s only.", p.Name(), p.InstallHint(), readyText)),
+		))
 	}
 	for _, issue := range unready {
-		notices = append(notices, startupWarning{
-			code:        errcat.ProviderUnavailable,
-			params:      errcat.ProviderUnavailableParams{Provider: issue.provider.Name()},
-			diagnostics: fmt.Sprintf("Provider %s is not configured: %s Starting with %s only.", issue.provider.Name(), formatReadinessProblem(issue.status), readyText),
-		})
+		notices = append(notices, errcat.New(errcat.ProviderUnavailable,
+			errcat.WithParams(errcat.ProviderUnavailableParams{Provider: issue.provider.Name()}),
+			errcat.WithDiagnostics(fmt.Sprintf("Provider %s is not configured: %s Starting with %s only.", issue.provider.Name(), formatReadinessProblem(issue.status), readyText)),
+		))
 	}
 	return notices
 }
@@ -914,12 +740,12 @@ type providerCatalogDiscoveryJob struct {
 	provider llm.LLMProvider
 }
 
-func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []startupWarning {
+func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []errcat.Error {
 	if len(providers) == 0 {
 		return nil
 	}
 
-	warningsByProvider := make([][]startupWarning, len(providers))
+	warningsByProvider := make([][]errcat.Error, len(providers))
 	var wg sync.WaitGroup
 	var reportMu sync.Mutex
 	reportProgress := func(provider string, model llm.ModelInfo) {
@@ -939,7 +765,7 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 	}
 	wg.Wait()
 
-	var warnings []startupWarning
+	var warnings []errcat.Error
 	for _, providerWarnings := range warningsByProvider {
 		warnings = append(warnings, providerWarnings...)
 	}
@@ -949,16 +775,15 @@ func discoverProviderCatalogs(ctx context.Context, providers []llm.LLMProvider, 
 // catalogWarning builds one model-catalog degradation warning: the catalog
 // authors the summary naming the provider, and the original condition text
 // rides along as diagnostics.
-func catalogWarning(providerName, diagnostics string) startupWarning {
-	return startupWarning{
-		code:        errcat.ModelCatalogDegraded,
-		params:      errcat.ProviderIssueParams{Provider: providerName},
-		diagnostics: diagnostics,
-	}
+func catalogWarning(providerName, diagnostics string) errcat.Error {
+	return errcat.New(errcat.ModelCatalogDegraded,
+		errcat.WithParams(errcat.ProviderIssueParams{Provider: providerName}),
+		errcat.WithDiagnostics(diagnostics),
+	)
 }
 
-func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []startupWarning {
-	var warnings []startupWarning
+func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, cacheRoot string, report providerCatalogDiscoveryProgress, refreshModels bool) []errcat.Error {
+	var warnings []errcat.Error
 	providerName := p.Name()
 	if policy, ok := p.(llm.CatalogRefreshPolicy); ok && policy.RefreshCatalogOnStartup() {
 		refreshModels = true
@@ -1042,7 +867,7 @@ func discoverOneProviderCatalog(ctx context.Context, p llm.LLMProvider, cacheRoo
 
 // tryStaleCacheFallback serves a previously cached catalog when a refresh
 // failed (reason); ok is false if no cache fallback applies.
-func tryStaleCacheFallback(provider llm.LLMProvider, cacheRoot, providerName, version string, refreshModels bool, reason string) ([]startupWarning, bool) {
+func tryStaleCacheFallback(provider llm.LLMProvider, cacheRoot, providerName, version string, refreshModels bool, reason string) ([]errcat.Error, bool) {
 	if !refreshModels || cacheRoot == "" || version == "" {
 		return nil, false
 	}
@@ -1056,7 +881,7 @@ func tryStaleCacheFallback(provider llm.LLMProvider, cacheRoot, providerName, ve
 		reason,
 		cached.DiscoveredAt.Format(time.RFC3339),
 	))
-	return []startupWarning{warning}, true
+	return []errcat.Error{warning}, true
 }
 
 func persistRefreshedProviderModelCatalog(cacheRoot string, provider llm.LLMProvider, models []llm.ModelInfo) error {
@@ -1074,7 +899,7 @@ func persistRefreshedProviderModelCatalog(cacheRoot string, provider llm.LLMProv
 	return saveProviderCatalogCache(cacheRoot, provider.Name(), version, models)
 }
 
-func showProviderStartupNotices(w io.Writer, notices []startupWarning, delay time.Duration) {
+func showProviderStartupNotices(w io.Writer, notices []errcat.Error, delay time.Duration) {
 	if len(notices) == 0 {
 		return
 	}
@@ -1215,11 +1040,8 @@ type gitFreshnessProvider struct {
 	cache *git.FreshnessCache
 }
 
-func newGitFreshnessProvider() *gitFreshnessProvider {
-	return &gitFreshnessProvider{cache: git.NewFreshnessCache()}
-}
-
-func newGitFreshnessProviderWithProbe(probe func(worktreePath string) string) *gitFreshnessProvider {
+// newGitFreshnessProvider caches probe; production passes git.RepoFreshness.
+func newGitFreshnessProvider(probe func(worktreePath string) string) *gitFreshnessProvider {
 	return &gitFreshnessProvider{cache: git.NewFreshnessCacheWithProbe(probe)}
 }
 
@@ -1341,7 +1163,7 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 	// before any serving or dispatch path can run.
 	orch.SetAdmissionBoundary(admission)
 
-	detected, warnings, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
+	detected, startupNotices, availabilityFiltered, err := checkRequiredProviders(ctx, registry)
 	if err != nil {
 		// Setup-capable mode: the headless server stays reachable when no
 		// provider CLI is installed or authenticated so a first-launch client
@@ -1354,13 +1176,12 @@ func bootstrapRuntime(ctx context.Context, configPath, stateDir string, dangerou
 			errcat.WithDiagnostics(err.Error()),
 		)
 		registry.RestrictToProviders(nil)
-		detected, warnings, startupNotices, availabilityFiltered = nil, nil, nil, true
+		detected, startupNotices, availabilityFiltered = nil, nil, true
 	}
-	renderStartupWarnings(stderr, warnings)
 
 	toolHard, toolSoft := agent.CheckRequiredTools()
 	for _, issue := range toolSoft {
-		startupWarning{code: issue.Code, params: issue.Params, diagnostics: issue.Diagnostics}.render(stderr)
+		renderError(stderr, issue.Code, errcat.WithParams(issue.Params), errcat.WithDiagnostics(issue.Diagnostics))
 	}
 	if len(toolHard) > 0 {
 		return nil, &toolStartupError{issues: toolHard}
@@ -1679,7 +1500,7 @@ func runServer(configPath, stateDir string, dangerouslySkipPerms bool, enabledPr
 			Name:         resolvedName,
 			Features:     boot.featureManager.Store,
 			FeatureStore: boot.featureManager.Store,
-			Freshness:    newGitFreshnessProvider(),
+			Freshness:    newGitFreshnessProvider(git.RepoFreshness),
 			Config:       boot.cfg,
 			Registry:     boot.registry,
 			Sessions:     boot.sessionManager,
@@ -2274,13 +2095,9 @@ func remapUnresolvableModels(cfg *config.Config, registry *llm.Registry) {
 			*field = fallback
 		}
 	}
-	remap(&m.Inquiry, fallbacks.Inquiry)
-	remap(&m.Research, fallbacks.Research)
-	remap(&m.Planning, fallbacks.Planning)
-	remap(&m.Implementation, fallbacks.Implementation)
-	remap(&m.Review, fallbacks.Review)
-	remap(&m.Utilities, fallbacks.Utilities)
-	remap(&m.KBBuild, fallbacks.KBBuild)
+	for _, r := range config.Roles {
+		remap(r.Model(m), *r.Model(&fallbacks))
+	}
 }
 
 // shouldPersistCatalogDefaults reports whether catalog-derived model defaults
@@ -2350,18 +2167,6 @@ func providerFxModules(enabled []string) ([]fx.Option, error) {
 	return modules, nil
 }
 
-func modelConfigDefaultsMap(m config.ModelConfig) map[string]string {
-	return map[string]string{
-		"inquiry":        m.Inquiry,
-		"research":       m.Research,
-		"planning":       m.Planning,
-		"implementation": m.Implementation,
-		"review":         m.Review,
-		chatName:         m.Utilities,
-		"kb_build":       m.KBBuild,
-	}
-}
-
 func canonicalizeModel(registry *llm.Registry, model string) string {
 	if registry == nil || model == "" {
 		return model
@@ -2379,13 +2184,9 @@ func canonicalizeModel(registry *llm.Registry, model string) string {
 
 func canonicalizeModelConfig(registry *llm.Registry, models config.ModelConfig) (config.ModelConfig, bool) {
 	updated := models
-	updated.Inquiry = canonicalizeModel(registry, models.Inquiry)
-	updated.Research = canonicalizeModel(registry, models.Research)
-	updated.Planning = canonicalizeModel(registry, models.Planning)
-	updated.Implementation = canonicalizeModel(registry, models.Implementation)
-	updated.Review = canonicalizeModel(registry, models.Review)
-	updated.Utilities = canonicalizeModel(registry, models.Utilities)
-	updated.KBBuild = canonicalizeModel(registry, models.KBBuild)
+	for _, r := range config.Roles {
+		*r.Model(&updated) = canonicalizeModel(registry, *r.Model(&updated))
+	}
 	return updated, updated != models
 }
 
@@ -2416,7 +2217,7 @@ func applyCatalogModelDefaultsToConfig(cfg *config.Config, registry *llm.Registr
 		return changed
 	}
 
-	return agent.ApplyStartupDefaults(cfg, modelConfigDefaultsMap(defaults)) || changed
+	return config.ApplyProviderDefaults(cfg, defaults) || changed
 }
 
 // shutdownFeatures stops all active sessions and transitions any feature in a

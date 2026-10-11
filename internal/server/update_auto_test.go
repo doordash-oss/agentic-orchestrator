@@ -56,7 +56,7 @@ func TestAutoPolicyInstallsDiscoveredReleaseWhenIdle(t *testing.T) {
 		t.Fatalf("operation present=%v auto=%v, want an automatic operation", present, auto)
 	}
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	snapshot := decodeUpdateSnapshot(t, w.Result())
 	if snapshot.Policy != UpdateSnapshotPolicy("auto") {
 		t.Fatalf("policy = %q, want auto", snapshot.Policy)
@@ -97,7 +97,7 @@ func TestAutoPolicyCancelledTargetWaitsForNewerRelease(t *testing.T) {
 	}, "auto policy must schedule the discovered release")
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodDelete, []byte(`{}`)))
 	if w.Result().StatusCode != http.StatusOK {
 		t.Fatalf("cancel status = %d, want 200", w.Result().StatusCode)
 	}
@@ -138,7 +138,7 @@ func TestAutoPolicyHonorsMaintenanceWindow(t *testing.T) {
 		return installOpStatus(fixture.handler.updates) == updateStatusScheduled
 	}, "the automatic install must park as scheduled outside the window")
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	snapshot := decodeUpdateSnapshot(t, w.Result())
 	if snapshot.ScheduledFor == nil || !snapshot.ScheduledFor.Equal(open) {
 		t.Fatalf("scheduled_for = %v, want %v", snapshot.ScheduledFor, open)
@@ -160,7 +160,7 @@ func TestInstallRefusesIncompatibleServerContract(t *testing.T) {
 	fixture.discoverLatest(t)
 
 	w := httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+	fixture.handler.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 	if w.Result().StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202", w.Result().StatusCode)
 	}
@@ -168,7 +168,7 @@ func TestInstallRefusesIncompatibleServerContract(t *testing.T) {
 		return installOpCleared(fixture.handler.updates)
 	}, "the incompatible target must settle as failed")
 	w = httptest.NewRecorder()
-	fixture.handler.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+	fixture.handler.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 	snapshot := decodeUpdateSnapshot(t, w.Result())
 	if snapshot.Status != UpdateSnapshotStatusFailed || snapshot.Error == nil {
 		t.Fatalf("status = %q error = %v, want failed with an error", snapshot.Status, snapshot.Error)

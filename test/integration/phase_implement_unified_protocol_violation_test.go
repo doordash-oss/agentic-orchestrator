@@ -312,7 +312,7 @@ func TestPhaseImplementUnified_ProtocolViolation_PersistsFailureRecord(t *testin
 
 	orch := orchestrator.New(orchestrator.Deps{
 		Manager: feature.NewManager(store, nil),
-		Store:     store,
+		Store:   store,
 	}, orchestrator.Hooks{})
 	if err := orch.HandlePhaseCompletion(f.ID, orchestrator.PhaseCompletionInput{
 		Phase:           feature.PhaseImplement,

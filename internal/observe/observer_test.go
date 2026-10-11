@@ -28,7 +28,18 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
+
+// newTestOtelBridge builds an enabled bridge carrying a schemaless
+// service-name-only resource, mirroring the observer's production wiring
+// without environment-derived resource attributes.
+func newTestOtelBridge(serviceName string) *otelBridge {
+	return newOtelBridgeWithResource(true, "", false, serviceName,
+		resource.NewSchemaless(semconv.ServiceNameKey.String(serviceName)))
+}
 
 // readEvents reads all events from events.jsonl for the given featureID.
 func readEvents(t *testing.T, stateDir, featureID string) []Event {
@@ -1740,7 +1751,7 @@ func TestSessionStartedCreatesOTelSpan(t *testing.T) {
 
 	obs := &Observer{
 		emitter: NewEmitter(stateDir),
-		otel:    newOtelBridge(true, "", false, "agentic-test"),
+		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
 
@@ -1771,7 +1782,7 @@ func TestIterationStartedCreatesOTelSpan(t *testing.T) {
 
 	obs := &Observer{
 		emitter: NewEmitter(stateDir),
-		otel:    newOtelBridge(true, "", false, "agentic-test"),
+		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
 
@@ -1802,7 +1813,7 @@ func TestReviewStartedCreatesOTelSpan(t *testing.T) {
 
 	obs := &Observer{
 		emitter: NewEmitter(stateDir),
-		otel:    newOtelBridge(true, "", false, "agentic-test"),
+		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
 
@@ -1833,7 +1844,7 @@ func TestFeatureStartedCreatesOTelSpan(t *testing.T) {
 
 	obs := &Observer{
 		emitter: NewEmitter(stateDir),
-		otel:    newOtelBridge(true, "", false, "agentic-test"),
+		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
 
@@ -1864,7 +1875,7 @@ func TestFeatureFailedEndsOTelSpan(t *testing.T) {
 
 	obs := &Observer{
 		emitter: NewEmitter(stateDir),
-		otel:    newOtelBridge(true, "", false, "agentic-test"),
+		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
 
@@ -1887,7 +1898,7 @@ func TestFeatureInterruptedEndsOTelSpan(t *testing.T) {
 
 	obs := &Observer{
 		emitter: NewEmitter(stateDir),
-		otel:    newOtelBridge(true, "", false, "agentic-test"),
+		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
 
@@ -1910,7 +1921,7 @@ func TestPermissionAddsOTelSpanEvent(t *testing.T) {
 
 	obs := &Observer{
 		emitter: NewEmitter(stateDir),
-		otel:    newOtelBridge(true, "", false, "agentic-test"),
+		otel:    newTestOtelBridge("agentic-test"),
 		enabled: true,
 	}
 

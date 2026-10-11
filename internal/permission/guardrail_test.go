@@ -1017,28 +1017,7 @@ func TestGuardrailFastPath_Git(t *testing.T) {
 	}
 }
 
-func TestGuardrailRedactionAndBounding(t *testing.T) {
-	// Secret replacement
-	t.Run("secret_replacement", func(t *testing.T) {
-		input := "api_key=abc123 command"
-		summary := permission.GuardrailBoundSummary(input)
-		if strings.Contains(summary, "abc123") {
-			t.Errorf("GuardrailBoundSummary did not redact secret: got %q", summary)
-		}
-		if !strings.Contains(summary, "[redacted]") {
-			t.Errorf("GuardrailBoundSummary did not contain [redacted]: got %q", summary)
-		}
-	})
-
-	// Token replacement
-	t.Run("token_replacement", func(t *testing.T) {
-		input := "ghp_1234567890abcdef command"
-		summary := permission.GuardrailBoundSummary(input)
-		if strings.Contains(summary, "ghp_1234567890abcdef") {
-			t.Errorf("GuardrailBoundSummary did not redact token: got %q", summary)
-		}
-	})
-
+func TestGuardrailInputDeferral(t *testing.T) {
 	t.Run("secret_keyword_in_attached_flag_defers", func(t *testing.T) {
 		for _, command := range []string{
 			"gcc -DPASSWORD=hunter2 -c main.c",
@@ -1049,46 +1028,6 @@ func TestGuardrailRedactionAndBounding(t *testing.T) {
 			if got {
 				t.Errorf("GuardrailFastPath(%q) = true, want false", command)
 			}
-		}
-	})
-
-	// Exact-boundary truncation (ASCII)
-	t.Run("exact_boundary_truncation", func(t *testing.T) {
-		input := strings.Repeat("a", 300)
-		summary := permission.GuardrailBoundSummary(input)
-		if len(summary) > 240 {
-			t.Errorf("GuardrailBoundSummary exceeded limit: got len %d, want <= 240", len(summary))
-		}
-		if !strings.HasSuffix(summary, "...") {
-			t.Errorf("GuardrailBoundSummary missing suffix: got %q", summary[len(summary)-10:])
-		}
-	})
-
-	// Multibyte-boundary truncation
-	t.Run("multibyte_boundary_truncation", func(t *testing.T) {
-		// Build a string with multibyte chars near the truncation boundary
-		input := strings.Repeat("é", 200)
-		summary := permission.GuardrailBoundSummary(input)
-		if !utf8.ValidString(summary) {
-			t.Errorf("GuardrailBoundSummary produced invalid UTF-8: got %q", summary)
-		}
-	})
-
-	// Suffix behavior
-	t.Run("suffix_behavior", func(t *testing.T) {
-		input := strings.Repeat("x", 300)
-		summary := permission.GuardrailBoundSummary(input)
-		if !strings.HasSuffix(summary, "...") {
-			t.Errorf("GuardrailBoundSummary should end with ...: got %q", summary[len(summary)-5:])
-		}
-	})
-
-	// Short string no truncation
-	t.Run("no_truncation_short", func(t *testing.T) {
-		input := "go test ./..."
-		summary := permission.GuardrailBoundSummary(input)
-		if summary != input {
-			t.Errorf("GuardrailBoundSummary should not truncate short input: got %q, want %q", summary, input)
 		}
 	})
 

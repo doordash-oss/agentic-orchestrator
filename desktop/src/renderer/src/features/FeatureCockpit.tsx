@@ -133,7 +133,7 @@ type CockpitState = LoadState<
 
 const FOCUSED_COMPLETION_SETTLE_MS = 500;
 
-export interface FeatureCockpitProps {
+interface FeatureCockpitProps {
   featureId: string;
   /** Immediate, non-durable warnings returned by this feature's creation. */
   creationWarnings?: readonly CanonicalError[];

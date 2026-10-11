@@ -42,7 +42,7 @@ import { defined } from '../shared/defined';
 
 const INITIALIZE_PATH = '/api/v1/workspace/repositories/initialize';
 
-export interface InitializeServiceDeps {
+interface InitializeServiceDeps {
   transport: ServerTransport;
   /** Captures the current server identity for request fencing. */
   identity?: ServerIdentitySource;
@@ -106,7 +106,7 @@ export class InitializeService {
 }
 
 /** Maps the snake_case server DTO onto the renderer-facing camelCase shape. */
-export function toInitializeRepositoryResult(
+function toInitializeRepositoryResult(
   dto: InitializeRepositoryResponse,
 ): InitializeRepositoryResult {
   const result: InitializeRepositoryResult = {

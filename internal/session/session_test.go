@@ -2159,7 +2159,7 @@ func TestSession_DenyResponse_E2E(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "deny.sh")
 	// Script emits init, then a control_request for Bash tool.
-	// DenyAllHandler will auto-deny it. Script reads the response and continues.
+	// denyAllTestHandler will auto-deny it. Script reads the response and continues.
 	os.WriteFile(script, []byte(`#!/bin/bash
 echo '{"type":"system","subtype":"init","session_id":"s1","model":"test"}'
 # Emit Bash tool permission request
@@ -2173,7 +2173,7 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 
 	s := NewSession("deny-test", "feat-1", feature.PhaseResearch)
 	s.protocol = claude.NewProtocol(llm.ProtocolOpts{})
-	s.permHandler = &permission.DenyAllHandler{}
+	s.permHandler = denyAllTestHandler{}
 	err := s.Start([]string{"bash", script}, dir, nil, nil)
 	if err != nil {
 		t.Fatalf("start: %v", err)

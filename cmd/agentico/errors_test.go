@@ -22,7 +22,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -63,25 +62,30 @@ func TestRunArgsParseFailuresRenderInvalidUsage(t *testing.T) {
 			wantSummary: "--listen is available only with the headless server; run 'agentico server --listen ...'",
 		},
 		{
-			name:        "update parse error",
-			args:        []string{"update", "--bogus"},
-			wantSummary: "unknown flag: --bogus",
+			name:        "removed update subcommand",
+			args:        []string{"update"},
+			wantSummary: "unknown command: update",
+		},
+		{
+			name:        "removed verify-evidence subcommand",
+			args:        []string{"verify-evidence"},
+			wantSummary: "unknown command: verify-evidence",
+		},
+		{
+			name:        "removed capability-probe subcommand",
+			args:        []string{"capability-probe", "display"},
+			wantSummary: "unknown command: capability-probe",
 		},
 		{
 			name:        "validate-artifacts parse error",
 			args:        []string{cliSubcommandValidateArtifacts, "--bogus"},
 			wantSummary: "unknown validate-artifacts flag: --bogus",
 		},
-		{
-			name:        "verify-evidence parse error",
-			args:        []string{cliSubcommandVerifyEvidence, "--bogus"},
-			wantSummary: "unknown verify-evidence flag: --bogus",
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			code := runArgs(tc.args, &stdout, &stderr, failingServerLauncher(t), failingUpdater(t))
+			code := runArgs(tc.args, &stdout, &stderr, failingServerLauncher(t))
 			if code != 1 {
 				t.Fatalf("runArgs(%v) code = %d, want 1", tc.args, code)
 			}
@@ -104,7 +108,7 @@ func TestRunArgsParseFailuresRenderInvalidUsage(t *testing.T) {
 func TestRunArgsHelpAndVersionWriteNothingToStderr(t *testing.T) {
 	for _, args := range [][]string{{"--help"}, {"--version"}, {"-h"}, {"-v"}} {
 		var stdout, stderr bytes.Buffer
-		code := runArgs(args, &stdout, &stderr, failingServerLauncher(t), failingUpdater(t))
+		code := runArgs(args, &stdout, &stderr, failingServerLauncher(t))
 		if code != 0 {
 			t.Fatalf("runArgs(%v) code = %d, want 0", args, code)
 		}
@@ -125,7 +129,6 @@ func TestRunArgsServerProviderSelection(t *testing.T) {
 				launchedServer = true
 				return 0
 			},
-			failingUpdater(t),
 		)
 		if code != 1 {
 			t.Fatalf("code = %d, want 1", code)
@@ -153,7 +156,6 @@ func TestRunArgsServerProviderSelection(t *testing.T) {
 				gotProviders = providers
 				return 0
 			},
-			failingUpdater(t),
 		)
 		if code != 0 {
 			t.Fatalf("code = %d, want 0; stderr = %q", code, stderr.String())
@@ -170,34 +172,12 @@ func TestRunArgsServerProviderSelection(t *testing.T) {
 	})
 }
 
-func TestRunArgsVerifyEvidenceUnreadableContractRendersContractInputUnreadable(t *testing.T) {
-	var stdout, stderr bytes.Buffer
-	contractPath := filepath.Join(t.TempDir(), "missing-contract.yaml")
-	code := runArgs(
-		[]string{cliSubcommandVerifyEvidence, cliFlagContract, contractPath, cliFlagDir, t.TempDir()},
-		&stdout, &stderr,
-		failingServerLauncher(t), failingUpdater(t),
-	)
-	if code != 1 {
-		t.Fatalf("code = %d, want 1", code)
-	}
-	if got := firstLine(t, stderr.String()); got != "error[contract_input_unreadable]: Contract input unreadable" {
-		t.Fatalf("stderr first line = %q, want the contract-input heading:\n%s", got, stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "  detail: reading testing contract: ") {
-		t.Fatalf("stderr = %q, want the read error under detail", stderr.String())
-	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
-	}
-}
-
 func TestRunArgsValidateArtifactsInvalidPhaseRendersInvalidUsage(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := runArgs(
 		[]string{cliSubcommandValidateArtifacts, cliFlagPhase, "not-a-phase", cliFlagRole, "implementer", cliFlagDir, t.TempDir()},
 		&stdout, &stderr,
-		failingServerLauncher(t), failingUpdater(t),
+		failingServerLauncher(t),
 	)
 	if code != 1 {
 		t.Fatalf("code = %d, want 1", code)

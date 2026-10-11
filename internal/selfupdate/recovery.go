@@ -66,13 +66,6 @@ type UnsafeRecoveryError struct {
 
 func (e *UnsafeRecoveryError) Error() string { return e.Diagnostic }
 
-// IsUnsafeRecovery reports whether err (or anything it wraps) is an unsafe
-// recovery refusal.
-func IsUnsafeRecovery(err error) bool {
-	var unsafe *UnsafeRecoveryError
-	return errors.As(err, &unsafe)
-}
-
 func refuse(format string, args ...interface{}) error {
 	return &UnsafeRecoveryError{Diagnostic: fmt.Sprintf(format, args...)}
 }

@@ -580,7 +580,7 @@ func TestUpdateReportsSupervisorActivity(t *testing.T) {
 	summary := func() UpdateActiveWorkSummary {
 		t.Helper()
 		w := httptest.NewRecorder()
-		h.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+		h.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET update status = %d body=%s", w.Code, w.Body.String())
 		}
@@ -607,7 +607,7 @@ func TestUpdateReportsSupervisorActivity(t *testing.T) {
 	svc.mu.Unlock()
 
 	w := httptest.NewRecorder()
-	h.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
+	h.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"now"}`)))
 	if w.Code != http.StatusConflict {
 		t.Fatalf("install status = %d body=%s, want 409", w.Code, w.Body.String())
 	}
@@ -664,14 +664,14 @@ func TestUpdateIdleInstallProceedsPastWaitingSupervisor(t *testing.T) {
 			h.updates.performCheck(context.Background(), "explicit")
 
 			w := httptest.NewRecorder()
-			h.routes().ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
+			h.ServeHTTP(w, authorizedUpdateRequest(http.MethodGet, apiPathUpdate, nil))
 			summary := decodeUpdateSnapshot(t, w.Result()).ActiveWorkSummary
 			if !summary.SupervisorActive || summary.SupervisorWaiting != !tc.waits {
 				t.Fatalf("summary = %+v, want supervisor_active and supervisor_waiting=%v", summary, !tc.waits)
 			}
 
 			w = httptest.NewRecorder()
-			h.routes().ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
+			h.ServeHTTP(w, trustedInstallRequest(http.MethodPost, []byte(`{"consent":true,"when":"idle"}`)))
 			if w.Code != http.StatusAccepted {
 				t.Fatalf("idle install status = %d body=%s", w.Code, w.Body.String())
 			}

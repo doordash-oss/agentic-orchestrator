@@ -27,7 +27,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/autoreview"
 	"github.com/doordash-oss/agentic-orchestrator/internal/config"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
-	"github.com/doordash-oss/agentic-orchestrator/internal/guidelinedef"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
@@ -181,8 +180,10 @@ func (pr *PhaseRunner) effortCapabilitiesForModel(model string) []llm.EffortLeve
 // model) falls back to the pipeline level (or low for Utilities) with a
 // runtime warning and does not mutate persisted state.
 func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRole, model string) (llm.EffortLevel, llm.EffortSource) {
-	field := llm.ConfigFieldForRole(role)
-	configured := config.EffortConfigFieldByName(f.Effort, field)
+	var configured string
+	if r, ok := config.RoleNamed(string(role)); ok {
+		configured = *r.Effort(&f.Effort)
+	}
 	pipelineEffort := f.EffectivePipeline().EffortLevel()
 
 	if role == llm.PhaseChat && (configured == "" || configured == "auto") {
@@ -193,7 +194,7 @@ func (pr *PhaseRunner) resolveEffortForRole(f *feature.Feature, role llm.PhaseRo
 	effectiveEffort, effortSource := llm.ResolveEffortFromString(configured, caps, pipelineEffort)
 	if llm.EffortDrifted(llm.EffortLevel(configured), caps) {
 		pr.logRuntimeWarning(f, "%s effort %q is not supported by model %q; falling back to Auto (%s)",
-			strings.ToLower(field), configured, model, string(pipelineEffort))
+			string(role), configured, model, string(pipelineEffort))
 	}
 	return effectiveEffort, effortSource
 }
@@ -209,11 +210,11 @@ func (pr *PhaseRunner) sessionRuntimeConfigResolver(featureID string) func(llm.P
 		if err != nil {
 			return sessionRuntimeConfig{}, fmt.Errorf("load feature %s: %w", featureID, err)
 		}
-		field := llm.ConfigFieldForRole(role)
-		if field == "" {
+		r, ok := config.RoleNamed(string(role))
+		if !ok {
 			return sessionRuntimeConfig{}, fmt.Errorf("unsupported session role %q", role)
 		}
-		model := pr.modelForRole(config.ModelConfigFieldByName(latest.Models, field), role)
+		model := pr.modelForRole(*r.Model(&latest.Models), role)
 		effort, effortSource := pr.resolveEffortForRole(latest, role, model)
 		return sessionRuntimeConfig{
 			Model:           model,
@@ -307,20 +308,19 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 		effortLevel = effectiveEffort
 	}
 	cmd, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		FeatureID:                      f.ID,
-		AutomaticReviewMode:            feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
-		Model:                          phaseModel,
-		Prompt:                         cfg.Prompt,
-		SystemPrompt:                   systemPrompt,
-		AdditionalDirs:                 additionalDirs,
-		AgentNames:                     cfg.AgentNames,
-		PIDDir:                         pidDir,
-		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, ""),
-		WorkDir:                        workDir,
-		EffortLevel:                    effortLevel,
-		Phase:                          cfg.Phase,
-		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
+		FeatureID:           f.ID,
+		AutomaticReviewMode: feature.NormalizeAutomaticReviewMode(f.AutomaticReviewMode),
+		Model:               phaseModel,
+		Prompt:              cfg.Prompt,
+		SystemPrompt:        systemPrompt,
+		AdditionalDirs:      additionalDirs,
+		AgentNames:          cfg.AgentNames,
+		PIDDir:              pidDir,
+		PermHandler:         permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, ""),
+		WorkDir:             workDir,
+		EffortLevel:         effortLevel,
+		Phase:               cfg.Phase,
+		CompletionProtocol:  true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("building inquire session: %w", err)
@@ -609,17 +609,16 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 		// kbDir is a sibling of pr.StateDir (under knowledge-base/<repo>), so it
 		// must be mounted explicitly. The global feature-state root is not KB
 		// context and must not be exposed to this agent.
-		AdditionalDirs:                 []string{kbDir},
-		AgentNames:                     knowledgeBaseAgentNames(),
-		PIDDir:                         pidDir,
-		PermHandler:                    permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
-		RepoName:                       repo.Name,
-		WorkDir:                        workDir,
-		EffortLevel:                    kbEffortLevel,
-		Phase:                          feature.PhaseKnowledgeBase,
-		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
-		LogPath:                        logPath,
+		AdditionalDirs:     []string{kbDir},
+		AgentNames:         knowledgeBaseAgentNames(),
+		PIDDir:             pidDir,
+		PermHandler:        permHandlerFor(pr.DangerouslySkipPermissions, pr.PermissionCache, repo.Name),
+		RepoName:           repo.Name,
+		WorkDir:            workDir,
+		EffortLevel:        kbEffortLevel,
+		Phase:              feature.PhaseKnowledgeBase,
+		CompletionProtocol: true,
+		LogPath:            logPath,
 	})
 	if err != nil {
 		return "", fmt.Errorf("building KB session: %w", err)
@@ -1017,7 +1016,7 @@ func (pr *PhaseRunner) liveAutomaticReviewEnabled(featureID string, fallbackMode
 // are read, the reviewer is
 // resolved, and the full snapshot is returned for the caller to store. The
 // enabled flag itself is read live by the decorator. The hidden reviewer is
-// launched via autoreview.Classify (never BuildSession), so it is never
+// launched via autoreview.ClassifyDetailed (never BuildSession), so it is never
 // decorated and cannot recurse.
 func (pr *PhaseRunner) decorateWithAutoReview(composed, original ports.PermissionHandler, opts *BuildSessionOpts, workDir string, writableRoots []string) (ports.PermissionHandler, ports.AutoReviewSnapshot) {
 	enabledFn := pr.liveAutomaticReviewEnabled(opts.FeatureID, opts.AutomaticReviewMode)
@@ -1166,11 +1165,6 @@ type BuildSessionOpts struct {
 	AgentNames    []string
 	TurnMode      ports.SessionTurnMode
 	Phase         feature.Phase // current phase, used to filter utility skill preamble
-	// SystemPromptHasUsefulResources indicates the system prompt already
-	// includes the soft KB/guideline/skill discovery catalog. Bounded helpers
-	// that still pass ad-hoc prompts leave this false so BuildSession can
-	// append the guideline preamble when needed.
-	SystemPromptHasUsefulResources bool
 	// CompletionProtocol keeps the provider session alive across bounded
 	// completion nudges and requires a root-owned semantic outcome.
 	CompletionProtocol bool
@@ -1332,16 +1326,6 @@ func (pr *PhaseRunner) BuildSession(opts BuildSessionOpts) (cmd []string, env []
 		readOnlyContextDirs = append(readOnlyContextDirs, pr.SkillsDir)
 	}
 
-	// Guidelines injection: append discovery table for code-touching phases.
-	if pr.GuidelinesDir != "" && opts.SystemPrompt != "" && !opts.SystemPromptHasUsefulResources {
-		switch opts.Phase {
-		case feature.PhaseDesign, feature.PhasePlan, feature.PhaseImplement, feature.PhaseReview:
-			preamble := guidelinedef.BuildPreamble(pr.GuidelinesDir)
-			if preamble != "" {
-				opts.SystemPrompt = opts.SystemPrompt + "\n\n" + preamble
-			}
-		}
-	}
 	// Guidelines injection: grant agents filesystem access to guideline files.
 	if pr.GuidelinesDir != "" {
 		opts.AdditionalDirs = append(opts.AdditionalDirs, pr.GuidelinesDir)

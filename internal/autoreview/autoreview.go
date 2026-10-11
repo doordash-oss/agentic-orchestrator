@@ -610,13 +610,6 @@ func classifyAttempt(
 	return attemptResult{result: Result{Decision: decision, Outcome: OutcomeDefer, Timing: timing}}
 }
 
-// Classify preserves the original decision/bool API for callers that do not
-// need the typed operational outcome.
-func Classify(ctx context.Context, reviewer Reviewer, req ClassifyRequest) (Decision, bool) {
-	result := ClassifyDetailed(ctx, reviewer, req)
-	return result.Decision, result.Outcome == OutcomeAllow || result.Outcome == OutcomeDefer
-}
-
 func mergeTiming(dst *Timing, src Timing) {
 	if dst.Launch == 0 && src.Launch > 0 {
 		dst.Launch = src.Launch

@@ -77,10 +77,10 @@ type InitializeOutcome struct {
 	AlreadyInitialized bool
 }
 
-// InitializeRepository creates exactly one empty root commit in the existing
-// unborn repository at dir, preserving its origin remotes, its valid
-// symbolic branch (verbatim, including slash-containing names) and every
-// existing file. It never reinitializes, republishes or pushes.
+// InitializeRepositoryAtIdentity creates exactly one empty root commit in
+// the existing unborn repository at dir, preserving its origin remotes, its
+// valid symbolic branch (verbatim, including slash-containing names) and
+// every existing file. It never reinitializes, republishes or pushes.
 //
 // Eligibility is proved before any mutation: the repository must have no
 // commits, no staged, unstaged or untracked content (ignored files are
@@ -97,14 +97,11 @@ type InitializeOutcome struct {
 // of producing a second commit or replacing the competing commit. The
 // whole sequence holds the shared per-path mutation lock, so Agentico's
 // own affected-checkout mutations on the same repository serialize with it.
-func InitializeRepository(ctx context.Context, dir string) (InitializeOutcome, error) {
-	return initializeRepository(ctx, dir, nil)
-}
-
-// InitializeRepositoryAtIdentity is InitializeRepository with an additional
-// identity fence. The expected identity is re-resolved while holding the
-// shared repository mutation lock, so a checkout replaced after catalog
-// resolution cannot inherit the prior request's authority.
+//
+// On top of that contract it carries an identity fence: the expected
+// identity is re-resolved while holding the shared repository mutation
+// lock, so a checkout replaced after catalog resolution cannot inherit the
+// prior request's authority.
 func InitializeRepositoryAtIdentity(ctx context.Context, dir string, expected RepoIdentity) (InitializeOutcome, error) {
 	return initializeRepository(ctx, dir, &expected)
 }

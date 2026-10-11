@@ -606,9 +606,9 @@ func TestClassifyAllow(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeAllowScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	reviewer, _, _ := ResolveReviewer(reg, "")
-	got, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()})
-	if !ok || got != Allow {
-		t.Fatalf("Classify = (%q,%v), want (ALLOW,true)", got, ok)
+	got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()})
+	if got.Decision != Allow || got.Outcome != OutcomeAllow {
+		t.Fatalf("ClassifyDetailed = (%q,%s), want (ALLOW,%s)", got.Decision, got.Outcome, OutcomeAllow)
 	}
 }
 
@@ -616,9 +616,9 @@ func TestClassifyDefer(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeDeferScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	reviewer, _, _ := ResolveReviewer(reg, "")
-	got, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "git status --short", WorkDir: t.TempDir()})
-	if !ok || got != Defer {
-		t.Fatalf("Classify = (%q,%v), want (DEFER,true)", got, ok)
+	got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "git status --short", WorkDir: t.TempDir()})
+	if got.Decision != Defer || got.Outcome != OutcomeDefer {
+		t.Fatalf("ClassifyDetailed = (%q,%s), want (DEFER,%s)", got.Decision, got.Outcome, OutcomeDefer)
 	}
 }
 
@@ -626,8 +626,9 @@ func TestClassifyMalformedFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeMalformedScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	reviewer, _, _ := ResolveReviewer(reg, "")
-	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
-		t.Fatalf("Classify(prose) = true, want false")
+	got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()})
+	if got.Outcome == OutcomeAllow || got.Outcome == OutcomeDefer {
+		t.Fatalf("ClassifyDetailed(prose) = %s, want a failure outcome", got.Outcome)
 	}
 }
 
@@ -722,8 +723,8 @@ func TestClassifyToolUseDeniedFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeToolUseScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	reviewer, _, _ := ResolveReviewer(reg, "")
-	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
-		t.Fatalf("Classify(tool use) = true, want false (deny-all boundary)")
+	if got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); got.Outcome == OutcomeAllow || got.Outcome == OutcomeDefer {
+		t.Fatalf("ClassifyDetailed(tool use) = %s, want a failure outcome (deny-all boundary)", got.Outcome)
 	}
 }
 
@@ -734,8 +735,8 @@ func TestClassifyControlRequestThenAllowFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeControlThenAllowScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	reviewer, _, _ := ResolveReviewer(reg, "")
-	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
-		t.Fatalf("Classify(control+ALLOW) = true, want false (control request is terminal)")
+	if got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); got.Outcome == OutcomeAllow || got.Outcome == OutcomeDefer {
+		t.Fatalf("ClassifyDetailed(control+ALLOW) = %s, want a failure outcome (control request is terminal)", got.Outcome)
 	}
 }
 
@@ -745,8 +746,8 @@ func TestClassifyErrorResultFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeErrorResultScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	reviewer, _, _ := ResolveReviewer(reg, "")
-	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
-		t.Fatalf("Classify(error result) = true, want false (error result is terminal)")
+	if got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); got.Outcome == OutcomeAllow || got.Outcome == OutcomeDefer {
+		t.Fatalf("ClassifyDetailed(error result) = %s, want a failure outcome (error result is terminal)", got.Outcome)
 	}
 }
 
@@ -859,8 +860,8 @@ func TestClassifyRefusalResultFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeRefusalScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	reviewer, _, _ := ResolveReviewer(reg, "")
-	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
-		t.Fatalf("Classify(refusal) = true, want false (refusal is terminal)")
+	if got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); got.Outcome == OutcomeAllow || got.Outcome == OutcomeDefer {
+		t.Fatalf("ClassifyDetailed(refusal) = %s, want a failure outcome (refusal is terminal)", got.Outcome)
 	}
 }
 
@@ -868,8 +869,8 @@ func TestClassifyTimeoutFails(t *testing.T) {
 	script := testutil.WriteFakeClaudeScript(t, testutil.FakeClaudeSleepScriptBody())
 	reg := testutil.NewFakeClaudeRegistry(t, script)
 	reviewer, _, _ := ResolveReviewer(reg, "")
-	if _, ok := Classify(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir(), Timeout: 200 * time.Millisecond}); ok {
-		t.Fatalf("Classify(timeout) = true, want false")
+	if got := ClassifyDetailed(context.Background(), reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir(), Timeout: 200 * time.Millisecond}); got.Outcome == OutcomeAllow || got.Outcome == OutcomeDefer {
+		t.Fatalf("ClassifyDetailed(timeout) = %s, want a failure outcome", got.Outcome)
 	}
 }
 
@@ -910,8 +911,8 @@ func TestClassifyCancelledContextFails(t *testing.T) {
 	reviewer, _, _ := ResolveReviewer(reg, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, ok := Classify(ctx, reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); ok {
-		t.Fatalf("Classify(cancelled ctx) = true, want false")
+	if got := ClassifyDetailed(ctx, reviewer, ClassifyRequest{ToolName: "Bash", Command: "go test ./...", WorkDir: t.TempDir()}); got.Outcome == OutcomeAllow || got.Outcome == OutcomeDefer {
+		t.Fatalf("ClassifyDetailed(cancelled ctx) = %s, want a failure outcome", got.Outcome)
 	}
 }
 

@@ -515,7 +515,7 @@ async function postStressProcessMemory() {
   }
 }
 
-export async function collectRssSamples(
+async function collectRssSamples(
   pid,
   read = readProcessRssBytes,
   sampleCount = 5,

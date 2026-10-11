@@ -130,7 +130,7 @@ export interface SourceUpdateNotice {
 }
 
 /** The exact displayed expectations the update request binds. */
-export interface SourceUpdateTarget {
+interface SourceUpdateTarget {
   request: RepositoryUpdateSourceRequest;
   branch: string;
   originBranch: string;

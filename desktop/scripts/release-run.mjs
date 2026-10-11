@@ -56,29 +56,6 @@ import {
   verifyReleasePublication,
 } from './verify-release-publication.mjs';
 
-export const RELEASE_SEQUENCE = Object.freeze([
-  'preflight',
-  'npm-ci',
-  'mac-package',
-  'linux-packages',
-  'package-gate',
-  'desktop-manifest-sign',
-  'desktop-manifest-gate',
-  'publication-snapshot',
-  'snapshot-gate',
-  'provenance-recheck',
-  'tag-reservation-start-record',
-  'remote-tag-reservation',
-  'goreleaser-start-record',
-  'goreleaser',
-  'goreleaser-resume-record',
-  'manifest-gate',
-  'remote-byte-gate',
-  'remote-resume-record',
-  'desktop-cask',
-  'cleanup',
-]);
-
 const RECEIPTS = Object.freeze([
   'package-verification-darwin-universal.json',
   'package-verification-linux-x64.json',
@@ -114,7 +91,7 @@ function resumePath(operatorRoot, gitCommand = git) {
   );
 }
 
-export function loadReleaseResumeState(operatorRoot, { gitCommand = git } = {}) {
+function loadReleaseResumeState(operatorRoot, { gitCommand = git } = {}) {
   const path = resumePath(operatorRoot, gitCommand);
   if (!existsSync(path)) return null;
   const stat = lstatSync(path);
@@ -122,7 +99,7 @@ export function loadReleaseResumeState(operatorRoot, { gitCommand = git } = {}) 
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
-export function saveReleaseResumeState(evidence, snapshot, stage, { gitCommand = git } = {}) {
+function saveReleaseResumeState(evidence, snapshot, stage, { gitCommand = git } = {}) {
   if (
     ![
       'tag-reservation-started',
@@ -142,7 +119,7 @@ export function saveReleaseResumeState(evidence, snapshot, stage, { gitCommand =
   writeReleaseEvidence(path, { schema_version: 1, stage, evidence, snapshot });
 }
 
-export function removeReleaseResumeState(operatorRoot, { gitCommand = git } = {}) {
+function removeReleaseResumeState(operatorRoot, { gitCommand = git } = {}) {
   const path = resumePath(operatorRoot, gitCommand);
   if (!existsSync(path)) return;
   const stat = lstatSync(path);
@@ -164,7 +141,7 @@ export function validateResumeEvidenceBoundary(evidence, { expectedPath, readEvi
   return evidence;
 }
 
-export function validateReleaseResumeState(state) {
+function validateReleaseResumeState(state) {
   if (
     state?.schema_version !== 1 ||
     ![

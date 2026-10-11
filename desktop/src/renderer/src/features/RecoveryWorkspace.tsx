@@ -44,7 +44,7 @@ function humanizeAction(action: string): string {
   }
 }
 
-export interface RecoveryWorkspaceProps {
+interface RecoveryWorkspaceProps {
   onNavigateToFeature?: (featureId: string) => void;
 }
 

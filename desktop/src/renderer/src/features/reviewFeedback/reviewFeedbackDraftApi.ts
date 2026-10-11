@@ -52,7 +52,7 @@ export interface ReviewFeedbackSelectionUpdate {
   selected: boolean;
 }
 
-export interface ReviewFeedbackLaunchResult {
+interface ReviewFeedbackLaunchResult {
   /** Identity of the created review-feedback child (`child_id ?? feature_id`). */
   childId: string;
   parentId: string;

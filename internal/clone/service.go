@@ -466,11 +466,6 @@ func stagingNameFor(kind, id string) string {
 	return stagingPrefix + kind + "-" + strings.TrimPrefix(strings.TrimPrefix(id, "clone-"), "create-")
 }
 
-// stagingName is the clone-kind staging name (legacy records have no kind).
-func stagingName(id string) string {
-	return stagingNameFor(KindClone, id)
-}
-
 // recordKind normalizes a record's kind: records written before kinds
 // existed are clone records.
 func recordKind(rec *Record) string {

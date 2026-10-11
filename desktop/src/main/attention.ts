@@ -147,7 +147,7 @@ type AttentionQuestionsItem = Extract<AttentionItem, { kind: 'questions' }>;
  * Who owns a control-request item: a feature tab (optionally through its
  * refactor parent) or, for the supervisor conversation, the Supervisor page.
  */
-export type ControlRequestOwner =
+type ControlRequestOwner =
   { featureId?: string; parentFeatureId?: string } | { target: 'supervisor' };
 
 /**
@@ -156,7 +156,7 @@ export type ControlRequestOwner =
  * feature id is the reserved `__supervisor__`. Such requests are never
  * dropped as orphans even though no listed feature owns them.
  */
-export function isSupervisorControlRequest(request: {
+function isSupervisorControlRequest(request: {
   feature_id?: string;
   session_id?: string;
 }): boolean {
@@ -179,7 +179,7 @@ function supervisorOriginFields(
 }
 
 /** Maps one pending server permission request to its attention item. */
-export function controlRequestPermissionItem(
+function controlRequestPermissionItem(
   request: ServerControlRequest,
   owner: ControlRequestOwner,
 ): AttentionPermissionItem {
@@ -226,7 +226,7 @@ export function controlRequestPermissionItem(
 }
 
 /** Maps one pending AskUser request to its attention item; null without questions. */
-export function controlRequestQuestionsItem(
+function controlRequestQuestionsItem(
   request: ServerControlRequest,
   owner: ControlRequestOwner,
 ): AttentionQuestionsItem | null {

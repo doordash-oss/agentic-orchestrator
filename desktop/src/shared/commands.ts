@@ -19,7 +19,7 @@ import type { AppRouteEvent } from './ipc';
 export type CommandGroup =
   'window' | 'file' | 'navigation' | 'view' | 'attention' | 'assistant' | 'feature' | 'bulk';
 
-export type GlobalCommandId =
+type GlobalCommandId =
   | 'global.palette'
   | 'global.help'
   | 'global.show'
@@ -290,7 +290,7 @@ export interface FeatureActionLike {
   disabledReasons: ReadonlyArray<{ code: string; message: string }>;
 }
 
-export interface FeatureCommandState {
+interface FeatureCommandState {
   enabled: boolean;
   /** Shown beside a disabled palette entry; absent while a snapshot loads. */
   reason?: string;

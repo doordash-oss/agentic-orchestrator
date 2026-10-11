@@ -25,42 +25,8 @@ limitations under the License.
 const trackedProcesses = new Set();
 let reaperInstalled = false;
 
-function delay(ms) {
-  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
-}
-
 function hasExited(handle) {
   return handle.exitCode !== null || handle.signalCode !== null;
-}
-
-function exited(handle) {
-  if (hasExited(handle)) {
-    return Promise.resolve();
-  }
-  return new Promise((resolveExit) => handle.once('exit', resolveExit));
-}
-
-/**
- * Closes a Playwright ElectronApplication with bounded escalation. Returns
- * `{ method: 'graceful' | 'sigterm' | 'sigkill' }` describing what it took;
- * the process is guaranteed dead (or SIGKILLed) when this resolves.
- */
-export async function terminateElectronApp(app, handle, options = {}) {
-  const { closeTimeoutMs = 5_000, sigtermTimeoutMs = 5_000, sigkillTimeoutMs = 2_000 } = options;
-  const exitPromise = exited(handle);
-  await Promise.race([app.close().catch(() => undefined), delay(closeTimeoutMs)]);
-  if (hasExited(handle)) {
-    return { method: 'graceful' };
-  }
-  handle.kill('SIGTERM');
-  if (
-    await Promise.race([exitPromise.then(() => true), delay(sigtermTimeoutMs).then(() => false)])
-  ) {
-    return { method: 'sigterm' };
-  }
-  handle.kill('SIGKILL');
-  await Promise.race([exitPromise, delay(sigkillTimeoutMs)]);
-  return { method: 'sigkill' };
 }
 
 /** Registers a child process to be SIGKILLed if the harness exits first. */
@@ -104,19 +70,4 @@ export function installProcessReaper(proc = process) {
       proc.exit(1);
     });
   }
-}
-
-/**
- * Returns an error message when a launch needed forced termination (the
- * quit-guard-leak condition), or null for a clean quit. Callers should
- * fail fast on a non-null result instead of leaking a window per sample.
- */
-export function cleanShutdownFailure(method) {
-  if (method === 'graceful') {
-    return null;
-  }
-  return (
-    `packaged app did not quit cleanly (required ${method}); ` +
-    'the quit guard is blocking automated shutdown, so aborting instead of leaking app instances'
-  );
 }

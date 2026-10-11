@@ -64,8 +64,8 @@ SSE endpoints. Mutations also keep the trusted local header,
 
 Shell callers on the server machine use `agentico api METHOD /api/v1/<path>
 [json]` as the sanctioned client instead of building requests by hand. It
-resolves the runtime directory (`--runtime-dir`, then `AGENTICO_RUNTIME_DIR`,
-then the default home runtime directory), trusts the discovery file only when
+resolves the runtime directory (`AGENTICO_RUNTIME_DIR`, then the default
+home runtime directory), trusts the discovery file only when
 it is a regular file owned by the caller with no group or other permission
 bits, and sends `Authorization: Bearer`, `X-Agentico-Client: local`, `Accept:
 application/json` and, with a body, `Content-Type: application/json` to the
@@ -265,8 +265,6 @@ e.g. `AGENTICO_BROWSER_STATE_SLACK_COM`) pointing at that file.
 
 CLI:
 
-- `agentico capability-probe <name[(argument)]>` prints available/unavailable
-  with the reason and exits 0/1.
 - `agentico report-blocker --contract <testing-contract.yaml> --dir
   <iteration_dir> --items <id,id,...> --capability <name> --reason <text>`
   writes the blocker gate (`need-user-input.yaml`, source agent) into the

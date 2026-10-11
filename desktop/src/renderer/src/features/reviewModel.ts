@@ -16,7 +16,7 @@ limitations under the License.
 
 import type { SessionSummary } from '../../../shared/ipc';
 
-export const REVIEW_AXIS_ORDER = [
+const REVIEW_AXIS_ORDER = [
   'Architecture',
   'Structural',
   'Grounding',
@@ -61,7 +61,7 @@ export function reviewAxisShortName(name: string): string {
   return known[name] ?? name;
 }
 
-export type ReviewStatusTone = 'passed' | 'failed' | 'running' | 'pending';
+type ReviewStatusTone = 'passed' | 'failed' | 'running' | 'pending';
 
 export function reviewStatusTone(status: string): ReviewStatusTone {
   const normalized = status.trim().toLocaleLowerCase();
@@ -113,36 +113,6 @@ export function orderRunSessions(sessions: readonly SessionSummary[]): SessionSu
       return left.index - right.index;
     })
     .map(({ session }) => session);
-}
-
-function isWaitingStatus(status: string): boolean {
-  const normalized = status.replaceAll(/[_\s-]/g, '').toLocaleLowerCase();
-  return normalized === 'waitinghelp' || normalized === 'waitingpermission';
-}
-
-function isActiveStatus(status: string): boolean {
-  return [
-    'running',
-    'active',
-    'starting',
-    'stopping',
-    'implementing',
-    'reviewing',
-    'finalreviewing',
-    'waiting',
-  ].includes(status.replaceAll(/[_\s-]/g, '').toLocaleLowerCase());
-}
-
-/** Mirrors attach focus: blocking work, then active work, then stable first tab. */
-export function selectInitialRunSession(
-  orderedSessions: readonly SessionSummary[],
-): SessionSummary | null {
-  return (
-    orderedSessions.find((session) => isWaitingStatus(session.status)) ??
-    orderedSessions.find((session) => isActiveStatus(session.status)) ??
-    orderedSessions[0] ??
-    null
-  );
 }
 
 export function sessionDisplayLabel(session: SessionSummary): string {

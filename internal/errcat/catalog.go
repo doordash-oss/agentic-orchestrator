@@ -1320,8 +1320,8 @@ var catalog = map[Code]Entry{
 		Title:             "Server discovery file not found",
 		Summary:           "No Agentico server has published a discovery file in the runtime directory.",
 		summaryParams:     runtimeDirTemplate("No Agentico server has published a discovery file in {dir}."),
-		Remediation:       "Start the Agentico server, or name its runtime directory with --runtime-dir or AGENTICO_RUNTIME_DIR, then retry.",
-		remediationParams: runtimeDirTemplate("Start the Agentico server that uses {dir}, or name its runtime directory with --runtime-dir or AGENTICO_RUNTIME_DIR, then retry."),
+		Remediation:       "Start the Agentico server, or name its runtime directory with AGENTICO_RUNTIME_DIR, then retry.",
+		remediationParams: runtimeDirTemplate("Start the Agentico server that uses {dir}, or name its runtime directory with AGENTICO_RUNTIME_DIR, then retry."),
 	},
 	DiscoveryUntrusted: {
 		Class:             ClassBlocking,

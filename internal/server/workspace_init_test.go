@@ -43,7 +43,7 @@ func newRepoInitHandler(t *testing.T, root string) (*apiHandler, http.Handler, *
 			return os.MkdirAll(filepath.Join(path, ".git"), 0o755)
 		},
 	})
-	return api, api.routes(), &initialized
+	return api, api, &initialized
 }
 
 func decodeErrorBody(t *testing.T, w *httptest.ResponseRecorder) ErrorResponse {

@@ -19,7 +19,6 @@
 package errcat
 
 import (
-	"sort"
 	"strings"
 )
 
@@ -162,16 +161,6 @@ type Entry struct {
 func Lookup(code Code) (Entry, bool) {
 	entry, ok := catalog[code]
 	return entry, ok
-}
-
-// Codes returns every catalog code, sorted.
-func Codes() []Code {
-	codes := make([]Code, 0, len(catalog))
-	for code := range catalog {
-		codes = append(codes, code)
-	}
-	sort.Slice(codes, func(i, j int) bool { return codes[i] < codes[j] })
-	return codes
 }
 
 const (

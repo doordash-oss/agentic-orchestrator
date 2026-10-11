@@ -25,9 +25,9 @@ import type { ReactElement } from 'react';
 import type { ReviewFeedbackDraftCommentView } from './reviewFeedbackDraftApi';
 
 /** Collapse thresholds for a card's long content (body and/or diff). */
-export const BODY_COLLAPSE_CHARS = 1200;
-export const BODY_COLLAPSE_LINES = 12;
-export const DIFF_COLLAPSE_LINES = 20;
+const BODY_COLLAPSE_CHARS = 1200;
+const BODY_COLLAPSE_LINES = 12;
+const DIFF_COLLAPSE_LINES = 20;
 
 export function needsExpansion(
   comment: Pick<ReviewFeedbackDraftCommentView, 'body' | 'diffHunk'>,
@@ -62,7 +62,7 @@ const KIND_LABEL: Record<DiffLineKind, string> = {
   context: 'Context line',
 };
 
-export interface ReviewFeedbackDiffProps {
+interface ReviewFeedbackDiffProps {
   text: string;
 }
 

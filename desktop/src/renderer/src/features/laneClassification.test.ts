@@ -23,7 +23,6 @@ import {
   classifyFeaturesByLane,
   classifyFeaturesByLaneWithAttention,
   classifyLane,
-  laneCounts,
   type Lane,
 } from './laneClassification';
 
@@ -304,7 +303,7 @@ describe('classifyLane — warnings never change the lane', () => {
   // Rewind action-result warnings and repository-diff errors travel on their
   // response objects, which classifyLane never receives; the two fields above
   // are the only warning carriers a snapshot can represent.
-  it('keeps lane groups and counts identical for a batch carrying warnings', () => {
+  it('keeps lane groups identical for a batch carrying warnings', () => {
     const bare = [
       snapshot('Published', {
         activeChild: child({ status: 'Implementing', warnings: [] }),
@@ -325,7 +324,6 @@ describe('classifyLane — warnings never change the lane', () => {
     expect(laneIds(classifyFeaturesByLane(laden))).toStrictEqual(
       laneIds(classifyFeaturesByLane(bare)),
     );
-    expect(laneCounts(laden)).toStrictEqual(laneCounts(bare));
   });
 });
 
@@ -367,28 +365,6 @@ describe('classifyFeaturesByLane', () => {
     expect(grouped.running).toStrictEqual([]);
     expect(grouped.published).toStrictEqual([]);
     expect(grouped['at-rest']).toStrictEqual([]);
-  });
-});
-
-describe('laneCounts', () => {
-  it('counts features per lane using the same classification, failed included', () => {
-    const features = [
-      snapshot('Done'),
-      snapshot('Done'),
-      snapshot('Failed', { errors: [blockingRunError('feature-Failed')] }),
-      snapshot('Implementing'),
-      snapshot('Published'),
-      snapshot('CodeReady'),
-    ];
-
-    expect(laneCounts(features)).toStrictEqual({
-      failed: 1,
-      waiting: 0,
-      running: 1,
-      published: 1,
-      done: 2,
-      'at-rest': 1,
-    });
   });
 });
 
@@ -438,7 +414,7 @@ describe('purity', () => {
     expect(feature).toStrictEqual(before);
   });
 
-  it('does not mutate inputs when grouping or counting a batch', () => {
+  it('does not mutate inputs when grouping a batch', () => {
     const features = [
       snapshot('Done'),
       snapshot('Failed', { errors: [blockingRunError('feature-Failed')] }),
@@ -447,7 +423,6 @@ describe('purity', () => {
     const before = JSON.parse(JSON.stringify(features));
 
     classifyFeaturesByLane(features);
-    laneCounts(features);
 
     expect(features).toStrictEqual(before);
   });

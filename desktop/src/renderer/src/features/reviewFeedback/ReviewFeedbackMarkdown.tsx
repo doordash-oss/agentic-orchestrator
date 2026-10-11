@@ -393,7 +393,7 @@ const COMPONENTS = {
   table: BoundedTable,
 };
 
-export interface ReviewFeedbackMarkdownProps {
+interface ReviewFeedbackMarkdownProps {
   text: string;
 }
 
@@ -436,5 +436,3 @@ function remarkFlattenRawHtml(): (tree: MdastLike) => void {
     walk(tree);
   };
 }
-
-export const __testing = { parseSafeDestination, resolveFenceLanguage };

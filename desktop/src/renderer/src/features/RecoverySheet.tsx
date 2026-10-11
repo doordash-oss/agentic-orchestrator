@@ -33,7 +33,7 @@ import { BulkPreviewPanel } from './BulkPreviewPanel';
 import { RecoveryWorkspace } from './RecoveryWorkspace';
 import { defined } from '../../../shared/defined';
 
-export interface RecoverySheetProps {
+interface RecoverySheetProps {
   /** Non-null when the opening route asked for a bulk preview (⌘⇧B, the bulk command). */
   bulkPreviewKey: number | null;
   onClose(): void;

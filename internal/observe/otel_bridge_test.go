@@ -22,8 +22,10 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	"google.golang.org/grpc"
 )
@@ -276,7 +278,8 @@ func TestNewOtelBridgeProductionConstructor(t *testing.T) {
 		defer grpcServer.Stop()
 
 		// Pass explicit gRPC options so the test controls endpoint and TLS.
-		bridge := newOtelBridge(true, "", false, "test-agentic-service",
+		bridge := newOtelBridgeWithResource(true, "", false, "test-agentic-service",
+			resource.NewSchemaless(semconv.ServiceNameKey.String("test-agentic-service")),
 			otlptracegrpc.WithEndpoint(lis.Addr().String()),
 			otlptracegrpc.WithInsecure(),
 		)
@@ -304,7 +307,7 @@ func TestNewOtelBridgeProductionConstructor(t *testing.T) {
 	})
 
 	t.Run("disabled returns noop bridge", func(t *testing.T) {
-		bridge := newOtelBridge(false, "", false, "")
+		bridge := newOtelBridgeWithResource(false, "", false, "", nil)
 
 		if bridge.enabled {
 			t.Fatal("expected bridge to be disabled")
@@ -382,7 +385,7 @@ func TestDisabledBridgeProducesNoExporterActivity(t *testing.T) {
 	defer grpcServer.Stop()
 
 	// Pass endpoint options so any accidental export attempt would be caught.
-	bridge := newOtelBridge(false, "", false, "",
+	bridge := newOtelBridgeWithResource(false, "", false, "", nil,
 		otlptracegrpc.WithEndpoint(lis.Addr().String()),
 		otlptracegrpc.WithInsecure(),
 	)

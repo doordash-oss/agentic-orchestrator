@@ -82,13 +82,6 @@ type BranchProbeRunner interface {
 	Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult
 }
 
-// BranchProbeRunnerFunc adapts a function for deterministic callers and tests.
-type BranchProbeRunnerFunc func(context.Context, string, []string, int) BranchProbeCommandResult
-
-func (f BranchProbeRunnerFunc) Run(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
-	return f(ctx, repoPath, args, diagnosticLimit)
-}
-
 // BranchProbeCommandResult is a completed and reaped command result.
 type BranchProbeCommandResult struct {
 	Stdout      string
@@ -317,13 +310,6 @@ func sanitizeBranchProbeDiagnostics(value string, limit int) string {
 // BranchName returns the full branch name for a feature.
 func BranchName(featureSlug string) string {
 	return "feature/" + featureSlug
-}
-
-// BranchExistsOnRemote checks whether a branch exists on the origin remote.
-// Returns false if the bounded probe is unavailable or confirms absence.
-// New callers should use ProbeRemoteBranch to retain the tri-state result.
-func BranchExistsOnRemote(repoPath, branch string) bool {
-	return ProbeRemoteBranch(context.Background(), repoPath, branch, BranchProbeOptions{}).State == BranchProbeCollision
 }
 
 // HasOriginRemote returns true if the repo at repoPath has an "origin" remote configured.

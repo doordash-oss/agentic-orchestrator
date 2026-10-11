@@ -1632,18 +1632,17 @@ attemptLoop:
 				// session for this attempt.
 				removeCompletionReceipt(attemptDir)
 				cmd, env, sessOpts, err := cfg.BuildSession(BuildSessionOpts{
-					Model:                          cfg.Feature.Models.Planning,
-					Prompt:                         prompt,
-					SystemPrompt:                   systemPrompt,
-					AdditionalDirs:                 addDirs,
-					AgentNames:                     explorationAgentNames(),
-					PIDDir:                         pidDir,
-					PermHandler:                    permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
-					WorkDir:                        cfg.WorkDir,
-					EffortLevel:                    planEffortLevel(cfg),
-					Phase:                          feature.PhasePlan,
-					SystemPromptHasUsefulResources: true,
-					CompletionProtocol:             true,
+					Model:              cfg.Feature.Models.Planning,
+					Prompt:             prompt,
+					SystemPrompt:       systemPrompt,
+					AdditionalDirs:     addDirs,
+					AgentNames:         explorationAgentNames(),
+					PIDDir:             pidDir,
+					PermHandler:        permHandlerFor(cfg.DangerouslySkipPermissions, cfg.PermissionCache, cfg.RepoName),
+					WorkDir:            cfg.WorkDir,
+					EffortLevel:        planEffortLevel(cfg),
+					Phase:              feature.PhasePlan,
+					CompletionProtocol: true,
 				})
 				if err != nil {
 					return nil, fmt.Errorf("building %s session (attempt %d): %w", kind.label, attempt, err)

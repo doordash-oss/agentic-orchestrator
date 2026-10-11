@@ -37,8 +37,8 @@ func testSessionProtocol(initialPrompt string) llm.Protocol {
 }
 
 // isReviewHelper reports whether opts.PermHandler indicates a bounded review
-// or validator helper run. New bounded helpers use BoundedHelperArtifactHandler;
-// a legacy path still uses ReadOnlyHandler. Tests treat both as "review session".
+// or validator helper run: bounded helpers use BoundedHelperArtifactHandler and
+// live-run reviews use LiveRunReviewHandler. Tests treat both as "review session".
 func isReviewHelper(h interface{}) bool {
 	switch typed := h.(type) {
 	case *permission.SessionGuardHandler:
@@ -46,8 +46,6 @@ func isReviewHelper(h interface{}) bool {
 	case *permission.BoundedHelperArtifactHandler:
 		return true
 	case *permission.LiveRunReviewHandler:
-		return true
-	case *permission.ReadOnlyHandler:
 		return true
 	}
 	return false

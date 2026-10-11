@@ -64,7 +64,7 @@ export interface DiscoveryDeps {
   isProcessAlive(pid: number): boolean;
 }
 
-export type DiscoveryOutcome =
+type DiscoveryOutcome =
   /** No discovery file: launch a server. */
   | { kind: 'absent' }
   /** Record points at a dead process: treat as absent and launch. */

@@ -49,7 +49,7 @@ export interface AftercareWorkspaceProps {
   onOpenPullRequest(url: string): void;
 }
 
-export interface AftercareActionError {
+interface AftercareActionError {
   action: string;
   error: CanonicalError;
 }

@@ -223,22 +223,21 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg reviewHelperConf
 		permHandler = permission.Guarded(boundedHandler)
 	}
 	command, env, sessOpts, err := pr.BuildSession(BuildSessionOpts{
-		Model:                          cfg.Model,
-		Prompt:                         prompt,
-		SystemPrompt:                   systemPrompt,
-		DisallowedTools:                boundedHelperDisallowedTools,
-		AdditionalDirs:                 cfg.AdditionalDirs,
-		WritableRoots:                  writableRoots,
-		PIDDir:                         pidDir,
-		PermHandler:                    permHandler,
-		RepoName:                       cfg.RepoName,
-		WorkDir:                        cfg.WorkDir,
-		LogPath:                        cfg.LogPath,
-		EffortLevel:                    reviewHelperEffortLevel(cfg),
-		AgentNames:                     explorationAgentNames(),
-		Phase:                          cfg.Phase,
-		SystemPromptHasUsefulResources: true,
-		CompletionProtocol:             true,
+		Model:              cfg.Model,
+		Prompt:             prompt,
+		SystemPrompt:       systemPrompt,
+		DisallowedTools:    boundedHelperDisallowedTools,
+		AdditionalDirs:     cfg.AdditionalDirs,
+		WritableRoots:      writableRoots,
+		PIDDir:             pidDir,
+		PermHandler:        permHandler,
+		RepoName:           cfg.RepoName,
+		WorkDir:            cfg.WorkDir,
+		LogPath:            cfg.LogPath,
+		EffortLevel:        reviewHelperEffortLevel(cfg),
+		AgentNames:         explorationAgentNames(),
+		Phase:              cfg.Phase,
+		CompletionProtocol: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: building session: %w", errPrefix, err)

@@ -60,7 +60,7 @@ import { formatWaitingDuration } from './phaseRail';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 import { defined } from '../../../shared/defined';
 
-export interface QuestionAnswerDraft {
+interface QuestionAnswerDraft {
   selected: number[];
   freeText: string;
 }
@@ -95,7 +95,7 @@ export function emptyAttentionDrafts(): AttentionDrafts {
   return { questions: {}, help: {}, gates: {} };
 }
 
-export interface AttentionInboxProps {
+interface AttentionInboxProps {
   items: AttentionItem[];
   refresh(): Promise<AttentionItem[]>;
   featureLabel(featureId: string | undefined): string;

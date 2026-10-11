@@ -34,7 +34,7 @@ import {
   type FeatureCommandId,
 } from '../../../shared/commands';
 
-export interface FeatureCommandExecutor {
+interface FeatureCommandExecutor {
   /** The feature this executor acts on; a mismatched target is a no-op. */
   featureId: string;
   /** Read at invocation time, never captured — staleness is the whole risk. */
@@ -57,7 +57,7 @@ export function registerFeatureCommandExecutor(next: FeatureCommandExecutor): ()
   };
 }
 
-export type FeatureCommandOutcome = 'executed' | 'no-target' | 'not-enabled';
+type FeatureCommandOutcome = 'executed' | 'no-target' | 'not-enabled';
 
 /**
  * Runs `id` against the live registration. `featureId`, when supplied, must

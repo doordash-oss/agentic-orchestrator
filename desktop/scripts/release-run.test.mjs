@@ -16,7 +16,7 @@ limitations under the License.
 
 import { describe, expect, it } from 'vitest';
 
-import { RELEASE_SEQUENCE, runRelease, validateResumeEvidenceBoundary } from './release-run.mjs';
+import { runRelease, validateResumeEvidenceBoundary } from './release-run.mjs';
 
 const evidence = {
   schema_version: 4,
@@ -89,31 +89,6 @@ describe('release runner', () => {
         readEvidence: () => evidence,
       }),
     ).toBe(evidence);
-  });
-
-  it('defines the one audited committed-source publication sequence', () => {
-    expect(RELEASE_SEQUENCE).toEqual([
-      'preflight',
-      'npm-ci',
-      'mac-package',
-      'linux-packages',
-      'package-gate',
-      'desktop-manifest-sign',
-      'desktop-manifest-gate',
-      'publication-snapshot',
-      'snapshot-gate',
-      'provenance-recheck',
-      'tag-reservation-start-record',
-      'remote-tag-reservation',
-      'goreleaser-start-record',
-      'goreleaser',
-      'goreleaser-resume-record',
-      'manifest-gate',
-      'remote-byte-gate',
-      'remote-resume-record',
-      'desktop-cask',
-      'cleanup',
-    ]);
   });
 
   it('runs native and Linux builds in the detached workspace and reserves immediately before publish', async () => {

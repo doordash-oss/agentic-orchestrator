@@ -47,7 +47,7 @@ export const E_CONNECTION_STRING_WILDCARD = 'E_CONNECTION_STRING_WILDCARD';
 export const E_CONNECTION_STRING_PORT = 'E_CONNECTION_STRING_PORT';
 export const E_CONNECTION_STRING_PORT_RANGE = 'E_CONNECTION_STRING_PORT_RANGE';
 
-export interface ParsedConnectionString {
+interface ParsedConnectionString {
   /** Canonical dialable base URL, e.g. http://10.1.2.3:8080 or http://[fe80::1]:8080. */
   baseUrl: string;
   /** Bearer token from the URL userinfo. Main-process only. */

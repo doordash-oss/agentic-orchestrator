@@ -180,7 +180,7 @@ func TestReconcileSourceUpdateStateUnobservedCheckoutFailsTruthfully(t *testing.
 	fx := newOriginalCheckoutFixture(t)
 	local := gitUpdateSHA(t, fx.repo, "refs/heads/main")
 	origin := gitUpdateSHA(t, fx.bare, "refs/heads/main")
-	options := OriginCheckOptions{Runner: BranchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
+	options := OriginCheckOptions{Runner: branchProbeRunnerFunc(func(ctx context.Context, repoPath string, args []string, diagnosticLimit int) BranchProbeCommandResult {
 		if len(args) > 0 && args[0] == "status" {
 			return BranchProbeCommandResult{ExitCode: 128, Diagnostics: "checkout inspection failed"}
 		}

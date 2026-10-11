@@ -84,13 +84,15 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 	handlerOptions := opts.HandlerOptions
 	handlerOptions.StartedAt = startedAt
 	handlerOptions.RuntimePolicy = policy
-	handler := newAPIHandler(handlerOptions)
+	// The runtime keeps the concrete handler for its sweep loops and
+	// coordinators; NewHandler always returns *apiHandler.
+	handler := NewHandler(handlerOptions).(*apiHandler)
 	lifetime := opts.Lifetime
 	if lifetime == nil {
 		lifetime = ctx
 	}
 	httpServer := &http.Server{
-		Handler: withHTTPMetrics(handler.routes(), opts.HTTPMetrics),
+		Handler: withHTTPMetrics(handler, opts.HTTPMetrics),
 		// ReadHeaderTimeout (not ReadTimeout) is intentional: ReadTimeout
 		// would cap the whole connection lifetime, killing long-lived SSE
 		// streams (/api/v1/events, /sessions/{id}/output/stream). Mutation

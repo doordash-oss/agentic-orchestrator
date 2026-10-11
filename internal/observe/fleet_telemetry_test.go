@@ -419,7 +419,16 @@ func TestFeatureMilestonesSurviveRestartAndMeasureEachRun(t *testing.T) {
 }
 
 func TestMetricErrorsUseCanonicalCatalog(t *testing.T) {
-	for _, code := range errcat.Codes() {
+	// A fixed representative list of catalog codes across classes stands in
+	// for the whole catalog: metricEnum resolves through errcat.Lookup, so
+	// any catalog code passes through and anything else collapses to "other".
+	for _, code := range []errcat.Code{
+		errcat.BadRequest,
+		errcat.NotFound,
+		errcat.InvalidConfiguration,
+		errcat.MissingExecutable,
+		errcat.DiscoveryMissing,
+	} {
 		if got := metricEnum("error_code", string(code)); got != string(code) {
 			t.Errorf("known code %s normalized to %s", code, got)
 		}

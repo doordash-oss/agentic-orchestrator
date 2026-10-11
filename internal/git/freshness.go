@@ -159,11 +159,6 @@ type FreshnessCache struct {
 	cache *ProbeCache[string]
 }
 
-// NewFreshnessCache caches RepoFreshness with the default TTL and bound.
-func NewFreshnessCache() *FreshnessCache {
-	return NewFreshnessCacheWithProbe(RepoFreshness)
-}
-
 // NewFreshnessCacheWithProbe caches an arbitrary freshness probe.
 func NewFreshnessCacheWithProbe(probe func(worktreePath string) string) *FreshnessCache {
 	return &FreshnessCache{cache: NewProbeCache(0, 0, probe)}

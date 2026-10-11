@@ -73,14 +73,6 @@ func GuardrailFastPath(command, workDir string, writableRoots []string) bool {
 	return classifyParsedCommand(parsed, workDir, writableRoots)
 }
 
-// GuardrailBoundSummary returns a redacted, UTF-8-safe truncated summary of
-// the command suitable for logging or audit. Uses the shared permission-audit
-// sanitization and bounding primitives so the guardrail never introduces a
-// second privacy vocabulary or truncation algorithm.
-func GuardrailBoundSummary(command string) string {
-	return sanitizeAuditInputSummary(command, maxAuditInputSummary)
-}
-
 // AutomaticReviewCommandSummary returns the provider-neutral command summary
 // shared by automatic-review status and observation records.
 func AutomaticReviewCommandSummary(command string) string {

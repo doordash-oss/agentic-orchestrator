@@ -29,7 +29,6 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
-	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
@@ -540,7 +539,7 @@ func TestRoadmapPlanningLoopUsesAttemptDirCompletionReceipt(t *testing.T) {
 
 	var planOpts *BuildSessionOpts
 	for i := range *captured {
-		if _, ok := (*captured)[i].PermHandler.(*permission.ReadOnlyHandler); !ok {
+		if !isReviewHelper((*captured)[i].PermHandler) {
 			planOpts = &(*captured)[i]
 			break
 		}
@@ -2320,10 +2319,10 @@ func TestPhasePlanLoop_SkillReadInstruction(t *testing.T) {
 	}
 
 	// Find the planning session (not the bounded validator helper, which runs
-	// with a ReadOnlyHandler).
+	// with a BoundedHelperArtifactHandler).
 	var planOpts *BuildSessionOpts
 	for i := range *captured {
-		if _, ok := (*captured)[i].PermHandler.(*permission.ReadOnlyHandler); !ok {
+		if !isReviewHelper((*captured)[i].PermHandler) {
 			planOpts = &(*captured)[i]
 			break
 		}

@@ -169,7 +169,7 @@ func TestStagedPublicationIdentityPinsStagedGitDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	work := filepath.Join(root, stagingName("clone-x"), stagingWorkDir)
+	work := filepath.Join(root, stagingNameFor(KindClone, "clone-x"), stagingWorkDir)
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestStagedPublicationIdentityPinsStagedGitDirectory(t *testing.T) {
 	}
 	dest := filepath.Join(root, "widget")
 	rec := Record{
-		StagingPath:     filepath.Join(root, stagingName("clone-x")),
+		StagingPath:     filepath.Join(root, stagingNameFor(KindClone, "clone-x")),
 		DestinationPath: dest,
 	}
 

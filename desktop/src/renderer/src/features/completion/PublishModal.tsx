@@ -59,7 +59,7 @@ type PublishOutcome =
   | { ok: false; reconciling: true; timeoutLocked: true }
   | { ok: false; reconciling?: undefined; error: CanonicalError };
 
-export interface PublishModalProps {
+interface PublishModalProps {
   featureId: string;
   preflight: CompletionPreflightResult;
   /** The feature's server action catalog; each row card resolves `publish` in it. */

@@ -92,21 +92,6 @@ func RenameNoReplaceDir(dir *os.File, oldName, newName string) error {
 	return nil
 }
 
-// RenameNoReplace is the path-based form used by tests: it opens the shared
-// parent directory with O_NOFOLLOW and performs the identity-bound rename.
-func RenameNoReplace(oldPath, newPath string) error {
-	parent := parentDir(oldPath)
-	if parentDir(newPath) != parent {
-		return errors.New("clone: no-replace rename requires a shared parent directory")
-	}
-	dir, _, err := OpenRootDir(parent)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = dir.Close() }()
-	return RenameNoReplaceDir(dir, filepathBase(oldPath), filepathBase(newPath))
-}
-
 func classifyRenameError(err error) error {
 	var errno syscall.Errno
 	if !errors.As(err, &errno) {
@@ -121,34 +106,6 @@ func classifyRenameError(err error) error {
 		return fmt.Errorf("%w: %v", ErrNoReplaceUnsupported, errno)
 	}
 	return err
-}
-
-func parentDir(path string) string {
-	idx := lastIndexByte(path, '/')
-	if idx < 0 {
-		return "."
-	}
-	if idx == 0 {
-		return "/"
-	}
-	return path[:idx]
-}
-
-func filepathBase(path string) string {
-	idx := lastIndexByte(path, '/')
-	if idx < 0 {
-		return path
-	}
-	return path[idx+1:]
-}
-
-func lastIndexByte(s string, b byte) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
 }
 
 func bytePtr(s string) (unsafe.Pointer, error) {

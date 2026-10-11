@@ -33,7 +33,7 @@ import {
 
 // --- Segment states ---------------------------------------------------------
 
-export type RailSegmentState = 'completed' | 'current' | 'upcoming';
+type RailSegmentState = 'completed' | 'current' | 'upcoming';
 
 export interface RailSegment {
   id: string;
@@ -137,7 +137,7 @@ export function railSegmentLabel(label: string): string {
 
 // --- Hold classification -----------------------------------------------------
 
-export type HoldKind = 'waiting' | 'paused';
+type HoldKind = 'waiting' | 'paused';
 
 export interface RailHold {
   kind: HoldKind;
@@ -206,7 +206,7 @@ function oldestWaitingSince(items: readonly AttentionItem[]): string | undefined
 // --- Waiting-duration formatter ---------------------------------------------
 
 /** One bucket of elapsed time: exactly one field is set. */
-export type ElapsedBucket =
+type ElapsedBucket =
   | { unit: 'sub-minute' }
   | { unit: 'minutes'; value: number }
   | { unit: 'hours'; value: number }
@@ -254,7 +254,7 @@ export function formatWaitingDuration(value: string | undefined): string | null 
 
 // --- Trio assembly ------------------------------------------------------------
 
-export type TrioEntryKind = 'waiting' | 'paused' | 'elapsed' | 'cost' | 'context';
+type TrioEntryKind = 'waiting' | 'paused' | 'elapsed' | 'cost' | 'context';
 
 export interface TrioEntry {
   kind: TrioEntryKind;
@@ -265,7 +265,7 @@ export interface TrioEntry {
   attention: boolean;
 }
 
-export interface RailTrioInputs {
+interface RailTrioInputs {
   /** Run-total elapsed seconds; omitted (undefined) when there is no run yet. */
   totalSeconds?: number;
   /** Run-total cost in USD; omitted when there is no run yet. */

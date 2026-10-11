@@ -826,9 +826,6 @@ fi`,
 				t.Errorf("fix call %d SystemPrompt missing %q:\n%s", i, want, opts.SystemPrompt)
 			}
 		}
-		if !opts.SystemPromptHasUsefulResources {
-			t.Errorf("fix call %d SystemPromptHasUsefulResources = false, want true", i)
-		}
 	}
 	// The reviewer call should also see every repo worktree.
 	for _, opts := range *captured {
@@ -850,9 +847,6 @@ fi`,
 			if !strings.Contains(opts.SystemPrompt, want) {
 				t.Errorf("reviewer SystemPrompt missing %q:\n%s", want, opts.SystemPrompt)
 			}
-		}
-		if !opts.SystemPromptHasUsefulResources {
-			t.Errorf("reviewer SystemPromptHasUsefulResources = false, want true")
 		}
 		if got, want := strings.Join(opts.AgentNames, ","), strings.Join(explorationAgentNames(), ","); got != want {
 			t.Errorf("reviewer AgentNames = %v, want exploration set %v", opts.AgentNames, explorationAgentNames())

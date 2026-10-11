@@ -21,7 +21,7 @@ limitations under the License.
  * — with the packaged-test override, when set, standing in for the ambient
  * focus flag so one hook pins both consumers.
  */
-export interface WindowFocusSignalDeps {
+interface WindowFocusSignalDeps {
   /** True while a main window exists and is visible. */
   isVisible(): boolean;
   /** Receives the effective value on every publish. */

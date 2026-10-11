@@ -18,12 +18,8 @@ import type { ServerUpdateState } from './ipc';
 
 const INSTALLING = new Set(['downloading', 'verified', 'scheduled', 'draining', 'restarting']);
 
-export function serverUpdateActive(state: ServerUpdateState | null): boolean {
+function serverUpdateActive(state: ServerUpdateState | null): boolean {
   return state !== null && INSTALLING.has(state.status);
-}
-
-export function serverUpdateAvailable(state: ServerUpdateState | null): boolean {
-  return state !== null && state.status === 'available';
 }
 
 export function serverUpdateStatusLabel(state: ServerUpdateState | null): string {
@@ -107,7 +103,7 @@ export function serverUpdatePolicyLabel(state: ServerUpdateState | null): string
   }
 }
 
-export interface ServerUpdateVerbs {
+interface ServerUpdateVerbs {
   check: boolean;
   installWhenIdle: boolean;
   installNow: boolean;

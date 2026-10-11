@@ -23,8 +23,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var allEffortRoles = []string{"Inquiry", "Research", "Planning", "Implementation", "Review", "Utilities", "KBBuild"}
-
 func TestEffortConfigMissingLegacyLoadsAsAuto(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
@@ -41,21 +39,21 @@ func TestEffortConfigMissingLegacyLoadsAsAuto(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range allEffortRoles {
-		got := config.EffortConfigFieldByName(cfg.Defaults.Effort, role)
+	for _, role := range config.Roles {
+		got := *role.Effort(&cfg.Defaults.Effort)
 		if got != "" {
-			t.Errorf("missing effort.%s should load as empty (Auto), got %q", role, got)
+			t.Errorf("missing effort.%s should load as empty (Auto), got %q", role.Name, got)
 		}
 	}
 }
 
 func TestEffortConfigExplicitAutoRoundTrips(t *testing.T) {
-	for _, role := range allEffortRoles {
-		t.Run(role, func(t *testing.T) {
+	for _, role := range config.Roles {
+		t.Run(role.Name, func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "config.yaml")
 			cfg := config.NewDefault()
-			config.SetEffortConfigFieldByName(&cfg.Defaults.Effort, role, "auto")
+			*role.Effort(&cfg.Defaults.Effort) = "auto"
 			if err := config.Save(path, cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -63,9 +61,9 @@ func TestEffortConfigExplicitAutoRoundTrips(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			got := config.EffortConfigFieldByName(loaded.Defaults.Effort, role)
+			got := *role.Effort(&loaded.Defaults.Effort)
 			if got != "auto" {
-				t.Errorf("explicit auto round-trip %s: got %q, want %q", role, got, "auto")
+				t.Errorf("explicit auto round-trip %s: got %q, want %q", role.Name, got, "auto")
 			}
 		})
 	}
@@ -73,13 +71,13 @@ func TestEffortConfigExplicitAutoRoundTrips(t *testing.T) {
 
 func TestEffortConfigEveryExplicitLevelRoundTrips(t *testing.T) {
 	levels := []string{"low", "medium", "high", "xhigh", "max", "ultra"}
-	for _, role := range allEffortRoles {
+	for _, role := range config.Roles {
 		for _, level := range levels {
-			t.Run(role+"_"+level, func(t *testing.T) {
+			t.Run(role.Name+"_"+level, func(t *testing.T) {
 				dir := t.TempDir()
 				path := filepath.Join(dir, "config.yaml")
 				cfg := config.NewDefault()
-				config.SetEffortConfigFieldByName(&cfg.Defaults.Effort, role, level)
+				*role.Effort(&cfg.Defaults.Effort) = level
 				if err := config.Save(path, cfg); err != nil {
 					t.Fatal(err)
 				}
@@ -87,9 +85,9 @@ func TestEffortConfigEveryExplicitLevelRoundTrips(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				got := config.EffortConfigFieldByName(loaded.Defaults.Effort, role)
+				got := *role.Effort(&loaded.Defaults.Effort)
 				if got != level {
-					t.Errorf("round-trip %s=%s: got %q, want %q", role, level, got, level)
+					t.Errorf("round-trip %s=%s: got %q, want %q", role.Name, level, got, level)
 				}
 			})
 		}
@@ -157,13 +155,13 @@ func TestEffortConfigYAMLShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"Inquiry": "low", "Research": "medium", "Planning": "high",
-		"Implementation": "max", "Review": "high", "Utilities": "low", "KBBuild": "medium",
+		"inquiry": "low", "research": "medium", "planning": "high",
+		"implementation": "max", "review": "high", "chat": "low", "kb_build": "medium",
 	}
-	for _, role := range allEffortRoles {
-		got := config.EffortConfigFieldByName(decoded.Effort, role)
-		if got != want[role] {
-			t.Errorf("YAML round-trip %s: got %q, want %q", role, got, want[role])
+	for _, role := range config.Roles {
+		got := *role.Effort(&decoded.Effort)
+		if got != want[role.Name] {
+			t.Errorf("YAML round-trip %s: got %q, want %q", role.Name, got, want[role.Name])
 		}
 	}
 }

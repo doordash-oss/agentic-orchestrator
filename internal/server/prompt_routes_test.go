@@ -32,12 +32,12 @@ type promptRouteTarget struct {
 
 func (t *promptRouteTarget) AnswerAskUser(req AskUserAnswerRequest) (AskUserAnswerResponse, error) {
 	t.askUser = append(t.askUser, req)
-	return AskUserAnswerResponse{RequestID: req.RequestID, SessionID: "sess-1"}, nil
+	return AskUserAnswerResponse{RequestID: req.RequestID, SessionID: "sess-1", Result: "answered"}, nil
 }
 
 func (t *promptRouteTarget) SendHelp(req HelpAnswerRequest) (HelpSendResponse, error) {
 	t.help = append(t.help, req)
-	return HelpSendResponse{FeatureID: "feat-1", SessionID: req.SessionID}, nil
+	return HelpSendResponse{FeatureID: "feat-1", SessionID: req.SessionID, Result: "sent"}, nil
 }
 
 // TestRetiredChatPromptRoutesAreNotFound pins the chat surface removal: the
@@ -64,7 +64,7 @@ func TestRetiredChatPromptRoutesAreNotFound(t *testing.T) {
 
 	w := postTrustedJSON(handler, "/api/v1/prompts/ask-user/answer", map[string]any{
 		"request_id": "ask-1",
-		"answers":    map[string]string{"Which cache?": "Redis"},
+		"answers":    map[string]string{"1": "Redis"},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("ask-user/answer status = %d body=%s; want 200", w.Code, w.Body.String())

@@ -56,7 +56,7 @@ All actions use `POST /api/v1/features/{feature_id}/actions/{action}`. Check the
 - `POST /api/v1/features/{feature_id}/actions/rewind` — rewind to an earlier phase. Required: `target_phase`. Optional: `roadmap_phase`, `upgrade_pipeline`, and `source_run_number` plus `source_revision` from the rewind preview (send them so a stale preview is refused).
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/rewind '{"target_phase":"plan","source_run_number":1,"source_revision":"{source_revision}"}'`
 - `POST /api/v1/features/{feature_id}/actions/need-user-input-draft` — save answers to the open need-user-input gate. Required: `answers`, an object keyed by each question's `index` (as a string) from `need_user_input.questions`.
-  Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input-draft '{"answers":{"0":"Use the existing export service."}}'`
+  Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input-draft '{"answers":{"1":"Use the existing export service."}}'`
 - `POST /api/v1/features/{feature_id}/actions/need-user-input` — submit the saved answers and resume the gated feature. Body `{}`.
   Example: `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/need-user-input '{}'`
 - `POST /api/v1/features/{feature_id}/actions/testing-contract-waive` — waive testing-contract rows the user agreed to waive. Required: `item_ids`, `reason`. Optional: `active_run`, `roadmap_phase`, `contract_revision` from the testing contract you read.
@@ -107,8 +107,8 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
 
 - `GET /api/v1/prompts` — list pending ask-user and help prompts with `request_id`, `session_id`, `feature_id` and the questions.
   Example: `"$AGENTICO_BIN" api GET /api/v1/prompts`
-- `POST /api/v1/prompts/ask-user/answer` — answer an ask-user prompt. Required: `request_id`, `answers` (an object keyed by each question's `question` text, valued with the chosen option label or free text). Optional: `session_id`.
-  Example: `"$AGENTICO_BIN" api POST /api/v1/prompts/ask-user/answer '{"request_id":"{request_id}","session_id":"{session_id}","answers":{"Which branch?":"main"}}'`
+- `POST /api/v1/prompts/ask-user/answer` — answer an ask-user prompt. Required: `request_id`, `answers` (an object keyed by each question's `index` as a string, from the prompt's `questions`, valued with an array of one-based option indexes or a text answer; every question must be answered; prefer indexes for selections because display labels may be truncated). Optional: `session_id`.
+  Example: `"$AGENTICO_BIN" api POST /api/v1/prompts/ask-user/answer '{"request_id":"{request_id}","session_id":"{session_id}","answers":{"1":[1]}}'`
 
 ## Help and permission answers
 
@@ -190,8 +190,6 @@ Recovery lists sessions orphaned by a previous server process.
   Example: `"$AGENTICO_BIN" api GET /api/v1/config/runtime`
 - `PATCH /api/v1/config/runtime` — change runtime configuration. Send only what changes, under `defaults` (for example `models`, `effort`, `pipeline`, `inquireness`, `checkpoints`, `max_iterations`), `workspace_roots` (the complete list; each must be an existing directory) or `notifications`.
   Example: `"$AGENTICO_BIN" api PATCH /api/v1/config/runtime '{"defaults":{"pipeline":"large"}}'`
-- `PUT /api/v1/config/runtime` — same body and effect as `PATCH`; prefer `PATCH`.
-  Example: `"$AGENTICO_BIN" api PUT /api/v1/config/runtime '{"workspace_roots":["/home/me/src"]}'`
 
 ## Update
 

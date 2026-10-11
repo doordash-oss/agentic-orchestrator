@@ -30,18 +30,18 @@ import (
 // update_in_progress work-start refusals.
 const admissionRetryAfterSeconds = 5
 
-// ProbeActivity counts read-launched background work for the repository-work
-// detector. It is shared with the CLI wiring so Git freshness refreshes
-// launched by feature projections participate in the count.
-type ProbeActivity struct {
+// probeActivity counts read-launched background work for the repository-work
+// detector, so Git freshness refreshes launched by feature projections
+// participate in the count.
+type probeActivity struct {
 	count atomic.Int64
 }
 
-// NewProbeActivity creates an empty probe counter.
-func NewProbeActivity() *ProbeActivity { return &ProbeActivity{} }
+// newProbeActivity creates an empty probe counter.
+func newProbeActivity() *probeActivity { return &probeActivity{} }
 
 // enter registers one in-flight probe and returns its release.
-func (p *ProbeActivity) enter() func() {
+func (p *probeActivity) enter() func() {
 	if p == nil {
 		return func() {}
 	}
@@ -238,10 +238,10 @@ func (h *apiHandler) detectRepositoryWork(context.Context) (workadmission.Activi
 // detector visibility through the probe counter.
 type admittedProbe struct {
 	admission *workadmission.Coordinator
-	probes    *ProbeActivity
+	probes    *probeActivity
 }
 
-func newAdmittedProbe(admission *workadmission.Coordinator, probes *ProbeActivity) *admittedProbe {
+func newAdmittedProbe(admission *workadmission.Coordinator, probes *probeActivity) *admittedProbe {
 	return &admittedProbe{admission: admission, probes: probes}
 }
 

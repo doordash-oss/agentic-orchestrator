@@ -20,12 +20,12 @@ const (
 	// CompatibilitySchemaVersion is the monotonic series number of the REST
 	// schema contract within the current API major. Bump it whenever the
 	// wire schema changes in a way existing clients cannot tolerate.
-	CompatibilitySchemaVersion = 2
+	CompatibilitySchemaVersion = 4
 
 	// CompatibilityMinClientSchema is the minimum client schema series a
 	// connecting client must implement for this server to consider it
 	// compatible.
-	CompatibilityMinClientSchema = 2
+	CompatibilityMinClientSchema = 4
 
 	// CompatibilityRuntimePolicy names the loopback runtime security/ownership
 	// policy contract: loopback-only listener, bearer-token auth, single-owner
@@ -38,13 +38,13 @@ const (
 	CompatibilityNetworkRuntimePolicy = "network-bearer-v1"
 )
 
-// NewCompatibilityDeclaration builds the explicit compatibility contract
+// newCompatibilityDeclaration builds the explicit compatibility contract
 // served on /api/v1/health. buildVersion is the server build's version
 // string (the instance-lock owner version); an empty value falls back to
 // "dev" so the declaration always carries a non-empty build identity.
 // runtimePolicy is the bind-mode policy from the resolved listen address;
 // an empty value falls back to the loopback policy.
-func NewCompatibilityDeclaration(buildVersion, runtimePolicy string) CompatibilityDeclaration {
+func newCompatibilityDeclaration(buildVersion, runtimePolicy string) CompatibilityDeclaration {
 	if buildVersion == "" {
 		buildVersion = "dev"
 	}

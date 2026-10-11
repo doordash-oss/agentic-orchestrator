@@ -88,11 +88,11 @@ func (h *apiHandler) handleSaveReviewDraft(w http.ResponseWriter, r *http.Reques
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
-	if !h.requireTrustedJSONMutationLimited(w, r, MaxReviewDraftBodyBytes) {
+	if !h.requireTrustedJSONMutationLimited(w, r, maxReviewDraftBodyBytes) {
 		return
 	}
 	var req ReviewDraftUpdateRequest
-	if !decodeMutationJSONLimited(w, r, &req, MaxReviewDraftBodyBytes) {
+	if !decodeMutationJSONLimited(w, r, &req, maxReviewDraftBodyBytes) {
 		return
 	}
 	resp, err := h.reviewSessionService().SaveDraft(featureID, reviewID, req)
@@ -109,11 +109,11 @@ func (h *apiHandler) handleValidateReviewDraft(w http.ResponseWriter, r *http.Re
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 		return
 	}
-	if !h.requireTrustedJSONMutationLimited(w, r, MaxReviewDraftBodyBytes) {
+	if !h.requireTrustedJSONMutationLimited(w, r, maxReviewDraftBodyBytes) {
 		return
 	}
 	var req ReviewDraftValidationRequest
-	if !decodeMutationJSONLimited(w, r, &req, MaxReviewDraftBodyBytes) {
+	if !decodeMutationJSONLimited(w, r, &req, maxReviewDraftBodyBytes) {
 		return
 	}
 	resp, err := h.reviewSessionService().ValidateDraft(featureID, reviewID, req)
@@ -156,13 +156,13 @@ func (h *apiHandler) reviewSessionService() *reviewSessionService {
 	return newReviewSessionService(h.store, decider, h.reviewSessionLocks)
 }
 
-// MaxReviewDraftBodyBytes caps the draft save and validate bodies. They carry
+// maxReviewDraftBodyBytes caps the draft save and validate bodies. They carry
 // the whole review document, which routinely exceeds the command-sized
-// MaxMutationBodyBytes; the desktop client allows the same 2 MiB of text.
-const MaxReviewDraftBodyBytes int64 = 2 * 1024 * 1024
+// maxMutationBodyBytes; the desktop client allows the same 2 MiB of text.
+const maxReviewDraftBodyBytes int64 = 2 * 1024 * 1024
 
 func (h *apiHandler) requireTrustedJSONMutation(w http.ResponseWriter, r *http.Request) bool {
-	return h.requireTrustedJSONMutationLimited(w, r, MaxMutationBodyBytes)
+	return h.requireTrustedJSONMutationLimited(w, r, maxMutationBodyBytes)
 }
 
 func (h *apiHandler) requireTrustedJSONMutationLimited(w http.ResponseWriter, r *http.Request, maxBytes int64) bool {

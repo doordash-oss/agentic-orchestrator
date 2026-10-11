@@ -108,13 +108,13 @@ func setReviewHelperEffortOnOpts(sessOpts *ports.SessionOpts, cfg ReviewHelperCo
 
 // Review helpers may use a different provider from their parent planner or
 // implementer. Resolve the protocol for the model actually being launched.
-func (pr *PhaseRunner) reviewHelperSystemPrompt(spec RoleSpec, cfg ReviewHelperConfig) string {
+func (pr *PhaseRunner) reviewHelperSystemPrompt(spec roleSpec, cfg ReviewHelperConfig) string {
 	askingClause, completionTool := cfg.CompletionAskingClause, cfg.CompletionTool
 	if pr.Registry != nil {
 		askingClause = pr.askingQuestionsClauseForModel(cfg.Model)
 		completionTool = pr.completionToolForModel(cfg.Model)
 	}
-	return BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+	return buildRoleSystemPrompt(roleSystemPromptInput{
 		Spec:           spec,
 		IterationDir:   cfg.HelperIterDir,
 		SkillsDir:      pr.SkillsDir,

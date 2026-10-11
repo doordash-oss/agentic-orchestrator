@@ -47,7 +47,7 @@ function wireState(overrides: Record<string, unknown> = {}): Record<string, unkn
         tool_name: 'AskUserQuestion',
         status: 'pending',
         waiting_since: '2026-10-06T10:01:00Z',
-        questions: [{ question: 'Which feature?', options: [{ label: 'A' }] }],
+        questions: [{ index: 1, question: 'Which feature?', options: [{ label: 'A' }] }],
       },
     ],
     head_seq: 9,
@@ -121,7 +121,8 @@ describe('SupervisorService', () => {
         waitingSince: '2026-10-06T10:01:00Z',
         questions: [
           {
-            key: 'Which feature?',
+            index: 1,
+            question: 'Which feature?',
             header: 'Which feature?',
             multiSelect: false,
             options: [{ label: 'A' }],
@@ -194,7 +195,9 @@ describe('SupervisorService', () => {
                     tool_name: 'AskUserQuestion',
                     status: 'pending',
                     waiting_since: '2026-10-06T10:01:00Z',
-                    questions: [{ question: 'Which branch?', options: [{ label: 'main' }] }],
+                    questions: [
+                      { index: 1, question: 'Which branch?', options: [{ label: 'main' }] },
+                    ],
                     origin: 'child',
                     child_session_id: 'agent_sub_1',
                   },

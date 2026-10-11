@@ -41,7 +41,7 @@ func (idleInstallStager) StageCandidate(_ context.Context, _ string, progress fu
 	for _, stage := range []string{"resolve", "download", "verify", "probe", "admit"} {
 		progress(stage)
 	}
-	return selfupdate.VerifiedCandidate{}, &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: 3, MinClientSchema: 1}, func() error { return nil }, nil
+	return selfupdate.VerifiedCandidate{}, &selfupdate.ServerContract{APIVersion: 2, SchemaVersion: 4, MinClientSchema: 1}, func() error { return nil }, nil
 }
 
 type idleInstallTx struct{}

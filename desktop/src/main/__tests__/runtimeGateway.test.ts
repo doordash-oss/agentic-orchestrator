@@ -35,6 +35,7 @@ import {
   type ServerChildLike,
   type SelectedRuntime,
 } from '../gateway/runtimeGateway';
+import { DESKTOP_SCHEMA_VERSION } from '../gateway/compatibility';
 
 const EMPTY_SCAN: RegistryScan = { candidates: [], pruned: 0, rejected: [] };
 
@@ -52,8 +53,8 @@ const LAUNCH_BASE = 'http://127.0.0.1:50505';
 function compatibleDeclaration(): Record<string, unknown> {
   return {
     api_version: 'v1',
-    schema_version: 2,
-    min_client_schema: 2,
+    schema_version: DESKTOP_SCHEMA_VERSION,
+    min_client_schema: DESKTOP_SCHEMA_VERSION,
     runtime_policy: 'loopback-bearer-v1',
     server_build: { version: 'v9.9.9-other-build', revision: 'deadbeef' },
   };

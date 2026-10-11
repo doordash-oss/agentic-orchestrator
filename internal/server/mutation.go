@@ -32,37 +32,18 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workadmission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/workspace"
 )
 
-const MaxMutationBodyBytes = 64 * 1024
-const MaxActionTextBytes = 4000
+const maxMutationBodyBytes = 64 * 1024
 
 // Stable API codes for publish-time remote branch safety conflicts.
 const (
 	maxCreationIdempotencyKeyLength = 128
 	maxRememberedCreationResults    = 1000
-)
-
-// resultCreated is the ActionResult.Result value for a newly created
-// feature.
-const resultCreated = "created"
-
-// resultAnswered, resultGenerated, resultRecovered, resultRewound,
-// resultStarted and resultUpdated are further
-// ActionResult/RecoveryActionResponse Result values for
-// permission/ask-user answers, generated publish descriptions, and the
-// default results of recovery, rewind, start-cycle and update actions.
-const (
-	resultAnswered     = "answered"
-	resultGenerated    = "generated"
-	resultRecovered    = "recovered"
-	resultRewound      = "rewound"
-	resultSetupStarted = "setup_started"
-	resultStarted      = "started"
-	resultUpdated      = "updated"
 )
 
 // decisionAllowOnce, decisionAllowRemember and decisionDeny are the valid
@@ -95,21 +76,26 @@ const trustedClientHeaderValue = "local"
 // between the route matcher and the client request builder.
 const apiPathPermissionsAnswer = "/api/v1/permissions/answer"
 
+// MutationTarget is the mutation surface the HTTP handler calls for every
+// REST mutation. On success the target fills the feature id and result of
+// every response that has those fields; the handler only stamps the API
+// version. On error the response is discarded.
 type MutationTarget interface {
 	CreateFeature(CreateFeatureRequest) (CreateFeatureResponse, error)
 	// SetupFeature dispatches server-owned durable setup (fresh run or retry
 	// of unfinished tasks) without starting orchestration; on success the
 	// feature ends in a startable pre-orchestration state.
 	SetupFeature(featureID string) (FeatureSetupResponse, error)
+	// StartFeature starts a created feature or resumes a stopped one; the
+	// REST start and resume actions both call it.
 	StartFeature(featureID string) (FeatureStartResponse, error)
-	ResumeFeature(featureID string) (FeatureStartResponse, error)
 	StopFeature(featureID string) (FeatureStopResponse, error)
 	RestartFeature(featureID string, req RestartFeatureRequest) (FeatureRestartResponse, error)
 	// ReviewDecision applies a review-gate decision; the live caller is the
 	// review-session decision endpoint, which uses the request only.
 	ReviewDecision(featureID string, req ReviewDecisionRequest) error
 	UpdateFeatureConfig(featureID string, req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error)
-	ResumeNeedUserInput(featureID string, req NeedUserInputResumeRequest) (NeedUserInputResumeResponse, error)
+	ResumeNeedUserInput(featureID string) (NeedUserInputResumeResponse, error)
 	DraftNeedUserInputAnswers(featureID string, req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error)
 	// WaiveTestingContractItems records user-authorized waivers on the
 	// current phase's testing contract outside the verification gate.
@@ -123,7 +109,7 @@ type MutationTarget interface {
 	MergeFeature(featureID string, req GuardedFeatureActionRequest) (MergeFeatureResponse, error)
 	RewindFeature(featureID string, req RewindFeatureRequest) (RewindFeatureResponse, error)
 	RetryFeature(featureID string) (RetryFeatureResponse, error)
-	RebaseFeature(featureID string, req RebaseFeatureRequest) (RebaseFeatureResponse, error)
+	RebaseFeature(featureID string) (RebaseFeatureResponse, error)
 	RefactorFeature(featureID string, req RefactorFeatureRequest) (RefactorFeatureResponse, error)
 	ReviewFeedbackFeature(featureID string, req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error)
 	CompletionPreflight(featureID string) (CompletionPreflightResponse, error)
@@ -200,7 +186,6 @@ type ReviewDecisionRequest struct {
 	PhasePlan bool   `json:"phase_plan,omitempty"`
 	Roadmap   bool   `json:"roadmap,omitempty"`
 	IsRewind  bool   `json:"is_rewind,omitempty"`
-	Comment   string `json:"comment,omitempty"`
 }
 
 type FeatureConfigMutationRequest struct {
@@ -212,8 +197,6 @@ type FeatureConfigMutationRequest struct {
 	InputNotifications  string                  `json:"input_notifications,omitempty"`
 	AutomaticReviewMode *string                 `json:"automatic_review_mode,omitempty"`
 }
-
-type NeedUserInputResumeRequest struct{}
 
 // TestingContractWaiveRequest names the contract items a user waives on the
 // current roadmap phase and why.
@@ -249,9 +232,9 @@ const (
 )
 
 type AskUserAnswerRequest struct {
-	RequestID string            `json:"request_id"`
-	SessionID string            `json:"session_id,omitempty"`
-	Answers   map[string]string `json:"answers"`
+	RequestID string                   `json:"request_id"`
+	SessionID string                   `json:"session_id,omitempty"`
+	Answers   map[string]askuser.Reply `json:"answers"`
 }
 
 type HelpAnswerRequest struct {
@@ -398,34 +381,39 @@ type CleanupActionRequest struct {
 	Target         string `json:"target,omitempty"`
 }
 
+// writeActionJSON writes an action response after stamping its APIVersion
+// field, located by reflection so every response type shares one writer.
 func writeActionJSON(w http.ResponseWriter, status int, resp any) {
-	setActionAPIVersion(resp)
+	if f := reflect.ValueOf(resp).Elem().FieldByName("APIVersion"); f.IsValid() && f.Kind() == reflect.String && f.String() == "" {
+		f.SetString(APIVersion)
+	}
 	writeJSON(w, status, resp)
 }
 
-// setActionAPIVersion defaults the APIVersion field of any action response
-// struct via reflection, replacing a per-type switch.
-func setActionAPIVersion(resp any) {
-	setStringFieldIfEmpty(resp, "APIVersion", APIVersion)
-}
-
-// defaultActionFields defaults the FeatureID and Result fields of an action
-// response struct, replacing the repeated double-if blocks in the mutation
-// route handlers. Types without one of these fields are left untouched.
-func defaultActionFields(resp any, featureID, result string) {
-	setStringFieldIfEmpty(resp, "FeatureID", featureID)
-	setStringFieldIfEmpty(resp, "Result", result)
-}
-
-// setStringFieldIfEmpty sets the named string field on resp (a pointer to a
-// struct) to value, but only if the field exists, is a string, and is
-// currently empty.
-func setStringFieldIfEmpty(resp any, name, value string) {
-	f := reflect.ValueOf(resp).Elem().FieldByName(name)
-	if f.IsValid() && f.Kind() == reflect.String && f.String() == "" {
-		f.SetString(value)
+// serveMutation is the decode, validate, call, write sequence shared by every
+// mutation route except feature creation. The body decodes into a fresh Req
+// with unknown fields rejected under the mutation byte cap; validate, when
+// set, writes its own 400 and reports false to stop; a target error goes
+// through the mutation error mapping, and a response is written under status.
+func serveMutation[Req, Resp any](w http.ResponseWriter, r *http.Request, status int, validate func(*Req) bool, call func(Req) (Resp, error)) {
+	var req Req
+	if !decodeMutationJSON(w, r, &req) {
+		return
 	}
+	if validate != nil && !validate(&req) {
+		return
+	}
+	resp, err := call(req)
+	if err != nil {
+		writeMutationError(w, err)
+		return
+	}
+	writeActionJSON(w, status, &resp)
 }
+
+// ignoredBody is the request type of actions that take no input: decoding
+// into it still rejects a malformed body while tolerating arbitrary fields.
+type ignoredBody = map[string]any
 
 // deleteActionResponse extends DeleteFeatureResponse with a retry indicator
 // so a parked cascade reads as resumable work rather than plain success.
@@ -434,8 +422,8 @@ type deleteActionResponse struct {
 	Retryable bool `json:"retryable,omitempty"`
 }
 
-func annotateDeleteResponse(r *DeleteFeatureResponse) *deleteActionResponse {
-	resp := &deleteActionResponse{DeleteFeatureResponse: *r}
+func annotateDeleteResponse(r DeleteFeatureResponse) deleteActionResponse {
+	resp := deleteActionResponse{DeleteFeatureResponse: r}
 	if r.Status == feature.CascadeDeleteCleanupPending ||
 		r.Status == feature.CascadeDeleteAttentionRequired {
 		resp.Retryable = true
@@ -702,7 +690,7 @@ func mutationRouteMethods(path string) ([]string, bool) {
 	case apiPathFeatures:
 		return []string{http.MethodPost}, true
 	case apiPathConfigRuntime:
-		return []string{http.MethodPatch, http.MethodPut}, true
+		return []string{http.MethodPatch}, true
 	case apiPathPermissionsAnswer:
 		return []string{http.MethodPost}, true
 	case apiPathRecoveryActions:
@@ -871,7 +859,6 @@ func (h *apiHandler) handleCreateFeatureMutation(w http.ResponseWriter, r *http.
 		writeMutationError(w, err)
 		return
 	}
-	defaultActionFields(&resp, "", resultCreated)
 	writeActionJSON(w, http.StatusCreated, &resp)
 }
 
@@ -962,26 +949,16 @@ func (h *apiHandler) handleFeatureMutationRoute(w http.ResponseWriter, r *http.R
 	if len(parts) != 1 || parts[0] != routeSegmentConfig {
 		return false
 	}
-	var req FeatureConfigMutationRequest
-	if !h.requireTrustedMutation(w, r) || !decodeMutationJSON(w, r, &req) {
+	if !h.requireTrustedMutation(w, r) {
 		return true
 	}
-	if !validatePipelineProfile(w, req.Pipeline) {
-		return true
-	}
-	if !validateAutomaticReviewMode(w, req.AutomaticReviewMode) {
-		return true
-	}
-	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
-		return true
-	}
-	resp, err := h.mutations.UpdateFeatureConfig(featureID, req)
-	if err != nil {
-		writeMutationError(w, err)
-		return true
-	}
-	defaultActionFields(&resp, featureID, resultUpdated)
-	writeActionJSON(w, http.StatusOK, &resp)
+	serveMutation(w, r, http.StatusOK, func(req *FeatureConfigMutationRequest) bool {
+		return validatePipelineProfile(w, req.Pipeline) &&
+			validateAutomaticReviewMode(w, req.AutomaticReviewMode) &&
+			validateEffortConfig(w, req.Effort, req.Models, h.registry)
+	}, func(req FeatureConfigMutationRequest) (FeatureConfigUpdateResponse, error) {
+		return h.mutations.UpdateFeatureConfig(featureID, req)
+	})
 	return true
 }
 
@@ -997,256 +974,152 @@ func (h *apiHandler) handleFeatureActionRoute(w http.ResponseWriter, r *http.Req
 	if !h.requireTrustedMutation(w, r) {
 		return true
 	}
+	switch {
+	case action == actionPublish && subaction == phaseNameDescription:
+		serveMutation(w, r, http.StatusOK, func(req *PublishDescriptionRequest) bool {
+			return validateRepoList(w, req.Repos, false)
+		}, func(req PublishDescriptionRequest) (PublishDescriptionResponse, error) {
+			return h.mutations.GeneratePublishDescription(featureID, req)
+		})
+		return true
+	case action == actionReviewFeedback && subaction == reviewFeedbackSubactionFetch:
+		h.handleReviewFeedbackFetchTrusted(w, r, featureID)
+		return true
+	case action == actionReviewFeedback && subaction == reviewFeedbackSubactionSelection:
+		h.handleReviewFeedbackSelectionTrusted(w, r, featureID)
+		return true
+	case subaction != "":
+		return false
+	}
 	switch action {
 	case actionSetup:
-		if subaction != "" {
-			return false
-		}
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.SetupFeature(featureID)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, resultSetupStarted)
-		writeActionJSON(w, http.StatusOK, &resp)
-	case actionStart:
-		if subaction != "" {
-			return false
-		}
-		h.handleStartFeatureMutationTrusted(w, r, featureID)
-	case actionResume:
-		if subaction != "" {
-			return false
-		}
-		h.handleResumeFeatureMutationTrusted(w, r, featureID)
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureSetupResponse, error) {
+			return h.mutations.SetupFeature(featureID)
+		})
+	case actionStart, actionResume:
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureStartResponse, error) {
+			return h.mutations.StartFeature(featureID)
+		})
 	case actionPauseStop:
-		if subaction != "" {
-			return false
-		}
-		h.handleStopFeatureMutationTrusted(w, r, featureID)
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (FeatureStopResponse, error) {
+			return h.mutations.StopFeature(featureID)
+		})
 	case actionRestart:
-		if subaction != "" {
-			return false
-		}
-		var req RestartFeatureRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		h.writeRestartFeature(w, featureID, req)
+		serveMutation(w, r, http.StatusOK, nil, func(req RestartFeatureRequest) (FeatureRestartResponse, error) {
+			return h.mutations.RestartFeature(featureID, req)
+		})
 	case actionNeedUserInput:
-		if subaction != "" {
-			return false
-		}
-		var req NeedUserInputResumeRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.ResumeNeedUserInput(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "resumed")
-		writeActionJSON(w, http.StatusOK, &resp)
+		// The resume takes no input, but the empty struct still rejects the
+		// retired decision payload as an unknown field.
+		serveMutation(w, r, http.StatusOK, nil, func(struct{}) (NeedUserInputResumeResponse, error) {
+			return h.mutations.ResumeNeedUserInput(featureID)
+		})
 	case actionTestingContractWaive:
-		if subaction != "" {
-			return false
-		}
-		var req TestingContractWaiveRequest
-		if !decodeMutationJSON(w, r, &req) {
+		serveMutation(w, r, http.StatusOK, func(req *TestingContractWaiveRequest) bool {
+			if len(req.ItemIDs) == 0 {
+				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("item_ids are required"))
+				return false
+			}
+			if strings.TrimSpace(req.Reason) == "" {
+				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("reason is required"))
+				return false
+			}
 			return true
-		}
-		if len(req.ItemIDs) == 0 {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("item_ids are required"))
-			return true
-		}
-		if strings.TrimSpace(req.Reason) == "" {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("reason is required"))
-			return true
-		}
-		resp, err := h.mutations.WaiveTestingContractItems(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "waived")
-		writeActionJSON(w, http.StatusOK, &resp)
+		}, func(req TestingContractWaiveRequest) (TestingContractWaiveResponse, error) {
+			return h.mutations.WaiveTestingContractItems(featureID, req)
+		})
 	case actionNeedInputDraft:
-		if subaction != "" {
-			return false
-		}
-		var req NeedUserInputDraftRequest
-		if !decodeMutationJSON(w, r, &req) {
+		serveMutation(w, r, http.StatusOK, func(req *NeedUserInputDraftRequest) bool {
+			if len(req.Answers) == 0 {
+				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
+				return false
+			}
 			return true
-		}
-		if len(req.Answers) == 0 {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
-			return true
-		}
-		resp, err := h.mutations.DraftNeedUserInputAnswers(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "drafted")
-		writeActionJSON(w, http.StatusOK, &resp)
+		}, func(req NeedUserInputDraftRequest) (NeedUserInputDraftResponse, error) {
+			return h.mutations.DraftNeedUserInputAnswers(featureID, req)
+		})
 	case actionPublish:
-		if subaction == phaseNameDescription {
-			var req PublishDescriptionRequest
-			if !decodeMutationJSON(w, r, &req) || !validateRepoList(w, req.Repos, false) {
-				return true
-			}
-			resp, err := h.mutations.GeneratePublishDescription(featureID, req)
-			if err != nil {
-				writeMutationError(w, err)
-				return true
-			}
-			defaultActionFields(&resp, featureID, resultGenerated)
-			writeActionJSON(w, http.StatusOK, &resp)
-			return true
-		}
-		if subaction != "" {
-			return false
-		}
-		var req PublishFeatureRequest
-		if !decodeMutationJSON(w, r, &req) || !validateRepoList(w, req.Repos, false) {
-			return true
-		}
-		resp, err := h.mutations.PublishFeature(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "published")
-		writeActionJSON(w, http.StatusOK, &resp)
-	case actionMerge, actionMarkDone, actionDelete:
-		if subaction != "" {
-			return false
-		}
-		var req GuardedFeatureActionRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		var (
-			resp          any
-			err           error
-			defaultResult string
-		)
-		switch action {
-		case actionMerge:
-			r, mergeErr := h.mutations.MergeFeature(featureID, req)
-			resp, err, defaultResult = &r, mergeErr, "merged"
-		case actionMarkDone:
-			r, markDoneErr := h.mutations.MarkDone(featureID, req)
-			resp, err, defaultResult = &r, markDoneErr, "done"
-		case actionDelete:
-			r, deleteErr := h.mutations.DeleteFeature(featureID, req)
-			resp, err, defaultResult = annotateDeleteResponse(&r), deleteErr, "deleted"
-		}
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(resp, featureID, defaultResult)
-		writeActionJSON(w, http.StatusOK, resp)
+		serveMutation(w, r, http.StatusOK, func(req *PublishFeatureRequest) bool {
+			return validateRepoList(w, req.Repos, false)
+		}, func(req PublishFeatureRequest) (PublishFeatureResponse, error) {
+			return h.mutations.PublishFeature(featureID, req)
+		})
+	case actionMerge:
+		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (MergeFeatureResponse, error) {
+			return h.mutations.MergeFeature(featureID, req)
+		})
+	case actionMarkDone:
+		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (MarkDoneResponse, error) {
+			return h.mutations.MarkDone(featureID, req)
+		})
+	case actionDelete:
+		serveMutation(w, r, http.StatusOK, nil, func(req GuardedFeatureActionRequest) (deleteActionResponse, error) {
+			resp, err := h.mutations.DeleteFeature(featureID, req)
+			return annotateDeleteResponse(resp), err
+		})
 	case actionRetry:
-		if subaction != "" {
-			return false
-		}
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.RetryFeature(featureID)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "retried")
-		writeActionJSON(w, http.StatusOK, &resp)
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (RetryFeatureResponse, error) {
+			return h.mutations.RetryFeature(featureID)
+		})
 	case actionRewind:
-		if subaction != "" {
-			return false
-		}
-		var req RewindFeatureRequest
-		if !decodeMutationJSON(w, r, &req) ||
-			!validatePhaseName(w, req.TargetPhase) ||
-			!validatePositiveOptionalInt(w, "roadmap_phase", req.RoadmapPhase) ||
-			!validatePipelineProfile(w, req.UpgradePipeline) {
-			return true
-		}
-		resp, err := h.mutations.RewindFeature(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, resultRewound)
-		writeActionJSON(w, http.StatusOK, &resp)
+		serveMutation(w, r, http.StatusOK, func(req *RewindFeatureRequest) bool {
+			return validatePhaseName(w, req.TargetPhase) &&
+				validatePositiveOptionalInt(w, "roadmap_phase", req.RoadmapPhase) &&
+				validatePipelineProfile(w, req.UpgradePipeline)
+		}, func(req RewindFeatureRequest) (RewindFeatureResponse, error) {
+			return h.mutations.RewindFeature(featureID, req)
+		})
 	case actionRebase:
-		if subaction != "" {
-			return false
-		}
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.RebaseFeature(featureID, RebaseFeatureRequest{})
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, "", resultCreated)
-		writeActionJSON(w, http.StatusCreated, &resp)
+		// Child launches answer 201 with the new child.
+		serveMutation(w, r, http.StatusCreated, nil, func(ignoredBody) (RebaseFeatureResponse, error) {
+			return h.mutations.RebaseFeature(featureID)
+		})
 	case actionRefactor:
-		if subaction != "" {
-			return false
-		}
-		h.handleRefactorFeatureMutationTrusted(w, r, featureID)
+		serveMutation(w, r, http.StatusCreated, func(req *RefactorFeatureRequest) bool {
+			req.Name = strings.TrimSpace(req.Name)
+			if req.Name == "" {
+				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("name is required"))
+				return false
+			}
+			return validatePipelineProfile(w, req.Pipeline) &&
+				validateRiskLevel(w, req.RiskLevel) &&
+				validateInquireness(w, req.Inquireness) &&
+				validateEffortConfig(w, req.Effort, req.Models, h.registry) &&
+				validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), len(req.Attachments), len(req.AttachmentUploads))
+		}, func(req RefactorFeatureRequest) (RefactorFeatureResponse, error) {
+			// Staged uploads resolve into durable handoff copies that roll
+			// back when the launch fails; the staged sources are deleted only
+			// after it succeeds, as for feature creation.
+			consumed, err := h.consumeUploadRefs(req.ImageUploads, req.AttachmentUploads, "")
+			if err != nil {
+				return RefactorFeatureResponse{}, err
+			}
+			if consumed != nil {
+				req.Images = append(req.Images, consumed.imagePaths...)
+				req.Attachments = append(req.Attachments, consumed.attachmentPaths...)
+			}
+			resp, err := h.mutations.RefactorFeature(featureID, req)
+			if err != nil {
+				consumed.rollback() // nil-safe: nothing to roll back without refs
+				return RefactorFeatureResponse{}, err
+			}
+			consumed.commit()
+			return resp, nil
+		})
 	case actionReviewFeedback:
-		switch subaction {
-		case "":
-			h.handleReviewFeedbackFeatureMutationTrusted(w, r, featureID)
-		case reviewFeedbackSubactionFetch:
-			h.handleReviewFeedbackFetchTrusted(w, r, featureID)
-		case reviewFeedbackSubactionSelection:
-			h.handleReviewFeedbackSelectionTrusted(w, r, featureID)
-		default:
-			return false
-		}
+		serveMutation(w, r, http.StatusCreated, nil, func(req ReviewFeedbackFeatureRequest) (ReviewFeedbackFeatureResponse, error) {
+			return h.mutations.ReviewFeedbackFeature(featureID, req)
+		})
 	case actionCleanup:
-		if subaction != "" {
-			return false
-		}
-		var req CleanupActionRequest
-		if !decodeMutationJSON(w, r, &req) || !validateCleanupRequest(w, req) {
-			return true
-		}
-		resp, err := h.mutations.CleanupFeature(featureID, req)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "cleaned")
-		writeActionJSON(w, http.StatusOK, &resp)
+		serveMutation(w, r, http.StatusOK, func(req *CleanupActionRequest) bool {
+			return validateCleanupRequest(w, *req)
+		}, func(req CleanupActionRequest) (CleanupFeatureResponse, error) {
+			return h.mutations.CleanupFeature(featureID, req)
+		})
 	case actionDiscard:
-		if subaction != "" {
-			return false
-		}
-		var req map[string]any
-		if !decodeMutationJSON(w, r, &req) {
-			return true
-		}
-		resp, err := h.mutations.DiscardChild(featureID)
-		if err != nil {
-			writeMutationError(w, err)
-			return true
-		}
-		defaultActionFields(&resp, featureID, "discarded")
-		writeActionJSON(w, http.StatusOK, &resp)
+		serveMutation(w, r, http.StatusOK, nil, func(ignoredBody) (DiscardChildResponse, error) {
+			return h.mutations.DiscardChild(featureID)
+		})
 	default:
 		return false
 	}
@@ -1257,40 +1130,32 @@ func (h *apiHandler) handleRuntimeConfigRoute(w http.ResponseWriter, r *http.Req
 	switch r.Method {
 	case http.MethodGet:
 		h.handleRuntimeConfig(w, r)
-	case http.MethodPatch, http.MethodPut:
+	case http.MethodPatch:
 		if !h.requireTrustedMutation(w, r) {
 			return
 		}
-		var req RuntimeConfigMutationRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return
-		}
-		models := h.configOrDefault().Defaults.Models
-		if req.Defaults.Models != nil {
-			models = ApplyModelConfigPatch(models, *req.Defaults.Models)
-		}
-		if !validateEffortConfig(w, req.Defaults.Effort, models, h.registry) {
-			return
-		}
-		if req.WorkspaceRoots != nil && !validateWorkspaceRootPaths(w, *req.WorkspaceRoots) {
-			return
-		}
-		resp, err := h.mutations.RuntimeConfig(req)
-		if err != nil {
-			writeMutationError(w, err)
-			return
-		}
-		defaultActionFields(&resp, "", resultUpdated)
-		if resp.Result == resultUpdated && h.broker != nil {
+		serveMutation(w, r, http.StatusOK, func(req *RuntimeConfigMutationRequest) bool {
+			models := h.configOrDefault().Defaults.Models
+			if req.Defaults.Models != nil {
+				models = ApplyModelConfigPatch(models, *req.Defaults.Models)
+			}
+			if !validateEffortConfig(w, req.Defaults.Effort, models, h.registry) {
+				return false
+			}
+			return req.WorkspaceRoots == nil || validateWorkspaceRootPaths(w, *req.WorkspaceRoots)
+		}, func(req RuntimeConfigMutationRequest) (RuntimeConfigUpdateResponse, error) {
+			resp, err := h.mutations.RuntimeConfig(req)
 			// A runtime configuration change (workspace roots, defaults,
 			// notifications) reshapes discovery and read models: every
-			// surface re-reads its snapshot. Unchanged mutations publish
-			// nothing.
-			h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
-		}
-		writeActionJSON(w, http.StatusOK, &resp)
+			// surface re-reads its snapshot. The target answers "updated"
+			// only for a change; unchanged mutations publish nothing.
+			if err == nil && resp.Result == "updated" && h.broker != nil {
+				h.broker.publish(snapshotRequiredEventDTO(sseEventConfigUpdated, Resource{Type: resourceTypeRuntime}))
+			}
+			return resp, err
+		})
 	default:
-		w.Header().Set("Allow", "GET, PATCH, PUT")
+		w.Header().Set("Allow", "GET, PATCH")
 		writeAPIError(w, http.StatusMethodNotAllowed, errcat.MethodNotAllowed)
 	}
 }
@@ -1375,41 +1240,37 @@ func (h *apiHandler) handlePermissionMutationRoutes(w http.ResponseWriter, r *ht
 	if h.refuseAdmissionClosed(w) {
 		return
 	}
-	var req PermissionAnswerRequest
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
+	serveMutation(w, r, http.StatusOK, func(req *PermissionAnswerRequest) bool {
+		return validatePermissionAnswer(w, *req)
+	}, h.mutations.AnswerPermission)
+}
+
+func validatePermissionAnswer(w http.ResponseWriter, req PermissionAnswerRequest) bool {
 	if strings.TrimSpace(req.RequestID) == "" {
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("request_id is required"))
-		return
+		return false
 	}
 	switch req.Decision {
 	case decisionAllowOnce, decisionAllowRemember, decisionDeny, "retry_auto_review":
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(errMessageInvalidDecision))
-		return
+		return false
 	}
 	if req.Decision == decisionAllowRemember && req.RememberScope == nil {
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("remember_scope is required for allow_remember"))
-		return
+		return false
 	}
 	switch req.AutoApproveScope {
 	case "", AutoApproveScopeFeature, AutoApproveScopeWorkspace:
 	default:
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope must be feature or workspace"))
-		return
+		return false
 	}
 	if req.AutoApproveScope != "" && (req.Decision == decisionDeny || req.Decision == "retry_auto_review") {
 		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("auto_approve_scope cannot be combined with deny or retry_auto_review"))
-		return
+		return false
 	}
-	resp, err := h.mutations.AnswerPermission(req)
-	if err != nil {
-		writeMutationError(w, err)
-		return
-	}
-	defaultActionFields(&resp, "", resultAnswered)
-	writeActionJSON(w, http.StatusOK, &resp)
+	return true
 }
 
 func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.Request) {
@@ -1429,162 +1290,37 @@ func (h *apiHandler) handlePromptMutationRoutes(w http.ResponseWriter, r *http.R
 		if h.refuseAdmissionClosed(w) {
 			return
 		}
-		var req AskUserAnswerRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return
-		}
-		if strings.TrimSpace(req.RequestID) == "" {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("request_id is required"))
-			return
-		}
-		if len(req.Answers) == 0 {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
-			return
-		}
-		resp, err := h.mutations.AnswerAskUser(req)
-		if err != nil {
-			writeMutationError(w, err)
-			return
-		}
-		defaultActionFields(&resp, "", resultAnswered)
-		writeActionJSON(w, http.StatusOK, &resp)
+		serveMutation(w, r, http.StatusOK, func(req *AskUserAnswerRequest) bool {
+			if strings.TrimSpace(req.RequestID) == "" {
+				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("request_id is required"))
+				return false
+			}
+			if len(req.Answers) == 0 {
+				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("answers are required"))
+				return false
+			}
+			return true
+		}, h.mutations.AnswerAskUser)
 	case "help/send":
 		// Help replies can launch new work for the waiting session: a
 		// closed admission boundary refuses them with the canonical 503.
 		if h.refuseAdmissionClosed(w) {
 			return
 		}
-		var req HelpAnswerRequest
-		if !decodeMutationJSON(w, r, &req) {
-			return
-		}
-		if strings.TrimSpace(req.Message) == "" {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("message is required"))
-			return
-		}
-		if strings.TrimSpace(req.SessionID) == "" && strings.TrimSpace(req.FeatureID) == "" {
-			writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("session_id or feature_id is required"))
-			return
-		}
-		resp, err := h.mutations.SendHelp(req)
-		if err != nil {
-			writeMutationError(w, err)
-			return
-		}
-		defaultActionFields(&resp, "", "sent")
-		writeActionJSON(w, http.StatusOK, &resp)
+		serveMutation(w, r, http.StatusOK, func(req *HelpAnswerRequest) bool {
+			if strings.TrimSpace(req.Message) == "" {
+				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("message is required"))
+				return false
+			}
+			if strings.TrimSpace(req.SessionID) == "" && strings.TrimSpace(req.FeatureID) == "" {
+				writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("session_id or feature_id is required"))
+				return false
+			}
+			return true
+		}, h.mutations.SendHelp)
 	default:
 		writeAPIError(w, http.StatusNotFound, errcat.NotFound, errcat.WithParams(errcat.SubjectParams{Subject: "Endpoint"}))
 	}
-}
-
-func (h *apiHandler) handleStartFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
-	var req map[string]any
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	resp, err := h.mutations.StartFeature(featureID)
-	if err != nil {
-		writeMutationError(w, err)
-		return
-	}
-	defaultActionFields(&resp, featureID, resultStarted)
-	writeActionJSON(w, http.StatusOK, &resp)
-}
-
-func (h *apiHandler) handleResumeFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
-	var req map[string]any
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	resp, err := h.mutations.ResumeFeature(featureID)
-	if err != nil {
-		writeMutationError(w, err)
-		return
-	}
-	defaultActionFields(&resp, featureID, resultStarted)
-	writeActionJSON(w, http.StatusOK, &resp)
-}
-
-func (h *apiHandler) handleStopFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
-	var req map[string]any
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	resp, err := h.mutations.StopFeature(featureID)
-	if err != nil {
-		writeMutationError(w, err)
-		return
-	}
-	defaultActionFields(&resp, featureID, "stopped")
-	writeActionJSON(w, http.StatusOK, &resp)
-}
-
-// handleRefactorFeatureMutationTrusted launches a refactor child under the
-// given parent. Unlike the other actions it returns 201 with the new child;
-// the mutation target runs child setup asynchronously after creation is
-// durable.
-func (h *apiHandler) handleRefactorFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
-	var req RefactorFeatureRequest
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	req.Name = strings.TrimSpace(req.Name)
-	if req.Name == "" {
-		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics("name is required"))
-		return
-	}
-	if !validatePipelineProfile(w, req.Pipeline) || !validateRiskLevel(w, req.RiskLevel) || !validateInquireness(w, req.Inquireness) {
-		return
-	}
-	if !validateEffortConfig(w, req.Effort, req.Models, h.registry) {
-		return
-	}
-	if !validateCombinedUploadCounts(w, len(req.Images), len(req.ImageUploads), len(req.Attachments), len(req.AttachmentUploads)) {
-		return
-	}
-	consumed, err := h.consumeUploadRefs(req.ImageUploads, req.AttachmentUploads, "")
-	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, errcat.BadRequest, errcat.WithDiagnostics(err.Error()))
-		return
-	}
-	if consumed != nil {
-		req.Images = append(req.Images, consumed.imagePaths...)
-		req.Attachments = append(req.Attachments, consumed.attachmentPaths...)
-	}
-	resp, err := h.mutations.RefactorFeature(featureID, req)
-	if err != nil {
-		consumed.rollback() // nil-safe: nothing to roll back without refs
-		writeMutationError(w, err)
-		return
-	}
-	consumed.commit()
-	defaultActionFields(&resp, "", resultCreated)
-	writeActionJSON(w, http.StatusCreated, &resp)
-}
-
-func (h *apiHandler) handleReviewFeedbackFeatureMutationTrusted(w http.ResponseWriter, r *http.Request, featureID string) {
-	var req ReviewFeedbackFeatureRequest
-	if !decodeMutationJSON(w, r, &req) {
-		return
-	}
-	resp, err := h.mutations.ReviewFeedbackFeature(featureID, req)
-	if err != nil {
-		writeMutationError(w, err)
-		return
-	}
-	defaultActionFields(&resp, "", resultCreated)
-	writeActionJSON(w, http.StatusCreated, &resp)
-}
-
-func (h *apiHandler) writeRestartFeature(w http.ResponseWriter, featureID string, req RestartFeatureRequest) {
-	resp, err := h.mutations.RestartFeature(featureID, req)
-	if err != nil {
-		writeMutationError(w, err)
-		return
-	}
-	defaultActionFields(&resp, featureID, "restarted")
-	writeActionJSON(w, http.StatusOK, &resp)
 }
 
 func validatePipelineProfile(w http.ResponseWriter, profile feature.PipelineProfile) bool {
@@ -1651,14 +1387,6 @@ func RefactorChildSpecFromRequest(req RefactorFeatureRequest) (feature.RefactorC
 // the committed pending draft against current server-resolved GitHub data.
 func ReviewFeedbackGateFromRequest(req ReviewFeedbackFeatureRequest) *bool {
 	return req.Gate
-}
-
-// RebaseChildSpecFromRequest is the zero-input mapper for rebase child
-// launches. The rebase action takes no user input; the orchestrator preflight
-// resolves targets and computes behind-ness before child creation. The mapper
-// exists for structural consistency with the other child-launch actions.
-func RebaseChildSpecFromRequest(_ RebaseFeatureRequest) feature.RebaseChildSpec {
-	return feature.RebaseChildSpec{}
 }
 
 func validateAutomaticReviewMode(w http.ResponseWriter, raw *string) bool {
@@ -1827,7 +1555,7 @@ func (h *apiHandler) requireTrustedClient(w http.ResponseWriter, r *http.Request
 		writeAPIError(w, http.StatusUnsupportedMediaType, errcat.UnsupportedMediaType, errcat.WithDiagnostics("JSON body is required"))
 		return false
 	}
-	if r.ContentLength > MaxMutationBodyBytes {
+	if r.ContentLength > maxMutationBodyBytes {
 		writeAPIError(w, http.StatusRequestEntityTooLarge, errcat.RequestTooLarge, errcat.WithDiagnostics("mutation body is too large"))
 		return false
 	}
@@ -1853,7 +1581,7 @@ func classifyDecodeError(err error) (status int, code errcat.Code, diagnostics s
 }
 
 func decodeMutationJSON(w http.ResponseWriter, r *http.Request, out any) bool {
-	return decodeMutationJSONLimited(w, r, out, MaxMutationBodyBytes)
+	return decodeMutationJSONLimited(w, r, out, maxMutationBodyBytes)
 }
 
 // decodeMutationJSONLimited decodes a mutation body under a caller-chosen

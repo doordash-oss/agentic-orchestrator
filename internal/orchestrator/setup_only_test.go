@@ -51,7 +51,7 @@ func countWorktreeCreates(worktrees *mocks.MockWorktreeOps) int {
 	return count
 }
 
-func TestRunSetupOnlyLeavesFeatureStartableWithoutStarting(t *testing.T) {
+func TestDispatchSetupLeavesFeatureStartableWithoutStarting(t *testing.T) {
 	store, manager, worktrees, runtimeDir := newSetupOnlyFixture(t)
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
 		return filepath.Join(runtimeDir, "worktrees", featureSlug, repoName), nil
@@ -69,9 +69,10 @@ func TestRunSetupOnlyLeavesFeatureStartableWithoutStarting(t *testing.T) {
 		OnFeatureStarted: func(string) { started++ },
 	})
 
-	if err := orch.RunSetupOnly(f.ID); err != nil {
-		t.Fatalf("RunSetupOnly() error = %v", err)
+	if err := orch.DispatchSetup(f.ID); err != nil {
+		t.Fatalf("DispatchSetup() error = %v", err)
 	}
+	orch.WaitForCycles()
 
 	updated, err := store.Load(f.ID)
 	if err != nil {
@@ -89,7 +90,7 @@ func TestRunSetupOnlyLeavesFeatureStartableWithoutStarting(t *testing.T) {
 	}
 }
 
-func TestRetrySetupOnlyRerunsOnlyUnfinishedTasksWithoutStarting(t *testing.T) {
+func TestDispatchSetupRetryRerunsOnlyUnfinishedTasksWithoutStarting(t *testing.T) {
 	store, manager, worktrees, runtimeDir := newSetupOnlyFixture(t)
 	failRepoB := true
 	worktrees.CreateFn = func(repoPath, featureSlug, repoName, startPoint string) (string, error) {
@@ -111,9 +112,11 @@ func TestRetrySetupOnlyRerunsOnlyUnfinishedTasksWithoutStarting(t *testing.T) {
 		OnFeatureStarted: func(string) { started++ },
 	})
 
-	if err := orch.RunSetupOnly(f.ID); err == nil {
-		t.Fatal("RunSetupOnly() error = nil; want initial failure for repo-b")
+	// Setup failures are durable; the dispatch itself succeeds.
+	if err := orch.DispatchSetup(f.ID); err != nil {
+		t.Fatalf("DispatchSetup() error = %v", err)
 	}
+	orch.WaitForCycles()
 	failed, err := store.Load(f.ID)
 	if err != nil {
 		t.Fatalf("Load failed feature: %v", err)
@@ -124,9 +127,10 @@ func TestRetrySetupOnlyRerunsOnlyUnfinishedTasksWithoutStarting(t *testing.T) {
 	createsAfterFirstRun := countWorktreeCreates(worktrees)
 
 	failRepoB = false
-	if err := orch.RetrySetupOnly(f.ID); err != nil {
-		t.Fatalf("RetrySetupOnly() error = %v", err)
+	if err := orch.DispatchSetup(f.ID); err != nil {
+		t.Fatalf("DispatchSetup() retry error = %v", err)
 	}
+	orch.WaitForCycles()
 
 	updated, err := store.Load(f.ID)
 	if err != nil {

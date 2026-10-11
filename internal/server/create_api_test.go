@@ -93,7 +93,7 @@ func newCreateServerFixtureGated(t *testing.T, gated bool) *createServerFixture 
 		Config:                cfg,
 		Mutations:             &createFeatureRecorder{},
 		DisableHostValidation: true,
-		Clones:                svc,
+		clones:                svc,
 	})
 	apiRef = fx.api
 	fx.handler = fx.api.routes()

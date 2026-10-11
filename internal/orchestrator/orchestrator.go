@@ -202,13 +202,16 @@ type Orchestrator struct {
 	// child creation. Mutation guard callers acquire a read lock for the
 	// guard check and the entire operation; child creation acquires the
 	// write lock. This closes the time-of-check/time-of-use gap where a
-	// standalone RelationshipGuard read could pass, then CreateChildLocked
+	// standalone relationshipGuard read could pass, then CreateChildLocked
 	// creates a child, then the mutation lands on a parent that now has
 	// an active child. The guard check and child creation are mutually
 	// exclusive: either the mutation guard sees no child and completes
 	// before child creation starts, or child creation completes first and
 	// the guard sees the child and rejects.
 	relationshipMu sync.RWMutex
+	// traceStep, when set by an in-package test, records each orchestration
+	// operation step (see trace).
+	traceStep func(step string)
 
 	supervisor *phaseSupervisor
 
@@ -241,7 +244,7 @@ type Orchestrator struct {
 	// work ends. Nil when no boundary is configured.
 	admission *featureAdmissions
 
-	// publishFn is a test hook. When nil the orchestrator calls o.Publish.
+	// publishFn is a test hook. When nil the orchestrator calls o.publish.
 	// Tests can override this to intercept publish dispatch without touching
 	// the publish implementation.
 	publishFn func(featureID string) error
@@ -288,16 +291,6 @@ type Orchestrator struct {
 	// worktreeFingerprintFn is a test seam for detecting whether a mounted
 	// context repo changed during the agent loop.
 	worktreeFingerprintFn func(worktreePath string) (string, error)
-}
-
-// SetRunImplementationFn installs a test seam that intercepts
-// PhaseRunner.RunImplementation dispatch. Intended for tests only.
-func (o *Orchestrator) SetRunImplementationFn(fn func(
-	f *feature.Feature,
-	planPath string,
-	kbInfos ...agent.KBInfo,
-) (chan *agent.LoopResult, error)) {
-	o.runImplementationFn = fn
 }
 
 // New creates an Orchestrator. The eventCh is a bounded buffer (256).
@@ -379,28 +372,18 @@ func New(deps Deps, hooks Hooks) *Orchestrator {
 // Events returns a read-only channel of domain events.
 func (o *Orchestrator) Events() <-chan ports.Event { return o.eventCh }
 
-// Done returns a channel that is closed when Shutdown has been invoked.
-// Consumers should select on Done alongside Events() to terminate receive
-// loops cleanly. The channel is never sent to — only closed.
-func (o *Orchestrator) Done() <-chan struct{} { return o.doneCh }
-
 // WaitForCycles blocks until every background goroutine launched by
 // asynchronous phase continuations has returned. Production
 // callers do not need this — the orchestrator drives phases to completion
 // via its event loop. It exists for tests whose state directory is a
 // t.TempDir(): without synchronizing on the goroutine, TempDir cleanup
 // can race with in-flight writes from the implementation loop.
+// Test-reachable seam: e2e journeys and module tests wait on it.
 func (o *Orchestrator) WaitForCycles() { o.cycleWG.Wait() }
-
-// SetPublishFn installs a test hook that intercepts publish dispatch in place
-// of o.Publish. Intended for tests only — production code leaves it unset so
-// startPublish falls through to o.Publish.
-func (o *Orchestrator) SetPublishFn(fn func(featureID string) error) {
-	o.publishFn = fn
-}
 
 // SetPublishRepoFn installs a test hook that intercepts per-repo publish
 // dispatch in place of o.publishRepo. Intended for tests only.
+// Test-reachable seam: e2e journeys and module tests install it.
 func (o *Orchestrator) SetPublishRepoFn(fn func(featureID, repoName string) (string, error)) {
 	o.publishRepoFn = fn
 }
@@ -408,6 +391,7 @@ func (o *Orchestrator) SetPublishRepoFn(fn func(featureID, repoName string) (str
 // SetRunMultiRepoImplFn installs a test seam that intercepts
 // PhaseRunner.RunMultiRepoImplementation dispatch. Intended for tests only —
 // production leaves the default adapter wired in New().
+// Test-reachable seam: module tests install it.
 func (o *Orchestrator) SetRunMultiRepoImplFn(fn func(
 	f *feature.Feature,
 	planPath string,
@@ -419,6 +403,7 @@ func (o *Orchestrator) SetRunMultiRepoImplFn(fn func(
 // SetRunMultiRepoFinalReviewFn installs a test seam that intercepts the
 // deferred end-of-feature Final Review dispatch. Intended for tests only —
 // production leaves the default adapter wired in New().
+// Test-reachable seam: e2e journeys install it.
 func (o *Orchestrator) SetRunMultiRepoFinalReviewFn(fn func(
 	f *feature.Feature,
 	kbInfos ...agent.KBInfo,
@@ -448,10 +433,10 @@ func (o *Orchestrator) CreateFeature(
 	return f, nil
 }
 
-// ChildCreated emits the relationship-created event for any durable child.
+// childCreated emits the relationship-created event for any durable child.
 // Child creation goes through the feature manager rather than
 // Orchestrator.CreateFeature, so mutation targets report the launch here.
-func (o *Orchestrator) ChildCreated(child *feature.Feature) {
+func (o *Orchestrator) childCreated(child *feature.Feature) {
 	if child == nil || !child.IsChild() {
 		return
 	}
@@ -520,9 +505,17 @@ func (o *Orchestrator) StartFeature(featureID string) error {
 	startMu.Lock()
 	defer startMu.Unlock()
 
-	o.relationshipMu.RLock()
-	defer o.relationshipMu.RUnlock()
-	if err := o.RelationshipGuard(featureID, MutationStart); err != nil {
+	unlock := o.lockRelationshipRead()
+	defer unlock()
+	return o.startFeatureLocked(featureID)
+}
+
+// startFeatureLocked is the start body. Callers hold the feature's start
+// control and the relationship read lock, in that order, so a restart can
+// dispatch its phase inside the same guard window as its transition.
+func (o *Orchestrator) startFeatureLocked(featureID string) error {
+	o.trace(traceDispatch)
+	if err := o.relationshipGuard(featureID, mutationStart); err != nil {
 		return err
 	}
 	if err := o.checkChildExecution(featureID); err != nil {
@@ -1223,7 +1216,7 @@ func (o *Orchestrator) startRoadmapPhasePlan(featureID string, f *feature.Featur
 // startImplement starts the Implementation phase. Resolves plan path through
 // the cascade, initializes repo impl tracking, persists the execution plan
 // fallback, and then delegates engine invocation and result routing to
-// StartMultiRepoImplementation — the single code path for multi-repo
+// startMultiRepoImplementation — the single code path for multi-repo
 // implementation runs, including fresh starts and recovery relaunches.
 //
 // Idempotent for recovery resume: when the feature is already
@@ -1277,7 +1270,7 @@ func (o *Orchestrator) startImplement(featureID string) (PhaseStartResult, error
 	// The unified phase-implement loop derives its repo set from PhaseScope
 	// (per-Task `**Repo:** <name>` tags); per-phase execution-order.yaml is
 	// gone in SchemaVersionCurrent = 4.
-	if err := o.StartMultiRepoImplementation(featureID); err != nil {
+	if err := o.startMultiRepoImplementation(featureID); err != nil {
 		return PhaseStartResult{}, fmt.Errorf("run implementation: %w", err)
 	}
 	return PhaseStartResult{Outcome: PhaseStarted}, nil
@@ -1285,7 +1278,7 @@ func (o *Orchestrator) startImplement(featureID string) (PhaseStartResult, error
 
 // startPublish is a thin dispatcher. It returns
 // PhaseNoOp when the feature is not publishable or auto-publish is disabled;
-// delegates to o.Publish otherwise.
+// delegates to o.publish otherwise.
 func (o *Orchestrator) startPublish(featureID string) (PhaseStartResult, error) {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
@@ -1299,7 +1292,7 @@ func (o *Orchestrator) startPublish(featureID string) (PhaseStartResult, error) 
 	}
 	publishFn := o.publishFn
 	if publishFn == nil {
-		publishFn = o.Publish
+		publishFn = o.publish
 	}
 	if err := publishFn(featureID); err != nil {
 		return PhaseStartResult{}, err
@@ -1353,7 +1346,7 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 	return actual.(*sync.Mutex)
 }
 
-// InterruptFeature stops all sessions for a feature and clears pending help,
+// interruptFeature stops all sessions for a feature and clears pending help,
 // permission, and feature-scoped input gate state. Normal phase work and
 // post-publish rebase children transition the feature to StatusInterrupted.
 // Does NOT clear KBStatus — preserve per-repo KB tracking for resume.
@@ -1363,7 +1356,7 @@ func (o *Orchestrator) featureStartControl(featureID string) *sync.Mutex {
 // already at StatusInterrupted and short-circuits its failure branch.
 // Otherwise the stopped session's last assistant text would surface
 // as failure_type=session_crash and beat FeatureInterrupted to emission.
-func (o *Orchestrator) InterruptFeature(featureID string) error {
+func (o *Orchestrator) interruptFeature(featureID string) error {
 	featureInterrupted := false
 	f, getErr := o.deps.Lifecycle.Get(featureID)
 	switch {
@@ -1479,12 +1472,12 @@ func (o *Orchestrator) InterruptAllRunning() error {
 			// transition here.
 			continue
 		case f.Status.IsRunning():
-			if err := o.InterruptFeature(f.ID); err != nil {
+			if err := o.interruptFeature(f.ID); err != nil {
 				errs = append(errs, fmt.Errorf("interrupt %s: %w", f.ID, err))
 				continue
 			}
 			// Startup-sweep parity: clear KBStatus to force full rebuild on
-			// restart. InterruptFeature alone preserves KBStatus for resume;
+			// restart. interruptFeature alone preserves KBStatus for resume;
 			// the sweep layers on this additional reset.
 			if err := o.deps.Store.Modify(f.ID, func(ff *feature.Feature) error {
 				ff.KBStatus = nil
@@ -1503,6 +1496,8 @@ func (o *Orchestrator) InterruptAllRunning() error {
 
 // HandlePhaseCompletion dispatches a phase-completion result to the
 // appropriate per-phase handler.
+// Test-reachable seam: production completions arrive through the phase
+// supervisor; integration tests drive it directly.
 func (o *Orchestrator) HandlePhaseCompletion(featureID string, input PhaseCompletionInput) error {
 	// Every session completion funnels here: after the handler runs, the
 	// feature's admission reservation settles unless it still owns work or
@@ -1565,12 +1560,12 @@ func (o *Orchestrator) HandleReviewDecision(featureID string, d ReviewDecision) 
 	// gate is an ordinary execution control and is allowed.
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
-	if err := o.RelationshipGuard(featureID, MutationReviewDecision); err != nil {
+	if err := o.relationshipGuard(featureID, mutationReviewDecision); err != nil {
 		return err
 	}
 
 	if d.IsRewind && d.Decision == "proceed" {
-		return o.ProceedFromRewindReview(featureID, d.TargetPhase)
+		return o.proceedFromRewindReview(featureID, d.TargetPhase)
 	}
 
 	switch d.Decision {
@@ -1595,7 +1590,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 
 	// Per-phase plan approval (roadmap phase plan): transition to ImplementReady,
 	// then dispatch PhaseImplement. The per-phase execution-order.yaml is
-	// read fresh from disk by StartMultiRepoImplementation; no pre-flight
+	// read fresh from disk by startMultiRepoImplementation; no pre-flight
 	// populate step is needed (per SchemaVersionCurrent = 3).
 	if d.PhasePlan {
 		if err := o.deps.Lifecycle.StartRoadmapPhaseImplementation(featureID); err != nil {
@@ -1649,7 +1644,7 @@ func (o *Orchestrator) reviewProceed(featureID string, f *feature.Feature, d Rev
 		}
 		// Non-roadmap legacy plan review approval. The legacy plan dir's
 		// execution-order.yaml (if any) is read fresh by
-		// StartMultiRepoImplementation; no pre-flight populate is needed.
+		// startMultiRepoImplementation; no pre-flight populate is needed.
 		if err := o.deps.Lifecycle.CompletePlanning(featureID); err != nil {
 			return fmt.Errorf("complete planning: %w", err)
 		}
@@ -1692,10 +1687,10 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 	// feedback on the latest plan attempt, then dispatch PhasePlan so the
 	// planner runs another attempt with the reviewer feedback in scope.
 	if d.Roadmap {
-		if err := o.ResetPlanStatusForRoadmap(featureID, 1); err != nil {
+		if err := o.resetPlanStatusForRoadmap(featureID, 1); err != nil {
 			return fmt.Errorf("reset plan status for roadmap reject: %w", err)
 		}
-		o.RecordRoadmapRejection(featureID, d.Comment)
+		o.recordRoadmapRejection(featureID, d.Comment)
 		_, _, err := o.startPhase(featureID, feature.PhasePlan)
 		return err
 	}
@@ -1719,7 +1714,7 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 	return nil
 }
 
-// ProceedFromRewindReview confirms a rewind that has already been performed
+// proceedFromRewindReview confirms a rewind that has already been performed
 // and dispatches the target phase. The caller invokes Lifecycle.RewindToPhase
 // before opening the rewind-artifact-review session, so
 // by the time the user picks "Proceed with rewind" the active run is already
@@ -1738,7 +1733,7 @@ func (o *Orchestrator) reviewIterate(featureID string, f *feature.Feature, d Rev
 // Replaces the previously-incorrect HandleReviewDecision({Decision:"rewind"})
 // path, which redundantly called RewindToPhase a second time and produced an
 // extra phantom run on every confirm.
-func (o *Orchestrator) ProceedFromRewindReview(featureID string, target feature.Phase) error {
+func (o *Orchestrator) proceedFromRewindReview(featureID string, target feature.Phase) error {
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature %s: %w", featureID, err)
@@ -1782,7 +1777,7 @@ func (o *Orchestrator) ProceedFromRewindReview(featureID string, target feature.
 	// the subsequent StartImplementation valid.
 	//
 	// The per-phase execution-order.yaml is read fresh from disk by
-	// StartMultiRepoImplementation (per SchemaVersionCurrent = 3); no
+	// startMultiRepoImplementation (per SchemaVersionCurrent = 3); no
 	// pre-flight populate step is needed on rewind.
 	if target == feature.PhaseImplement {
 		if pendingPartialImplementReview {
@@ -1814,7 +1809,7 @@ func (o *Orchestrator) ProceedFromRewindReview(featureID string, target feature.
 }
 
 // clearReviewGate clears PendingReviewPhase and IsRewind. Used from both
-// reviewProceed and ProceedFromRewindReview.
+// reviewProceed and proceedFromRewindReview.
 func (o *Orchestrator) clearReviewGate(featureID string) error {
 	return o.deps.Store.Modify(featureID, func(ff *feature.Feature) error {
 		ff.PendingReviewPhase = nil
@@ -2014,10 +2009,10 @@ func (o *Orchestrator) tryCompleteAndEmit(featureID string) (bool, error) {
 	return true, nil
 }
 
-// Publish runs the publish pipeline for a feature. Fans out per-repo
+// publish runs the publish pipeline for a feature. Fans out per-repo
 // publishRepo calls, aggregates results, emits PublishStarted/PublishCompleted
 // events, and delegates FeatureCompleted emission to tryCompleteAndEmit.
-func (o *Orchestrator) Publish(featureID string) error {
+func (o *Orchestrator) publish(featureID string) error {
 	return o.PublishWithOptions(featureID, PublishOptions{})
 }
 
@@ -2041,7 +2036,7 @@ func (o *Orchestrator) PublishWithOptions(featureID string, opts PublishOptions)
 // when auto-publish is invoked from settleChildClosureTail, which already
 // runs under the relationship read lock held by RunChildIntegration.
 func (o *Orchestrator) publishWithOptionsLocked(featureID string, opts PublishOptions) error {
-	if err := o.RelationshipGuard(featureID, MutationPublish); err != nil {
+	if err := o.relationshipGuard(featureID, mutationPublish); err != nil {
 		return err
 	}
 	f, err := o.deps.Lifecycle.Get(featureID)
@@ -2170,12 +2165,14 @@ func publishRepoSelection(f *feature.Feature, repos []string) (map[string]bool, 
 }
 
 // ScanRecovery / ExecuteRecovery live in recovery.go
-// StartMultiRepoImplementation lives in multirepo.go
+// startMultiRepoImplementation lives in multirepo.go
 
 // Shutdown cleanly shuts down the orchestrator. It closes doneCh to unblock
-// consumers of Events/Done and any in-flight emitters, and shuts down the
+// consumers of Events and any in-flight emitters, and shuts down the
 // session manager. Safe to call more than once; stopOnce guarantees the body
 // runs exactly once. Never closes eventCh — consumers observe doneCh instead.
+// Test-reachable seam: production shutdown runs through the fx lifecycle;
+// e2e journeys call it directly.
 func (o *Orchestrator) Shutdown() error {
 	o.stopOnce.Do(func() {
 		o.emitShutdownStarted()
@@ -2187,7 +2184,7 @@ func (o *Orchestrator) Shutdown() error {
 	return nil
 }
 
-// StopFeatureSessions stops every PTY session associated with the given
+// stopFeatureSessions stops every PTY session associated with the given
 // feature ID. Safe to call with nil Sessions port (no-op). Used by callers
 // that need to reset session state before cascading operations (delete,
 // restart, KB-failure propagation) without also triggering lifecycle
@@ -2195,7 +2192,7 @@ func (o *Orchestrator) Shutdown() error {
 //
 // Keeping this policy in the orchestrator prevents client call sites from
 // duplicating session-stop rules.
-func (o *Orchestrator) StopFeatureSessions(featureID string) {
+func (o *Orchestrator) stopFeatureSessions(featureID string) {
 	if o.deps.Sessions == nil {
 		return
 	}
@@ -2235,14 +2232,4 @@ func (o *Orchestrator) releaseKBLocksForFeature(f *feature.Feature) {
 	if released {
 		o.wakeKBWaiters(f.ID)
 	}
-}
-
-// Delete executes the durable relationship cascade (which also releases any
-// KB locks the feature still owns). The error-only wrapper is retained for
-// callers that do not consume the typed convergent result. Synchronous
-// (caller learns the outcome via the returned error); no ports.Event is
-// emitted because deletion is synchronously acknowledged.
-func (o *Orchestrator) Delete(featureID string) error {
-	_, err := o.DeleteCascade(featureID)
-	return err
 }

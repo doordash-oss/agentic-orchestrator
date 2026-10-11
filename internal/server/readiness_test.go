@@ -577,7 +577,7 @@ func TestCreateFeatureAcceptsContextAnnotatedModelFallback(t *testing.T) {
 
 func (t *createFeatureRecorder) CreateFeature(req CreateFeatureRequest) (CreateFeatureResponse, error) {
 	t.created.Add(1)
-	return CreateFeatureResponse{FeatureID: fixtureFeatureID, Result: resultCreated}, nil
+	return CreateFeatureResponse{FeatureID: fixtureFeatureID, Result: "created"}, nil
 }
 
 func TestCreateFeatureReturnsStructuredReadinessErrorWhenNoProviderUsable(t *testing.T) {

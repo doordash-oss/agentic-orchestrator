@@ -630,7 +630,7 @@ func (h *apiHandler) handleUploadsRoute(w http.ResponseWriter, r *http.Request) 
 // requireTrustedUpload enforces the same bearer-adjacent posture as
 // requireTrustedMutation — trusted local client header and loopback-only
 // Origin — for the octet-stream upload route, requiring the octet-stream
-// content type instead of a JSON body bound by MaxMutationBodyBytes.
+// content type instead of a JSON body bound by maxMutationBodyBytes.
 func (h *apiHandler) requireTrustedUpload(w http.ResponseWriter, r *http.Request) bool {
 	if h.uploads == nil {
 		writeAPIError(w, http.StatusServiceUnavailable, errcat.Unavailable)

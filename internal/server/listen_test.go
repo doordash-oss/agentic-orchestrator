@@ -30,8 +30,8 @@ func TestResolveListenAddrAcceptedForms(t *testing.T) {
 		value string
 		want  string
 	}{
-		{"", DefaultListenAddr},
-		{"  ", DefaultListenAddr},
+		{"", defaultListenAddr},
+		{"  ", defaultListenAddr},
 		{"8080", "127.0.0.1:8080"},
 		{"127.0.0.1:8080", "127.0.0.1:8080"},
 		{"localhost:9000", "localhost:9000"},
@@ -61,7 +61,7 @@ func TestResolveListenPolicyMatrix(t *testing.T) {
 		wantPolicy  string
 		wantWilcard bool
 	}{
-		{"", DefaultListenAddr, "127.0.0.1", CompatibilityRuntimePolicy, false},
+		{"", defaultListenAddr, "127.0.0.1", CompatibilityRuntimePolicy, false},
 		{"8080", "127.0.0.1:8080", "127.0.0.1", CompatibilityRuntimePolicy, false},
 		{":8080", "127.0.0.1:8080", "127.0.0.1", CompatibilityRuntimePolicy, false},
 		{"127.0.0.1:8080", "127.0.0.1:8080", "127.0.0.1", CompatibilityRuntimePolicy, false},

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // TestNormalizePermissionInput_EditFilepathLowercase guards the bug where the
@@ -316,33 +317,18 @@ func decodePermissionResponse(t *testing.T, line []byte) PermissionResponse {
 
 // --- question helpers + structured-question tests (Task 3) ---
 
-type renderedOption struct {
-	Label       string   `json:"label"`
-	Description string   `json:"description"`
-	Confidence  *float64 `json:"confidence"`
-}
-
-type renderedQuestion struct {
-	Question    string           `json:"question"`
-	Header      string           `json:"header"`
-	MultiSelect bool             `json:"multiSelect"`
-	Options     []renderedOption `json:"options"`
-}
-
-// askUserQuestionsFrom decodes the {"questions":[...]} envelope an AskUserQuestion
-// control request carries in its Input.
-func askUserQuestionsFrom(t *testing.T, cr *llm.ControlRequestMessage) []renderedQuestion {
+// askUserQuestionsFrom parses the {"questions":[...]} envelope an
+// AskUserQuestion control request carries in its Input.
+func askUserQuestionsFrom(t *testing.T, cr *llm.ControlRequestMessage) []askuser.Question {
 	t.Helper()
 	if cr == nil || cr.Request.ToolName != "AskUserQuestion" {
 		t.Fatalf("control request is not an AskUserQuestion: %+v", cr)
 	}
-	var env struct {
-		Questions []renderedQuestion `json:"questions"`
+	bundle, err := askuser.Parse(cr.Request.Input)
+	if err != nil {
+		t.Fatalf("AskUserQuestion input not parseable: %v (%s)", err, cr.Request.Input)
 	}
-	if err := json.Unmarshal(cr.Request.Input, &env); err != nil {
-		t.Fatalf("AskUserQuestion input not decodable: %v (%s)", err, cr.Request.Input)
-	}
-	return env.Questions
+	return bundle.Questions
 }
 
 // structuredQuestionLine builds a session/request_permission request whose tool
@@ -400,6 +386,33 @@ func TestParseLine_StructuredQuestionBecomesAskUserQuestion(t *testing.T) {
 // TestRespondToAskUser_StructuredAnswerSelectsNativeOption proves answering a
 // structured question selects the matching option's id through the native ACP
 // outcome — resuming via the provider protocol's pending request (Task 3).
+func TestRespondToAskUser_IndexedAnswerSelectsNativeOption(t *testing.T) {
+	for _, label := range []string{strings.Repeat("x", 1001), " Yes ", "red, green"} {
+		t.Run(label[:min(len(label), 20)], func(t *testing.T) {
+			p, buf, _ := newPostHandshakeProtocol(t)
+			msgs := mustParse(t, p, structuredQuestionLine(t, 91, "Pick one", []map[string]any{
+				{"optionId": "opt-first", "name": label},
+				{"optionId": "opt-second", "name": label + "other"},
+			}))
+			bundle, err := askuser.Parse(msgs[0].ControlRequest.Request.Input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := bundle.ResolveReplies(map[string]askuser.Reply{"1": {Options: []int{2}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := p.RespondToAskUser("91", resolved); err != nil {
+				t.Fatal(err)
+			}
+			out := decodePermissionResponse(t, buf.lastLine(t))
+			if out.Result.Outcome.Outcome != OutcomeSelected || out.Result.Outcome.OptionID != "opt-second" {
+				t.Fatalf("indexed answer must select the native option, got %+v", out.Result.Outcome)
+			}
+		})
+	}
+}
+
 func TestRespondToAskUser_StructuredAnswerSelectsNativeOption(t *testing.T) {
 	p, buf, _ := newPostHandshakeProtocol(t)
 	const reqID = 91
@@ -409,8 +422,7 @@ func TestRespondToAskUser_StructuredAnswerSelectsNativeOption(t *testing.T) {
 	}))
 	raw := msgs[0].ControlRequest.Request.Input
 
-	answers := map[string]string{"Pick one": "Online (Recommended)"}
-	if err := p.RespondToAskUser("91", raw, answers, nil); err != nil {
+	if err := p.RespondToAskUser("91", resolveAnswers(t, raw, map[string]string{"1": "Online (Recommended)"})); err != nil {
 		t.Fatalf("RespondToAskUser error: %v", err)
 	}
 	out := decodePermissionResponse(t, buf.lastLine(t))
@@ -432,7 +444,7 @@ func TestRespondToAskUser_StructuredFreeFormFallsBackToFollowUpTurn(t *testing.T
 	}))
 	raw := msgs[0].ControlRequest.Request.Input
 
-	if err := p.RespondToAskUser("92", raw, map[string]string{"Pick one": "Actually do C instead"}, nil); err != nil {
+	if err := p.RespondToAskUser("92", resolveAnswers(t, raw, map[string]string{"1": "Actually do C instead"})); err != nil {
 		t.Fatalf("RespondToAskUser error: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -846,8 +858,7 @@ func TestRespondToAskUser_SyntheticAnswerDeliversFollowUpTurn(t *testing.T) {
 		t.Fatalf("expected a synthetic AskUserQuestion, got %+v", msgs)
 	}
 
-	answers := map[string]string{"What release name should I use?": "phoenix"}
-	if err := p.RespondToAskUser(cr.RequestID, cr.Request.Input, answers, nil); err != nil {
+	if err := p.RespondToAskUser(cr.RequestID, resolveAnswers(t, cr.Request.Input, map[string]string{"1": "phoenix"})); err != nil {
 		t.Fatalf("RespondToAskUser(synthetic) error: %v", err)
 	}
 	var followUp Request
@@ -862,6 +873,21 @@ func TestRespondToAskUser_SyntheticAnswerDeliversFollowUpTurn(t *testing.T) {
 	if !strings.Contains(body, "phoenix") || !strings.Contains(body, "release name") {
 		t.Fatalf("follow-up turn = %q, want it to restate the question and carry the answer", body)
 	}
+}
+
+// resolveAnswers resolves index-keyed answers against a control request's
+// AskUserQuestion input.
+func resolveAnswers(t *testing.T, input json.RawMessage, answers map[string]string) askuser.Resolved {
+	t.Helper()
+	bundle, err := askuser.Parse(input)
+	if err != nil {
+		t.Fatalf("parse ask-user input: %v (%s)", err, input)
+	}
+	resolved, err := bundle.Resolve(answers)
+	if err != nil {
+		t.Fatalf("resolve answers: %v", err)
+	}
+	return resolved
 }
 
 func mustMarshal(t *testing.T, v any) []byte {

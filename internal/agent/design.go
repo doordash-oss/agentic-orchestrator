@@ -16,7 +16,6 @@ package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -30,7 +29,7 @@ func BuildDesignPrompt(f *feature.Feature, skillsDir, guidelinesDir, researchArt
 	_, _, _ = skillsDir, guidelinesDir, kbInfos
 	repos, images, attachments := researchFeatureViews(f)
 
-	return roles.BuildDesignPrompt(roles.DesignUserInput{
+	return prompts.DesignUserPrompt(designUserInput{
 		Name:                  f.Name,
 		Description:           f.Description,
 		ExitCriteria:          f.ExitCriteria,

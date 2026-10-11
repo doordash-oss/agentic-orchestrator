@@ -693,7 +693,7 @@ func TestSupervisorHelperOperatesFeatureWithoutLeakingToken(t *testing.T) {
 		t.Fatalf("answer helper calls = %+v", answerCalls)
 	}
 	wantAnswer := `"$AGENTICO_BIN" api POST /api/v1/prompts/ask-user/answer '{"request_id":"` + ask.RequestID + `","session_id":"` + ask.SessionID +
-		`","answers":{"` + testutil.FakeHelperPhaseQuestion + `":"` + testutil.FakeHelperPhaseOption + `"}}'`
+		`","answers":{"1":"` + testutil.FakeHelperPhaseOption + `"}}'`
 	if answerCalls[0].command != `"$AGENTICO_BIN" api GET /api/v1/prompts` || answerCalls[1].command != wantAnswer {
 		t.Fatalf("answer commands = %q / %q, want GET prompts then %q", answerCalls[0].command, answerCalls[1].command, wantAnswer)
 	}

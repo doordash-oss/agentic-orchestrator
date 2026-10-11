@@ -34,10 +34,6 @@ func (t *stateErrorMutationTarget) StartFeature(string) (FeatureStartResponse, e
 	return FeatureStartResponse{}, t.err
 }
 
-func (t *stateErrorMutationTarget) ResumeFeature(string) (FeatureStartResponse, error) {
-	return FeatureStartResponse{}, t.err
-}
-
 func (t *stateErrorMutationTarget) RestartFeature(string, RestartFeatureRequest) (FeatureRestartResponse, error) {
 	return FeatureRestartResponse{}, t.err
 }

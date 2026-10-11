@@ -1371,7 +1371,9 @@ export const FEATURE_QUESTION_ITEM = {
   waitingSince: '2026-07-29T16:00:00Z',
   questions: [
     {
-      key: 'For the agentic-orchestrator project, which overall direction should guide the next major investment while preserving the reliability of the existing orchestration engine, keeping the desktop experience understandable during long-running agent work, and giving maintainers enough evidence to distinguish a genuinely useful workflow improvement from a visually attractive change that adds operational complexity without improving completion quality? The answer should also account for teams adopting the tool gradually, repositories with different verification costs, and operators who need to recover interrupted work without reconstructing hidden runtime context.',
+      index: 1,
+      question:
+        'For the agentic-orchestrator project, which overall direction should guide the next major investment while preserving the reliability of the existing orchestration engine, keeping the desktop experience understandable during long-running agent work, and giving maintainers enough evidence to distinguish a genuinely useful workflow improvement from a visually attractive change that adds operational complexity without improving completion quality? The answer should also account for teams adopting the tool gradually, repositories with different verification costs, and operators who need to recover interrupted work without reconstructing hidden runtime context.',
       header: 'Project direction',
       multiSelect: false,
       options: [
@@ -1421,7 +1423,9 @@ export const FEATURE_QUESTION_BENCH_ITEM = {
   waitingSince: new Date(Date.now() - 6 * 60_000).toISOString(),
   questions: [
     {
-      key: 'There is already an Italian README at docs/it/README.md. What should happen to it?',
+      index: 1,
+      question:
+        'There is already an Italian README at docs/it/README.md. What should happen to it?',
       header: 'Existing translation',
       multiSelect: false,
       options: [
@@ -1464,7 +1468,8 @@ function backgroundAttentionItems(): AttentionSnapshot['items'] {
       waitingSince: '2026-07-19T14:19:00Z',
       questions: [
         {
-          key: 'Which background behavior should be verified first?',
+          index: 1,
+          question: 'Which background behavior should be verified first?',
           header: 'Verification target',
           multiSelect: false,
           options: [
@@ -1986,7 +1991,7 @@ function makeMockApi(
                   role: 'assistant',
                   type: 'text',
                   text: [
-                    sceneQuestion(scene).key,
+                    sceneQuestion(scene).question,
                     '',
                     ...sceneQuestion(scene).options.map(
                       (option, index) =>

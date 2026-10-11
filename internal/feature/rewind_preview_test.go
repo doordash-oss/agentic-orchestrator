@@ -197,3 +197,34 @@ func newRewindableFeature(t *testing.T, store *Store, repo string, publishable b
 	}
 	return f
 }
+
+func TestParsePhaseNameUsesSharedDirParser(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  Phase
+	}{
+		{name: "knowledge base alias", input: " KB ", want: PhaseKnowledgeBase},
+		{name: "final review alias", input: "final review", want: PhaseFinalReview},
+		{name: "review extra", input: "review", want: PhaseReview},
+		{name: "publish extra", input: "publish", want: PhasePublish},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParsePhaseName(tt.input)
+			if err != nil {
+				t.Fatalf("ParsePhaseName(%q) error = %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("ParsePhaseName(%q) = %v; want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParsePhaseNameRejectsUnknownName(t *testing.T) {
+	_, err := ParsePhaseName("not-a-phase")
+	if err == nil || err.Error() != `unknown phase "not-a-phase"` {
+		t.Fatalf("ParsePhaseName(unknown) error = %v; want unknown phase error", err)
+	}
+}

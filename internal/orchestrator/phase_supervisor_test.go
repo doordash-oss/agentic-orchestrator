@@ -44,6 +44,7 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 	sm := mocks.NewMockSessionManager()
 	sess := mocks.NewMockSessionView(inquireSessionID, "feat")
 	sess.PhaseVal = feature.PhaseInquire
+	sess.HasUnansweredQuestionVal = true
 	configureSuccessfulRootTurn(sess)
 	sm.GetSessionFn = func(id string) ports.SessionView {
 		if id != inquireSessionID {
@@ -70,6 +71,9 @@ func TestPhaseSupervisorSingleShotCompletesOnSessionResultBeforeProcessExit(t *t
 	}
 	if sess.StopCalled != 1 {
 		t.Fatalf("session Stop calls = %d, want 1", sess.StopCalled)
+	}
+	if sess.HasUnansweredQuestionVal {
+		t.Fatal("clean single-shot commit left the unanswered-question flag set")
 	}
 }
 

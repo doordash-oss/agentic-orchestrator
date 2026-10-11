@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"fmt"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -40,7 +39,7 @@ const (
 	RoleValidatePlanTesting Role = "validate_plan_testing"
 )
 
-var planValidatorRoleSpecs = []RoleSpec{
+var planValidatorRoleSpecs = []roleSpec{
 	planValidatorRoleSpec(RoleValidateRoadmapArchitecture, "validate-roadmap-architecture", "architecture"),
 	planValidatorRoleSpec(RoleValidateRoadmapScope, "validate-roadmap-scope", "scope"),
 	planValidatorRoleSpec(RoleValidatePhasePlanStructural, "validate-phase-plan-structural", "structural"),
@@ -51,51 +50,40 @@ var planValidatorRoleSpecs = []RoleSpec{
 	planValidatorRoleSpec(RoleValidatePlanTesting, "validate-plan-testing", "testing"),
 }
 
-// PlanValidatorRoleSpecs returns the RoleSpec-backed per-axis validator roles.
-func PlanValidatorRoleSpecs() []RoleSpec {
-	out := make([]RoleSpec, 0, len(planValidatorRoleSpecs))
-	for _, spec := range planValidatorRoleSpecs {
-		out = append(out, CloneRoleSpec(spec))
-	}
-	return out
-}
-
-// PlanValidatorRoleForSkill returns the validator RoleSpec for a validator
-// skill name such as "validate-roadmap-architecture".
-func PlanValidatorRoleForSkill(skillName string) (RoleSpec, bool) {
+// planValidatorRoleForSkill returns the validator spec for a validator skill
+// name such as "validate-roadmap-architecture".
+func planValidatorRoleForSkill(skillName string) (roleSpec, bool) {
 	for _, spec := range planValidatorRoleSpecs {
 		if spec.SkillName == skillName {
-			return CloneRoleSpec(spec), true
+			return spec, true
 		}
 	}
-	return RoleSpec{}, false
+	return roleSpec{}, false
 }
 
-func planValidatorRoleSpec(role Role, skillName, axis string) RoleSpec {
-	return reviewFeedbackAxisRoleSpec(reviewFeedbackAxisRoleSpecConfig{
-		Phase:        feature.PhasePlan,
-		Role:         role,
-		SkillName:    skillName,
-		UserTemplate: "validate_specialized.user",
-		OutputRoots: []OutputRootSpec{
+func planValidatorRoleSpec(role Role, skillName, axis string) roleSpec {
+	return roleSpec{
+		Phase:     feature.PhasePlan,
+		Role:      role,
+		SkillName: skillName,
+		OutputRoots: []outputRootSpec{
 			validatorAttemptDirOutputRoot(),
 			validatorHelperDirOutputRoot(),
 		},
-		Artifact: RoleArtifactSpec{
+		Artifacts: []roleArtifactSpec{{
 			Name:         "plan_validator_feedback",
 			DisplayPath:  fmt.Sprintf("validation-%s-feedback.md", axis),
 			RootName:     "helper_dir",
 			RelativePath: fmt.Sprintf("validation-%s-feedback.md", axis),
-			Presence:     ArtifactRequired,
 			Description:  "structured validation feedback markdown with verdict and findings for this axis",
-			Validate:     ValidatorReviewFeedback,
-		},
-	})
+			Validate:     validateReviewFeedbackArtifact,
+		}},
+	}
 }
 
-// ValidateSpecializedUserInput is the data passed to
+// validateSpecializedUserInput is the data passed to
 // validate_specialized.user.tmpl.
-type ValidateSpecializedUserInput struct {
+type validateSpecializedUserInput struct {
 	Name             string
 	Description      string
 	ExitCriteria     string
@@ -116,9 +104,4 @@ type ValidateSpecializedUserInput struct {
 	AxisLabel    string
 
 	AutomatedVerificationOnly bool
-}
-
-// BuildValidateSpecializedPrompt renders a per-axis validation prompt.
-func BuildValidateSpecializedPrompt(in ValidateSpecializedUserInput) string {
-	return prompts.ValidateSpecializedUserPrompt(in)
 }

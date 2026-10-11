@@ -722,25 +722,6 @@ paths:
           $ref: "#/components/responses/ErrorResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
-    put:
-      operationId: putRuntimeConfig
-      summary: Replace runtime configuration.
-      description: >-
-        Replaces the runtime configuration. Submitted workspace_roots are
-        validated the same way as for PATCH: each root must exist and resolve
-        to a directory, otherwise the request fails with a 400
-        invalid_workspace_root error and nothing is persisted.
-      parameters:
-        - $ref: "#/components/parameters/TrustedMutationHeader"
-      requestBody:
-        $ref: "#/components/requestBodies/JSONMutation"
-      responses:
-        "200":
-          $ref: "#/components/responses/ActionResponse"
-        "400":
-          $ref: "#/components/responses/ErrorResponse"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
 
   /api/v1/catalog/models:
     get:
@@ -867,6 +848,13 @@ paths:
     post:
       operationId: answerAskUserPrompt
       summary: Answer an ask-user prompt.
+      description: >-
+        The generic JSON mutation body carries `answers`, an object keyed by
+        each question's `index` rendered as a string (one-based, e.g. `"1"`),
+        valued with an array of one-based option indexes (e.g. `[1, 3]`) or a text
+        answer. Option indexes refer to the original option order; display labels
+        may be trimmed or truncated. Text answers still accept verbatim option
+        labels for compatibility. Every question must be answered.
       parameters:
         - $ref: "#/components/parameters/TrustedMutationHeader"
       requestBody:
@@ -6771,9 +6759,11 @@ components:
           maxLength: 65536
     NeedUserInputQuestion:
       type: object
+      required: [index]
       properties:
         index:
           type: integer
+          minimum: 1
         prompt:
           type: string
           maxLength: 65536
@@ -7358,7 +7348,12 @@ components:
           x-go-type-skip-optional-pointer: false
     AskUserQuestion:
       type: object
+      required: [index, question]
       properties:
+        index:
+          type: integer
+          minimum: 1
+          description: One-based position of the question within its prompt; answers are keyed by it.
         question:
           type: string
         header:

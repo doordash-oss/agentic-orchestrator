@@ -238,9 +238,10 @@ export function controlRequestQuestionsItem(
     ...(request.session_id === undefined ? {} : { sessionId: request.session_id }),
     ...(request.phase === undefined ? {} : { phase: request.phase }),
     waitingSince: request.waiting_since ?? fallbackTime,
-    questions: questions.map((question, index) => ({
-      key: question.question ?? question.header ?? `Question ${index + 1}`,
-      header: question.header ?? question.question ?? `Question ${index + 1}`,
+    questions: questions.map((question) => ({
+      index: question.index,
+      question: question.question,
+      header: question.header ?? question.question,
       multiSelect: question.multi_select === true,
       options: (question.options ?? []).flatMap((option) =>
         option.label === undefined
@@ -421,7 +422,7 @@ export class AttentionService {
                 },
               }),
           questions: (gate.questions ?? []).map((question, index) => ({
-            index: question.index !== undefined && question.index > 0 ? question.index : index + 1,
+            index: question.index,
             prompt: question.prompt ?? `Question ${index + 1}`,
             answer: question.answer ?? '',
           })),

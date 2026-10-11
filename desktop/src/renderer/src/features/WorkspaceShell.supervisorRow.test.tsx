@@ -65,7 +65,7 @@ const QUESTION = {
   sessionId: '__supervisor__.supervisor-conversation-1.1',
   target: 'supervisor' as const,
   waitingSince: '2026-10-06T10:00:00Z',
-  questions: [{ key: 'q1', header: 'Which repo?', multiSelect: false, options: [] }],
+  questions: [{ index: 1, question: 'q1', header: 'Which repo?', multiSelect: false, options: [] }],
 };
 
 /** Installs one feature and opens the shell on its page (or on Supervisor). */

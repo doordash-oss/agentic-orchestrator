@@ -50,56 +50,56 @@ func (o *Orchestrator) closeChildRelationship(childID, outcome string, closedAt 
 	})
 }
 
-// MutationOperation identifies which orchestrator mutation is being guarded.
-type MutationOperation string
+// mutationOperation identifies which orchestrator mutation is being guarded.
+type mutationOperation string
 
 const (
-	MutationPublish       MutationOperation = "publish"
-	MutationMerge         MutationOperation = "merge"
-	MutationRewind        MutationOperation = "rewind"
-	MutationCleanup       MutationOperation = "cleanup"
-	MutationMarkDone      MutationOperation = "mark-done"
-	MutationDelivery      MutationOperation = "delivery"
-	MutationRestart       MutationOperation = "restart"
-	MutationResume        MutationOperation = "resume"
-	MutationStart         MutationOperation = "start"
-	MutationStop          MutationOperation = "stop"
-	MutationRetry         MutationOperation = "retry"
-	MutationDelete        MutationOperation = "delete"
-	MutationRefactor      MutationOperation = "refactor"
-	MutationConfig        MutationOperation = "config"
-	MutationDiscard       MutationOperation = "discard"
-	MutationNeedUserInput MutationOperation = "need-user-input"
-	// MutationReviewDecision covers a user review-gate decision (proceed/
+	mutationPublish       mutationOperation = "publish"
+	mutationMerge         mutationOperation = "merge"
+	mutationRewind        mutationOperation = "rewind"
+	mutationCleanup       mutationOperation = "cleanup"
+	mutationMarkDone      mutationOperation = "mark-done"
+	mutationDelivery      mutationOperation = "delivery"
+	mutationRestart       mutationOperation = "restart"
+	mutationResume        mutationOperation = "resume"
+	mutationStart         mutationOperation = "start"
+	mutationStop          mutationOperation = "stop"
+	mutationRetry         mutationOperation = "retry"
+	mutationDelete        mutationOperation = "delete"
+	mutationRefactor      mutationOperation = "refactor"
+	mutationConfig        mutationOperation = "config"
+	mutationDiscard       mutationOperation = "discard"
+	mutationNeedUserInput mutationOperation = "need-user-input"
+	// mutationReviewDecision covers a user review-gate decision (proceed/
 	// iterate/rewind) that can clear gate fields and dispatch a new phase.
 	// It is an ordinary execution control for a child but a parent mutation
 	// that can restart the parent pipeline, so it is allowed for children
 	// and locked for parents with an active child.
-	MutationReviewDecision MutationOperation = "review-decision"
+	mutationReviewDecision mutationOperation = "review-decision"
 )
 
 // allowedChildMutations is the set of operations permitted on an active child.
-var allowedChildMutations = map[MutationOperation]bool{
-	MutationStart:          true,
-	MutationStop:           true,
-	MutationRestart:        true,
-	MutationResume:         true,
-	MutationNeedUserInput:  true,
-	MutationConfig:         true,
-	MutationDiscard:        true,
-	MutationRetry:          true,
-	MutationReviewDecision: true,
+var allowedChildMutations = map[mutationOperation]bool{
+	mutationStart:          true,
+	mutationStop:           true,
+	mutationRestart:        true,
+	mutationResume:         true,
+	mutationNeedUserInput:  true,
+	mutationConfig:         true,
+	mutationDiscard:        true,
+	mutationRetry:          true,
+	mutationReviewDecision: true,
 }
 
 // allowedParentMutationsWhileChildActive is the set of operations permitted
 // on a parent while it has an active child or a discard intent that has not
 // reached safe closure. Discard is a child action, not a parent mutation;
 // it is absent here so callers cannot infer it is a valid parent operation.
-var allowedParentMutationsWhileChildActive = map[MutationOperation]bool{
-	MutationConfig: true,
+var allowedParentMutationsWhileChildActive = map[mutationOperation]bool{
+	mutationConfig: true,
 }
 
-// RelationshipGuard checks whether a mutation is allowed given the
+// relationshipGuard checks whether a mutation is allowed given the
 // parent/child relationship state. It is the single authoritative guard used
 // by orchestrator operations and REST mutations. The action catalog agrees
 // with this enforcement but never serves as the sole protection.
@@ -107,9 +107,10 @@ var allowedParentMutationsWhileChildActive = map[MutationOperation]bool{
 // For mutations that follow the Store.Modify pattern, prefer guardedModify
 // which combines the guard check and the mutation under the same store mutex,
 // closing the time-of-check/time-of-use gap with concurrent child creation
-// (CreateChildLocked). RelationshipGuard remains correct for call sites where
+// (CreateChildLocked). relationshipGuard remains correct for call sites where
 // the subsequent operation is not a simple Store.Modify.
-func (o *Orchestrator) RelationshipGuard(featureID string, op MutationOperation) error {
+func (o *Orchestrator) relationshipGuard(featureID string, op mutationOperation) error {
+	o.trace(traceGuard)
 	f, err := o.deps.Lifecycle.Get(featureID)
 	if err != nil {
 		return fmt.Errorf("loading feature for relationship guard: %w", err)
@@ -123,7 +124,7 @@ func (o *Orchestrator) RelationshipGuard(featureID string, op MutationOperation)
 	}
 	if owned, ownershipErr := o.cascadeOwnsRelationship(relationshipParentID); ownershipErr != nil {
 		return ownershipErr
-	} else if owned && op != MutationDelete {
+	} else if owned && op != mutationDelete {
 		return fmt.Errorf("%w: cascade delete owns relationship %s", feature.ErrParentMutationLocked, relationshipParentID)
 	}
 
@@ -145,11 +146,11 @@ func (o *Orchestrator) RelationshipGuard(featureID string, op MutationOperation)
 }
 
 // relationshipGuardCheck is the core guard logic operating on pre-loaded
-// features. It is shared by RelationshipGuard (which loads features from the
+// features. It is shared by relationshipGuard (which loads features from the
 // lifecycle) and guardedModify (which loads them under the store mutex so the
 // guard check is serialized with CreateChildLocked). activeChild is nil when
 // the feature is a child or when no active child exists.
-func relationshipGuardCheck(f *feature.Feature, activeChild *feature.Feature, op MutationOperation) error {
+func relationshipGuardCheck(f *feature.Feature, activeChild *feature.Feature, op mutationOperation) error {
 	if f == nil {
 		return nil
 	}
@@ -165,7 +166,7 @@ func relationshipGuardCheck(f *feature.Feature, activeChild *feature.Feature, op
 		// Closed child controls are presentation-only. Automatic
 		// reconciliation owns any unfinished closure cleanup.
 		if f.Parent != nil && f.Parent.CloseOutcome != "" {
-			if op == MutationRestart || op == MutationRetry || op == MutationStart {
+			if op == mutationRestart || op == mutationRetry || op == mutationStart {
 				return nil
 			}
 			return fmt.Errorf("%w: %s is not permitted on closed child %s", feature.ErrChildRelationshipClosed, op, f.ID)
@@ -183,7 +184,7 @@ func relationshipGuardCheck(f *feature.Feature, activeChild *feature.Feature, op
 		// Delete is always cascade_delete_not_available while any child
 		// relationship exists, including during discard — the complete
 		// recoverable cascade operation is not yet available.
-		if op == MutationDelete {
+		if op == mutationDelete {
 			return fmt.Errorf("%w: parent %s has a child %s with discard in progress", feature.ErrCascadeDeleteNotAvailable, f.ID, activeChild.ID)
 		}
 		if !allowedParentMutationsWhileChildActive[op] {
@@ -193,7 +194,7 @@ func relationshipGuardCheck(f *feature.Feature, activeChild *feature.Feature, op
 	}
 
 	// Active child with no discard in progress.
-	if op == MutationDelete {
+	if op == mutationDelete {
 		return fmt.Errorf("%w: parent %s has an active child %s", feature.ErrCascadeDeleteNotAvailable, f.ID, activeChild.ID)
 	}
 	if !allowedParentMutationsWhileChildActive[op] {
@@ -206,10 +207,10 @@ func relationshipGuardCheck(f *feature.Feature, activeChild *feature.Feature, op
 // under the same store mutex, closing the time-of-check/time-of-use gap with
 // concurrent child creation (CreateChildLocked). When the concrete store
 // supports ModifyGuarded, the guard and mutation are atomic; otherwise it
-// falls back to RelationshipGuard + Store.Modify.
+// falls back to relationshipGuard + Store.Modify.
 func (o *Orchestrator) guardedModify(
 	featureID string,
-	op MutationOperation,
+	op mutationOperation,
 	fn func(f *feature.Feature) error,
 ) error {
 	type guardedModifier interface {
@@ -225,27 +226,27 @@ func (o *Orchestrator) guardedModify(
 		)
 	}
 	// Fallback for stores that do not support ModifyGuarded.
-	if err := o.RelationshipGuard(featureID, op); err != nil {
+	if err := o.relationshipGuard(featureID, op); err != nil {
 		return err
 	}
 	return o.deps.Store.Modify(featureID, fn)
 }
 
-// WithRelationshipReadLock acquires the relationship read lock and runs fn.
+// withRelationshipReadLock acquires the relationship read lock and runs fn.
 // Callers that need to detect and act on the relationship state (e.g. paired
 // config detection + update) must hold this lock for the entire detect-act
 // window so a concurrent child creation cannot interleave.
-func (o *Orchestrator) WithRelationshipReadLock(fn func() error) error {
+func (o *Orchestrator) withRelationshipReadLock(fn func() error) error {
 	o.relationshipMu.RLock()
 	defer o.relationshipMu.RUnlock()
 	return fn()
 }
 
-// WithRelationshipWriteLock acquires the relationship write lock and runs fn.
+// withRelationshipWriteLock acquires the relationship write lock and runs fn.
 // Child creation must hold this lock so no mutation guard can pass while a
 // child is being created. The lock is released before the method returns so
 // long-running post-creation work (e.g. async setup) does not block mutations.
-func (o *Orchestrator) WithRelationshipWriteLock(fn func() error) error {
+func (o *Orchestrator) withRelationshipWriteLock(fn func() error) error {
 	o.relationshipMu.Lock()
 	defer o.relationshipMu.Unlock()
 	return fn()

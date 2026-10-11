@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -23,27 +23,20 @@ import (
 // requests changes.
 const RoleFinalReviewFixer Role = "final_review_fixer"
 
-var finalReviewFixerRoleSpec = RoleSpec{
-	Phase:        feature.PhaseReview,
-	Role:         RoleFinalReviewFixer,
-	SkillName:    "final-fix",
-	UserTemplate: "final_fix.user",
-	Required:     []feature.Phase{feature.PhaseReview},
-	OutputRoots: []OutputRootSpec{
+var finalReviewFixerRoleSpec = roleSpec{
+	Phase:     feature.PhaseReview,
+	Role:      RoleFinalReviewFixer,
+	SkillName: "final-fix",
+	OutputRoots: []outputRootSpec{
 		iterationDirOutputRoot("Final-review fix iteration artifact directory."),
 	},
 	// No required artifacts: no testing contract executes at Final Review;
 	// the next review iteration's live-run axes re-exercise the product.
-	Artifacts: []RoleArtifactSpec{},
+	Artifacts: []roleArtifactSpec{},
 }
 
-// FinalReviewFixerRoleSpec returns the RoleSpec-backed final-review fix role.
-func FinalReviewFixerRoleSpec() RoleSpec {
-	return CloneRoleSpec(finalReviewFixerRoleSpec)
-}
-
-// FinalFixUserInput is the data passed to final_fix.user.tmpl.
-type FinalFixUserInput struct {
+// finalFixUserInput is the data passed to final_fix.user.tmpl.
+type finalFixUserInput struct {
 	VisualReferences prompts.VisualReferencesInput
 
 	Iteration        int
@@ -57,9 +50,4 @@ type FinalFixUserInput struct {
 	// RefactorPassForkPoint resolves the spec's "fork point" references for a
 	// refactor child ("repo @ sha"). Empty for top-level features.
 	RefactorPassForkPoint string
-}
-
-// BuildFinalFixPrompt renders the final-review fix prompt.
-func BuildFinalFixPrompt(in FinalFixUserInput) string {
-	return prompts.FinalFixUserPrompt(in)
 }

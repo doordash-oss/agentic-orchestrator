@@ -273,7 +273,7 @@ func (pr *PhaseRunner) resolvePhaseArtifactDir(f *feature.Feature, phaseName str
 // roots, and completion.
 type interactivePhaseConfig struct {
 	Prompt          string
-	Spec            RoleSpec
+	Spec            roleSpec
 	DirName         string        // artifact subdirectory: "inquire", "research", "design"
 	SkillName       string        // skill name (used for error messages and session naming)
 	SessionSuffix   string        // appended to feature ID: "-inquire", "-research", "-design"
@@ -296,7 +296,7 @@ func (pr *PhaseRunner) runInteractivePhase(f *feature.Feature, cfg interactivePh
 
 	effectiveEffort, effortSource := pr.resolveEffortForRole(f, cfg.ModelRole, phaseModel)
 
-	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+	systemPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
 		Spec:           cfg.Spec,
 		IterationDir:   artifactDir,
 		SkillsDir:      pr.SkillsDir,
@@ -405,7 +405,7 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 	}
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
 		Prompt:          BuildInquirePrompt(f, pr.SkillsDir, kbInfos...),
-		Spec:            InquirerRoleSpec(),
+		Spec:            inquirerRoleSpec,
 		DirName:         "inquire",
 		SkillName:       "inquire",
 		SessionSuffix:   "-inquire",
@@ -422,7 +422,7 @@ func (pr *PhaseRunner) RunInquire(f *feature.Feature, kbInfos ...KBInfo) (string
 func (pr *PhaseRunner) RunResearchFromQuestions(f *feature.Feature, questionsPath string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
 		Prompt:          BuildResearchFromQuestionsPrompt(f, pr.SkillsDir, questionsPath, kbInfos...),
-		Spec:            ResearcherRoleSpec(),
+		Spec:            researcherRoleSpec,
 		DirName:         "research",
 		SkillName:       "research-codebase",
 		SessionSuffix:   "-research",
@@ -452,7 +452,7 @@ func explorationAgentNames() []string {
 func (pr *PhaseRunner) RunDesign(f *feature.Feature, researchOutput string, qaFilePaths []string, kbInfos ...KBInfo) (string, error) {
 	return pr.runInteractivePhase(f, interactivePhaseConfig{
 		Prompt:          BuildDesignPrompt(f, pr.SkillsDir, pr.GuidelinesDir, researchOutput, qaFilePaths, kbInfos...),
-		Spec:            DesignerRoleSpec(),
+		Spec:            designerRoleSpec,
 		DirName:         feature.PhaseDesign.DirName(),
 		SkillName:       "design",
 		SessionSuffix:   "-design",
@@ -637,8 +637,8 @@ func (pr *PhaseRunner) runKBSession(f *feature.Feature, repo feature.FeatureRepo
 	kbModel := pr.modelForRole(f.Models.KBBuild, llm.PhaseKBBuild)
 	kbEffectiveEffort, kbEffortSource := pr.resolveEffortForRole(f, llm.PhaseKBBuild, kbModel)
 
-	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:           KnowledgeBaseBuilderRoleSpec(),
+	systemPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
+		Spec:           knowledgeBaseBuilderRoleSpec,
 		IterationDir:   kbDir,
 		SkillsDir:      pr.SkillsDir,
 		GuidelinesDir:  pr.GuidelinesDir,

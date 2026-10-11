@@ -85,7 +85,8 @@ const questionsItem: Extract<AttentionItem, { kind: 'questions' }> = {
   waitingSince: '2026-07-15T10:00:00.000Z',
   questions: [
     {
-      key: 'Which overall direction should this project take?',
+      index: 1,
+      question: 'Which overall direction should this project take?',
       header: 'Project direction',
       multiSelect: false,
       options: [
@@ -829,8 +830,7 @@ describe('AttentionInbox question detail', () => {
       requestId: questionsItem.id,
       sessionId: questionsItem.sessionId,
       answers: {
-        'Which overall direction should this project take?':
-          'Harden the review pipeline (Recommended)',
+        '1': [1],
       },
     });
 
@@ -842,7 +842,7 @@ describe('AttentionInbox question detail', () => {
     expect(mock.api.answerQuestions).toHaveBeenLastCalledWith({
       requestId: questionsItem.id,
       sessionId: questionsItem.sessionId,
-      answers: { 'Which overall direction should this project take?': 'Focus on speed' },
+      answers: { '1': 'Focus on speed' },
     });
 
     await user.click(screen.getByRole('radio', { name: /Build user-facing features/ }));
@@ -852,7 +852,7 @@ describe('AttentionInbox question detail', () => {
       requestId: questionsItem.id,
       sessionId: questionsItem.sessionId,
       answers: {
-        'Which overall direction should this project take?': 'Build user-facing features',
+        '1': [2],
       },
     });
   });
@@ -871,7 +871,7 @@ describe('AttentionInbox question detail', () => {
       requestId: questionsItem.id,
       sessionId: questionsItem.sessionId,
       answers: {
-        'Which overall direction should this project take?': 'Build user-facing features',
+        '1': [2],
       },
     });
 

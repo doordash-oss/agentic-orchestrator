@@ -257,11 +257,8 @@ func TestDecideAskUserAutoPick(t *testing.T) {
 				}
 				return
 			}
-			if got.Answers["Scope?"] != "" && got.Answers["Scope?"] != tt.wantAnswer {
-				t.Errorf("decideAskUserAutoPick(%s) Scope answer = %q, want %q", tt.name, got.Answers["Scope?"], tt.wantAnswer)
-			}
-			if got.Answers["Design?"] != "" && got.Answers["Design?"] != tt.wantAnswer {
-				t.Errorf("decideAskUserAutoPick(%s) Design answer = %q, want %q", tt.name, got.Answers["Design?"], tt.wantAnswer)
+			if len(got.Answers) != 1 || got.Answers["1"] != tt.wantAnswer {
+				t.Errorf("decideAskUserAutoPick(%s).Answers = %v, want {\"1\": %q}", tt.name, got.Answers, tt.wantAnswer)
 			}
 			if len(got.Selections) != 1 {
 				t.Fatalf("decideAskUserAutoPick(%s) len(Selections) = %d, want 1", tt.name, len(got.Selections))
@@ -633,9 +630,8 @@ func TestRespondToAskUserAutoPicked_PreservesWaitingHelpForOtherPendingQuestion(
 
 	err := s.respondToAskUserAutoPicked(
 		"ask_2",
-		json.RawMessage(askInput(`{"question":"Second?","options":[{"label":"C (Recommended)","confidence":0.9},{"label":"D","confidence":0.1}]}`)),
-		map[string]string{"Second?": "C (Recommended)"},
-		map[string]float64{"Second?": 0.9},
+		resolveAskUser(t, json.RawMessage(askInput(`{"question":"Second?","options":[{"label":"C (Recommended)","confidence":0.9},{"label":"D","confidence":0.1}]}`)), map[string]string{"1": "C (Recommended)"}),
+		map[int]float64{1: 0.9},
 	)
 	if err != nil {
 		t.Fatalf("respondToAskUserAutoPicked(): %v", err)

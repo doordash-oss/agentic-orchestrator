@@ -351,7 +351,7 @@ export function RefactorPassWorkspace({
     pendingQuestion === undefined
       ? undefined
       : {
-          prompt: pendingQuestion.key,
+          prompt: pendingQuestion.question,
           optionLabels: pendingQuestion.options.map((option) => option.label),
         };
   const showsLiveSurface =

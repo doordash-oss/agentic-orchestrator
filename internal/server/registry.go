@@ -37,12 +37,12 @@ func RegistryDir(runtimeParent string) string {
 	return filepath.Join(runtimeParent, registryDirName)
 }
 
-// RegistryEntryName returns the stable per-runtime key for the registry
+// registryEntryName returns the stable per-runtime key for the registry
 // entry owned by the server running from runtimeDir. Runtime dirs are
 // canonicalized (symlinks resolved, matching canonicalizeStateDir on the CLI
 // side and the desktop gateway) so the same runtime always reuses one entry
 // and restarts overwrite in place.
-func RegistryEntryName(runtimeDir string) string {
+func registryEntryName(runtimeDir string) string {
 	canonical := runtimeDir
 	if resolved, err := filepath.EvalSymlinks(runtimeDir); err == nil {
 		canonical = resolved
@@ -53,7 +53,7 @@ func RegistryEntryName(runtimeDir string) string {
 
 // RegistryEntryPath is the full path of the registry entry for runtimeDir.
 func RegistryEntryPath(registryDir, runtimeDir string) string {
-	return filepath.Join(registryDir, RegistryEntryName(runtimeDir))
+	return filepath.Join(registryDir, registryEntryName(runtimeDir))
 }
 
 // PublishRegistryEntry writes rec (the verbatim per-runtime discovery
@@ -82,7 +82,7 @@ func PublishRegistryEntry(registryDir string, rec DiscoveryRecord) error {
 	}
 
 	tmp, err := os.OpenFile(
-		filepath.Join(registryDir, fmt.Sprintf(".agentico-registry-%d-%s.tmp", os.Getpid(), RegistryEntryName(rec.Runtime.RuntimeDir))),
+		filepath.Join(registryDir, fmt.Sprintf(".agentico-registry-%d-%s.tmp", os.Getpid(), registryEntryName(rec.Runtime.RuntimeDir))),
 		os.O_CREATE|os.O_EXCL|os.O_WRONLY,
 		0o600,
 	)

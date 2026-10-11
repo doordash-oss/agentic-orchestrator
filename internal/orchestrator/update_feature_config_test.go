@@ -51,7 +51,7 @@ func TestUpdateFeatureConfig_ClosedChildRejectsWithoutMutation(t *testing.T) {
 	fs := newFeatureStore(f)
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
-	err := o.UpdateFeatureConfig(f.ID, orchestrator.UpdateFeatureConfigInput{
+	_, err := o.UpdateFeatureConfig(f.ID, orchestrator.UpdateFeatureConfigInput{
 		Models:      config.ModelConfig{Research: "new-research"},
 		Inquireness: feature.InquirenessHigh,
 		Checkpoints: feature.Checkpoints{ManualPublish: true},
@@ -110,13 +110,14 @@ func TestUpdateFeatureConfig_QuiescentWritesAllAxes(t *testing.T) {
 			}
 			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, hooks)
 
+			enabled := feature.AutomaticReviewEnabled
 			newInput := orchestrator.UpdateFeatureConfigInput{
 				Models:              config.ModelConfig{Research: "new-research", Planning: "new-planning"},
 				Inquireness:         feature.InquirenessHigh,
 				Checkpoints:         feature.Checkpoints{InquiryReview: true, ManualPublish: true},
-				AutomaticReviewMode: feature.AutomaticReviewEnabled,
+				AutomaticReviewMode: &enabled,
 			}
-			if err := o.UpdateFeatureConfig("feat-1", newInput); err != nil {
+			if _, err := o.UpdateFeatureConfig("feat-1", newInput); err != nil {
 				t.Fatalf("UpdateFeatureConfig: %v", err)
 			}
 
@@ -229,7 +230,7 @@ func TestUpdateFeatureConfig_NonQuiescentWritesAllThreeAxes(t *testing.T) {
 			}
 			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, hooks)
 
-			err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
+			_, err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
 				Models:      config.ModelConfig{Research: "new-research"},
 				Inquireness: feature.InquirenessHigh,
 				Checkpoints: feature.Checkpoints{ManualPublish: true},
@@ -279,7 +280,7 @@ func TestUpdateFeatureConfig_NilHookIsSafe(t *testing.T) {
 
 	o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: fs}, orchestrator.Hooks{})
 
-	err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
+	_, err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
 		Inquireness: feature.InquirenessHigh,
 	})
 	if err != nil {
@@ -310,7 +311,7 @@ func TestUpdateFeatureConfig_NormalizesCheckpointsForPipeline(t *testing.T) {
 			ManualPublish:   true,
 		},
 	}
-	if err := o.UpdateFeatureConfig("feat-1", input); err != nil {
+	if _, err := o.UpdateFeatureConfig("feat-1", input); err != nil {
 		t.Fatalf("UpdateFeatureConfig: %v", err)
 	}
 	if got := f.Checkpoints; got != (feature.Checkpoints{RoadmapReview: true, PhasePlanReview: true, ManualPublish: true}) {
@@ -355,7 +356,7 @@ func TestUpdateFeatureConfig_NextAskUserAutoPickUsesEditedInquireness(t *testing
 		CmdRunner:   pr.CommandRunner,
 	}, orchestrator.Hooks{})
 
-	if err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
+	if _, err := o.UpdateFeatureConfig("feat-1", orchestrator.UpdateFeatureConfigInput{
 		Inquireness: feature.InquirenessNone,
 	}); err != nil {
 		t.Fatalf("UpdateFeatureConfig: %v", err)

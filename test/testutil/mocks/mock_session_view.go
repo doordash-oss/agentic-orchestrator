@@ -16,15 +16,17 @@ package mocks
 
 import (
 	"encoding/json"
+	"os"
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 )
 
-// MockSessionView implements ports.SessionView with configurable fields.
+// MockSessionView implements ports.SessionHandle with configurable fields.
 // All identity and state fields are set via exported struct fields.
 // Interaction methods record their calls for assertion.
 //
@@ -74,6 +76,7 @@ type MockSessionView struct {
 	HasPendingAskUserQuestionVal     bool
 	HasPendingRootAskUserQuestionVal bool
 	RootCompletionIntentVal          llm.CompletionIntent
+	HasUnansweredQuestionVal         bool
 	TaskActivitiesVal                []llm.TaskActivity
 
 	// Channels
@@ -82,17 +85,17 @@ type MockSessionView struct {
 	DoneChVal   chan struct{}
 
 	// Interaction call recording
-	SentMessages       []string
-	ControlResponses   []ControlResponseCall
-	AskUserResponses   []AskUserResponseCall
-	ClearedQuestions   []string
-	ResetWaitingCalled int
-	StopCalled         int
-	InterruptCalled    int
-	WaitCalled         int
-	StopError          error
-	InterruptError     error
+	SentMessages     []string
+	ControlResponses []ControlResponseCall
+	AskUserResponses []AskUserResponseCall
+	StopCalled       int
+	InterruptCalled  int
+	WaitCalled       int
+	StopError        error
+	InterruptError   error
 }
+
+var _ ports.SessionHandle = (*MockSessionView)(nil)
 
 // ControlResponseCall records a RespondToControl call.
 type ControlResponseCall struct {
@@ -103,10 +106,8 @@ type ControlResponseCall struct {
 
 // AskUserResponseCall records a RespondToAskUser call.
 type AskUserResponseCall struct {
-	RequestID   string
-	Questions   json.RawMessage
-	Answers     map[string]string
-	Annotations map[string]llm.AskUserAnnotation
+	RequestID string
+	Resolved  askuser.Resolved
 }
 
 // NewMockSessionView creates a MockSessionView with sensible defaults
@@ -234,22 +235,12 @@ func (m *MockSessionView) RespondToControl(requestID string, allow bool, reason 
 	return nil
 }
 
-func (m *MockSessionView) RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]llm.AskUserAnnotation) error {
+func (m *MockSessionView) RespondToAskUser(requestID string, resolved askuser.Resolved) error {
 	m.AskUserResponses = append(m.AskUserResponses, AskUserResponseCall{
-		RequestID:   requestID,
-		Questions:   questions,
-		Answers:     answers,
-		Annotations: annotations,
+		RequestID: requestID,
+		Resolved:  resolved,
 	})
 	return nil
-}
-
-func (m *MockSessionView) ClearPendingQuestion(requestID string) {
-	m.ClearedQuestions = append(m.ClearedQuestions, requestID)
-}
-
-func (m *MockSessionView) ResetWaitingStatus() {
-	m.ResetWaitingCalled++
 }
 
 func (m *MockSessionView) Stop() error {
@@ -265,3 +256,13 @@ func (m *MockSessionView) Interrupt() error {
 func (m *MockSessionView) Wait() {
 	m.WaitCalled++
 }
+
+func (m *MockSessionView) SetStatus(status ports.SessionStatus) { m.StatusVal = status }
+func (m *MockSessionView) SetLogFile(*os.File)                  {}
+func (m *MockSessionView) AddCleanupFunc(func())                {}
+func (m *MockSessionView) SetHasUnansweredQuestion(v bool)      { m.HasUnansweredQuestionVal = v }
+func (m *MockSessionView) CloseStdin()                          {}
+func (m *MockSessionView) SetOnToolAllowed(func(toolName string, input json.RawMessage)) {
+}
+func (m *MockSessionView) SetOnFileRead(func(read llm.FileReadEvent))  {}
+func (m *MockSessionView) SetOnSubagentEvent(func(msg llm.SDKMessage)) {}

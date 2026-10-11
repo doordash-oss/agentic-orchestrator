@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -22,33 +22,21 @@ import (
 // RoleResearcher is the single-shot Research session.
 const RoleResearcher Role = "researcher"
 
-var researcherRoleSpec = RoleSpec{
-	Phase:        feature.PhaseResearch,
-	Role:         RoleResearcher,
-	SkillName:    "research-codebase",
-	UserTemplate: "research_from_questions.user",
-	Required:     []feature.Phase{feature.PhaseInquire},
-	OutputRoots: []OutputRootSpec{
+var researcherRoleSpec = roleSpec{
+	Phase:     feature.PhaseResearch,
+	Role:      RoleResearcher,
+	SkillName: "research-codebase",
+	OutputRoots: []outputRootSpec{
 		singleShotPhaseDirOutputRoot("Research phase artifact directory."),
 	},
-	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("research markdown artifact", ValidatorPhaseMarkdown),
+	Artifacts: []roleArtifactSpec{
+		phaseMarkdownRoleArtifact("research markdown artifact", validatePhaseMarkdownArtifact),
 	},
 }
 
-// ResearcherRoleSpec returns the RoleSpec-backed research role.
-func ResearcherRoleSpec() RoleSpec {
-	return CloneRoleSpec(researcherRoleSpec)
-}
-
-// ResearchFromQuestionsUserInput is the data passed to
+// researchFromQuestionsUserInput is the data passed to
 // research_from_questions.user.tmpl.
-type ResearchFromQuestionsUserInput struct {
+type researchFromQuestionsUserInput struct {
 	QuestionsPath string
 	Repos         []prompts.RepoView
-}
-
-// BuildResearchFromQuestionsPrompt renders the question-driven research prompt.
-func BuildResearchFromQuestionsPrompt(in ResearchFromQuestionsUserInput) string {
-	return prompts.ResearchFromQuestionsUserPrompt(in)
 }

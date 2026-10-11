@@ -56,7 +56,7 @@ func TestReadTrustedDiscoveryReportsMissingFile(t *testing.T) {
 	if !errors.Is(err, ErrDiscoveryMissing) {
 		t.Fatalf("error = %v; want ErrDiscoveryMissing", err)
 	}
-	if errors.Is(err, ErrDiscoveryUntrusted) {
+	if errors.Is(err, errDiscoveryUntrusted) {
 		t.Fatalf("error = %v; a missing file must not also read as untrusted", err)
 	}
 }
@@ -107,7 +107,7 @@ func TestReadTrustedDiscoveryRejectsUnsafeFiles(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			_, err := ReadTrustedDiscovery(setup(t))
-			if !errors.Is(err, ErrDiscoveryUntrusted) {
+			if !errors.Is(err, errDiscoveryUntrusted) {
 				t.Fatalf("error = %v; want ErrDiscoveryUntrusted", err)
 			}
 			if strings.Contains(err.Error(), trustedDiscoveryToken) {
@@ -130,7 +130,7 @@ func TestReadTrustedDiscoveryRejectsForeignOwner(t *testing.T) {
 	t.Cleanup(func() { discoveryOwnerUID = prev })
 
 	_, err := ReadTrustedDiscovery(dir)
-	if !errors.Is(err, ErrDiscoveryUntrusted) {
+	if !errors.Is(err, errDiscoveryUntrusted) {
 		t.Fatalf("error = %v; want ErrDiscoveryUntrusted for a foreign-owned file", err)
 	}
 	if !strings.Contains(err.Error(), "owned by uid") {

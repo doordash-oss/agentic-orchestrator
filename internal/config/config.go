@@ -172,6 +172,19 @@ type ModelConfig struct {
 	AutomaticReview string `yaml:"automatic_review,omitempty" json:"automatic_review,omitempty"`
 }
 
+// IsEmpty reports whether no stage model, including the automatic reviewer,
+// is set.
+func (m ModelConfig) IsEmpty() bool {
+	return m.Inquiry == "" &&
+		m.Research == "" &&
+		m.Planning == "" &&
+		m.Implementation == "" &&
+		m.Review == "" &&
+		m.Utilities == "" &&
+		m.KBBuild == "" &&
+		m.AutomaticReview == ""
+}
+
 // EffortConfig holds per-role reasoning-effort configuration alongside
 // ModelConfig. Each field accepts the closed set auto|low|medium|high|xhigh|max|ultra.
 // Empty or missing values load as Auto without triggering a load-time rewrite.

@@ -15,7 +15,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"testing"
 )
@@ -23,43 +22,11 @@ import (
 type needUserInputResumeTarget struct {
 	MutationTarget
 	resumeCalls int
-	featureID   string
-	request     NeedUserInputResumeRequest
 }
 
-func (t *needUserInputResumeTarget) ResumeNeedUserInput(featureID string, req NeedUserInputResumeRequest) (NeedUserInputResumeResponse, error) {
+func (t *needUserInputResumeTarget) ResumeNeedUserInput(featureID string) (NeedUserInputResumeResponse, error) {
 	t.resumeCalls++
-	t.featureID = featureID
-	t.request = req
 	return NeedUserInputResumeResponse{FeatureID: featureID, Result: "resumed"}, nil
-}
-
-func TestNeedUserInputActionResumesTargetWithoutDecision(t *testing.T) {
-	t.Parallel()
-	target := &needUserInputResumeTarget{}
-	handler := NewHandler(HandlerOptions{
-		Mutations:             target,
-		DisableHostValidation: true,
-	})
-
-	w := postTrustedJSON(handler, "/api/v1/features/feat-resume/actions/need-user-input", map[string]any{})
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d body=%s; want 200", w.Code, w.Body.String())
-	}
-	if target.featureID != "feat-resume" {
-		t.Fatalf("feature id = %q; want feat-resume", target.featureID)
-	}
-
-	var body map[string]any
-	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if body["result"] != "resumed" {
-		t.Fatalf("result = %v; want resumed", body["result"])
-	}
-	if _, ok := body["decision"]; ok {
-		t.Fatalf("response unexpectedly contains retired decision field: %+v", body)
-	}
 }
 
 func TestNeedUserInputActionRejectsRetiredAbortPayload(t *testing.T) {

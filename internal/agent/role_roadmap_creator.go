@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -22,30 +22,23 @@ import (
 // RolePlanRoadmapPlanner is the top-level roadmap planner session.
 const RolePlanRoadmapPlanner Role = "plan_roadmap_planner"
 
-var roadmapCreatorRoleSpec = RoleSpec{
-	Phase:        feature.PhasePlan,
-	Role:         RolePlanRoadmapPlanner,
-	SkillName:    "create-roadmap",
-	UserTemplate: "roadmap.user",
-	Required:     []feature.Phase{feature.PhaseDesign},
-	OutputRoots: []OutputRootSpec{
+var roadmapCreatorRoleSpec = roleSpec{
+	Phase:     feature.PhasePlan,
+	Role:      RolePlanRoadmapPlanner,
+	SkillName: "create-roadmap",
+	OutputRoots: []outputRootSpec{
 		artifactDirOutputRoot("Shared roadmap artifact root. The roadmap markdown is written here across attempts."),
 		attemptDirOutputRoot("Active roadmap attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
 	},
-	Artifacts: []RoleArtifactSpec{
+	Artifacts: []roleArtifactSpec{
 		roadmapMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),
 	},
 	ReadOnlyOutsideRoots: true,
 }
 
-// RoadmapCreatorRoleSpec returns the RoleSpec-backed roadmap creation role.
-func RoadmapCreatorRoleSpec() RoleSpec {
-	return CloneRoleSpec(roadmapCreatorRoleSpec)
-}
-
-// RoadmapUserInput is the data passed to roadmap.user.tmpl.
-type RoadmapUserInput struct {
+// roadmapUserInput is the data passed to roadmap.user.tmpl.
+type roadmapUserInput struct {
 	Name         string
 	Description  string
 	ExitCriteria string
@@ -64,9 +57,4 @@ type RoadmapUserInput struct {
 	MultiRepo bool
 
 	Inquireness prompts.GrillMeInquirenessInput
-}
-
-// BuildRoadmapPrompt renders the roadmap-creation prompt.
-func BuildRoadmapPrompt(in RoadmapUserInput) string {
-	return prompts.RoadmapUserPrompt(in)
 }

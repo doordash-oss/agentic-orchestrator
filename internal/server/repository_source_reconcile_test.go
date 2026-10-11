@@ -444,7 +444,7 @@ func (t *sequencingCreateTarget) CreateFeature(req CreateFeatureRequest) (Create
 	default:
 		close(t.called)
 	}
-	return CreateFeatureResponse{FeatureID: fixtureFeatureID, Result: resultCreated}, nil
+	return CreateFeatureResponse{FeatureID: fixtureFeatureID, Result: "created"}, nil
 }
 
 // newSequencingFixture builds the initialize fixture shape around a create

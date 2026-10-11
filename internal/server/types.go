@@ -73,9 +73,10 @@ type Options struct {
 	// initialization implementation. Nil means the default git adapter
 	// (internal/git.InitializeRepository).
 	InitializeGitRepository func(ctx context.Context, dir string) (git.InitializeOutcome, error)
-	// Clones overrides the clone lifecycle service. Nil constructs the
+	// clones is an in-package test seam for the clone lifecycle service. Nil,
+	// the only production value, constructs the
 	// default service from the runtime state dir.
-	Clones CloneService
+	clones cloneService
 	// Worktrees inspects parent worktrees so a dirty refactor entry can
 	// attach the same structured diagnostics the launch-time error carries.
 	// Nil is tolerated: the dirty_parent disabled reason then ships without
@@ -93,10 +94,9 @@ type Options struct {
 	// update checks). Nil uses the Start context, which callers may bound
 	// to startup only.
 	Lifetime context.Context
-	// ProbeActivity counts read-launched background probes; shared with the
-	// CLI wiring so Git freshness refreshes participate. Nil creates a
-	// private counter.
-	ProbeActivity *ProbeActivity
+	// probeActivity is an in-package test seam for the read-launched probe
+	// counter; nil, the only production value, creates the handler's own.
+	probeActivity *probeActivity
 	// Supervisor owns the supervisor conversation; nil serves 503 on the
 	// supervisor namespace.
 	Supervisor  SupervisorService
@@ -137,10 +137,11 @@ type HandlerOptions struct {
 	// initialization implementation. Nil means the default git adapter
 	// (internal/git.InitializeRepository).
 	InitializeGitRepository func(ctx context.Context, dir string) (git.InitializeOutcome, error)
-	// Clones overrides the clone lifecycle service. Nil constructs the
+	// clones is an in-package test seam for the clone lifecycle service. Nil,
+	// the only production value, constructs the
 	// default service from the runtime state dir (and is disabled when the
 	// runtime has no state dir).
-	Clones    CloneService
+	clones    cloneService
 	Worktrees feature.WorktreeOps
 	// Updates carries the resolved release-availability startup inputs. The
 	// zero value serves a disabled snapshot.
@@ -149,10 +150,9 @@ type HandlerOptions struct {
 	// orchestration, sessions, and repository work. Nil disables the
 	// boundary.
 	Admission *workadmission.Coordinator
-	// ProbeActivity counts read-launched background probes; shared with the
-	// CLI wiring so Git freshness refreshes participate. Nil creates a
-	// private counter.
-	ProbeActivity *ProbeActivity
+	// probeActivity is an in-package test seam for the read-launched probe
+	// counter; nil, the only production value, creates the handler's own.
+	probeActivity *probeActivity
 	// Supervisor owns the supervisor conversation; nil serves 503 on the
 	// supervisor namespace.
 	Supervisor SupervisorService
@@ -170,13 +170,13 @@ type FeatureReader interface {
 	ListRuns(featureID string) ([]int, error)
 }
 
-type RelationshipReader interface {
+type relationshipReader interface {
 	RelationshipChildren(parentID string) (*feature.RelationshipChildren, error)
 }
 
-// BulkRelationshipReader resolves every parent's children in one store pass
+// bulkRelationshipReader resolves every parent's children in one store pass
 // so list-shaped endpoints avoid a per-parent directory rescan.
-type BulkRelationshipReader interface {
+type bulkRelationshipReader interface {
 	AllRelationshipChildren() (map[string]*feature.RelationshipChildren, error)
 }
 
@@ -191,7 +191,7 @@ func OwnerFromInstanceOwner(owner instancelock.Owner) Owner {
 	}
 }
 
-type RecoveryActionRequest struct {
+type recoveryActionRequest struct {
 	SnapshotID string            `json:"snapshot_id"`
 	Actions    map[string]string `json:"actions"`
 }

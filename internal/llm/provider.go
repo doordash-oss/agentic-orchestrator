@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 )
 
 // LLMProvider defines the interface that each coding tool (Claude Code, Codex,
@@ -221,8 +223,9 @@ type Protocol interface {
 	// Providers that don't use hooks should no-op.
 	RespondToHook(requestID string) error
 
-	// RespondToAskUser responds to an AskUserQuestion request.
-	RespondToAskUser(requestID string, questions json.RawMessage, answers map[string]string, annotations map[string]AskUserAnnotation) error
+	// RespondToAskUser responds to an AskUserQuestion request with answers
+	// already resolved against the request's question bundle.
+	RespondToAskUser(requestID string, resolved askuser.Resolved) error
 
 	// Interrupt asks the CLI to cancel the current turn while keeping the
 	// session alive for subsequent messages. Returns ErrNotSupported when

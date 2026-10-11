@@ -241,7 +241,7 @@ func TestSupervisorCodexToolActivityApprovalsAndQuestions(t *testing.T) {
 		t.Fatalf("question pending = %+v", st.PendingRequests)
 	}
 	h.do(http.MethodPost, "/api/v1/prompts/ask-user/answer", map[string]any{
-		"request_id": st.PendingRequests[0].RequestID, "session_id": st.SessionID, "answers": map[string]string{"Which branch?": "dev"},
+		"request_id": st.PendingRequests[0].RequestID, "session_id": st.SessionID, "answers": map[string]string{"1": "dev"},
 	}, http.StatusOK, nil)
 	stream.until("question idle", isState(server.SupervisorLifecycleIdle))
 

@@ -166,7 +166,11 @@ func (o *Orchestrator) admissionLaunch(featureID string) error {
 
 // admissionBeginAsync reserves one scheduled asynchronous continuation.
 func (o *Orchestrator) admissionBeginAsync(featureID string) error {
-	return o.admission.beginAsync(featureID)
+	if err := o.admission.beginAsync(featureID); err != nil {
+		return err
+	}
+	o.trace(traceAdmission)
+	return nil
 }
 
 // admissionOwnsWork reports whether the feature still owns observable work:
@@ -205,6 +209,7 @@ func (o *Orchestrator) admissionSettleIfQuiet(featureID string) {
 // admissionEndAsync returns a continuation's credit (finished or never
 // dispatched), then settles if quiet.
 func (o *Orchestrator) admissionEndAsync(featureID string) {
+	o.trace(traceSettle)
 	o.admission.endAsync(featureID, func() bool { return o.admissionOwnsWork(featureID) })
 }
 
@@ -217,24 +222,4 @@ func (o *Orchestrator) SetAdmissionBoundary(coordinator *workadmission.Coordinat
 		return
 	}
 	o.admission = newFeatureAdmissions(coordinator)
-}
-
-// PrepareAsyncWork reserves admission for server-owned background work
-// (durable feature setup, restart dispatch) before it is scheduled. A
-// closed boundary refuses the scheduling with workadmission.ClosedError.
-func (o *Orchestrator) PrepareAsyncWork(featureID string) error {
-	return o.admissionBeginAsync(featureID)
-}
-
-// SettleAsyncWork ends one unit of server-owned background work after it
-// finishes; the release applies only when the feature owns no other work.
-func (o *Orchestrator) SettleAsyncWork(featureID string) {
-	o.admissionEndAsync(featureID)
-}
-
-// SettleFeatureWork releases the feature's admission reservation
-// unconditionally; the terminal cleanup paths (delete, discard) call it
-// once their state machine has settled.
-func (o *Orchestrator) SettleFeatureWork(featureID string) {
-	o.admission.settle(featureID)
 }

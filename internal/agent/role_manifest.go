@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import "github.com/doordash-oss/agentic-orchestrator/internal/feature"
 
 var roleSpecs = append(
-	append([]RoleSpec{
+	append([]roleSpec{
 		implementRoleSpec,
 		roadmapCreatorRoleSpec,
 		roadmapReviserRoleSpec,
@@ -32,36 +32,12 @@ var roleSpecs = append(
 	implementationReviewAxisRoleSpecs...,
 )
 
-// All returns every canonical RoleSpec declaration.
-func All() []RoleSpec {
-	out := make([]RoleSpec, 0, len(roleSpecs))
-	for _, spec := range roleSpecs {
-		out = append(out, CloneRoleSpec(spec))
-	}
-	return out
-}
-
-// SkillOutputRoleSpecs returns the roles whose SKILL.md files carry generated
-// Output Files sections.
-func SkillOutputRoleSpecs() []RoleSpec {
-	seen := map[string]bool{}
-	out := make([]RoleSpec, 0, len(roleSpecs))
-	for _, spec := range roleSpecs {
-		if spec.SkillName == "" || len(spec.Artifacts) == 0 || seen[spec.SkillName] {
-			continue
-		}
-		seen[spec.SkillName] = true
-		out = append(out, CloneRoleSpec(spec))
-	}
-	return out
-}
-
-// Lookup returns the RoleSpec for a phase and role.
-func Lookup(phase feature.Phase, role Role) (RoleSpec, bool) {
+// lookupRoleSpec returns the spec for a phase and role.
+func lookupRoleSpec(phase feature.Phase, role Role) (roleSpec, bool) {
 	for _, spec := range roleSpecs {
 		if spec.Phase == phase && spec.Role == role {
-			return CloneRoleSpec(spec), true
+			return spec, true
 		}
 	}
-	return RoleSpec{}, false
+	return roleSpec{}, false
 }

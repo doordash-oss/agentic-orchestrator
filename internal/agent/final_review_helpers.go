@@ -20,12 +20,12 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -50,7 +50,7 @@ type FinalFixPromptOpts struct {
 // The prose lives in internal/agent/prompts/templates/final_fix.user.tmpl
 // (with the manual-verification-outcomes partial branched on a flag).
 func BuildFinalFixPrompt(opts FinalFixPromptOpts) string {
-	return roles.BuildFinalFixPrompt(roles.FinalFixUserInput{
+	return prompts.FinalFixUserPrompt(finalFixUserInput{
 		VisualReferences: prompts.VisualReferencesInput{
 			Images: opts.Images,
 			Label:  "applying this fix",
@@ -182,4 +182,47 @@ func allVerificationChecks(report *VerificationReport) []VerificationCheckResult
 	checks = append(checks, report.RequiredChecks...)
 	checks = append(checks, report.AdditionalChecks...)
 	return checks
+}
+
+func latestCompletedImplementationReportPath(implementDir string) string {
+	entries, err := os.ReadDir(implementDir)
+	if err != nil {
+		return ""
+	}
+	am := NewArtifactManager(implementDir)
+	latest := 0
+	best := ""
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		var iteration int
+		if _, err := fmt.Sscanf(entry.Name(), "iteration-%d", &iteration); err != nil || iteration <= latest {
+			continue
+		}
+		iterDir := filepath.Join(implementDir, entry.Name())
+		meta, err := am.ReadMeta(iterDir)
+		if err != nil || !completedImplementationMeta(meta) {
+			continue
+		}
+		reportPath := filepath.Join(iterDir, "verification-report.yaml")
+		if _, err := os.Stat(reportPath); err != nil {
+			continue
+		}
+		latest = iteration
+		best = reportPath
+	}
+	return best
+}
+
+func completedImplementationMeta(meta IterationMeta) bool {
+	if strings.TrimSpace(meta.AgentStatus) != agentStatusSuccess {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(meta.ReviewStatus)) {
+	case strings.ToLower(ReviewApproved.String()), reviewStatusSkipped:
+		return true
+	default:
+		return false
+	}
 }

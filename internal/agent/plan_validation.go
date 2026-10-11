@@ -28,7 +28,7 @@ import (
 
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
 	"github.com/doordash-oss/agentic-orchestrator/internal/observe"
@@ -707,7 +707,7 @@ func runSpecializedPlanValidationForArtifact(cfg PlanLoopConfig, sm ports.Sessio
 	parentFeedbackPath := filepath.Join(attemptDir, fmt.Sprintf("validation-%s-feedback.md", domainLower))
 
 	validationPrompt := buildSpecializedValidationPromptForArtifact(cfg.Feature, planArtifactPath, cfg.ResearchArtifactPath, cfg.SkillsDir, feedbackPath, domain, kind, extras)
-	validatorSpec, ok := PlanValidatorRoleForSkill(domain.Template)
+	validatorSpec, ok := planValidatorRoleForSkill(domain.Template)
 	if !ok {
 		return ReviewFailed, "", ValidatorMarkers{}, fmt.Errorf("missing validator RoleSpec for skill %q", domain.Template)
 	}
@@ -1143,7 +1143,7 @@ func buildSpecializedValidationPromptForArtifact(f *feature.Feature, planPath, r
 
 	intent := resolvePromptIntent(f)
 
-	return roles.BuildValidateSpecializedPrompt(roles.ValidateSpecializedUserInput{
+	return prompts.ValidateSpecializedUserPrompt(validateSpecializedUserInput{
 		Name:                      f.Name,
 		Description:               intent.Description,
 		ExitCriteria:              intent.ExitCriteria,
@@ -1662,18 +1662,18 @@ roadmapAttemptLoop:
 			resumeValidation = false
 		} else {
 			var prompt string
-			var plannerSpec RoleSpec
+			var plannerSpec roleSpec
 			if attempt == 1 {
 				prompt = BuildRoadmapPromptWithResearch(cfg.Feature, cfg.SkillsDir, cfg.GuidelinesDir, cfg.DesignArtifactPath, cfg.initialPlanningResearchArtifactPath(), cfg.QAFilePaths, cfg.KBInfos...)
-				plannerSpec = RoadmapCreatorRoleSpec()
+				plannerSpec = roadmapCreatorRoleSpec
 			} else {
 				prevRoadmapPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
 				approvals := LoadPriorAxisApprovals(artifactDir)
 				prompt = BuildRoadmapRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevRoadmapPath, prevRoadmapPath, criticFeedback, cfg.DesignArtifactPath, attempt, approvals)
-				plannerSpec = RoadmapReviserRoleSpec()
+				plannerSpec = roadmapReviserRoleSpec
 			}
 
-			systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+			systemPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
 				Spec:           plannerSpec,
 				IterationDir:   attemptDir,
 				SkillsDir:      cfg.SkillsDir,
@@ -1770,9 +1770,6 @@ roadmapAttemptLoop:
 							SessionID:   sessionID,
 							Intent:      intent,
 						})
-						if err == nil && len(violations) == 0 {
-							sess.SetHasUnansweredQuestion(false)
-						}
 						return violations, err
 					},
 					MissingArtifacts: []string{"roadmap.md"},
@@ -2053,18 +2050,18 @@ phasePlanAttemptLoop:
 			resumeValidation = false
 		} else {
 			var prompt string
-			var plannerSpec RoleSpec
+			var plannerSpec roleSpec
 			if attempt == 1 {
 				prompt = BuildPhasePlanPromptWithResearch(cfg.Feature, cfg.SkillsDir, cfg.GuidelinesDir, cfg.RoadmapPath, cfg.initialPlanningResearchArtifactPath(), cfg.Phase, cfg.QAFilePaths, cfg.KBInfos...)
-				plannerSpec = PhasePlanCreatorRoleSpec()
+				plannerSpec = phasePlanCreatorRoleSpec
 			} else {
 				prevPlanPath := resolvePlanArtifactPath(cfg.FeatureStore, cfg.Feature.ID, artifactDir)
 				approvals := LoadPriorAxisApprovals(artifactDir)
 				prompt = BuildPhasePlanRevisionPrompt(cfg.Feature, cfg.SkillsDir, prevPlanPath, criticFeedback, cfg.DesignArtifactPath, cfg.Phase, attempt, approvals)
-				plannerSpec = PhasePlanReviserRoleSpec()
+				plannerSpec = phasePlanReviserRoleSpec
 			}
 
-			systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
+			systemPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
 				Spec:           plannerSpec,
 				IterationDir:   attemptDir,
 				SkillsDir:      cfg.SkillsDir,
@@ -2161,9 +2158,6 @@ phasePlanAttemptLoop:
 							SessionID:   sessionID,
 							Intent:      intent,
 						})
-						if err == nil && len(violations) == 0 {
-							sess.SetHasUnansweredQuestion(false)
-						}
 						return violations, err
 					},
 					MissingArtifacts: []string{"plan.md"},
@@ -2451,7 +2445,7 @@ func handleCompletedPlanSession(
 	waitResult PhaseOutcomeWaitResult,
 	sm ports.SessionManager,
 	attempt, maxAttempts, sessionAttempt int,
-	plannerSpec RoleSpec,
+	plannerSpec roleSpec,
 	attemptDir, artifactDir, logPath string,
 ) (outcome planSessionOutcome, result *PlanLoopResult, newCriticFeedback string, newSessionAttempt int) {
 	agentStatus := waitResult.Status

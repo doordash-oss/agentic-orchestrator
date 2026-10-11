@@ -275,16 +275,6 @@ func TestMockSessionViewRecordsInteractions(t *testing.T) {
 		t.Error("ControlResponses[0].Allow = false, want true")
 	}
 
-	mv.ClearPendingQuestion("req-2")
-	if len(mv.ClearedQuestions) != 1 || mv.ClearedQuestions[0] != "req-2" {
-		t.Errorf("ClearedQuestions = %v, want [req-2]", mv.ClearedQuestions)
-	}
-
-	mv.ResetWaitingStatus()
-	if mv.ResetWaitingCalled != 1 {
-		t.Errorf("ResetWaitingCalled = %d, want 1", mv.ResetWaitingCalled)
-	}
-
 	if err := mv.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}

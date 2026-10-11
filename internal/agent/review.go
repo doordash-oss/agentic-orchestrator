@@ -19,7 +19,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
+	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
 )
 
 type ReviewStatus int
@@ -50,6 +50,49 @@ func (s ReviewStatus) String() string {
 	}
 }
 
+// verificationItemView projects a RequiredVerificationItem for review templates.
+type verificationItemView struct {
+	Name        string
+	Requirement string
+}
+
+// reviewUserInput is the data passed to review.user.tmpl.
+type reviewUserInput struct {
+	Iteration int
+	IterDir   string
+
+	GateLabel          string
+	FinalGate          bool
+	LiveRunAxis        bool
+	DiffBase           string
+	FeatureDescription string
+	DesignArtifactPath string
+	PreviousFeedback   string
+	// RefactorPassForkPoint names a refactor child's fork-point commits
+	// ("repo @ sha"). It resolves the spec's "fork point" references and
+	// attributes cumulative-diff hunks between parent and pass. Empty for
+	// top-level features.
+	RefactorPassForkPoint string
+
+	RoadmapPath            string
+	PlanPath               string
+	ExitCriteria           string
+	AcceptanceClause       string
+	VerificationReportPath string
+
+	ContractPath         string
+	RequiredVerification []verificationItemView
+
+	PriorImplementationReportPaths       []string
+	PriorImplementationEvidenceRootDirs  []string
+	PriorImplementationEvidenceArtifacts []string
+
+	ProgressPath string
+	PhaseType    string
+
+	FeedbackPath string
+}
+
 // BuildReviewPrompt constructs the prompt for the review gate.
 // Large artifacts (plan, roadmap, progress, verification report) are referenced
 // by path so the reviewer reads them via tool use, keeping the prompt compact.
@@ -62,15 +105,15 @@ func (s ReviewStatus) String() string {
 //
 // The prose lives in internal/agent/prompts/templates/review.user.tmpl.
 func BuildReviewPrompt(planPath, exitCriteria, progressPath, iterDir, contractPath, verificationReportPath string, iteration int, requiredVerification []RequiredVerificationItem, roadmapPath, phaseType, feedbackPath string) string {
-	required := make([]roles.VerificationItemView, 0, len(requiredVerification))
+	required := make([]verificationItemView, 0, len(requiredVerification))
 	for _, item := range requiredVerification {
-		required = append(required, roles.VerificationItemView{
+		required = append(required, verificationItemView{
 			Name:        item.Name,
 			Requirement: item.Requirement,
 		})
 	}
 
-	return roles.BuildReviewPrompt(roles.ReviewUserInput{
+	return prompts.ReviewUserPrompt(reviewUserInput{
 		Iteration:              iteration,
 		IterDir:                iterDir,
 		RoadmapPath:            roadmapPath,
@@ -144,9 +187,9 @@ func BuildImplementationReviewAxisPrompt(planPath, exitCriteria, progressPath, i
 // BuildImplementationReviewAxisPromptWithOpts renders one gate-aware
 // implementation review axis prompt.
 func BuildImplementationReviewAxisPromptWithOpts(opts ImplementationReviewAxisPromptOpts) string {
-	required := make([]roles.VerificationItemView, 0, len(opts.RequiredVerification))
+	required := make([]verificationItemView, 0, len(opts.RequiredVerification))
 	for _, item := range opts.RequiredVerification {
-		required = append(required, roles.VerificationItemView{
+		required = append(required, verificationItemView{
 			Name:        item.Name,
 			Requirement: item.Requirement,
 		})
@@ -157,8 +200,8 @@ func BuildImplementationReviewAxisPromptWithOpts(opts ImplementationReviewAxisPr
 		phaseType = ""
 	}
 
-	return roles.BuildImplementationReviewAxisPrompt(roles.ImplementationReviewAxisUserInput{
-		ReviewUserInput: roles.ReviewUserInput{
+	return prompts.ImplementationReviewAxisUserPrompt(implementationReviewAxisUserInput{
+		reviewUserInput: reviewUserInput{
 			Iteration:                            opts.Iteration,
 			IterDir:                              opts.IterDir,
 			GateLabel:                            implementationReviewGateLabel(opts.Gate),

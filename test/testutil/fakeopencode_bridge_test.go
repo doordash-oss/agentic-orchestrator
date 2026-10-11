@@ -15,7 +15,6 @@
 package testutil_test
 
 import (
-	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -25,6 +24,7 @@ import (
 	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
@@ -239,17 +239,9 @@ func TestOpenCodeBridgeQuestions(t *testing.T) {
 			if req.Request.ToolName != "AskUserQuestion" || !strings.Contains(string(req.Request.Input), testutil.FakeOpenCodeQuestion) {
 				t.Fatalf("question = %s %s", req.Request.ToolName, req.Request.Input)
 			}
-			var input struct {
-				Questions []struct {
-					MultiSelect bool `json:"multiSelect"`
-					Custom      bool `json:"custom"`
-					Options     []struct {
-						Label string `json:"label"`
-					} `json:"options"`
-				} `json:"questions"`
-			}
-			if err := json.Unmarshal(req.Request.Input, &input); err != nil || len(input.Questions) != 1 || len(input.Questions[0].Options) != 2 || !input.Questions[0].Custom {
-				t.Fatalf("question input = %s", req.Request.Input)
+			input, err := askuser.Parse(req.Request.Input)
+			if err != nil || len(input.Questions) != 1 || len(input.Questions[0].Options) != 2 {
+				t.Fatalf("question input = %s (%v)", req.Request.Input, err)
 			}
 			wantKind := llm.EventOriginRoot
 			if tc.child {
@@ -258,7 +250,7 @@ func TestOpenCodeBridgeQuestions(t *testing.T) {
 			if ctrl.Origin.Kind != wantKind {
 				t.Fatalf("origin = %+v, want %s", ctrl.Origin, wantKind)
 			}
-			if err := s.sess.RespondToAskUser(req.RequestID, req.Request.Input, map[string]string{testutil.FakeOpenCodeQuestion: "dev"}, nil); err != nil {
+			if err := s.sess.RespondToAskUser(req.RequestID, resolveAskUser(t, req.Request.Input, map[string]string{"1": "dev"})); err != nil {
 				t.Fatal(err)
 			}
 			s.obs.wait(t, "answer echo", func(m llm.SDKMessage) bool { return assistantText(m) == tc.reply })

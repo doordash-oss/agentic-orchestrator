@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
@@ -469,7 +468,7 @@ func TestContractRegistryPlanPhasePlannerReportsMissingMeta(t *testing.T) {
 func TestContractRegistryHasNoLegacyRefactorPlanRole(t *testing.T) {
 	// The legacy refactor cycle and its refactor-plan role were removed; the
 	// role registry must not carry any refactor-scoped role anymore.
-	for _, spec := range roles.All() {
+	for _, spec := range roleSpecs {
 		if spec.SkillName == "refactor" || strings.Contains(string(spec.Role), "refactor") {
 			t.Errorf("legacy refactor role still registered: %+v", spec)
 		}
@@ -893,7 +892,7 @@ frozen_sections:
 	if err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if len(violations) != 0 || !out.OK || out.AxisApproval != nil {
+	if len(violations) != 0 || !out.OK {
 		t.Fatalf("Validate() = (%+v, %v), want helper-local axis approval ignored", out, violations)
 	}
 }

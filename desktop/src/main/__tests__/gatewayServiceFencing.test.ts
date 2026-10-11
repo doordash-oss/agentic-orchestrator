@@ -43,6 +43,7 @@ import {
 } from '../gateway/runtimeGateway';
 import { type ChildExit } from '../gateway/serverProcess';
 import type { ServerIdentitySource } from '../serverFence';
+import { DESKTOP_SCHEMA_VERSION } from '../gateway/compatibility';
 
 const EMPTY_SCAN: RegistryScan = { candidates: [], pruned: 0, rejected: [] };
 
@@ -71,8 +72,8 @@ function serverKeyFor(runtimeDir: string): string {
 function compatibleDeclaration(): Record<string, unknown> {
   return {
     api_version: 'v1',
-    schema_version: 2,
-    min_client_schema: 2,
+    schema_version: DESKTOP_SCHEMA_VERSION,
+    min_client_schema: DESKTOP_SCHEMA_VERSION,
     runtime_policy: 'loopback-bearer-v1',
     server_build: { version: 'v9.9.9-other-build', revision: 'deadbeef' },
   };

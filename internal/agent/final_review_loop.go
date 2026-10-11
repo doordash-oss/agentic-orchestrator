@@ -723,8 +723,8 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 
 	_ = os.WriteFile(filepath.Join(iterDir, "fix-prompt.md"), []byte(prompt), 0o644)
 
-	systemPrompt := BuildRoleSystemPrompt(BuildRoleSystemPromptInput{
-		Spec:           FinalReviewFixerRoleSpec(),
+	systemPrompt := buildRoleSystemPrompt(roleSystemPromptInput{
+		Spec:           finalReviewFixerRoleSpec,
 		IterationDir:   iterDir,
 		SkillsDir:      cfg.SkillsDir,
 		GuidelinesDir:  cfg.GuidelinesDir,
@@ -803,9 +803,6 @@ func (s *featureFinalReviewLoopState) runFix(iteration int, iterDir, feedback st
 				SessionID:   sessionID,
 				Intent:      intent,
 			})
-			if err == nil && len(violations) == 0 {
-				sess.SetHasUnansweredQuestion(false)
-			}
 			return violations, err
 		},
 	})

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -24,30 +24,21 @@ import (
 // RoleDesigner; both roles share the same artifact validation behavior.
 const RoleDesigner Role = "designer"
 
-var designerRoleSpec = RoleSpec{
-	Phase:        feature.PhaseDesign,
-	Role:         RoleDesigner,
-	SkillName:    "design",
-	UserTemplate: "design.user",
-	Required:     []feature.Phase{feature.PhaseResearch},
-	OutputRoots: []OutputRootSpec{
+var designerRoleSpec = roleSpec{
+	Phase:     feature.PhaseDesign,
+	Role:      RoleDesigner,
+	SkillName: "design",
+	OutputRoots: []outputRootSpec{
 		singleShotPhaseDirOutputRoot("Design phase artifact directory."),
 	},
-	Artifacts: []RoleArtifactSpec{
-		phaseMarkdownRoleArtifact("design markdown artifact", ValidatorDesignDocument),
+	Artifacts: []roleArtifactSpec{
+		phaseMarkdownRoleArtifact("design markdown artifact", validateDesignDocumentArtifact),
 	},
 	ReadOnlyOutsideRoots: true,
 }
 
-// DesignerRoleSpec returns the canonical Design RoleSpec.
-func DesignerRoleSpec() RoleSpec {
-	return CloneRoleSpec(designerRoleSpec)
-}
-
-// DesignUserInput is the data passed to design.user.tmpl. Shape matches
-// DesignUserInput so callers can migrate without churn; the legacy
-// builder delegates here.
-type DesignUserInput struct {
+// designUserInput is the data passed to design.user.tmpl.
+type designUserInput struct {
 	Name         string
 	Description  string
 	ExitCriteria string
@@ -64,9 +55,4 @@ type DesignUserInput struct {
 
 	QAFiles     prompts.QAFilesInput
 	Inquireness prompts.GrillMeInquirenessInput
-}
-
-// BuildDesignPrompt renders the canonical Design user prompt.
-func BuildDesignPrompt(in DesignUserInput) string {
-	return prompts.DesignUserPrompt(in)
 }

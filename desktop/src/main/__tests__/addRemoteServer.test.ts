@@ -24,6 +24,7 @@ import {
   type AddRemoteServerDeps,
 } from '../gateway/addRemoteServer';
 import type { HttpResult } from '../gateway/runtimeGateway';
+import { DESKTOP_SCHEMA_VERSION } from '../gateway/compatibility';
 
 const TOKEN = 'tok-secret-xyz';
 const BASE_URL = 'http://10.1.2.3:8080';
@@ -33,8 +34,8 @@ const STATE_DIR = '/srv/remote/features';
 
 const COMPATIBILITY = {
   api_version: 'v1',
-  schema_version: 2,
-  min_client_schema: 2,
+  schema_version: DESKTOP_SCHEMA_VERSION,
+  min_client_schema: DESKTOP_SCHEMA_VERSION,
   runtime_policy: 'network-bearer-v1',
   server_build: { version: 'v1.2.3' },
 };

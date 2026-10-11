@@ -608,7 +608,8 @@ export function supervisorPendingQuestion(
     waitingSince: '2026-10-06T10:00:00.000Z',
     questions: [
       {
-        key: 'Which branch should the sub-task use?',
+        index: 1,
+        question: 'Which branch should the sub-task use?',
         header: 'Branch',
         multiSelect: false,
         options: [{ label: 'main' }, { label: 'dev' }],

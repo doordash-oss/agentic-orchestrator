@@ -106,7 +106,7 @@ func TestOrchestrator_Shutdown_SignalsDoneAndStopsSessions(t *testing.T) {
 
 		// Done() channel closed → receive returns zero value immediately.
 		select {
-		case <-o.Done():
+		case <-o.doneCh:
 		case <-time.After(100 * time.Millisecond):
 			t.Error("Done() did not close within 100ms")
 		}
@@ -197,7 +197,7 @@ func TestOrchestrator_Shutdown_SignalsDoneAndStopsSessions(t *testing.T) {
 				for {
 					o.emitEventBlocking(ports.Event{Type: ports.FeatureStarted, FeatureID: "load"})
 					select {
-					case <-o.Done():
+					case <-o.doneCh:
 						return
 					default:
 					}
@@ -227,7 +227,7 @@ func TestOrchestrator_Shutdown_SignalsDoneAndStopsSessions(t *testing.T) {
 
 		// Done closed, Events not closed.
 		select {
-		case <-o.Done():
+		case <-o.doneCh:
 		case <-time.After(50 * time.Millisecond):
 			t.Error("Done() not closed after Shutdown")
 		}
@@ -245,7 +245,7 @@ func TestOrchestrator_Shutdown_SignalsDoneAndStopsSessions(t *testing.T) {
 				select {
 				case <-o.Events():
 					// drain any stray events
-				case <-o.Done():
+				case <-o.doneCh:
 					return
 				}
 			}

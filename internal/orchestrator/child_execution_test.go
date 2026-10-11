@@ -159,15 +159,6 @@ func TestOrchestrator_ClosedChildExecutionRefused(t *testing.T) {
 				t.Fatalf("closed child mutated by rejected start: outcome=%q status=%s", parked.Parent.CloseOutcome, parked.Status)
 			}
 		})
-		t.Run("retry/"+tc.name, func(t *testing.T) {
-			lc := lifecycleForFeature(tc.f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(tc.f)}, orchestrator.Hooks{})
-			err := o.RetryPhase(tc.f.ID)
-			if !errors.Is(err, feature.ErrChildExecutionClosed) {
-				t.Fatalf("RetryPhase() error = %v, want ErrChildExecutionClosed", err)
-			}
-			refuteLifecycleCall(t, lc, "RetryPhase")
-		})
 	}
 
 	t.Run("restart/settled child replays no pipeline phases", func(t *testing.T) {
@@ -218,15 +209,6 @@ func TestOrchestrator_ChildExecutionBlocked(t *testing.T) {
 			}
 			refuteLifecycleCall(t, lc, "RunSetup")
 		})
-		t.Run("retry/"+tc.name, func(t *testing.T) {
-			lc := lifecycleForFeature(tc.f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(tc.f)}, orchestrator.Hooks{})
-			err := o.RetryPhase(tc.f.ID)
-			if !errors.Is(err, feature.ErrChildExecutionBlocked) {
-				t.Fatalf("RetryPhase() error = %v, want ErrChildExecutionBlocked", err)
-			}
-			refuteLifecycleCall(t, lc, "RetryPhase")
-		})
 	}
 }
 
@@ -245,11 +227,6 @@ func TestOrchestrator_ChildGatePropagatesLookupErrors(t *testing.T) {
 		!strings.Contains(err.Error(), "loading feature") ||
 		errors.Is(err, feature.ErrChildExecutionBlocked) {
 		t.Fatalf("StartFeature() error = %v, want propagated lookup failure", err)
-	}
-	if err := newOrchestrator().RetryPhase("child-x"); err == nil ||
-		!strings.Contains(err.Error(), "loading feature") ||
-		errors.Is(err, feature.ErrChildExecutionBlocked) {
-		t.Fatalf("RetryPhase() error = %v, want propagated lookup failure", err)
 	}
 	if _, err := newOrchestrator().RestartPhase("child-x", 0, 0); err == nil ||
 		!strings.Contains(err.Error(), "loading feature") ||
@@ -330,14 +307,6 @@ func TestOrchestrator_ChildCapabilityGate(t *testing.T) {
 			_, err := o.RestartPhase(tc.f.ID, 0, 0)
 			if err != nil {
 				t.Fatalf("RestartPhase() error = %v, want nil for eligible %s child", err, tc.name)
-			}
-		})
-		t.Run("retry/"+tc.name, func(t *testing.T) {
-			lc := lifecycleForFeature(tc.f)
-			o := orchestrator.New(orchestrator.Deps{Lifecycle: lc, Store: newFeatureStore(tc.f)}, orchestrator.Hooks{})
-			err := o.RetryPhase(tc.f.ID)
-			if err != nil {
-				t.Fatalf("RetryPhase() error = %v, want nil for eligible %s child", err, tc.name)
 			}
 		})
 	}

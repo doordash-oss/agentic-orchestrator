@@ -38,7 +38,7 @@ type RuntimeServer struct {
 	startedAt    time.Time
 	srv          *http.Server
 	broker       *eventBroker
-	clones       CloneService
+	clones       cloneService
 	originChecks *originCheckCoordinator
 	updates      *updateCoordinator
 	done         chan error
@@ -100,11 +100,11 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		PersistProviderModelCatalog: opts.PersistProviderModelCatalog,
 		InitGitRepository:           opts.InitGitRepository,
 		InitializeGitRepository:     opts.InitializeGitRepository,
-		Clones:                      opts.Clones,
+		clones:                      opts.clones,
 		Worktrees:                   opts.Worktrees,
 		Updates:                     opts.Updates,
 		Admission:                   opts.Admission,
-		ProbeActivity:               opts.ProbeActivity,
+		probeActivity:               opts.probeActivity,
 		Supervisor:                  opts.Supervisor,
 		RuntimePolicy:               policy,
 	})
@@ -118,7 +118,7 @@ func Start(ctx context.Context, opts Options) (*RuntimeServer, error) {
 		// would cap the whole connection lifetime, killing long-lived SSE
 		// streams (/api/v1/events, /sessions/{id}/output/stream). Mutation
 		// bodies are still bounded — decodeMutationJSON wraps r.Body in
-		// http.MaxBytesReader(MaxMutationBodyBytes) and the upload route caps
+		// http.MaxBytesReader(maxMutationBodyBytes) and the upload route caps
 		// per kind via http.MaxBytesReader — so an unbounded-body-read DoS
 		// isn't reintroduced by this tradeoff.
 		ReadHeaderTimeout: 5 * time.Second,
@@ -326,7 +326,7 @@ func (s *RuntimeServer) SetUpdateReceipt(receipt selfupdate.Receipt) {
 
 // cloneSweepLoop prunes expired clone records once at startup and hourly
 // until the server lifetime context ends.
-func cloneSweepLoop(ctx context.Context, clones CloneService) {
+func cloneSweepLoop(ctx context.Context, clones cloneService) {
 	clones.Sweep()
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()

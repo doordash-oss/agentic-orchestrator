@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
-	"github.com/doordash-oss/agentic-orchestrator/internal/agent/roles"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 )
 
@@ -137,7 +136,7 @@ func BuildRoadmapPromptWithResearch(f *feature.Feature, skillsDir, guidelinesDir
 	_ = guidelinesDir
 	_ = kbInfos
 	repos := roadmapFeatureViews(f)
-	return roles.BuildRoadmapPrompt(roles.RoadmapUserInput{
+	return prompts.RoadmapUserPrompt(roadmapUserInput{
 		Name:                  f.Name,
 		Description:           f.Description,
 		ExitCriteria:          f.ExitCriteria,
@@ -178,7 +177,7 @@ func BuildRoadmapRevisionPrompt(f *feature.Feature, skillsDir, roadmapPath, prev
 	_ = f
 	_ = roadmapPath
 	_ = designArtifactPath
-	return roles.BuildRoadmapRevisionPrompt(roles.RoadmapRevisionUserInput{
+	return prompts.RoadmapRevisionUserPrompt(roadmapRevisionUserInput{
 		Attempt:        attempt,
 		CriticFeedback: criticFeedback,
 		PriorAxisApprovals: prompts.PriorAxisApprovalsInput{
@@ -217,8 +216,8 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesD
 	_ = skillsDir
 	_ = guidelinesDir
 	_ = kbInfos
-	return roles.BuildPhasePlanPrompt(roles.PhasePlanUserInput{
-		Phase: roles.PhasePlanView{
+	return prompts.PhasePlanUserPrompt(phasePlanUserInput{
+		Phase: phasePlanView{
 			Number:        phase.Number,
 			Name:          phase.Name,
 			Type:          string(phase.Type),
@@ -250,9 +249,9 @@ func BuildPhasePlanPromptWithResearch(f *feature.Feature, skillsDir, guidelinesD
 // internal/agent/prompts/templates/phase_plan_revision.user.tmpl.
 func BuildPhasePlanRevisionPrompt(f *feature.Feature, skillsDir, phasePlanPath, feedback, designArtifactPath string, phase RoadmapPhase, attempt int, approvals []AxisApproval) string {
 	_ = designArtifactPath
-	return roles.BuildPhasePlanRevisionPrompt(roles.PhasePlanRevisionUserInput{
+	return prompts.PhasePlanRevisionUserPrompt(phasePlanRevisionUserInput{
 		Attempt: attempt,
-		Phase: roles.PhasePlanView{
+		Phase: phasePlanView{
 			Number: phase.Number,
 			Name:   phase.Name,
 			Type:   string(phase.Type),

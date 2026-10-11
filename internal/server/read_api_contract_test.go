@@ -39,6 +39,7 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/supervisor"
 )
@@ -610,7 +611,7 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 		Iteration: 3,
 		Questions: []agent.NeedUserInputQuestion{
 			{Index: 1, Prompt: "Which database should implementation use?", Answer: "Postgres"},
-			{Prompt: "Should we migrate existing data?", Answer: ""},
+			{Index: 3, Prompt: "Should we migrate existing data?", Answer: ""},
 		},
 		Verification: &agent.NeedUserInputVerificationContext{
 			Blockers: []agent.NeedUserInputVerificationBlocker{{
@@ -658,8 +659,8 @@ func TestNeedUserInputGateDTOsIncludeQuestionnaireAndCycleRouting(t *testing.T) 
 		t.Fatalf("detail gate first question = %+v", firstDetailQuestion)
 	}
 	secondDetailQuestion := detailQuestions[1].(map[string]any)
-	if secondDetailQuestion["index"] != float64(2) {
-		t.Fatalf("detail gate second question index = %v; want ordinal fallback 2", secondDetailQuestion["index"])
+	if secondDetailQuestion["index"] != float64(3) {
+		t.Fatalf("detail gate second question index = %v; want stored index 3", secondDetailQuestion["index"])
 	}
 
 	prompts := getJSONMap(t, handler, apiPathPrompts)
@@ -1146,6 +1147,55 @@ func TestPromptSnapshotPreservesReadableAskUserQuestionText(t *testing.T) {
 	}
 }
 
+func TestPromptSnapshotEmitsOneBasedAskUserQuestionIndex(t *testing.T) {
+	t.Parallel()
+
+	store, f := seedReadFeature(t)
+	input := json.RawMessage(mustMarshalJSON(t, map[string]any{
+		questionsFieldKey: []map[string]any{
+			{questionFieldKey: "Which branch?", headerFieldKey: "Branch", optionsFieldKey: []map[string]any{{labelFieldKey: "main", descriptionFieldKey: "default"}}},
+			{questionFieldKey: strings.Repeat("Which rollout plan should we follow? ", 200), headerFieldKey: "Rollout"},
+		},
+	}))
+	sess := &fakeSessionView{
+		id: fixtureAskSessionID, featureID: f.ID, phase: feature.PhaseDesign, status: ports.SessionWaitingHelp,
+		pending: []*llm.ControlRequestMessage{{
+			Type:      transcriptTypeControlRequest,
+			RequestID: "ask-index",
+			Request: llm.ControlRequest{
+				Subtype:  controlSubtypeCanUseTool,
+				ToolName: toolNameAskUserQuestion,
+				Input:    input,
+			},
+		}},
+	}
+	opts := baseReadHandlerOptions(store)
+	opts.Sessions = fakeSessionManager{views: []ports.SessionView{sess}}
+	handler := NewHandler(opts)
+
+	prompts := getJSONMap(t, handler, apiPathPrompts)
+	asks := prompts["ask_user_questions"].([]any)
+	if len(asks) != 1 {
+		t.Fatalf("ask_user_questions length = %d; want 1", len(asks))
+	}
+	questions := asks[0].(map[string]any)[questionsFieldKey].([]any)
+	if len(questions) != 2 {
+		t.Fatalf("ask_user questions length = %d; want 2", len(questions))
+	}
+	for i, raw := range questions {
+		if got := raw.(map[string]any)["index"]; got != float64(i+1) {
+			t.Fatalf("ask_user question[%d] index = %v; want %d", i, got, i+1)
+		}
+	}
+
+	// The supervisor state and stream project pending prompts through the
+	// same control-request DTO.
+	dto := controlRequestDTO(sess, sess.pending[0])
+	if len(dto.Questions) != 2 || dto.Questions[0].Index != 1 || dto.Questions[1].Index != 2 {
+		t.Fatalf("control request questions = %+v; want indexes 1 and 2", dto.Questions)
+	}
+}
+
 func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.T) {
 	t.Parallel()
 
@@ -1160,7 +1210,7 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: question,
 			headerFieldKey:   "Orthography",
-			"multi_select":   true,
+			"multiSelect":    true,
 			optionsFieldKey: []map[string]any{
 				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0]},
 				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1]},
@@ -1172,7 +1222,7 @@ func TestPromptSnapshotRecoversAskUserConfidenceFromAssistantToolUse(t *testing.
 		questionsFieldKey: []map[string]any{{
 			questionFieldKey: question,
 			headerFieldKey:   "Orthography",
-			"multi_select":   true,
+			"multiSelect":    true,
 			optionsFieldKey: []map[string]any{
 				{labelFieldKey: "Historical-Literary (Recommended)", descriptionFieldKey: optionDescriptions[0], confidenceFieldKey: 0.72},
 				{labelFieldKey: "De Blasi & Montuori 2020", descriptionFieldKey: optionDescriptions[1], confidenceFieldKey: 0.21},
@@ -3712,14 +3762,12 @@ func (s *fakeSessionView) TaskActivities() []llm.TaskActivity {
 }
 func (s *fakeSessionView) SendUserMessage(string) error                { return nil }
 func (s *fakeSessionView) RespondToControl(string, bool, string) error { return nil }
-func (s *fakeSessionView) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+func (s *fakeSessionView) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
-func (s *fakeSessionView) ClearPendingQuestion(string) {}
-func (s *fakeSessionView) ResetWaitingStatus()         {}
-func (s *fakeSessionView) Stop() error                 { return nil }
-func (s *fakeSessionView) Interrupt() error            { return nil }
-func (s *fakeSessionView) Wait()                       {}
+func (s *fakeSessionView) Stop() error      { return nil }
+func (s *fakeSessionView) Interrupt() error { return nil }
+func (s *fakeSessionView) Wait()            {}
 
 type fakeMessageLog struct {
 	messages []llm.SDKMessage

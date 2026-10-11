@@ -29,26 +29,18 @@ type preflightMutationTarget struct {
 	MutationTarget
 	rebaseFeatureID        string
 	rebaseFeatureErr       error
-	completionPreflight    CompletionPreflightResponse
 	completionPreflightErr error
-	completionPreflightID  string
 	repoDiff               RepositoryDiffResponse
 	repoDiffErr            error
-	repoDiffID             string
-	repoDiffName           string
 	repoDiffFilePath       string
 	publishReq             PublishFeatureRequest
-	publishDescReq         PublishDescriptionRequest
-	mergeReq               GuardedFeatureActionRequest
-	markDoneReq            GuardedFeatureActionRequest
 	cleanupReq             CleanupActionRequest
-	deleteReq              GuardedFeatureActionRequest
 }
 
-func (t *preflightMutationTarget) RebaseFeature(featureID string, _ RebaseFeatureRequest) (RebaseFeatureResponse, error) {
+func (t *preflightMutationTarget) RebaseFeature(featureID string) (RebaseFeatureResponse, error) {
 	t.rebaseFeatureID = featureID
 	if t.rebaseFeatureErr != nil {
-		return RebaseFeatureResponse{ParentID: featureID, Result: "failed"}, t.rebaseFeatureErr
+		return RebaseFeatureResponse{}, t.rebaseFeatureErr
 	}
 	return RebaseFeatureResponse{FeatureID: "rebase-child", ParentID: featureID, Result: "created"}, nil
 }

@@ -24,6 +24,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 )
 
@@ -40,7 +41,7 @@ func (p *stubProtocol) SendUserMessage(string) error                            
 func (p *stubProtocol) RespondToControl(string, bool, json.RawMessage, string) error { return nil }
 func (p *stubProtocol) RespondToHook(string) error                                   { return nil }
 func (p *stubProtocol) Interrupt() error                                             { return llm.ErrNotSupported }
-func (p *stubProtocol) RespondToAskUser(string, json.RawMessage, map[string]string, map[string]llm.AskUserAnnotation) error {
+func (p *stubProtocol) RespondToAskUser(string, askuser.Resolved) error {
 	return nil
 }
 func (p *stubProtocol) SessionID() string      { return p.sessionID }

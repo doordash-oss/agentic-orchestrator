@@ -550,7 +550,7 @@ func TestRefactorActionReturnsCreated(t *testing.T) {
 	t.Parallel()
 
 	target := &refactorMutationTarget{
-		resp: RefactorFeatureResponse{FeatureID: "child-1", ParentID: "feat-1", Result: resultCreated},
+		resp: RefactorFeatureResponse{FeatureID: "child-1", ParentID: "feat-1", Result: "created"},
 	}
 	handler := NewHandler(HandlerOptions{
 		Mutations:             target,
@@ -586,7 +586,7 @@ func TestRefactorActionReturnsCreated(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if out.FeatureID != "child-1" || out.ParentID != "feat-1" || out.Result != resultCreated {
+	if out.FeatureID != "child-1" || out.ParentID != "feat-1" || out.Result != "created" {
 		t.Fatalf("response = %+v; want feature_id child-1 parent_id feat-1 result created", out)
 	}
 	if len(target.received) != 1 {
@@ -677,7 +677,7 @@ func TestReviewFeedbackActionLaunchesFromSubmittedPayload(t *testing.T) {
 	target := &reviewFeedbackMutationTarget{resp: ReviewFeedbackFeatureResponse{
 		ParentID:  "parent-1",
 		FeatureID: "child-1",
-		Result:    resultCreated,
+		Result:    "created",
 	}}
 	handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
 	body := `{"expected_revision":3,"gate":false}`
@@ -711,7 +711,7 @@ func TestReviewFeedbackActionRejectsCommentPayloadFields(t *testing.T) {
 	target := &reviewFeedbackMutationTarget{resp: ReviewFeedbackFeatureResponse{
 		ParentID:  "parent-1",
 		FeatureID: "child-1",
-		Result:    resultCreated,
+		Result:    "created",
 	}}
 	handler := NewHandler(HandlerOptions{Mutations: target, DisableHostValidation: true})
 	body := `{"expected_revision":3,"comments":[{"repo":"api","id":17,"type":"review","body":"handle this"}]}`
@@ -1009,10 +1009,6 @@ func (t *startBlockedMutationTarget) StartFeature(string) (FeatureStartResponse,
 	return FeatureStartResponse{}, t.err
 }
 
-func (t *startBlockedMutationTarget) ResumeFeature(string) (FeatureStartResponse, error) {
-	return FeatureStartResponse{}, t.err
-}
-
 type deleteBlockedMutationTarget struct {
 	MutationTarget
 	err error
@@ -1059,7 +1055,7 @@ func (t permissionAnswerMutationTarget) AnswerPermission(req PermissionAnswerReq
 		RequestID: req.RequestID,
 		SessionID: req.SessionID,
 		Decision:  req.Decision,
-		Result:    resultAnswered,
+		Result:    "answered",
 	}, nil
 }
 

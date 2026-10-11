@@ -145,7 +145,9 @@ export const ServerAskUserOptionSchema = z.object({
   confidence: z.number().min(0).max(1).optional(),
 });
 export const ServerAskUserQuestionSchema = z.object({
-  question: AttentionTextSchema.optional(),
+  /** One-based position of the question within its prompt; answers are keyed by it. */
+  index: z.number().int().min(1),
+  question: AttentionTextSchema,
   header: z.string().max(500).optional(),
   multi_select: z.boolean().optional(),
   options: z.array(ServerAskUserOptionSchema).max(100).optional(),
@@ -215,7 +217,8 @@ export const ServerNeedUserInputGateSchema = z.object({
   questions: z
     .array(
       z.object({
-        index: z.number().int().nonnegative().optional(),
+        // The stored one-based gate index; drafts and answers are keyed by it.
+        index: z.number().int().min(1),
         prompt: AttentionTextSchema.optional(),
         answer: AttentionTextSchema.optional(),
       }),
@@ -1012,7 +1015,7 @@ export const ServerNeedUserInputGateDetailSchema = z.object({
   questions: z
     .array(
       z.object({
-        index: z.number().int().nonnegative().optional(),
+        index: z.number().int().min(1),
         prompt: z.string().optional(),
         answer: z.string().optional(),
       }),
@@ -1658,7 +1661,9 @@ export const ServerSupervisorRecordSchema = z.object({
   created_at: z.string().max(100),
   client_message_id: z.string().max(128).optional(),
   stream_message_id: ServerSupervisorIdSchema.optional(),
-  messages: z.array(ServerTranscriptMessageSchema).max(500),
+  // Paging limits records, not the projected rows within a record. A single
+  // tool result can contain thousands of file changes; preserve every row.
+  messages: z.array(ServerTranscriptMessageSchema),
   request: ServerSupervisorRequestRecordSchema.optional(),
   marker: ServerSupervisorMarkerRecordSchema.optional(),
   checkpoint: ServerSupervisorCheckpointRecordSchema.optional(),
@@ -2081,6 +2086,27 @@ const _needUserInputVerificationSubset = (
   value: NeedUserInputVerificationDTO,
 ): z.output<typeof ServerNeedUserInputVerificationSchema> => value;
 void _needUserInputVerificationSubset;
+// Ask-user and gate questions are guarded in both directions: the generated
+// component must parse, and the parsed output must carry every field the
+// server now requires (the one-based `index` answers are keyed by).
+type AskUserQuestionDTO = components['schemas']['AskUserQuestion'];
+type ServerAskUserQuestion = z.output<typeof ServerAskUserQuestionSchema>;
+const _askUserQuestionSubset = (value: AskUserQuestionDTO): ServerAskUserQuestion => value;
+void _askUserQuestionSubset;
+const _askUserQuestionAssignable = (value: ServerAskUserQuestion): AskUserQuestionDTO => value;
+void _askUserQuestionAssignable;
+type NeedUserInputQuestionDTO = components['schemas']['NeedUserInputQuestion'];
+type ServerNeedUserInputQuestion = NonNullable<
+  z.output<typeof ServerNeedUserInputGateSchema>['questions']
+>[number];
+const _needUserInputQuestionSubset = (
+  value: NeedUserInputQuestionDTO,
+): ServerNeedUserInputQuestion => value;
+void _needUserInputQuestionSubset;
+const _needUserInputQuestionAssignable = (
+  value: ServerNeedUserInputQuestion,
+): NeedUserInputQuestionDTO => value;
+void _needUserInputQuestionAssignable;
 type RewindPreviewDTO = components['schemas']['RewindPreviewResponse'];
 const _rewindPreviewSubset = (value: RewindPreviewDTO): RewindPreviewResponse => value;
 void _rewindPreviewSubset;

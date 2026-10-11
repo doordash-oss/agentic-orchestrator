@@ -70,7 +70,7 @@ type apiHandler struct {
 	uploads *uploadStore
 	// clones owns the repository clone lifecycle; nil when no clone
 	// service is available (tests, or a runtime without a state dir).
-	clones                CloneService
+	clones                cloneService
 	persistProviderModels func(llm.LLMProvider, []llm.ModelInfo) error
 	disableHostValidation bool
 	runtimePolicy         string
@@ -115,7 +115,7 @@ type apiHandler struct {
 	featureDetectFail func() error
 	// probeActivity counts read-launched background probes for the
 	// repository-work activity detector.
-	probeActivity *ProbeActivity
+	probeActivity *probeActivity
 
 	// sourceUpdates tracks the lifetime of admitted Update-from-origin
 	// attempts so reconciliation reads and feature acceptance settle before
@@ -190,11 +190,11 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		sourceUpdates:           newSourceUpdateTracker(),
 		reconcileSourceDeadline: defaultReconcileSourceDeadline,
 		admission:               opts.Admission,
-		probeActivity:           opts.ProbeActivity,
+		probeActivity:           opts.probeActivity,
 		supervisor:              opts.Supervisor,
 	}
 	if handler.probeActivity == nil {
-		handler.probeActivity = NewProbeActivity()
+		handler.probeActivity = newProbeActivity()
 	}
 	// The update coordinator's activity probe reads this handler's
 	// detectors; discovery runs outside the coordinator's mutex.
@@ -203,10 +203,10 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		activity, detectionFailed, _ := handler.admissionActivitySnapshot(ctx)
 		return activity, detectionFailed, handler.admissionPendingCount()
 	}
-	if updatesOpts.Stopper == nil {
+	if updatesOpts.stopper == nil {
 		// The production stopper dispatches through this handler's mutation
 		// surface and pause-stop projection; tests inject fakes directly.
-		updatesOpts.Stopper = handlerInstallStopper{handler: handler}
+		updatesOpts.stopper = handlerInstallStopper{handler: handler}
 	}
 	handler.featureDetectFail = updatesOpts.DetectFailHook
 	handler.updates = newUpdateCoordinator(updatesOpts)
@@ -228,8 +228,8 @@ func newAPIHandler(opts HandlerOptions) *apiHandler {
 		}
 		handler.cleanliness = inspector
 	}
-	if opts.Clones != nil {
-		handler.clones = opts.Clones
+	if opts.clones != nil {
+		handler.clones = opts.clones
 	} else if strings.TrimSpace(opts.Runtime.StateDir) != "" {
 		// The default clone service owns durable records under the state
 		// dir and publishes SSE invalidations through this handler's
@@ -391,7 +391,7 @@ func (h *apiHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		StartedAt:     h.startedAt,
 		Owner:         OwnerFromInstanceOwner(h.owner),
 		ServerTime:    time.Now().UTC(),
-		Compatibility: NewCompatibilityDeclaration(h.owner.Version, h.runtimePolicy),
+		Compatibility: newCompatibilityDeclaration(h.owner.Version, h.runtimePolicy),
 		Name:          h.name,
 	})
 }
@@ -405,7 +405,7 @@ func (h *apiHandler) handleFeatureList(w http.ResponseWriter, r *http.Request) {
 	// One relationship pass for the whole list; the per-parent scan re-reads
 	// the entire store and turns the list O(N²) in disk reads.
 	var bulkChildren map[string]*feature.RelationshipChildren
-	if reader, ok := h.store.(BulkRelationshipReader); ok {
+	if reader, ok := h.store.(bulkRelationshipReader); ok {
 		bulkChildren, err = reader.AllRelationshipChildren()
 		if err != nil {
 			writeAPIError(w, http.StatusInternalServerError, errcat.RelationshipReadFailed, errcat.WithDiagnostics("read relationship history"))

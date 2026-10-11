@@ -134,45 +134,6 @@ echo '{"type":"result","subtype":"success","session_id":"s1","total_cost_usd":0.
 	_ = fmt.Sprintf("%v", sess)
 }
 
-func TestSessionStatusTransitions(t *testing.T) {
-	// Test the status transitions via direct session manipulation
-	s := NewSession("unit-latch", "feat-1", feature.PhaseImplement)
-	s.status = SessionRunning
-
-	// Simulate control_request → WaitingPermission
-	s.mu.Lock()
-	s.status = SessionWaitingPermission
-	s.mu.Unlock()
-
-	if s.status != SessionWaitingPermission {
-		t.Errorf("expected SessionWaitingPermission, got %v", s.status)
-	}
-
-	// ResetWaitingStatus should transition to running
-	s.ResetWaitingStatus()
-	if s.status != SessionRunning {
-		t.Errorf("expected SessionRunning after reset, got %v", s.status)
-	}
-
-	// WaitingHelp → reset
-	s.mu.Lock()
-	s.status = SessionWaitingHelp
-	s.mu.Unlock()
-	s.ResetWaitingStatus()
-	if s.status != SessionRunning {
-		t.Errorf("expected SessionRunning after reset from WaitingHelp, got %v", s.status)
-	}
-
-	// Done should not be reset
-	s.mu.Lock()
-	s.status = SessionDone
-	s.mu.Unlock()
-	s.ResetWaitingStatus()
-	if s.status != SessionDone {
-		t.Errorf("expected SessionDone to not be reset, got %v", s.status)
-	}
-}
-
 func TestNewManagerRestoresLiveSessionTranscript(t *testing.T) {
 	stateDir := t.TempDir()
 	logPath := filepath.Join(stateDir, "output.txt")
@@ -288,19 +249,6 @@ func waitForMessageCount(t *testing.T, sess ports.SessionView, want int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("message count = %d, want at least %d", sess.MessageLog().Len(), want)
-}
-
-func TestResetWaitingStatus_JSONProtocol(t *testing.T) {
-	s := NewSession("suppress-test", "feat-1", feature.PhaseImplement)
-
-	s.mu.Lock()
-	s.status = SessionWaitingHelp
-	s.mu.Unlock()
-
-	s.ResetWaitingStatus()
-	if s.status != SessionRunning {
-		t.Fatalf("expected SessionRunning after reset, got %v", s.status)
-	}
 }
 
 // TestHighVolumePartialStreamNoBoundedGoroutines verifies that high-volume

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package roles
+package agent
 
 import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/agent/prompts"
@@ -22,29 +22,23 @@ import (
 // RolePlanPhasePlanner is the per-roadmap-phase planner session.
 const RolePlanPhasePlanner Role = "plan_phase_planner"
 
-var phasePlanCreatorRoleSpec = RoleSpec{
-	Phase:        feature.PhasePlan,
-	Role:         RolePlanPhasePlanner,
-	SkillName:    "plan-phase",
-	UserTemplate: "phase_plan.user",
-	OutputRoots: []OutputRootSpec{
+var phasePlanCreatorRoleSpec = roleSpec{
+	Phase:     feature.PhasePlan,
+	Role:      RolePlanPhasePlanner,
+	SkillName: "plan-phase",
+	OutputRoots: []outputRootSpec{
 		artifactDirOutputRoot("Shared per-phase plan artifact root. The phase plan markdown is written here across attempts."),
 		attemptDirOutputRoot("Active phase-plan attempt directory. Debug prompts, attempt metadata, and validator output are written here; the harness records its completion receipt here after validation."),
 	},
-	Artifacts: []RoleArtifactSpec{
+	Artifacts: []roleArtifactSpec{
 		phasePlanMarkdownRoleArtifact(),
 		planAttemptMetaRoleArtifact(),
 	},
 	ReadOnlyOutsideRoots: true,
 }
 
-// PhasePlanCreatorRoleSpec returns the RoleSpec-backed phase-plan creation role.
-func PhasePlanCreatorRoleSpec() RoleSpec {
-	return CloneRoleSpec(phasePlanCreatorRoleSpec)
-}
-
-// PhasePlanView projects a roadmap phase for phase-plan prompts.
-type PhasePlanView struct {
+// phasePlanView projects a roadmap phase for phase-plan prompts.
+type phasePlanView struct {
 	Number        int
 	Name          string
 	Type          string
@@ -52,9 +46,9 @@ type PhasePlanView struct {
 	StubsToRetire []string
 }
 
-// PhasePlanUserInput is the data passed to phase_plan.user.tmpl.
-type PhasePlanUserInput struct {
-	Phase                PhasePlanView
+// phasePlanUserInput is the data passed to phase_plan.user.tmpl.
+type phasePlanUserInput struct {
+	Phase                phasePlanView
 	RoadmapPath          string
 	ResearchArtifactPath string
 
@@ -63,9 +57,4 @@ type PhasePlanUserInput struct {
 	Inquireness prompts.GrillMeInquirenessInput
 
 	AutomatedVerificationOnly bool
-}
-
-// BuildPhasePlanPrompt renders the phase-plan creation prompt.
-func BuildPhasePlanPrompt(in PhasePlanUserInput) string {
-	return prompts.PhasePlanUserPrompt(in)
 }

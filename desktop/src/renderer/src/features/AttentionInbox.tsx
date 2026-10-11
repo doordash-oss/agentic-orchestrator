@@ -60,12 +60,13 @@ import { formatWaitingDuration } from './phaseRail';
 import { useAttentionDraftSaves } from './useAttentionDraftSaves';
 
 export interface QuestionAnswerDraft {
-  selected: string[];
+  selected: number[];
   freeText: string;
 }
 
 export interface AttentionDrafts {
-  questions: Record<string, Record<string, QuestionAnswerDraft>>;
+  /** Per attention item, the answer drafts keyed by each question's one-based index. */
+  questions: Record<string, Record<number, QuestionAnswerDraft>>;
   help: Record<string, string>;
   gates: Record<string, Record<number, string>>;
 }
@@ -658,7 +659,7 @@ export function AttentionDetail({
 
   if (item.kind === 'questions') {
     const complete = item.questions.every(
-      (question) => questionAnswer(questionDraft[question.key]) !== '',
+      (question) => questionAnswer(questionDraft[question.index]) !== '',
     );
     const submitAnswers = () =>
       submit(() =>
@@ -667,8 +668,8 @@ export function AttentionDetail({
           ...(item.sessionId === undefined ? {} : { sessionId: item.sessionId }),
           answers: Object.fromEntries(
             item.questions.map((question) => [
-              question.key,
-              questionAnswer(questionDraft[question.key]),
+              String(question.index),
+              questionAnswer(questionDraft[question.index]),
             ]),
           ),
         }),
@@ -677,7 +678,7 @@ export function AttentionDetail({
       <div className="attention-detail attention-detail--questions">
         <AttentionContextMeta item={item} />
         {item.questions.map((question, questionIndex) => {
-          const draft = questionDraft[question.key] ?? { selected: [], freeText: '' };
+          const draft = questionDraft[question.index] ?? { selected: [], freeText: '' };
           let recommendedIndex = -1;
           let highestConfidence = Number.NEGATIVE_INFINITY;
           if (!question.multiSelect) {
@@ -689,13 +690,13 @@ export function AttentionDetail({
             });
           }
           const freeTextHintId = `${detailKey}:${questionIndex}:free-text-hint`;
-          const chooseOption = (label: string, checked: boolean) =>
-            setQuestionDraft(setDrafts, detailKey, question.key, {
+          const chooseOption = (index: number, checked: boolean) =>
+            setQuestionDraft(setDrafts, detailKey, question.index, {
               selected: question.multiSelect
                 ? checked
-                  ? [...new Set([...draft.selected, label])]
-                  : draft.selected.filter((value) => value !== label)
-                : [label],
+                  ? [...new Set([...draft.selected, index])]
+                  : draft.selected.filter((value) => value !== index)
+                : [index],
               freeText: '',
             });
           const handleKeys = (event: ReactKeyboardEvent<HTMLFieldSetElement>) => {
@@ -713,8 +714,7 @@ export function AttentionDetail({
             if (!Number.isInteger(digit) || digit < 1) return;
             if (digit <= question.options.length) {
               event.preventDefault();
-              const option = question.options[digit - 1]!;
-              chooseOption(option.label, !draft.selected.includes(option.label));
+              chooseOption(digit, !draft.selected.includes(digit));
             } else if (digit === question.options.length + 1) {
               event.preventDefault();
               event.currentTarget
@@ -723,7 +723,7 @@ export function AttentionDetail({
             }
           };
           return (
-            <fieldset key={question.key} className="attention-question" onKeyDown={handleKeys}>
+            <fieldset key={question.index} className="attention-question" onKeyDown={handleKeys}>
               <legend>
                 {item.questions.length > 1 ? (
                   <span className="attention-question__progress">
@@ -732,7 +732,7 @@ export function AttentionDetail({
                 ) : null}
                 <span className="attention-question__header">{question.header}</span>
                 <span className="attention-question__prompt" role="heading" aria-level={3}>
-                  {question.key}
+                  {question.question}
                 </span>
               </legend>
               {question.multiSelect ? (
@@ -741,10 +741,10 @@ export function AttentionDetail({
               {question.options.map((option, optionIndex) => {
                 const recommended = optionIndex === recommendedIndex;
                 const selected =
-                  draft.freeText.trim() === '' && draft.selected.includes(option.label);
+                  draft.freeText.trim() === '' && draft.selected.includes(optionIndex + 1);
                 return (
                   <label
-                    key={option.label}
+                    key={optionIndex}
                     className="attention-option"
                     data-recommended={recommended ? true : undefined}
                     data-selected={selected ? true : undefined}
@@ -752,10 +752,12 @@ export function AttentionDetail({
                     <input
                       className="sr-only"
                       type={question.multiSelect ? 'checkbox' : 'radio'}
-                      name={`${detailKey}:${question.key}`}
-                      value={option.label}
-                      checked={draft.selected.includes(option.label)}
-                      onChange={(event) => chooseOption(option.label, event.currentTarget.checked)}
+                      name={`${detailKey}:${question.index}`}
+                      value={optionIndex + 1}
+                      checked={draft.selected.includes(optionIndex + 1)}
+                      onChange={(event) =>
+                        chooseOption(optionIndex + 1, event.currentTarget.checked)
+                      }
                     />
                     <span className="attention-option__number" aria-hidden="true">
                       {optionIndex + 1}
@@ -792,7 +794,7 @@ export function AttentionDetail({
                     placeholder="Type your own answer here"
                     value={draft.freeText}
                     onChange={(event) =>
-                      setQuestionDraft(setDrafts, detailKey, question.key, {
+                      setQuestionDraft(setDrafts, detailKey, question.index, {
                         freeText: event.target.value,
                       })
                     }
@@ -1194,28 +1196,32 @@ export function displayQuestionOptionLabel(label: string): string {
 export function setQuestionDraft(
   setDrafts: Dispatch<SetStateAction<AttentionDrafts>>,
   detailKey: string,
-  questionKey: string,
+  questionIndex: number,
   patch: Partial<QuestionAnswerDraft>,
 ): void {
   setDrafts((current) => {
     const itemDraft = current.questions[detailKey] ?? {};
-    const existing = itemDraft[questionKey] ?? { selected: [], freeText: '' };
+    const existing = itemDraft[questionIndex] ?? { selected: [], freeText: '' };
     return {
       ...current,
       questions: {
         ...current.questions,
         [detailKey]: {
           ...itemDraft,
-          [questionKey]: { ...existing, ...patch },
+          [questionIndex]: { ...existing, ...patch },
         },
       },
     };
   });
 }
 
-export function questionAnswer(draft: QuestionAnswerDraft | undefined): string {
+export function questionAnswer(draft: QuestionAnswerDraft | undefined): string | number[] {
   if (draft === undefined) return '';
-  return draft.freeText.trim() === '' ? draft.selected.join(', ') : draft.freeText;
+  return draft.freeText.trim() === ''
+    ? draft.selected.length > 0
+      ? draft.selected
+      : ''
+    : draft.freeText;
 }
 
 function gateDraftFor(

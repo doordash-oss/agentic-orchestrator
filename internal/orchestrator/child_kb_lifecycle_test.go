@@ -489,7 +489,7 @@ func TestPromotionReleaseFailureStartupRecoveryOrder(t *testing.T) {
 	// unfinished journal is resumed and must release the leftover lock
 	// even though every entry was already Done before the retry.
 	failRelease = false
-	if err := fx.o.ReconcilePromotions(); err != nil {
+	if err := fx.o.reconcilePromotions(); err != nil {
 		t.Fatalf("ReconcilePromotions: %v", err)
 	}
 	if owner, _ := feature.ReadOverlayLockOwner(overlayDir); owner != "" {
@@ -543,7 +543,7 @@ func TestReconcilePromotionsReleasesLeftoverLocks(t *testing.T) {
 		t.Fatalf("AcquireOverlayLock = %v, %v", acquired, err)
 	}
 
-	if err := fx.o.ReconcilePromotions(); err != nil {
+	if err := fx.o.reconcilePromotions(); err != nil {
 		t.Fatalf("ReconcilePromotions: %v", err)
 	}
 	owner, lockErr := feature.ReadOverlayLockOwner(overlayDir)

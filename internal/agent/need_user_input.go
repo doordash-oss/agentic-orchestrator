@@ -597,7 +597,9 @@ func WriteNeedUserInputRecord(path string, rec NeedUserInputRecord) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// ReadNeedUserInputRecord loads the gate artifact at path.
+// ReadNeedUserInputRecord loads the gate artifact at path. It rejects a
+// record whose question indexes are not positive and unique, since the index
+// is the only answer key clients may send.
 func ReadNeedUserInputRecord(path string) (NeedUserInputRecord, error) {
 	var rec NeedUserInputRecord
 	data, err := os.ReadFile(path)
@@ -606,6 +608,16 @@ func ReadNeedUserInputRecord(path string) (NeedUserInputRecord, error) {
 	}
 	if err := yaml.Unmarshal(data, &rec); err != nil {
 		return rec, fmt.Errorf("parse need-user-input: %w", err)
+	}
+	seen := make(map[int]bool, len(rec.Questions))
+	for i, q := range rec.Questions {
+		if q.Index <= 0 {
+			return NeedUserInputRecord{}, fmt.Errorf("need-user-input question %d %q has index %d; want a positive index", i+1, q.Prompt, q.Index)
+		}
+		if seen[q.Index] {
+			return NeedUserInputRecord{}, fmt.Errorf("need-user-input question %d %q repeats index %d", i+1, q.Prompt, q.Index)
+		}
+		seen[q.Index] = true
 	}
 	return rec, nil
 }

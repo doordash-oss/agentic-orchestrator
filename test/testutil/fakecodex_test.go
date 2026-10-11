@@ -29,11 +29,27 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/llm"
+	"github.com/doordash-oss/agentic-orchestrator/internal/llm/askuser"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
 	"github.com/doordash-oss/agentic-orchestrator/internal/session"
 	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
+
+// resolveAskUser resolves index-keyed answers against an AskUserQuestion
+// control request input, as the mutation module does before answering.
+func resolveAskUser(t testing.TB, input json.RawMessage, answers map[string]string) askuser.Resolved {
+	t.Helper()
+	bundle, err := askuser.Parse(input)
+	if err != nil {
+		t.Fatalf("parse ask-user input: %v (%s)", err, input)
+	}
+	resolved, err := bundle.Resolve(answers)
+	if err != nil {
+		t.Fatalf("resolve ask-user answers: %v", err)
+	}
+	return resolved
+}
 
 func TestMain(m *testing.M) {
 	testutil.RunFakeCodexIfRequested()
@@ -445,7 +461,7 @@ func TestFakeCodexDrivesRealAdapter(t *testing.T) {
 		if ctrl.ControlRequest.Request.ToolName != "AskUserQuestion" {
 			t.Fatalf("question tool = %s", ctrl.ControlRequest.Request.ToolName)
 		}
-		if err := sess.RespondToAskUser(ctrl.ControlRequest.RequestID, ctrl.ControlRequest.Request.Input, map[string]string{"Which branch?": "dev"}, nil); err != nil {
+		if err := sess.RespondToAskUser(ctrl.ControlRequest.RequestID, resolveAskUser(t, ctrl.ControlRequest.Request.Input, map[string]string{"1": "dev"})); err != nil {
 			t.Fatal(err)
 		}
 		obs.wait(t, "echoed answer", func(m llm.SDKMessage) bool {

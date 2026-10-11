@@ -22,16 +22,16 @@ import (
 	"github.com/doordash-oss/agentic-orchestrator/internal/git"
 )
 
-// RebaseChildPreflightResult carries the creation-time resolved per-repo
+// rebaseChildPreflightResult carries the creation-time resolved per-repo
 // targets, the behind set, and the captured parent tip SHAs produced by the
 // orchestrator preflight.
-type RebaseChildPreflightResult struct {
+type rebaseChildPreflightResult struct {
 	Bases   []feature.ChildRepoBase
 	Targets []feature.RebaseRepoTarget
 	Behind  []string
 }
 
-// RebaseChildPreflight performs the orchestrator-owned preflight for a rebase
+// rebaseChildPreflight performs the orchestrator-owned preflight for a rebase
 // child launch: it loads the parent, checks every worktree for dirty state,
 // resolves each repo's merge target (PR base branch → recorded base branch →
 // repository default branch), fetches (for publishable repos), and computes
@@ -39,7 +39,7 @@ type RebaseChildPreflightResult struct {
 // the local target branch otherwise. If any repo fails target resolution or
 // fetch, the whole preflight fails atomically with a typed error naming the
 // repo. If every repo is up to date, it returns a RebaseAlreadyUpToDateError.
-func (o *Orchestrator) RebaseChildPreflight(parentID string) (*RebaseChildPreflightResult, error) {
+func (o *Orchestrator) rebaseChildPreflight(parentID string) (*rebaseChildPreflightResult, error) {
 	parent, err := o.deps.Store.Load(parentID)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -111,7 +111,7 @@ func (o *Orchestrator) RebaseChildPreflight(parentID string) (*RebaseChildPrefli
 		return nil, &feature.RebaseAlreadyUpToDateError{Targets: targets}
 	}
 
-	return &RebaseChildPreflightResult{
+	return &rebaseChildPreflightResult{
 		Bases:   bases,
 		Targets: targets,
 		Behind:  behind,

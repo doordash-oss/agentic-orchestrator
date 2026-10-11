@@ -521,9 +521,10 @@ func TestReleaseInstallJourneyTargetStartupFailure(t *testing.T) {
 	if n := p.stderrPrefixCount("selfupdate-driver: exec /"); n != 1 {
 		t.Fatalf("exec milestones = %d; want 1 (stderr tail:\n%s)", n, p.stderrTail())
 	}
-	if !p.stderrContains("warning[update_rolled_back]") {
-		t.Fatalf("no update_rolled_back warning (stderr tail:\n%s)", p.stderrTail())
-	}
+	// The restored image serves health before its launcher goroutine reaches
+	// the listening line and the warning that follows it, so the warning is
+	// awaited rather than asserted at the first healthy observation.
+	p.waitStderr(t, "warning[update_rolled_back]")
 	requireSuppressedTarget(t, j, r)
 	if code := p.terminate(); code != 0 {
 		t.Fatalf("SIGTERM exit code = %d; want 0 (stderr tail:\n%s)", code, p.stderrTail())

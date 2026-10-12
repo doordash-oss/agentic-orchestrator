@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestReadOnlySandboxProfile_DeniesWorktreeWritesAllowsRest(t *testing.T) {
@@ -69,6 +70,7 @@ func TestWriteRestrictedSandboxProfile_DeniesWritesOutsideRoots(t *testing.T) {
 }
 
 func TestWrapVerificationSandbox_BlocksWritesOutsideRoots(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	if !sandboxExecAvailable() {
 		t.Skip("sandbox-exec not available on this host")
 	}

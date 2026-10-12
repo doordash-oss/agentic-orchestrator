@@ -2522,6 +2522,7 @@ func TestImplementLoopHarnessCapabilityPauseKeepsSameIteration(t *testing.T) {
 // but gone by post-handoff verification still opens the gate on the same
 // iteration, after the implementer session ran.
 func TestImplementLoopPostHandoffCapabilityLossGatesSameIteration(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
@@ -2600,6 +2601,7 @@ func TestImplementLoopPostHandoffCapabilityLossGatesSameIteration(t *testing.T) 
 // after the user makes the capability available, resume re-probes and passes
 // instead of replaying the cached blocked report into an identical gate.
 func TestImplementLoopRetryAfterAuthReexecutesVerification(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
@@ -2837,6 +2839,7 @@ func TestImplementLoopUnauthorizedWaiverRaisesUserGate(t *testing.T) {
 }
 
 func TestImplementLoopHarnessContractErrorRoutesPlanRevisionKeepsSameIteration(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")
@@ -3005,6 +3008,7 @@ func TestImplementLoopUnscopedMultiRepoVerificationRoutesPlanRevisionBeforeImple
 }
 
 func TestImplementLoopSkipReviewRoutesHarnessRegressionToRetry(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	tmpDir := t.TempDir()
 	workDir := filepath.Join(tmpDir, "work")
 	artifactDir := filepath.Join(tmpDir, "artifacts")

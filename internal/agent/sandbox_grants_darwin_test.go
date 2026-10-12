@@ -25,6 +25,7 @@ import (
 	"testing"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func countEvidenceRuns(t *testing.T, contractPath, itemID string) int {
@@ -49,6 +50,7 @@ func countEvidenceRuns(t *testing.T, contractPath, itemID string) int {
 // confirm — so the item passes with a persisted unsandboxed disposition
 // instead of surfacing as an unclassified failure.
 func TestExecuteTestingContractEscalatesSandboxLimitedCommand(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	if !sandboxExecAvailable() {
 		t.Skip("requires sandbox-exec")
 	}
@@ -99,6 +101,7 @@ func TestExecuteTestingContractEscalatesSandboxLimitedCommand(t *testing.T) {
 // fails once and passes on the ladder's own re-runs resolves as passed with
 // no baseline needed and no lasting unsandboxed disposition.
 func TestExecuteTestingContractLadderAbsorbsFlakeWithoutBaseline(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	if !sandboxExecAvailable() {
 		t.Skip("requires sandbox-exec")
 	}
@@ -130,6 +133,7 @@ func TestExecuteTestingContractLadderAbsorbsFlakeWithoutBaseline(t *testing.T) {
 // deterministic failure pays candidate + unsandboxed + baseline, with the
 // ladder's unsandboxed failure standing in for the regression confirmation.
 func TestExecuteTestingContractLadderFailureDoublesAsRegressionConfirmation(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	if !sandboxExecAvailable() {
 		t.Skip("requires sandbox-exec")
 	}
@@ -158,6 +162,7 @@ func TestExecuteTestingContractLadderFailureDoublesAsRegressionConfirmation(t *t
 // denied, the executor grants the minimal root, retries, and persists the
 // grant so a second execution passes without another denial round.
 func TestExecuteTestingContractAutoGrantsDeniedTempPath(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	if !sandboxExecAvailable() {
 		t.Skip("requires sandbox-exec")
 	}

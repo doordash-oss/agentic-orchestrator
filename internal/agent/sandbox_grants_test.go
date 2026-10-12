@@ -23,6 +23,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/permission"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestSandboxGrantRootForDeniedPath(t *testing.T) {
@@ -166,6 +167,7 @@ func TestUnsandboxedDispositionRoundtrip(t *testing.T) {
 }
 
 func TestExecuteTestingContractBlocksProtectedPathDenial(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("no home dir")

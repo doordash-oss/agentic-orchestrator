@@ -29,6 +29,7 @@ import (
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
 	"github.com/doordash-oss/agentic-orchestrator/internal/ports"
+	"github.com/doordash-oss/agentic-orchestrator/test/testutil"
 )
 
 func TestExecuteTestingContractRunsOnlyExplicitItems(t *testing.T) {
@@ -81,6 +82,7 @@ func TestExecuteTestingContractClassifiesInheritedFailure(t *testing.T) {
 }
 
 func TestExecuteTestingContractClassifiesRepoPrefixedPathAsContractError(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("translated\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -179,6 +181,7 @@ func TestExecuteTestingContractDoesNotTreatUnquotedRepoTextAsPathWhenCommandPass
 }
 
 func TestExecuteTestingContractClassifiesQuotedRepoPrefixedOperandAsContractError(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	repo := t.TempDir()
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("translated\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -201,6 +204,7 @@ func TestExecuteTestingContractClassifiesQuotedRepoPrefixedOperandAsContractErro
 }
 
 func TestExecuteTestingContractClassifiesRedundantRepoCDAsContractError(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	repo := t.TempDir()
 	command := "cd repo && make test"
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
@@ -238,6 +242,7 @@ func TestExecuteTestingContractClassifiesInvalidShellAsContractError(t *testing.
 }
 
 func TestExecuteTestingContractClassifiesCommandNotFoundAsContractError(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	repo := t.TempDir()
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
 		ID: "missing-command", Source: testingContractPlanSource, Owner: testingContractOwnerHarness, Repo: "repo",
@@ -256,6 +261,7 @@ func TestExecuteTestingContractClassifiesCommandNotFoundAsContractError(t *testi
 }
 
 func TestExecuteTestingContractClassifiesDeletedCommandAsRegression(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
 	if err := os.Remove(filepath.Join(repo, "check.sh")); err != nil {
 		t.Fatal(err)
@@ -350,6 +356,7 @@ func TestResolveAndValidateVerificationCwdRejectsInvalidLocations(t *testing.T) 
 }
 
 func TestExecuteTestingContractClassifiesRegressionAgainstPassingBase(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
 	if err := os.WriteFile(filepath.Join(repo, "check.sh"), []byte("#!/bin/sh\necho new-failure >&2\nexit 9\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -678,6 +685,7 @@ func TestSandboxVerificationArgvOnlyWrapsHostRunner(t *testing.T) {
 }
 
 func TestExecuteTestingContractBlocksEnvironmentWriteDenial(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Skip("no home dir")
@@ -723,6 +731,7 @@ func TestExecuteTestingContractKeepsWriteDenialInsideWritableRootsAsFailure(t *t
 }
 
 func TestExecuteTestingContractBlocksMissingEnvManagedTool(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	repo := t.TempDir()
 	command := "PATH=/var/empty devbox version"
 	contract := TestingContract{Version: 2, Revision: 1, Items: []TestingContractItem{{
@@ -746,6 +755,7 @@ func TestExecuteTestingContractBlocksMissingEnvManagedTool(t *testing.T) {
 }
 
 func TestExecuteTestingContractPassesFlakyCheckOnConfirmationRerun(t *testing.T) {
+	testutil.RequireSandboxExec(t)
 	repo, commit := verificationGitRepo(t, "#!/bin/sh\necho ok\n")
 	flaky := "#!/bin/sh\nif [ -f flaky-marker ]; then exit 0; fi\ntouch flaky-marker\necho transient >&2\nexit 1\n"
 	if err := os.WriteFile(filepath.Join(repo, "check.sh"), []byte(flaky), 0o755); err != nil {
@@ -1030,5 +1040,23 @@ func TestVerificationEvidenceSha256RoundTrip(t *testing.T) {
 	}
 	if read.Results[0].EvidenceData.Sha256 != "deadbeef" {
 		t.Fatalf("sha256 = %q after round trip", read.Results[0].EvidenceData.Sha256)
+	}
+}
+
+func TestNestedSandboxDeniedRecognizesSandboxApplyFailure(t *testing.T) {
+	run := func(sandboxed bool, exit int, stderr string) capturedVerificationRun {
+		return capturedVerificationRun{record: verificationRunRecord{Sandboxed: sandboxed, ExitCode: exit}, stderr: stderr}
+	}
+	if !nestedSandboxDenied(run(true, 71, "sandbox-exec: sandbox_apply: Operation not permitted\n")) {
+		t.Fatal("sandboxed exit 71 with sandbox_apply denial not recognized as nested sandbox")
+	}
+	for name, r := range map[string]capturedVerificationRun{
+		"unsandboxed":    run(false, 71, "sandbox-exec: sandbox_apply: Operation not permitted"),
+		"other exit":     run(true, 1, "sandbox-exec: sandbox_apply: Operation not permitted"),
+		"exit 71 others": run(true, 71, "some tool failed"),
+	} {
+		if nestedSandboxDenied(r) {
+			t.Errorf("%s: misclassified as nested sandbox denial", name)
+		}
 	}
 }

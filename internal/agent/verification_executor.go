@@ -365,15 +365,20 @@ func executeTestingContract(
 						return nil, err
 					}
 				}
+				reason, note := "command fails under the verification sandbox and passes unsandboxed",
+					"passed unsandboxed; sandboxed execution is environment-limited (disposition recorded)"
+				if nestedSandboxDenied(candidate) {
+					reason = "nested sandbox-exec is not permitted (the harness already runs inside a sandbox); command passes unsandboxed"
+					note = "passed unsandboxed; nested sandbox-exec is not permitted in this environment (disposition recorded)"
+				}
 				if err := recordUnsandboxedDisposition(contractPath, sandboxUnsandboxedDisposition{
 					ItemID: item.ID,
-					Reason: "command fails under the verification sandbox and passes unsandboxed",
+					Reason: reason,
 				}); err != nil {
 					return nil, err
 				}
 				unsandboxedItems[item.ID] = true
-				report.Results[idx] = machineContractResult(item, verificationStatusPassed, escalated,
-					"passed unsandboxed; sandboxed execution is environment-limited (disposition recorded)")
+				report.Results[idx] = machineContractResult(item, verificationStatusPassed, escalated, note)
 				continue
 			}
 			escalated.record.Classification = "unsandboxed_failure"
@@ -1137,6 +1142,15 @@ func envManagedToolNotFound(run capturedVerificationRun) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// nestedSandboxDenied reports a sandboxed run that never started because
+// sandbox-exec could not apply its profile: macOS refuses to nest seatbelt
+// sandboxes and sandbox-exec exits 71 with "sandbox_apply: Operation not
+// permitted" when the harness itself already runs inside one.
+func nestedSandboxDenied(run capturedVerificationRun) bool {
+	return run.record.Sandboxed && run.record.ExitCode == 71 &&
+		outputContainsAny(run.stderr, "sandbox_apply: operation not permitted")
 }
 
 func outputContainsAny(output string, values ...string) bool {

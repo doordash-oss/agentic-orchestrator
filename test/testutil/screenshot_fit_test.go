@@ -50,6 +50,7 @@ func TestRenderTerminalPNGDisablesChromeSandboxInCI(t *testing.T) {
 // frame (every column occupied, including wide border glyphs) and asserts
 // the capture is not clipped. Skips when no headless renderer exists.
 func TestRenderTerminalPNGFitsJourneyGrid(t *testing.T) {
+	RequireSandboxExec(t)
 	if _, err := RendererPath(); err != nil {
 		t.Skipf("no headless renderer: %v", err)
 	}

@@ -30,6 +30,12 @@ import (
 )
 
 const (
+	// defaultEventReplayLimit is the number of most recent events the broker
+	// retains for cursor resume. Snapshot-required events are low volume and
+	// session.output.activity is throttled to one per session per second, so
+	// 4096 envelopes (a few MB at most) cover well beyond the minutes-long
+	// gaps between a snapshot read and a reconnect; older cursors get
+	// stream.reset.
 	defaultEventReplayLimit      = 4096
 	subscriberFIFOSize           = 16
 	maxSubscriberCoalescedEvents = 1024
@@ -138,10 +144,11 @@ func (b *eventBroker) subscribeAfter(after uint64, epoch string) (chan SSEEvent,
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.subs[ch] = &subscriberState{coalesced: map[string]SSEEvent{}}
-	if after > 0 && epoch == "" {
-		reset := b.streamResetEventLocked()
-		return ch, nil, &reset
-	}
+	// An epoch-less cursor is read in the current epoch: snapshots expose
+	// meta.as_of_seq without an epoch, so a seq-only resume is the normal
+	// snapshot-then-subscribe path. Only a supplied epoch can prove a
+	// server restart; without one, the retained-window check below still
+	// resets any cursor beyond the head or older than the ring.
 	if epoch != "" && epoch != b.epoch {
 		reset := b.streamResetEventLocked()
 		return ch, nil, &reset
@@ -293,12 +300,13 @@ func (b *eventBroker) appendReplayLocked(evt SSEEvent) {
 }
 
 func (b *eventBroker) replayAfterLocked(after uint64) ([]SSEEvent, bool) {
+	// A cursor beyond the head was never issued by this epoch; check it
+	// before the empty-ring shortcut so a fresh broker still resets it.
+	if after > b.nextSeq {
+		return nil, false
+	}
 	if len(b.ring) == 0 {
 		return nil, true
-	}
-	current := b.nextSeq
-	if after > current {
-		return nil, false
 	}
 	oldest := b.ring[0].Seq
 	if after < oldest-1 {

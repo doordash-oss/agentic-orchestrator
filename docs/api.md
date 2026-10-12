@@ -196,9 +196,14 @@ Clients bootstrap from a snapshot and then consume ordered event deltas:
 1. Read discovery metadata.
 2. `GET` the needed snapshot endpoint with the bearer token.
 3. Store `meta.as_of_seq` from the body or `X-Agentico-Seq` from the headers.
-4. Connect to `/api/v1/events?after=<as_of_seq>&epoch=<epoch>`.
-5. Apply events by `seq`. On `stream.reset`, re-read snapshots and reconnect
-   from the returned sequence.
+4. Connect to `/api/v1/events?after=<as_of_seq>` (or send it as
+   `Last-Event-ID`). The server replays retained events after the cursor in
+   order; it keeps the most recent 4096 events. Add `&epoch=<epoch>` once you
+   have seen an event envelope: a cursor without `epoch` is read in the current
+   epoch, so only a supplied epoch lets the server detect a restart.
+5. Apply events by `seq`. On `stream.reset` (cursor older than the retained
+   window, beyond the head, or from another epoch), re-read snapshots and
+   reconnect from the returned sequence and epoch.
 
 Event envelopes include `seq`, `epoch`, `kind`, `resource`,
 `resource_version`, and `snapshot_required`. Snapshot responses include

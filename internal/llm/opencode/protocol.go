@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -156,6 +157,11 @@ type permissionOptions struct {
 }
 
 type toolCallState struct {
+	// name is the OpenCode tool identifier (read, grep, bash, ...). It is
+	// locked from the first update that carries one, because OpenCode reuses
+	// the ACP title for a display string (the read path, the grep pattern, the
+	// bash description) once the call completes.
+	name                string
 	title               string
 	kind                string
 	path                string
@@ -167,6 +173,12 @@ type toolCallState struct {
 	taskTerminalEmitted bool
 	estimatedInput      bool
 	estimatedOutput     bool
+	// lastProgressKey is the identity of the last tool_progress emitted for
+	// the call, so repeated updates carrying nothing new collapse into one.
+	lastProgressKey string
+	// lastPhase is the last non-empty status phase (active or terminal), so
+	// a bare update with no status keeps the previous phase.
+	lastPhase string
 }
 
 // NewProtocol creates a new OpenCode ACP protocol handler.
@@ -1036,11 +1048,12 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) []ll
 			out = append(out, msg)
 		}
 		out = append(out, p.taskLifecycleFromUpdate(su.Update)...)
-		progress := p.toolProgressFromUpdate(su.Update)
-		out = append(out, llm.SDKMessage{
-			Type:         "tool_progress",
-			ToolProgress: &progress,
-		})
+		if progress, ok := p.toolProgressFromUpdate(su.Update); ok {
+			out = append(out, llm.SDKMessage{
+				Type:         "tool_progress",
+				ToolProgress: &progress,
+			})
+		}
 		if msg, ok := p.estimatedUsageUpdate(); ok {
 			out = append(out, msg)
 		}
@@ -1299,30 +1312,63 @@ func (p *Protocol) taskLifecycleFromUpdate(update SessionUpdate) []llm.SDKMessag
 	return out
 }
 
-func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) llm.ToolProgressMessage {
+// toolProgressFromUpdate folds an ACP tool_call/tool_call_update into the
+// call's state and returns the tool_progress to emit. It reports false when
+// the update adds nothing over the last record emitted for the same call id
+// (for example pending -> in_progress with no new input), so one tool call
+// yields one record per meaningful change rather than one per ACP update.
+func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) (llm.ToolProgressMessage, bool) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.toolCalls == nil {
 		p.toolCalls = make(map[string]toolCallState)
 	}
-	state := p.toolCalls[update.ToolCallID]
-	state = mergeToolCallState(state, update)
-	if update.ToolCallID != "" {
-		p.toolCalls[update.ToolCallID] = state
+	state := mergeToolCallState(p.toolCalls[update.ToolCallID], update)
+	if phase := progressPhase(update.Status); phase != "" {
+		state.lastPhase = phase
 	}
-	p.mu.Unlock()
-
-	return llm.ToolProgressMessage{
+	progress := llm.ToolProgressMessage{
 		Type:      "tool_progress",
 		ToolUseID: update.ToolCallID,
 		ToolName:  normalizedProgressToolName(state),
 		Data:      normalizedProgressData(update.Status, state),
 		TimeoutMS: state.timeoutMS,
 	}
+	key := strings.Join([]string{
+		progress.ToolName,
+		normalizedProgressData("", state),
+		state.lastPhase,
+		strconv.FormatInt(state.timeoutMS, 10),
+	}, "\x00")
+	duplicate := update.ToolCallID != "" && key == state.lastProgressKey
+	state.lastProgressKey = key
+	if update.ToolCallID != "" {
+		p.toolCalls[update.ToolCallID] = state
+	}
+	return progress, !duplicate
+}
+
+// progressPhase collapses ACP tool statuses into the phases that matter to
+// consumers: pending and in_progress are both "active" (the watchdog arms on
+// either), and each terminal status is its own phase.
+func progressPhase(status string) string {
+	switch status = strings.ToLower(strings.TrimSpace(status)); status {
+	case "":
+		return ""
+	case "pending", "in_progress":
+		return "active"
+	default:
+		return status
+	}
 }
 
 func mergeToolCallState(state toolCallState, update SessionUpdate) toolCallState {
-	if strings.TrimSpace(update.Title) != "" {
-		state.title = strings.TrimSpace(update.Title)
+	title := strings.TrimSpace(update.Title)
+	if state.name == "" && isToolIdentifierTitle(update.SessionUpdate, title) {
+		state.name = title
+	}
+	if title != "" {
+		state.title = title
 	}
 	if strings.TrimSpace(update.Kind) != "" {
 		state.kind = strings.TrimSpace(update.Kind)
@@ -1367,29 +1413,104 @@ func toolCallPath(update SessionUpdate, state toolCallState) string {
 	return ""
 }
 
+var toolIdentifierRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*$`)
+
+// canonicalToolNames maps OpenCode tool identifiers to the canonical names the
+// rest of Agentico uses (Bash/Write/Edit drive file-change rows, Task marks a
+// subagent for the watchdog).
+var canonicalToolNames = map[string]string{
+	"bash":        "Bash",
+	"read":        "Read",
+	"write":       "Write",
+	"edit":        "Edit",
+	"multiedit":   "Edit",
+	"patch":       "Edit",
+	"apply_patch": "Edit",
+	"applypatch":  "Edit",
+	"grep":        "Grep",
+	"glob":        "Glob",
+	"list":        "LS",
+	"ls":          "LS",
+	"webfetch":    "WebFetch",
+	"websearch":   "WebSearch",
+	"task":        "Task",
+	"todowrite":   "TodoWrite",
+	"todoread":    "TodoRead",
+	"skill":       "Skill",
+	"question":    "AskUserQuestion",
+}
+
+// isToolIdentifierTitle reports whether an ACP title names the tool rather
+// than describing the call. OpenCode titles the initial tool_call with the
+// tool id; later updates may carry a display title (a path, a grep pattern,
+// a bash description), so on an update only a known tool id is trusted.
+func isToolIdentifierTitle(sessionUpdate, title string) bool {
+	if !toolIdentifierRe.MatchString(title) {
+		return false
+	}
+	if sessionUpdate == UpdateToolCall {
+		return true
+	}
+	_, known := canonicalToolNames[strings.ToLower(title)]
+	return known
+}
+
 func normalizedProgressToolName(state toolCallState) string {
+	if name := strings.TrimSpace(state.name); name != "" {
+		if canonical, ok := canonicalToolNames[strings.ToLower(name)]; ok {
+			return canonical
+		}
+		return name
+	}
 	kind := strings.ToLower(strings.TrimSpace(state.kind))
-	title := strings.TrimSpace(state.title)
 	switch kind {
 	case ToolKindExecute:
 		return "Bash"
 	case ToolKindEdit:
-		if strings.Contains(strings.ToLower(title), "write") {
+		if strings.Contains(strings.ToLower(state.title), "write") {
 			return "Write"
 		}
 		return "Edit"
+	case ToolKindRead:
+		return "Read"
+	case ToolKindSearch:
+		return "Search"
+	case ToolKindFetch:
+		return "WebFetch"
+	case ToolKindThink:
+		return "Task"
+	case "":
+		return "tool"
 	}
-	if title != "" {
-		return title
+	return kind
+}
+
+// progressSummary is the call's human detail: the display title OpenCode
+// attaches (read path, grep pattern, bash description) or the equivalent
+// input field, unless it merely repeats the tool name, command, or path.
+func progressSummary(state toolCallState) string {
+	summary := strings.TrimSpace(state.title)
+	if summary == "" || strings.EqualFold(summary, state.name) {
+		summary = firstStringField(state.rawInput, "", "description", "pattern", "query", "url")
 	}
-	if kind != "" {
-		return kind
+	path := strings.TrimSpace(state.path)
+	if summary == "" || summary == strings.TrimSpace(state.command) ||
+		(path != "" && strings.HasSuffix(path, summary)) {
+		// OpenCode titles a read with the worktree-relative path, which the
+		// File: line already carries in full.
+		return ""
 	}
-	return "tool"
+	if strings.EqualFold(summary, state.name) || strings.EqualFold(summary, normalizedProgressToolName(state)) {
+		return ""
+	}
+	return summary
 }
 
 func normalizedProgressData(status string, state toolCallState) string {
 	var lines []string
+	if summary := progressSummary(state); summary != "" {
+		lines = append(lines, summary)
+	}
 	if strings.TrimSpace(state.command) != "" {
 		lines = append(lines, strings.TrimSpace(state.command))
 	}

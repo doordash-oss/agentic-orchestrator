@@ -748,8 +748,9 @@ func TestParseLine_ToolProgressKeepsStableID(t *testing.T) {
 	if tp.ToolUseID != "call_42" {
 		t.Fatalf("tool progress id = %q, want call_42", tp.ToolUseID)
 	}
-	if tp.ToolName != "Read file" {
-		t.Fatalf("tool progress name = %q, want 'Read file'", tp.ToolName)
+	// A display title is not a tool identifier; the name comes from the kind.
+	if tp.ToolName != "Read" {
+		t.Fatalf("tool progress name = %q, want Read", tp.ToolName)
 	}
 
 	msgs = mustParse(t, p, notificationLine(t, "session/update", map[string]any{
@@ -805,10 +806,20 @@ func TestParseLine_ToolProgressCarriesDeclaredTimeout(t *testing.T) {
 		t.Fatalf("tool progress timeout = %d, want 7200000", tp.TimeoutMS)
 	}
 
+	// A repeated in_progress update with nothing new collapses.
+	for _, m := range mustParse(t, p, notificationLine(t, "session/update", map[string]any{
+		"sessionId": "ses_x",
+		"update":    map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "bash_42", "status": "in_progress"},
+	})) {
+		if m.ToolProgress != nil {
+			t.Fatalf("bare in_progress update produced %+v, want it collapsed", m.ToolProgress)
+		}
+	}
+
 	// Later updates without rawInput keep the declared timeout.
 	tp = toolProgress(mustParse(t, p, notificationLine(t, "session/update", map[string]any{
 		"sessionId": "ses_x",
-		"update":    map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "bash_42", "status": "in_progress"},
+		"update":    map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "bash_42", "status": "completed"},
 	})))
 	if tp.TimeoutMS != 7200000 {
 		t.Fatalf("tool progress timeout after bare update = %d, want 7200000", tp.TimeoutMS)
@@ -857,7 +868,7 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 		msgs[1].TaskStarted.TaskType != "codebase-locator" {
 		t.Fatalf("second message = %+v, want normalized task start for call_task", msgs[1])
 	}
-	if msgs[2].ToolProgress == nil || msgs[2].ToolProgress.ToolName != "Find markdown/link CI checks & hooks" {
+	if msgs[2].ToolProgress == nil || msgs[2].ToolProgress.ToolName != "Task" {
 		t.Fatalf("third message = %+v, want task tool_progress", msgs[2])
 	}
 
@@ -893,8 +904,8 @@ func TestParseLine_OpenCodeTaskUpdateEmitsTaskToolUsePrompt(t *testing.T) {
 			"status":        "completed",
 		},
 	}))
-	if len(duplicateTerminal) != 1 || duplicateTerminal[0].ToolProgress == nil {
-		t.Fatalf("duplicate terminal task update produced %+v, want only tool_progress", duplicateTerminal)
+	if len(duplicateTerminal) != 0 {
+		t.Fatalf("duplicate terminal task update produced %+v, want it collapsed", duplicateTerminal)
 	}
 }
 

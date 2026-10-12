@@ -5616,6 +5616,12 @@ components:
         tool_call:
           $ref: "#/components/schemas/ToolCall"
           x-go-type-skip-optional-pointer: false
+          description: >-
+            Sanitized tool call detail on tool_use and tool_progress rows.
+            On tool_progress rows only summary is set: one line (at most 200
+            characters) naming what the tool acts on (title, path, pattern,
+            or command), never its output; absent when the provider reports
+            nothing beyond the tool name.
         task:
           $ref: "#/components/schemas/Task"
           x-go-type-skip-optional-pointer: false

@@ -128,7 +128,7 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
 
 ## Transcripts and output streams
 
-- `GET /api/v1/sessions/{session_id}/transcript` — read a bounded page of the session's structured transcript. Optional query: `offset`, `limit`.
+- `GET /api/v1/sessions/{session_id}/transcript` — read a bounded page of the session's structured transcript (`tool_use` and `tool_progress` rows carry a one-line `tool_call.summary` naming the path, pattern, or command when known). Optional query: `offset`, `limit`.
   Example: `"$AGENTICO_BIN" api GET '/api/v1/sessions/{session_id}/transcript?limit=50'`
 - `GET /api/v1/sessions/{session_id}/output/stream` — tail the session's transcript records as they are written. Requires `--timeout`. Optional query: `from` (the transcript row index to start at).
   Example: `"$AGENTICO_BIN" api --timeout 30s GET '/api/v1/sessions/{session_id}/output/stream?from=120'`

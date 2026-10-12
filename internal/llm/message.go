@@ -471,7 +471,13 @@ type ToolProgressMessage struct {
 	Type      string `json:"type"`
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	ToolName  string `json:"tool_name,omitempty"`
-	Data      string `json:"data,omitempty"`
+	// Data is provider-shaped detail and may carry raw tool output (Codex
+	// streams command output here), so it is never shown to clients.
+	Data string `json:"data,omitempty"`
+	// Summary is one human-readable line naming what the tool acts on (a
+	// title, path, pattern, or command), never its output. Providers set it
+	// when they know it; transcripts show it beside the tool name.
+	Summary   string `json:"summary,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
 	// TimeoutMS is the tool invocation's declared execution timeout in
 	// milliseconds, when the provider reports one; 0 means unknown.

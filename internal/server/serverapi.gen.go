@@ -5161,8 +5161,10 @@ type TranscriptMessage struct {
 	Task               *Task       `json:"task,omitempty"`
 	Text               string      `json:"text,omitempty"`
 	Tool               string      `json:"tool,omitempty"`
-	ToolCall           *ToolCall   `json:"tool_call,omitempty"`
-	Type               string      `json:"type"`
+
+	// ToolCall Sanitized tool call detail on tool_use and tool_progress rows. On tool_progress rows only summary is set: one line (at most 200 characters) naming what the tool acts on (title, path, pattern, or command), never its output; absent when the provider reports nothing beyond the tool name.
+	ToolCall *ToolCall `json:"tool_call,omitempty"`
+	Type     string    `json:"type"`
 }
 
 // TranscriptResponse defines model for TranscriptResponse.

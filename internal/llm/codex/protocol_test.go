@@ -798,6 +798,9 @@ func TestCodexFileChangeCompletedIncludesStructuredDiff(t *testing.T) {
 	if msg.ToolProgress.ToolUseID != "call_write" || msg.ToolProgress.ToolName != codexToolNameWrite {
 		t.Fatalf("ToolProgress = %+v, want call_write Write", msg.ToolProgress)
 	}
+	if msg.ToolProgress.Summary != "/tmp/test/README.md" {
+		t.Fatalf("ToolProgress.Summary = %q, want the changed path", msg.ToolProgress.Summary)
+	}
 	if len(msg.FileChanges) != 1 {
 		t.Fatalf("len(FileChanges) = %d, want 1", len(msg.FileChanges))
 	}
@@ -826,8 +829,9 @@ func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 		ThreadID: "thread-1",
 		TurnID:   "turn-1",
 		Item: itemUnion{
-			ID:   "call_1",
-			Type: "commandExecution",
+			ID:      "call_1",
+			Type:    "commandExecution",
+			Command: "go test ./...",
 		},
 	})
 	if err != nil {
@@ -842,6 +846,9 @@ func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 	}
 	if started.ToolProgress.ToolUseID != "call_1" || started.ToolProgress.ToolName != "Bash" {
 		t.Fatalf("started ToolProgress = %+v, want ToolUseID call_1 and Bash", started.ToolProgress)
+	}
+	if started.ToolProgress.Summary != "go test ./..." {
+		t.Fatalf("started Summary = %q, want the command", started.ToolProgress.Summary)
 	}
 
 	deltaParams, err := json.Marshal(commandOutputDelta{
@@ -862,6 +869,9 @@ func TestCodexToolProgressIncludesProviderItemID(t *testing.T) {
 	}
 	if delta.ToolProgress.ToolUseID != "call_1" || delta.ToolProgress.ToolName != "Bash" {
 		t.Fatalf("delta ToolProgress = %+v, want ToolUseID call_1 and Bash", delta.ToolProgress)
+	}
+	if delta.ToolProgress.Summary != "" {
+		t.Fatalf("delta Summary = %q, want none: output is not a summary", delta.ToolProgress.Summary)
 	}
 }
 

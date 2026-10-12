@@ -1332,6 +1332,7 @@ func (p *Protocol) toolProgressFromUpdate(update SessionUpdate) (llm.ToolProgres
 		ToolUseID: update.ToolCallID,
 		ToolName:  normalizedProgressToolName(state),
 		Data:      normalizedProgressData(update.Status, state),
+		Summary:   progressSummaryLine(state),
 		TimeoutMS: state.timeoutMS,
 	}
 	key := strings.Join([]string{
@@ -1504,6 +1505,33 @@ func progressSummary(state toolCallState) string {
 		return ""
 	}
 	return summary
+}
+
+// progressSummaryLine is the one line a transcript shows beside the tool
+// name: the call's title, else its description/pattern/query/url, command,
+// or path. It skips values that merely repeat the tool name, and a title
+// that is a suffix of the path (OpenCode titles a read with a relative path)
+// yields to the full path.
+func progressSummaryLine(state toolCallState) string {
+	title := strings.TrimSpace(state.title)
+	if path := strings.TrimSpace(state.path); title != "" && path != "" && strings.HasSuffix(path, title) {
+		title = path
+	}
+	candidates := []string{
+		title,
+		firstStringField(state.rawInput, "", "description", "pattern", "query", "url"),
+		state.command,
+		state.path,
+	}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || strings.EqualFold(candidate, state.name) ||
+			strings.EqualFold(candidate, normalizedProgressToolName(state)) {
+			continue
+		}
+		return candidate
+	}
+	return ""
 }
 
 func normalizedProgressData(status string, state toolCallState) string {

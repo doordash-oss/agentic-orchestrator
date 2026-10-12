@@ -1629,6 +1629,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					ToolUseID: completed.Item.ID,
 					ToolName:  "Bash",
 					Data:      completed.Item.AggregatedOutput,
+					Summary:   toolProgressSummary(completed.Item),
 				},
 				FileReads: p.fileReadEventsForCommand(completed.Item),
 			}, true
@@ -1642,6 +1643,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					Type:      "tool_progress",
 					ToolUseID: completed.Item.ID,
 					ToolName:  codexToolNameWrite,
+					Summary:   toolProgressSummary(completed.Item),
 				},
 				FileChanges: fileChangeEventsForItem(completed.Item),
 			}, true
@@ -1694,6 +1696,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					Type:      "tool_progress",
 					ToolUseID: started.Item.ID,
 					ToolName:  "Bash",
+					Summary:   toolProgressSummary(started.Item),
 				},
 			}, true
 		case codexItemTypeFileChange:
@@ -1706,6 +1709,7 @@ func (p *Protocol) parseNotification(method string, params json.RawMessage) (llm
 					Type:      "tool_progress",
 					ToolUseID: started.Item.ID,
 					ToolName:  codexToolNameWrite,
+					Summary:   toolProgressSummary(started.Item),
 				},
 			}, true
 		case codexItemTypeCollabAgentToolCall:
@@ -2038,6 +2042,18 @@ func (p *Protocol) fileReadEventsForCommand(item itemUnion) []llm.FileReadEvent 
 		events = append(events, event)
 	}
 	return events
+}
+
+// toolProgressSummary names what a command or file-change item acts on: the
+// command line, or the first changed path. It never carries command output.
+func toolProgressSummary(item itemUnion) string {
+	if item.Type == codexItemTypeFileChange {
+		if paths := changedPaths(item); len(paths) > 0 {
+			return paths[0]
+		}
+		return ""
+	}
+	return strings.TrimSpace(item.Command)
 }
 
 func fileChangeEventsForItem(item itemUnion) []llm.FileChangeEvent {

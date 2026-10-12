@@ -438,7 +438,7 @@ func transcriptDTOs(messages []llm.SDKMessage, start int, workDir ...string) []T
 				out = append(out, rows...)
 				continue
 			}
-			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeToolProgress, Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root)})
+			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeToolProgress, Tool: msg.ToolProgress.ToolName, Redacted: true, FileChange: fileChangeDTOFromToolProgress(msg.ToolProgress, root), ToolCall: toolCallDTOFromToolProgress(msg.ToolProgress, root)})
 		case msg.TaskStarted != nil:
 			out = append(out, TranscriptMessage{Index: index, Role: roleSystem, Type: transcriptTypeTaskStarted, Redacted: true, Task: taskDTOFromStarted(msg.TaskStarted)})
 		case msg.TaskProgress != nil:
@@ -646,6 +646,35 @@ func fileChangeDTOFromToolUse(block llm.ContentBlock, workDir string) *FileChang
 	default:
 		return nil
 	}
+}
+
+// toolProgressSummaryLimit bounds a tool_progress summary in runes.
+const toolProgressSummaryLimit = 200
+
+// toolCallDTOFromToolProgress exposes the provider's one-line Summary (the
+// title, path, pattern, or command a tool_use row would show) and never Data,
+// which may hold raw tool output. Paths under workDir become relative.
+func toolCallDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir string) *ToolCall {
+	if progress == nil {
+		return nil
+	}
+	line := ""
+	for _, candidate := range strings.Split(progress.Summary, "\n") {
+		if line = strings.Join(strings.Fields(candidate), " "); line != "" {
+			break
+		}
+	}
+	if root := strings.TrimRight(strings.TrimSpace(workDir), "/"); root != "" {
+		line = strings.ReplaceAll(line, root+"/", "")
+	}
+	if runes := []rune(line); len(runes) > toolProgressSummaryLimit {
+		line = strings.TrimSpace(string(runes[:toolProgressSummaryLimit])) + "..."
+	}
+	line = SafeDisplayText(line, 0)
+	if line == "" || strings.EqualFold(line, strings.TrimSpace(progress.ToolName)) {
+		return nil
+	}
+	return &ToolCall{Summary: line}
 }
 
 func fileChangeDTOFromToolProgress(progress *llm.ToolProgressMessage, workDir string) *FileChange {

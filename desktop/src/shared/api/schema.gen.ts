@@ -2692,6 +2692,7 @@ export interface components {
             /** Format: double */
             auto_pick_confidence?: number;
             file_change?: components["schemas"]["FileChange"];
+            /** @description Sanitized tool call detail on tool_use and tool_progress rows. On tool_progress rows only summary is set: one line (at most 200 characters) naming what the tool acts on (title, path, pattern, or command), never its output; absent when the provider reports nothing beyond the tool name. */
             tool_call?: components["schemas"]["ToolCall"];
             task?: components["schemas"]["Task"];
         };

@@ -431,6 +431,52 @@ func TestTranscriptDTOsAssignBlockIndexToConversationRows(t *testing.T) {
 	}
 }
 
+func TestTranscriptDTOsSummarizeToolProgressRows(t *testing.T) {
+	t.Parallel()
+
+	progress := func(tool, data, summary string) llm.SDKMessage {
+		return llm.SDKMessage{Type: transcriptTypeToolProgress, ToolProgress: &llm.ToolProgressMessage{
+			Type: transcriptTypeToolProgress, ToolName: tool, Data: data, Summary: summary,
+		}}
+	}
+	long := strings.Repeat("é", 250)
+	cases := []struct {
+		name string
+		msg  llm.SDKMessage
+		want string
+	}{
+		// Codex streams command output in Data; only the command is summarized.
+		{"codex command", progress(toolNameBash, "private-token output body", "go test ./..."), "go test ./..."},
+		{"codex file change", progress(toolNameWrite, "", "/work/repo/internal/a.go"), "internal/a.go"},
+		{"opencode read", progress("Read", "File: /work/repo/README.md\nStatus: completed", "README.md"), "README.md"},
+		{"opencode grep", progress("Grep", "TODO\nStatus: running", "TODO"), "TODO"},
+		{"data alone is never summarized", progress(toolNameBash, "private-token output body", ""), ""},
+		{"empty", progress("Read", "", "  \n "), ""},
+		{"repeats tool name", progress("Read", "", "read"), ""},
+		{"multiline is one line", progress(toolNameBash, "", "\n  npm   run\tbuild \nsecond line"), "npm run build"},
+		{"long is truncated", progress(toolNameBash, "", long), strings.Repeat("é", 200) + "..."},
+	}
+	for _, tc := range cases {
+		rows := transcriptDTOs([]llm.SDKMessage{tc.msg}, 0, "/work/repo")
+		if len(rows) != 1 {
+			t.Fatalf("%s: rows = %+v, want one", tc.name, rows)
+		}
+		got := ""
+		if rows[0].ToolCall != nil {
+			got = rows[0].ToolCall.Summary
+			if got == "" {
+				t.Fatalf("%s: tool_call present with empty summary", tc.name)
+			}
+		}
+		if got != tc.want {
+			t.Fatalf("%s: summary = %q, want %q", tc.name, got, tc.want)
+		}
+		if strings.Contains(got, "private-token") || strings.Contains(got, "output body") {
+			t.Fatalf("%s: summary leaked tool output: %q", tc.name, got)
+		}
+	}
+}
+
 func TestTranscriptDTOsExposeStatusTextInPlace(t *testing.T) {
 	t.Parallel()
 
@@ -2815,6 +2861,7 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 			ToolUseID: "toolu-bash-1",
 			ToolName:  toolNameBash,
 			Data:      "private-token output must stay redacted",
+			Summary:   "go test ./...",
 		},
 	}}
 	for i := 1; i <= 6; i++ {
@@ -2852,6 +2899,9 @@ func TestLivePreviewIncludesExtendedTranscriptTailAndToolProgressRows(t *testing
 	tool := transcript[0].(map[string]any)
 	if tool["type"] != transcriptTypeToolProgress || tool["tool"] != toolNameBash || tool["redacted"] != true {
 		t.Fatalf("tool progress transcript row = %+v; want redacted Bash tool_progress row", tool)
+	}
+	if call, _ := tool["tool_call"].(map[string]any); call["summary"] != "go test ./..." {
+		t.Fatalf("tool progress tool_call = %+v; want the command summary", tool["tool_call"])
 	}
 }
 

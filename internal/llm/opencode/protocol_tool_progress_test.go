@@ -46,6 +46,8 @@ func TestToolProgress_OpenCodeSequencesKeepToolNameAndCollapseRepeats(t *testing
 		updates     []map[string]any
 		wantTool    string
 		wantSummary string
+		// wantLine is the one-line Summary on the in_progress and completed records.
+		wantLine string
 	}{
 		{
 			name: "read",
@@ -55,6 +57,7 @@ func TestToolProgress_OpenCodeSequencesKeepToolNameAndCollapseRepeats(t *testing
 				strings.TrimPrefix(skill, "/")),
 			wantTool:    "Read",
 			wantSummary: "File: " + skill,
+			wantLine:    skill,
 		},
 		{
 			name: "grep",
@@ -64,6 +67,7 @@ func TestToolProgress_OpenCodeSequencesKeepToolNameAndCollapseRepeats(t *testing
 				"TODO|FIXME|XXX|HACK"),
 			wantTool:    "Grep",
 			wantSummary: "TODO|FIXME|XXX|HACK",
+			wantLine:    "TODO|FIXME|XXX|HACK",
 		},
 		{
 			name: "bash",
@@ -73,6 +77,7 @@ func TestToolProgress_OpenCodeSequencesKeepToolNameAndCollapseRepeats(t *testing
 				"Review Rules"),
 			wantTool:    "Bash",
 			wantSummary: "Review Rules",
+			wantLine:    "Review Rules",
 		},
 	}
 	for _, tc := range cases {
@@ -85,6 +90,14 @@ func TestToolProgress_OpenCodeSequencesKeepToolNameAndCollapseRepeats(t *testing
 			for i, r := range records {
 				if r.ToolName != tc.wantTool {
 					t.Fatalf("record %d tool = %q, want %q", i, r.ToolName, tc.wantTool)
+				}
+			}
+			if records[0].Summary != "" {
+				t.Fatalf("pending summary = %q, want none (title repeats the tool name)", records[0].Summary)
+			}
+			for _, r := range records[1:] {
+				if r.Summary != tc.wantLine {
+					t.Fatalf("%s summary = %q, want %q", r.Data, r.Summary, tc.wantLine)
 				}
 			}
 			final := records[2].Data

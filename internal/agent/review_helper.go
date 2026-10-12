@@ -272,6 +272,13 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg reviewHelperConf
 	if sessOpts != nil {
 		var sandboxed bool
 		command, sandboxed, sandboxCleanup = maybeWrapHelperSandbox(command, sandboxRequested, pr.StateDir)
+		if sandboxRequested && !sandboxed {
+			// Launch unconfined rather than fail to start; the bounded
+			// handler falls back to tool-level write denial.
+			if status := SandboxAvailability(); status.Unavailable {
+				recordSandboxUnavailable(pr.FeatureStore, cfg.FeatureID, status.Reason)
+			}
+		}
 		if boundedHandler != nil {
 			boundedHandler.Sandboxed = sandboxed
 		}

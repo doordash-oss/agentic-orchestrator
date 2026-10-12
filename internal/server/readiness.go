@@ -549,5 +549,24 @@ func flattenReadinessIssues(resp ReadinessResponse) []Error {
 			issues = append(issues, *repo.Issue)
 		}
 	}
+	if issue := sandboxReadinessIssue(); issue != nil {
+		issues = append(issues, *issue)
+	}
 	return issues
+}
+
+// verificationSandboxStatus is the cached once-per-process sandbox probe;
+// tests replace it.
+var verificationSandboxStatus = agent.SandboxAvailability
+
+// sandboxReadinessIssue is the single machine-level warning that the
+// verification sandbox cannot be applied (only macOS reports this, e.g.
+// nested sandbox-exec). It never changes ready.
+func sandboxReadinessIssue() *Error {
+	status := verificationSandboxStatus()
+	if !status.Unavailable {
+		return nil
+	}
+	return readinessIssue(errcat.VerificationSandboxUnavailable,
+		errcat.WithDiagnostics(SafeDisplayText(status.Reason, maxReadinessTextLen)))
 }

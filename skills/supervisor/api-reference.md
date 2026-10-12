@@ -137,7 +137,7 @@ Feature sessions ask questions (ask-user) and request help; both wait in the pen
 
 - `GET /api/v1/features/{feature_id}/runs` — list the feature's runs, newest first. Optional query: `page`, `page_size`.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs`
-- `GET /api/v1/features/{feature_id}/runs/{run_number}` — one run's detail: seal, provenance, timing, cost.
+- `GET /api/v1/features/{feature_id}/runs/{run_number}` — one run's detail: seal, provenance, timing, cost, and `sandbox` (`{available:false, reason}`, present only when the run's verification commands or review validators ran without the OS sandbox).
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}`
 - `GET /api/v1/features/{feature_id}/runs/{run_number}/sessions` — the sessions that belong to one run.
   Example: `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/runs/{run_number}/sessions`
@@ -185,6 +185,8 @@ Recovery lists sessions orphaned by a previous server process.
   Example: `"$AGENTICO_BIN" api POST /api/v1/readiness/runtime/refresh '{}'`
 
 Each `providers[]` entry may carry `endpoint_reachable` (result of a short, unauthenticated probe of the provider's custom API endpoint, such as an OpenCode `baseURL`, `ANTHROPIC_BASE_URL`, or a Codex `model_provider` `base_url`; absent when none is configured or the background check is still running) and `warning`. A `provider_endpoint_unreachable` warning also appears in `issues` and does not set `ready:false`, but sessions on that provider will fail to connect. Tell the user to check their VPN or network, then refresh readiness. A refresh waits up to 3 seconds for the check; plain reads use the cached result and recheck in the background.
+
+On macOS, Agentico runs testing-contract commands and Final Review validators under `sandbox-exec`. It checks once per server process that `sandbox-exec` can apply a profile. macOS does not allow nested sandboxes, so when Agentico itself runs inside one (hardened CI, an agent sandbox, or Agentico validating itself), that check fails and `issues` carries one `verification_sandbox_unavailable` warning. The probe's reason is in `diagnostics`, and `ready` stays unchanged. In that state, each contract command runs once, unsandboxed: there is no sandboxed attempt and no confirmation rerun, and the result notes `verification sandbox unavailable (<reason>)`. Validators launch without the sandbox wrapper. The affected run records `sandbox` in its run detail. To restore write confinement, run Agentico outside the outer sandbox and restart the server.
 
 ## Runtime config
 

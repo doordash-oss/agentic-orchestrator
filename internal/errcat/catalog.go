@@ -1700,6 +1700,12 @@ var catalog = map[Code]entry{
 		summaryParams: providerEndpointSummary,
 		Remediation:   "Check your VPN or network connection, then check readiness again.",
 	},
+	VerificationSandboxUnavailable: {
+		Class:       classWarning,
+		Title:       "Verification sandbox unavailable",
+		Summary:     "Verification sandbox is unavailable on this machine; contract commands and review validators run unconfined.",
+		Remediation: "macOS cannot nest sandboxes: when Agentico itself runs inside a sandbox (hardened CI, an agent sandbox, or Agentico validating itself), sandbox-exec cannot apply its profile. Run Agentico outside the outer sandbox to restore write confinement, then restart the server.",
+	},
 
 	// --- Orphan-session recovery codes ---------------------------------------
 	// An orphan session's recovery item carries one of these, picked by

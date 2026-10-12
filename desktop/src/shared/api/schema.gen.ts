@@ -3172,6 +3172,14 @@ export interface components {
             committing?: boolean;
             timing: components["schemas"]["Timing"];
             cost: components["schemas"]["Cost"];
+            sandbox?: components["schemas"]["RunSandbox"];
+        };
+        /** @description Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined. */
+        RunSandbox: {
+            /** @description Always false when present. */
+            available: boolean;
+            /** @description Why the sandbox probe failed. */
+            reason?: string;
         };
         RunListResponse: components["schemas"]["JSONResponse"] & {
             runs: components["schemas"]["RunSummary"][];

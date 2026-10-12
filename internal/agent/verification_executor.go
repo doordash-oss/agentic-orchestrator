@@ -97,6 +97,9 @@ type verificationRunRecord struct {
 	StdoutPath     string    `yaml:"stdout_path"`
 	StderrPath     string    `yaml:"stderr_path"`
 	BaselineRunID  string    `yaml:"baseline_run_id,omitempty"`
+	// SandboxUnavailable is the probe reason when this run executed
+	// unsandboxed because the verification sandbox could not be applied.
+	SandboxUnavailable string `yaml:"sandbox_unavailable,omitempty"`
 }
 
 type capturedVerificationRun struct {
@@ -157,6 +160,11 @@ func executeTestingContract(
 	if unsandboxedItems == nil {
 		unsandboxedItems = make(map[string]bool)
 	}
+	// An unusable sandbox (nested macOS sandbox-exec) runs every command
+	// unsandboxed directly: no sandboxed attempt, no environment
+	// differential, and no persisted disposition, since the condition is the
+	// host's rather than the command's.
+	sandboxUnavailableReason, sandboxUnavailable := verificationSandboxUnavailable(runner)
 	emitProgress := verificationProgressFromContext(ctx)
 	// The item currently marked "running" gets its final report status
 	// emitted when the next item starts (or after the loop): every outcome
@@ -262,8 +270,11 @@ func executeTestingContract(
 		}
 		itemEnv = append(itemEnv, probe.env...)
 
-		runSandboxed := !unsandboxedItems[item.ID]
+		runSandboxed := !unsandboxedItems[item.ID] && !sandboxUnavailable
 		candidate, candidateErr := captureVerificationCommand(ctx, runner, item.ID, "candidate", item.Run.Shell, cwd, item.Run.Timeout, writableRoots, runSandboxed, itemEnv)
+		if sandboxUnavailable {
+			candidate.record.SandboxUnavailable = sandboxUnavailableReason
+		}
 		// Sandbox self-expansion: an OS write denial on a grantable path is a
 		// harness limitation, not a finding. Grant the minimal root, retry,
 		// and persist so later runs (and baselines) start with it. Protected
@@ -301,6 +312,8 @@ func executeTestingContract(
 			note := ""
 			if len(grantedThisItem) > 0 {
 				note = "passed after sandbox write grants: " + strings.Join(grantedThisItem, ", ")
+			} else if sandboxUnavailable {
+				note = "executed unsandboxed: verification sandbox unavailable (" + sandboxUnavailableReason + ")"
 			} else if !runSandboxed {
 				note = "executed unsandboxed per recorded environment disposition"
 			}
@@ -977,6 +990,17 @@ func verificationItemEnv(item TestingContractItem, iterationDir string) ([]strin
 	}
 	dir := filepath.Join(iterationDir, root, safeEvidenceComponent(item.ID))
 	return []string{"AGENTICO_EVIDENCE_DIR=" + dir}, dir
+}
+
+// verificationSandboxUnavailable reports whether verification commands this
+// runner executes would be wrapped in a sandbox that cannot be applied. Only
+// the host exec runner is ever wrapped (see sandboxVerificationArgv).
+func verificationSandboxUnavailable(runner ports.CommandRunner) (string, bool) {
+	if _, ok := runner.(*execCommandRunner); !ok {
+		return "", false
+	}
+	status := SandboxAvailability()
+	return status.Reason, status.Unavailable
 }
 
 // sandboxVerificationArgv wraps a planner-authored command in the platform

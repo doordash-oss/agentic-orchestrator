@@ -884,6 +884,9 @@ func runImplementationLoop(cfg ImplementConfig, sm ports.SessionManager) (result
 					verifyCtx = withVerificationProgress(verifyCtx, func(name, state string) {
 						updateVerificationStatus(cfg.FeatureStore, cfg.Feature.ID, name, state, cfg.OnVerificationProgress)
 					})
+					if reason, unavailable := verificationSandboxUnavailable(cfg.CommandRunner); unavailable {
+						recordSandboxUnavailable(cfg.FeatureStore, cfg.Feature.ID, reason)
+					}
 					harnessVerification, readErr = executeTestingContract(verifyCtx, cfg.CommandRunner, contract, &report, testingContractPath, iterDir, cfg.WorkDir, verificationRepos)
 					cancelVerify()
 					clearVerificationStatuses(cfg.FeatureStore, cfg.Feature.ID, cfg.OnVerificationProgress)

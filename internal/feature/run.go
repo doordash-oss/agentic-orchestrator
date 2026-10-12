@@ -212,6 +212,19 @@ type Run struct {
 	// single-repo NEED_USER_INPUT gate. Empty when no gate is open. Multi-repo
 	// runs persist the per-repo gate path on RepoImplState instead.
 	PendingNeedUserInputPath string `yaml:"pending_need_user_input_path,omitempty"`
+
+	// Sandbox is set once, the first time this run executes harness
+	// verification or launches a sandboxed review validator while the OS
+	// sandbox is unavailable (e.g. nested macOS sandbox-exec), so the run
+	// record shows those commands ran unconfined. Absent otherwise.
+	Sandbox *SandboxRecord `yaml:"sandbox,omitempty"`
+}
+
+// SandboxRecord notes that the verification sandbox was unavailable for a
+// run and why.
+type SandboxRecord struct {
+	Available bool   `yaml:"available"`
+	Reason    string `yaml:"reason,omitempty"`
 }
 
 // SessionCostRecord is one accounted LLM session within a run. PhaseCosts is

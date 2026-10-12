@@ -28,3 +28,7 @@ func wrapHelperSandbox(command []string, _ string) ([]string, bool, func()) {
 func wrapVerificationSandbox(command []string, _ []string) ([]string, bool, func()) {
 	return command, false, func() {}
 }
+
+// platformSandboxProbe reports no sandbox-unavailable condition: only macOS
+// sandbox-exec has the nested-sandbox failure the probe exists to detect.
+func platformSandboxProbe() SandboxStatus { return SandboxStatus{} }

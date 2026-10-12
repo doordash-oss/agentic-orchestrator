@@ -4388,25 +4388,28 @@ type RunDetail struct {
 	CarriedPhases     []string `json:"carried_phases,omitempty"`
 
 	// Committing True while a forked run's carry-forward copy is in flight (crash-recovery signal); a reconnecting client treats this as "requires safe retry" until startup cleanup reconciles.
-	Committing                      bool       `json:"committing,omitempty"`
-	Cost                            Cost       `json:"cost"`
-	CurrentPhase                    string     `json:"current_phase,omitempty"`
-	HasNeedUserGate                 bool       `json:"has_need_user_gate,omitempty"`
-	IsRewind                        bool       `json:"is_rewind,omitempty"`
-	Iteration                       int        `json:"iteration,omitempty"`
-	PendingReviewPhase              string     `json:"pending_review_phase,omitempty"`
-	PendingRewindReviewRoadmapPhase int        `json:"pending_rewind_review_roadmap_phase,omitempty"`
-	PhaseStatus                     string     `json:"phase_status,omitempty"`
-	RewindRoadmapPhase              int        `json:"rewind_roadmap_phase,omitempty"`
-	RewindTarget                    string     `json:"rewind_target,omitempty"`
-	RoadmapPhase                    int        `json:"roadmap_phase,omitempty"`
-	RoadmapTotal                    int        `json:"roadmap_total,omitempty"`
-	RunNumber                       int        `json:"run_number"`
-	SealReason                      string     `json:"seal_reason,omitempty"`
-	SealedAt                        *time.Time `json:"sealed_at,omitempty"`
-	Setup                           *Setup     `json:"setup,omitempty"`
-	StartedAt                       *time.Time `json:"started_at,omitempty"`
-	Timing                          Timing     `json:"timing"`
+	Committing                      bool   `json:"committing,omitempty"`
+	Cost                            Cost   `json:"cost"`
+	CurrentPhase                    string `json:"current_phase,omitempty"`
+	HasNeedUserGate                 bool   `json:"has_need_user_gate,omitempty"`
+	IsRewind                        bool   `json:"is_rewind,omitempty"`
+	Iteration                       int    `json:"iteration,omitempty"`
+	PendingReviewPhase              string `json:"pending_review_phase,omitempty"`
+	PendingRewindReviewRoadmapPhase int    `json:"pending_rewind_review_roadmap_phase,omitempty"`
+	PhaseStatus                     string `json:"phase_status,omitempty"`
+	RewindRoadmapPhase              int    `json:"rewind_roadmap_phase,omitempty"`
+	RewindTarget                    string `json:"rewind_target,omitempty"`
+	RoadmapPhase                    int    `json:"roadmap_phase,omitempty"`
+	RoadmapTotal                    int    `json:"roadmap_total,omitempty"`
+	RunNumber                       int    `json:"run_number"`
+
+	// Sandbox Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined.
+	Sandbox    *RunSandbox `json:"sandbox,omitempty"`
+	SealReason string      `json:"seal_reason,omitempty"`
+	SealedAt   *time.Time  `json:"sealed_at,omitempty"`
+	Setup      *Setup      `json:"setup,omitempty"`
+	StartedAt  *time.Time  `json:"started_at,omitempty"`
+	Timing     Timing      `json:"timing"`
 }
 
 // RunDetailResponse defines model for RunDetailResponse.
@@ -4442,6 +4445,15 @@ type RunLogListResponse struct {
 	APIVersion string       `json:"api_version"`
 	Logs       []RunLog     `json:"logs"`
 	Meta       ResponseMeta `json:"meta,omitempty"`
+}
+
+// RunSandbox Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined.
+type RunSandbox struct {
+	// Available Always false when present.
+	Available bool `json:"available"`
+
+	// Reason Why the sandbox probe failed.
+	Reason string `json:"reason,omitempty"`
 }
 
 // RunSessionListResponse defines model for RunSessionListResponse.

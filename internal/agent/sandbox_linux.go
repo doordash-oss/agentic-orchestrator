@@ -92,3 +92,7 @@ func wrapWithBwrap(command []string, denyDir string) []string {
 	}
 	return append(args, command...)
 }
+
+// platformSandboxProbe reports no sandbox-unavailable condition: only macOS
+// sandbox-exec has the nested-sandbox failure the probe exists to detect.
+func platformSandboxProbe() SandboxStatus { return SandboxStatus{} }

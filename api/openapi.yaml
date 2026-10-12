@@ -6765,6 +6765,20 @@ components:
               $ref: "#/components/schemas/Timing"
             cost:
               $ref: "#/components/schemas/Cost"
+            sandbox:
+              x-go-type-skip-optional-pointer: false
+              $ref: "#/components/schemas/RunSandbox"
+    RunSandbox:
+      type: object
+      description: Present only when this run executed harness verification commands or launched review validators while the OS verification sandbox was unavailable (for example nested macOS sandbox-exec); those commands ran unconfined.
+      required: [available]
+      properties:
+        available:
+          type: boolean
+          description: Always false when present.
+        reason:
+          type: string
+          description: Why the sandbox probe failed.
     RunListResponse:
       allOf:
         - $ref: "#/components/schemas/JSONResponse"

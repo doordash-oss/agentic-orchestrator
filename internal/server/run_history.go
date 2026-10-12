@@ -221,6 +221,9 @@ func runDetailFromRun(run *feature.Run) RunDetail {
 			dto.CarriedPhases = append([]string(nil), run.CarriedPhases...)
 		}
 		dto.BackupBranchRepos = runBackupBranchRepos(run)
+		if run.Sandbox != nil {
+			dto.Sandbox = &RunSandbox{Available: run.Sandbox.Available, Reason: run.Sandbox.Reason}
+		}
 	}
 	return dto
 }

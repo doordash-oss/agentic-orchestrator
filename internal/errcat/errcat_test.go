@@ -182,7 +182,9 @@ func TestTerminalRunFailureActionReferences(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s: missing from catalog", code)
 		}
-		want := []string{"restart"}
+		// A failed phase enables retry and restart; retry is the primary
+		// remediation, so the envelope must reference both, retry first.
+		want := []string{"retry", "restart"}
 		if IsSetupFailure(code) {
 			want = []string{"setup"}
 		}

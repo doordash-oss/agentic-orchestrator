@@ -1359,8 +1359,8 @@ var catalog = map[Code]entry{
 			}
 			return ""
 		},
-		Remediation: "Review the listed violations, fix the affected artifacts, and restart the phase.",
-		Actions:     []string{"restart"},
+		Remediation: "Review the listed violations, fix the affected artifacts, and retry or restart the phase.",
+		Actions:     []string{"retry", "restart"},
 	},
 
 	// --- Terminal run-failure codes ---------------------------------------------
@@ -1376,8 +1376,8 @@ var catalog = map[Code]entry{
 			}
 			return runPhaseSummary(params, "exhausted its iteration budget")
 		},
-		Remediation: "Restart the phase with an extended iteration budget, or revise the plan so the work converges.",
-		Actions:     []string{"restart"},
+		Remediation: "Retry the phase with an extended iteration budget, or revise the plan so the work converges.",
+		Actions:     []string{"retry", "restart"},
 	},
 	SafetyRailTripped: {
 		Class:   ClassBlocking,
@@ -1391,8 +1391,8 @@ var catalog = map[Code]entry{
 			}
 			return runPhaseSummary(params, "was stopped by a safety rail")
 		},
-		Remediation: "Review what the rail blocked, adjust the approach, and restart the phase.",
-		Actions:     []string{"restart"},
+		Remediation: "Review what the rail blocked, adjust the approach, and retry or restart the phase.",
+		Actions:     []string{"retry", "restart"},
 	},
 	SessionCrashed: {
 		Class:   ClassBlocking,
@@ -1406,8 +1406,8 @@ var catalog = map[Code]entry{
 			}
 			return runPhaseSummary(params, "lost its agent session")
 		},
-		Remediation: "Restart the phase; the session log has the crash details.",
-		Actions:     []string{"restart"},
+		Remediation: "Retry or restart the phase; the session log has the crash details.",
+		Actions:     []string{"retry", "restart"},
 	},
 	artifactMissing: {
 		Class:   ClassBlocking,
@@ -1421,8 +1421,8 @@ var catalog = map[Code]entry{
 			}
 			return runPhaseSummary(params, "did not produce a required artifact")
 		},
-		Remediation: "Restart the phase so the agent can produce the required artifacts.",
-		Actions:     []string{"restart"},
+		Remediation: "Retry or restart the phase so the agent can produce the required artifacts.",
+		Actions:     []string{"retry", "restart"},
 	},
 	InfrastructureFailure: {
 		Class:   ClassBlocking,
@@ -1436,8 +1436,8 @@ var catalog = map[Code]entry{
 			}
 			return runPhaseSummary(params, "failed on an infrastructure error")
 		},
-		Remediation: "Check the runtime environment and provider tooling, then restart the phase.",
-		Actions:     []string{"restart"},
+		Remediation: "Check the runtime environment, provider connectivity, and credentials, then retry the phase (or restart it).",
+		Actions:     []string{"retry", "restart"},
 	},
 	WorktreeSetupFailed: {
 		Class:   ClassBlocking,

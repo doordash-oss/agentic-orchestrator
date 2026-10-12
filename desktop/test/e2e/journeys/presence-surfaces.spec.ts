@@ -205,15 +205,12 @@ test('presence surfaces: one failure, one owner, every surface agrees', async ({
     expect(await capturedNotifications(handle)).toHaveLength(1);
     transcript.step('exactly one preview notification carried the class label, feature, and title');
 
-    transcript.section('Restart clears the item and the lane entry');
+    transcript.section('Retry clears the item and the lane entry');
     await activateNotification(handle, 0);
     await ensureMainWindowFocus(handle);
-    const restartButton = failureCard.getByRole('button', { name: 'Restart' });
-    await expect(restartButton).toBeEnabled({ timeout: 30_000 });
-    await restartButton.click();
-    const dialog = handle.page.getByRole('dialog', { name: `Restart ${featureName}?` });
-    await expect(dialog).toBeVisible();
-    await dialog.getByRole('button', { name: 'Confirm restart' }).click();
+    const retryButton = failureCard.getByRole('button', { name: 'Retry' });
+    await expect(retryButton).toBeEnabled({ timeout: 30_000 });
+    await retryButton.click();
     await expect
       .poll(async () => {
         const feature = await handle!.page.evaluate(

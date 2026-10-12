@@ -1856,7 +1856,7 @@ export function FeatureCockpit({
   // against the feature's action catalog: the card's own primary button and
   // its disabled-reason text come from the server's enabled state.
   const resolveFailureAction = (actionId: string): ErrorSurfaceAction | undefined => {
-    const label = actionId === 'setup' ? 'Retry setup' : 'Restart';
+    const label = actionId === 'setup' ? 'Retry setup' : actionId === 'retry' ? 'Retry' : 'Restart';
     return catalogErrorAction(snapshot, actionId, label);
   };
 
@@ -1867,6 +1867,10 @@ export function FeatureCockpit({
     }
     if (actionId === 'restart') {
       restart();
+      return;
+    }
+    if (actionId === 'retry') {
+      retry();
     }
   };
 

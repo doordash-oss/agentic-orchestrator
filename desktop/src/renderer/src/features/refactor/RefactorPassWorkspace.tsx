@@ -603,11 +603,13 @@ export function RefactorPassWorkspace({
                 catalogErrorAction(
                   child,
                   actionId,
-                  actionId === 'setup' ? 'Retry setup' : 'Restart',
+                  actionId === 'setup' ? 'Retry setup' : actionId === 'retry' ? 'Retry' : 'Restart',
                 )
               }
               onAction={(actionId) => {
-                if (actionId === 'restart' || actionId === 'setup') void pass.dispatch(actionId);
+                if (actionId === 'restart' || actionId === 'retry' || actionId === 'setup') {
+                  void pass.dispatch(actionId);
+                }
               }}
               explain={{
                 reference: { scope: 'run', code: runFailure.code, featureId: child.id },

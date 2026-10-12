@@ -238,6 +238,27 @@ describe('ErrorSurface structured details', () => {
 });
 
 describe('ErrorSurface primary-action slot', () => {
+  it('uses a later enabled action when the first catalog action is disabled', async () => {
+    const onAction = vi.fn();
+    render(
+      <ErrorSurface
+        error={{
+          ...FULL_ERROR,
+          remediation: { hint: REMEDIATION_HINT, actions: ['retry', 'restart'] },
+        }}
+        resolveAction={(id) =>
+          id === 'retry'
+            ? { enabled: false, label: 'Retry', disabledReason: 'Retry is unavailable.' }
+            : { enabled: true, label: 'Restart' }
+        }
+        onAction={onAction}
+      />,
+    );
+    expect(screen.queryByText('Retry is unavailable.')).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Restart' }));
+    expect(onAction).toHaveBeenCalledWith('restart');
+  });
+
   it('renders the enabled action as the only button and forwards the click', async () => {
     const onAction = vi.fn();
     const resolveAction = vi.fn(() => ENABLED_ACTION);

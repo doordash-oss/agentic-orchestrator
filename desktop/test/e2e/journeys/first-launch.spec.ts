@@ -35,11 +35,14 @@ import { expect, test } from '@playwright/test';
 import {
   assertNoLeakedProcesses,
   closeApp,
+  closeSettings,
   createFeatureViaForm,
   evidenceShot,
   evidenceShotBothThemes,
   launchApp,
   mockDirectoryPicker,
+  openSettings,
+  selectSettingsPane,
   persistAppLogs,
   setTheme,
   setWindowSize,
@@ -141,6 +144,11 @@ test(
 
       // Narrow/wide layout evidence with a real keyboard focus ring.
       await setWindowSize(handle, 500, 760);
+      const wizard = handle.page.getByRole('region', { name: 'First-launch setup' });
+      // Wheel scrolling must reach the retry button even when all provider cards overflow.
+      await wizard.hover();
+      await handle.page.mouse.wheel(0, 2400);
+      await expect(handle.page.getByRole('button', { name: 'Check again' })).toBeInViewport();
       await focusButtonByKeyboard(handle, 'Check again');
       await evidenceShot(handle, 'first-launch-narrow');
       await setWindowSize(handle, 1400, 900);
@@ -149,6 +157,22 @@ test(
       transcript.step(
         'captured narrow (500px, keyboard focus ring on Check again) and wide (1400px) wizard layouts',
       );
+
+      transcript.section('Defer setup, recover navigation, and reopen setup');
+      await appPageDeferSetup(handle);
+      const settings = await openSettings(handle);
+      await selectSettingsPane(settings, 'Servers');
+      await expect(settings.getByRole('textbox', { name: /add a remote server/i })).toBeVisible();
+      await closeSettings(handle);
+      await handle.page.getByRole('button', { name: /— switch server/ }).click();
+      await expect(handle.page.getByRole('region', { name: 'Switch server' })).toBeVisible();
+      await handle.page.keyboard.press('Escape');
+      await handle.page.getByRole('button', { name: 'Open setup' }).click();
+      const setupSheet = handle.page.getByRole('dialog', { name: 'Set up Agentico' });
+      await expect(setupSheet).toBeVisible();
+      await setupSheet.getByRole('button', { name: 'Close', exact: true }).click();
+      await handle.page.getByRole('button', { name: 'Open setup' }).click();
+      await expect(setupSheet).toBeVisible();
 
       transcript.section('External remediation, then Check again');
       setStubAuthenticated(world, true);
@@ -379,4 +403,15 @@ function findEntries(root: string, pattern: RegExp): string[] {
   };
   walk(root);
   return matches;
+}
+
+async function appPageDeferSetup(handle: AppHandle): Promise<void> {
+  const defer = handle.page.getByRole('button', { name: 'Set up later' });
+  await expect(defer).toBeInViewport();
+  await defer.click();
+  await expect(handle.page.getByRole('region', { name: 'First-launch setup' })).toHaveCount(0);
+  await expect(handle.page.getByRole('region', { name: 'Setup incomplete' })).toBeVisible();
+  const readiness = await handle.page.evaluate(() => window.agentico.getRuntimeReadiness());
+  expect(readiness.ready).toBe(false);
+  expect(readiness.providers.some((provider) => provider.ready)).toBe(false);
 }

@@ -97,6 +97,23 @@ describe('ReadinessGate first snapshot', () => {
 });
 
 describe('ReadinessGate gating', () => {
+  it('lets an unready runtime leave setup and reopen it without claiming readiness', async () => {
+    const mock = installAgenticoMock({ readiness: unreadySnapshot() });
+    const onSetupIncompleteChange = vi.fn();
+    render(<ReadinessGate onSetupIncompleteChange={onSetupIncompleteChange} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Set up later' }));
+    expect(await screen.findByRole('option', { name: 'Supervisor' })).toBeVisible();
+    const banner = screen.getByRole('region', { name: 'Setup incomplete' });
+    expect(banner).toBeVisible();
+    expect(onSetupIncompleteChange).toHaveBeenLastCalledWith(true);
+    expect(mock.api.refreshRuntimeReadiness).not.toHaveBeenCalled();
+    await userEvent.click(within(banner).getByRole('button', { name: 'Open setup' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Set up Agentico' });
+    expect(within(sheet).getByRole('heading', { name: 'Connect a provider' })).toBeVisible();
+    await userEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
+    expect(banner).toBeVisible();
+  });
+
   it('never offers feature creation while any mandatory gate is unsatisfied', async () => {
     installAgenticoMock({ readiness: unreadySnapshot() });
     render(<ReadinessGate />);

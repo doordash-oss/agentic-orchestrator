@@ -235,9 +235,9 @@ describe('SetupWizard cross-cutting a11y and presentation', () => {
     const mock = installAgenticoMock();
     render(<Harness initial={unreadySnapshot()} />);
 
-    expect(screen.getByText(/provider clis installed on this machine/i)).toBeInTheDocument();
+    expect(screen.getByText(/provider clis on the connected server/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /hide help/i }));
-    expect(screen.queryByText(/provider clis installed on this machine/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/provider clis on the connected server/i)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(mock.api.updateSettings).toHaveBeenCalledWith({
         wizard: { collapsedHelp: true },
@@ -251,7 +251,7 @@ describe('SetupWizard cross-cutting a11y and presentation', () => {
     render(<Harness initial={unreadySnapshot()} />);
     // Wizard still renders from the authoritative snapshot with default help.
     expect(await screen.findByRole('heading', { name: /set up agentico/i })).toBeInTheDocument();
-    expect(screen.getByText(/provider clis installed on this machine/i)).toBeInTheDocument();
+    expect(screen.getByText(/provider clis on the connected server/i)).toBeInTheDocument();
   });
 
   it('surfaces an invalid configuration as a blocking ErrorSurface with remediation', () => {

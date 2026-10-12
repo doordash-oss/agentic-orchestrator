@@ -109,8 +109,8 @@ export function deriveWizardState(snapshot: RuntimeReadinessSnapshot): WizardSta
 
 /**
  * How the readiness gate presents a snapshot. With no ready provider the
- * runtime cannot do anything, so the full-page wizard owns the window. Once
- * one provider is ready the shell mounts even while other gates are still
+ * full-page wizard opens first; the gate can defer it to recover navigation.
+ * Once one provider is ready the shell mounts even while other gates are still
  * outstanding (`partial`), carrying a banner and an on-demand wizard sheet;
  * `complete` is the shell as it has always been.
  */

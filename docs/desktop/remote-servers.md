@@ -177,3 +177,20 @@ combined endpoint. Its initial response is still reused, but connecting to that
 older server can still incur repository inspection. Authentication errors and
 network failures do not trigger this fallback. Existing clients can continue
 using the combined endpoint unchanged.
+
+### Recovering from provider setup failures
+
+Provider checks run on the connected server, with that server process's account
+and environment. Run remediation commands there. A failed probe can reflect a
+CLI startup error, so expand **More detail** before assuming credentials expired.
+For example, launching the server from a temporary directory and then deleting
+that directory used to make every provider appear unauthenticated. Provider
+inspection subprocesses now fall back to the server user's home when the launch
+directory no longer exists.
+
+The setup page scrolls within the window and keeps **Set up later** visible.
+Use it to open the dashboard, Settings, or the server switcher while setup is
+incomplete. This does not mark the runtime ready: its warning remains, server
+readiness checks still apply, and **Open setup** reopens the dismissible setup
+sheet. **Check again** refreshes provider status after remediation. Reconnecting
+to a server evaluates readiness again.

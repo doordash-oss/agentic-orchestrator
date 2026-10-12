@@ -1330,8 +1330,8 @@ func TestServerMutationTargetCreateFeaturePersistsSelectedRESTOptions(t *testing
 		t.Fatalf("created attachments = %v; want attachment queued for setup, not copied during create", created.Attachments)
 	}
 	setup := created.Run().Setup
-	if setup == nil || setup.Status != feature.SetupStatusRunning {
-		t.Fatalf("created setup = %+v; want active setup state", setup)
+	if setup == nil || setup.Status != feature.SetupStatusQueued || setup.StartedAt != nil {
+		t.Fatalf("created setup = %+v; want queued setup state with no start time", setup)
 	}
 	attachmentTask := setup.Tasks["attachment:1"]
 	if attachmentTask.Kind != feature.SetupTaskAttachment || attachmentTask.Status != feature.SetupStatusQueued || attachmentTask.SourcePath != attachment {
@@ -1428,8 +1428,8 @@ func TestServerMutationTargetCreateFeatureQueuesSetupWithoutWorktreeSideEffects(
 		t.Fatalf("created status = %s, want SettingUpWorktrees", created.Status)
 	}
 	setup := created.Run().Setup
-	if setup == nil || setup.Status != feature.SetupStatusRunning {
-		t.Fatalf("created setup = %+v, want active setup state", setup)
+	if setup == nil || setup.Status != feature.SetupStatusQueued || setup.StartedAt != nil {
+		t.Fatalf("created setup = %+v, want queued setup state with no start time", setup)
 	}
 	if len(worktrees.Calls) != 0 {
 		t.Fatalf("worktree calls = %+v, want none during feature_create", worktrees.Calls)
@@ -1608,7 +1608,7 @@ func TestServerMutationTargetSetupFeatureOnFailedSetupChildRerunsUnfinishedAndPa
 		},
 		Parent: &feature.ChildRelationship{ParentID: parent.ID, Kind: feature.ChildKindRefactor},
 	}
-	child.SetRun(&feature.Run{RunNumber: 1, Setup: feature.NewActiveSetupState(child.Repos, nil, nil, time.Now())})
+	child.SetRun(&feature.Run{RunNumber: 1, Setup: feature.NewQueuedSetupState(child.Repos, nil, nil)})
 	if err := store.Save(child); err != nil {
 		t.Fatalf("Save child: %v", err)
 	}

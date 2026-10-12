@@ -394,7 +394,7 @@ func (m *Manager) Create(name, description string, repos []string, models config
 		}
 	}
 	if opt.QueueSetup {
-		run.Setup = NewActiveSetupState(featureRepos, images, opt.Attachments, now, setupInitOptions{
+		run.Setup = NewQueuedSetupState(featureRepos, images, opt.Attachments, setupInitOptions{
 			UseCurrentBranch:        opt.UseCurrentBranch,
 			UseCurrentBranchPerRepo: opt.UseCurrentBranchPerRepo,
 			ExactStartPointPerRepo:  acceptedCommits,

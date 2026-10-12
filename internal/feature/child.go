@@ -1098,7 +1098,7 @@ func (m *Manager) buildRefactorChild(parent *Feature, spec RefactorChildSpec, ba
 			run.RepoStates[fr.Name] = &RepoState{}
 		}
 	}
-	run.Setup = NewActiveSetupState(childRepos, spec.Images, spec.Attachments, now, setupInitOptions{
+	run.Setup = NewQueuedSetupState(childRepos, spec.Images, spec.Attachments, setupInitOptions{
 		ExactStartPointPerRepo: exactStart,
 		MergeTargetPerRepo:     spec.RebaseMergeTargets,
 	})

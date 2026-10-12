@@ -16,7 +16,7 @@ Each recipe is a sequence of single, bare helper calls. Run them one at a time, 
    `"$AGENTICO_BIN" api POST /api/v1/features/{feature_id}/actions/setup '{}'`
 5. Validate creation:
    `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}`
-   Expect the feature with its repositories, and its setup running or complete. If setup failed, report `failure` and offer the `setup` action again.
+   Expect the feature with its repositories, and its setup `running` or `done`. A setup still `queued` was never dispatched: send the `setup` action. If setup failed, report `failure` and offer the `setup` action again.
 6. To change its config, read the current config first:
    `"$AGENTICO_BIN" api GET /api/v1/features/{feature_id}/config`
 7. Send the whole `current` object back with only the user's change applied (the endpoint replaces the config; an omitted field resets):

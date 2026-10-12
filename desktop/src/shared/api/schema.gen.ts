@@ -52,7 +52,7 @@ export interface paths {
         put?: never;
         /**
          * Create a feature.
-         * @description Queues server-owned durable setup for the new feature. While mandatory readiness is not satisfied (no usable provider, invalid configuration), creation is rejected with a structured `not_ready` error whose target carries the outstanding readiness issues.
+         * @description Queues server-owned durable setup for the new feature but does not dispatch it. The created feature reads `SettingUpWorktrees` with `setup.status` `queued`, no `setup.started_at`, every setup task `queued`, and the `setup` action enabled; nothing runs until the client dispatches the `setup` action (setup only, leaving the feature `Created`) or the `start` action (setup, then the first phase). While mandatory readiness is not satisfied (no usable provider, invalid configuration), creation is rejected with a structured `not_ready` error whose target carries the outstanding readiness issues.
          */
         post: operations["createFeature"];
         delete?: never;
@@ -1418,7 +1418,7 @@ export interface components {
             error: components["schemas"]["Error"];
         };
         /**
-         * @description Feature lifecycle action identifier.
+         * @description Feature lifecycle action identifier. `setup` dispatches a feature's queued durable setup (required after create unless the client dispatches `start`) or reruns only the unfinished tasks of a failed setup, asynchronously and without starting orchestration; the feature becomes `Created` when setup completes.
          * @enum {string}
          */
         FeatureAction: "setup" | "start" | "resume" | "pause-stop" | "restart" | "publish" | "merge" | "rewind" | "retry" | "rebase" | "need-user-input" | "need-user-input-draft" | "testing-contract-waive" | "mark-done" | "cleanup" | "delete" | "refactor" | "review-feedback" | "discard";
@@ -2613,9 +2613,13 @@ export interface components {
             allowed_actions: string[];
         };
         Setup: {
+            /** @description `queued` (created, awaiting the `setup` or `start` action), `running` (dispatched), `done`, or `failed`. */
             status: string;
             attempt?: number;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description Start of the latest dispatched attempt; absent while setup is queued.
+             */
             started_at?: string;
             /** Format: date-time */
             completed_at?: string;

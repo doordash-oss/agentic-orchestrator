@@ -795,6 +795,7 @@ func TestScanRecovery_ReconcilesAbandonedSetupBeforeScan(t *testing.T) {
 	}
 	if err := store.Modify(f.ID, func(ff *feature.Feature) error {
 		setup := ff.Run().Setup
+		setup.Status = feature.SetupStatusRunning
 		setup.LatestLogPath = logPath
 		task := setup.Tasks["worktree:test-repo"]
 		task.Status = feature.SetupStatusRunning

@@ -205,7 +205,7 @@ func TestFeatureDetailIncludesDurableSetupFailureState(t *testing.T) {
 		SchemaVersion: feature.SchemaVersionCurrent,
 		Repos:         []feature.FeatureRepo{{Name: "repo-a", Branch: "feature/setup-failed"}},
 	}
-	setup := feature.NewActiveSetupState(f.Repos, nil, nil, now)
+	setup := feature.NewQueuedSetupState(f.Repos, nil, nil)
 	setup.Status = feature.SetupStatusFailed
 	setup.CompletedAt = &now
 	setup.LatestLogPath = "/tmp/agentico/setup.log"

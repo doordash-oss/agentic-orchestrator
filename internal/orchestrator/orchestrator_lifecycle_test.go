@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/doordash-oss/agentic-orchestrator/internal/errcat"
 	"github.com/doordash-oss/agentic-orchestrator/internal/feature"
@@ -92,7 +91,6 @@ func TestOrchestrator_StartFeature_FirstPhase(t *testing.T) {
 }
 
 func TestOrchestrator_StartFeatureRunsQueuedSetupBeforeFirstPhase(t *testing.T) {
-	now := time.Now()
 	f := &feature.Feature{
 		ID:       "feat-setup-start",
 		Status:   feature.StatusSettingUpWorktrees,
@@ -101,7 +99,7 @@ func TestOrchestrator_StartFeatureRunsQueuedSetupBeforeFirstPhase(t *testing.T) 
 	}
 	f.SetRun(&feature.Run{
 		RunNumber: 1,
-		Setup:     feature.NewActiveSetupState(f.Repos, nil, nil, now),
+		Setup:     feature.NewQueuedSetupState(f.Repos, nil, nil),
 	})
 	fs, lc := newStoredFeatureFixture(t, f)
 	worktrees := mocks.NewMockWorktreeOps()
@@ -132,7 +130,6 @@ func TestOrchestrator_StartFeatureRunsQueuedSetupBeforeFirstPhase(t *testing.T) 
 }
 
 func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testing.T) {
-	now := time.Now()
 	f := &feature.Feature{
 		ID:       "feat-setup-fail",
 		Status:   feature.StatusSettingUpWorktrees,
@@ -141,7 +138,7 @@ func TestOrchestrator_StartFeaturePersistsSetupFailureWithoutPhaseStart(t *testi
 	}
 	f.SetRun(&feature.Run{
 		RunNumber: 1,
-		Setup:     feature.NewActiveSetupState(f.Repos, nil, nil, now),
+		Setup:     feature.NewQueuedSetupState(f.Repos, nil, nil),
 	})
 	fs, lc := newStoredFeatureFixture(t, f)
 	worktreeKey := "worktree:" + repoName

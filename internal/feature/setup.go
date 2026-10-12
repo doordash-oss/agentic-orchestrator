@@ -30,6 +30,12 @@ const (
 	SetupStatusFailed  SetupStatus = "failed"
 )
 
+// unfinished reports whether setup has not reached a terminal state: it is
+// queued awaiting dispatch or running.
+func (s SetupStatus) unfinished() bool {
+	return s == SetupStatusQueued || s == SetupStatusRunning
+}
+
 type SetupTaskKind string
 
 const (
@@ -92,7 +98,12 @@ type setupInitOptions struct {
 	MergeTargetPerRepo map[string]string
 }
 
-func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now time.Time, opts ...setupInitOptions) *SetupState {
+// NewQueuedSetupState builds the durable setup state a new feature starts
+// with: every task queued and the setup itself queued, with no start time.
+// Nothing runs until setup is dispatched (the setup action, the start
+// action, or the child-launch path); the runner then records the attempt's
+// start time and moves the setup to running.
+func NewQueuedSetupState(repos []FeatureRepo, images, attachments []string, opts ...setupInitOptions) *SetupState {
 	var opt setupInitOptions
 	if len(opts) > 0 {
 		opt = opts[0]
@@ -168,9 +179,8 @@ func NewActiveSetupState(repos []FeatureRepo, images, attachments []string, now 
 		order = append(order, key)
 	}
 	return &SetupState{
-		Status:    SetupStatusRunning,
+		Status:    SetupStatusQueued,
 		Attempt:   1,
-		StartedAt: &now,
 		Tasks:     tasks,
 		TaskOrder: order,
 	}

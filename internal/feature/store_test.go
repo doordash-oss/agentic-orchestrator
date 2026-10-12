@@ -2375,7 +2375,7 @@ func TestStoreSetupStateRoundTrip(t *testing.T) {
 		RunCount:      1,
 		SchemaVersion: SchemaVersionCurrent,
 	}
-	setup := NewActiveSetupState(repos, []string{"/tmp/image.png"}, []string{"/tmp/spec.md"}, now)
+	setup := NewQueuedSetupState(repos, []string{"/tmp/image.png"}, []string{"/tmp/spec.md"})
 	task := setup.Tasks["worktree:api"]
 	task.Path = "/tmp/worktrees/setup-state/api"
 	setup.Tasks["worktree:api"] = task
@@ -2393,8 +2393,8 @@ func TestStoreSetupStateRoundTrip(t *testing.T) {
 	if got == nil {
 		t.Fatal("loaded setup state is nil")
 	}
-	if got.Status != SetupStatusRunning || got.Attempt != 1 {
-		t.Fatalf("loaded setup status/attempt = %q/%d, want running/1", got.Status, got.Attempt)
+	if got.Status != SetupStatusQueued || got.Attempt != 1 {
+		t.Fatalf("loaded setup status/attempt = %q/%d, want queued/1", got.Status, got.Attempt)
 	}
 	if !slices.Equal(got.TaskOrder, []string{"worktree:api", "image:1", "attachment:1"}) {
 		t.Fatalf("loaded task order = %v, want worktree/image/attachment", got.TaskOrder)

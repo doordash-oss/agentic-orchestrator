@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -343,7 +344,7 @@ func TestManagerCreateWithWorktree(t *testing.T) {
 	}
 }
 
-func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) {
+func TestManagerCreateQueuesSetupWithoutWorktreeSideEffects(t *testing.T) {
 	t.Parallel()
 	// parallel-candidate: per-test temp dirs and mocks isolate filesystem and collaborator state.
 	storeDir := t.TempDir()
@@ -386,8 +387,8 @@ func TestManagerCreateQueuesActiveSetupWithoutWorktreeSideEffects(t *testing.T) 
 	if setup == nil {
 		t.Fatal("persisted run setup state is nil")
 	}
-	if setup.Status != feature.SetupStatusRunning {
-		t.Fatalf("persisted setup status = %q, want %q", setup.Status, feature.SetupStatusRunning)
+	if setup.Status != feature.SetupStatusQueued || setup.StartedAt != nil {
+		t.Fatalf("persisted setup status/started_at = %q/%v, want %q with no start time until dispatch", setup.Status, setup.StartedAt, feature.SetupStatusQueued)
 	}
 	task, ok := setup.Tasks["worktree:test-repo"]
 	if !ok {
@@ -611,6 +612,93 @@ func TestManagerRunSetupCompletesQueuedSetupAndCopiesAssets(t *testing.T) {
 		if ev.RunNumber != 1 || ev.Attempt != 1 {
 			t.Fatalf("event = %+v, want run 1 attempt 1", ev)
 		}
+	}
+}
+
+// TestManagerRunSetupProgressReportsTaskLifecycle pins the setup lifecycle
+// a created feature walks: creation leaves setup queued with no start time,
+// dispatch records the attempt start, and each task's progress events report
+// running then done, so the last progress event before completion carries
+// the terminal status and the persisted task keeps its start time.
+func TestManagerRunSetupProgressReportsTaskLifecycle(t *testing.T) {
+	store := feature.NewStore(t.TempDir())
+	wtDir := t.TempDir()
+	cfg := config.NewDefault()
+	cfg.Repos["repo-a"] = config.RepoConfig{Path: "/repos/repo-a"}
+	mgr := feature.NewManager(store, cfg)
+	worktrees := mocks.NewMockWorktreeOps()
+	worktrees.CreateFn = func(_, featureSlug, repoName, _ string) (string, error) {
+		return filepath.Join(wtDir, featureSlug, repoName), nil
+	}
+	mgr.Worktrees = worktrees
+	mgr.PRs = mocks.NewMockPRCloser()
+
+	f, err := mgr.Create("Setup Lifecycle", "progress", []string{"repo-a"}, cfg.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	queued := f.Run().Setup
+	if queued.Status != feature.SetupStatusQueued || queued.StartedAt != nil {
+		t.Fatalf("created setup status/started_at = %q/%v, want queued with no start time", queued.Status, queued.StartedAt)
+	}
+
+	var events []feature.SetupEvent
+	if err := mgr.RunSetup(f.ID, feature.SetupRunnerOptions{OnEvent: func(ev feature.SetupEvent) {
+		events = append(events, ev)
+	}}); err != nil {
+		t.Fatalf("run setup: %v", err)
+	}
+
+	var progress []feature.SetupStatus
+	for _, ev := range events {
+		if ev.TaskKey == "worktree:repo-a" {
+			progress = append(progress, ev.TaskStatus)
+		}
+	}
+	want := []feature.SetupStatus{feature.SetupStatusRunning, feature.SetupStatusDone}
+	if !slices.Equal(progress, want) {
+		t.Fatalf("worktree task progress = %v, want %v", progress, want)
+	}
+	if n := len(events); n < 2 || events[n-1].Kind != feature.SetupEventCompleted || events[n-2].TaskStatus != feature.SetupStatusDone {
+		t.Fatalf("events = %+v, want a done progress event right before completion", events)
+	}
+
+	loaded, err := store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	setup := loaded.Run().Setup
+	if setup.Status != feature.SetupStatusDone || setup.StartedAt == nil {
+		t.Fatalf("setup status/started_at = %q/%v, want done with dispatch start time", setup.Status, setup.StartedAt)
+	}
+	task := setup.Tasks["worktree:repo-a"]
+	if task.Status != feature.SetupStatusDone || task.StartedAt == nil || task.EndedAt == nil {
+		t.Fatalf("task = %+v, want done with start and end times", task)
+	}
+}
+
+// TestManagerReconcileAbandonedSetupsLeavesQueuedSetup pins that startup
+// reconciliation fails only setups that were running: a setup that was never
+// dispatched stays queued and dispatchable.
+func TestManagerReconcileAbandonedSetupsLeavesQueuedSetup(t *testing.T) {
+	mgr := newTestManager(t)
+	f, err := mgr.Create("Setup Queued", "never dispatched", []string{"test-repo"}, mgr.Config.Defaults.Models, "", "", nil, feature.CreateOptions{QueueSetup: true})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	reconciled, err := mgr.ReconcileAbandonedSetups()
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(reconciled) != 0 {
+		t.Fatalf("reconciled = %v, want none", reconciled)
+	}
+	loaded, err := mgr.Store.Load(f.ID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if loaded.Status != feature.StatusSettingUpWorktrees || loaded.Run().Setup.Status != feature.SetupStatusQueued {
+		t.Fatalf("status/setup = %s/%s, want SettingUpWorktrees/queued", loaded.Status, loaded.Run().Setup.Status)
 	}
 }
 
@@ -991,6 +1079,7 @@ func TestManagerReconcileAbandonedSetupsMarksFailed(t *testing.T) {
 	}
 	if err := mgr.Store.Modify(f.ID, func(ff *feature.Feature) error {
 		setup := ff.Run().Setup
+		setup.Status = feature.SetupStatusRunning
 		setup.LatestLogPath = logPath
 		task := setup.Tasks["worktree:test-repo"]
 		task.Status = feature.SetupStatusRunning

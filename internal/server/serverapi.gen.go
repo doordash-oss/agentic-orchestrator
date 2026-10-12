@@ -2964,7 +2964,7 @@ type ErrorSetupTaskContext struct {
 	Label string `json:"label"`
 }
 
-// FeatureAction Feature lifecycle action identifier.
+// FeatureAction Feature lifecycle action identifier. `setup` dispatches a feature's queued durable setup (required after create unless the client dispatches `start`) or reruns only the unfinished tasks of a failed setup, asynchronously and without starting orchestration; the feature becomes `Created` when setup completes.
 type FeatureAction string
 
 // FeatureActionResponse defines model for FeatureActionResponse.
@@ -4620,13 +4620,17 @@ type SessionSummary struct {
 
 // Setup defines model for Setup.
 type Setup struct {
-	Attempt       int                  `json:"attempt,omitempty"`
-	CompletedAt   *time.Time           `json:"completed_at,omitempty"`
-	LatestLogPath string               `json:"latest_log_path,omitempty"`
-	StartedAt     *time.Time           `json:"started_at,omitempty"`
-	Status        string               `json:"status"`
-	TaskOrder     []string             `json:"task_order,omitempty"`
-	Tasks         map[string]SetupTask `json:"tasks,omitempty"`
+	Attempt       int        `json:"attempt,omitempty"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	LatestLogPath string     `json:"latest_log_path,omitempty"`
+
+	// StartedAt Start of the latest dispatched attempt; absent while setup is queued.
+	StartedAt *time.Time `json:"started_at,omitempty"`
+
+	// Status `queued` (created, awaiting the `setup` or `start` action), `running` (dispatched), `done`, or `failed`.
+	Status    string               `json:"status"`
+	TaskOrder []string             `json:"task_order,omitempty"`
+	Tasks     map[string]SetupTask `json:"tasks,omitempty"`
 }
 
 // SetupTask defines model for SetupTask.

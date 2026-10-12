@@ -17,6 +17,7 @@ package observe
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -593,6 +594,15 @@ type SessionUsage struct {
 	Truncated                bool
 }
 
+// ErrSessionInterrupted marks a session ended by a user stop or a cancelled
+// context. SessionEnded records it with status "interrupted" rather than as
+// a successful or failed session.
+var ErrSessionInterrupted = errors.New("session interrupted")
+
+// SessionEndedStatusInterrupted is the session.ended status for sessions that
+// were stopped before finishing.
+const SessionEndedStatusInterrupted = "interrupted"
+
 // SessionEnded emits a session.ended event.
 func (o *Observer) SessionEnded(sc SpanContext, phase, sessionID, repoName string, usage SessionUsage, duration time.Duration, err error) {
 	if o == nil || !o.enabled {
@@ -629,6 +639,9 @@ func (o *Observer) SessionEnded(sc SpanContext, phase, sessionID, repoName strin
 
 	if err != nil {
 		evt.Status = "error"
+		if errors.Is(err, ErrSessionInterrupted) || errors.Is(err, context.Canceled) {
+			evt.Status = SessionEndedStatusInterrupted
+		}
 		evt.Error = err.Error()
 	}
 	for key, value := range map[string]any{"provider": usage.Provider, "model": usage.Model, "effort": usage.Effort,

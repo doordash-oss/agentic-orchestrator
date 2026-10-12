@@ -683,6 +683,9 @@ type Feature struct {
 	ReviewFixing      bool              `yaml:"-"`
 	ValidatingPlan    bool              `yaml:"-"`
 	ValidatorStatuses map[string]string `yaml:"-"`
+	// ValidatorErrors holds the last error of a failed or retrying validator,
+	// keyed like ValidatorStatuses.
+	ValidatorErrors map[string]string `yaml:"-"`
 	// VerificationItems is the ordered live progress of harness-executed
 	// testing-contract commands while CurrentPhaseStatus is "verifying".
 	VerificationItems []VerificationItemStatus `yaml:"-"`
@@ -790,6 +793,7 @@ func (f *Feature) syncShadowsToRun() {
 	r.ReviewFixing = f.ReviewFixing
 	r.ValidatingPlan = f.ValidatingPlan
 	r.ValidatorStatuses = f.ValidatorStatuses
+	r.ValidatorErrors = f.ValidatorErrors
 	r.VerificationItems = f.VerificationItems
 	r.PlanIteration = f.PlanIteration
 	r.ReviewIteration = f.ReviewIteration
@@ -832,6 +836,7 @@ func (f *Feature) syncRunToShadows() {
 	f.ReviewFixing = r.ReviewFixing
 	f.ValidatingPlan = r.ValidatingPlan
 	f.ValidatorStatuses = r.ValidatorStatuses
+	f.ValidatorErrors = r.ValidatorErrors
 	f.VerificationItems = r.VerificationItems
 	f.PlanIteration = r.PlanIteration
 	f.ReviewIteration = r.ReviewIteration

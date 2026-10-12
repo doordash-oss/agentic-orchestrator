@@ -166,6 +166,7 @@ type Run struct {
 	// Plan validation + gate state (moved from Feature).
 	ValidatingPlan    bool              `yaml:"validating_plan,omitempty"`
 	ValidatorStatuses map[string]string `yaml:"validator_statuses,omitempty"`
+	ValidatorErrors   map[string]string `yaml:"validator_errors,omitempty"`
 	// VerificationItems is the ordered live progress of harness-executed
 	// testing-contract commands while CurrentPhaseStatus is "verifying".
 	VerificationItems  []VerificationItemStatus `yaml:"verification_items,omitempty"`

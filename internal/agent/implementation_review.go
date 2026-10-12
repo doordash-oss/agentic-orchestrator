@@ -326,6 +326,11 @@ func runImplementationReviewAxis(cfg ImplementConfig, sm ports.SessionManager, i
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
 		Posture:                axis.ExecutionPosture,
+		OnRetry: func(_ int, err error) {
+			if cfg.Feature != nil {
+				markMultiAxisValidatorRetrying(cfg.FeatureStore, cfg.Feature.ID, axis.Name, err)
+			}
+		},
 	}
 	helperResult, err := helper.runReviewHelper(context.Background(), helperCfg)
 	if err != nil {

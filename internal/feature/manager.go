@@ -628,6 +628,7 @@ func (m *Manager) StartPlanning(featureID string) error {
 		f.CurrentPhase = PhasePlan
 		f.ValidatingPlan = false
 		f.ValidatorStatuses = nil
+		f.ValidatorErrors = nil
 		// Accumulate any in-flight time under the old key before switching.
 		// Without this, an interrupt → restart cycle for a roadmap-phase plan
 		// would lose the in-flight bucket because Transition only auto-
@@ -763,6 +764,7 @@ func (m *Manager) AdvanceRoadmapPhase(featureID string) error {
 		f.MaxPlanIterations = 0 // reset per-phase; loop uses config default
 		f.ValidatingPlan = false
 		f.ValidatorStatuses = nil
+		f.ValidatorErrors = nil
 		// Clear the active plan artifact so startImplementationCmd re-resolves
 		// for the new phase instead of reusing a stale rebase plan.
 		delete(f.Artifacts, "plan")

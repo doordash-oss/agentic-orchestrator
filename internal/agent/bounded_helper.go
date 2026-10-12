@@ -58,6 +58,7 @@ const (
 	boundedHelperStatusFailed             = "failed"
 	boundedHelperStatusEmptyOutput        = "empty_output"
 	BoundedHelperStatusProtocolViolation  = "protocol_violation"
+	boundedHelperStatusInterrupted        = "interrupted"
 )
 
 // boundedHelperConfig configures a single-turn interactive helper run.
@@ -204,6 +205,9 @@ type boundedHelperRunConfig struct {
 	contractPhase feature.Phase
 	contractRole  Role
 	parentSpanCtx observe.SpanContext
+	// onRetry, when set, is told about each failed attempt that will be
+	// retried, so live surfaces can show the helper as retrying.
+	onRetry func(nextAttempt int, err error)
 }
 
 func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedHelperRunConfig) (*boundedHelperResult, error) {
@@ -235,10 +239,29 @@ func (pr *PhaseRunner) runBoundedHelperSession(ctx context.Context, cfg boundedH
 		}
 		result, err, retryable := pr.runBoundedHelperSessionOnce(ctx, cfg, label)
 		if retryable && sessionAttempt < retryableInfrastructureSessionMaxAttempts {
+			// A stop between attempts must never relaunch the helper.
+			if pr.helperInterrupted(ctx, cfg.featureID) {
+				if result != nil {
+					result.Status = boundedHelperStatusInterrupted
+				}
+				return result, fmt.Errorf("running %s: %w", label, errHelperInterrupted)
+			}
+			if cfg.onRetry != nil {
+				cfg.onRetry(sessionAttempt+1, err)
+			}
 			continue
 		}
 		return result, err
 	}
+}
+
+// helperInterrupted reports whether the helper's run was cancelled or its
+// feature was stopped. Deadline expiry is a timeout, not an interruption.
+func (pr *PhaseRunner) helperInterrupted(ctx context.Context, featureID string) bool {
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return true
+	}
+	return featureID != "" && isFeatureInterrupted(pr.FeatureStore, featureID)
 }
 
 func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boundedHelperRunConfig, label string) (*boundedHelperResult, error, bool) {
@@ -247,7 +270,21 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 	}
 	sess, err := pr.SessionManager.StartSession(cfg.sessionID, cfg.featureID, cfg.phase, cfg.command, cfg.workDir, cfg.env, cfg.sessOpts)
 	if err != nil {
-		return nil, fmt.Errorf("running %s: starting session: %w", label, err), false
+		err = fmt.Errorf("running %s: starting session: %w", label, err)
+		switch classifyStartSessionError(err) {
+		case providerFailureHard:
+			// The provider CLI cannot boot or its endpoint is unreachable:
+			// fail fast instead of relaunching into the same failure.
+			return nil, newProviderUnavailableError("", err), false
+		case providerFailureTransient:
+			// A handshake timeout is a provider slow to boot; retry it like a
+			// session that started and failed.
+			if pr.helperInterrupted(ctx, cfg.featureID) {
+				return nil, fmt.Errorf("running %s: %w", label, errHelperInterrupted), false
+			}
+			return nil, err, true
+		}
+		return nil, err, false
 	}
 
 	sessionCtx := observe.SpanContext{}
@@ -276,6 +313,9 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 		pr.installSubagentProgressTracker(sess, sessionCtx, observerPhase, cfg.sessionID)
 	}
 
+	// endedInterrupted records that the session was stopped by an interrupt
+	// so session.ended reports "interrupted", not "ok" or "error".
+	endedInterrupted := false
 	defer func() {
 		cost := extractSessionCost(sess)
 		_ = accumulateSessionCostToFeature(pr.FeatureStore, cfg.featureID, observerPhase, cost, sessionCostMetadata{
@@ -284,7 +324,11 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			RepoName:      cfg.repoName,
 		})
 		if pr.Observer != nil {
-			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost, sess), time.Since(sessionStart), sessionErrFromStatus(sess))
+			endErr := sessionErrFromStatus(sess)
+			if endedInterrupted {
+				endErr = errHelperInterrupted
+			}
+			pr.Observer.SessionEnded(sessionCtx, observerPhase, cfg.sessionID, cfg.repoName, toSessionUsage(cost, sess), time.Since(sessionStart), endErr)
 		}
 		_ = sess.Stop()
 		sess.Wait()
@@ -311,8 +355,23 @@ func (pr *PhaseRunner) runBoundedHelperSessionOnce(ctx context.Context, cfg boun
 			result.Status = BoundedHelperStatusProtocolViolation
 			err = newProtocolViolationError(cfg.contractRole, cfg.completionDir, pendingCommitViolations)
 		}
-		retryable := err != nil &&
-			result != nil &&
+		if err == nil {
+			return result, nil, false
+		}
+		// A stopped feature kills its sessions with the same footprint as an
+		// infrastructure failure; record it as interrupted, never retry it.
+		if pr.helperInterrupted(ctx, cfg.featureID) {
+			endedInterrupted = true
+			if result != nil {
+				result.Status = boundedHelperStatusInterrupted
+			}
+			return result, fmt.Errorf("running %s: %w", label, errHelperInterrupted), false
+		}
+		if result != nil && result.Status == boundedHelperStatusFailed &&
+			classifyProviderFailure(providerFailureText(sess, result, err)) == providerFailureHard {
+			return result, newProviderUnavailableError(providerFailureDetail(sess, result), err), false
+		}
+		retryable := result != nil &&
 			result.Status == boundedHelperStatusFailed &&
 			(isRetryableInfrastructureSessionFailure(sess, extractSessionCost(sess), time.Since(sessionStart)) ||
 				errors.Is(err, errHelperReturnedErrorResult) ||
@@ -501,11 +560,10 @@ func isRetryableProviderNetworkFailure(output string, err error) bool {
 		return false
 	}
 	text := strings.ToLower(output + " " + err.Error())
+	// Connection-refused / host-not-found style failures are hard and are
+	// classified by classifyProviderFailure before this check runs.
 	for _, marker := range []string{
-		"unable to connect to api",
-		"enotfound",
 		"econnreset",
-		"econnrefused",
 		"eai_again",
 		"etimedout",
 	} {

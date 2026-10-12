@@ -85,20 +85,55 @@ func validatorResultsToMultiAxisResults(results []validatorResult) []multiAxisRe
 	return out
 }
 
+// Validator live states recorded alongside verdicts in ValidatorStatuses.
+const (
+	validatorStateRunning     = "running"
+	validatorStateRetrying    = "retrying"
+	validatorStateError       = "error"
+	validatorStateInterrupted = "interrupted"
+)
+
+// maxValidatorErrorLen bounds the last-error text kept per validator.
+const maxValidatorErrorLen = 500
+
 func setMultiAxisValidatorStatuses(store FeatureStore, featureID string, axes []string) {
 	if store == nil || featureID == "" {
 		return
 	}
 	_ = store.Modify(featureID, func(f *feature.Feature) error {
 		f.ValidatorStatuses = make(map[string]string, len(axes))
+		f.ValidatorErrors = nil
 		for _, axis := range axes {
-			f.ValidatorStatuses[axis] = "running"
+			f.ValidatorStatuses[axis] = validatorStateRunning
 		}
 		return nil
 	})
 }
 
+// updateMultiAxisValidatorStatus records a validator's terminal state: its
+// verdict, "interrupted" for a stopped helper, or "error" plus the last error.
 func updateMultiAxisValidatorStatus(store FeatureStore, featureID, axis string, status reviewStatus, err error) {
+	switch {
+	case err == nil:
+		setMultiAxisValidatorState(store, featureID, axis, status.String(), "")
+	case isHelperInterruptedError(err):
+		setMultiAxisValidatorState(store, featureID, axis, validatorStateInterrupted, "")
+	default:
+		setMultiAxisValidatorState(store, featureID, axis, validatorStateError, err.Error())
+	}
+}
+
+// markMultiAxisValidatorRetrying shows a validator as retrying after a
+// failed attempt, keeping that attempt's error visible.
+func markMultiAxisValidatorRetrying(store FeatureStore, featureID, axis string, err error) {
+	detail := ""
+	if err != nil {
+		detail = err.Error()
+	}
+	setMultiAxisValidatorState(store, featureID, axis, validatorStateRetrying, detail)
+}
+
+func setMultiAxisValidatorState(store FeatureStore, featureID, axis, state, lastError string) {
 	if store == nil || featureID == "" {
 		return
 	}
@@ -106,11 +141,21 @@ func updateMultiAxisValidatorStatus(store FeatureStore, featureID, axis string, 
 		if f.ValidatorStatuses == nil {
 			f.ValidatorStatuses = make(map[string]string)
 		}
-		if err != nil {
-			f.ValidatorStatuses[axis] = "error"
-		} else {
-			f.ValidatorStatuses[axis] = status.String()
+		f.ValidatorStatuses[axis] = state
+		if lastError == "" {
+			delete(f.ValidatorErrors, axis)
+			if len(f.ValidatorErrors) == 0 {
+				f.ValidatorErrors = nil
+			}
+			return nil
 		}
+		if len(lastError) > maxValidatorErrorLen {
+			lastError = lastError[:maxValidatorErrorLen] + "…"
+		}
+		if f.ValidatorErrors == nil {
+			f.ValidatorErrors = make(map[string]string)
+		}
+		f.ValidatorErrors[axis] = lastError
 		return nil
 	})
 }
@@ -121,6 +166,7 @@ func clearMultiAxisValidatorStatuses(store FeatureStore, featureID string) {
 	}
 	_ = store.Modify(featureID, func(f *feature.Feature) error {
 		f.ValidatorStatuses = nil
+		f.ValidatorErrors = nil
 		return nil
 	})
 }

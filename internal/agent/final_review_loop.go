@@ -261,6 +261,21 @@ func (s *featureFinalReviewLoopState) run() (*FeatureFinalReviewResult, error) {
 		reviewStatus, feedback, reviewErr := s.runReview(i, iterDir)
 
 		if reviewErr != nil {
+			// A stop cancels the round: report the interrupt, never count it
+			// as a failed round or start the next one.
+			if isHelperInterruptedError(reviewErr) || isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+				return &FeatureFinalReviewResult{FinalStatus: "interrupted", Iterations: i - 1}, nil
+			}
+			// A provider that cannot be reached will not heal by rerunning
+			// the round: fail fast so the feature surfaces the outage.
+			if isProviderUnavailableError(reviewErr) {
+				s.writeIterationMetaWithAgent(iterDir, i, "FAILED", "review_failed")
+				return &FeatureFinalReviewResult{
+					FinalStatus: "failed",
+					Iterations:  i,
+					LastError:   fmt.Sprintf("final review could not run: %v; check provider connectivity and credentials, then retry", reviewErr),
+				}, nil
+			}
 			if isProtocolViolationError(reviewErr) {
 				consecutiveFailures++
 				s.writeIterationMetaWithAgent(iterDir, i, agentStatusProtocolViolation, "review_failed")
@@ -428,6 +443,14 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 	setMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID, axisNames)
 	defer clearMultiAxisValidatorStatuses(cfg.FeatureStore, cfg.Feature.ID)
 
+	// The round's context cancels on pause-stop (feature interrupted) and when
+	// any validator hits a non-retryable provider failure, so no validator
+	// keeps running or retrying after the round is decided.
+	roundCtx, cancelOnInterrupt := verificationContext(cfg.FeatureStore, cfg.Feature.ID)
+	defer cancelOnInterrupt()
+	roundCtx, cancelRound := context.WithCancel(roundCtx)
+	defer cancelRound()
+
 	validationCtx := observe.SpanContextForFeature(cfg.Feature.ID, cfg.Feature.TraceID, cfg.Feature.Name, cfg.Feature.FeatureSpanID).WithRun(cfg.Feature.ActiveRun).Child()
 	validationStart := time.Now()
 	cfg.Observer.ValidationStarted(validationCtx, "final_review", len(axes))
@@ -439,16 +462,30 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 		axisStart := time.Now()
 		cfg.Observer.ValidatorStarted(axisCtx, axis.Name)
 
-		status, feedback, err := s.runFinalReviewAxis(iteration, iterDir, axis, axisCtx, cfg)
+		status, feedback, err := s.runFinalReviewAxis(roundCtx, iteration, iterDir, axis, axisCtx, cfg)
 		results[i] = reviewAxisResult{Axis: axis.Name, Status: status, Feedback: feedback, Error: err}
+		if isProviderUnavailableError(err) {
+			cancelRound()
+		}
 
 		verdict := status.String()
-		if err != nil {
+		switch {
+		case isHelperInterruptedError(err):
+			verdict = validatorStateInterrupted
+		case err != nil:
 			verdict = "error"
 		}
 		cfg.Observer.ValidatorCompleted(axisCtx, axis.Name, verdict, time.Since(axisStart))
 		updateMultiAxisValidatorStatus(cfg.FeatureStore, cfg.Feature.ID, axis.Name, status, err)
 	})
+	if roundErr := finalReviewRoundAbort(cfg, results); roundErr != nil {
+		verdict := "error"
+		if isHelperInterruptedError(roundErr) {
+			verdict = validatorStateInterrupted
+		}
+		cfg.Observer.ValidationCompleted(validationCtx, "final_review", verdict, time.Since(validationStart), len(axes))
+		return reviewFailed, "", roundErr
+	}
 	if !isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 		violations, guardErr := EnforceReadOnlyRepoMutations(context.Background(), cfg.CommandRunner, cfg.Feature, feature.PhaseFinalReview, iterDir)
 		if guardErr != nil {
@@ -468,7 +505,28 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxes(iteration int, iterDir 
 	return status, feedback, err
 }
 
-func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, cfg OrchestratorConfig) (reviewStatus, string, error) {
+// finalReviewRoundAbort returns the error that decides a round without a
+// verdict: a non-retryable provider failure (which also cancelled its
+// siblings) wins over the interrupt it caused; otherwise a stopped feature
+// or interrupted validator aborts the round as interrupted.
+func finalReviewRoundAbort(cfg OrchestratorConfig, results []reviewAxisResult) error {
+	for _, result := range results {
+		if isProviderUnavailableError(result.Error) {
+			return fmt.Errorf("%s validator: %w", result.Axis, result.Error)
+		}
+	}
+	for _, result := range results {
+		if isHelperInterruptedError(result.Error) {
+			return fmt.Errorf("%s validator: %w", result.Axis, result.Error)
+		}
+	}
+	if isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
+		return fmt.Errorf("final review round: %w", errHelperInterrupted)
+	}
+	return nil
+}
+
+func (s *featureFinalReviewLoopState) runFinalReviewAxis(ctx context.Context, iteration int, iterDir string, axis implementationReviewAxis, parentCtx observe.SpanContext, cfg OrchestratorConfig) (reviewStatus, string, error) {
 	axisSlug := axis.Slug
 	axisDir := filepath.Join(iterDir, axisSlug)
 	if err := os.MkdirAll(axisDir, 0o755); err != nil {
@@ -550,12 +608,18 @@ func (s *featureFinalReviewLoopState) runFinalReviewAxis(iteration int, iterDir 
 		Kind:                   ports.KindValidator,
 		Label:                  axis.Name,
 		Posture:                axis.ExecutionPosture,
+		OnRetry: func(_ int, err error) {
+			markMultiAxisValidatorRetrying(cfg.FeatureStore, cfg.Feature.ID, axis.Name, err)
+		},
 	}
-	helperResult, err := helper.runReviewHelper(context.Background(), helperCfg)
+	helperResult, err := helper.runReviewHelper(ctx, helperCfg)
 	if err != nil {
 		feedback := ""
 		if helperResult != nil {
 			feedback = helperResult.Feedback
+		}
+		if isHelperInterruptedError(err) {
+			return reviewFailed, feedback, err
 		}
 		if _, statErr := os.Stat(feedbackPath); os.IsNotExist(statErr) {
 			stub := formatStructuredReviewFeedback(

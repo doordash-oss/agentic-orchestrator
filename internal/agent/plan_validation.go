@@ -692,9 +692,18 @@ func runSpecializedPlanValidationForArtifact(cfg planLoopConfig, sm ports.Sessio
 			EffortSource:           cfg.ValidatorEffortSource,
 			Kind:                   ports.KindValidator,
 			Label:                  domain.Name,
+			OnRetry: func(_ int, retryErr error) {
+				markMultiAxisValidatorRetrying(cfg.FeatureStore, cfg.Feature.ID, domain.Name, retryErr)
+			},
 		})
-		if err == nil || isProtocolViolationError(err) {
+		// Hard provider failures and stops are final: rerunning the
+		// validator would hit the same outage or relaunch stopped work.
+		if err == nil || isProtocolViolationError(err) || isProviderUnavailableError(err) ||
+			isHelperInterruptedError(err) || isFeatureInterrupted(cfg.FeatureStore, cfg.Feature.ID) {
 			break
+		}
+		if sessionAttempt < maxValidatorInfrastructureSessionAttempts {
+			markMultiAxisValidatorRetrying(cfg.FeatureStore, cfg.Feature.ID, domain.Name, err)
 		}
 	}
 	if err != nil {

@@ -95,8 +95,16 @@ func TestIsRetryableProviderNetworkFailure(t *testing.T) {
 		want   bool
 	}{
 		{
-			name:   "dns lookup failure in provider transcript",
+			// Host-not-found is a hard failure classified by
+			// classifyProviderFailure, not a transient network retry.
+			name:   "dns lookup failure is not a transient retry",
 			output: `{"result":"API Error: Unable to connect to API (ENOTFOUND)"}`,
+			err:    errors.New("running review helper: helper returned an error result"),
+			want:   false,
+		},
+		{
+			name:   "transient dns failure in provider transcript",
+			output: `{"result":"getaddrinfo EAI_AGAIN api.example.com"}`,
 			err:    errors.New("running review helper: helper returned an error result"),
 			want:   true,
 		},

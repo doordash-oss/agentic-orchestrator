@@ -16,8 +16,10 @@ package observe
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -499,6 +501,31 @@ func TestSessionEndedEmitsErrorOnFailure(t *testing.T) {
 	}
 	if evt.Error != "connection lost" {
 		t.Errorf("Error = %q, want %q", evt.Error, "connection lost")
+	}
+}
+
+func TestSessionEndedRecordsInterruptedSessions(t *testing.T) {
+	for name, err := range map[string]error{
+		"sentinel": fmt.Errorf("helper interrupted: %w", ErrSessionInterrupted),
+		"canceled": fmt.Errorf("running helper: %w", context.Canceled),
+	} {
+		t.Run(name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			featureID := "session_interrupted_feat"
+			os.MkdirAll(filepath.Join(stateDir, featureID), 0755)
+			obs := newObserver(true, stateDir, false, "", false, "agentic")
+
+			sc := SpanContextForFeature(featureID, "", "", "").Child().Child()
+			obs.SessionEnded(sc, "review", "sess-1", "", SessionUsage{}, time.Second, err)
+
+			events := readEvents(t, stateDir, featureID)
+			if len(events) != 1 {
+				t.Fatalf("expected 1 event, got %d", len(events))
+			}
+			if events[0].Status != SessionEndedStatusInterrupted {
+				t.Errorf("Status = %q, want %q", events[0].Status, SessionEndedStatusInterrupted)
+			}
+		})
 	}
 }
 

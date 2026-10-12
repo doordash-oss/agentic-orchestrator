@@ -73,6 +73,9 @@ type reviewHelperConfig struct {
 	Label string
 	// Posture selects the execution posture; empty is read-only.
 	Posture reviewExecutionPosture
+	// OnRetry, when set, is called before each retried session attempt with
+	// the error that ended the previous attempt.
+	OnRetry func(nextAttempt int, err error)
 }
 
 // reviewHelperResult captures the parsed verdict from a bounded helper run.
@@ -297,6 +300,7 @@ func (pr *PhaseRunner) runReviewHelper(ctx context.Context, cfg reviewHelperConf
 		contractPhase: contractPhase,
 		contractRole:  cfg.Role,
 		parentSpanCtx: cfg.ParentSpanCtx,
+		onRetry:       cfg.OnRetry,
 	})
 	if boundedResult == nil {
 		return nil, runErr
